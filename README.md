@@ -5,8 +5,8 @@ English | [繁體中文](README.zh-TW.md)
 > Write the code as you think — one way, and only one way, to do it.
 
 Zerg is a **compiled, general-purpose language**. The compiler translates your Zerg source to **C**
-(**C17** by default, **C99** as a fallback), then hands it off to a C compiler (`cc`) to build the native
-binary. Programs are fast to write, easy to read, and overwhelmingly straightforward.
+(**C17**, or **C99** / **C11** when `ZERG_CSTD` asks), then hands it off to a C compiler (`cc`) to build
+the native binary. Programs are fast to write, easy to read, and overwhelmingly straightforward.
 
 > **Project status — Phase-1 MVP.** Zerg is at an early bootstrap stage. The _language_ (as defined in
 > the specification) is deliberately larger than what the _bootstrap compiler_ implements today, so every
@@ -159,7 +159,7 @@ Full catalogue with signatures — **[Standard Library](docs/runtime/stdlib.md)*
                                   ▼
                      ┌───────────────────────────┐
                      │  C source code            │
-                     │  (C17 → C99)              │
+                     │  (C17, or C99 / C11)      │
                      └─────────────┬─────────────┘
                                   │
                                   ▼
@@ -197,6 +197,10 @@ It is never a crash, never a silently wrong answer, and never an error reported 
 compiler or the linker against generated code nobody wrote. Where the specification marks a
 feature **[not yet]**, using it raises `NotImplemented` and stops.
 
+That is the standard, and the specification now records where this compiler falls short of it
+— each one marked **[deviation]** in the chapter it belongs to, and listed under Known
+deviations below. A contract nothing measures is a wish; the markers are the measurement.
+
 **What is built.** Structs and enums (payload, recursive, and with observable
 discriminants), `match` with exhaustiveness checking, `list[T]` and `map[K, V]`, strings and
 bytes, `mut &` parameters, optionals with `?` / `??` / `?.` / `!`, the whole value tier
@@ -220,15 +224,23 @@ composite; `Ref[T]` and the `atomic` module; command literals; `unsafe`, raw poi
 inline assembly; the `is` type-test for non-error types; the `Reader` I/O surface; and the
 `zerg test` runner.
 
-**Known deviations (bugs the spec records against current behavior).** A refusal carries no
-position — a checked rule reports `file:line:col` with the source line and a caret, and a
-form the compiler has not built names the form and nothing else; module visibility is
-not enforced — a module reaches another module's private declarations; the bootstrap emits
-`-std=c11` rather than the specified C17-default / C99-fallback; left-to-right evaluation
-order of call arguments and operands is not enforced; and the
-scheduler is **cooperative, not preemptive** — nothing takes a coroutine off its worker
-until it parks, so a CPU-bound coroutine occupies one, and as many of them as there are
-workers stop the program. Each is marked where it appears in the spec.
+**Known deviations (bugs the spec records against current behavior).** Six of these are
+**silent** — the program compiles and the answer is wrong — and they are the ones to know
+first: a `str` literal `match` arm never fires; an if-expression does not check that its
+branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; a `defer`
+does not run on the abort path out of `main`; `main`'s `Result[nil]` is discarded, so a
+returned `Right` exits 0; and a module-level inferred binding is dropped rather than refused.
+Two more break the contract in the other direction: `in` and `??` used as a **whole
+condition** reach `cc` against generated C, and 800 levels of nesting is a SIGSEGV.
+
+Then the structural ones: a refusal carries no position — a checked rule reports
+`file:line:col` with the source line and a caret, and a form the compiler has not built names
+the form and nothing else; module visibility is not enforced — a module reaches another
+module's private declarations; top-level constants initialize in source order, so a forward
+reference reads zero; left-to-right evaluation order of call arguments and operands is not
+enforced; and the scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
+its worker until it parks, so a CPU-bound coroutine occupies one, and as many of them as there
+are workers stop the program. Each is marked where it appears in the spec.
 
 ## DDD (Dream-Driven Development)
 

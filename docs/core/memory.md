@@ -23,6 +23,14 @@ reassigning a recursive field through a `mut` binding **leaks**, as there is no 
 (**[deviation]** — the same unrecoverable stack-overflow deviation catalogued in
 [Conformance](../conformance.md) and [Errors](../code/errors.md)).
 
+> **[not yet]** A recursive **`struct`** cannot be declared at all, so neither artifact above is reachable
+> through one. `struct Node { value: int; next: Node? }` is rejected with _`Node` is part of a cycle of
+> by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
+> declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
+> that would have given it a size. The recursive **`enum`** is the half that works, boxing and
+> refcount-sharing exactly as described. The `Node` used below — in Copy vs reference semantics, where it is
+> the one place a shared mutation is observable — is the specified form and does not compile today.
+
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
 reorders** them — so a Zerg `struct` _is_ a C `struct`, field for field, at natural alignment with standard
@@ -45,6 +53,13 @@ through:
   (`f(xs[i], xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
   inserted only where `mut &` arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
+
+> **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
+> aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
+> rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
+> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps
+> it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
+> legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
 `list` / `map` literal or a `set(...)` constructor evaluate **in source order**, deterministically — so a
@@ -120,7 +135,23 @@ on **every** path, **including the abort-unwind path**, and several `defer`s in 
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
 order.
 
+> **[not yet]** A bare `{ … }` block as a **statement** is refused by name —
+> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
+> function's scope, so a block of its own would not free anything at its `}`_ — and that message is also the
+> reason: bindings are given the function's scope rather than the block's. "Block exit" is therefore always a
+> function's, a loop body's, or an arm's, never a scope a program opened for itself, and the `defer` example
+> below is written in a form the compiler does not read.
+
 ## `Ref[T]` — a resource that outlives its scope
+
+> **[not yet]** There is no `Ref[T]` in this compiler. `Ref(5)` is refused by name —
+> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_ — so this
+> section, the `mut`-versus-effect distinction under it, and every mention of a `Ref[T]` elsewhere on this
+> page describe a type nothing can construct. The **machinery** is built and works: the `Ref` spec has one
+> implementer, the built-in `chan`, which is shared by reference, counted, and closed at the last holder's
+> scope exit exactly as specified. What is missing is the second implementer — the stdlib box that carries an
+> arbitrary value together with a user-written `drop` — so a resource that must escape its scope has, today,
+> no answer at all rather than the one this section gives.
 
 Most cleanup is just memory, which scope exit frees automatically. A **resource whose release is not that
 automatic free** — a foreign handle (see [FFI](../runtime/ffi.md)), anything that must be closed **exactly once** — and
@@ -161,6 +192,13 @@ x := parse(x)        # RHS reads the old x; the old x is del-ed; the name rebind
 mut x := x           # shadow again — now mutable, seeded from the previous copy
 ```
 
+> **[deviation]** A name may **not** be re-declared in the same block. `x := read()` followed by
+> `x := parse(x)` is rejected with _`x` is already declared in this block — a name is bound once per block,
+> though an inner block may shadow it_, so the worked example above does not compile and the
+> declare-del-declare sequence it illustrates never runs. Shadowing in a **nested** block — a loop body, an
+> `if` arm, a function body — does work, and is the half the compiler's own sources are written in;
+> same-block rebinding is a form nothing in the corpus needed, so nothing measured it.
+
 Because the old binding is dead the instant the RHS finishes, `x := transform(x)` needs no copy — the
 source is provably dead, so the move optimization applies and the old storage is reused.
 
@@ -178,8 +216,8 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** `del` of a `Ref` value — a `chan` or a `Ref[T]` — dropping a holder (and running `drop` at
-> the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —
+> **Status.** `del` of a `Ref` value — a `chan`; there is no `Ref[T]` here, above — dropping a holder (and
+> running `drop` at the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —
 > to free its storage **early** is **[not yet]**: today such a `del` revokes the name's access, but the
 > storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above is
 > thus the intended behavior, not yet the bootstrap's for owning values.
@@ -214,6 +252,15 @@ flush a buffer, close a scope-local resource — needing no type at all:
 }
 ```
 
+> **[deviation]** An uncaught abort that reaches `main` runs **no** pending `defer`.
+> `fn main() { defer say("bye")  raise ValueError("boom") }` writes `boom` to standard error and exits `1`
+> without printing anything from the `defer`. Every other exit is honored: a normal return, an early `return`,
+> each iteration of a loop, and — the case that hides this one — a `raise` caught by an enclosing `guard`,
+> which does run the defers on the unwound path. Only the last unwind, the one that leaves `main`, skips them,
+> so a test that catches its own abort observes the specified behaviour and a program that does not catch it
+> never gets to report what it saw. This also contradicts step 2 of the runtime abort contract in
+> [Conformance](../conformance.md).
+
 Several `defer`s in a block run **last-scheduled-first**, interleaved with scope-owned frees and `Ref`
 drops in reverse construction order, so teardown mirrors setup. Three constructs share one axis — _when_
 cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires
@@ -223,3 +270,8 @@ scope? **No → `defer`; yes → `Ref[T]`.**
 A **`with` block** scopes such a resource to a lexical region, running its release at block exit. Today it
 is limited to **Ref-bearing** resources (a `chan` or a `Ref[T]`); `with` over a general `Scoped` value is
 **[not yet]**.
+
+> **[not yet]** `with … as` is refused outright, at the keyword: _NotImplemented: with_. So the qualification
+> above states a restriction on a construct the compiler does not read past — both halves are unbuilt, the
+> Ref-bearing case as much as the general `Scoped` one, and a resource is scoped to a region today only by
+> writing the `defer` by hand.

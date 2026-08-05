@@ -1,8 +1,14 @@
-# visibility demo (negative): calling lib's module-private helper across the module
-# boundary is rejected. Building this must fail with a visibility diagnostic.
-#   zerg build examples/1g/private/main.zg   # error: helper is not a public member
+# visibility demo (negative, and currently a DEVIATION): `helper` is module-private,
+# so naming it across the module boundary is specified to be a compile error — and
+# this compiler does not enforce it. The build below succeeds and prints 2.
+#   zerg build examples/1g/private/main.zg   # specified: error, `helper` is not public
+#                                            # today:     builds, and prints 2
+# `pub` is parsed and re-export works (see ../reexport); what is missing is the
+# refusal. It is marked [deviation] in docs/runtime/package.md — when the refusal
+# lands this example stops building, and that failure is the reminder to rewrite it
+# as the negative case it was always meant to be.
 import "lib"
 
 fn main() {
-	print lib.helper() # ERROR: `helper` is not a public member of module `lib`
+	print lib.helper() # 2 — specified to be rejected, allowed by this compiler
 }

@@ -12,6 +12,10 @@
 - **`display`——給人看的視圖。** 它的**預設就是 `debug`**，所以永遠存在。override 它來決定終端使用者該怎麼讀這個值
   （金額、日期）；compiler 永不衍生語意化渲染，所以有意義的 `display` 只能 override。
 
+> **[deviation]** **override 會被靜默忽略。** `display`（與 `debug`）被描述為可 override，但寫在 `impl` 裡的
+> `fn display() -> str` 從來不會被採用：對一個其型別宣告了它的值 `print m`，印出來的是底層的 scalar。在 `struct`
+> 上該 hole 會被下方的 [not yet] 直接拒絕，所以「被忽略而非被拒絕」的那個 override，是寫在 `type X = Y` 上的那個。
+>
 > **狀態。** 渲染一個**純量**或一個 **`str`**——透過純 `{x}` 洞、`print`，或 f-string——可用。
 > **複合值的結構化渲染**（`struct`、`list`、`map`）為 **[not yet]**：今日格式洞裡的複合值會在**編譯期被拒絕**，
 > 所以「每個值都能渲染」對純量與字串現已成立，複合值則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切拼法

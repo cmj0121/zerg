@@ -22,6 +22,11 @@ the grammar:
 | `str`   | immutable, null-terminated Unicode (no embedded NUL) |
 | `nil`   | the placeholder value of `T?`                        |
 
+> **[not yet]** No part of the fixed-width ladder exists: `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are
+> specified as stdlib types and no stdlib declares one. Because a width is an ordinary identifier rather than
+> a keyword, the refusal is not even a named one — `i32(x)` reports _undefined function `i32`_, the message
+> any misspelled call gets, so a reader is told the name is unknown rather than that the ladder is unbuilt.
+
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
   **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never
   wrap (opt into roll-over with `+%`/`-%`/`*%`, below).
@@ -66,6 +71,26 @@ the grammar:
   `int` value never becomes a `float` implicitly (see "Numeric literals" below). `//` does **not**
   open a comment — a Zerg comment starts with `#`.
 
+> **[deviation]** `~` on a `byte` computes the **64-bit** complement and never masks it back to eight bits, so
+> the answer is right only where it immediately lands in a `byte` slot. With `b: byte = 12`, the specified
+> result is `243` in all three of these; `c: byte = ~b` gives it, because the binding's own conversion narrows
+> the value, while `print ~b` writes `18446744073709551603` and `int(~b)` gives `-13`. The complement is
+> emitted as C's `~` on the promoted operand, and the one spelling a test naturally reaches for — storing the
+> result straight back into a `byte` — is the one spelling that hides it.
+>
+> **[not yet]** The bitwise operators do not desugar to anything a user type can implement. No `BitAnd`,
+> `BitOr`, `BitXor`, `Not`, `Shl` or `Shr` spec is declared anywhere, so naming one reports
+> _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
+> no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
+> specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
+>
+> **[deviation]** The `%`-suffixed operators wrap on `int` and on `uint`, and **raise** on a `byte`:
+> `byte(255) +% byte(1)` aborts with `OverflowError: integer conversion out of range` instead of yielding `0`,
+> and `-%` and `*%` fail the same way. The wrapping is done at the promoted width and the result is then
+> narrowed back to `byte` by the ordinary **checked** conversion — which is precisely the raise the `%`
+> spelling exists to opt out of, so the operator becomes an alias for the one it was written to avoid. The
+> two wider types are the ones every hashing and checksum case is written against, so nothing measured `byte`.
+>
 > **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is
 > the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
@@ -117,6 +142,13 @@ the `return`'s. Every rule below reads `T` there, never the wrapper.
 > its payload by another route, which no rule was attached to. `x: float? = i` for an `int` value printed
 > `5`, and `Left(i)` for `i = 300` into a `Result[byte]` truncated in silence — the same two mistakes the
 > same rules already refuse one level up.
+>
+> **[deviation]** **The other operand** is the one position of the fourteen that does not reject a literal too
+> large for it. An integer literal that does not fit the other operand's type silently retypes the **whole
+> expression** to `int` rather than being a compile error: `b: byte = 1` followed by `print b + 300` compiles
+> and writes `301`. A literal that does fit adopts `byte` and is then checked like any other byte arithmetic,
+> so `b: byte = 100` makes `b + 200` an `OverflowError` at run time — the rule is present and working, and only
+> the out-of-range literal escapes it, by widening the very operand it was supposed to be measured against.
 
 ### Numeric literals
 
@@ -143,6 +175,12 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 
   Every one of the conversions is a **lint** finding (`L5xx`), because the reader of `xs: list[byte] =
 [1, 2]` should be able to see bytes on the page rather than infer them from the declaration.
+
+> **[not yet]** The **upper half of `uint`** cannot be written as a literal. Every integer literal is measured
+> against `int` before its position is consulted, so `u: uint = 18446744073709551615` is rejected with
+> _the integer literal … does not fit an `int`_ even though the value is an ordinary `uint` and is reachable
+> by arithmetic. The rule above stands — a literal adopts the type its position demands — but the range it is
+> checked against is fixed at the signed one, so the `uint` half of "what fits" is unwritable.
 
 ## User-Defined Types
 
@@ -171,6 +209,13 @@ enum Either[X, Y] {         # generic sum type
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
 Its MVP limits (a `mut`-built cycle leaks; a long chain frees in O(depth)) are the [Values & Memory](memory.md)
 reference.
+
+> **[not yet]** A recursive **`struct`** cannot be declared. The `Node` written above is rejected with
+> _`Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
+> size_: sizing runs over the declaration graph before any boxing decision is reached, so the self-referential
+> slot never gets the cell the paragraph promises it. The recursive **`enum`** is the half that works, its
+> payload being the slot the compiler boxes — which is why `Expr` builds and `Node` does not, and why the same
+> example in [Values & Memory](memory.md) does not compile either.
 
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a
@@ -204,6 +249,14 @@ methods and no `spec` impl of its own**: reach for a named `struct` the moment a
 nominal identity, or field names worth reading. A tuple result is **first-class** — stored, passed, or
 destructured — so multiple return needs no separate mechanism ([Pattern matching](../code/control-flow.md)).
 
+> **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple is
+> refused by name — _NotImplemented: `==` on a (int, int) — structural equality over a container is unbuilt,
+> and a container has no declaration to derive it on_ — and that message is the mechanism: the derivation is
+> driven by a `#[derive(…)]` on a declaration, and being anonymous is exactly what leaves a tuple nothing to
+> carry one. **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports
+> _NotImplemented: `,` is not an expression this compiler reads_ — so a tuple result is stored and passed as
+> specified, and read back only through `.0` / `.1`.
+
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
 is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
@@ -232,6 +285,13 @@ usable only where every field is visible. A "constructor" is not a separate feat
 therefore **opaque** outside its module — a struct literal cannot name the private field, so outsiders
 build it only through such a `pub` function, which runs inside the type's module and can establish the
 type's invariant at the moment of construction.
+
+> **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
+> `P(a: 1, b: 2)` reports _NotImplemented: the named argument `a:` — this compiler binds arguments by position
+> only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
+> itself is unaffected; what is missing is the spelling this section states its rules in terms of — "it names
+> every field" is how the opacity of a private field is derived, and `Foo(age: 2, name: base.name)` below is
+> written in a form the compiler does not read.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
 and, given a `mut` binding, writable; a private field is neither. There is no separate "public read,
@@ -310,6 +370,13 @@ spec Into[T] {
 - **`.into()` needs a target.** `x := 1.into()` is a compile error — there is nothing there to say
   which `Into` was meant. Written by hand, it is legal exactly where the compiler would have written
   it.
+
+> **[not yet]** A hand-written `.into()` does not exist at all: `1.into()` reports
+> _NotImplemented: the method `into` on a int_, wherever it is written and whatever target is in view. So the
+> second line of the pair above — `x: float = 1.5 + 1.into()`, the "what it means" half — is not a program
+> this compiler builds, though the `x: float = 1.5 + 1` it explains is. The conversion the compiler writes for
+> itself is built and the built-in matrix below is real; only the spelling a reader can write out by hand is
+> missing, which is why it went unnoticed — nothing needs to say `.into()` for the feature to work.
 
 **What an expression's type is, is decided by its operands alone** — never by what it is being assigned
 to. So the two operands of an operator agree first, and only then does the result meet the declared

@@ -67,6 +67,22 @@ file:line:col: message
 > 或 emitter 的 `NotImplemented` 仍然只報形式名稱、不報位置。`zerg` 記錄的位置是**逐語句**的，所以欄位指的是
 > 語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到那個 token。
 
+本專案要求自己遵守的規則比上面幾段更強，而且值得單獨寫出來——因為接下來那兩個 deviation 破的是它，不是任何
+單一章節：
+
+**一個形式要嘛被正確下降、要嘛被具名拒絕。** 它永遠不是崩潰、永遠不是靜默的錯誤答案，也永遠不是 C 編譯器或
+linker 對著沒人寫過的產生碼所報的錯。
+
+> **[deviation]** **一族日常形式會漏到 `cc`。** 下降成 GNU statement expression 的運算式被直接放進 `if` 與
+> `while` 本來就有的那對括號裡，產生 `if ({ … })`，而 C 編譯器不接受——所以讀者拿到的診斷是對著一行產生的 C
+> 說 `error: expected expression`。涉及的形式是 list 或 map 上的 `in`、以及當作整個條件用的 `??`，波及 `if`、
+> `for`，以及後綴的 `return … if`、`break if`、`continue if` 與 `raise … if`。把同一個運算式先綁到名字
+> （`b := 2 in xs` 再 `if b`）就編得過，這正是這個行為看起來時好時壞的原因。沒有 `fn main` 的程式——也就是
+> grammar 開場的那個 `nop` 程式——因為同樣的理由在 linker 失敗：沒有任何東西先拒絕它。
+>
+> **[deviation]** **深度巢狀會讓編譯器崩潰。** 大約 800 層的巢狀括號、list literal 或呼叫，會耗盡
+> recursive-descent parser 的堆疊，程序以 `SIGSEGV` 死亡且完全沒有診斷。沒有深度上限、也沒有錯誤；400 層則正常。
+
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
@@ -81,6 +97,18 @@ taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會�
 
 > **[deviation]** runtime 無法攔截的硬體 fault——今天是 coroutine stack 溢出越過其 guard page，或 `main` 未受保護
 > 的原生 stack——會以 signal 終止行程、不執行 `defer`，而非乾淨的 `StackOverflowError` abort。見 [Errors](code/errors.zh-TW.md)。
+
+## 參考實作 emit 出來的 C
+
+參考實作把 Zerg 下降成 C，再交給 C 編譯器（`cc`）。依[何者為 normative](#何者為-normative)，這是一則實作註記
+而非對 conforming implementation 的要求——它不約束一個直接產生機器碼的實作，對 Zerg 程式而言也不可觀察。之所以
+寫下來，是因為 dialect 是本專案在首頁上作出的宣稱，而一個沒有任何章節寫明的編譯器旗標數字，就是會漂走的那種數字。
+
+dialect 是 **C17**。`ZERG_CSTD` 為需要的建置指定另一個——`c99` 與 `c11` 是 runtime 另外兩個寫得能編譯的 dialect，
+而 build cache 以 dialect 作為 object 的 key 的一部分，兩者不會把彼此的 object 交給對方。
+
+> **[not yet]** **fallback 不是自動的**。原意是：一個做不到 C17 的 `cc` 應被退回 C99；但沒有建置任何探測，所以這個
+> 退回是建置用 `ZERG_CSTD=c99` **主動要求**的，而不是編譯器自己發現的。兩種 dialect 都在 CI 上編譯並執行。
 
 ## Undefined 與 implementation-defined behavior
 

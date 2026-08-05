@@ -23,6 +23,10 @@ propagated:
 function (sugar for that early return), so the function must share the same right type. There's no
 implicit bridge between `T?` and `Result`: convert first with `opt.ok_or(err)` or `res.ok()`.
 
+> **[not yet]** Neither converter is built — `opt.ok_or(err)` and `res.ok()` are each refused by name — so
+> there is no bridge between `T?` and `Result` in either direction at all. A `T?` reaches a
+> `Result`-answering function only by being taken apart by hand, with `??` or an if-let, and re-wrapped.
+
 ```text
 fn load() -> Result[Config] {
     txt := read_file(path)?     # Result[str]; an Err early-returns
@@ -110,6 +114,20 @@ thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes t
 contract itself — the message written to stderr, exit status 1, the `Kind: message` line — is
 [Conformance](../conformance.md).
 
+> **[not yet]** The **`Error` interface is not built**. `message()`, `unwrap()` and `code()` are each
+> refused by name on a caught error (``NotImplemented: the method `message` on a Err``), so `err.message()`
+> just claimed above is unreadable, and so are the `from` cause chain and the `code()` byte. A caught `Err`
+> answers `is` and `in` — its kind, and its kind only — and can be read no other way, which also means the
+> worked example under [Handling errors by type](#handling-errors-by-type--is) does not compile. This is the
+> chapter's largest single gap: the taxonomy is built and testable, and the values it carries are not.
+>
+> **[deviation]** A hand-written `raise` of a built-in kind loses the **`Kind:` prefix** the abort contract
+> specifies. `raise ValueError("bad input")` writes `bad input` and nothing else to stderr, while the same
+> kind raised by the runtime writes `IndexError: index out of range`. The kind is in the value either way;
+> only the runtime's own path renders it into the line. One kind thus has two output shapes decided by who
+> raised it, and nothing about the compile is wrong, so the mismatch shows only in a program's stderr — a
+> place no gate reads for a `raise` a test wrote on purpose.
+
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
 expected failure. Of the fault names this chapter uses, ten reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
@@ -173,10 +191,11 @@ fn read_config(s: str) -> Result[Config] {
 > variable modified between `setjmp` and the landing pad indeterminate unless it is `volatile`
 > (C99 7.13.2.1) — give the block a call or a literal as its value, which is the everyday shape
 > anyway.
->
-> **[not yet]** The `read_config` example above needs `Result[T]` to survive in a SIGNATURE, which
-> the shipped `zerg` erases — the guard itself is fine, the return type is not. Until that lands,
-> hand the `Result` straight to `??` / `match` at the call site instead of returning it.
+
+`Result[T]` **survives in a signature**, so `read_config` above is an ordinary function and what it returns
+is an ordinary value at the call site: hand it to `??` for a default, to a `match` for the two sides (the
+`Right(e)` arm's `e is ValueError` answers the kind), or to `?` to propagate the same right out through the
+next function's boundary unchanged.
 
 The `Result` is **always flattened**: because a raised error is itself an `Err`, guarding a block
 that already yields `Result[U]` still yields `Result[U]` — an internal abort and a returned
@@ -206,6 +225,11 @@ match guard { work() } {
 }
 ```
 
+> **[not yet]** The example above does not compile as written: `report(e.message())` needs the `Error`
+> interface, which is unbuilt in all three of its methods (see the taxonomy section). The `is` chain and its
+> mandatory catch-all are real; what the catch-all may do with the error it caught is a kind test and
+> nothing else.
+
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
 is built **for the error taxonomy** — the six built-in kinds and any built-in
@@ -221,3 +245,10 @@ When you only recognize a few kinds, take the erased **`Result[T]`** and `is`-di
 return type is a contract: an erased `Result` says "branch and use the `Error` interface"; a concrete `Either`
 says "here is my exact error kind". (A user-defined error `enum` gathering several kinds into one closed sum
 is deferred with user error types above.)
+
+> **[not yet]** A built-in error kind cannot appear in a **type** position: `fn f() -> Either[int, ValueError]`
+> reports ``no type named `ValueError` ``. The six kinds are constructors the runtime knows, not names the
+> type checker resolves, so the closed-set half of the split just described — the concrete
+> `Either[T, Kind]` whose right a `match` reads by value, named here and again where the taxonomy is
+> introduced — has no program that can be written today. The erased `Result[T]` with an `is`-chain is the
+> one of the two routes that exists.

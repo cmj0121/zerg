@@ -6,17 +6,26 @@ rewrite your code. Because the set is closed, an **unknown or misspelled decorat
 is never silently ignored. Each decorator binds to the declaration that follows it. Part of the
 [Language Reference](../language.md). Also in [繁體中文](decorators.zh-TW.md).
 
+> **[deviation]** A `#[derive]` or `#[derive()]` with **no argument** is accepted and silently dropped, which
+> is the one outcome this page says cannot happen. The argument list is read as a loop over the spec names
+> inside the brackets, so an empty list is zero iterations and nothing is either generated or refused; and
+> because the check that a decorator sits on the right kind of declaration is made **per named spec**, the
+> bare form skips that too — `#[derive]` above a `fn` compiles, where `#[derive(Eq)]` above the same `fn` is
+> correctly rejected with _`#[derive(Eq)]` has no declaration under it_. Nothing is miscompiled, but a
+> directive is read and thrown away, which is what the closed set is supposed to rule out.
+
 ## The set
 
 `#[derive]` is the only decorator the compiler reads. Every other one — `#[dyn]`, `#[test]`,
 `#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
-  from the type's **structure**. The blessed set is **`Eq`** and **`Ord`** (**[not yet]** — the decorator
-  is read and dropped, and `==` / `<` on a composite is refused by name), with
-  **`Hash`**, **`Encode`**, and **`Decode`** specified but **[not yet]**; there is **no auto-derived
-  `Object`**. A user spec can never be derived (`#[derive(MySpec)]` is a compile error). See
-  **[Derive & Default Behavior](derive.md)**.
+  from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
+  `struct` and on a fieldless `enum` (on a **payload** `enum` it is **[not yet]**) — together with **`Ord`**,
+  **`Hash`**, **`Encode`** and **`Decode`**, each specified here and **[not yet]**: naming one is a clean
+  refusal, _NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and
+  `Decode` are specified and unbuilt_. There is **no auto-derived `Object`**. A user spec can never be
+  derived (`#[derive(MySpec)]` is a compile error). See **[Derive & Default Behavior](derive.md)**.
 - **`#[dyn]`** — on a generic `fn`. Compiles the generic to **one shared witness-table body** instead of
   monomorphizing per type argument — trading zero-cost for smaller code, and letting the compiler cap
   instantiation bloat. See **[Grammar](../surface/grammar.md)** (group 7).
@@ -36,6 +45,14 @@ is a "not yet supported" **compile error**, never a silent no-op:
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators. Reserved for
   controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
+
+> **[deviation]** The compiler does not distinguish a **recognized** decorator from an **unknown** one. Every
+> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[dyn]`, `#[test]` and
+> the misspelled `#[frobnicate]` all get the same sentence — _NotImplemented: the decorator `#[X]` — this
+> compiler reads `#[derive(…)]` and no other_. Every one of them is refused, so nothing is silently dropped
+> and nothing miscompiles; what is lost is the distinction this section and **Reserved** below are built on.
+> A typo is reported as though it were a reserved name awaiting implementation, and the promise that an
+> unknown decorator is an error the reader can tell apart from a not-yet-supported one is not kept.
 
 ## Not a macro
 

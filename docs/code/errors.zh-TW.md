@@ -18,6 +18,9 @@
 **`?`——傳遞。** `x?` 拆出左值，或從所在函式**提早 return** 右值（early return 的語法糖），因此函式必須有相同的
 右型別。`T?` 與 `Result` 之間沒有隱式橋接：先用 `opt.ok_or(err)` 或 `res.ok()` 轉換。
 
+> **[not yet]** 兩個轉換器都尚未建置——`opt.ok_or(err)` 與 `res.ok()` 各自都會被指名拒絕——所以 `T?` 與 `Result`
+> 之間兩個方向都完全沒有橋。一個 `T?` 要抵達一個回答 `Result` 的函式，只能用 `??` 或 if-let 手工拆開再手工包回去。
+
 ```text
 fn load() -> Result[Config] {
     txt := read_file(path)?     # Result[str]；Err 會提早 return
@@ -92,6 +95,18 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
 寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
 
+> **[not yet]** **`Error` 介面尚未建置**。在一個接到的錯誤上，`message()`、`unwrap()` 與 `code()` 三者都會被指名
+> 拒絕（``NotImplemented: the method `message` on a Err``），所以上面剛聲稱可讀的 `err.message()` 讀不到，`from`
+> 記下的 cause chain 與 `code()` 那個 byte 也一樣。一個接到的 `Err` 只答得出 `is` 與 `in`——它的種類，而且僅只
+> 種類——再沒有別的讀法；這也表示 [依型別處理錯誤](#依型別處理錯誤is) 一節裡那個範例編不過。這是本章最大的單一
+> 缺口：分類建置了、也測得出來，而它所攜帶的值沒有。
+>
+> **[deviation]** 手寫 `raise` 一個內建種類時，abort 契約所定的 **`Kind:` 前綴**會掉。
+> `raise ValueError("bad input")` 只往 stderr 寫 `bad input`、別的都沒有，而同一個種類由 runtime raise 出來時寫的
+> 是 `IndexError: index out of range`。種類兩邊都在值裡；只有 runtime 自己那條路徑會把它渲染進那一行。於是同一個
+> 種類有兩種輸出形狀、由「誰 raise 的」決定，而編譯這一段沒有任何地方是錯的，所以這個落差只顯示在程式的 stderr
+> ——對一個測試刻意寫下的 `raise` 來說，那是沒有任何 gate 在讀的地方。
+
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
 用到的 fault 名稱裡,今天有十個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
 `EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，再加上並行那章指名的三個——`SendOnClosedError`、
@@ -145,10 +160,10 @@ fn read_config(s: str) -> Result[Config] {
 > 把 handler 留在上面。區塊的值若是**在區塊內綁定的名字**也被拒絕，因為 C 規定在 `setjmp`
 > 與落點之間被修改的自動變數，除非是 `volatile` 否則其值不確定（C99 7.13.2.1）——把區塊的
 > 值寫成一次呼叫或一個常值，那本來也是日常寫法。
->
-> **[not yet]** 上面 `read_config` 那個範例需要 `Result[T]` 能在**簽章**裡存活，而出貨的
-> `zerg` 會把它抹掉——guard 本身沒問題，是回傳型別不行。在那件事落地前，把 `Result` 直接
-> 交給呼叫端的 `??` / `match`，而不是回傳它。
+
+`Result[T]` **能在簽章裡存活**，所以上面的 `read_config` 就是一個普通函式，而它回傳的東西在呼叫端就是一個普通的
+值：交給 `??` 取預設、交給 `match` 讀兩側（`Right(e)` 那個 arm 的 `e is ValueError` 回答種類），或交給 `?` 把同一
+個右側原封不動地往下一個函式的邊界外傳。
 
 `Result` **恆被壓平**：因為被 raise 的錯誤本身就是 `Err`，對一個已經產出 `Result[U]` 的區塊 `guard`，結果仍是
 `Result[U]`——內部 abort 與回傳的 `Right(err)` 收斂成同一個 `Right(err)`。`guard` 只攔**當前 stack** 上的 abort；
@@ -174,6 +189,10 @@ match guard { work() } {
 }
 ```
 
+> **[not yet]** 上面這個範例照寫是編不過的：`report(e.message())` 需要 `Error` 介面，而它三個 method 全都尚未建置
+> （見分類那一節）。`is` 串與它必備的 catch-all 是真的；至於 catch-all 接到錯誤之後能拿它做什麼，就只有種類測試、
+> 別無其他。
+
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
 ——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被
 `guard` 具現化的內建 abort;對**非錯誤**型別的一般存在性測試 `x is T` 是 **[not yet]**。這裡可達的錯誤集合在覆蓋上被
@@ -185,3 +204,8 @@ match guard { work() } {
 **`Either[T, ValueError]`**(從不抹除),其右側由 `match` 以值讀出。只認得少數幾種時,收下被抹除的 **`Result[T]`**、用
 `is` 分派並留 catch-all。於是回傳型別本身就是契約:抹除的 `Result` 說「分支、用 `Error` 介面」,具體的 `Either` 說
 「這是我確切的錯誤種類」。(把多種錯誤聚成一個封閉 sum 的自訂 error `enum`,與上面的自訂 error 型別一同延後。)
+
+> **[not yet]** 內建錯誤種類不能出現在**型別**位置：`fn f() -> Either[int, ValueError]` 會回報
+> ``no type named `ValueError` ``。那六個種類是 runtime 認得的 constructor，不是型別檢查器解析得到的名字，所以剛
+> 才描述的那一分為二裡封閉集合的那一半——由 `match` 以值讀出右側的具體 `Either[T, Kind]`，本節與分類那一節都點名
+> 過——今天沒有任何程式寫得出來。兩條路裡存在的是被抹除的 `Result[T]` 加上一串 `is`。

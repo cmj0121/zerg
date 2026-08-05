@@ -11,6 +11,21 @@
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
 
+> **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
+> 寫在它上一行的 `f := text.make` 會報 _module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條路
+> 上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
+>
+> **[not yet]** 型別引數只能**被推論**。在使用點顯式固定一個會被拒絕——`id[int](7)` 報 _NotImplemented: calling
+> index — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a
+> function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt_——因為一次呼叫的
+> callee 被 parse 成一個裸名字，index 運算式根本到不了呼叫那條路；三個看似無關的形式共用同一則拒絕就是這個
+> 緣故。從引數型別推論是做好的，也是今天實例化一個 generic 的唯一途徑。
+>
+> **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被 parser 拒絕：
+> `f: fn(mut &int) = bump` 報 _expected `,`, found `&`_，而 `GRAMMAR` 明明推導出
+> `param-type ::= ( 'mut' '&' )? type`。參數型別的 parser 只讀一個純型別，從不讀那條產生式允許的 `mut &`
+> 前綴，所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的相異只留在紙上。
+
 **一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
 可變參考——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做
 I/O、讀 ambient 狀態（clock、randomness、`env`）、或可能 **abort**，都不出現在簽章裡。I/O 只能透過檔案的 `import`
@@ -36,13 +51,19 @@ greet("Sam", "Hi", true)     # 全 positional
   求值一次，所以沒有 shared-mutable-default 的陷阱；它是普通運算式，且可讀取前面的參數（求值由左往右）。沒有預設
   的參數仍是**必填**。
 
-  > **[deviation]** 今天只有**自足的簡單常數**預設（一個 literal，如 `443` 或 `"Hello"`）會被正確 lower。一個
-  > **非平凡**的預設運算式——由運算子或呼叫組成者，例如 `greeting: str = "a" + "b"`——目前會被**錯誤處理**,而非
-  > 如規格所述每次呼叫求值。在修好之前,預設值請保持為簡單常數。
+  > **[not yet]** **讀取前面參數**的預設值——`fn g(a: int, b: int = a * 2)`——是唯一沒做出來的形狀。預設值在
+  > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _error: undefined name `a`_，
+  > 而不是求值 `a * 2`。其餘每種預設值都如規格 lower，純常數與計算出來的運算式一樣：`b: int = 1 + 2`、
+  > `b: int = side()` 與 `greeting: str = "a" + "b"` 都在呼叫處、每次求值。
 
 - 一個**具名引數**以參數名字傳入（`loud: true`）——這正是讓你能**跳過中間的預設參數**的關鍵。規則就是慣例那套：
   positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
   不能再回到 positional）。
+
+  > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _NotImplemented: the named argument
+  > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒有辦法跳過中間那個
+  > 有預設的參數，「一旦具名，其後全部都要具名」這條規則也沒有東西可管。一次呼叫由左往右填它的參數，有預設的
+  > 參數只能從引數列的**尾端**省略。
 
 因為參數可以用名字挑選，**名字就成了函式契約的一部分**——改名會弄壞呼叫者，就跟改型別一樣。但預設與名字都不進
 _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名字住在參數列——與「型別就是輸入／輸出契約、僅此

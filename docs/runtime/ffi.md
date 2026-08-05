@@ -5,6 +5,18 @@ Because C is Zerg's **codegen target** (not just an escape hatch), FFI is a nati
 directly on the type, memory, error, and visibility models in the [Language Reference](../language.md) and
 the public-surface rules in [Modules, Packages & Programs](package.md). Also in [繁體中文](ffi.zh-TW.md).
 
+> **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
+> `unsafe` context both of them sit inside is refused by name (`NotImplemented: unsafe`), which takes the
+> import edge with it: there is no `ffi` module in the shipped standard library, and `import "ffi"` is
+> accepted silently — an import that resolves to nothing is not diagnosed — so the failure arrives later, at
+> the `unsafe` the binding needs. On the export edge a `--emit lib` build writes an object and **no header**,
+> and nothing reports which `pub` declarations would have been left out of one. `sizeof` / `alignof`, which
+> this chapter calls a stdlib facility and [Built-ins](builtins.md) calls a built-in, exist in neither place.
+>
+> Two things here are not merely unbuilt but wrong today, and they are marked where they appear below: a
+> standalone `unsafe fn` is callable from safe code with no diagnostic, and a `handle`-typed binding escapes
+> to `cc` against generated C.
+
 ## Two edges, one contract
 
 FFI has two directions, and they deliberately reuse machinery you already have rather than adding a new
@@ -202,6 +214,20 @@ and callable only from unsafe; and a **module-level `unsafe { … }`** that **gr
 unsafe context (a `fn` inside is an unsafe fn, a `mut` binding is a mutable global). There is **no
 `unsafe mut` prefix**. Inside any of them the compiler makes no safety guarantee across the foreign call —
 the thin wrapper you write is where you vouch. Group the raw bindings and their wrappers together:
+
+> **[deviation]** **The trust boundary is not enforced.** A standalone `unsafe fn` is callable from ordinary
+> safe code with no diagnostic at all — `unsafe fn g() -> int { return 2 }` then `print g()` compiles and
+> prints 2 — and so is a `fn` declared inside a module-level `unsafe { … }` group. The keyword is parsed and
+> nothing reads it, so `unsafe` marks intent and confers no checking.
+>
+> **[deviation]** A `mut` binding inside a module-level `unsafe { … }` group is accepted and then **dropped**
+> rather than becoming a mutable global: the declaration compiles and the use site reports
+> `error: undefined name`. The `fn` declarations in the same group survive.
+>
+> **[deviation]** A `handle`-typed binding escapes to `cc`. `mut h: handle? = nil` produces no Zerg
+> diagnostic and fails as `error: unknown type name 'zg_handle'` against the generated C — the one place in
+> this chapter where a form breaks the standing contract by reaching the C compiler rather than being
+> refused.
 
 ```text
 unsafe {

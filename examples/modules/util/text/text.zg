@@ -9,8 +9,13 @@ pub struct Pair {
 }
 
 # make is a cross-module FUNCTION returning a real module type (not Unknown).
+#
+# The fields are filled BY POSITION. Arguments bind by position in this language and a
+# named argument is refused by name, so `Pair(lo: a, hi: b)` is not a spelling of this
+# call — it is the form this compiler has not built, and writing it here is what kept the
+# example off the compiler that ships.
 pub fn make(a: int, b: int) -> Pair {
-	return Pair(lo: a, hi: b)
+	return Pair(a, b)
 }
 
 # id is a cross-module GENERIC, monomorphized across the module boundary at each

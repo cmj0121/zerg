@@ -94,7 +94,8 @@ fn env_help() -> str {
 		"\nEnvironment:\n" +
 		"  ZERG_ROOT          installation root (default: the current directory)\n" +
 		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
-		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n" +
+		"  ZERG_CSTD          the C dialect cc compiles the emitted code with (default: c17)\n"
 }
 
 # --- what each sub-command does -------------------------------------------------------------
@@ -560,7 +561,7 @@ fn file_key(path: str) -> str {
 fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
-	argv.append("-std=c11")
+	argv.append(cc_std())
 
 	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
 	# invocations that compile, not to this one.
@@ -618,6 +619,12 @@ fn reap(pids: list[int]) {
 # the same object, which is a property the self-host fixpoint already proves. So a unit's
 # key is a hash of the C it emitted — which folds in its own source, everything it can see,
 # and the compiler that produced it, since a change to any of those changes the C.
+#
+# And of the DIALECT, which changes none of that and changes the object anyway. It is the
+# one input to `cc` that is not downstream of the C, so it is the one thing the C cannot
+# stand in for: without it, building the same program under c99 after building it under c17
+# is a cache hit that hands back the c17 objects and reports success — a dialect gate that
+# never compiled anything in the dialect it names.
 
 # cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
 # cannot be created is not fatal: the build carries on without one.
@@ -638,7 +645,7 @@ fn cache_path(key: str) -> str {
 # makes that far less likely. A cryptographic digest is the upgrade to make when the
 # standard library has one.
 fn unit_key(code: str) -> str {
-	b := list[byte](code)
+	b := list[byte](f"{cc_std()}\n{code}")
 	mut h := 2166136261
 	mut i := 0
 	for i < b.len() {
@@ -771,6 +778,23 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 fn env_or(key: str, fallback: str) -> str {
 	return __zrt_getenv(key) if __zrt_has_env(key)
 	return fallback
+}
+
+# cc_std is the C dialect the emitted code is compiled with. C17 is the default because
+# that is the dialect the specification names, and the number in a flag nobody reads is
+# exactly the kind of claim that drifts: this said `c11` while the front page said C17,
+# and no gate compared the two.
+#
+# $ZERG_CSTD picks another one. The specification's "C99 as a fallback" means an automatic
+# retreat when a `cc` cannot do C17, and probing for that is not built — so what exists is
+# the ability to ASK for a dialect, which is what lets CI compile the same emitted C under
+# both and find out whether the fallback is real before a user does.
+fn cc_std() -> str {
+	if __zrt_has_env("ZERG_CSTD") {
+		std := __zrt_getenv("ZERG_CSTD")
+		return "-std=" + std
+	}
+	return "-std=c17"
 }
 
 # zerg_root is the installation root: $ZERG_ROOT, else the current directory (the repo
@@ -1049,7 +1073,7 @@ fn cc_dialect(mut &argv: list[str]) {
 fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
-	argv.append("-std=c11")
+	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")
 	argv.append(rt_dir())
@@ -1064,7 +1088,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
 	argv.append("cc")
-	argv.append("-std=c11")
+	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")
 	argv.append(rt)

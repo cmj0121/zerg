@@ -43,11 +43,22 @@ rebinding — the Rust `let mut` / Swift `var` model, not a variable-vs-elements
 So one `list` type is both a frozen sequence (plain) and a growable vector (`mut`); **only a `mut`
 collection can modify its elements**.
 
+> **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
+> refused by name on both `list` and `map` (``NotImplemented: the list method `insert` ``), so a collection
+> grows at its end and does not shrink at all.
+
 ```text
 xs := [1, 2, 3]            # frozen: xs.append(4) and xs[0] = 9 are errors
 mut ys := [1, 2, 3]
 ys.append(4)               # grow  ·  ys[0] = 9  # edit  ·  ys = [2, 4]  # rebind
 ```
+
+> **[deviation]** The frozen guarantee holds for **element assignment** and not for the **growing
+> methods**. `xs[0] = 9` on a plain `xs` is rejected exactly as the comment above says, but `xs.append(4)`
+> on that same frozen `xs` compiles and really grows the list. The mutability check is written on the
+> assignment forms; a method call was never asked whether its receiver is `mut`, so every `mut this` method
+> passes through a plain binding unchallenged. The program compiles, the frozen half of the model is not
+> enforced, and nothing on the way says so.
 
 ## Keys — `Eq` free, `Hash` explicit
 
@@ -79,6 +90,11 @@ first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
+> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both refused by name, so
+> the `m.get(id) ?? "anon"` line above does not compile and indexing — which aborts — is the only way into
+> a container. Expected absence is therefore not a question a program can ask; it is one it has to head off
+> with `k in m` before indexing.
+
 ## Slicing — read-only subranges
 
 A **subrange** — `xs.slice(a, b)`, the elements `[a, b)` — is an ordinary **read-only `list[T]` value**,
@@ -91,9 +107,10 @@ alongside copy-elision and the move (Values & Memory), adding no visible sharing
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
 materializing a `str` only when it keeps a token.
 
-> **[not yet]** Slicing is unbuilt this phase: neither `xs.slice(a, b)` nor the **`x[a..b]`** slice-index
-> sugar (the latter also deferred at the grammar level — see [Deferred](#deferred)) is available yet. The
-> read-only, copy-on-write design above is the intended semantics.
+> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is refused by name. The
+> **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
+> `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
+> form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
 
 ## Order & equality
 
@@ -105,12 +122,13 @@ equality).
 
 > **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is a
 > **loud compile error** today, and `set[T]` does not exist yet. Only **`str ==`** compares. `for mut x`
-> over a collection of **non-POD** elements (a `list[str]`, or elements of a recursive / boxed type) is also
-> **[not yet]** — over POD elements it is available.
+> over a collection is **[not yet]** for **every** element type, POD included: `for mut x in ys` is refused
+> by name whatever `ys` holds, so the second line of the example below is not a program, and
+> [Control Flow](control-flow.md)'s unconditional marker on the form is the accurate one.
 
 ```text
 for x in xs { total = total + x }         # read
-for mut x in ys { x = x * 2 }             # edit in place — ys must be mut (POD elements today)
+for mut x in ys { x = x * 2 }             # edit in place — [not yet], refused for every element type
 ```
 
 ## Iterating & mutation
@@ -119,11 +137,22 @@ Within a `for … in xs`, `xs` is **frozen against structural change** — appen
 growing/shrinking, or rebinding it inside the loop is a **compile error** — so an iterator can **never be
 invalidated** (no dangling cursor, no runtime fail-fast check). This is a **local** rule — the loop knows
 the collection it walks — so it needs no borrow checker and costs you nothing at runtime. Editing an
-**element** in place (`for mut x`) stays fine: it never moves the cursor.
+**element** in place (`for mut x`) stays fine: it never moves the cursor — though that binding is itself
+**[not yet]** (see [Order & equality](#order--equality)).
+
+> **[deviation]** None of the freeze is implemented. `for x in xs { xs.append(x) }` compiles and runs, and
+> so does `for x in xs { xs = [9] }`, which rebinds the very buffer the loop is walking while the cursor
+> still points into the old one. That is reachable undefined behaviour from safe code — precisely the thing
+> this section says cannot happen — and it is silent: no compile error, no runtime fail-fast, and a short
+> loop usually finishes looking correct, which is why nothing measured it. The rule is as local and as
+> cheap as described; it was simply never written.
 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.
+
+> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both refused by
+> name, so a transform is written as a `for` that appends into a second `list`, and a rebind after the loop.
 
 ## Fixed-size arrays — `[T; N]`
 
@@ -163,12 +192,12 @@ of the rules already stated for `list`:
   at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but
   can **never grow or shrink** — the size is in the type; a plain `a` is frozen.
 - **Length** — `a.len()` is `N`, itself a compile-time constant.
-- **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a`
-  over non-POD elements is [not yet]**), and derives **element-wise**: an array derives `Eq` / `Ord`
+- **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a` is
+  [not yet]** for every element type, POD included), and derives **element-wise**: an array derives `Eq` / `Ord`
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
   compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
   `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW
-  bridge from an array back into the list family — but slicing is **[not yet]** (see
+  bridge from an array back into the list family — but the `slice` **method** is **[not yet]** (see
   [Slicing](#slicing--read-only-subranges)).
 
 ## Strings & bytes
@@ -194,6 +223,6 @@ element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f
   value position.
 - **Container equality** — structural `==` / `!=` on `list` and `map` is **[not yet]**; only `str ==`
   compares today.
-- **Slicing** — both `slice(a, b)` and the **`x[a..b]` slice-index sugar** (the range-index form, also a
-  grammar/syntax concern) are **[not yet]**.
+- **Slicing** — the `slice(a, b)` **method** is **[not yet]**; the **`x[a..b]` slice-index sugar** is built
+  and correct, and is how a subrange is taken today.
 - **Ordered variants** — a sorted `map`/`set` keyed on `Ord` rather than `Hash`, if wanted.

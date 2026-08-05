@@ -15,6 +15,24 @@ differ in calling convention — mutable-reference vs copy). Visibility is **not
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
 anonymous function.
 
+> **[not yet]** The value stops at the module boundary. A function named through another module is a **call
+> target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _module `text` has no
+> `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path
+> never learned it. So a cross-module function can be called, but not bound, passed, or stored.
+>
+> **[not yet]** A type argument may only be **inferred**. Fixing one explicitly at the use site is refused —
+> `id[int](7)` reports _NotImplemented: calling index — a callee is a plain name in this compiler, so
+> `f[T](…)` (an explicit type argument), `fs[0](…)` (a function value in a container) and `p?.m(…)` (an
+> optional method call) are all unbuilt_ — because a call's callee is parsed as a plain name and an index
+> expression never reaches the call path, which is why the three unrelated-looking forms share one refusal.
+> Inference from the argument types is built, and is the only way a generic is instantiated today.
+>
+> **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
+> **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,
+> though `GRAMMAR` derives `param-type ::= ( 'mut' '&' )? type`. The parameter-type parser reads a plain type
+> and never the `mut &` prefix that production allows, so `fn(mut &int) -> bool` has no spelling and the two
+> types stay distinct only on paper.
+
 **A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
 marking the one argument-level effect, a mutable reference that writes back to the caller — and its result, where a
 recoverable failure shows as a `Result` / `Either`. It tracks **no other effect**: whether a function does
@@ -45,15 +63,22 @@ greet("Sam", "Hi", true)     # all positional
   shared-mutable-default trap; it is an ordinary expression and may read earlier parameters (evaluation is
   left-to-right). A parameter with no default stays **mandatory**.
 
-  > **[deviation]** Today only a **self-contained simple constant** default (a literal such as `443` or
-  > `"Hello"`) is lowered correctly. A **non-trivial** default expression — one built from an operator or a
-  > call, e.g. `greeting: str = "a" + "b"` — is currently **mishandled** rather than evaluated per call as
-  > specified. Keep defaults to simple constants until this is fixed.
+  > **[not yet]** A default that **reads an earlier parameter** — `fn g(a: int, b: int = a * 2)` — is the one
+  > shape that is not built. The default is materialised at the **call site**, where the callee's parameter
+  > names are not in scope, so the call reports _error: undefined name `a`_ instead of evaluating `a * 2`.
+  > Every other default is lowered as specified, a bare constant and a computed expression alike:
+  > `b: int = 1 + 2`, `b: int = side()` and `greeting: str = "a" + "b"` all evaluate at the call, each time.
 
 - A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
   defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,
   any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
   the rest must be named too** (no positional after a name).
+
+  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _NotImplemented:
+  > the named argument `loud:` — this compiler binds arguments by position only_, and the rest of the
+  > mechanism goes with it: there is no way to skip a defaulted parameter in the middle, and the "once you
+  > name an argument the rest must be named too" rule has nothing left to govern. A call fills its parameters
+  > left to right, and a defaulted one can only be dropped off the **end** of the argument list.
 
 Because a parameter can be selected by name, **the name is part of the function's contract** — renaming it
 breaks callers, exactly as changing a type would. Yet neither defaults nor names ride in the _type_:

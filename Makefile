@@ -139,30 +139,36 @@ $(SUBDIR):
 # corpus inside a subset a reader is not writing in. Note `--emit bin`: `zerg build` alone
 # stops at an object file, so a target that omits it links nothing and tests nothing.
 #
-# `$(MAKE) build` is the dependency, as in `corpus`, `lint` and `fmt-corpus` — the toolchain
-# it produces is bin/zerg AND bin/zerg0, so the two seed-built demos below need no second one.
+# `$(MAKE) build` is the dependency, as in `corpus`, `lint` and `fmt-corpus`.
 #
-# Two demos stay on the seed, because `zerg` cannot build them yet: examples/modules needs a
-# generic function definition ("NotImplemented"), and examples/1g/init emits a module constant
-# its init never declares (the cc fails on it). Both still build and run here, by zerg0 — the
-# exception is which compiler proves them, not whether they are proven — and they move up to
-# `zerg` with the numbered corpus as soon as those two gaps close.
+# ONE compiler. Two demos used to be built by `zerg0` here, because `zerg` could not build
+# them — which made the gate answer a narrower question than its name: two shipped examples
+# were provable only by the compiler the README says a reader never meets, and the
+# `zerg build …` line in each one's own header answered `NotImplemented` when typed. The
+# forms they needed were a named argument and a module-level inferred binding; both examples
+# are now written in the language this compiler has, and the seed is off this target.
+#
+# The list is a GLOB, not names. `examples/1g/private` was absent from the hand-written list
+# and so was built by nothing at all — a negative example asserting a refusal this compiler
+# does not make, sitting in the tree with no gate to notice. A glob makes a new example
+# directory gated the moment it exists, which is the same reason `corpus` names what CANNOT
+# pass instead of what can.
+#
+# EXAMPLE_MIN is the floor a shrinking glob runs into. The guard against a mistyped pattern
+# is not that the loop fails, it is that the loop has nothing to iterate and says so happily.
+EXAMPLE_MIN ?= 20
+
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
-	for src in examples/[0-9][0-9]_*.zg examples/1g/reexport/main.zg examples/1g/modconst/main.zg examples/1g/spec/main.zg examples/1g/strings/main.zg; do \
+	for src in examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg; do \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \
 		n=$$((n+1)); \
 	done; \
-	for src in examples/modules/main.zg examples/1g/init/main.zg; do \
-		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
-		./bin/zerg0 build $$src -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src (seed)"; fail=1; continue; }; \
-		$$out >/dev/null 2>&1 || { echo "RUN    $$src (seed)"; fail=1; continue; }; \
-		n=$$((n+1)); \
-	done; \
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
+	[ $$n -ge $(EXAMPLE_MIN) ] || { echo "examples: only $$n were built, and the floor is $(EXAMPLE_MIN)"; exit 1; }; \
 	echo "examples: $$n examples built and run"
 
 # Where the fmt cases live, and a FLOOR under how many of them were checked. Same shape as

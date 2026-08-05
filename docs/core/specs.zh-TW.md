@@ -238,7 +238,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
 > `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
 > 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
-> spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類、`chan` 的 refcounted 關閉——但它們由編譯器
+> spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
+> `chan` 的 refcounted 關閉——但它們由編譯器
 > 擁有,使用者型別加入不了:一個 `struct` 上的 `<` 報的是 _NotImplemented: `<` on a P — an ordering comes from
 > `Ord`, which this compiler does not generate_,不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都
 > 是對著這個缺口所寫的規範。

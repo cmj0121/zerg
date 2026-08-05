@@ -23,10 +23,6 @@ propagated:
 function (sugar for that early return), so the function must share the same right type. There's no
 implicit bridge between `T?` and `Result`: convert first with `opt.ok_or(err)` or `res.ok()`.
 
-> **[not yet]** Neither converter is built — `opt.ok_or(err)` and `res.ok()` are each refused by name — so
-> there is no bridge between `T?` and `Result` in either direction at all. A `T?` reaches a
-> `Result`-answering function only by being taken apart by hand, with `??` or an if-let, and re-wrapped.
-
 ```text
 fn load() -> Result[Config] {
     txt := read_file(path)?     # Result[str]; an Err early-returns
@@ -114,12 +110,10 @@ thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes t
 contract itself — the message written to stderr, exit status 1, the `Kind: message` line — is
 [Conformance](../conformance.md).
 
-> **[not yet]** The **`Error` interface is not built**. `message()`, `unwrap()` and `code()` are each
-> refused by name on a caught error (``NotImplemented: the method `message` on a Err``), so `err.message()`
-> just claimed above is unreadable, and so are the `from` cause chain and the `code()` byte. A caught `Err`
-> answers `is` and `in` — its kind, and its kind only — and can be read no other way, which also means the
-> worked example under [Handling errors by type](#handling-errors-by-type--is) does not compile. This is the
-> chapter's largest single gap: the taxonomy is built and testable, and the values it carries are not.
+> **[not yet]** `code()` answers `byte?` and answers it **absent**, always. No `Err` this compiler can
+> construct carries a code: the errors that exist are the built-in kinds, and a code belongs to a
+> user-defined error type, which is the part of this paragraph that is not built. `message()` and
+> `unwrap()` are.
 >
 > **[deviation]** A hand-written `raise` of a built-in kind loses the **`Kind:` prefix** the abort contract
 > specifies. `raise ValueError("bad input")` writes `bad input` and nothing else to stderr, while the same
@@ -224,11 +218,6 @@ match guard { work() } {
     }
 }
 ```
-
-> **[not yet]** The example above does not compile as written: `report(e.message())` needs the `Error`
-> interface, which is unbuilt in all three of its methods (see the taxonomy section). The `is` chain and its
-> mandatory catch-all are real; what the catch-all may do with the error it caught is a kind test and
-> nothing else.
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`

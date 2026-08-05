@@ -200,12 +200,15 @@ surface** (whether module-private, or package-internal and never re-exported), b
 not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
 its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
 
-> **[deviation]** **Nothing here is enforced.** `pub` is parsed and carried on a declaration, and no rule
-> reads it: a module calls another module's module-private function, reads its module-private struct's
-> fields, and returns a module-private type from a `pub` signature, all without a finding. Every module is
-> flattened into one namespace, which is also why two modules that declare the same name collide — the
-> refusal that exists here is about the name, not about the visibility. `pub` **does** decide two things:
-> `import pub` re-export, and which declarations `zerg lint` will call dead.
+> **[deviation]** **Enforced on functions, and on nothing else yet.** Naming another module's
+> module-private FUNCTION is a compile error, reported with a place — both as a bare call and as the
+> namespaced `lib.helper()`. A module-private TYPE and a module-private FIELD are still readable across the
+> boundary: a `pub fn` may return a private struct and a dependent may read a private field of it, with no
+> finding. Every module is flattened into one namespace, which is also why two modules that declare the same
+> name collide — that refusal is about the name, not about the visibility. What the rule compares is the
+> DIRECTORY a declaration was read from against the directory doing the reading, which is the module
+> boundary and not the package one; **package-internal** and **package-public** above still need a package
+> to exist.
 
 ### Importing & referencing
 

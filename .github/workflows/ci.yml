@@ -190,6 +190,49 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make corpus
 
+  # The C dialect the emitted code is compiled with. `-std=c17` is the default and what
+  # every other job here uses, so this exists for the OTHER leg: the specification names
+  # C99 as the fallback, and until this job the fallback had never been compiled once —
+  # `max_align_t` is a C11 typedef, and the runtime's list buffer asked for it.
+  #
+  # It is a matrix over both rather than a c99-only job so that the flag is what is pinned
+  # and not the default: a change to `cc_std`'s default would otherwise move this gate's
+  # meaning without touching this file.
+  #
+  # `make examples` and not `make build` alone, because a dialect that miscompiles rather
+  # than failing to compile is caught by RUNNING a program, and the examples are the corpus
+  # that needs no submodule. Locally this is `ZERG_CSTD=c99 make examples`; the cache keys
+  # objects by dialect, so the two do not hand each other's objects back.
+  #
+  # Linux, because a dialect is mostly a question about the platform's headers and glibc's
+  # feature-test macros are where that question has teeth. macOS runs the default c17 leg
+  # in the job above.
+  dialects:
+    name: the emitted C compiles as ${{ matrix.cstd }} (linux)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cstd: [c17, c99]
+    env:
+      ZERG_CSTD: ${{ matrix.cstd }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      - name: Build the toolchain, emitted C compiled as ${{ matrix.cstd }}
+        run: make build
+
+      - name: Build & run every example as ${{ matrix.cstd }}
+        run: make examples
+
   # The compiler compiles itself, so a codegen change that makes it emit subtly different
   # C for its own source has no other signal: every corpus case still passes, because the
   # one program large enough to reach a rare emitter path is the compiler. `make build`

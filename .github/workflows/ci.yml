@@ -98,6 +98,12 @@ jobs:
       - name: Build the self-hosting compiler with the seed
         run: make build
 
+      # --- 4b. and both of them say the same thing about which version they are --
+      # Immediately after `make build`, because this gate reads bin/ instead of filling it;
+      # scripts/version-check.sh says what it compares and why nothing else here can.
+      - name: The version is one number in one file
+        run: make version-check
+
       # --- 5. build every example with the compiler that SHIPS, then run it ------
       # This step used to inline its own loop and drive `zerg0`, which made it a
       # gate on the SEED — and the seed is deliberately the narrower compiler. Four

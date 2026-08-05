@@ -10,6 +10,23 @@ SUBDIR := editors src/bootstrap src/runtime
 ZERG_ENTRY := src/compiler/zergc.zg
 ZERG_STAGE1 := ./bin/.zerg-stage1
 
+# VERSION is the toolchain's version and the repo's VERSION file is the only place it is
+# written. Everything downstream is derived: the seed takes it through -ldflags, the shipping
+# compiler takes it through a generated src/compiler/zerg/version.zg, and `make version-check`
+# holds all three to each other.
+#
+# It is a file rather than a variable here because a version is also read by things that are
+# not make — a release script, a packager, a person — and `cat VERSION` is an interface all of
+# them already have. That is also why it holds a bare number and no comments.
+#
+# `tr`, not `cat`, and it is the same `tr` gen-version.sh and version-check.sh read the file
+# with. One tolerance shared by three readers, because two tolerances is a file that passes
+# the gate and breaks the build: `cat` keeps a leading space, which reaches the fan-out below
+# as `VERSION=  0.1.0` — an EMPTY version for the sub-make, silently falling the seed back to
+# 0.0.0-dev, and `0.1.0` left over as a goal make has no rule for. A leading space is exactly
+# what pre-commit's trailing-whitespace hook does not look at.
+VERSION := $(shell tr -d ' \t\n\r' <VERSION)
+
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
 # which is what `zerg` is growing toward, while the seed is covered by its own unit tests.
 #
@@ -39,7 +56,7 @@ CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-d
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -56,6 +73,10 @@ test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 run: $(SUBDIR)                  # run in the local environment
 
 build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, then zerg
+	@# BEFORE the seed reads a line of the compiler: version.zg is one of the compiler's own
+	@# sources, so regenerating it afterwards would put the new number into the NEXT build and
+	@# leave this one quietly claiming the old one.
+	@./scripts/gen-version.sh
 	./bin/zerg0 build $(ZERG_ENTRY) -o $(ZERG_STAGE1)
 	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)
 	@rm -f $(ZERG_STAGE1) $(ZERG_STAGE1).c
@@ -92,8 +113,12 @@ help:				            # show this message
 	@perl -nle 'print $$& if m{^[\w-]+:.*?#.*$$}' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?#"} {printf "    %-18s %s\n", $$1, $$2}'
 
+# VERSION rides along on the fan-out because the seed's Makefile stamps it into the binary,
+# and a sub-make inherits nothing that is not handed to it. It is passed to every
+# subdirectory rather than only to src/bootstrap: the ones with no use for it ignore it, and
+# a list of which subdirectory cares is a thing that goes stale the day another one starts to.
 $(SUBDIR):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+	$(MAKE) -C $@ $(MAKECMDGOALS) VERSION=$(VERSION)
 
 # The examples are the corpus a reader meets first, so they are built by the compiler that
 # SHIPS — `zerg` — and they are RUN, not merely emitted. Until now the seed compiled them
@@ -244,7 +269,8 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+# `version-check` sits straight after `build` because it reads bin/ rather than filling it.
+LINUX_GATES ?= build version-check test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -270,6 +296,13 @@ docs-links:                     # every docs path the repo cites must resolve
 	done; \
 	[ $$fail -eq 0 ] || { echo "docs-links: a cited path does not exist"; exit 1; }; \
 	echo "docs-links: every cited docs path resolves"
+
+# No `$(MAKE) build` above the recipe, unlike almost everything else here, and that is the
+# one thing about this target worth knowing from the Makefile: it reads bin/ instead of
+# filling it, so it must be run after a build rather than instead of one. What it compares
+# and why nothing else can see it are set out in the script.
+version-check:                  # VERSION, the generated source, and both compilers agree
+	./scripts/version-check.sh
 
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build

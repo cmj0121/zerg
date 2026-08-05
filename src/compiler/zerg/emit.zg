@@ -548,7 +548,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 # are written, which is why they are read here rather than in c_call.
 fn c_ctor_side(e: Expr) -> int {
 	return match e {
-		ECall(nm, args) => c_ctor_side_of(nm, args.len())
+		ECall(nm, args, _) => c_ctor_side_of(nm, args.len())
 		_ => 0 - 1
 	}
 }
@@ -557,7 +557,7 @@ fn c_ctor_side(e: Expr) -> int {
 # one value.
 fn c_check_ctor_arity(e: Expr) {
 	match e {
-		ECall(nm, args) => c_check_ctor_arity_of(nm, args.len())
+		ECall(nm, args, _) => c_check_ctor_arity_of(nm, args.len())
 		_ => c_skip()
 	}
 }
@@ -1474,6 +1474,16 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[Expr]) -> str {
 		decls.append(pm.ty)
 	}
 	sol := gen_solve(tpl.tparams, decls, actuals)
+	return c_instantiate_at(em, name, sol)
+}
+
+# c_instantiate_at is the half of c_instantiate that happens once the type arguments are
+# known, whoever worked them out. A call that WRITES them — `id[int](7)` — has said what it
+# means and inference has nothing to add; a call that does not is solved from its arguments
+# and arrives here with the same list. Splitting the two apart is what keeps the checks, the
+# dedup and the budget in one place rather than one copy per way in.
+fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
+	tpl := em.gen_tpls[c_generic_row(em, name)]
 
 	# THE DEDUP SCAN COMES FIRST. A key already here was checked when it was made, and both
 	# checks below walk `sol` — one of them into `c_impls`, a scan of every impl in the
@@ -1523,9 +1533,40 @@ fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 fn c_check_bounds(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 	mut i := 0
 	for i < sol.len() and i < tpl.tbounds.len() {
-		raise f"`{ty_name(sol[i])}` does not implement `{tpl.tbounds[i]}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if tpl.tbounds[i] != "" and not c_satisfies(em, sol[i], tpl.tbounds[i])
+		# A bound is a CONJUNCTION, carried joined by `+`: every spec in it has to be met,
+		# and the one that is not is the one named. Reporting the whole bound instead would
+		# make a reader check each in turn to find which.
+		# It RAISES rather than reporting through chk_at, and that is deliberate: a failed
+		# bound means the specialization must not be built, and a collected finding would let
+		# the walk carry on into a body whose type does not meet the promise it was written
+		# against — which reports the consequence first and buries the cause.
+		for b in c_split_bounds(tpl.tbounds[i]) {
+			raise f"`{ty_name(sol[i])}` does not implement `{b}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if not c_satisfies(em, sol[i], b)
+		}
 		i = i + 1
 	}
+}
+
+# c_split_bounds takes `Eq+Hash` back apart. An empty bound answers nothing to check, which
+# is why the loop above needs no `!= ""` of its own.
+fn c_split_bounds(bound: str) -> list[str] {
+	mut out: list[str] = []
+	return out if bound == ""
+
+	b := list[byte](bound)
+	mut cur: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		if b[i] == byte(43) {
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(b[i])
+		}
+		i = i + 1
+	}
+	out.append(str(cur))
+	return out
 }
 
 # c_satisfies is whether a type meets a bound. A BUILT-IN type meets `Eq` inherently — `==`
@@ -3008,7 +3049,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EIdent(n) => c_ident_val(em, n, sb)
 		EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
-		ECall(name, args) => c_call(em, name, args, sb)
+		ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
 		EField(target, fld) => c_fieldref(em, target, fld, sb)
 		EOptChain(target, fld) => c_optchain(em, target, fld, sb)
 		ETry(x) => c_try(em, x, sb)
@@ -4702,6 +4743,38 @@ fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
 	return out + " zgt_ll; })"
 }
 
+# c_call_written is a call that WROTE its type arguments — `id[int](7)`. The specialization
+# is named from what the program said rather than from what its arguments imply, and the call
+# then goes on as an ordinary one. Where nothing was written this is exactly c_call, which is
+# the common path and pays nothing for the other's existence.
+#
+# A written argument on a name that is not a template is a mistake worth naming: it means the
+# reader thinks something is generic that is not, and silently ignoring the brackets would
+# let them keep thinking it.
+fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], sb: Subst) -> str {
+	return c_call(em, name, args, sb) if ts.len() == 0
+
+	# A CHECKED rule, so it carries a place: this is a statement about a program the language
+	# rejects — the reader believes something is generic that is not — rather than a form
+	# this compiler has not built.
+	if not c_is_generic(em, name) {
+		chk_at(em, f"`{name}` is not generic, so `{name}[…]` has no type argument to take")
+		return "0"
+	}
+
+	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
+}
+
+# c_infer_call_written is the same choice for the pass that types a call rather than emits
+# it. Both have to instantiate, because the specialization's signature is what carries the
+# return type, and both have to pick the SAME one.
+fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty]) -> Ty {
+	return c_infer_call(em, name, args) if ts.len() == 0
+	return c_lookup_sig_ret(em, c_instantiate_at(em, name, ts)) if c_is_generic(em, name)
+
+	return c_infer_call(em, name, args)
+}
+
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(name) {
 		em.used_rt = true
@@ -5634,7 +5707,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIdent(n) => c_infer_ident(em, n)
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
-		ECall(name, args) => c_infer_call(em, name, args)
+		ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
 		EField(target, fld) => c_field_ty_of(em, target, fld)
 		EOptChain(target, fld) => c_optchain_ty(em, target, fld)
@@ -7054,16 +7127,16 @@ fn c_meth_args_of(e: Expr) -> list[Expr] {
 
 fn c_call_name(e: Expr) -> str {
 	return match e {
-		ECall(n, _) => n
-		_           => ""
+		ECall(n, _, _) => n
+		_ => ""
 	}
 }
 
 fn c_call_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
-		ECall(_, a) => a
-		_           => none
+		ECall(_, a, _) => a
+		_ => none
 	}
 }
 
@@ -8305,8 +8378,8 @@ fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
 
 fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 	return match x {
-		ECall(nm, _) => c_err_kind(nm) > 0
-		_            => false
+		ECall(nm, _, _) => c_err_kind(nm) > 0
+		_ => false
 	}
 }
 

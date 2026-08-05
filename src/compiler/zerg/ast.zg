@@ -81,7 +81,12 @@ enum Expr {
 	EIdent(str)
 	EUnary(str, Expr)
 	EBinary(str, Expr, Expr)
-	ECall(str, list[Expr])
+
+	# ECall's third field is the type arguments a call WROTE — `id[int](7)`. It is empty for
+	# the ordinary call, whose type arguments are solved from the argument types instead;
+	# what it carries is the case where the program said them, which inference must then
+	# not overrule.
+	ECall(str, list[Expr], list[Ty])
 	EField(Expr, str)
 
 	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
@@ -571,7 +576,7 @@ fn expr_kind(e: Expr) -> str {
 		EIdent(n) => "ident " + n
 		EUnary(oper, x) => "unary " + oper
 		EBinary(oper, a, b) => "binary " + oper
-		ECall(name, args) => "call " + name
+		ECall(name, args, _) => "call " + name
 		EField(target, name) => "field ." + name
 		EOptChain(target, name) => "optional chain ?." + name
 		ETry(x) => "try `?`"

@@ -5,8 +5,8 @@ English | [繁體中文](README.zh-TW.md)
 > Write the code as you think — one way, and only one way, to do it.
 
 Zerg is a **compiled, general-purpose language**. The compiler translates your Zerg source to **C**
-(**C17** by default, **C99** as a fallback), then hands it off to a C compiler (`cc`) to build the native
-binary. Programs are fast to write, easy to read, and overwhelmingly straightforward.
+(**C17**, or **C99** / **C11** when `ZERG_CSTD` asks), then hands it off to a C compiler (`cc`) to build
+the native binary. Programs are fast to write, easy to read, and overwhelmingly straightforward.
 
 > **Project status — Phase-1 MVP.** Zerg is at an early bootstrap stage. The _language_ (as defined in
 > the specification) is deliberately larger than what the _bootstrap compiler_ implements today, so every
@@ -159,7 +159,7 @@ Full catalogue with signatures — **[Standard Library](docs/runtime/stdlib.md)*
                                   ▼
                      ┌───────────────────────────┐
                      │  C source code            │
-                     │  (C17 → C99)              │
+                     │  (C17, or C99 / C11)      │
                      └─────────────┬─────────────┘
                                   │
                                   ▼
@@ -223,8 +223,7 @@ inline assembly; the `is` type-test for non-error types; the `Reader` I/O surfac
 **Known deviations (bugs the spec records against current behavior).** A refusal carries no
 position — a checked rule reports `file:line:col` with the source line and a caret, and a
 form the compiler has not built names the form and nothing else; module visibility is
-not enforced — a module reaches another module's private declarations; the bootstrap emits
-`-std=c11` rather than the specified C17-default / C99-fallback; left-to-right evaluation
+not enforced — a module reaches another module's private declarations; left-to-right evaluation
 order of call arguments and operands is not enforced; and the
 scheduler is **cooperative, not preemptive** — nothing takes a coroutine off its worker
 until it parks, so a CPU-bound coroutine occupies one, and as many of them as there are

@@ -74,7 +74,7 @@ func TestManifest(t *testing.T) {
 			name:         "result-nil-main",
 			src:          "fn main() -> Result[nil] {\n  nop\n}",
 			wantRuntime:  true,
-			wantContains: []string{"#include \"zergrt.h\"", "zrt_result_nil zg_main(void)", "return zrt_run(zg_main);", "return zrt_result_ok();"},
+			wantContains: []string{"#include \"zergrt.h\"", "zrt_result_nil zg_main(void)", "static zrt_result_nil __zerg_entry(void)", "return zrt_run(__zerg_entry);", "return zrt_result_ok();"},
 		},
 	}
 	for _, tc := range cases {

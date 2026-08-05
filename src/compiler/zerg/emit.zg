@@ -5943,6 +5943,97 @@ fn c_let_value(s: Stmt) -> Expr {
 	}
 }
 
+# c_main_entry writes the program's C entry: a WRAPPER carrying the top-level
+# initialization and the call to `main`, and the runtime shim that runs it under a root
+# abort handler.
+#
+# The defect it closes is that there was no root handler at all. The emitted `int main`
+# called the body directly, so an uncaught abort reached `zrt_unwind_abort` with no handler
+# installed, took its `exit(1)` last resort, and left the cleanup stack standing — every
+# `defer` pending at the top level skipped, on the one path a reader most needs them. Every
+# other exit ran them: a normal return, an early `return`, each round of a loop, and an
+# abort a `guard` demoted, which is the case that made the gap look like coverage.
+#
+# THE WRAPPER IS WHAT PUTS THE INITIALIZATION INSIDE THE HANDLER. A module constant's
+# initializer and every `init()` run before main's body and can abort like any other code;
+# emitted straight into `int main` they sat outside whatever handler the body had. A
+# concurrent program had exactly that shape and still does not: `zrt_sched_main_nil(zg_main)`
+# guards the body and not the prologue. One wrapper fixes both, because both families of
+# shim take the same nullary function.
+#
+# THE WRAPPER'S NAME IS OUT OF REACH. `__zerg_entry` and `__zerg_args` cannot be written by
+# a Zerg program, because every Zerg name mangles through `zg_`: a program that declares
+# `entry__` or a module constant named `args__` used to collide with them, and the
+# collision surfaced as a `cc` error against generated C — for the constant, as a silently
+# wrong answer, since the initializer assigned to the wrapper's PARAMETER instead. The seed
+# already named its init aggregator `__zerg_init_main` for the same reason.
+#
+# The bracket itself is the RUNTIME's. `zrt_run` has spelled it since the `Result[nil]`
+# entry existed and `coro_trampoline` spells it for every coroutine; a copy in emitted text
+# would be the only one no compiler in this repository ever checks. What is decided here is
+# which shim runs the wrapper — the scheduler's when the program is concurrent, entry.c's
+# when it is not — and that is the only difference between the two paths left.
+#
+# A program that reaches the runtime NOWHERE keeps the plain entry it has always had. Its
+# cleanup stack cannot be non-empty, because a `defer` needs the runtime and so does every
+# raise, so the handler would guard an empty unwind — and buying it would cost every trivial
+# program the whole runtime, which zergrt.h opens by recording that it does not pay.
+#
+# There is no `Result[nil]` arm, and its absence is the discarded-Result deviation
+# ([Modules, Packages & Programs](../../docs/runtime/package.md)) rather than an oversight
+# here: such a main falls to the nil shape, so its `Right` is dropped and the program exits
+# 0. The seed HAS the arm — `zrt_run` maps the Result to a status — which is why the two
+# compilers disagree about that one shape, and why no program can observe it: the seed
+# cannot build `Right` either.
+fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
+	has_args := c_main_has_args(own)
+	ret_int := c_main_ret_is_int(own)
+
+	if has_args and em.used_conc {
+		# The scheduler's program-entry shims all take a NULLARY function pointer, so
+		# running main(args) as coroutine 0 needs a scheduler shim that does not exist.
+		# entry.c's zrt_run_args shows the SHAPE is fine; it is the scheduler's version
+		# of it that is missing.
+		raise "NotImplemented: main(args) in a program that uses concurrency"
+	}
+
+	if not has_args and not c_needs_runtime(em) and not em.used_rt {
+		return "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n" if ret_int
+
+		return "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
+	}
+
+	em.used_rt = true
+	if has_args {
+		# args in and an exit code out is its own shim. Both compilers used to drop that
+		# code — `fn main(args) -> int` returning 2 exited 0 — because the entry called
+		# main for effect and answered 0 itself.
+		if ret_int {
+			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    return zg_main(__zerg_args);\n}\n\n"
+			return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args_int(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
+		}
+		wrap := "static void __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    zg_main(__zerg_args);\n}\n\n"
+		return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
+	}
+	if ret_int {
+		wrap := "static int64_t __zerg_entry(void) {\n" + inits + "    return zg_main();\n}\n\n"
+		shim := c_main_shim(em, "zrt_sched_main_int", "zrt_main_run_int")
+		return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
+	}
+	wrap := "static void __zerg_entry(void) {\n" + inits + "    zg_main();\n}\n\n"
+	shim := c_main_shim(em, "zrt_sched_main_nil", "zrt_main_run_nil")
+	return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
+}
+
+# c_main_shim is the one thing a concurrent program decides differently: it runs the entry
+# as coroutine 0 and drains the run queue afterwards, so a fire-and-forget `spawn` still
+# finishes. Both families arm the same root handler around the same wrapper.
+fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
+	return conc if em.used_conc
+
+	return plain
+}
+
 # c_init_calls is the `init()` invocations main opens with, in declaration order.
 fn c_init_calls(f: File) -> str {
 	mut out := ""
@@ -8816,32 +8907,8 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# one example that owns this behaviour was built by the seed, whose single
 		# translation unit makes `own` and `f` the same file.
 		inits := c_const_assigns(em, f) + c_init_calls(f)
-		if c_main_has_args(own) {
-			# main(args): build the arg list from argv via the runtime
-			em.used_rt = true
-			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
-			if em.used_conc {
-				# the scheduler's program-entry shims all take a NULLARY function pointer
-				# (zergrt.h) — there is no shape that carries an argument — so running
-				# main(args) as coroutine 0 needs a runtime shim that does not exist yet
-				raise "NotImplemented: main(args) in a program that uses concurrency"
-			}
-		} else if c_main_ret_is_int(own) {
-			# main's value IS the exit code. Calling an `int64_t (*)(void)` through the
-			# `void (*)(void)` shim was undefined behaviour AND threw the code away, so
-			# every concurrent `fn main() -> int` exited 0 whatever it returned.
-			mainw = "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n"
-			if em.used_conc {
-				mainw = "int main(void) {\n" + inits + "    return (int)zrt_sched_main_int(zg_main);\n}\n"
-			}
-		} else {
-			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
-			if em.used_conc {
-				# a concurrent program runs main AS COROUTINE 0 — the scheduler drains
-				# the run queue afterwards, so a fire-and-forget spawn still finishes
-				mainw = "int main(void) {\n" + inits + "    return zrt_sched_main_nil(zg_main);\n}\n"
-			}
-		}
+
+		mainw = c_main_entry(em, own, inits)
 	}
 
 	# A separately-compiled unit declares the WHOLE program's prototypes, and any of them

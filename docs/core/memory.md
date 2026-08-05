@@ -252,15 +252,6 @@ flush a buffer, close a scope-local resource — needing no type at all:
 }
 ```
 
-> **[deviation]** An uncaught abort that reaches `main` runs **no** pending `defer`.
-> `fn main() { defer say("bye")  raise ValueError("boom") }` writes `boom` to standard error and exits `1`
-> without printing anything from the `defer`. Every other exit is honored: a normal return, an early `return`,
-> each iteration of a loop, and — the case that hides this one — a `raise` caught by an enclosing `guard`,
-> which does run the defers on the unwound path. Only the last unwind, the one that leaves `main`, skips them,
-> so a test that catches its own abort observes the specified behaviour and a program that does not catch it
-> never gets to report what it saw. This also contradicts step 2 of the runtime abort contract in
-> [Conformance](../conformance.md).
-
 Several `defer`s in a block run **last-scheduled-first**, interleaved with scope-owned frees and `Ref`
 drops in reverse construction order, so teardown mirrors setup. Three constructs share one axis — _when_
 cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires

@@ -712,6 +712,11 @@ static inline int64_t zrt_floordiv_f(double a, double b) {
  * raises EncodingError on violation, going FROM a str never fails. */
 zrt_list zrt_str_bytes(const char *s);
 zrt_list zrt_str_runes(const char *s);
+/* zrt_str_dup copies a C string into a managed cell. It is how an `Err`'s message is read:
+ * a zrt_err's msg may be a managed payload, an immortal literal cell, or a plain string
+ * literal the runtime raised with, and only a copy is correct for all three. */
+const char *zrt_str_dup(const char *s);
+
 const char *zrt_str_from_bytes(zrt_list bytes);
 const char *zrt_str_from_runes(zrt_list runes);
 

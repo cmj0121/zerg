@@ -202,23 +202,30 @@ discriminants), `match` with exhaustiveness checking, `list[T]` and `map[K, V]`,
 bytes, `mut &` parameters, optionals with `?` / `??` / `?.` / `!`, the whole value tier
 (`Either[X, Y]` / `Result[T]` / `Left` / `Right`), `guard` / `raise` with cause chaining,
 `defer` and `del`, ranges, f-strings, inherent `impl` and `spec` / `impl Spec for T`,
-modules with `pub` and `init()`, and the whole concurrency chapter — `spawn`, `chan[T]`,
-directional ends, `close`, `select` and `for select` with the non-blocking `_` arm, and
-`time.after` / `time.ticker`.
+modules with `pub` and `init()`, generic **functions** whose type arguments are solved from
+the call, `#[derive(Eq)]` and the `==` it writes on a struct or a fieldless enum, list
+slicing, `for` over a `str`'s runes, checked integer arithmetic with the wrapping `%`-suffixed
+forms beside it, and the whole concurrency chapter — `spawn`, `chan[T]`, directional ends,
+`close`, `select` and `for select` with the non-blocking `_` arm, and `time.after` /
+`time.ticker`.
 
-**Not yet (each refused by name).** Generics and generic type aliases; `derive`, and with it
-`==` / `<` on a composite; `spec` provided methods; closures that capture; `set[T]`; fixed
-arrays `[T; N]`; slicing; `list` / `map` equality; tuple, struct and list patterns, and
-or-patterns; a block as a `match` arm body; f-string conversions (`!r` / `!s` / `!a`), format
-specs and `{x=}`; structural rendering of a composite; `for c in <str>`; `Ref[T]` and the
-`atomic` module; command literals; `unsafe`, raw pointers and inline assembly; the `is`
-type-test for non-error types; the `Reader` / `stdin` I/O surface; and the `zerg test` runner.
+**Not yet (each refused by name).** A generic `struct`, `enum` or method, a bound naming two
+specs (`T: A + B`), a generic type alias, and an explicit type argument at a call
+(`id[int](7)`); `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
+provided methods; closures that capture; named arguments at a call; `set[T]`; fixed arrays
+`[T; N]`; `list` / `map` equality; tuple, struct and list patterns, or-patterns and
+destructuring bindings; a block used as an expression, and so as a `match` arm body; f-string
+conversions (`!r` / `!s` / `!a`), format specs and `{x=}`; structural rendering of a
+composite; `Ref[T]` and the `atomic` module; command literals; `unsafe`, raw pointers and
+inline assembly; the `is` type-test for non-error types; the `Reader` I/O surface; and the
+`zerg test` runner.
 
-**Known deviations (bugs the spec records against current behavior).** Arithmetic lowers to
-plain C, so overflow and division-by-zero do not trap and the wrapping `+%` operators are
-the same as `+`; out-of-range literals for the named integer types are not rejected; the
-bootstrap emits `-std=c11` rather than the specified C17-default / C99-fallback;
-left-to-right evaluation order of call arguments and operands is not enforced; and the
+**Known deviations (bugs the spec records against current behavior).** A refusal carries no
+position — a checked rule reports `file:line:col` with the source line and a caret, and a
+form the compiler has not built names the form and nothing else; module visibility is
+not enforced — a module reaches another module's private declarations; the bootstrap emits
+`-std=c11` rather than the specified C17-default / C99-fallback; left-to-right evaluation
+order of call arguments and operands is not enforced; and the
 scheduler is **cooperative, not preemptive** — nothing takes a coroutine off its worker
 until it parks, so a CPU-bound coroutine occupies one, and as many of them as there are
 workers stop the program. Each is marked where it appears in the spec.

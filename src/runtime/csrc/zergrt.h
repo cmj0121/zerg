@@ -539,6 +539,24 @@ static inline int64_t zrt_shr_i64(int64_t a, int64_t n, int64_t width) {
 	return a >> n;
 }
 
+/* The WRAPPING three — `+%`, `-%`, `*%`. They are the operators whose overflow is the point,
+ * and a plain C `+` on two signed operands is UNDEFINED on exactly that input: the compiler
+ * is entitled to assume it never happens, and UBSan reports it. The arithmetic is done on the
+ * unsigned bit pattern, where wrapping is defined as modulo 2^64, and cast back — which is
+ * what `+%` means. The conversion back is implementation-defined rather than undefined, and
+ * every target this compiler emits for is two's complement. */
+static inline int64_t zrt_wrap_add(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a + (uint64_t)b);
+}
+
+static inline int64_t zrt_wrap_sub(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a - (uint64_t)b);
+}
+
+static inline int64_t zrt_wrap_mul(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a * (uint64_t)b);
+}
+
 /* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
 static inline int64_t zrt_neg_i64(int64_t a) {
 	if (a == INT64_MIN) {

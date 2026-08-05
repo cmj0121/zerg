@@ -814,7 +814,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path, kw.line, kw.col)
+	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path, kw.line, kw.col, [], [])
 }
 
 pub fn init_name(at: int) -> str {
@@ -1117,7 +1117,34 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 	head := parse_fn_head(p, is_pub, recv, recv_mut)
 	body := parse_block(p)
 
-	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col)
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds)
+}
+
+# p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
+# names and the spec each is bounded by ("" for an unbounded one). It answers nothing when
+# there is no bracket, so every caller may ask.
+#
+# A BOUND IS ONE SPEC. `T: Eq + Hash` is the grammar's, and this compiler carries one, which
+# is refused by name rather than read as the first of them — a bound silently narrowed is a
+# program that type-checks against a promise nobody made.
+fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) {
+	return if not p_at(p, LBrack)
+
+	p_advance(p) # '['
+	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		nm := p_name(p, "a type parameter")
+		mut bound := ""
+		if p_at(p, Colon) {
+			p_advance(p)
+			bound = p_name(p, "a bound")
+			raise f"NotImplemented: the bound `{nm}: {bound} + …` names more than one spec — this compiler carries one bound per type parameter" if p_at(p, Plus)
+		}
+		names.append(nm)
+		bounds.append(bound)
+		break if not p_at(p, Comma)
+		p_advance(p)
+	}
+	expect(p, RBrack)
 }
 
 # parse_fn_head reads a function's SIGNATURE and stops before its body, answering a FnDecl
@@ -1131,9 +1158,13 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 	p_advance(p) # 'fn'
 	name := p_name(p, "a function")
 
-	# `fn f[T](x: T)` — the bracket group was read as the parameter list, so `[T]` became
-	# two parameters named `[` and `]` and the C came out unparseable
-	raise "NotImplemented: a generic function definition" if p_at(p, LBrack)
+	# `fn f[T, U: Eq](…)` — the type parameters, and the spec each is bounded by. They are
+	# read here rather than skipped because a generic function is a TEMPLATE: nothing is
+	# emitted for the declaration itself, and one instantiation reaches C per distinct set
+	# of type arguments a call asks for.
+	mut tparams: list[str] = []
+	mut tbounds: list[str] = []
+	p_type_params(p, tparams, tbounds)
 	expect(p, LParen)
 	mut params: list[Param] = []
 	if recv != "" {
@@ -1184,7 +1215,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 		has_ret = true
 	}
 	mut none: list[Stmt] = []
-	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col)
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {

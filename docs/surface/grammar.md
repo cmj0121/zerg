@@ -762,22 +762,23 @@ name**, and no program that uses one compiles into something else. This list is 
 `scripts/refuse-check.sh` holds a case for each, so a form that quietly starts working, or
 quietly starts failing differently, fails the gate.
 
-| Group | Form                                                                                    |
-| ----- | --------------------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                         |
-| 3     | destructuring binding `(a, b) := …`                                                     |
-| 4     | a callee that is not a name — `f[T](…)`, `fs[0](…)`, `p?.m(…)`                          |
-| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                  |
-| 5     | a named argument `f(b: 1)` — arguments bind by position                                 |
-| 6     | generic `fn` / `struct` / `enum`; a closure that captures; an untyped closure parameter |
-| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`        |
-| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body        |
-| 8     | associated function `Type.f(…)`; an associated type or value, in a `spec` or an `impl`  |
-| 8     | an `impl` on a built-in type (`impl Tag for int`)                                       |
-| 8     | every decorator but `#[derive(…)]`                                                      |
-| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                          |
-| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                              |
-| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                 |
+| Group | Form                                                                                   |
+| ----- | -------------------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                        |
+| 3     | destructuring binding `(a, b) := …`                                                    |
+| 4     | a callee that is not a name — `f[T](…)`, `fs[0](…)`, `p?.m(…)`                         |
+| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                 |
+| 5     | a named argument `f(b: 1)` — arguments bind by position                                |
+| 6     | generic `struct` / `enum`; a generic METHOD; a bound naming two specs (`T: Eq + Ord`)  |
+| 6     | a closure that captures; an untyped closure parameter                                  |
+| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`       |
+| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body       |
+| 8     | associated function `Type.f(…)`; an associated type or value, in a `spec` or an `impl` |
+| 8     | an `impl` on a built-in type (`impl Tag for int`)                                      |
+| 8     | every decorator but `#[derive(…)]`                                                     |
+| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                         |
+| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                             |
+| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
 dispatches on the spec — that much a declared interface means. What is enforced is the

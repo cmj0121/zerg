@@ -1,0 +1,286 @@
+# generic — monomorphization (docs/core/specs.md, GRAMMAR group 6).
+#
+# A generic function is a TEMPLATE, not a function. Nothing is emitted for the declaration
+# itself; what reaches C is one specialization per distinct set of type arguments some call
+# site asks for. C has no generics, and erasing to a common representation would need a
+# uniform boxed value — which this language does not have, because a `list[int]` is int64s
+# and not pointers.
+#
+# The whole pass is an AST-to-AST substitution: `subst_fn` copies the template with each
+# type parameter replaced, and what comes back is an ORDINARY FnDecl. Everything downstream
+# — the checker, the emitter, the name mangler, the copy and drop rules — handles it with no
+# knowledge that a generic was ever involved. That is the point of doing it here and not
+# later: a type parameter that survives into lowering is a type the C backend has no width
+# for, and every pass would need an opinion about it.
+#
+# The type ARGUMENTS are not written at the call site. They are solved from the argument
+# types by matching the template's declared parameter types against them, which is what
+# makes `assert_eq(1, 1)` legal without spelling `assert_eq[int]`.
+
+# gen_ty_key is a type as a name fragment, and it has to tell ANY two distinct types apart —
+# a key that collides hands the second call the first's specialization, which is the wrong
+# function body with no diagnostic anywhere.
+#
+# So the encoding is INJECTIVE, and getting there took two tries. Dropping what cannot be
+# spelled maps `list[int]` and a type named `listint` together; replacing each such byte with
+# `_` maps `Foo?` and a type named `Foo_` together. What works is escaping: `_` doubles, and
+# every other byte becomes `_<hex>_`, so the escape character can never be confused with
+# itself and two distinct `ty_name`s can never meet.
+fn gen_ty_key(t: Ty) -> str {
+	mut out := ""
+	for b in list[byte](ty_name(t)) {
+		out = out + gen_key_byte(b)
+	}
+	return out
+}
+
+fn gen_key_byte(b: byte) -> str {
+	return "__" if b == b'_'
+	return f"_{strconv.to_string(int(b), 16)}_" if not is_ident(b)
+
+	mut one: list[byte] = []
+	one.append(b)
+	return str(one)
+}
+
+# gen_mangle is the C-visible name of one specialization. The type arguments go into the
+# name because they are what distinguishes it: two instantiations of one template are two
+# functions, and a name that dropped them would collide the moment a program used both.
+#
+# `$` is not legal in a Zerg identifier, so a mangled name cannot collide with one a
+# program declares. It is mapped to `_` on the way into C, which does not accept it either.
+fn gen_mangle(name: str, args: list[Ty]) -> str {
+	mut out := name
+	for a in args {
+		out = out + "$" + gen_ty_key(a)
+	}
+	return out
+}
+
+# gen_solve works out what each type parameter must be, from the types the call actually
+# passes. It matches each declared parameter type against the argument's type STRUCTURALLY,
+# so a `list[T]` parameter given a `list[int]` solves T, not only a bare `T`.
+#
+# An unsolved parameter answers TUnknown, and the caller reports it: a type argument that
+# cannot be worked out is a call that has not said what it means, and guessing `int` would
+# make the program compile as something nobody wrote.
+fn gen_solve(tparams: list[str], decls: list[Ty], actuals: list[Ty]) -> list[Ty] {
+	mut sol: list[Ty] = []
+	for n in tparams {
+		sol.append(TUnknown)
+	}
+	mut i := 0
+	for i < decls.len() and i < actuals.len() {
+		gen_match(tparams, sol, decls[i], actuals[i])
+		i = i + 1
+	}
+	return sol
+}
+
+# gen_match walks a declared type and an actual one together, recording a binding wherever
+# the declared side is a type parameter. The FIRST binding wins: `f(a: T, b: T)` given an
+# int and a str takes int, and the mismatch is then reported by the ordinary argument rule
+# against the specialization's own signature — which says `b: int` and means it.
+fn gen_match(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty) {
+	nm := c_named_of(decl)
+	if nm != "" and c_name_in(tparams, nm) {
+		mut i := 0
+		for i < tparams.len() {
+			if tparams[i] == nm and c_is_unknown(sol[i]) {
+				sol[i] = actual
+				return
+			}
+			i = i + 1
+		}
+		return
+	}
+	gen_match_inner(tparams, sol, decl, actual)
+}
+
+# gen_match_inner is the structural half: a container's element, a carrier's payload, a
+# map's two sides, a function type's parameters and its result. Both types are taken APART
+# the same way and their parts matched by POSITION.
+#
+# ASKING ONE READER TWICE is what keeps this small. It was a dispatch on the declaration's
+# shape with a second, nested match on the actual inside a helper per shape — two idioms for
+# one question, and the second is what dragged in a `gen_match_two`, a `gen_match_fnparts`
+# and a nop of its own. Eleven functions did what four do.
+#
+# A shape that does not line up simply binds nothing, because two part lists of different
+# lengths stop at the shorter — which is what the argument rule downstream is there to
+# report, against a signature that by then has real types in it.
+fn gen_match_inner(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty) {
+	gen_match_all(tparams, sol, gen_parts(decl), gen_parts(actual))
+}
+
+# gen_parts is a type's SUB-TYPES, in written order — the one place this file knows how a
+# type is built out of others. A scalar has none, and so does a name: a `TNamed` reaching
+# here is a struct or an enum, whose fields are not the type's arguments.
+fn gen_parts(t: Ty) -> list[Ty] {
+	return match t {
+		TList(e)      => [e]
+		TOpt(e)       => [e]
+		TChan(e, d)   => [e]
+		TMap(k, v)    => [k, v]
+		TTuple(es)    => es
+		TEither(x, y) => [x, y]
+		TFn(ps, r)    => gen_fn_parts(ps, r)
+		_             => []
+	}
+}
+
+# a function type's parts are its parameters and then its result, which is the order they
+# are written in and the order two of them have to be compared in
+fn gen_fn_parts(ps: list[Ty], r: Ty) -> list[Ty] {
+	mut out := ps
+	out.append(r)
+	return out
+}
+
+fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list[Ty]) {
+	mut i := 0
+	for i < ds.len() and i < as_.len() {
+		gen_match(tparams, sol, ds[i], as_[i])
+		i = i + 1
+	}
+}
+
+# --- substitution -------------------------------------------------------------------
+#
+# One template plus one set of type arguments makes one ordinary function. Every node that
+# can carry a type is rebuilt; every node that cannot is rebuilt too, because a walk that
+# returned the original for "nothing to do here" would have to know which subtrees contain
+# a type, and that is the same question one level up.
+
+# subst_fn specializes a template. The result has NO type parameters — that is what makes
+# it an ordinary function, and what stops it being instantiated again.
+fn subst_fn(tpl: FnDecl, args: list[Ty]) -> FnDecl {
+	names := tpl.tparams
+	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [])
+}
+
+# subst_ty replaces a type parameter wherever a type is written, at any depth.
+fn subst_ty(names: list[str], args: list[Ty], t: Ty) -> Ty {
+	nm := c_named_of(t)
+	if nm != "" {
+		mut i := 0
+		for i < names.len() {
+			return args[i] if names[i] == nm and i < args.len()
+			i = i + 1
+		}
+		return t
+	}
+	return match t {
+		TList(e)      => TList(subst_ty(names, args, e))
+		TOpt(e)       => TOpt(subst_ty(names, args, e))
+		TChan(e, d)   => TChan(subst_ty(names, args, e), d)
+		TMap(k, v)    => TMap(subst_ty(names, args, k), subst_ty(names, args, v))
+		TTuple(es)    => TTuple(subst_tys(names, args, es))
+		TEither(x, y) => TEither(subst_ty(names, args, x), subst_ty(names, args, y))
+		TFn(ps, r)    => TFn(subst_tys(names, args, ps), subst_ty(names, args, r))
+		_             => t
+	}
+}
+
+fn subst_tys(names: list[str], args: list[Ty], ts: list[Ty]) -> list[Ty] {
+	mut out: list[Ty] = []
+	for t in ts {
+		out.append(subst_ty(names, args, t))
+	}
+	return out
+}
+
+fn subst_block(names: list[str], args: list[Ty], b: list[Stmt]) -> list[Stmt] {
+	mut out: list[Stmt] = []
+	for s in b {
+		out.append(subst_stmt(names, args, s))
+	}
+	return out
+}
+
+fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
+	return match s {
+		SLet(nm, ty, ht, im, v) => SLet(nm, subst_ty(names, args, ty), ht, im, subst_expr(names, args, v))
+		SAssign(l, r) => SAssign(subst_expr(names, args, l), subst_expr(names, args, r))
+		SPrint(v) => SPrint(subst_expr(names, args, v))
+		SReturn(hv, v) => SReturn(hv, subst_expr(names, args, v))
+		SReturnIf(v, c) => SReturnIf(subst_expr(names, args, v), subst_expr(names, args, c))
+		SExpr(v) => SExpr(subst_expr(names, args, v))
+		SIf(c, tb, he, eb) => SIf(subst_expr(names, args, c), subst_block(names, args, tb), he, subst_block(names, args, eb))
+		SFor(hc, c, b) => SFor(hc, subst_expr(names, args, c), subst_block(names, args, b))
+		SForIn(nm, it, b) => SForIn(nm, subst_expr(names, args, it), subst_block(names, args, b))
+		SForSelect(arms) => SForSelect(subst_sel_arms(names, args, arms))
+		SRaise(e, hf, cause) => SRaise(subst_expr(names, args, e), hf, subst_expr(names, args, cause))
+		SDefer(v) => SDefer(subst_expr(names, args, v))
+		SSpawn(v) => SSpawn(subst_expr(names, args, v))
+		SSend(ch, v) => SSend(subst_expr(names, args, ch), subst_expr(names, args, v))
+		SSelect(arms) => SSelect(subst_sel_arms(names, args, arms))
+		SClose(ch, tw) => SClose(subst_expr(names, args, ch), tw)
+		SIfLet(nm, v, tb, he, eb) => SIfLet(nm, subst_expr(names, args, v), subst_block(names, args, tb), he, subst_block(names, args, eb))
+		_ => s
+	}
+}
+
+fn subst_sel_arms(names: list[str], args: list[Ty], arms: list[SelArm]) -> list[SelArm] {
+	mut out: list[SelArm] = []
+	for a in arms {
+		out.append(SelArm(a.op, a.bind, subst_expr(names, args, a.ch), subst_expr(names, args, a.val), subst_block(names, args, a.body)))
+	}
+	return out
+}
+
+fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
+	return match e {
+		EUnary(o, x) => EUnary(o, subst_expr(names, args, x))
+		EBinary(o, a, b) => EBinary(o, subst_expr(names, args, a), subst_expr(names, args, b))
+		ECall(nm, xs) => ECall(nm, subst_exprs(names, args, xs))
+		EField(x, f) => EField(subst_expr(names, args, x), f)
+		EOptChain(x, f) => EOptChain(subst_expr(names, args, x), f)
+		ETry(x) => ETry(subst_expr(names, args, x))
+		EIndex(x, i) => EIndex(subst_expr(names, args, x), subst_expr(names, args, i))
+		EMethod(x, m, xs) => EMethod(subst_expr(names, args, x), m, subst_exprs(names, args, xs))
+		EListLit(xs) => EListLit(subst_exprs(names, args, xs))
+		EConv(ty, x, as_) => EConv(subst_ty(names, args, ty), subst_expr(names, args, x), as_)
+		EIf(c, a, b) => EIf(subst_expr(names, args, c), subst_expr(names, args, a), subst_expr(names, args, b))
+		EMatch(x, arms) => EMatch(subst_expr(names, args, x), subst_arms(names, args, arms))
+		ERange(a, b, inc) => ERange(subst_expr(names, args, a), subst_expr(names, args, b), inc)
+		ETuple(xs) => ETuple(subst_exprs(names, args, xs))
+		EMapLit(ks, vs) => EMapLit(subst_exprs(names, args, ks), subst_exprs(names, args, vs))
+		EFn(ps, hr, r, b) => EFn(subst_params(names, args, ps), hr, subst_ty(names, args, r), subst_block(names, args, b))
+		EChanNew(ty, cap) => EChanNew(subst_ty(names, args, ty), subst_expr(names, args, cap))
+		ERecv(x) => ERecv(subst_expr(names, args, x))
+		EForce(x) => EForce(subst_expr(names, args, x))
+		ECoalesce(a, b, jump) => ECoalesce(subst_expr(names, args, a), subst_expr(names, args, b), subst_block(names, args, jump))
+		EGuard(b) => EGuard(subst_block(names, args, b))
+		EIs(x, nm) => EIs(subst_expr(names, args, x), nm)
+		EIn(x, s) => EIn(subst_expr(names, args, x), subst_expr(names, args, s))
+		_ => e
+	}
+}
+
+# subst_params is a parameter list, and it is a function of its own because BOTH a template
+# and a closure inside one have one. The rebuild was written twice, so a Param that grew a
+# field would have been substituted in one and copied unchanged in the other.
+fn subst_params(names: list[str], args: list[Ty], ps: list[Param]) -> list[Param] {
+	mut out: list[Param] = []
+	for pm in ps {
+		out.append(Param(pm.name, subst_ty(names, args, pm.ty), pm.is_ref, pm.has_def, subst_expr(names, args, pm.def)))
+	}
+	return out
+}
+
+fn subst_exprs(names: list[str], args: list[Ty], xs: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for x in xs {
+		out.append(subst_expr(names, args, x))
+	}
+	return out
+}
+
+fn subst_arms(names: list[str], args: list[Ty], arms: list[Arm]) -> list[Arm] {
+	mut out: list[Arm] = []
+	for a in arms {
+		out.append(Arm(a.pat, subst_expr(names, args, a.lit), a.bind, a.ctor, a.binds, a.has_guard, subst_expr(names, args, a.guard_expr), subst_expr(names, args, a.body)))
+	}
+	return out
+}

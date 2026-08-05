@@ -320,6 +320,17 @@ struct FnDecl {
 	# other position to report.
 	line: int
 	col: int
+
+	# tparams / tbounds are `fn f[T, U: Eq](…)` — the type parameter NAMES and, in
+	# parallel, the spec each is bounded by ("" for an unbounded one). A generic function
+	# is not emitted: it is a TEMPLATE, and what reaches C is one instantiation per
+	# distinct set of type arguments a call site asks for.
+	#
+	# They are two parallel lists rather than a list of pairs for the reason the other
+	# tables here are: a pair needs a struct that exists only to be that pair, and every
+	# walk over it then names a field instead of an index.
+	tparams: list[str]
+	tbounds: list[str]
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

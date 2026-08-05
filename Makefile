@@ -49,6 +49,18 @@ CORPUS_SKIP := \
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 
+# A FLOOR under how many cases the gate has to have run, of the kind fmt-tokens and
+# reject-fuzz carry. The `[ -d test-data/codegen ]` guard in the recipe catches an ABSENT
+# submodule and nothing else; a shallow, partial or wrong-commit checkout leaves the
+# directory THERE with a handful of cases in it, the wildcard above shrinks to match, and the
+# gate reports `1/1 cases pass` and exits 0 — success for having measured almost nothing,
+# which is the one failure that still looks like a corpus.
+#
+# 60 against the 80 that pass today. The gap is room for cases to move into CORPUS_SKIP while
+# they wait for a feature, so that adding a case for something `zerg` cannot build yet is not
+# also a chore here; it is nowhere near the two or three a broken checkout leaves behind.
+CORPUS_MIN ?= 60
+
 # A `conc_` case is run more than once. Every other case is a function of its source, so
 # one run answers the question; a concurrent one is a function of its source AND of an
 # interleaving the scheduler picks fresh each time, and a race that shows up one run in
@@ -153,14 +165,32 @@ examples:                       # build every example with zerg itself, and run 
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
 	echo "examples: $$n examples built and run"
 
+# Where the fmt cases live, and a FLOOR under how many of them were checked. Same shape as
+# `corpus`: the directory guard below catches an absent submodule, and a checkout that has
+# test-data/fmt with two cases in it satisfies every assertion here — `zerg fmt --check` is
+# happy with an argument list of two, and the gate says `2 cases are fmt's fixpoint` and
+# exits 0.
+#
+# 24 against the 31 there are today, the same judgement fmt-tokens made with 100 against 137:
+# far enough below that retiring or renaming a case is not a chore, far enough above that a
+# corpus which lost most of itself cannot pass.
+#
+# The directory is a variable for the reason reject-fuzz's $CORPUS is one — a floor nobody
+# has watched fire is a floor nobody knows works, and watching this one fire means pointing
+# the gate at a directory holding fewer cases than test-data/fmt does.
+FMT_CORPUS ?= test-data/fmt
+FMT_CORPUS_MIN ?= 24
+
 # `zerg fmt --check` is the tool answering its own question. This target used to copy each
 # case to a temp file, format the copy and `cmp` — the Makefile reimplementing in shell
 # something the formatter knew and had no way to say.
 fmt-corpus:                     # every test-data/fmt case must already be canonical
 	$(MAKE) build
-	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
-	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
+	@[ -d $(FMT_CORPUS) ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@./bin/zerg fmt --check $(FMT_CORPUS)/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
+	@n=$$(ls $(FMT_CORPUS)/*.zg | wc -l | tr -d ' '); \
+	[ $$n -ge $(FMT_CORPUS_MIN) ] || { echo "fmt-corpus: only $$n cases were checked, and the floor is $(FMT_CORPUS_MIN)"; exit 1; }; \
+	echo "fmt-corpus: $$n cases are fmt's fixpoint"
 
 # The compiler's OWN sources, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
@@ -181,7 +211,7 @@ fmt-tokens:                     # formatting changes spacing, never the token st
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@fail=0; \
+	@fail=0; ran=0; \
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
@@ -193,10 +223,12 @@ corpus:                         # run zerg against the test-data corpus it now o
 			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
 			n=$$((n+1)); \
 		done; \
+		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \
 	done; \
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
-	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
+	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
+	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
 
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.

@@ -185,20 +185,24 @@ Zerg 處於 Phase-1 MVP。出貨的編譯器是 **`zerg`**——以 Zerg 寫成�
 **已建置的部分。** struct 與 enum(payload、遞迴,以及可觀察的 discriminant)、帶窮盡性檢查的 `match`、
 `list[T]` 與 `map[K, V]`、字串與 byte、`mut &` 參數、帶 `?` / `??` / `?.` / `!` 的 optional、完整的
 value tier(`Either[X, Y]` / `Result[T]` / `Left` / `Right`)、`guard` / `raise` 與 cause 串接、`defer`
-與 `del`、range、f-string、inherent `impl` 與 `spec` / `impl Spec for T`、帶 `pub` 與 `init()` 的模組,
+與 `del`、range、f-string、inherent `impl` 與 `spec` / `impl Spec for T`、帶 `pub` 與 `init()` 的模組、
+型別引數由呼叫端解出的泛型**函式**、`#[derive(Eq)]` 以及它為 struct 或無 payload enum 寫出的 `==`、
+list slicing、對 `str` 的 rune 迭代、帶檢查的整數算術與並列的 `%` 後綴 wrapping 形式,
 以及整章並行——`spawn`、`chan[T]`、有向端點、`close`、`select` 與 `for select`(含非阻塞的 `_` arm),
 還有 `time.after` / `time.ticker`。
 
-**尚未實作(每一項都被指名拒絕)。** 泛型與 generic type alias;`derive`,以及隨之而來的複合值 `==` / `<`;
-`spec` 的 provided method;會捕獲的 closure;`set[T]`;定長陣列 `[T; N]`;slicing;`list` / `map` 的相等
-比較;tuple、struct 與 list pattern,以及 or-pattern;block 當 `match` arm body;f-string 的轉換
-(`!r` / `!s` / `!a`)、format spec 與 `{x=}`;複合值的結構化渲染;`for c in <str>`;`Ref[T]` 與 `atomic`
-模組;command literal;`unsafe`、裸指標與內嵌組語;非錯誤型別的 `is` 測試;`Reader` / `stdin` I/O 介面;
-以及 `zerg test` runner。
+**尚未實作(每一項都被指名拒絕)。** 泛型 `struct`、`enum` 或 method,指名兩個 spec 的 bound
+(`T: A + B`),generic type alias,以及呼叫端的顯式型別引數(`id[int](7)`);payload enum 上的 `derive`,
+以及 `Ord` / `Hash` / `Encode` / `Decode`;`spec` 的 provided method;會捕獲的 closure;呼叫端的具名引數;
+`set[T]`;定長陣列 `[T; N]`;`list` / `map` 的相等比較;tuple、struct 與 list pattern、or-pattern 與
+解構繫結;block 當成表達式,連帶當 `match` arm body;f-string 的轉換(`!r` / `!s` / `!a`)、format spec
+與 `{x=}`;複合值的結構化渲染;`Ref[T]` 與 `atomic` 模組;command literal;`unsafe`、裸指標與內嵌組語;
+非錯誤型別的 `is` 測試;`Reader` I/O 介面;以及 `zerg test` runner。
 
-**已知偏差(規格對照目前行為記錄的 bug)。** 算術降階為純 C,所以溢位與除零不會 trap、wrapping 的 `+%`
-系列等同 `+`;named integer 型別的超範圍字面量不會被拒絕;bootstrap 目前 emit `-std=c11` 而非規格所定的
-C17 預設 / C99 fallback;call 引數與運算元的左到右求值順序尚未強制;排程器是**協作式、非搶佔式**——在一條
+**已知偏差(規格對照目前行為記錄的 bug)。** 拒絕不帶位置——被檢查的規則會報 `file:line:col`、原始行與
+caret,而編譯器尚未實作的形式只說出形式的名字,別的都沒有;模組可見性未被強制——一個模組讀得到另一個模組的私有宣告;
+bootstrap 目前 emit `-std=c11` 而非規格所定的 C17 預設 / C99 fallback;call 引數與運算元的左到右求值順序
+尚未強制;排程器是**協作式、非搶佔式**——在一條
 coroutine 自己 park 之前沒有東西能把它從 worker 上拿下來,所以一個 CPU-bound 的 coroutine 會佔住一條,
 數量到達 worker 數就讓整個程式停擺。每一項都在規格對應處標註。
 

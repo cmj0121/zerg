@@ -47,6 +47,13 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
 的：`list[Cat]` 不是 `list[Animal]`——要抽象一整族就用 spec bound（`[T: X]`），而非 subtype 代換。
 
+**型別引數由呼叫端解出**,而且是結構性的:宣告為 `list[T]` 的參數收到 `list[int]` 就決定了 `T`,所以 `max(a, b)`
+不必寫 `[int]`。沒有任何引數提到的型別參數是編譯錯誤而非猜測;而 **bound 在 instantiation 時檢查**——那是具體型別
+第一次存在、可供檢查的地方。
+
+> **[not yet]** 泛型 **`fn`** 已實作。泛型 **`struct`**、泛型 **`enum`**、泛型 **method**,以及指名一個以上 spec 的
+> bound(`T: Eq + Ord`),各自都會被指名拒絕。
+
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 （`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持

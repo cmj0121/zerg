@@ -107,7 +107,9 @@ func TestMainArgsIntReturnRuns(t *testing.T) {
 }
 
 // TestMainArgsLowering pins the C entry: it grows argc/argv, builds the list with
-// zrt_os_args, and routes a Result[nil] main through zrt_run_args.
+// zrt_os_args, and routes a Result[nil] main through zrt_run_args — reached through the
+// entry WRAPPER, which is what carries the top-level initialization inside the root abort
+// handler rather than leaving it in front of one.
 func TestMainArgsLowering(t *testing.T) {
 	code, manifest, diags := Compile("fn main(args: list[str]) -> Result[nil] {\n\treturn nil\n}\n")
 	if len(diags) != 0 {
@@ -115,8 +117,9 @@ func TestMainArgsLowering(t *testing.T) {
 	}
 	for _, want := range []string{
 		"int main(int argc, char **argv)",
-		"zrt_list zg_args = zrt_os_args(argc, argv);",
-		"return zrt_run_args(zg_main, zg_args);",
+		"static zrt_result_nil __zerg_entry(zrt_list zg_args)",
+		"return zg_main(zg_args);",
+		"return zrt_run_args(__zerg_entry, zrt_os_args(argc, argv));",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)

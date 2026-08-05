@@ -16,13 +16,25 @@ PKG     := ./cmd/zerg
 # reason.
 TIMEOUT ?= 30m
 
+# VERSION is stamped into the binary at link time, and it arrives from OUTSIDE — the root
+# Makefile reads it from the repo's VERSION file and hands it down, so the number lives in
+# one place rather than being restated here.
+#
+# It is deliberately allowed to be unset. `go build ./...`, `go test`, and an editor running
+# the compiler for its own reasons all produce a working seed without going through the root
+# Makefile, and none of them should have to. Those binaries keep main.go's `0.0.0-dev`, which
+# says what they are; passing `-X main.version=` with nothing after it would instead give
+# them an EMPTY version, which is the one answer that looks like a bug in the flag rather
+# than like a development build.
+LDFLAGS := $(if $(VERSION),-ldflags "-X main.version=$(VERSION)")
+
 .PHONY: all build test run clean install uninstall help
 
 all: build			# default action: build the toolchain driver
 
-build:				# build the zerg toolchain driver into bin/
+build:				# build the zerg toolchain driver into bin/ (VERSION=x.y.z stamps --version)
 	@mkdir -p "$(BIN)"
-	$(GO) build -o "$(BINARY)" $(PKG)
+	$(GO) build $(LDFLAGS) -o "$(BINARY)" $(PKG)
 
 test:				# run the Go test suite
 	$(GO) test -timeout $(TIMEOUT) ./...

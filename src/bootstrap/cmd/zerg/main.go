@@ -30,9 +30,16 @@ import (
 )
 
 // CLI is the zerg command line, parsed by kong.
+//
+// Version is a kong.VersionFlag, which prints kong's "version" variable and exits 0 before
+// anything else is parsed. Handling it by hand would mean a second path through argument
+// parsing that has to agree with the first about what a flag is; letting kong own it means
+// `zerg0 --version` and `zerg0 build --version` answer the same way, and the flag appears in
+// --help without being written there twice.
 type CLI struct {
-	Build   BuildCmd `cmd:"" name:"build" help:"Compile a Zerg source file to a binary."`
-	Verbose int      `short:"v" type:"counter" help:"increase log verbosity (-v info, -vv debug)"`
+	Build   BuildCmd         `cmd:"" name:"build" help:"Compile a Zerg source file to a binary."`
+	Version kong.VersionFlag `short:"V" name:"version" help:"show the version and exit"`
+	Verbose int              `short:"v" type:"counter" help:"increase log verbosity (-v info, -vv debug)"`
 }
 
 // BuildCmd compiles one source file through the Phase 0 pipeline.
@@ -50,6 +57,10 @@ func main() {
 		kong.Name("zerg0"),
 		kong.Description("The minimal Zerg bootstrap seed: compile a .zg source with 'build'."),
 		kong.UsageOnError(),
+		// The banner names the SEED, so nobody reading a build log has to work out which of
+		// the two compilers answered. Both carry the same number, which is the whole point of
+		// stamping it in from one file; the words around it are where they differ.
+		kong.Vars{"version": "zerg0 " + version + " (seed)"},
 	)
 	setupLog(cli.Verbose)
 	switch ctx.Command() {

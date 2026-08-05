@@ -306,6 +306,21 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 # parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR:545) — into the spec names
 # it conjoins, dropping each one's type arguments. It is the same production after a type
 # parameter's `:` and after a spec's, which is why one function reads both.
+# join_bounds carries a conjunction in the one string a type parameter owns. A bound is read
+# in exactly one place and checked in exactly one place, so the shape that matters is the one
+# there; what a `list[list[str]]` would buy is a shape rather than an answer. A `+` cannot
+# appear in a spec name, so the join is reversible — c_split_bounds is the other half.
+fn join_bounds(specs: list[str]) -> str {
+	mut out := ""
+	for sp in specs {
+		if out != "" {
+			out = out + "+"
+		}
+		out = out + sp
+	}
+	return out
+}
+
 fn parse_bound(mut &p: Parser, whose: str) -> list[str] {
 	mut out: list[str] = []
 	for p_at(p, Ident) {
@@ -1138,17 +1153,12 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		mut bound := ""
 		if p_at(p, Colon) {
 			p_advance(p)
-			bound = p_name(p, "a bound")
 
-			# `T: Eq + Hash` — every spec after the first joins the same string, separated by
-			# `+`, and the instantiation splits it back. A bound is a CONJUNCTION, so one
-			# field per parameter is enough to carry it; what a second list would buy is a
-			# shape, not an answer. A `+` cannot appear in a spec name, so the join is
-			# reversible.
-			for p_at(p, Plus) {
-				p_advance(p)
-				bound = bound + "+" + p_name(p, "a bound")
-			}
+			# `parse_bound` is the one reader of `Spec` and `A + B + C`, shared with a spec's
+			# own type parameters and with a super-spec. A second reader here would be a
+			# second answer to the same production — and a narrower one, since that reader
+			# also refuses a bound carrying type arguments.
+			bound = join_bounds(parse_bound(p, "a type parameter's bound"))
 		}
 		names.append(nm)
 		bounds.append(bound)

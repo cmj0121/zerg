@@ -86,6 +86,10 @@ enum Expr {
 	# the ordinary call, whose type arguments are solved from the argument types instead;
 	# what it carries is the case where the program said them, which inference must then
 	# not overrule.
+	#
+	# It holds AT MOST ONE today. The parser recovers a written argument from an `EIndex`,
+	# whose subscript is a single expression, so `id[int, str](…)` has no path in — the list
+	# is the shape the field will need, not the shape it can currently be given.
 	ECall(str, list[Expr], list[Ty])
 	EField(Expr, str)
 
@@ -326,14 +330,12 @@ struct FnDecl {
 	line: int
 	col: int
 
-	# tparams / tbounds are `fn f[T, U: Eq](…)` — the type parameter NAMES and, in
-	# parallel, the spec each is bounded by ("" for an unbounded one). A generic function
-	# is not emitted: it is a TEMPLATE, and what reaches C is one instantiation per
-	# distinct set of type arguments a call site asks for.
-	#
-	# They are two parallel lists rather than a list of pairs for the reason the other
-	# tables here are: a pair needs a struct that exists only to be that pair, and every
-	# walk over it then names a field instead of an index.
+	# tparams / tbounds are `fn f[T, U: Eq](…)` — the type parameter NAMES and, in the same
+	# order, the bound each carries or "" for none. A bound is a CONJUNCTION — `T: Eq + Show`
+	# asks for both — and its specs are carried joined by `+` in the one string, because a
+	# bound is read in one place (the parser) and checked in one place (the instantiation),
+	# so the shape that matters is the shape there. `join_bounds` writes it and
+	# `c_split_bounds` reads it back; a `+` cannot appear in a spec name.
 	tparams: list[str]
 	tbounds: list[str]
 }

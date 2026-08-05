@@ -1485,6 +1485,12 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[Expr]) -> str {
 fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
 	tpl := em.gen_tpls[c_generic_row(em, name)]
 
+	# ONE TYPE ARGUMENT PER PARAMETER. `gen_solve` always answers one per parameter, so
+	# while inference was the only way in this was an invariant nothing had to state; a call
+	# that WRITES its arguments decides the length itself, and `pair[int](…)` on a two
+	# parameter template used to substitute the first and let the second reach C untouched.
+	raise f"`{name}` has {strconv.to_string(tpl.tparams.len(), 10)} type parameters and this gives {strconv.to_string(sol.len(), 10)}" if sol.len() != tpl.tparams.len()
+
 	# THE DEDUP SCAN COMES FIRST. A key already here was checked when it was made, and both
 	# checks below walk `sol` — one of them into `c_impls`, a scan of every impl in the
 	# program. Every call site reaches this twice, so re-checking was pure repeat work.
@@ -1553,17 +1559,14 @@ fn c_split_bounds(bound: str) -> list[str] {
 	mut out: list[str] = []
 	return out if bound == ""
 
-	b := list[byte](bound)
 	mut cur: list[byte] = []
-	mut i := 0
-	for i < b.len() {
-		if b[i] == byte(43) {
+	for ch in list[byte](bound) {
+		if ch == b'+' {
 			out.append(str(cur))
 			cur = []
 		} else {
-			cur.append(b[i])
+			cur.append(ch)
 		}
-		i = i + 1
 	}
 	out.append(str(cur))
 	return out
@@ -4497,7 +4500,7 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 		e := c_tmp(em, "zgt_ke")
 		mut out := "({ " + c_type(TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
 		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
-		out = out + " if (" + t + ".tag == 0) { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_payload_copy(em, elem, t + ".ok") + "; }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_res_taken(em, t, elem) + "; }"
 		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
 		return out + " " + r + "; })"
 	}
@@ -4510,31 +4513,24 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 		t := c_tmp(em, "zgt_ko")
 		o := c_tmp(em, "zgt_kv")
 		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
-		out = out + " if (" + t + ".tag == 0) { " + o + ".tag = 0; " + o + ".ok = " + c_payload_copy(em, left, t + ".ok") + "; }"
-		out = out + " else { " + o + ".tag = 1; }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_ok(o) + " = " + c_res_taken(em, t, left) + "; }"
+		out = out + " else { " + c_res_mark_right(o) + " }"
 		return out + " " + o + "; })"
 	}
 
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`"
 }
 
-# c_payload_copy copies a carrier payload when its type needs one and hands it straight back
-# when it does not. `c_copy_of` alone answers `zg_copy_<T>` for anything that is not a list, a
-# map, a tuple or a str — and for a scalar that name is `zg_copy_`, a function nobody
-# declares, which reaches cc.
-fn c_payload_copy(mut &em: Emitter, t: Ty, x: str) -> str {
-	return x if not c_needs_copy(em, t)
-
-	return c_copy_of(em, t, x)
-}
-
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
 # is a `Result[T]` whatever the optional held; `ok` keeps the Left and drops the Right.
 fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
 	return TEither(c_opt_elem(tty), TErr) if meth == "ok_or" and c_is_opt(tty)
-	return TOpt(c_either_left(tty)) if meth == "ok" and c_is_either(tty)
 
-	return TUnknown
+	# Raising rather than answering `TUnknown` for the same reason c_err_method_ret does:
+	# the two tables must agree about which names EXIST, and only a raise makes them.
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`" if meth != "ok" or not c_is_either(tty)
+
+	return TOpt(c_either_left(tty))
 }
 
 # c_err_method_ret is the same three answers, for the pass that types the call rather than
@@ -4543,9 +4539,15 @@ fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
 fn c_err_method_ret(meth: str) -> Ty {
 	return TStr if meth == "message"
 	return TOpt(TErr) if meth == "unwrap"
-	return TOpt(TByte) if meth == "code"
 
-	return TUnknown
+	# It RAISES on a name it does not know, exactly as c_list_method_ret does and unlike
+	# c_map_method_ret, which answers quietly. The two tables are read by one `c_meth_kind`,
+	# so they cannot disagree about WHICH method this is — but they could disagree about
+	# whether it EXISTS, and a fourth method added to the emit side alone would then infer
+	# `TUnknown` and be reported somewhere far from here.
+	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`" if meth != "code"
+
+	return TOpt(TByte)
 }
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
@@ -4672,7 +4674,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the one
 	# shape where the reader has said which module they mean, and the one where reading a
 	# module-private name is unambiguous rather than accidental.
-	chk_visible(em, meth, c_sig_mod_of(em, c_sig_key("", meth)), c_sig_pub_of(em, c_sig_key("", meth)))
+	c_chk_visible_fn(em, meth)
 
 	return f"{c_fn_cname("", meth)}({c_call_args(em, meth, args, sb)})"
 }
@@ -4769,8 +4771,9 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 # it. Both have to instantiate, because the specialization's signature is what carries the
 # return type, and both have to pick the SAME one.
 fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty]) -> Ty {
-	return c_infer_call(em, name, args) if ts.len() == 0
-	return c_lookup_sig_ret(em, c_instantiate_at(em, name, ts)) if c_is_generic(em, name)
+	# It stays SILENT where the emit side reports: a written type argument on a name that is
+	# not generic is one mistake, and one diagnostic is what it should produce.
+	return c_lookup_sig_ret(em, c_instantiate_at(em, name, ts)) if ts.len() > 0 and c_is_generic(em, name)
 
 	return c_infer_call(em, name, args)
 }
@@ -4846,7 +4849,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# allowed to name it. It is asked HERE and not at the lookup above because the lookup
 	# answers for every shape of call — a method, a constructor, an intrinsic — and only a
 	# plain function has a module that could be the wrong one.
-	chk_visible(em, name, c_sig_mod_of(em, c_sig_key("", name)), c_sig_pub_of(em, c_sig_key("", name)))
+	c_chk_visible_fn(em, name)
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname("", name), name, args, rels, sb) if c_any_owned(rels)
@@ -4854,25 +4857,19 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	return f"{c_fn_cname("", name)}({c_call_args(em, name, args, sb)})"
 }
 
-# c_sig_mod_of / c_sig_pub_of read the two visibility columns recorded beside a signature.
-# An unknown key answers "" and true — a generated declaration has no module a reader could
-# have written, and refusing on one would be a rule nobody can act on.
-fn c_sig_mod_of(mut &em: Emitter, key: str) -> str {
-	mut i := 0
-	for i < em.sig_names.len() {
-		return em.sig_mod[i] if em.sig_names[i] == key
-		i = i + 1
-	}
-	return ""
-}
+# c_chk_visible_fn is the visibility rule for a free function. It goes through `c_sig_row`,
+# the one scan of that table there should be: a column-per-reader pair walked ~1.7k rows
+# twice per call site and built the key twice, which is the cost the table's own comment on
+# `sig_nparams` explains they precomputed two integers to avoid.
+#
+# A key that is not there is quiet. A generated declaration — a `derive`d impl, a
+# monomorphized specialization — has no module a reader could have written, and a rule that
+# guessed there would refuse programs for a reason nobody can act on.
+fn c_chk_visible_fn(mut &em: Emitter, name: str) {
+	r := c_sig_row(em, c_sig_key("", name))
+	return if r < 0
 
-fn c_sig_pub_of(mut &em: Emitter, key: str) -> bool {
-	mut i := 0
-	for i < em.sig_names.len() {
-		return em.sig_pub[i] if em.sig_names[i] == key
-		i = i + 1
-	}
-	return true
+	chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
 }
 
 # c_struct_args emits a struct constructor's arguments, giving each field's type as

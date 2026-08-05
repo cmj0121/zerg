@@ -88,16 +88,10 @@ const char *zrt_str_concat(const char *a, const char *b) {
  * from, which is the property worth paying for: the caller owns what it is handed, whoever
  * raised it. */
 const char *zrt_str_dup(const char *s) {
-	size_t n;
-	char  *p;
 	if (s == NULL) {
 		s = "";
 	}
-	n = strlen(s);
-	p = str_alloc(n + 1);
-	memcpy(p, s, n);
-	p[n] = '\0';
-	return p;
+	return dup_n(s, strlen(s));
 }
 
 /* --- display() -------------------------------------------------------------- */

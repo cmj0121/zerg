@@ -20,6 +20,23 @@
 #include <stdbool.h> /* bool */
 #include <setjmp.h>  /* jmp_buf */
 
+/* --- compile-time assertions --------------------------------------------- */
+
+/* ZRT_STATIC_ASSERT states an invariant the build must hold rather than the test
+ * suite. `_Static_assert` is C11, and this runtime is compiled under C99 too —
+ * where clang and gcc both still accept the keyword, but only as an extension, so
+ * a conforming C99 toolchain is entitled to reject it. The fallback declares an
+ * array whose length is negative when the condition is false, which says the same
+ * thing in C89 onward; the message rides along in the arm that can carry one. */
+#define ZRT_SA_CAT_(a, b) a##b
+#define ZRT_SA_CAT(a, b) ZRT_SA_CAT_(a, b)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define ZRT_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#define ZRT_STATIC_ASSERT(cond, msg) \
+	typedef char ZRT_SA_CAT(zrt_static_assert_, __LINE__)[(cond) ? 1 : -1]
+#endif
+
 /* --- allocator wrapper (alloc.c) ----------------------------------------- */
 
 /* zrt_alloc returns n bytes of zero-uninitialised heap, aborting on OOM. It is

@@ -18,11 +18,9 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(pthread_t) <= sizeof(zrt_thread), "pthread_t does not fit zrt_thread");
-_Static_assert(sizeof(pthread_mutex_t) <= sizeof(zrt_mutex), "pthread_mutex_t does not fit zrt_mutex");
-_Static_assert(sizeof(pthread_cond_t) <= sizeof(zrt_cond), "pthread_cond_t does not fit zrt_cond");
-#endif
+ZRT_STATIC_ASSERT(sizeof(pthread_t) <= sizeof(zrt_thread), "pthread_t does not fit zrt_thread");
+ZRT_STATIC_ASSERT(sizeof(pthread_mutex_t) <= sizeof(zrt_mutex), "pthread_mutex_t does not fit zrt_mutex");
+ZRT_STATIC_ASSERT(sizeof(pthread_cond_t) <= sizeof(zrt_cond), "pthread_cond_t does not fit zrt_cond");
 
 static pthread_t *as_thread(zrt_thread *t) { return (pthread_t *)(void *)t->slots; }
 static pthread_mutex_t *as_mutex(zrt_mutex *m) { return (pthread_mutex_t *)(void *)m->slots; }

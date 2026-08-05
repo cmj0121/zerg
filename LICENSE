@@ -23,6 +23,20 @@ coherent.
 Full texts are in [`LICENSES/`](LICENSES). Each directory above carries its own `LICENSE`
 file naming which one applies there.
 
+## What the table does not cover: `test-data/`
+
+`test-data/` is a **private submodule** holding the conformance corpus — the programs the
+gates build, run and compare, and the reason a claim in the specification can be measured
+rather than asserted. It is **not part of a release**: no release artifact contains it, no
+program built with Zerg links it, and a source tree without it still builds the compiler.
+The gates that read it say so and stand down when it is absent.
+
+`.gitmodules` records where that repository lives so that whoever already has access can
+fetch it in the right place. **A path in `.gitmodules` is a bookmark, not a grant** — it
+conveys no license to the corpus and no right of access to it. The corpus is licensed, if
+at all, by its own repository; none of the licenses above reaches it, and nothing in this
+file should be read as offering it.
+
 ## What this means for a program you write in Zerg
 
 **Your program is yours.** Compiling with Zerg does not place any license on your source

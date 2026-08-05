@@ -5,16 +5,24 @@
 是編譯錯誤**——絕不會被默默忽略。每個 decorator 綁定其後的宣告。屬於
 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](decorators.md) 版本。
 
+> **[deviation]** 一個**不帶引數**的 `#[derive]` 或 `#[derive()]` 會被接受、然後默默丟掉,而那正是本頁說絕不會發生
+> 的那件事。引數清單是以「對括號內的 spec 名字做迴圈」讀進來的,所以空清單就是零次迭代,既不生成也不拒絕任何東西;
+> 而且因為「decorator 有沒有掛在對的宣告種類上」這道檢查是**逐個具名 spec** 做的,裸寫的形式連那道檢查也一併跳過
+> ——`#[derive]` 掛在一個 `fn` 上會編過,而同一個 `fn` 上的 `#[derive(Eq)]` 則正確地被拒絕、報
+> _`#[derive(Eq)]` has no declaration under it_。沒有任何東西被編錯,但一道指令被讀進來又被丟掉,而那正是封閉集合
+> 本來要排除的事。
+
 ## 集合
 
 `#[derive]` 是編譯器唯一會讀的 decorator。其餘每一個——`#[dyn]`、`#[test]`、`#[sealed]`、版面指示——
 皆為 **[not yet]**,會被指名拒絕:
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
-  受祝福集合是 **`Eq`** 與 **`Ord`**（**[not yet]**——decorator 被讀進來然後丟掉,而複合值上的 `==` / `<`
-  會被指名拒絕），而 **`Hash`**、**`Encode`**、**`Decode`** 已規範、但
-  **[not yet]**;**沒有自動 derive 的 `Object`**。使用者 spec 不可被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見
-  **[Derive & Default Behavior](derive.zh-TW.md)**。
+  受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`（掛在**帶 payload**
+  的 `enum` 上則是 **[not yet]**）——以及 **`Ord`**、**`Hash`**、**`Encode`**、**`Decode`**,各自已規範、但
+  **[not yet]**:指名其中一個是一次乾淨的拒絕,_NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`;
+  `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt_。**沒有自動 derive 的 `Object`**。使用者 spec 不可
+  被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[dyn]`** — 掛在泛型 `fn`。把泛型編成**一份共享的 witness-table body**,而非依型別引數各自 monomorphize——以
   zero-cost 換較小的碼,並讓 compiler 封頂實例化膨脹。見 **[Grammar](../surface/grammar.zh-TW.md)**（group 7）。
 - **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。函式不帶參數;
@@ -30,6 +38,12 @@
   **[not yet]**
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
+
+> **[deviation]** 編譯器並不區分一個**已識別**的 decorator 與一個**未知**的。除了 `#[derive]` 以外的每一個 `#[…]`
+> 都落進同一個分支,所以 `#[sealed]`、`#[repr]`、`#[dyn]`、`#[test]`,以及拼錯的 `#[frobnicate]`,拿到的是同一句話
+> ——_NotImplemented: the decorator `#[X]` — this compiler reads `#[derive(…)]` and no other_。它們每一個都被拒絕,
+> 所以沒有任何東西被默默丟掉、也沒有任何東西被編錯;失去的是本節與下面〈保留〉賴以成立的那個區分。一個打錯的字會
+> 被報成一個「保留、等待實作」的名字,而「未知的 decorator 是一個讀者分辨得出來的錯誤」這個承諾並沒有兌現。
 
 ## 不是 macro
 

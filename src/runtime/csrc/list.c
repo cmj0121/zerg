@@ -35,19 +35,27 @@
  * second allocation and `data` stays the element pointer every reader already uses.
  *
  * `data` must stay suitably aligned for any element type, and the prefix is what decides
- * that. The union with max_align_t is not enough on its own: `max_align_t` is 8 bytes on
- * Apple silicon and 16 on x86-64 Linux, so the same source gives a different guarantee per
- * target — and the one platform where it is weaker is the one this is developed on, which
- * is the worst way to find out. The assertion says what is actually required. Every
- * element type today (scalars, a list or map header, structs of those) needs 8, so the
- * floor is 8 and it is checked rather than assumed. */
+ * that. The union is not enough on its own: its width is 8 bytes on Apple silicon and 16
+ * on x86-64 Linux, so the same source gives a different guarantee per target — and the one
+ * platform where it is weaker is the one this is developed on, which is the worst way to
+ * find out. The assertion says what is actually required. Every element type today
+ * (scalars, a list or map header, structs of those) needs 8, so the floor is 8 and it is
+ * checked rather than assumed.
+ *
+ * The members are spelled out rather than reached through `max_align_t`, which is the C11
+ * typedef naming the widest of exactly these — and is absent from <stddef.h> under C99,
+ * the other dialect this runtime is built with. Naming them costs four lines and makes the
+ * union mean the same thing in both. */
 typedef union {
 	int64_t     rc;
-	max_align_t align;
+	long double ld;
+	double      d;
+	long long   ll;
+	void       *p;
 } zrt_buf_hdr;
 
-_Static_assert(sizeof(zrt_buf_hdr) >= 8 && sizeof(zrt_buf_hdr) % 8 == 0,
-               "a list buffer's prefix must keep `data` 8-byte aligned");
+ZRT_STATIC_ASSERT(sizeof(zrt_buf_hdr) >= 8 && sizeof(zrt_buf_hdr) % 8 == 0,
+                  "a list buffer's prefix must keep `data` 8-byte aligned");
 
 static zrt_buf_hdr *buf_hdr(const zrt_list *l) {
 	return (zrt_buf_hdr *)(void *)(l->data - sizeof(zrt_buf_hdr));

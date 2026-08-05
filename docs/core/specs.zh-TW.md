@@ -20,10 +20,11 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **相等、排序與雜湊都是 opt-in、絕非自動。** 沒有**自動實作的 `Object` spec**、也沒有隱式的 `==`。一個型別只有透過
   **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
-  `derive(Hash)` 取得雜湊（**[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何 spec bound
-  就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是表徵的性質、
-  不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（受祝福集合中每一個 trait 皆為
-  **[not yet]**）見 [Derive 與預設行為](derive.zh-TW.md) 參考。
+  `derive(Hash)` 取得雜湊（兩者皆 **[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何
+  spec bound 就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是
+  表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（`Eq` 在一個 `struct` 與一個
+  無欄位 `enum` 上已建置;`Ord`、`Hash`、`Encode`、`Decode`,以及帶 payload 的 `enum` 上的 `Eq`,皆為 **[not yet]**）
+  見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
@@ -42,6 +43,13 @@ box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體
 具體型別**，所以在 **existential 上**各自是 compile error——這不是禁止該 spec 當型別，只是禁止那一個呼叫，和 binary
 op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可以當型別**，box 就只提供「單憑 `this` 就能分派」的
 東西——並把回傳 `This` 的結果 re-box 成同一個 spec。
+
+> **[not yet]** `spec` 根本不能**當型別用**,所以上面那三段——heap-boxed 的 existential、它的動態 dispatch、以及逐個
+> 成員交代 box 提供什麼、不提供什麼——講的是一套沒有程式到得了的機制。`fn go(g: Greet)` 會被拒絕、報
+> _NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
+> here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
+> 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
+> 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
@@ -110,6 +118,13 @@ impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range)
 泛型直接指名參數（`[X: Indexable[int]]`）、或當場綁定它（`[X: Indexable[K]]` 綁定 `K`），所以 **bound 永遠不歧義**
 ——只有「對一個有多個實作的值做裸使用」才會。要在**執行期**、而非依引數型別做選擇，就改用 `enum`。
 
+> **[not yet]** 一個帶參數的 spec 只能在**一個**引數上被實作,不能同時在好幾個上——而那正是本節存在的全部意義。
+> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _`C` declares `ix` twice — every method on a type
+> shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
+> **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
+> `Indexable[int]` / `Indexable[Range]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
+> [型別](types.zh-TW.md#into--自己會發生的那個轉換) 裡「每個型別只能有一個 `Into`」是同一個根因。
+
 ## 型別測試（Type tests）——`is`
 
 existential 藏起值、但沒藏起**身分**——就是上面介紹過的 `x is T` 測試。它不是 downcast、也不為語言添加任何
@@ -138,6 +153,13 @@ spec 的 method 分兩種：
   implementer **沿用**它、或以特化版**覆寫**（例如更快的 `contains`）；覆寫仍須維持慣常語意，且 `(型別, spec)` 的
   實作無論如何都保持 canonical。
 
+> **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
+> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
+> it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
+> 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
+> method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
+> 的那一點就指名了它,所以沒有任何程式走到 dispatch 這個問題。
+
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
 被 bound 的 `T` 呼叫。這些 provided default 都是**行為性**的——寫在 method 上、不碰 fields；另一個由 compiler
@@ -151,8 +173,8 @@ spec 的 method 分兩種：
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
 **monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
-（**[not yet]**——provided method 會被指名拒絕）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、
-也不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
+（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑
+spec 的 **default body**——不需要 `#[dyn]`、也不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 
@@ -169,6 +191,13 @@ impl 固定——而非逐次使用時另選，像帶參數的 `Iterable[T]` 會
 形式。與 associated **function**（`fn max() -> This`，它會*執行*以產生值）不同，associated **value** 在編譯期被*摺疊*
 ；一個由 spec 保證的常數用值形式，一個需計算的則用 function 形式。
 
+> **[not yet]** 這兩種成員都不存在。**associated type** 在宣告它的那個 `spec` 上就被拒絕——
+> _NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing here
+> binds one_——而 **associated value** 則在要供給它的那個 `impl` 上被拒絕,
+> _NotImplemented: an associated value binding `BITS := …` in an `impl`_。這裡的 `spec` 只宣告 method 簽名、沒有別
+> 的,這也是為什麼上面的 `Indexable[K]` 與下面帶固定 `Item` 的 `Iterator`,在這個編譯器裡根本寫不出來:兩者各需要一
+> 種它沒有的成員。
+
 ## 型別常數（Type constants）
 
 一個**型別常數**是每型別的編譯期值，宣告在型別的 `impl` 裡、作為一個 **`val-bind`**——`NAME := <const-expr>`
@@ -183,6 +212,10 @@ impl 固定——而非逐次使用時另選，像帶參數的 `Iterable[T]` 會
 spec 的 `BITS: int` 是同一個、被 spec *要求*的 `val-bind`。所以一個 spec 必須保證的「每型別的*值*」是一個
 **associated value**——`MAX: This` 被要求、每個 impl 供給 `MAX := …`、泛型端讀 `T.MAX`——**而非**無 receiver 的
 function。
+
+> **[not yet]** **型別常數**就是它所對應的 associated value 那個尚未建置的 `val-bind`:`impl` 裡的 `BITS := 32` 會
+> 報 _NotImplemented: an associated value binding `BITS := …` in an `impl`_,不論有沒有某個 spec 要求它。所以
+> `Type.NAME` 什麼都指不到、`Point.ORIGIN` 宣告不出來,而一個本來要由型別常數供給的定長陣列大小,只能改寫成字面量。
 
 ## 內建 spec（Built-in specs）
 
@@ -199,6 +232,16 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
 **`is`** 關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體
 型別？」，而非「這兩個是不是同一個值？」。
+
+> **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
+> （見 [型別轉換](types.zh-TW.md#into--自己會發生的那個轉換)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
+> sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
+> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
+> 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
+> spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類、`chan` 的 refcounted 關閉——但它們由編譯器
+> 擁有,使用者型別加入不了:一個 `struct` 上的 `<` 報的是 _NotImplemented: `<` on a P — an ordering comes from
+> `Ord`, which this compiler does not generate_,不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都
+> 是對著這個缺口所寫的規範。
 
 其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 

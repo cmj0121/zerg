@@ -92,9 +92,21 @@ func runBuild(cmd *BuildCmd) int {
 	return link(cmd, code, manifest)
 }
 
+// cStd is the C dialect the emitted code is compiled with: c17 by default, and
+// whatever $ZERG_CSTD names when a build asks for another one. The seed reads the
+// same variable as the compiler it builds, because the two are one chain — a job
+// that sets it to c99 and gets a c17 stage1 out of the seed has measured half of
+// what it set out to.
+func cStd() string {
+	if v := os.Getenv("ZERG_CSTD"); v != "" {
+		return "-std=" + v
+	}
+	return "-std=c17"
+}
+
 // link writes the C source and compiles it into cmd.Output with cmd.CC. When the
 // manifest reports no runtime is needed (every value-only program, including all
-// the examples), it links exactly as Phase 0 did — a single 'cc -std=c11 -o out
+// the examples), it links exactly as Phase 0 did — a single 'cc -std=… -o out
 // file.c' — so the built binary is byte-identical. When the runtime is needed it
 // materializes the embedded src/runtime tree next to the C and compiles it in
 // with the include path.
@@ -106,7 +118,7 @@ func link(cmd *BuildCmd, code string, manifest emit.Manifest) int {
 	}
 	defer cleanup()
 
-	args := []string{"-std=c11", "-o", cmd.Output, cpath}
+	args := []string{cStd(), "-o", cmd.Output, cpath}
 	if manifest.NeedsRuntime {
 		rtdir, err := os.MkdirTemp("", "zerg-rt-")
 		if err != nil {

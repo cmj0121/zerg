@@ -9,6 +9,10 @@
 副作用而跑的 **statement**；**`if`** 則**兩者皆是**——既是 statement，也（在帶強制結尾 `else` 時）是 expression。**區塊**
 （block）本身就是一個 expression，其值是**最後一個 statement 的值**，所以以 expression 收尾的分支會把該值帶出來。
 
+> **[not yet]** **把區塊當 expression 用**會被指名拒絕：裸的 `{ … }` 出現在 `:=`、引數位置、或 `return` 之後都編
+> 不過。區塊的值規則只在某個構造本來就要一個區塊時成立——`if` 的分支、`match` 的 arm——此外皆無，所以區塊自己
+> 到不了任何值的位置。
+
 **`if`**——作為 **statement** 時，`if cond { … }`（可接 `else` / `else if`）為副作用而跑、不產出值；條件是 `bool`
 （沒有 truthiness）。帶**強制結尾 `else`** 時它反而是 **expression**（`if-expr`，一個 `primary`）：它產出**被選中分支
 的區塊值**，且**每個分支必須產出相同型別**（`x := if hot { warm() } else { cool() }`）。在 statement 位置以 statement
@@ -19,6 +23,18 @@ then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是
 以及作為被回傳的 if 運算式(`return if x := opt { use(x) } else { fallback }`)。它也載得住 non-POD 的
 `str?`——解包後的 `str` 僅綁在 then 區塊內。
 
+> **[deviation]** **每個分支必須產出相同型別**這條規則對 `if` 並沒有檢查。`x := if false { 1 } else { 2.5 }`
+> 編得過而且印出 `2`——`float` 那個分支被截斷成第一個分支選定的 `int`——而 `if false { 1 } else { true }` 印出
+> `1`。當兩個型別之間沒有 C 的轉換時，這個不一致會整個逃出 compiler、改由 `cc` 回報，而且是對著產生出來的 C
+> 報、不是對著造成它的 Zerg 報。同一條規則在 `match` 上**有**檢查
+> （`error: a match answers ONE type, and its arms give int and str`），這正是它為何是單一構造上的遺漏，而不是
+> 對「分支如何定型」的決定。
+>
+> **[not yet]** 值形式有兩種樣子會被指名拒絕。一是 if 運算式裡的 **`else if` 串**
+> （`x := if a { 1 } else if b { 2 } else { 3 }`）：運算式形式只收一個結尾 `else`，串接的那種仍只是 statement。
+> 二是**在運算式位置的 if-let**——`return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的
+> if-let，都會被拒絕——所以這個階段綁定形式只是 statement，而不是上文所載的「`if` 能出現的任何位置」。
+
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
 `mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見 [迭代](../core/specs.zh-TW.md)）、以及 **`for cond { … }`**
@@ -26,7 +42,8 @@ then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
 要走 byte 就用 `list[byte](s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
-**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用;把 **range 當成值**用在別處則是 **[not yet]**。
+**`v in range`** 測試成員關係（`x in 0..n` → `bool`）是 **[not yet]**——這個形式會被指名拒絕——把 **range 當成值**
+用在別處也一樣；range 今天只存在於「`for` 走訪的東西」與「`match` arm 包含的東西」裡。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
@@ -50,6 +67,9 @@ conditional-return 的 `if` 取的是**裸條件、沒有區塊**。
 `for` 是 statement——不產出值；要組結果就鏈一個 iterator adapter（`map` / `filter` / `fold`）或 append 進另一個
 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 
+> **[not yet]** iterator adapter 尚未建置：`map`、`filter` 與 `fold` 三者都會被指名拒絕，所以這個階段要把結果帶出
+> 迴圈，唯一的辦法是 append 進另一個 collection。
+
 ## 模式比對（Pattern matching）
 
 `match` 是一個 **expression**：它用 **arm**（`pattern => result`，arm 分隔符 `=>` 刻意與引入函式回傳型別的 `->`
@@ -60,6 +80,10 @@ statement。覆蓋是**必需**的——漏掉某個 case 的 `match` 是**編�
 無法證明 guard 成立——所以該 case 仍需要一個**無 guard** 的 arm 或結尾的 **`_`**。既然每個值都已被靜態覆蓋，
 `MatchError` 只是那個殘餘 guard-gap 的執行期後備；而**多餘**的 arm（已被前面 arm 覆蓋者）是 warning。
 
+> **[not yet]** **多餘 arm 的 warning** 尚未建置：一個已被前面 arm 覆蓋的 arm 什麼都不會產生——沒有 warning、也
+> 沒有提示——而且它會以「沒有任何值到得了的 arm」留在 emit 出來的程式碼裡。反方向的覆蓋，也就是沒有任何 arm
+> 處理的 case，是有檢查的，而且是 error。
+
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；
 或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、以及一個 **range** arm（`1..=2 =>`，以
@@ -67,6 +91,17 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 `A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出，list pattern 連型別
 檢查都過。
 
+> **[deviation]** **`str` literal** 的 arm 永遠不會觸發。`match s { "y" => 1  "n" => 0  _ => -1 }` 在 `s == "y"`
+> 時回答 `-1`：`--emit c` 顯示該 arm 被降階成 subject 與 arm literal 之間的**指標**比較，而同一個檔案裡寫成
+> expression 的 `"y" == "y"` 則降階成 `strcmp(…) == 0`。`int`、`bool`、`rune` 與負數 literal 的 arm 都如規格所述
+> 以值比對；只有 `str` 是錯的，而且錯得**無聲**——沒有任何診斷、結尾的 `_` 吸收掉每一次落空，於是一個對字串做的
+> `match` 表現得就像 subject 一個 case 都沒中。
+>
+> **[not yet]** **nested pattern** 根本 parse 不了：`Left(Some(v))`，還有 `L(0)`，都會被
+> ``a pattern binding needs a name, and `(` is not one`` 擋下——payload 位置只收一個名字、別的都不收，所以每個
+> pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，因為
+> 根本沒有程式寫得出巢狀 pattern。
+>
 > **or-pattern 會被明確拒絕。** pattern 位置上的 `|` 被讀成位元運算子，所以 `1 | 2 =>` 會折成 `3 =>`，1 和 2
 > 都不中——它以前編得過而且靜默地錯，那正是編譯器最不該做的事，所以現在直接turn away。`zerg fmt` 會改寫唯一有可用
 > 寫法的那個情況（連續整數收成 range `1..=2`，規則 `F408`），其餘的都等語言層面的工作。
@@ -81,7 +116,8 @@ msg := match ev {
 
 > **註。** 對**巢狀** payload 的 exhaustiveness 檢查目前弱於完整覆蓋：compiler 證明頂層 variant 已覆蓋，但不總是
 > 證明每一種巢狀組合，所以一個巢狀 case 可能編譯通過、落到 `MatchError` 後備，而一個完全精確的檢查器會要求再多一個
-> arm。
+> arm。這描述的是意圖中的檢查器，不是今天任何程式到得了的狀態：它所弱的那種巢狀 pattern 根本 parse 不了（見上），
+> 所以沒有東西碰得到那個弱點。
 
 `match` 的 **pattern** 永不窺看 existential 的真實型別——spec 當型別用是單向抹除、無 downcast——它只解構 variant、比對
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
@@ -93,3 +129,7 @@ product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。**g
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的
 語法糖，等同 `_ if _ in <range>`——它以**range 包含關係**比對（不是值相等）、**不綁定**任何值、同樣不計入覆蓋（要綁值
 就寫 `x if x in <range>`）。
+
+> **[not yet]** 上一句剛給的那個替代寫法今天寫不出來：`x if x in <range>` 需要成員測試 `v in range`，而它會被指名
+> 拒絕（見上文的 `for`）。所以 range arm 的值沒有任何路徑綁得到——arm 本身按設計就不綁，而本來要替它出面的那個
+> guard 也不行。

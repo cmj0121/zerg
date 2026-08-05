@@ -15,11 +15,9 @@
 
 #include <windows.h>
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(HANDLE) <= sizeof(zrt_thread), "HANDLE does not fit zrt_thread");
-_Static_assert(sizeof(CRITICAL_SECTION) <= sizeof(zrt_mutex), "CRITICAL_SECTION does not fit zrt_mutex");
-_Static_assert(sizeof(CONDITION_VARIABLE) <= sizeof(zrt_cond), "CONDITION_VARIABLE does not fit zrt_cond");
-#endif
+ZRT_STATIC_ASSERT(sizeof(HANDLE) <= sizeof(zrt_thread), "HANDLE does not fit zrt_thread");
+ZRT_STATIC_ASSERT(sizeof(CRITICAL_SECTION) <= sizeof(zrt_mutex), "CRITICAL_SECTION does not fit zrt_mutex");
+ZRT_STATIC_ASSERT(sizeof(CONDITION_VARIABLE) <= sizeof(zrt_cond), "CONDITION_VARIABLE does not fit zrt_cond");
 
 static HANDLE *as_thread(zrt_thread *t) { return (HANDLE *)(void *)t->slots; }
 static CRITICAL_SECTION *as_mutex(zrt_mutex *m) { return (CRITICAL_SECTION *)(void *)m->slots; }

@@ -81,6 +81,25 @@ first — `zerg` does, for the rules it checks.
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.
 
+The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its own
+because the two deviations that follow are breaches of it rather than of any one chapter:
+
+**A form is either lowered correctly or refused by name.** It is never a crash, never a silently wrong answer,
+and never an error reported by the C compiler or the linker against generated code nobody wrote.
+
+> **[deviation]** **A family of everyday forms escapes to `cc`.** An expression that lowers to a GNU statement
+> expression is emitted directly inside the parentheses `if` and `while` already own, producing `if ({ … })`,
+> which a C compiler does not accept — so the diagnostic a reader gets is `error: expected expression` against
+> a line of generated C. The forms are `in` over a list or a map and `??` used as a whole condition, which
+> reaches `if`, `for`, and the postfix `return … if`, `break if`, `continue if` and `raise … if`. Binding the
+> same expression to a name first (`b := 2 in xs` then `if b`) compiles, which is why the behaviour looks
+> intermittent. A program with no `fn main` — the `nop` program the grammar opens with — fails in the linker
+> for the same reason: nothing refuses it first.
+>
+> **[deviation]** **Deep nesting crashes the compiler.** Around 800 levels of nested parentheses, list
+> literals or calls exhausts the recursive-descent parser's stack and the process dies of `SIGSEGV` with no
+> diagnostic at all. There is no depth limit and no error; 400 levels are fine.
+
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed
@@ -98,6 +117,22 @@ the built-in error kinds and which operations raise them.
 > **[deviation]** A hardware fault that the runtime cannot intercept — today, a coroutine stack overflowing
 > past its guard page, or `main`'s unguarded native stack — terminates the process by signal without
 > running `defer`s, rather than as a clean `StackOverflowError` abort. See [Errors](code/errors.md).
+
+## The C the reference implementation emits
+
+The reference implementation lowers Zerg to C and hands the result to a C compiler (`cc`). Per
+[What is normative](#what-is-normative) this is an implementation note, not a requirement on a conforming
+implementation — nothing here binds one that emits machine code, and nothing here is observable to a Zerg
+program. It is written down because the dialect is a claim the project makes on its front page, and a
+number in a compiler flag that no chapter states is one that drifts.
+
+The dialect is **C17**. `ZERG_CSTD` names another for a build that needs one — `c99` and `c11` are the
+others the runtime is written to compile under, and the build cache keys an object by dialect so two of
+them do not hand each other's objects back.
+
+> **[not yet]** The **fallback** is not automatic. The intent is that a `cc` which cannot do C17 is
+> retreated from to C99; no probe for that is built, so the retreat is something a build **asks** for with
+> `ZERG_CSTD=c99` rather than something the compiler discovers. Both dialects are compiled and run on CI.
 
 ## Undefined and implementation-defined behavior
 

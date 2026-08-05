@@ -26,11 +26,17 @@ program that reads Zerg and became a Zerg program that reads Zerg.
 - **Integer arithmetic is checked.** `+`, `-`, `*` and unary `-` raise on overflow, `/` and `%` are Euclidean
   and raise on a zero divisor, and the `%`-suffixed `+%`, `-%`, `*%` wrap — a pairing that had meant nothing
   while both spellings emitted the same C.
-- **Memory is scope-owned with no tracing GC.** Values are freed at scope exit on every path including an abort
-  unwind; lists are copy-on-write behind an atomic refcount; two names of a value type never alias.
-- **A form is implemented or refused by name.** It is never a crash, never a silently wrong answer, and never an
-  error reported by `cc` against generated code nobody wrote. `make refuse` pins 141 such refusals and
-  `make reject` pins 159 ill-formed programs the compiler turns away itself.
+- **Memory is scope-owned with no tracing GC.** Values are freed at scope exit on every path including an
+  abort unwind caught by a `guard`; lists are copy-on-write behind an atomic refcount; two names of a value
+  type never alias. An uncaught abort leaving `main` is the one path that skips its `defer`s — a deviation,
+  not a design.
+- **A form is implemented or refused by name** — the standing contract, and this release is the first to
+  MEASURE it rather than assert it. `make refuse` pins 141 refusals and `make reject` pins 159 ill-formed
+  programs the compiler turns away itself. The measurement also found where the contract is broken today, and
+  the specification now marks each one: a `str` literal `match` arm never fires, an if-expression does not
+  check that its branches agree, `~` on a `byte` yields the unmasked 64-bit complement, a `defer` does not run
+  on the abort path out of `main`, `in` and `??` used as a whole condition reach `cc`, and 800 levels of
+  nesting is a SIGSEGV. They are listed in full in the release notes.
 - **A broken RULE says where; a refused FORM does not.** A rule the compiler checks reports `file:line:col`, the
   source line, a caret, and every other finding in the same run rather than only the first — `undefined name`
   among them. A form it has not built says the form's name and nothing else, with no place at all: 170 of 235

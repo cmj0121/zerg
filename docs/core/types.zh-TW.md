@@ -20,6 +20,11 @@
 | `str`   | immutable、null-terminated 的 Unicode（不含 embedded NUL） |
 | `nil`   | `T?` 的 placeholder 值                                     |
 
+> **[not yet]** 固定寬度階梯一個都不存在:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib 型別,而沒有任何
+> stdlib 宣告過其中一個。因為一個寬度不過是普通的 identifier、不是關鍵字,連拒絕都不是具名的——`i32(x)` 報的是
+> _undefined function `i32`_,任何拼錯的呼叫都會拿到的那句話,所以讀者被告知的是這個名字不存在,而不是這道階梯尚未
+> 建置。
+
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
   （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）；`int`/`uint`/`byte`/`rune` 絕不環繞（要環繞就用下方的 `+%`/`-%`/`*%`）。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
@@ -54,6 +59,23 @@
   ——`int / int` 是 `int`、`float / float` 是 `float`——因為已具型別的 `int` 值永遠不會隱式變成 `float`
   （見下方「數值字面值」）。`//` **不會**開啟註解——Zerg 的註解以 `#` 起始。
 
+> **[deviation]** `~` 作用在 `byte` 上算的是 **64 位元**的補數、而且從不遮罩回八個 bit,所以只有在結果立刻落進一個
+> `byte` 槽時答案才是對的。以 `b: byte = 12` 為例,規範的結果在下面三處都是 `243`:`c: byte = ~b` 給出它,因為那個
+> binding 自己的轉換把值縮了回去;而 `print ~b` 印出 `18446744073709551603`、`int(~b)` 給出 `-13`。這個補數是以 C 的
+> `~` 作用在已提升的運算元上產生的,而一個測試最自然會採取的那種寫法——把結果直接存回一個 `byte`——正好就是把它藏
+> 起來的那一種。
+>
+> **[not yet]** bitwise 運算子並不 desugar 到任何 user type 能實作的東西。`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`
+> 與 `Shr` 這些 spec 在任何地方都沒有被宣告,所以指名其中一個會報 _error: no spec named `BitAnd`_——那是「沒有人寫
+> 過這個 spec」的普通訊息——而複合值上的 `&` 沒有任何路徑通往使用者寫的 body。運算子本身在 `int` / `uint` / `byte`
+> 上是內建的、如規範般運作;缺的是這道 desugar 存在的目的:多載（見 [Spec 與 Generics](specs.zh-TW.md)）。
+>
+> **[deviation]** `%` 後綴的運算子在 `int` 與 `uint` 上環繞,在 `byte` 上卻會 **raise**:`byte(255) +% byte(1)` 以
+> `OverflowError: integer conversion out of range` abort,而不是給出 `0`,`-%` 與 `*%` 也一樣。環繞是在已提升的寬度
+> 上做的,結果再由普通的**檢查式**轉換窄回 `byte`——而那正是 `%` 這個寫法存在的目的所要迴避的那次 raise,於是這個運
+> 算子成了它本來要繞開的那個的別名。每一個 hashing 與 checksum 的案例都寫在那兩個較寬的型別上,所以沒有人量過
+> `byte`。
+>
 > **[deviation]** 讓 `/` 與 `%` 成為 Euclidean 的那個修正是**無條件**產生的,並未在兩個運算元都可證明非負時
 > elide——上面說的「最常見情況零成本」是意圖中的 codegen、不是今天的。語意不受影響:那是成本、不是錯的答案。
 
@@ -100,6 +122,12 @@
 > carrier 那句話是同一個故事的裡面那一半:編譯器先把 **wrapper** 裝好,再走另一條路把 payload 降下去,而那條路上
 > 沒有掛任何規則。`x: float? = i`(`i` 是 `int` 值)印出 `5`,而 `i = 300` 的 `Left(i)` 放進 `Result[byte]` 靜靜地
 > 被截斷——正是同一組規則在上面一層早就拒絕的那兩個錯誤。
+>
+> **[deviation]** **另一個運算元**是那十四個位置裡,唯一不會拒絕一個放不進它的字面量的位置。一個放不進另一個運算
+> 元型別的整數字面量,不會成為編譯錯誤,而是靜靜地把**整個運算式**改定型為 `int`:`b: byte = 1` 之後
+> `print b + 300` 會編過並印出 `301`。放得進去的字面量則會採用 `byte`、接著像任何 byte 算術一樣被檢查,所以
+> `b: byte = 100` 讓 `b + 200` 在執行期成為 `OverflowError`——規則在、也有效,只有超出範圍的那種字面量逃掉了,而它
+> 逃掉的方式,正是把那個本來要拿來量它的運算元加寬。
 
 ### 數值字面量（Numeric literals）
 
@@ -121,6 +149,11 @@
 
   每一個這樣的轉換都是一個 **lint** 發現(`L5xx`),因為讀 `xs: list[byte] = [1, 2]` 的人應該在頁面上看見 byte,
   而不是從宣告去推斷它。
+
+> **[not yet]** **`uint` 的上半段**寫不成字面量。每一個整數字面量都是先對著 `int` 量、才去問它所在的位置,所以
+> `u: uint = 18446744073709551615` 會被拒絕、報 _the integer literal … does not fit an `int`_,即使那個值是一個普
+> 通的 `uint`、而且用算術到得了。上面那條規則成立——字面量採用它所在位置要求的型別——但拿來量它的範圍固定在有號的
+> 那一個,於是「放得進去」的 `uint` 那一半寫不出來。
 
 ## 使用者定義型別（User-Defined Types）
 
@@ -148,6 +181,12 @@ Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝�
 參照**(refcount 共享),不是深拷貝。它的 MVP 限制(以 `mut` 建出的循環會洩漏;長鏈以 O(depth) 釋放)見
 [值與記憶體](memory.zh-TW.md)。
 
+> **[not yet]** 遞迴 **`struct`** 宣告不出來。上面寫的那個 `Node` 會被拒絕、報 _`Node` is part of a cycle of
+> by-value declarations — a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於
+> 任何裝箱決定,所以那個自我參照的槽從來沒拿到這段文字答應它的 cell。能運作的是遞迴 **`enum`** 那一半,它的 payload
+> 就是編譯器裝箱的那個槽——這也是為什麼 `Expr` 建得起來而 `Node` 建不起來,以及為什麼
+> [值與記憶體](memory.zh-TW.md) 裡同一個例子同樣編不過。
+
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
@@ -173,6 +212,13 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 method、也沒有自己的 `spec` impl**：一旦某個值需要行為、nominal 身分、或值得閱讀的欄位名，就改用具名 `struct`。
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制（見 [模式比對](../code/control-flow.zh-TW.md)）。
 
+> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——
+> _NotImplemented: `==` on a (int, int) — structural equality over a container is unbuilt, and a container has
+> no declaration to derive it on_——而那句訊息本身就是機制:衍生由掛在**宣告**上的 `#[derive(…)]` 驅動,而匿名正好
+> 讓 tuple 沒有東西可掛。**解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報
+> _NotImplemented: `,` is not an expression this compiler reads_——所以 tuple 的結果如規範般可存、可傳,但只能用
+> `.0` / `.1` 讀回來。
+
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
 兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。一個**單型**的 `type X = Y`
@@ -193,6 +239,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal。因此只要型別
 有**任一私有欄位**，它對其 module 之外就是 **opaque**——struct literal 指不出私有欄位，外部只能透過那個 `pub` 函式
 建構；該函式在型別自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。
+
+> **[not yet]** struct literal **只依位置**綁定,所以那個指名欄位的形式並不存在:`P(a: 1, b: 2)` 報
+> _NotImplemented: the named argument `a:` — this compiler binds arguments by position only_
+> （見 [函式與 Closure](../code/functions.zh-TW.md)）。`P(1, 2)` 建出同一個值,所以建構本身不受影響;缺的是這一節
+> 用來陳述自己規則的那個寫法——「它會指名每個欄位」正是私有欄位之所以 opaque 的推導起點——而下面的
+> `Foo(age: 2, name: base.name)` 寫的是編譯器讀不了的形式。
 
 欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否。
 **沒有「對外可讀、對外不可寫」的獨立軸**；更細的控制以 method 表達。
@@ -257,6 +309,12 @@ spec Into[T] {
   合法的原因:`x` 在運算元位置到達 `Y`,而那個和在 binding 位置到達 `Z`。那是兩個位置,不是一條 chain。
 - **`.into()` 需要一個目標。** `x := 1.into()` 是編譯錯誤 —— 那裡沒有任何東西能說出是哪一個 `Into`。手寫的
   `.into()` 合法的地方,恰好就是編譯器會幫你寫的地方。
+
+> **[not yet]** 手寫的 `.into()` 根本不存在:`1.into()` 報 _NotImplemented: the method `into` on a int_,不論寫在
+> 哪裡、目標是什麼都一樣。所以上面那一對的第二行——`x: float = 1.5 + 1.into()`,也就是「它的意思」那一半——不是這
+> 個編譯器建得出來的程式,儘管它所解釋的 `x: float = 1.5 + 1` 是。編譯器幫自己寫的那次轉換已經建好,下面那張內建
+> 矩陣也是真的;缺的只有讀者能親手寫出來的那個寫法,而這正是它沒被發現的原因:這個功能要能運作,誰都不必說出
+> `.into()`。
 
 **一個運算式的型別,只由它的運算元決定** —— 永遠不由它要被指派給誰決定。所以是兩個運算元先談攏,然後結果才去見宣
 告的型別:

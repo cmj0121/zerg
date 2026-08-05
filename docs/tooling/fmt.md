@@ -7,16 +7,18 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group      | Is                                                |
-| ------ | ---------- | ------------------------------------------------- |
-| `F1xx` | layout     | where the line breaks and how far it is indented  |
-| `F2xx` | spacing    | where a space goes between two tokens             |
-| `F3xx` | trivia     | what happens to what a person wrote for a person  |
-| `F4xx` | rewrites   | the rules that MOVE code rather than space it     |
-| `L1xx` | dead code  | things written that nothing reaches               |
-| `L3xx` | capture    | what a coroutine or a deferred call actually took |
-| `L4xx` | resolution | a name that answers to more than one thing        |
-| `E1xx` | lexical    | text that is not a token                          |
+| Prefix | Group       | Is                                                   |
+| ------ | ----------- | ---------------------------------------------------- |
+| `F1xx` | layout      | where the line breaks and how far it is indented     |
+| `F2xx` | spacing     | where a space goes between two tokens                |
+| `F3xx` | trivia      | what happens to what a person wrote for a person     |
+| `F4xx` | rewrites    | the rules that MOVE code rather than space it        |
+| `L1xx` | dead code   | things written that nothing reaches                  |
+| `L2xx` | null safety | an optional operator that does not do what it says   |
+| `L3xx` | capture     | what a coroutine or a deferred call actually took    |
+| `L4xx` | resolution  | a name that answers to more than one thing           |
+| `L5xx` | conversion  | a type that changed where the source does not say so |
+| `E1xx` | lexical     | text that is not a token                             |
 
 ## `zerg fmt`
 

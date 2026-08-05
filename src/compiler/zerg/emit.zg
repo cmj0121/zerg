@@ -4313,6 +4313,8 @@ fn c_is_lvalue(e: Expr) -> bool {
 enum MethKind {
 	MList
 	MMap
+	MErr
+	MCarrier
 	MRecv
 	MFnField
 	MFree
@@ -4321,6 +4323,16 @@ enum MethKind {
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 	return MList if c_is_list(tty)
 	return MMap if c_is_map(tty)
+
+	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
+	# to carry a method, so anything else would fall to the namespaced-call arm and be
+	# emitted as a free function nobody declared — which is the shape this table's own
+	# comment says must not happen. c_err_method names what it does not have.
+	return MErr if c_is_err_ty(tty)
+
+	# and every method on a CARRIER, for the same reason: `T?` and `Either[L, R]` are types
+	# the compiler builds rather than a program declares, so neither has anywhere to hang one.
+	return MCarrier if c_is_opt(tty) or c_is_either(tty)
 	return MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -4339,10 +4351,150 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method(em, target, meth, args, tty, sb)
 		MMap     => c_map_method(em, target, meth, tty, sb)
+		MErr     => c_err_method(em, target, meth, args, sb)
+		MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_        => c_free_method(em, target, meth, args, sb)
 	}
+}
+
+# c_err_method is the `Error` interface on a caught `Err` — the three questions the error
+# tier answers about a VALUE rather than about its kind. `is` and `in` ask which kind it is,
+# and they were the only questions that could be asked at all: the message it was raised
+# with, the error it was raised FROM, and its code were carried by the runtime value and
+# reachable from no Zerg expression, so a `guard` handed back an error a program could
+# classify and not read.
+#
+# `message` RETAINS. A `str` is refcounted and the one in the Err belongs to the Err; handing
+# the caller that pointer without a retain would let the caller's drop free a string the Err
+# still holds — and the Err outlives the read whenever it sits in a `Result`.
+#
+# `unwrap` answers `Err?` and not `Err`, because a cause is exactly what an error may not
+# have: `raise e` records none and `raise e from c` records one. The runtime spells the
+# absence as a NULL `cause`, and this is where that becomes a tag a `match` can read.
+#
+# `code` answers `byte?`, and answers it ABSENT — always, today. That is not a hedge: no
+# `Err` this compiler can construct carries a code, because the only errors there are are the
+# built-in kinds and a code belongs to a user-defined error type, which is `[not yet]`. The
+# method exists so the shape is right when that arrives, and what it reports meanwhile is
+# true rather than convenient.
+fn c_err_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+
+	# NONE of the three takes an argument, and an argument list nobody reads is a question
+	# the program asked that nothing answered: `e.message(1)` compiled, with the `1`
+	# evaluated nowhere and mentioned by nothing.
+	raise f"NotImplemented: the method `{meth}` on an Err takes no argument" if args.len() != 0
+
+	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
+
+	if meth == "unwrap" {
+		cn := c_opt_name(em, TErr)
+		t := c_tmp(em, "zgt_ec")
+		head := "({ zrt_err *" + t + " = (" + c_expr(em, target, sb) + ").cause; "
+		return head + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = *" + t + " } : (" + cn + "){ .tag = 1 }; })"
+	}
+	return "(" + c_opt_name(em, TByte) + "){ .tag = 1 }" if meth == "code"
+
+	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`"
+}
+
+# c_carrier_method is the bridge between the two carriers — the one conversion the error
+# chapter offers and neither carrier had.
+#
+# `opt.ok_or(err)` reads an absent optional as a failure and names what the failure IS;
+# `res.ok()` reads a failed Result as an absence and forgets why. They are not symmetric and
+# should not be: going one way needs a reason supplied, going the other throws one away, and
+# writing that out is the point of having both spellings rather than a cast.
+#
+# Without them `T?` and `Result[T]` were two islands. A function answering `int?` could not
+# be given to one taking `Result[int]` by any expression a program could write, so the choice
+# of carrier propagated outward through every signature that touched it.
+#
+# The LEFT PAYLOAD IS COPIED, not aliased. A fresh carrier is not an lvalue, so the coalesce
+# and force paths treat it as this expression's own and drop it — which, with a shared
+# payload, releases a `str` the source optional still holds. That is a use-after-free the
+# `int` payloads in the corpus could not show, and the two conversions here are the path the
+# errors chapter tells a reader to take.
+#
+# The Right is dropped by value on the `ok()` path, exactly as `??` drops it — the carrier
+# held a copy and nothing releases it there either. That is one behaviour, not two, and if it
+# is a leak it is the same leak in both places.
+fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	if meth == "ok_or" and c_is_opt(tty) {
+		raise "NotImplemented: `ok_or` takes the error to answer an absence with, and none was given" if args.len() == 0
+		raise "NotImplemented: `ok_or` takes ONE error to answer an absence with" if args.len() != 1
+
+		# The argument is the RIGHT of the Result being built, so it has to be an `Err`.
+		# Without the check `o.ok_or(3)` assigned an `int` to a `zrt_err` field and the
+		# diagnostic came from cc, against a line of generated C.
+		at := c_infer(em, args[0])
+		raise "NotImplemented: `ok_or` answers an absence with an `Err`, and this is a " + ty_name(at) if not c_is_err_ty(at)
+
+		elem := c_opt_elem(tty)
+		on := c_opt_name(em, elem)
+		rn := c_carrier_name(em, elem, TErr)
+		t := c_tmp(em, "zgt_ko")
+		r := c_tmp(em, "zgt_kr")
+
+		# The error is evaluated BEFORE the branch, not inside the `else`. Arguments evaluate
+		# in source order ([Memory Model](../../docs/core/memory.md)) and the short-circuit
+		# forms are a closed set `ok_or` is not in, so an argument that printed or raised did
+		# it only when the optional happened to be absent — a conditional side effect the
+		# language does not have anywhere else, and one nothing marked.
+		e := c_tmp(em, "zgt_ke")
+		mut out := "({ " + c_type(TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
+		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
+		out = out + " if (" + t + ".tag == 0) { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_payload_copy(em, elem, t + ".ok") + "; }"
+		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
+		return out + " " + r + "; })"
+	}
+	if meth == "ok" and c_is_either(tty) {
+		raise "NotImplemented: `ok` forgets the Right and takes no argument" if args.len() != 0
+
+		left := c_either_left(tty)
+		cn := c_carrier_ty_cname(tty)
+		on := c_opt_name(em, left)
+		t := c_tmp(em, "zgt_ko")
+		o := c_tmp(em, "zgt_kv")
+		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
+		out = out + " if (" + t + ".tag == 0) { " + o + ".tag = 0; " + o + ".ok = " + c_payload_copy(em, left, t + ".ok") + "; }"
+		out = out + " else { " + o + ".tag = 1; }"
+		return out + " " + o + "; })"
+	}
+
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`"
+}
+
+# c_payload_copy copies a carrier payload when its type needs one and hands it straight back
+# when it does not. `c_copy_of` alone answers `zg_copy_<T>` for anything that is not a list, a
+# map, a tuple or a str — and for a scalar that name is `zg_copy_`, a function nobody
+# declares, which reaches cc.
+fn c_payload_copy(mut &em: Emitter, t: Ty, x: str) -> str {
+	return x if not c_needs_copy(em, t)
+
+	return c_copy_of(em, t, x)
+}
+
+# c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
+# is a `Result[T]` whatever the optional held; `ok` keeps the Left and drops the Right.
+fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
+	return TEither(c_opt_elem(tty), TErr) if meth == "ok_or" and c_is_opt(tty)
+	return TOpt(c_either_left(tty)) if meth == "ok" and c_is_either(tty)
+
+	return TUnknown
+}
+
+# c_err_method_ret is the same three answers, for the pass that types the call rather than
+# emits it. The two tables are read by one `c_meth_kind`, so they cannot disagree about
+# WHICH method this is; this is where they must agree about what it gives back.
+fn c_err_method_ret(meth: str) -> Ty {
+	return TStr if meth == "message"
+	return TOpt(TErr) if meth == "unwrap"
+	return TOpt(TByte) if meth == "code"
+
+	return TUnknown
 }
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
@@ -5493,6 +5645,8 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr])
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method_ret(meth)
 		MMap     => c_map_method_ret(meth)
+		MErr     => c_err_method_ret(meth)
+		MCarrier => c_carrier_method_ret(em, tty, meth)
 		MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 

@@ -303,7 +303,8 @@ tests) — "what concrete type is boxed here?", never "are these two the same va
 > `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
 > `impl Ord for P` reports _error: no spec named `Ord`_, the ordinary message for a spec nobody wrote, and
 > `impl BitAnd for P` reports it too. Several of the **behaviours** are built in and reachable without their
-> spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err` names, a `chan`'s refcounted
+> spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err` names and the `message()` /
+> `unwrap()` it answers, a `chan`'s refcounted
 > close — but they are compiler-owned and a user type cannot join them: `<` on a `struct` reports
 > _NotImplemented: `<` on a P — an ordering comes from `Ord`, which this compiler does not generate_, with a
 > `#[derive(Eq)]` on the type or without one. Everything from here to the end of this chapter is specified

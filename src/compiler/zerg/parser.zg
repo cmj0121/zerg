@@ -1124,9 +1124,11 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 # names and the spec each is bounded by ("" for an unbounded one). It answers nothing when
 # there is no bracket, so every caller may ask.
 #
-# A BOUND IS ONE SPEC. `T: Eq + Hash` is the grammar's, and this compiler carries one, which
-# is refused by name rather than read as the first of them — a bound silently narrowed is a
-# program that type-checks against a promise nobody made.
+# A BOUND IS A CONJUNCTION of specs — `T: Eq + Hash` asks for both. They are carried joined
+# by `+` in the one string a parameter owns, and split where they are checked: a bound is
+# read in exactly one place, so the shape that matters is the one there. A bound silently
+# narrowed to its first spec would be a program that type-checks against a promise nobody
+# made, which is what refusing the form was protecting against.
 fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) {
 	return if not p_at(p, LBrack)
 
@@ -1137,7 +1139,16 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		if p_at(p, Colon) {
 			p_advance(p)
 			bound = p_name(p, "a bound")
-			raise f"NotImplemented: the bound `{nm}: {bound} + …` names more than one spec — this compiler carries one bound per type parameter" if p_at(p, Plus)
+
+			# `T: Eq + Hash` — every spec after the first joins the same string, separated by
+			# `+`, and the instantiation splits it back. A bound is a CONJUNCTION, so one
+			# field per parameter is enough to carry it; what a second list would buy is a
+			# shape, not an answer. A `+` cannot appear in a spec name, so the join is
+			# reversible.
+			for p_at(p, Plus) {
+				p_advance(p)
+				bound = bound + "+" + p_name(p, "a bound")
+			}
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -1752,6 +1763,32 @@ fn parse_unary(mut &p: Parser) -> Expr {
 	return parse_postfix(p)
 }
 
+# index_base_name / index_type_name take an `EIndex` apart for the one shape that is not a
+# subscript: `id[int]` as the callee of a call. Both answer "" for anything else, which is
+# what leaves every other indexed callee refused by name.
+fn index_base_name(e: Expr) -> str {
+	return match e {
+		EIndex(b, _) => ident_name(b)
+		_            => ""
+	}
+}
+
+fn index_type_name(e: Expr) -> str {
+	return match e {
+		EIndex(_, i) => ident_name(i)
+		_            => ""
+	}
+}
+
+# p_ty_of_name is a written type argument as a type. A scalar goes through the conversion
+# table the parser already has; anything else is a declared name, and whether such a type
+# exists is the instantiation's question rather than this one's.
+fn p_ty_of_name(nm: str) -> Ty {
+	return conv_ty(nm) if is_conv(nm)
+
+	return TNamed(nm)
+}
+
 # parse_postfix parses a primary then a chain of calls. In the subset the callee is
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
@@ -1781,7 +1818,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			}
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
-			name := ident_name(e)
+			mut name := ident_name(e)
 
 			# A CALLEE THAT IS NOT A NAME. Three forms reach here and all three used to be
 			# built as `ECall("", args)`, which the emitter reported as ``undefined function
@@ -1793,7 +1830,21 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			#
 			# The shape is still in hand here, which is why the refusal belongs in the parser
 			# rather than downstream of the name it threw away.
-			raise f"NotImplemented: calling {expr_kind(e)} — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt" if name == ""
+			# EXPLICIT TYPE ARGUMENTS. `id[int](7)` reached here as an INDEX of `id` — the
+			# postfix loop cannot tell a subscript from a type argument list, and neither can
+			# the grammar without knowing what `id` is. So the shape is recovered here, where
+			# the base and the bracket are both still in hand: an index whose base is a plain
+			# name and whose subscript is a TYPE NAME is a call that said its own type.
+			mut tyargs: list[Ty] = []
+			if name == "" {
+				base := index_base_name(e)
+				tn := index_type_name(e)
+				if base != "" and tn != "" {
+					name = base
+					tyargs.append(p_ty_of_name(tn))
+				}
+			}
+			raise f"NotImplemented: calling {expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt" if name == ""
 
 			args := parse_call_args(p)
 			if is_conv(name) {
@@ -1806,7 +1857,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 
 				e = EConv(conv_ty(name), args[0], name)
 			} else {
-				e = ECall(name, args)
+				e = ECall(name, args, tyargs)
 			}
 		}
 	}

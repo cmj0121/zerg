@@ -1,5 +1,12 @@
 # Zerg Grammar
 #
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# This file is part of the language DEFINITION, not of any program built with it,
+# so it is licensed with the specification rather than with the runtime. See
+# LICENSE at the repository root for the layering, and docs/LICENSE for the
+# companion chapters this file is the syntax half of.
+#
 # The formal surface grammar of the Zerg language, written in W3C-style EBNF and
 # built up one grammar group at a time, from core to minor. This file is the single
 # source of truth for what is syntactically well-formed; the prose companion lives in

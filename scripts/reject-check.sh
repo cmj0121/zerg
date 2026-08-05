@@ -1480,13 +1480,13 @@ EOF
 #
 # A composite is not a scalar to re-construct at all, and that one reached cc.
 
-reject parse-a-str-as-a-bool 'does not parse a `str`' no-place <<'EOF'
+reject parse-a-str-as-a-bool 'does not parse a `str`' <<'EOF'
 fn main() {
 	print(f"{bool("1")}")
 }
 EOF
 
-reject parse-a-str-as-a-byte 'does not parse a `str`' no-place <<'EOF'
+reject parse-a-str-as-a-byte 'does not parse a `str`' <<'EOF'
 fn main() {
 	print(f"{byte("65")}")
 }

@@ -78,8 +78,9 @@ concrete type first exists to check it against. There is **no subtyping** betwee
 generics are **invariant**: `list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound
 (`[T: X]`), not subtype substitution.
 
-> **[not yet]** A generic **`fn`** is built. A generic **`struct`** or **`enum`**, a generic **method**, and
-> a bound naming more than one spec (`T: Eq + Ord`) are each refused by name.
+> **[not yet]** A generic **`fn`** is built, and so is a bound naming more than one spec — `T: Eq + Show`
+> is a conjunction, and the spec that is not met is the one the refusal names. A generic **`struct`** or
+> **`enum`** and a generic **method** are each still refused by name.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,

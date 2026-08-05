@@ -850,16 +850,6 @@ EOF
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They are one root cause and three separate unbuilt features.
 
-expect "$ZERG" call-with-explicit-type-args "NotImplemented: calling index" <<'EOF'
-fn id(x: int) -> int {
-	return x
-}
-
-fn main() {
-	print id[int](7)
-}
-EOF
-
 expect "$ZERG" call-a-fn-value-from-a-list "NotImplemented: calling index" <<'EOF'
 fn dbl(x: int) -> int {
 	return x * 2
@@ -1393,12 +1383,21 @@ impl P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" generic-multi-bound "more than one spec" <<'EOF'
-fn f[T: Eq + Ord](a: T) -> T {
+# A bound is a CONJUNCTION — `T: Eq + Show` asks for both — and the one that is not met is
+# the one named. The form itself is built; what is refused here is the type that does not
+# keep the promise.
+expect "$ZERG" generic-bound-unmet-in-a-conjunction "does not implement `Show`" <<'EOF'
+spec Show {
+	fn show() -> str
+}
+
+fn f[T: Eq + Show](a: T) -> T {
 	return a
 }
 
-fn main() { print f(1) }
+fn main() {
+	print f(1)
+}
 EOF
 
 expect "$ZERG" generic-undecidable "is not decided by this call" <<'EOF'

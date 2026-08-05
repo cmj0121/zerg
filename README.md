@@ -213,9 +213,8 @@ forms beside it, and the whole concurrency chapter — `spawn`, `chan[T]`, direc
 `close`, `select` and `for select` with the non-blocking `_` arm, and `time.after` /
 `time.ticker`.
 
-**Not yet (each refused by name).** A generic `struct`, `enum` or method, a bound naming two
-specs (`T: A + B`), a generic type alias, and an explicit type argument at a call
-(`id[int](7)`); `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
+**Not yet (each refused by name).** A generic `struct`, `enum` or method, and a generic type
+alias; `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
 provided methods; closures that capture; named arguments at a call; `set[T]`; fixed arrays
 `[T; N]`; `list` / `map` equality; tuple, struct and list patterns, or-patterns and
 destructuring bindings; a block used as an expression, and so as a `match` arm body; f-string

@@ -20,12 +20,11 @@ anonymous function.
 > `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path
 > never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
-> **[not yet]** A type argument may only be **inferred**. Fixing one explicitly at the use site is refused —
-> `id[int](7)` reports _NotImplemented: calling index — a callee is a plain name in this compiler, so
-> `f[T](…)` (an explicit type argument), `fs[0](…)` (a function value in a container) and `p?.m(…)` (an
-> optional method call) are all unbuilt_ — because a call's callee is parsed as a plain name and an index
-> expression never reaches the call path, which is why the three unrelated-looking forms share one refusal.
-> Inference from the argument types is built, and is the only way a generic is instantiated today.
+> **[not yet]** Two of the three forms that share the indexed-callee shape are still unbuilt: a call through
+> a function VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. An explicit type
+> argument — `id[int](7)` — is built: the parser recovers it where the base and the bracket are both still in
+> hand, and a written argument on a name that is not generic is a checked rule with a place rather than a
+> silently swallowed bracket.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
 > **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,

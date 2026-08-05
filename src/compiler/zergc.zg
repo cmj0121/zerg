@@ -21,8 +21,13 @@ import (
 
 # banner is the one line `--version` prints. It cannot be called `version`: a program and
 # the modules it imports flatten into one scope, and `cli.version` is a name in it.
+#
+# The NUMBER in it is not written here. It comes from `zerg.zerg_version()`, which is a
+# generated file carrying whatever the root VERSION says — because a version literal in the
+# driver is one that gets bumped for a release on the days somebody remembers, and every
+# other day the compiler introduces itself as the release before last.
 fn banner() -> str {
-	return "zerg 0.1.0 (self-hosted)"
+	return f"zerg {zerg.zerg_version()} (self-hosted)"
 }
 
 fn main(args: list[str]) {

@@ -76,6 +76,24 @@ const char *zrt_str_concat(const char *a, const char *b) {
 	return p;
 }
 
+/* zrt_str_dup COPIES a C string into a managed cell, and is what an `Err`'s message is read
+ * through. `zrt_str_retain` cannot serve there: it recovers a cell header from the byte
+ * BEFORE the payload, and a zrt_err's msg is very often not a payload at all — every abort
+ * the runtime raises itself passes a plain string literal ("IndexError: index out of range"
+ * in list.c, and its like in str.c, map.c, sys.c and conv.c). Retaining one of those reads
+ * eight bytes of .rodata as a refcount and writes them back, which is a bus error on a good
+ * day and silent corruption on a bad one.
+ *
+ * Copying costs an allocation per read and needs no invariant about where the message came
+ * from, which is the property worth paying for: the caller owns what it is handed, whoever
+ * raised it. */
+const char *zrt_str_dup(const char *s) {
+	if (s == NULL) {
+		s = "";
+	}
+	return dup_n(s, strlen(s));
+}
+
 /* --- display() -------------------------------------------------------------- */
 
 const char *zrt_display_int(int64_t v) {

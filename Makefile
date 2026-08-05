@@ -158,13 +158,30 @@ $(SUBDIR):
 # is not that the loop fails, it is that the loop has nothing to iterate and says so happily.
 EXAMPLE_MIN ?= 20
 
+# The examples that must be REFUSED, and the sentence they must be refused with. An example
+# is a claim about the language, and a NEGATIVE one — this program is not Zerg — is a claim
+# a build-and-run loop cannot check: it can only report that the build failed, which is what
+# a typo does too. So the refusal is held to what it SAYS and to carrying a place, which is
+# the same standard `make reject` holds its own cases to. That gate takes single files from a
+# heredoc and this example is a module and an entry, which is why it is checked here.
+EXAMPLE_REFUSED ?= examples/1g/private/main.zg
+EXAMPLE_REFUSED_SAYS ?= is not a public member of module
+
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
 	for src in examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg; do \
+		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \
+		n=$$((n+1)); \
+	done; \
+	for src in $(EXAMPLE_REFUSED); do \
+		say=$$(./bin/zerg build $$src --emit bin -o bin/examples/refused 2>&1); \
+		if [ $$? -eq 0 ]; then echo "BUILT  $$src (it must be refused)"; fail=1; continue; fi; \
+		echo "$$say" | grep -q "$(EXAMPLE_REFUSED_SAYS)" || { echo "SAID   $$src: $$say"; fail=1; continue; }; \
+		echo "$$say" | grep -q "$$(basename $$src):" || { echo "PLACE  $$src said no file:line:col"; fail=1; continue; }; \
 		n=$$((n+1)); \
 	done; \
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
@@ -214,6 +231,12 @@ fmt-tokens:                     # formatting changes spacing, never the token st
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./scripts/fmt-tokens.sh
 
+# A case's EXIT STATUS is checked as well as its stdout, against `<name>.rc` where there is
+# one and against 0 where there is not. Only stdout was compared before, so a program that
+# stopped aborting — or started — passed unchanged: the abort contract's third step (exit 1)
+# was a thing the corpus could not see, which is a poor property for a corpus that holds
+# cases whose whole subject is aborting. Its FIRST step, the message on stderr, still is:
+# that needs a `<name>.err` beside the other two and is not built.
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
@@ -222,11 +245,13 @@ corpus:                         # run zerg against the test-data corpus it now o
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
 		want=$$(cat test-data/codegen/$$name.out); \
+		want_rc=0; [ -f test-data/codegen/$$name.rc ] && want_rc=$$(cat test-data/codegen/$$name.rc); \
 		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
 		n=0; \
 		while [ $$n -lt $$reps ]; do \
-			got=$$(./bin/corpus-case 2>/dev/null); \
+			got=$$(./bin/corpus-case 2>/dev/null); rc=$$?; \
 			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
+			[ "$$rc" = "$$want_rc" ] || { echo "STATUS $$name (run $$n): want $$want_rc, got $$rc"; fail=1; break; }; \
 			n=$$((n+1)); \
 		done; \
 		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \

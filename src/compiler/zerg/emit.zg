@@ -293,6 +293,14 @@ struct Emitter {
 	# until the second asker arrived and wanted the same rows.
 	impl_on: list[str]
 	impl_target: list[str]
+
+	# sig_mod / sig_pub are, per signature, the MODULE that declared it and whether that
+	# declaration is `pub`. Visibility is the one question about a name that the flattened
+	# namespace cannot answer on its own: every module's names land in one space, so by the
+	# time a call is resolved there is nothing left to say where the callee came from. These
+	# two lists are what remembers it, recorded where the signature is.
+	sig_mod: list[str]
+	sig_pub: list[bool]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -540,7 +548,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 # are written, which is why they are read here rather than in c_call.
 fn c_ctor_side(e: Expr) -> int {
 	return match e {
-		ECall(nm, args) => c_ctor_side_of(nm, args.len())
+		ECall(nm, args, _) => c_ctor_side_of(nm, args.len())
 		_ => 0 - 1
 	}
 }
@@ -549,7 +557,7 @@ fn c_ctor_side(e: Expr) -> int {
 # one value.
 fn c_check_ctor_arity(e: Expr) {
 	match e {
-		ECall(nm, args) => c_check_ctor_arity_of(nm, args.len())
+		ECall(nm, args, _) => c_check_ctor_arity_of(nm, args.len())
 		_ => c_skip()
 	}
 }
@@ -1466,6 +1474,22 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[Expr]) -> str {
 		decls.append(pm.ty)
 	}
 	sol := gen_solve(tpl.tparams, decls, actuals)
+	return c_instantiate_at(em, name, sol)
+}
+
+# c_instantiate_at is the half of c_instantiate that happens once the type arguments are
+# known, whoever worked them out. A call that WRITES them — `id[int](7)` — has said what it
+# means and inference has nothing to add; a call that does not is solved from its arguments
+# and arrives here with the same list. Splitting the two apart is what keeps the checks, the
+# dedup and the budget in one place rather than one copy per way in.
+fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
+	tpl := em.gen_tpls[c_generic_row(em, name)]
+
+	# ONE TYPE ARGUMENT PER PARAMETER. `gen_solve` always answers one per parameter, so
+	# while inference was the only way in this was an invariant nothing had to state; a call
+	# that WRITES its arguments decides the length itself, and `pair[int](…)` on a two
+	# parameter template used to substitute the first and let the second reach C untouched.
+	raise f"`{name}` has {strconv.to_string(tpl.tparams.len(), 10)} type parameters and this gives {strconv.to_string(sol.len(), 10)}" if sol.len() != tpl.tparams.len()
 
 	# THE DEDUP SCAN COMES FIRST. A key already here was checked when it was made, and both
 	# checks below walk `sol` — one of them into `c_impls`, a scan of every impl in the
@@ -1515,9 +1539,37 @@ fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 fn c_check_bounds(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 	mut i := 0
 	for i < sol.len() and i < tpl.tbounds.len() {
-		raise f"`{ty_name(sol[i])}` does not implement `{tpl.tbounds[i]}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if tpl.tbounds[i] != "" and not c_satisfies(em, sol[i], tpl.tbounds[i])
+		# A bound is a CONJUNCTION, carried joined by `+`: every spec in it has to be met,
+		# and the one that is not is the one named. Reporting the whole bound instead would
+		# make a reader check each in turn to find which.
+		# It RAISES rather than reporting through chk_at, and that is deliberate: a failed
+		# bound means the specialization must not be built, and a collected finding would let
+		# the walk carry on into a body whose type does not meet the promise it was written
+		# against — which reports the consequence first and buries the cause.
+		for b in c_split_bounds(tpl.tbounds[i]) {
+			raise f"`{ty_name(sol[i])}` does not implement `{b}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if not c_satisfies(em, sol[i], b)
+		}
 		i = i + 1
 	}
+}
+
+# c_split_bounds takes `Eq+Hash` back apart. An empty bound answers nothing to check, which
+# is why the loop above needs no `!= ""` of its own.
+fn c_split_bounds(bound: str) -> list[str] {
+	mut out: list[str] = []
+	return out if bound == ""
+
+	mut cur: list[byte] = []
+	for ch in list[byte](bound) {
+		if ch == b'+' {
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(ch)
+		}
+	}
+	out.append(str(cur))
+	return out
 }
 
 # c_satisfies is whether a type meets a bound. A BUILT-IN type meets `Eq` inherently — `==`
@@ -1561,6 +1613,8 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 fn c_add_sig(mut &em: Emitter, fn_i: FnDecl) {
 	key := c_sig_key(fn_i.recv, fn_i.name)
 	em.sig_names.append(key)
+	em.sig_mod.append(c_mod_of(fn_i.path))
+	em.sig_pub.append(fn_i.is_pub)
 	em.sig_rets.append(fn_i.ret)
 	em.sig_hasret.append(fn_i.has_ret)
 	em.sig_nparams.append(fn_i.params.len())
@@ -2998,7 +3052,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EIdent(n) => c_ident_val(em, n, sb)
 		EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
-		ECall(name, args) => c_call(em, name, args, sb)
+		ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
 		EField(target, fld) => c_fieldref(em, target, fld, sb)
 		EOptChain(target, fld) => c_optchain(em, target, fld, sb)
 		ETry(x) => c_try(em, x, sb)
@@ -4313,6 +4367,8 @@ fn c_is_lvalue(e: Expr) -> bool {
 enum MethKind {
 	MList
 	MMap
+	MErr
+	MCarrier
 	MRecv
 	MFnField
 	MFree
@@ -4321,6 +4377,16 @@ enum MethKind {
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 	return MList if c_is_list(tty)
 	return MMap if c_is_map(tty)
+
+	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
+	# to carry a method, so anything else would fall to the namespaced-call arm and be
+	# emitted as a free function nobody declared — which is the shape this table's own
+	# comment says must not happen. c_err_method names what it does not have.
+	return MErr if c_is_err_ty(tty)
+
+	# and every method on a CARRIER, for the same reason: `T?` and `Either[L, R]` are types
+	# the compiler builds rather than a program declares, so neither has anywhere to hang one.
+	return MCarrier if c_is_opt(tty) or c_is_either(tty)
 	return MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -4339,10 +4405,149 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method(em, target, meth, args, tty, sb)
 		MMap     => c_map_method(em, target, meth, tty, sb)
+		MErr     => c_err_method(em, target, meth, args, sb)
+		MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_        => c_free_method(em, target, meth, args, sb)
 	}
+}
+
+# c_err_method is the `Error` interface on a caught `Err` — the three questions the error
+# tier answers about a VALUE rather than about its kind. `is` and `in` ask which kind it is,
+# and they were the only questions that could be asked at all: the message it was raised
+# with, the error it was raised FROM, and its code were carried by the runtime value and
+# reachable from no Zerg expression, so a `guard` handed back an error a program could
+# classify and not read.
+#
+# `message` RETAINS. A `str` is refcounted and the one in the Err belongs to the Err; handing
+# the caller that pointer without a retain would let the caller's drop free a string the Err
+# still holds — and the Err outlives the read whenever it sits in a `Result`.
+#
+# `unwrap` answers `Err?` and not `Err`, because a cause is exactly what an error may not
+# have: `raise e` records none and `raise e from c` records one. The runtime spells the
+# absence as a NULL `cause`, and this is where that becomes a tag a `match` can read.
+#
+# `code` answers `byte?`, and answers it ABSENT — always, today. That is not a hedge: no
+# `Err` this compiler can construct carries a code, because the only errors there are are the
+# built-in kinds and a code belongs to a user-defined error type, which is `[not yet]`. The
+# method exists so the shape is right when that arrives, and what it reports meanwhile is
+# true rather than convenient.
+fn c_err_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+
+	# NONE of the three takes an argument, and an argument list nobody reads is a question
+	# the program asked that nothing answered: `e.message(1)` compiled, with the `1`
+	# evaluated nowhere and mentioned by nothing.
+	raise f"NotImplemented: the method `{meth}` on an Err takes no argument" if args.len() != 0
+
+	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
+
+	if meth == "unwrap" {
+		cn := c_opt_name(em, TErr)
+		t := c_tmp(em, "zgt_ec")
+		head := "({ zrt_err *" + t + " = (" + c_expr(em, target, sb) + ").cause; "
+		return head + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = *" + t + " } : (" + cn + "){ .tag = 1 }; })"
+	}
+	return "(" + c_opt_name(em, TByte) + "){ .tag = 1 }" if meth == "code"
+
+	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`"
+}
+
+# c_carrier_method is the bridge between the two carriers — the one conversion the error
+# chapter offers and neither carrier had.
+#
+# `opt.ok_or(err)` reads an absent optional as a failure and names what the failure IS;
+# `res.ok()` reads a failed Result as an absence and forgets why. They are not symmetric and
+# should not be: going one way needs a reason supplied, going the other throws one away, and
+# writing that out is the point of having both spellings rather than a cast.
+#
+# Without them `T?` and `Result[T]` were two islands. A function answering `int?` could not
+# be given to one taking `Result[int]` by any expression a program could write, so the choice
+# of carrier propagated outward through every signature that touched it.
+#
+# The LEFT PAYLOAD IS COPIED, not aliased. A fresh carrier is not an lvalue, so the coalesce
+# and force paths treat it as this expression's own and drop it — which, with a shared
+# payload, releases a `str` the source optional still holds. That is a use-after-free the
+# `int` payloads in the corpus could not show, and the two conversions here are the path the
+# errors chapter tells a reader to take.
+#
+# The Right is dropped by value on the `ok()` path, exactly as `??` drops it — the carrier
+# held a copy and nothing releases it there either. That is one behaviour, not two, and if it
+# is a leak it is the same leak in both places.
+fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	if meth == "ok_or" and c_is_opt(tty) {
+		raise "NotImplemented: `ok_or` takes the error to answer an absence with, and none was given" if args.len() == 0
+		raise "NotImplemented: `ok_or` takes ONE error to answer an absence with" if args.len() != 1
+
+		# The argument is the RIGHT of the Result being built, so it has to be an `Err`.
+		# Without the check `o.ok_or(3)` assigned an `int` to a `zrt_err` field and the
+		# diagnostic came from cc, against a line of generated C.
+		at := c_infer(em, args[0])
+		raise "NotImplemented: `ok_or` answers an absence with an `Err`, and this is a " + ty_name(at) if not c_is_err_ty(at)
+
+		elem := c_opt_elem(tty)
+		on := c_opt_name(em, elem)
+		rn := c_carrier_name(em, elem, TErr)
+		t := c_tmp(em, "zgt_ko")
+		r := c_tmp(em, "zgt_kr")
+
+		# The error is evaluated BEFORE the branch, not inside the `else`. Arguments evaluate
+		# in source order ([Memory Model](../../docs/core/memory.md)) and the short-circuit
+		# forms are a closed set `ok_or` is not in, so an argument that printed or raised did
+		# it only when the optional happened to be absent — a conditional side effect the
+		# language does not have anywhere else, and one nothing marked.
+		e := c_tmp(em, "zgt_ke")
+		mut out := "({ " + c_type(TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
+		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_res_taken(em, t, elem) + "; }"
+		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
+		return out + " " + r + "; })"
+	}
+	if meth == "ok" and c_is_either(tty) {
+		raise "NotImplemented: `ok` forgets the Right and takes no argument" if args.len() != 0
+
+		left := c_either_left(tty)
+		cn := c_carrier_ty_cname(tty)
+		on := c_opt_name(em, left)
+		t := c_tmp(em, "zgt_ko")
+		o := c_tmp(em, "zgt_kv")
+		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_ok(o) + " = " + c_res_taken(em, t, left) + "; }"
+		out = out + " else { " + c_res_mark_right(o) + " }"
+		return out + " " + o + "; })"
+	}
+
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`"
+}
+
+# c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
+# is a `Result[T]` whatever the optional held; `ok` keeps the Left and drops the Right.
+fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
+	return TEither(c_opt_elem(tty), TErr) if meth == "ok_or" and c_is_opt(tty)
+
+	# Raising rather than answering `TUnknown` for the same reason c_err_method_ret does:
+	# the two tables must agree about which names EXIST, and only a raise makes them.
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`" if meth != "ok" or not c_is_either(tty)
+
+	return TOpt(c_either_left(tty))
+}
+
+# c_err_method_ret is the same three answers, for the pass that types the call rather than
+# emits it. The two tables are read by one `c_meth_kind`, so they cannot disagree about
+# WHICH method this is; this is where they must agree about what it gives back.
+fn c_err_method_ret(meth: str) -> Ty {
+	return TStr if meth == "message"
+	return TOpt(TErr) if meth == "unwrap"
+
+	# It RAISES on a name it does not know, exactly as c_list_method_ret does and unlike
+	# c_map_method_ret, which answers quietly. The two tables are read by one `c_meth_kind`,
+	# so they cannot disagree about WHICH method this is — but they could disagree about
+	# whether it EXISTS, and a fourth method added to the emit side alone would then infer
+	# `TUnknown` and be reported somewhere far from here.
+	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`" if meth != "code"
+
+	return TOpt(TByte)
 }
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
@@ -4466,6 +4671,11 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
 
+	# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the one
+	# shape where the reader has said which module they mean, and the one where reading a
+	# module-private name is unambiguous rather than accidental.
+	c_chk_visible_fn(em, meth)
+
 	return f"{c_fn_cname("", meth)}({c_call_args(em, meth, args, sb)})"
 }
 
@@ -4535,6 +4745,39 @@ fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
 	return out + " zgt_ll; })"
 }
 
+# c_call_written is a call that WROTE its type arguments — `id[int](7)`. The specialization
+# is named from what the program said rather than from what its arguments imply, and the call
+# then goes on as an ordinary one. Where nothing was written this is exactly c_call, which is
+# the common path and pays nothing for the other's existence.
+#
+# A written argument on a name that is not a template is a mistake worth naming: it means the
+# reader thinks something is generic that is not, and silently ignoring the brackets would
+# let them keep thinking it.
+fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], sb: Subst) -> str {
+	return c_call(em, name, args, sb) if ts.len() == 0
+
+	# A CHECKED rule, so it carries a place: this is a statement about a program the language
+	# rejects — the reader believes something is generic that is not — rather than a form
+	# this compiler has not built.
+	if not c_is_generic(em, name) {
+		chk_at(em, f"`{name}` is not generic, so `{name}[…]` has no type argument to take")
+		return "0"
+	}
+
+	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
+}
+
+# c_infer_call_written is the same choice for the pass that types a call rather than emits
+# it. Both have to instantiate, because the specialization's signature is what carries the
+# return type, and both have to pick the SAME one.
+fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty]) -> Ty {
+	# It stays SILENT where the emit side reports: a written type argument on a name that is
+	# not generic is one mistake, and one diagnostic is what it should produce.
+	return c_lookup_sig_ret(em, c_instantiate_at(em, name, ts)) if ts.len() > 0 and c_is_generic(em, name)
+
+	return c_infer_call(em, name, args)
+}
+
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(name) {
 		em.used_rt = true
@@ -4602,10 +4845,31 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		raise f"undefined function `{name}`"
 	}
 
+	# The callee is a real free function, so the last question is whether this module is
+	# allowed to name it. It is asked HERE and not at the lookup above because the lookup
+	# answers for every shape of call — a method, a constructor, an intrinsic — and only a
+	# plain function has a module that could be the wrong one.
+	c_chk_visible_fn(em, name)
+
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname("", name), name, args, rels, sb) if c_any_owned(rels)
 
 	return f"{c_fn_cname("", name)}({c_call_args(em, name, args, sb)})"
+}
+
+# c_chk_visible_fn is the visibility rule for a free function. It goes through `c_sig_row`,
+# the one scan of that table there should be: a column-per-reader pair walked ~1.7k rows
+# twice per call site and built the key twice, which is the cost the table's own comment on
+# `sig_nparams` explains they precomputed two integers to avoid.
+#
+# A key that is not there is quiet. A generated declaration — a `derive`d impl, a
+# monomorphized specialization — has no module a reader could have written, and a rule that
+# guessed there would refuse programs for a reason nobody can act on.
+fn c_chk_visible_fn(mut &em: Emitter, name: str) {
+	r := c_sig_row(em, c_sig_key("", name))
+	return if r < 0
+
+	chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
 }
 
 # c_struct_args emits a struct constructor's arguments, giving each field's type as
@@ -5440,7 +5704,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIdent(n) => c_infer_ident(em, n)
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
-		ECall(name, args) => c_infer_call(em, name, args)
+		ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
 		EField(target, fld) => c_field_ty_of(em, target, fld)
 		EOptChain(target, fld) => c_optchain_ty(em, target, fld)
@@ -5493,6 +5757,8 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr])
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method_ret(meth)
 		MMap     => c_map_method_ret(meth)
+		MErr     => c_err_method_ret(meth)
+		MCarrier => c_carrier_method_ret(em, tty, meth)
 		MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 
@@ -5922,10 +6188,18 @@ fn c_const_in(f: File, name: str) -> bool {
 
 # c_const_assigns is the constants' values, assigned before any init() runs.
 fn c_const_assigns(mut &em: Emitter, f: File) -> str {
+	# A module constant's initializer is emitted into the ENTRY's wrapper, so the statement
+	# marker still names the entry file while the code belongs to whichever module declared
+	# the constant. Clearing the path says that honestly — the visibility rule is quiet when
+	# it cannot tell which module is reading — rather than answering with the wrong one,
+	# which reported `m`'s own call to its own private function as a violation.
+	keep := em.at_path
+	em.at_path = ""
 	mut out := ""
 	for c in f.consts {
 		out = out + f"    zg_{c_let_name(c)} = {c_expr(em, c_let_value(c), c_nosub())};\n"
 	}
+	em.at_path = keep
 	return out
 }
 
@@ -5941,6 +6215,97 @@ fn c_let_value(s: Stmt) -> Expr {
 		SLet(_, _, _, _, v) => v
 		_ => ENil
 	}
+}
+
+# c_main_entry writes the program's C entry: a WRAPPER carrying the top-level
+# initialization and the call to `main`, and the runtime shim that runs it under a root
+# abort handler.
+#
+# The defect it closes is that there was no root handler at all. The emitted `int main`
+# called the body directly, so an uncaught abort reached `zrt_unwind_abort` with no handler
+# installed, took its `exit(1)` last resort, and left the cleanup stack standing — every
+# `defer` pending at the top level skipped, on the one path a reader most needs them. Every
+# other exit ran them: a normal return, an early `return`, each round of a loop, and an
+# abort a `guard` demoted, which is the case that made the gap look like coverage.
+#
+# THE WRAPPER IS WHAT PUTS THE INITIALIZATION INSIDE THE HANDLER. A module constant's
+# initializer and every `init()` run before main's body and can abort like any other code;
+# emitted straight into `int main` they sat outside whatever handler the body had. A
+# concurrent program had exactly that shape and still does not: `zrt_sched_main_nil(zg_main)`
+# guards the body and not the prologue. One wrapper fixes both, because both families of
+# shim take the same nullary function.
+#
+# THE WRAPPER'S NAME IS OUT OF REACH. `__zerg_entry` and `__zerg_args` cannot be written by
+# a Zerg program, because every Zerg name mangles through `zg_`: a program that declares
+# `entry__` or a module constant named `args__` used to collide with them, and the
+# collision surfaced as a `cc` error against generated C — for the constant, as a silently
+# wrong answer, since the initializer assigned to the wrapper's PARAMETER instead. The seed
+# already named its init aggregator `__zerg_init_main` for the same reason.
+#
+# The bracket itself is the RUNTIME's. `zrt_run` has spelled it since the `Result[nil]`
+# entry existed and `coro_trampoline` spells it for every coroutine; a copy in emitted text
+# would be the only one no compiler in this repository ever checks. What is decided here is
+# which shim runs the wrapper — the scheduler's when the program is concurrent, entry.c's
+# when it is not — and that is the only difference between the two paths left.
+#
+# A program that reaches the runtime NOWHERE keeps the plain entry it has always had. Its
+# cleanup stack cannot be non-empty, because a `defer` needs the runtime and so does every
+# raise, so the handler would guard an empty unwind — and buying it would cost every trivial
+# program the whole runtime, which zergrt.h opens by recording that it does not pay.
+#
+# There is no `Result[nil]` arm, and its absence is the discarded-Result deviation
+# ([Modules, Packages & Programs](../../docs/runtime/package.md)) rather than an oversight
+# here: such a main falls to the nil shape, so its `Right` is dropped and the program exits
+# 0. The seed HAS the arm — `zrt_run` maps the Result to a status — which is why the two
+# compilers disagree about that one shape, and why no program can observe it: the seed
+# cannot build `Right` either.
+fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
+	has_args := c_main_has_args(own)
+	ret_int := c_main_ret_is_int(own)
+
+	if has_args and em.used_conc {
+		# The scheduler's program-entry shims all take a NULLARY function pointer, so
+		# running main(args) as coroutine 0 needs a scheduler shim that does not exist.
+		# entry.c's zrt_run_args shows the SHAPE is fine; it is the scheduler's version
+		# of it that is missing.
+		raise "NotImplemented: main(args) in a program that uses concurrency"
+	}
+
+	if not has_args and not c_needs_runtime(em) and not em.used_rt {
+		return "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n" if ret_int
+
+		return "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
+	}
+
+	em.used_rt = true
+	if has_args {
+		# args in and an exit code out is its own shim. Both compilers used to drop that
+		# code — `fn main(args) -> int` returning 2 exited 0 — because the entry called
+		# main for effect and answered 0 itself.
+		if ret_int {
+			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    return zg_main(__zerg_args);\n}\n\n"
+			return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args_int(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
+		}
+		wrap := "static void __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    zg_main(__zerg_args);\n}\n\n"
+		return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
+	}
+	if ret_int {
+		wrap := "static int64_t __zerg_entry(void) {\n" + inits + "    return zg_main();\n}\n\n"
+		shim := c_main_shim(em, "zrt_sched_main_int", "zrt_main_run_int")
+		return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
+	}
+	wrap := "static void __zerg_entry(void) {\n" + inits + "    zg_main();\n}\n\n"
+	shim := c_main_shim(em, "zrt_sched_main_nil", "zrt_main_run_nil")
+	return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
+}
+
+# c_main_shim is the one thing a concurrent program decides differently: it runs the entry
+# as coroutine 0 and drains the run queue afterwards, so a fire-and-forget `spawn` still
+# finishes. Both families arm the same root handler around the same wrapper.
+fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
+	return conc if em.used_conc
+
+	return plain
 }
 
 # c_init_calls is the `init()` invocations main opens with, in declaration order.
@@ -6759,16 +7124,16 @@ fn c_meth_args_of(e: Expr) -> list[Expr] {
 
 fn c_call_name(e: Expr) -> str {
 	return match e {
-		ECall(n, _) => n
-		_           => ""
+		ECall(n, _, _) => n
+		_ => ""
 	}
 }
 
 fn c_call_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
-		ECall(_, a) => a
-		_           => none
+		ECall(_, a, _) => a
+		_ => none
 	}
 }
 
@@ -8010,8 +8375,8 @@ fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
 
 fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 	return match x {
-		ECall(nm, _) => c_err_kind(nm) > 0
-		_            => false
+		ECall(nm, _, _) => c_err_kind(nm) > 0
+		_ => false
 	}
 }
 
@@ -8700,7 +9065,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -8816,32 +9181,8 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# one example that owns this behaviour was built by the seed, whose single
 		# translation unit makes `own` and `f` the same file.
 		inits := c_const_assigns(em, f) + c_init_calls(f)
-		if c_main_has_args(own) {
-			# main(args): build the arg list from argv via the runtime
-			em.used_rt = true
-			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
-			if em.used_conc {
-				# the scheduler's program-entry shims all take a NULLARY function pointer
-				# (zergrt.h) — there is no shape that carries an argument — so running
-				# main(args) as coroutine 0 needs a runtime shim that does not exist yet
-				raise "NotImplemented: main(args) in a program that uses concurrency"
-			}
-		} else if c_main_ret_is_int(own) {
-			# main's value IS the exit code. Calling an `int64_t (*)(void)` through the
-			# `void (*)(void)` shim was undefined behaviour AND threw the code away, so
-			# every concurrent `fn main() -> int` exited 0 whatever it returned.
-			mainw = "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n"
-			if em.used_conc {
-				mainw = "int main(void) {\n" + inits + "    return (int)zrt_sched_main_int(zg_main);\n}\n"
-			}
-		} else {
-			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
-			if em.used_conc {
-				# a concurrent program runs main AS COROUTINE 0 — the scheduler drains
-				# the run queue afterwards, so a fire-and-forget spawn still finishes
-				mainw = "int main(void) {\n" + inits + "    return zrt_sched_main_nil(zg_main);\n}\n"
-			}
-		}
+
+		mainw = c_main_entry(em, own, inits)
 	}
 
 	# A separately-compiled unit declares the WHOLE program's prototypes, and any of them

@@ -213,9 +213,8 @@ forms beside it, and the whole concurrency chapter — `spawn`, `chan[T]`, direc
 `close`, `select` and `for select` with the non-blocking `_` arm, and `time.after` /
 `time.ticker`.
 
-**Not yet (each refused by name).** A generic `struct`, `enum` or method, a bound naming two
-specs (`T: A + B`), a generic type alias, and an explicit type argument at a call
-(`id[int](7)`); `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
+**Not yet (each refused by name).** A generic `struct`, `enum` or method, and a generic type
+alias; `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
 provided methods; closures that capture; named arguments at a call; `set[T]`; fixed arrays
 `[T; N]`; `list` / `map` equality; tuple, struct and list patterns, or-patterns and
 destructuring bindings; a block used as an expression, and so as a `match` arm body; f-string
@@ -224,21 +223,22 @@ composite; `Ref[T]` and the `atomic` module; command literals; `unsafe`, raw poi
 inline assembly; the `is` type-test for non-error types; the `Reader` I/O surface; and the
 `zerg test` runner.
 
-**Known deviations (bugs the spec records against current behavior).** Six of these are
+**Known deviations (bugs the spec records against current behavior).** Five of these are
 **silent** — the program compiles and the answer is wrong — and they are the ones to know
 first: a `str` literal `match` arm never fires; an if-expression does not check that its
-branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; a `defer`
-does not run on the abort path out of `main`; `main`'s `Result[nil]` is discarded, so a
-returned `Right` exits 0; and a module-level inferred binding is dropped rather than refused.
+branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; `main`'s
+`Result[nil]` is discarded, so a returned `Right` exits 0; and a module-level inferred
+binding is dropped rather than refused.
 Two more break the contract in the other direction: `in` and `??` used as a **whole
 condition** reach `cc` against generated C, and 800 levels of nesting is a SIGSEGV.
 
 Then the structural ones: a refusal carries no position — a checked rule reports
 `file:line:col` with the source line and a caret, and a form the compiler has not built names
-the form and nothing else; module visibility is not enforced — a module reaches another
-module's private declarations; top-level constants initialize in source order, so a forward
-reference reads zero; left-to-right evaluation order of call arguments and operands is not
-enforced; and the scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
+the form and nothing else; module visibility is enforced on functions and not yet on types
+or fields — a module still reads another module's private struct and its private fields;
+top-level constants initialize in source order, so a forward reference reads zero;
+left-to-right evaluation order of call arguments and operands is not enforced; and the
+scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
 its worker until it parks, so a CPU-bound coroutine occupies one, and as many of them as there
 are workers stop the program. Each is marked where it appears in the spec.
 

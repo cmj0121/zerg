@@ -248,6 +248,22 @@ fn main() {
 }
 EOF
 
+# --- generics -----------------------------------------------------------------------
+#
+# Both of these were `refuse` cases until the forms they name were built. What is left when
+# a form arrives is not nothing: it is the PROGRAM's own mistake, which is permanent and
+# belongs here.
+
+reject explicit-type-args-on-a-plain-fn "is not generic" <<'EOF'
+fn id(x: int) -> int {
+	return x
+}
+
+fn main() {
+	print id[int](7)
+}
+EOF
+
 # --- redeclaration ----------------------------------------------------------------
 #
 # A name is bound once per block. Shadowing across blocks is legal and load bearing, so

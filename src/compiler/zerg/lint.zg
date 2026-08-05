@@ -225,7 +225,7 @@ fn lint_opt_expr(e: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
 		EField(t, nm) => lint_opt_expr(t, fname, ret_opt, out)
 		EOptChain(t, nm) => lint_opt_expr(t, fname, ret_opt, out)
 		ETry(x) => lint_opt_expr(x, fname, ret_opt, out)
-		ECall(nm, args) => lint_opt_args(args, fname, ret_opt, out)
+		ECall(nm, args, _) => lint_opt_args(args, fname, ret_opt, out)
 		EMethod(t, nm, args) => lint_opt_args(args, fname, ret_opt, out)
 		_ => lint_skip()
 	}
@@ -359,7 +359,7 @@ fn lint_captures_expr(e: Expr, fname: str, refs: list[str], mut &muts: list[str]
 	match e {
 		EGuard(b) => lint_captures_body(b, fname, refs, muts, out)
 		EFn(ps, has_ret, ret, b) => lint_captures_body(b, fname, refs, muts, out)
-		ECall(nm, args) => lint_captures_each(args, fname, refs, muts, out)
+		ECall(nm, args, _) => lint_captures_each(args, fname, refs, muts, out)
 		EMethod(t, m, args) => lint_captures_each(args, fname, refs, muts, out)
 		_ => lint_skip()
 	}
@@ -443,7 +443,7 @@ fn assigns_to(s: Stmt, n: str, refs: list[str]) -> bool {
 fn mutates_expr(e: Expr, n: str, refs: list[str]) -> bool {
 	return match e {
 		EMethod(t, m, args) => c_meth_mutates(m) and chk_root_name(t) == n
-		ECall(nm, args) => ref_arg(nm, args, n, refs)
+		ECall(nm, args, _) => ref_arg(nm, args, n, refs)
 		_ => false
 	}
 }
@@ -670,7 +670,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EIdent(name) => ids.append(name)
 		EUnary(oper, x) => walk_expr(x, ids, calls, ns)
 		EBinary(oper, a, b) => walk_pair(a, b, ids, calls, ns)
-		ECall(name, args) => walk_call(name, args, ids, calls, ns)
+		ECall(name, args, _) => walk_call(name, args, ids, calls, ns)
 		EField(target, name) => walk_expr(target, ids, calls, ns)
 		EOptChain(target, name) => walk_expr(target, ids, calls, ns)
 		ETry(x) => walk_expr(x, ids, calls, ns)

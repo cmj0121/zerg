@@ -199,9 +199,9 @@ list slicing、對 `str` 的 rune 迭代、帶檢查的整數算術與並列的 
 與 `{x=}`;複合值的結構化渲染;`Ref[T]` 與 `atomic` 模組;command literal;`unsafe`、裸指標與內嵌組語;
 非錯誤型別的 `is` 測試;`Reader` I/O 介面;以及 `zerg test` runner。
 
-**已知偏差（規格對照目前行為記錄的 bug）。** 其中六項是**靜默的**——程式編得過、答案是錯的——這幾項最該先知道：
+**已知偏差（規格對照目前行為記錄的 bug）。** 其中五項是**靜默的**——程式編得過、答案是錯的——這幾項最該先知道：
 `str` 字面值的 `match` arm 永遠不成立；if-expression 不檢查各分支型別是否一致；`byte` 上的 `~` 給出未遮罩的
-64-bit 補數；未捕捉的 abort 走出 `main` 時 `defer` 不執行；`main` 的 `Result[nil]` 被丟棄，所以回傳 `Right`
+64-bit 補數；`main` 的 `Result[nil]` 被丟棄，所以回傳 `Right`
 仍以 0 離開；模組層的推導式 binding 被丟棄而非被拒絕。另有兩項是往另一個方向破壞契約：`in` 與 `??` 當作**整個
 條件**使用時會漏到 `cc`，而 800 層巢狀是一次 SIGSEGV。
 

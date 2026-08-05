@@ -224,12 +224,12 @@ composite; `Ref[T]` and the `atomic` module; command literals; `unsafe`, raw poi
 inline assembly; the `is` type-test for non-error types; the `Reader` I/O surface; and the
 `zerg test` runner.
 
-**Known deviations (bugs the spec records against current behavior).** Six of these are
+**Known deviations (bugs the spec records against current behavior).** Five of these are
 **silent** — the program compiles and the answer is wrong — and they are the ones to know
 first: a `str` literal `match` arm never fires; an if-expression does not check that its
-branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; a `defer`
-does not run on the abort path out of `main`; `main`'s `Result[nil]` is discarded, so a
-returned `Right` exits 0; and a module-level inferred binding is dropped rather than refused.
+branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; `main`'s
+`Result[nil]` is discarded, so a returned `Right` exits 0; and a module-level inferred
+binding is dropped rather than refused.
 Two more break the contract in the other direction: `in` and `??` used as a **whole
 condition** reach `cc` against generated C, and 800 levels of nesting is a SIGSEGV.
 

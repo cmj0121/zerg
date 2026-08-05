@@ -235,10 +235,11 @@ condition** reach `cc` against generated C, and 800 levels of nesting is a SIGSE
 
 Then the structural ones: a refusal carries no position — a checked rule reports
 `file:line:col` with the source line and a caret, and a form the compiler has not built names
-the form and nothing else; module visibility is not enforced — a module reaches another
-module's private declarations; top-level constants initialize in source order, so a forward
-reference reads zero; left-to-right evaluation order of call arguments and operands is not
-enforced; and the scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
+the form and nothing else; module visibility is enforced on functions and not yet on types
+or fields — a module still reads another module's private struct and its private fields;
+top-level constants initialize in source order, so a forward reference reads zero;
+left-to-right evaluation order of call arguments and operands is not enforced; and the
+scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
 its worker until it parks, so a CPU-bound coroutine occupies one, and as many of them as there
 are workers stop the program. Each is marked where it appears in the spec.
 

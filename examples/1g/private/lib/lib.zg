@@ -4,9 +4,9 @@ pub fn public_fn() -> int {
 	return 1
 }
 
-# helper is module-private: specified to be reachable only inside lib, never as
-# lib.helper. This compiler flattens every module into one namespace and checks no
-# visibility, so the cross-module call in ../main.zg resolves — see the header there.
+# helper is module-private: reachable only inside lib, never as lib.helper. Every module
+# still flattens into one C namespace — what decides the question is the DIRECTORY each
+# declaration was read from, compared with the directory doing the reading.
 fn helper() -> int {
 	return 2
 }

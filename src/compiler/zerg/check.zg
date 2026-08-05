@@ -56,6 +56,79 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 	em.diags.append(Diag(path, line, col, msg))
 }
 
+# --- visibility -------------------------------------------------------------------
+#
+# `pub` is the one visibility marker, and until now nothing read it. Every module flattens
+# into one namespace, so a call to another module's module-private function resolved exactly
+# as a call to its own — `pub` was parsed, carried on the declaration, and consulted by the
+# linter alone.
+#
+# A MODULE IS A DIRECTORY, so the question is answered by comparing the directory a
+# declaration was read from with the directory the reference is in. That is the whole of the
+# rule this compiler enforces: the package layer above it — package-internal versus
+# package-public, and the root module's re-export surface — needs a package to exist first,
+# and none does.
+#
+# The entry file's own directory is deliberately NOT a module here. A file beside the entry
+# is not compiled into the build at all, so nothing in it can be referenced and there is
+# nothing for this rule to say about it.
+fn c_mod_of(path: str) -> str {
+	b := list[byte](path)
+	mut cut := -1
+	mut i := 0
+	for i < b.len() {
+		if b[i] == byte(47) {
+			cut = i
+		}
+		i = i + 1
+	}
+	return "" if cut < 0
+
+	mut out: list[byte] = []
+	mut j := 0
+	for j < cut {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# c_mod_name is the module as a reader names it — the last segment of its directory, which
+# is what `import "util/text"` binds and what a diagnostic should say.
+fn c_mod_name(dir: str) -> str {
+	b := list[byte](dir)
+	mut cut := -1
+	mut i := 0
+	for i < b.len() {
+		if b[i] == byte(47) {
+			cut = i
+		}
+		i = i + 1
+	}
+	return dir if cut < 0
+
+	mut out: list[byte] = []
+	mut j := cut + 1
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# chk_visible is the rule. It is quiet on a `pub` declaration, on one from the module doing
+# the reading, and on one whose module is unknown — a generated declaration (a `derive`d
+# impl, a monomorphized specialization) carries the path of whatever asked for it, and a
+# rule that guessed there would refuse programs for a reason the reader cannot see.
+pub fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
+	return if is_pub or decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+	return if here == decl_mod or here == ""
+
+	chk_at(em, f"`{name}` is not a public member of module `{c_mod_name(decl_mod)}`")
+}
+
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
 # every implicit conversion is a lint finding, and every one of them is also a legal program,
 # so it goes on a list that does not fail the build.

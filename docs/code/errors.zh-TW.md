@@ -18,9 +18,6 @@
 **`?`——傳遞。** `x?` 拆出左值，或從所在函式**提早 return** 右值（early return 的語法糖），因此函式必須有相同的
 右型別。`T?` 與 `Result` 之間沒有隱式橋接：先用 `opt.ok_or(err)` 或 `res.ok()` 轉換。
 
-> **[not yet]** 兩個轉換器都尚未建置——`opt.ok_or(err)` 與 `res.ok()` 各自都會被指名拒絕——所以 `T?` 與 `Result`
-> 之間兩個方向都完全沒有橋。一個 `T?` 要抵達一個回答 `Result` 的函式，只能用 `??` 或 if-let 手工拆開再手工包回去。
-
 ```text
 fn load() -> Result[Config] {
     txt := read_file(path)?     # Result[str]；Err 會提早 return
@@ -95,11 +92,9 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
 寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
 
-> **[not yet]** **`Error` 介面尚未建置**。在一個接到的錯誤上，`message()`、`unwrap()` 與 `code()` 三者都會被指名
-> 拒絕（``NotImplemented: the method `message` on a Err``），所以上面剛聲稱可讀的 `err.message()` 讀不到，`from`
-> 記下的 cause chain 與 `code()` 那個 byte 也一樣。一個接到的 `Err` 只答得出 `is` 與 `in`——它的種類，而且僅只
-> 種類——再沒有別的讀法；這也表示 [依型別處理錯誤](#依型別處理錯誤is) 一節裡那個範例編不過。這是本章最大的單一
-> 缺口：分類建置了、也測得出來，而它所攜帶的值沒有。
+> **[not yet]** `code()` 回答 `byte?`，而且**永遠回答 absent**。本編譯器建得出來的 `Err` 沒有一個帶著 code：
+> 存在的錯誤就是那些內建種類，而 code 屬於使用者自訂的錯誤型別——那才是本段尚未建置的部分。`message()` 與
+> `unwrap()` 已經建了。
 >
 > **[deviation]** 手寫 `raise` 一個內建種類時，abort 契約所定的 **`Kind:` 前綴**會掉。
 > `raise ValueError("bad input")` 只往 stderr 寫 `bad input`、別的都沒有，而同一個種類由 runtime raise 出來時寫的
@@ -188,10 +183,6 @@ match guard { work() } {
     }
 }
 ```
-
-> **[not yet]** 上面這個範例照寫是編不過的：`report(e.message())` 需要 `Error` 介面，而它三個 method 全都尚未建置
-> （見分類那一節）。`is` 串與它必備的 catch-all 是真的；至於 catch-all 接到錯誤之後能拿它做什麼，就只有種類測試、
-> 別無其他。
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
 ——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被

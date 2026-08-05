@@ -27,6 +27,11 @@
 共享的值（複製時 retain、最後一個持有者釋放一次）；它讓值得以超出定義它的 scope、或跨 `spawn` 共享。見
 [值與記憶體](../core/memory.zh-TW.md)。
 
+> **[not yet]** 本編譯器沒有 `Ref[T]` 型別，所以這兩個內建都不存在，兩者都被具名拒絕——
+> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
+> reference count 的是 `chan`、`str` 與遞迴型別，各由編譯器自行管理、而非透過這個 box；`atomic` 模組與
+> `Reader` 表面都在等這一項。
+
 ## `deref`
 
 `deref(r: Ref[T]) -> T`——把 box 的內容讀出來。讀出是一個值（非 POD 的 `T` 會複製）；box 本身不受影響。
@@ -37,6 +42,11 @@
 `u8`…`u64` / `f32` / `f64`）——把 `x` 的值**重新建構**成 `T`，絕非位元的 reinterpret。不合目標範圍的值會
 **abort**（`OverflowError`，如 `uint(-1)` 或會失去範圍的縮窄），所以轉換是被檢查的、不會無聲失真。見
 [型別](../core/types.zh-TW.md)。
+
+> **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
+> `i32(5)` 回報的是 _undefined function `i32`_——一個普通的未解析名稱，而不是說明「這個形式尚未建置」的拒絕，
+> 這是本章唯一一處契約在結果上成立、在措辭上不成立的地方。上面點名的六個都可用，`uint(-1)` 也確實以
+> _OverflowError: integer conversion out of range_ abort，與規格一致。
 
 ## 解析字串（Parsing a string）
 
@@ -62,14 +72,29 @@
 `e is IOError` 測試已抹除的 `Err`。這組由編譯器擁有——本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
 
+> **[deviation]** kind 在**型別**裡活著、在**訊息**裡掉了。對建構出來的 `Err`，`e is IOError` 回答正確；但
+> 一個 `raise ValueError("bad input")` 走到頂端時，標準錯誤上只有 _bad input_，而
+> [abort 契約](../conformance.zh-TW.md)所定的是 `Kind: message`——那正是 runtime 自己 raise 時用的形狀
+> （_IndexError: index out of range_）。同一個 kind、兩種輸出形狀，取決於是誰 raise 的。
+
 ## raw pointer（僅限 `unsafe`）
 
 **只在 `unsafe` 情境內**合法。自由函式 `addr(x) -> ptr[T]`（可定址值的位址）、`ptr(p) -> ptr` /
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](../core/memory.zh-TW.md)。
 
+> **[not yet]** 全部都沒有建，而拒絕訊息對此是誠實的——_NotImplemented: the raw-pointer built-in `addr` —
+> bare-metal memory access, which is `unsafe`-only and not built here_，以及 _NotImplemented: `ptr` is not an
+> expression this compiler reads_。在**型別**位置措辭較弱：`fn f(p: ptr)` 回報 _no type named `ptr`_，而
+> `p: ptr = 0` 回報 _cannot bind int to a ptr binding_，讀起來像是 `ptr` 是個既有型別、只是值不合。它們所需的
+> `unsafe` 情境本身也還沒建。
+
 ## `sizeof` / `alignof`
 
 `sizeof[T] -> uint` 與 `alignof[T] -> uint` 是型別的**位元組大小**與**對齊**，在**編譯期**決定——這是唯一需要
 編譯器 layout 知識、純 Zerg 表達不出來的 built-in。引數是**型別**，寫法與 `list[T]` 的型別引數一致：`sizeof[int]`
 （8）、`sizeof[Point]`、`sizeof[list[byte]]`。主要用於 FFI 與低階 layout。見 [值與記憶體](../core/memory.zh-TW.md)。
+
+> **[not yet]** 具名拒絕——_NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does not
+> compute a type's layout_，`alignof[T]` 相同。另請注意 [FFI](ffi.zh-TW.md) 把同一組描述成 **stdlib** 設施而非
+> built-in；兩章對它將來住在哪裡說法不一，而且兩邊都還沒有它。

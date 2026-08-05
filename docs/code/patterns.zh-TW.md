@@ -15,6 +15,12 @@ Zerg 的匿名函式 `fn(…) -> R { … }` **就是** closure——first-class,
 2. **寫 `for` 迴圈**——往往最清楚,也最 procedural-first。
 3. **inline `fn` + 型別推論**——一次性用途,且 use-site 已知函式型別時,參數與回傳型別可省。
 
+   > **[not yet]** 參數不帶型別的 inline `fn` 會被拒絕：`xs.map(fn(x) { return x *% 2 })` 報
+   > _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the function
+   > type the closure is checked against, and this compiler does not infer it; write `x: T`_。use-site 知道
+   > 期望的型別，卻沒有任何東西把它帶回 closure 自己的參數列，所以每個 inline `fn` 即使型別早已確定，也得把
+   > 參數型別寫出來。
+
 ## 鏈式 pipeline
 
 method call 可鏈（`a.f().g()`）,所以 `map` / `filter` / `fold` 可組合。**優先用具名函式**,少用 inline
@@ -26,6 +32,11 @@ fn positive(x: int) -> bool { return x > 0 }
 
 result := xs.map(double).filter(positive).fold(0, add)
 ```
+
+> **[not yet]** 這些 adapter 本身不存在。`xs.map(double)` 報 _NotImplemented: the list method `map` — this
+> compiler has `len` and `append`_，`filter` 與 `fold` 的回答一樣，所以上面那條鏈沒有東西可鏈。method call 確實
+> 可鏈，而一個 `list` 有的就是那則訊息裡點名的兩個；在 adapter 落地之前，下面的迴圈就不只是 procedural-first
+> 的替代方案，而是唯一的寫法。
 
 或者,procedural-first,直接迴圈——這是 [控制流](control-flow.zh-TW.md) 推薦的慣用法（append 進另一個
 collection）:
@@ -43,6 +54,9 @@ for x in xs {
 ```text
 ys := xs.map(fn(x) { return x *% 2 })      # 由 xs 推得 x: int、-> int
 ```
+
+> **[not yet]** 這一行被拒絕兩次——為了沒有型別的 `x`，也為了 `map`，兩者都標在上面。它留在這裡，是因為這就是
+> 語言規定「一次性用途」該有的樣子，也是 closure 參數能從被檢查的函式型別取得型別之後，該預期的樣子。
 
 ## Builder
 
@@ -62,6 +76,12 @@ c := connect("example.com", port: 8080, tls: false)  # 只具名覆寫想改的
 cfg := Config(host: "example.com", port: 8080)
 ```
 
+> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做（見 [函式與閉包](functions.zh-TW.md)）：
+> `connect("example.com", port: 8080, tls: false)` 與 `Config(host: "example.com", port: 8080)` 一樣報
+> _NotImplemented: the named argument `port:` — this compiler binds arguments by position only_。今天 struct
+> 是 positional 建構的——`Config("example.com", 8080)`——而有預設的參數只能從呼叫的尾端省略，所以本節拿來取代
+> 流式儀式的那個「一次呼叫的 builder」，正是它目前沒有東西可跑的部分。
+
 若真需要**分階段 / 流式**的 builder（如 query builder）,**copy-by-value 讓 fluent-immutable 天然成立**——每步
 讀 `this`、改一份 copy、回傳,鏈式全程不共享可變狀態:
 
@@ -80,13 +100,18 @@ q := new_query().where("age > 18").order("name").limit(10)
 ## 解構與 pattern 支援
 
 解構可直接在 `:=` 綁定:一個 tuple `(a, b) := e` 與一個 struct `P{x, y} := e` 都一步解開——這是消費
-多重回傳或小型 record 的日常方式;兩者皆為 **[not yet]**。在 `match`(見 [控制流](control-flow.zh-TW.md))中,**struct**、**tuple**、
-**variant**、**萬用 `_`**、**range**、與**負數 literal** pattern,連同它們的**巢狀**,都可用;**struct**、
-**tuple** 與 **`as`** pattern 則是 **[not yet]**——tuple 用靜態索引（`.0` / `.1`）讀回、struct 用欄位讀回。
+多重回傳或小型 record 的日常方式;兩者皆為 **[not yet]**,`match`(見 [控制流](control-flow.zh-TW.md))中的
+**struct**、**tuple** 與 **`as`** pattern 也是——tuple 用靜態索引（`.0` / `.1`）讀回、struct 用欄位讀回。
+`match` 真正會解構的是 **variant**、**萬用 `_`**、**range** 與**負數 literal** pattern,連同它們的**巢狀**。
 `GRAMMAR` 允許但 **[not yet]** 的另有兩種:一個 **or-pattern**(`A | B =>`,綁不綁都算)與一個
 **list pattern**(`[h, ..t]`)。兩者都在 code generation 被拒絕:list pattern 在型別檢查之後,or-pattern 則是因為那裡的
 `|` 被讀成位元運算子,而一個靜默比對到錯的值的 arm,比一個編不過的 arm 更糟。`zerg fmt` 對「連續整數」那個情況能做
 什麼,見 [控制流](control-flow.zh-TW.md)。
+
+> **[not yet]** 上面那份清單裡不存在的是**巢狀**；四種 pattern 各自單獨用都成立。pattern 裡再放一個 pattern
+> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name, and `(` is not one_，因為
+> variant pattern 的 payload 位置只收一個 binding 名字——那裡從來沒讀過子 pattern，所以巢狀的 variant 與巢狀的
+> literal 都過不了 parser。一次比對一層，把 payload 綁起來，再對那個 binding 做一次 `match`。
 
 ## 刻意不加的
 

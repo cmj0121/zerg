@@ -67,6 +67,22 @@ file:line:col: message
 > 或 emitter 的 `NotImplemented` 仍然只報形式名稱、不報位置。`zerg` 記錄的位置是**逐語句**的，所以欄位指的是
 > 語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到那個 token。
 
+本專案要求自己遵守的規則比上面幾段更強，而且值得單獨寫出來——因為接下來那兩個 deviation 破的是它，不是任何
+單一章節：
+
+**一個形式要嘛被正確下降、要嘛被具名拒絕。** 它永遠不是崩潰、永遠不是靜默的錯誤答案，也永遠不是 C 編譯器或
+linker 對著沒人寫過的產生碼所報的錯。
+
+> **[deviation]** **一族日常形式會漏到 `cc`。** 下降成 GNU statement expression 的運算式被直接放進 `if` 與
+> `while` 本來就有的那對括號裡，產生 `if ({ … })`，而 C 編譯器不接受——所以讀者拿到的診斷是對著一行產生的 C
+> 說 `error: expected expression`。涉及的形式是 list 或 map 上的 `in`、以及當作整個條件用的 `??`，波及 `if`、
+> `for`，以及後綴的 `return … if`、`break if`、`continue if` 與 `raise … if`。把同一個運算式先綁到名字
+> （`b := 2 in xs` 再 `if b`）就編得過，這正是這個行為看起來時好時壞的原因。沒有 `fn main` 的程式——也就是
+> grammar 開場的那個 `nop` 程式——因為同樣的理由在 linker 失敗：沒有任何東西先拒絕它。
+>
+> **[deviation]** **深度巢狀會讓編譯器崩潰。** 大約 800 層的巢狀括號、list literal 或呼叫，會耗盡
+> recursive-descent parser 的堆疊，程序以 `SIGSEGV` 死亡且完全沒有診斷。沒有深度上限、也沒有錯誤；400 層則正常。
+
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或

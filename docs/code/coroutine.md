@@ -163,18 +163,11 @@ A **crash** close is in none of those lines, and that is the point: it raises. A
 to read the reason and keep going demotes it with `guard { <-ch }`, the same way it would any other
 failure.
 
-> **[not yet]** A receiver **already parked on an empty channel** when its last sender crashes is
-> woken as a deadlock rather than with the reason — a plain `<-ch` and a `select` alike.
-> The program reports the producer's abort and then `DeadlockError`, and the `Err` never
-> reaches the receive. A receiver that still has values to drain
-> gets the reason as promised (that is what `conc_crash` pins). The hole is in the runtime's close
-> wake-up, not in the language, and it predates the receive answering `T?`.
-
 `guard { <-ch }` hands back `Right(err)` carrying the producer's own Err,
 and the receiver runs on. That is the whole of what a crash close asks of a program — decide, once,
 whether this stream ending badly is your business — and `guard` is where that decision is written.
 `?` on a receive, meanwhile, now needs only what any `T?` needs: the absence is an ordinary optional,
-so the `Result[T]`-in-a-signature problem this note used to describe is off the channel path.
+so the `Result[T]`-in-a-signature problem that used to be noted here is off the channel path.
 
 The `match` line above also carries a restriction, and it is the one most likely to bite: what may
 stand in an arm.
@@ -472,10 +465,10 @@ For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`**
 provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
 > **[not yet]** And not because of anything about atomics: an `Atomic[int]` IS a `Ref[int]`, and there
-> is no `Ref[T]` yet. `import "std/atomic"` is refused by name — _no type named `Ref` (field
-> `Atomic.cell`)_ — rather than emitting a type nothing declares, so the actor above is the pattern
-> that works today. The explicit **memory-ordering argument** and a **generic `Atomic[T]`** are
-> **[not yet]** in the language as well.
+> is no `Ref[T]` yet. `import "std/atomic"` is refused by name rather than emitting a type nothing
+> declares — _NotImplemented: a generic struct `Atomic[…]` — this compiler erases type parameters, and a
+> field names one_ — so the actor above is the pattern that works today. The explicit **memory-ordering
+> argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.
 
 ## A producer — the generator pattern
 

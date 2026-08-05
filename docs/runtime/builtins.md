@@ -28,6 +28,11 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 is the one value shared **by reference** (copies retain, the last holder frees it once); it is how a value
 outlives its defining scope or is shared across a `spawn`. See [Values & Memory](../core/memory.md).
 
+> **[not yet]** There is no `Ref[T]` type in this compiler, so neither built-in exists. Both are refused by
+> name — _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
+> IS reference-counted is `chan`, a `str` and a recursive type, each managed by the compiler rather than
+> through this box; the `atomic` module and the `Reader` surface both wait on this one.
+
 ## `deref`
 
 `deref(r: Ref[T]) -> T` — read the payload out of a box. The read is a value (a copy for a non-POD `T`);
@@ -39,6 +44,12 @@ the box itself is unaffected.
 `u8`…`u64` / `f32` / `f64`) **re-constructs** `x`'s value as a `T` — never a reinterpretation of bits. A
 value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-1)`, or a narrowing that
 loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
+
+> **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
+> types nor conversions, and `i32(5)` reports _undefined function `i32`_ — an ordinary unresolved name rather
+> than a refusal saying the form is unbuilt, which is the one place in this chapter where the standing
+> contract is met in outcome and not in wording. The six named above all work, and `uint(-1)` aborts with
+> _OverflowError: integer conversion out of range_ exactly as specified.
 
 ## Parsing a string
 
@@ -65,6 +76,12 @@ each called as `Kind(msg: str) -> Err`, builds an `Err` of that kind carrying th
 `raise` to abort, or in an `Either` value; test an erased `Err` with `e is IOError`. The set is
 compiler-owned — a program cannot define a new kind this phase. See [Null-safety & Errors](../code/errors.md).
 
+> **[deviation]** The kind survives in the TYPE and is lost in the MESSAGE. `e is IOError` answers correctly
+> on a constructed `Err`, but a `raise ValueError("bad input")` that reaches the top writes only _bad input_
+> to standard error, where the [abort contract](../conformance.md) specifies `Kind: message` — which is the
+> shape a runtime-raised one does use (_IndexError: index out of range_). One kind, two output shapes,
+> depending on who raised it.
+
 ## Raw pointers (`unsafe`)
 
 Legal **only inside an `unsafe` context**. The free functions `addr(x) -> ptr[T]` (the address of an
@@ -72,9 +89,20 @@ addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast)
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](../core/memory.md).
 
+> **[not yet]** None of it is built, and the refusals say so — _NotImplemented: the raw-pointer built-in
+> `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, and _NotImplemented: `ptr`
+> is not an expression this compiler reads_. In a TYPE position the wording is weaker: `fn f(p: ptr)` reports
+> _no type named `ptr`_ and `p: ptr = 0` reports _cannot bind int to a ptr binding_, which reads as though
+> `ptr` were an existing type the value did not suit. The `unsafe` context they need is itself unbuilt.
+
 ## `sizeof` / `alignof`
 
 `sizeof[T] -> uint` and `alignof[T] -> uint` are a type's **byte size** and **alignment**, resolved at
 **compile time** — the one built-in that needs compiler layout knowledge, unexpressible in pure Zerg. The
 argument is a **type**, written like a type argument on `list[T]`: `sizeof[int]` (8), `sizeof[Point]`,
 `sizeof[list[byte]]`. Mainly for FFI and low-level layout. See [Values & Memory](../core/memory.md).
+
+> **[not yet]** Refused by name — _NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does
+> not compute a type's layout_, and the same for `alignof[T]`. Note that [FFI](ffi.md) describes the same
+> pair as a **standard-library** facility rather than a built-in; the two chapters disagree about where it
+> will live, and neither has it.

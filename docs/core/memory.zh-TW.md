@@ -18,6 +18,12 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 一條長鏈會在原生 C stack 上**遞迴 O(depth)**、並可能將其溢位(**[deviation]**——即 [Conformance](../conformance.zh-TW.md)
 與 [Errors](../code/errors.zh-TW.md) 所載、同一個不可回復的 stack-overflow deviation)。
 
+> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那兩個注意事項都不可能經由它到達。
+> `struct Node { value: int; next: Node? }` 會被拒絕、報 _`Node` is part of a cycle of by-value declarations —
+> a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
+> 參照的槽從來沒拿到那個會給它一個大小的 cell。能運作的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享完全如上
+> 所述。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能觀察到共享變動之處——是規範中的形式,今天編不過。
+
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
 配標準 padding。這是 transpile 到 C 掉出來的，也正是為什麼 struct **預設就 FFI-ready**（見 [FFI](../runtime/ffi.zh-TW.md)）：
@@ -35,6 +41,12 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   **compile error**，而編譯器無法證明之處（`f(xs[i], xs[j])` 且 runtime `i == j`）該次呼叫會
   **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
+
+> **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
+> 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
+> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
+> safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
+> 接受這次呼叫,只有在索引真的相遇時才 abort。
 
 **求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都
 **依原始碼順序**求值、deterministic——所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測，不像 C 的引數
@@ -95,7 +107,20 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
 **後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
 
+> **[not yet]** 一個裸的 `{ … }` block 當作**述句**會被指名拒絕——
+> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
+> function's scope, so a block of its own would not free anything at its `}`_——而那句訊息同時也是原因:binding 拿到
+> 的是函式的 scope、不是 block 的。所以「block 退出」永遠指的是一個函式、一個迴圈 body、或一個 arm 的退出,絕不是
+> 程式自己開出來的 scope,而下面那個 `defer` 的例子寫的是編譯器讀不了的形式。
+
 ## `Ref[T]`——逃出自身 scope 的資源
+
+> **[not yet]** 這個編譯器裡沒有 `Ref[T]`。`Ref(5)` 會被指名拒絕——
+> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_——所以本節、它底下
+> 那個 `mut` 與 effect 的區分、以及本頁其他每一處提到的 `Ref[T]`,講的都是一個沒有東西建得出來的型別。**機制**是建
+> 好而且可用的:`Ref` spec 有一個實作者,也就是內建的 `chan`,它以參照共享、被計數、並在最後一個持有者的 scope 退出
+> 時關閉,完全如規範所述。缺的是第二個實作者——那個承載任意值與一段使用者所寫 `drop` 的 stdlib 盒子——所以一個必須
+> 逃出自身 scope 的資源,今天得到的不是本節給的答案,而是根本沒有答案。
 
 多數清理只是記憶體，離開 scope 時就自動釋放。若一個**資源的釋放不屬於這種自動釋放**——foreign handle（見
 [FFI](../runtime/ffi.zh-TW.md)）、任何必須**恰好關閉一次**者——且它必須**逃出開啟它的 scope**（被 return、存進欄位、送過
@@ -130,6 +155,12 @@ x := parse(x)        # 右側讀到舊 x；舊 x 被 del；名字重新綁到新
 mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為初值
 ```
 
+> **[deviation]** 一個名字**不能**在同一個 block 裡重新宣告。`x := read()` 之後 `x := parse(x)` 會被拒絕、報
+> _`x` is already declared in this block — a name is bound once per block, though an inner block may shadow it_,
+> 所以上面那段範例編不過,它所示範的 declare-del-declare 次序也從來沒跑過。在**巢狀** block 裡遮蔽——一個迴圈
+> body、一個 `if` arm、一個函式 body——確實可用,而那正是編譯器自己的原始碼所用的那一半;同 block 的重新綁定是語料
+> 庫從不需要的形式,所以也從來沒有人量過它。
+
 因為舊 binding 在右側算完的當下就死亡，`x := transform(x)` 不需複製——來源已被證明死亡，move 最佳化即生效、
 直接重用舊的儲存。
 
@@ -145,8 +176,8 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** `del` 一個 `Ref` 值——一個 `chan` 或一個 `Ref[T]`——放掉一個 holder（並在最後一個跑 `drop`）是
-> 可用。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
+> **狀態。** `del` 一個 `Ref` 值——一個 `chan`;這裡沒有 `Ref[T]`,見上——放掉一個 holder（並在最後一個跑 `drop`）
+> 是可用。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
 > **[not yet]**：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所以
 > 上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況。
 
@@ -175,6 +206,13 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 }
 ```
 
+> **[deviation]** 一次到達 `main` 而未被捕捉的 abort,**不會**跑任何待決的 `defer`。
+> `fn main() { defer say("bye")  raise ValueError("boom") }` 把 `boom` 寫到標準錯誤、以 `1` 結束,而那個 `defer`
+> 什麼都沒印。其餘每一條離開路徑都有效:正常回傳、提早 `return`、迴圈的每一次迭代,以及——正是它把這個缺陷藏起來的
+> ——被外層 `guard` 捕捉的一次 `raise`,那條 unwind 路徑上的 defer 確實會跑。只有最後那一次 unwind、也就是離開
+> `main` 的那一次會跳過它們,所以一個會捕捉自己 abort 的測試看到的是規範中的行為,而一個不捕捉的程式根本沒機會把
+> 它看到的報出來。這也與 [Conformance](../conformance.zh-TW.md) 中 runtime abort 契約的第 2 步相牴觸。
+
 一個 block 內多個 `defer` 以**後登記先跑**執行，與 scope-owned 的釋放及 `Ref` 的 drop 交錯、依建構的逆序進行，於是
 拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
 觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
@@ -182,3 +220,7 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 
 一個 **`with` block** 把這種資源綁進一段語彙區間、在 block 退出時跑它的釋放。今天它僅限於 **Ref-bearing** 資源
 （一個 `chan` 或一個 `Ref[T]`）；`with` 施於一個一般的 `Scoped` 值是 **[not yet]**。
+
+> **[not yet]** `with … as` 會被直接拒絕,就在關鍵字上:_NotImplemented: with_。所以上面那句限定,講的是一個編譯器
+> 根本沒讀過去的構造上的限制——兩半都尚未建置,Ref-bearing 的那個案例與一般 `Scoped` 的那個一樣,而今天要把一個資源
+> 綁進一段區間,只能親手寫那個 `defer`。

@@ -19,6 +19,12 @@ functional chains. Three ways to keep closures readable, in order of preference:
 3. **Inline `fn` with inferred types** — for a one-off, when the function type is known at the call site the
    parameter and result types may be omitted.
 
+   > **[not yet]** An inline `fn` whose parameters carry no type is refused: `xs.map(fn(x) { return x *% 2 })`
+   > reports _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the
+   > function type the closure is checked against, and this compiler does not infer it; write `x: T`_. The
+   > expected type is known at the call site, but nothing carries it back into the closure's own parameter
+   > list, so every inline `fn` must write its parameter types out even where they are already determined.
+
 ## Chained pipelines
 
 Method calls chain (`a.f().g()`), so `map` / `filter` / `fold` compose. Prefer **named functions** over
@@ -30,6 +36,12 @@ fn positive(x: int) -> bool { return x > 0 }
 
 result := xs.map(double).filter(positive).fold(0, add)
 ```
+
+> **[not yet]** The adapters themselves do not exist. `xs.map(double)` reports _NotImplemented: the list
+> method `map` — this compiler has `len` and `append`_, and `filter` and `fold` answer the same way, so the
+> chain above has nothing to chain. Method calls do chain, and the ones a `list` has are the two named in
+> that message; until the adapters land, the loop below is not merely the procedural-first alternative but
+> the only spelling.
 
 Or, procedural-first, just loop — the idiom [Control Flow](control-flow.md) endorses (append into another
 collection):
@@ -47,6 +59,10 @@ When an inline function is genuinely one-off, inferred types keep it short:
 ```text
 ys := xs.map(fn(x) { return x *% 2 })      # x: int and -> int inferred from xs
 ```
+
+> **[not yet]** This one line is refused twice over — for the untyped `x` and for `map`, both marked above.
+> It stays here because it is the shape the language specifies a one-off to take, and the shape to expect
+> once the closure parameter takes its type from the function type it is checked against.
 
 ## Builders
 
@@ -66,6 +82,13 @@ For plain data, **construction is a call** with named fields, which does the sam
 ```text
 cfg := Config(host: "example.com", port: 8080)
 ```
+
+> **[not yet]** Both calls above are the named-argument form, and named arguments are not built (see
+> [Functions & Closures](functions.md)): `connect("example.com", port: 8080, tls: false)` and
+> `Config(host: "example.com", port: 8080)` alike report _NotImplemented: the named argument `port:` — this
+> compiler binds arguments by position only_. A struct is built positionally today —
+> `Config("example.com", 8080)` — and a defaulted parameter can only be dropped off the end of a call, so the
+> one-call builder this section recommends over the fluent ceremony is the part of it with nothing to run on.
 
 When you genuinely need a **staged / fluent** builder (e.g. a query builder), **copy-by-value makes a
 fluent-immutable builder fall out** — each step reads `this`, modifies a copy, and returns it, so the chain
@@ -95,6 +118,12 @@ pattern** (`[h, ..t]`). Both are rejected at code generation: the list pattern a
 or-pattern because `|` there is read as the bitwise operator and an arm that matched the wrong value in
 silence is worse than one that does not build. See [Control Flow](control-flow.md) for what `zerg fmt` can
 do about the contiguous-integer case.
+
+> **[not yet]** Of that list it is the **nesting** that does not exist; the four kinds each work on their
+> own. A pattern inside a pattern is not parsed: `L(Yes(v))` and `L(0)` both report _a pattern binding needs
+> a name, and `(` is not one_, because a variant pattern's payload position accepts a binding name and
+> nothing else — a sub-pattern there was never read, so neither a nested variant nor a nested literal gets
+> past the parser. Match one level, bind the payload, and `match` the binding in turn.
 
 ## Deliberately not added
 

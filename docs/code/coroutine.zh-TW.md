@@ -140,14 +140,9 @@ for v in ch { use(v) }                   # 同一種 drain，串流結束處就�
 **崩潰**關閉不在上面任何一行裡，而那正是重點：它 raise。想讀原因又要繼續跑的接收端，用 `guard { <-ch }` 把它
 降階，跟處理其他任何失敗一樣。
 
-> **[not yet]** 接收端如果在最後一個 sender 崩潰時**已經停在一條空的 channel 上**，它會被當成死鎖喚醒而不是拿到
-> 原因——裸的 `<-ch` 和 `select` 都一樣：程式先報生產者的 abort，接著報 `DeadlockError`，那個 `Err` 到不了 receive。還有值可以排空的接收端則如
-> 承諾拿得到原因（`conc_crash` 盯的就是這件事）。這個洞在 runtime 的關閉喚醒路徑上，不在語言裡，而且早於「receive
-> 回傳 `T?`」這個改動。
-
 `guard { <-ch }` 交回帶著生產者自己 `Err` 的 `Right(err)`，接收端繼續跑。那就是崩潰關閉
 對一支程式的全部要求——決定一次，這條串流以壞的方式結束是不是你的事——而 `guard` 就是那個決定被寫下來的地方。
-至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以這條註記原本描述的
+至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以原本記在這裡的
 「`Result[T]` 活不進簽章」問題，已經不在 channel 這條路上了。
 
 上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
@@ -408,8 +403,9 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 `fetch_add` / `compare_swap`。
 
 > **[not yet]** 在**出貨的 `zerg`** 上，而且原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而
-> `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_no type named `Ref` (field `Atomic.cell`)_——而不是吐出一個沒人
-> 宣告的型別，所以 `import "std/atomic"` 在那裡是一則乾淨的診斷；上面的 actor 才是**兩個編譯器**都成立的做法。
+> `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_NotImplemented: a generic struct `Atomic[…]` — this compiler
+> erases type parameters, and a field names one_——而不是吐出一個沒人宣告的型別，所以 `import "std/atomic"` 在
+> 那裡是一則乾淨的診斷；上面的 actor 才是**兩個編譯器**都成立的做法。
 
 ## producer——generator pattern
 

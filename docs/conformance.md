@@ -81,6 +81,25 @@ first — `zerg` does, for the rules it checks.
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.
 
+The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its own
+because the two deviations that follow are breaches of it rather than of any one chapter:
+
+**A form is either lowered correctly or refused by name.** It is never a crash, never a silently wrong answer,
+and never an error reported by the C compiler or the linker against generated code nobody wrote.
+
+> **[deviation]** **A family of everyday forms escapes to `cc`.** An expression that lowers to a GNU statement
+> expression is emitted directly inside the parentheses `if` and `while` already own, producing `if ({ … })`,
+> which a C compiler does not accept — so the diagnostic a reader gets is `error: expected expression` against
+> a line of generated C. The forms are `in` over a list or a map and `??` used as a whole condition, which
+> reaches `if`, `for`, and the postfix `return … if`, `break if`, `continue if` and `raise … if`. Binding the
+> same expression to a name first (`b := 2 in xs` then `if b`) compiles, which is why the behaviour looks
+> intermittent. A program with no `fn main` — the `nop` program the grammar opens with — fails in the linker
+> for the same reason: nothing refuses it first.
+>
+> **[deviation]** **Deep nesting crashes the compiler.** Around 800 levels of nested parentheses, list
+> literals or calls exhausts the recursive-descent parser's stack and the process dies of `SIGSEGV` with no
+> diagnostic at all. There is no depth limit and no error; 400 levels are fine.
+
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed

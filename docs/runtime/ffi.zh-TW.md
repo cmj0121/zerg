@@ -5,6 +5,16 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 錯誤與可見性模型，以及 [Module、Package 與 Program](package.zh-TW.md) 的 public surface 規則之上。
 亦有 [English](ffi.md) 版本。
 
+> **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 兩者所處的 `unsafe` 情境被具名拒絕
+> （`NotImplemented: unsafe`），import 那條邊也就一起沒了：出貨的標準函式庫裡沒有 `ffi` 模組，而
+> `import "ffi"` 會被靜默接受——一個解析不到東西的 import 不會被診斷——所以失敗發生在更後面，發生在該 binding
+> 需要的那個 `unsafe` 上。export 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些
+> `pub` 宣告會被排除在 header 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md)
+> 稱之為 built-in——兩處都沒有。
+>
+> 這裡有兩件事不只是沒建、而是今天就是錯的，它們標在下方各自出現的位置：獨立的 `unsafe fn` 可以從安全程式碼
+> 呼叫且沒有任何診斷，以及 `handle` 型別的 binding 會對著產生的 C 漏到 `cc`。
+
 ## 兩條邊、一份契約
 
 FFI 有兩個方向，它們刻意重用你已經有的機制，而不是各自長出一套新語法：
@@ -174,6 +184,17 @@ fn`**，其整個本體都是 unsafe、且只能從 unsafe 呼叫；以及一個
 進一個 unsafe 情境（裡面的 `fn` 是一個 unsafe fn，一個 `mut` binding 是一個可變 global）。**沒有 `unsafe mut`
 前綴**。在其中任何一種裡，compiler 都不對這次外部呼叫作安全保證——你寫的那層薄 wrapper 就是你擔保之處。把
 raw 綁定與它們的 wrapper 分在一組：
+
+> **[deviation]** **信任邊界未被強制。** 一個獨立的 `unsafe fn` 可以從普通的安全程式碼呼叫，而且完全沒有診斷
+> ——`unsafe fn g() -> int { return 2 }` 之後 `print g()` 編得過並印出 2——宣告在 module 層級 `unsafe { … }`
+> 分組裡的 `fn` 也一樣。這個關鍵字被 parse 了，然後沒有任何東西去讀它，所以 `unsafe` 只標示意圖、不帶來檢查。
+>
+> **[deviation]** module 層級 `unsafe { … }` 分組裡的 `mut` binding 會被接受、然後**丟棄**，並不會變成可變
+> global：宣告編得過，使用點回報 `error: undefined name`。同一組裡的 `fn` 宣告則保留下來。
+>
+> **[deviation]** `handle` 型別的 binding 會漏到 `cc`。`mut h: handle? = nil` 不產生任何 Zerg 診斷，而是對著
+> 產生的 C 以 `error: unknown type name 'zg_handle'` 失敗——這是本章唯一一處形式以「抵達 C 編譯器」而非「被拒絕」
+> 的方式打破標準契約。
 
 ```text
 unsafe {

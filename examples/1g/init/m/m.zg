@@ -1,12 +1,17 @@
 # m — a module that owns an init() block and a module constant (Phase 1g).
 #
-# `answer` is a module constant (a top-level `:=`): immutable, module-private, and
-# evaluated once at init time — its initializer is a runtime call, so it is computed
-# inside the module's init function, not at C static-init. `init()` runs exactly
-# once, before the first use of the module from `main`.
+# `answer` is a module constant: immutable, module-private, and evaluated once at
+# init time — its initializer is a runtime call, so it is computed inside the
+# module's init function, not at C static-init. `init()` runs exactly once, before
+# the first use of the module from `main`.
+#
+# It carries its type. A module-level INFERRED binding (`answer := compute()`) is
+# the form this compiler accepts and then drops, so the name goes missing at the
+# use site instead of the declaration being refused — see Known deviations in the
+# release notes. The typed const is the module constant that works.
 
 # A module-private constant, evaluated at init from a runtime call.
-answer := compute()
+const answer: int = compute()
 
 # compute is module-private, used only to initialize the constant.
 fn compute() -> int {
@@ -14,7 +19,7 @@ fn compute() -> int {
 }
 
 # init() runs once; its `print` proves it ran exactly once even across two uses.
-init() {
+init () {
 	print 1
 }
 

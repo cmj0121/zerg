@@ -194,6 +194,11 @@ d := rand.below(g, 6)    # g advances; d in [0, 6)
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
+> **[not yet]** The module ships and **cannot be imported**. `Atomic[T]` is a generic struct and a
+> generic struct is a form this compiler refuses, so `import "atomic"` itself reports
+> `NotImplemented: a generic struct`Atomic[…]``. The signatures below also name `Ref[T]`, which does not
+> exist either. It is the one module of the twelve that does not import cleanly.
+
 | Function                                                       | Summary                                   |
 | -------------------------------------------------------------- | ----------------------------------------- |
 | `atomic(v: int) -> Ref[int]`                                   | a fresh shared cell holding `v`           |

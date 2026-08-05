@@ -18,6 +18,16 @@ one concern:
 Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two layers is what gives
 `pub` a precise meaning.
 
+> **[not yet]** The **package** layer does not exist in this toolchain. There is no manifest, no version
+> declaration, no resolver and no dependency fetch: a build is an entry file and the modules its imports
+> reach on disk. Everything below that names a package — versioning, the package DAG, one-version
+> selection, package-public as a position, and the orphan rule that rests on the graph being acyclic —
+> describes a layer nothing implements yet. `import "name"` that resolves to nothing on disk is accepted
+> silently and only `zerg lint` mentions it (`L101 unused import`).
+>
+> **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
+> module is flattened into one namespace and no visibility is checked. See Visibility below.
+
 ### Programs & the entry point
 
 A **program is a build**, not a special kind of package. You point the compiler at an **entry file** —
@@ -45,6 +55,11 @@ dependency DAG.
   stack and crashes. Expected failure (`Right`) and a bug (abort) stay two distinct exits, and `?`
   works directly in `main`.
 
+> **[deviation]** `main`'s **result is discarded**. `fn main() -> Result[nil]` compiles, and a `Right`
+> returned from it prints nothing to stderr and exits **0** — as does an error propagated out of `main`
+> with `?`. So the one exit path a program has for expected failure reports success instead, silently.
+> An uncaught **abort** is unaffected and still exits 1.
+
 ### Program lifetime & top-level initialization
 
 `main`'s body is the **root scope of the program**: when it returns, everything scope-owned beneath it
@@ -59,6 +74,12 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 (neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
 **source order** within a module. This whole ordering — topological, with the module-name-then-source
 tie-break — holds.
+
+> **[deviation]** Top-level constants are initialized in **source order**, not dependency order, and a
+> cycle is not diagnosed. A constant whose initializer reads one declared **after** it reads that
+> constant's zero value and the program runs: `const A: int = B + 1` above `const B: int = 10` yields
+> `A == 1`. A cycle (`A` reads `B`, `B` reads `A`) compiles with no finding at all. Both are silent wrong
+> answers rather than the compile error specified here.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
@@ -76,6 +97,19 @@ only itself). The module is then **poisoned**: `init()` is **not re-run** (exact
 failure, so no side effect repeats), and every later use **re-aborts with the same cached error**. A
 half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
 
+> **[deviation]** Initialization is **eager, not lazy**. Every `init()` in the program runs before
+> `main`'s first statement, in declaration order over the whole program, rather than at the first use of
+> the module that owns it. Exactly-once and FIFO-within-a-module hold; "the first time the module is
+> used" does not, so an `init()` in a module a run never touches still runs.
+>
+> **[not yet]** Two modules that each declare an `init()` are refused by name — the flattened namespace
+> cannot tell `init__0` from `init__0`. So cross-module initialization **order** has no program that can
+> observe it yet.
+>
+> **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
+> cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
+> a use site.
+
 ### Packages
 
 A **package** is a tree of modules and the unit of **distribution, dependency, and versioning** — the
@@ -84,6 +118,9 @@ acyclic graph — dependencies never loop back): cycles between packages are rej
 
 A build selects **one version per package** across the whole graph — the same package never appears at
 two versions in one program — so a package's types keep a single identity program-wide.
+
+> **[not yet]** All of it — see the marker under Four layers. There is no package, so there is no
+> version, no graph between packages, and nothing to select.
 
 ### Coherence & the orphan rule
 
@@ -105,6 +142,10 @@ graph is a DAG, at most one of the two owning packages can depend on — and so 
 third package can name both without owning either. So the implementation, if it exists, is unique by
 construction. Single-version selection is what makes "one type, one implementation"
 well-defined.
+
+> **[not yet]** The **orphan rule is not enforced**. A third module may write `impl Spec for T` owning
+> neither the spec nor the type, and it compiles. What IS checked is the narrower thing the flattened
+> namespace can see: two `impl`s giving one type the same method name in one build are refused.
 
 ### Modules
 
@@ -129,6 +170,14 @@ Program lifetime & top-level initialization): a cycle there has no valid order a
 A type naming another type is never such a cycle — only a constant whose initializer transitively needs
 its own value.
 
+> **[deviation]** The **entry file's own directory** is not a module. A file beside the entry file is not
+> in its namespace and is not compiled into the build: naming a function declared there reports
+> `undefined function`. Files share one namespace in every module that is reached by an `import`; the
+> module rooted at the entry file is the exception.
+>
+> **[deviation]** **Import cycles are not rejected.** Two modules that import each other compile and run.
+> Nothing detects the cycle, at either layer.
+
 ### Visibility — exposing a declaration
 
 Every declaration starts **module-private**. `pub` is the one visibility marker, and it means exactly
@@ -150,6 +199,13 @@ names — a package-public function cannot take or return a type that is **not i
 surface** (whether module-private, or package-internal and never re-exported), because a dependent could
 not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
 its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
+
+> **[deviation]** **Nothing here is enforced.** `pub` is parsed and carried on a declaration, and no rule
+> reads it: a module calls another module's module-private function, reads its module-private struct's
+> fields, and returns a module-private type from a `pub` signature, all without a finding. Every module is
+> flattened into one namespace, which is also why two modules that declare the same name collide — the
+> refusal that exists here is about the name, not about the visibility. `pub` **does** decide two things:
+> `import pub` re-export, and which declarations `zerg lint` will call dead.
 
 ### Importing & referencing
 
@@ -173,6 +229,14 @@ package **cycles be rejected**.
 > re-export** onto the root module's public surface. (The re-export is one level: `import pub` exposes the
 > named module on this module's surface; it does not transitively re-export what that module itself
 > re-exports.)
+>
+> **[deviation]** **No transitivity is not enforced.** Because every module flattens into one namespace,
+> a module a build reaches at all is a module every other one can name, whether it imported it or not.
+> The import graph decides what is COMPILED into the build, not what is visible inside it.
+>
+> **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
+> `f := other.helper` reports that the module has no such member, so the first-class value this section
+> promises stops at the module boundary.
 
 ### The prelude & std
 
@@ -198,6 +262,15 @@ imported explicitly like any package: `io`, `math`, further collections, and the
 Because the prelude is built-in rather than an implicit import, "no ambient imports" holds without
 exception.
 
+> **[not yet]** Of the built-in specs the prelude promises, only **`Eq`** and **`Into[T]`** exist.
+> `Ord`, `Hash`, `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
+> `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
+> are likewise absent — `list` and `map` are the containers there are.
+>
+> **[deviation]** Prelude names are **not reserved**. A program may declare `struct list`, `struct
+Result`, `struct Ref` or `spec Eq` and none of it is refused, so the names the operators desugar to can
+> in fact be knocked out from under the language.
+
 ### Testing & visibility
 
 A test is ordinary code under the same visibility rules — there is **no test-only backdoor** into
@@ -216,6 +289,11 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
+> **[not yet]** There is **no test build**. `*_test.zg` is kept out of an ordinary build, which is the
+> half of the convention that works; the command that would include it — `zerg test` — does not exist,
+> so the white-box and black-box positions above are places to put a file rather than a way to run one.
+> The `testing` module's `assert` family is callable from an ordinary program in the meantime.
+
 ### Target-conditional files
 
 Platform and architecture differences are handled the **same way** — at the **file level, by build-tool
@@ -224,3 +302,8 @@ convention** — not by an inline `#ifdef` / `cfg` construct, which would fragme
 alongside the `_test` convention), and the build includes only the ones matching the selected target; the
 language itself stays **target-agnostic**, ascribing no meaning to the name. The exact target-naming and
 matching scheme is a build-tool detail, **deferred**.
+
+> **[not yet]** No suffix is recognized. Every `.zg` file in a module directory is compiled into the
+> build, so a module holding `plat_linux.zg` and `plat_darwin.zg` is two declarations of one name and is
+> refused as a collision — which is a clearer failure than picking the wrong one, and is still not the
+> feature.

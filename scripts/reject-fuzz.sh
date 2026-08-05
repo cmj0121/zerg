@@ -55,11 +55,19 @@ unbuildable=0
 # this gate, and it grows by about one per corpus file — so a ceiling on it measures how
 # many test programs exist. The other five are the check.zg rules, which DO report a place,
 # and there the number is small, meaningful, and may only go down.
+#
+# Four of the five are at ZERO, and they got there the only way a ceiling may be satisfied:
+# the rules that were answering with a bare sentence — an unknown name, a construction short
+# of a required field, a `str` handed to a conversion that does not parse one — became
+# checked rules that carry a place. The last two belong to `write-immutable` and are the
+# PARSER's, which has no diag channel at all: it raises, so `x = 1` where the surrounding
+# form wanted something else is reported as `expected X, found Y` with nowhere attached.
+# That is one gap owed once, and these two are what is left of it here.
 
-NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-7}
+NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-0}
 NOPLACE_MAX_wrong_type=${NOPLACE_MAX_wrong_type:-0}
-NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-3}
-NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-1}
+NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-2}
+NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-0}
 NOPLACE_MAX_mixed_operands=${NOPLACE_MAX_mixed_operands:-0}
 
 # mutate writes the mutated program to stdout, or exits non-zero when the mutation does not

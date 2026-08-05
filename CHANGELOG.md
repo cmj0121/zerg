@@ -32,9 +32,9 @@ program that reads Zerg and became a Zerg program that reads Zerg.
   error reported by `cc` against generated code nobody wrote. `make refuse` pins 141 such refusals and
   `make reject` pins 159 ill-formed programs the compiler turns away itself.
 - **A broken RULE says where; a refused FORM does not.** A rule the compiler checks reports `file:line:col`, the
-  source line, a caret, and every other finding in the same run rather than only the first. A form it has not
-  built says the form's name and nothing else — no file, no line. That is 173 of 235 reporting sites, and it is
-  the half you meet first.
+  source line, a caret, and every other finding in the same run rather than only the first — `undefined name`
+  among them. A form it has not built says the form's name and nothing else, with no place at all: 170 of 235
+  reporting sites, and the widest-reaching deviation the specification records.
 - **A pure-Zerg standard library over a self runtime**: `io`, `fs`, `os`, `strings`, `ascii`, `cli`, `strconv`,
   `time`, `math`, `rand`, `atomic`, `testing`. No third-party library is linked into anything.
 - **One binary, three jobs.** `zerg build`, `zerg fmt`, `zerg lint` — with `--emit` for the stage you want,

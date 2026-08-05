@@ -1,0 +1,21 @@
+# version — the toolchain's version, in the one form a Zerg program can read.
+#
+# GENERATED from the root VERSION file by `make`. An edit here is overwritten by the next
+# build and takes nothing with it, so the number is changed in VERSION and the build carries
+# it down — to this file, to the seed's -ldflags, and to whatever a release is tagged. One
+# number in one file is the only arrangement in which `zerg --version` and `zerg0 --version`
+# cannot come to disagree, and `make version-check` is what holds them to it.
+#
+# It is a `pub fn` and not a `const` for a reason that is about the SEED. The Go seed cannot
+# parse a module-level `const` inside an imported module, and this file is only ever reached
+# through an import — so a constant here would compile under `zerg` and stop the bootstrap
+# dead at the one step that has to keep working.
+
+# zerg_version is the version alone — "0.1.0" — with no product name around it, because
+# the two compilers word their banners differently and only the number is shared.
+#
+# It cannot be called `version`: a program and the modules it imports flatten into one
+# scope, and `cli.version` is already a name in it.
+pub fn zerg_version() -> str {
+	return "0.1.0"
+}

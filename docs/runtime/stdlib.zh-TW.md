@@ -22,6 +22,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
+| [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help  |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                 |
 | [`testing`](#testing) | `import "testing"` | `#[test]` 函式用的斷言輔助         |
 
@@ -70,6 +71,11 @@ leaf。
 offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**——非 ASCII 位元組原樣通過。空的 `split` 分隔字串、
 或負的 `repeat` 次數，會 raise `ValueError`。
 
+> **[deviation]** 標準函式庫函式拋出的錯誤**不是 taxonomy kind**。`strings`、`strconv` 與 `math` 是以訊息 raise、
+> 而非以某個內建 kind，所以接住的錯誤對 `e is ValueError` 回答 `false`，未接住的則以裸的
+> `strings.repeat: negative count` abort，而不是 [abort 契約](../conformance.zh-TW.md)所定的 `Kind: message`
+> 形狀。`io` 與 `fs` 的函式確實 raise 真正的 `IOError`——這正是為什麼這是純 Zerg 模組的缺口，而不是 runtime 的。
+
 | 函式                                   | 摘要                                       |
 | -------------------------------------- | ------------------------------------------ |
 | `has_prefix(s: str, prefix: str)`      | `s` 是否以 `prefix` 開頭（`-> bool`）      |
@@ -93,22 +99,22 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 ## `ascii`
 
 單位元組 **ASCII** 分類——tokenise ASCII 原始碼的誠實工具（此處 byte ≥ 128 一律不算字母／數字／空白）。述詞集
-對應 C 的 `<ctype.h>`；`to_upper` / `to_lower` 是 `strings` 大小寫折疊的單位元組版本；`digit_val` / `hex_val`
+對應 C 的 `<ctype.h>`；`fold_upper` / `fold_lower` 是 `strings` 大小寫折疊的單位元組版本；`digit_val` / `hex_val`
 把數字位元組映成其值（否則 `-1`），供手寫數字掃描。每個函式都是純值運算——不配置記憶體。
 
-| 函式                        | 摘要                                               |
-| --------------------------- | -------------------------------------------------- |
-| `is_digit(b: byte) -> bool` | `b` 是否為 `'0'..'9'`                              |
-| `is_alpha(b: byte) -> bool` | `b` 是否為 `'A'..'Z'` 或 `'a'..'z'`                |
-| `is_alnum(b: byte) -> bool` | `b` 是否為字母或十進位數字                         |
-| `is_hex_digit(b: byte)`     | `b` 是否為 `'0'..'9'` / `'a'..'f'` / `'A'..'F'`    |
-| `is_upper(b: byte) -> bool` | `b` 是否為 `'A'..'Z'`                              |
-| `is_lower(b: byte) -> bool` | `b` 是否為 `'a'..'z'`                              |
-| `is_space(b: byte) -> bool` | `b` 是否為 ASCII 空白（tab..CR、space）——C isspace |
-| `to_upper(b: byte) -> byte` | 把 ASCII 小寫字母折成大寫（否則原樣）              |
-| `to_lower(b: byte) -> byte` | 把 ASCII 大寫字母折成小寫（否則原樣）              |
-| `digit_val(b: byte) -> int` | 十進位數字的值 `0..9`，否則 `-1`                   |
-| `hex_val(b: byte) -> int`   | 十六進位數字（不分大小寫）的值 `0..15`，否則 `-1`  |
+| 函式                          | 摘要                                               |
+| ----------------------------- | -------------------------------------------------- |
+| `is_digit(b: byte) -> bool`   | `b` 是否為 `'0'..'9'`                              |
+| `is_alpha(b: byte) -> bool`   | `b` 是否為 `'A'..'Z'` 或 `'a'..'z'`                |
+| `is_alnum(b: byte) -> bool`   | `b` 是否為字母或十進位數字                         |
+| `is_hex_digit(b: byte)`       | `b` 是否為 `'0'..'9'` / `'a'..'f'` / `'A'..'F'`    |
+| `is_upper(b: byte) -> bool`   | `b` 是否為 `'A'..'Z'`                              |
+| `is_lower(b: byte) -> bool`   | `b` 是否為 `'a'..'z'`                              |
+| `is_space(b: byte) -> bool`   | `b` 是否為 ASCII 空白（tab..CR、space）——C isspace |
+| `fold_upper(b: byte) -> byte` | 把 ASCII 小寫字母折成大寫（否則原樣）              |
+| `fold_lower(b: byte) -> byte` | 把 ASCII 大寫字母折成小寫（否則原樣）              |
+| `digit_val(b: byte) -> int`   | 十進位數字的值 `0..9`，否則 `-1`                   |
+| `hex_val(b: byte) -> int`     | 十六進位數字（不分大小寫）的值 `0..15`，否則 `-1`  |
 
 ## `strconv`
 
@@ -182,6 +188,25 @@ mut g := rand.seed(42)
 x := rand.next(g)        # g 推進
 d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 ```
+
+## `cli`
+
+命令列是**宣告**出來的，不是手工 parse：一個 `Command` 宣告它的引數、子命令，以及各自要跑的函式，而那份宣告就是
+命令列唯一的描述——parser 讀它、help 算繪器讀它、驗證器也讀它。`zerg` 自己的命令列就是用它宣告的
+（見 [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)）。
+
+| 函式                                                    | 摘要                                |
+| ------------------------------------------------------- | ----------------------------------- |
+| `command(name: str, about: str = "") -> Command`        | 一個命令，root 或子命令             |
+| `argument(short, long, help, fallback) -> Argument`     | 帶值的選項                          |
+| `flag(short, long, help) -> Argument`                   | 只有「在」與「不在」的選項          |
+| `positional(name, help) -> Argument`                    | 位置引數                            |
+| `Command.opt` / `.required` / `.flag` / `.pos`          | 就地宣告引數，不必先建一個          |
+| `Command.add(a)` / `.sub(c)` / `.run(f)`                | 掛上引數、子命令、它的函式          |
+| `Command.version` / `.usage` / `.epilog` / `.no_help`   | `--help` 與 `--version` 說什麼      |
+| `Command.exec(args: list[str]) -> int`                  | parse、dispatch，並回答程序的狀態碼 |
+| `Ctx.has` / `.get` / `.all` / `.int_of` / `.args`       | 讀出這次 parse 的結果               |
+| `Argument.required` / `.repeated` / `.env` / `.section` | 收窄一個已宣告的引數                |
 
 ## `atomic`
 

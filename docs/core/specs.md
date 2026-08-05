@@ -29,11 +29,12 @@ inherent methods are invisible. So:
 - **Equality, ordering, and hashing are opt-in, never automatic.** There is **no auto-implemented
   `Object` spec** and no implicit `==`. A type gains structural equality (`==` / `!=`) only through
   **`#[derive(Eq)]`** or a hand-written `impl Eq`, a total order through `derive(Ord)`, and a hash through
-  `derive(Hash)` (**[not yet]**); comparing two values of a type that has no `Eq` impl is a compile error.
-  What _every_ value has, with no spec bound at all, are the **structural memory operations** the memory
-  model guarantees — copy, `del`, pass, store, send over a channel — because those are properties of the
-  representation, not behavior a spec abstracts. The compiler-owned **structural derivation** that backs
-  `derive` (**[not yet]** for every trait in the blessed set) is the
+  `derive(Hash)` (both **[not yet]**); comparing two values of a type that has no `Eq` impl is a compile
+  error. What _every_ value has, with no spec bound at all, are the **structural memory operations** the
+  memory model guarantees — copy, `del`, pass, store, send over a channel — because those are properties of
+  the representation, not behavior a spec abstracts. The compiler-owned **structural derivation** that backs
+  `derive` (built for **`Eq`** on a `struct` and on a fieldless `enum`; **[not yet]** for `Ord`, `Hash`,
+  `Encode`, `Decode`, and for `Eq` on a payload `enum`) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
@@ -59,6 +60,14 @@ holds one entry per type, not one per type-argument). Each needs a **named concr
 compile error **on an existential** — never a ban on using the spec as a type, only on that call, exactly as
 for the binary ops. So there is **no object-safety gate**: a spec is **always usable as a type**, and the box
 offers precisely what dispatches through `this` alone — re-boxing a `This`-returning result as the same spec.
+
+> **[not yet]** A `spec` cannot be used **as a type** at all, so the three paragraphs above — the heap-boxed
+> existential, its dynamic dispatch, and the member-by-member account of what a box does and does not offer —
+> describe a facility no program can reach. `fn go(g: Greet)` is refused by name: the `spec` is a bound and an
+> interface here, not yet a value's type, and the refusal says to take the concrete type or a generic
+> parameter bounded by it instead. A `spec` fills two of its three roles here and not the third; the same
+> claim in the [Language Reference](../language.md) overview is unbuilt for the same reason, and the
+> dynamic-dispatch half of the codegen paragraph below has nothing to dispatch on.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
@@ -146,6 +155,15 @@ of several matches a use means. A concrete-bound generic names the parameter dir
 ambiguous** — only a bare use on a value with several impls is. For a choice made at **run time** rather
 than by the argument's type, use an `enum` instead.
 
+> **[not yet]** A parameterized spec may be implemented at **one** argument, not several, which is the whole
+> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _`C` declares
+> `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
+> canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
+> with the first instead of being told apart by the very argument that is supposed to distinguish them. The
+> `Indexable[int]` / `Indexable[Range]` pair above therefore cannot be declared, and the three-outcome
+> resolution it feeds has nothing to resolve between. It is the same root cause as the one `Into` per type in
+> [Types](types.md#into--the-conversion-that-happens-on-its-own).
+
 ## Type tests — `is`
 
 An existential hides the value but not its **identity** — the `x is T` test introduced above. It is not a
@@ -180,6 +198,14 @@ A spec's methods come in two kinds:
   version (a faster `contains`, say); an override must still mean the conventional thing, and the
   `(type, spec)` implementation stays canonical either way.
 
+> **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
+> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
+> nothing in it is checked and it is not the method that runs; declare the signature and write the body in
+> each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
+> the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
+> no mechanism under it. The refusal names the form at the point it is written, so no program reaches the
+> dispatch question at all.
+
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
 **all** of them, required and provided, callable on a bounded `T`. These provided defaults are
@@ -197,7 +223,7 @@ method reaches the type's override (a defaulted `count` built on `next` uses an 
 `next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
 through its **vtable** to the actual impl. This holds for a **direct call on a concrete value** as well
-(**[not yet]** — a provided method is refused by name):
+(**[not yet]** — a provided method is refused at its declaration, above):
 `c.provided()` runs the type's **override** if it has one, else the spec's **default
 body** — with no `#[dyn]` and no boxing needed, so a provided method is not confined to the
 dynamic-dispatch path.
@@ -221,6 +247,13 @@ requires it, and the impl provides `BITS := 32` (a **`val-bind`**). It is a fold
 **function** (`fn max() -> This`, which _runs_ to produce a value), an associated **value** is _folded_ at
 compile time; use the value form for a constant a spec guarantees, the function form for a computed one.
 
+> **[not yet]** Neither member kind exists. An **associated type** is refused at the `spec` that declares it —
+> _NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing
+> here binds one_ — and an **associated value** at the `impl` that would supply it,
+> _NotImplemented: an associated value binding `BITS := …` in an `impl`_. A `spec` here declares method
+> signatures and nothing else, which is also why the `Indexable[K]` above and `Iterator` with its fixed `Item`
+> below cannot be written down in this compiler at all: each needs a member this one does not have.
+
 ## Type constants
 
 A **type constant** is a per-type compile-time value, declared inside the type's `impl` as a
@@ -238,6 +271,11 @@ A type constant is the **impl side** of the associated-value machinery (above): 
 `val-bind` no spec demanded, while a spec's `BITS: int` is the same `val-bind` a spec _requires_. So a
 per-type _value_ that a spec must guarantee is an **associated value** — `MAX: This` required, each impl
 supplying `MAX := …`, generic code reading `T.MAX` — **not** a receiver-less function.
+
+> **[not yet]** A **type constant** is the same unbuilt `val-bind` as the associated value it is the impl side
+> of: `BITS := 32` inside an `impl` reports _NotImplemented: an associated value binding `BITS := …` in an
+> `impl`_, whether or not a spec asked for it. So `Type.NAME` names nothing, `Point.ORIGIN` cannot be
+> declared, and a fixed-array size that a type constant was to supply is written as a literal instead.
 
 ## Built-in specs
 
@@ -258,6 +296,18 @@ distinct instances and there's no aliasing, so "same instance?" would be meaning
 too narrow to earn an operator. Equality, where a type opts into it, is the **structural** `Eq`. The
 **`is`** keyword is a different question — the **type-identity** test `x is T` on an existential (Type
 tests) — "what concrete type is boxed here?", never "are these two the same value?".
+
+> **[not yet]** Of the built-in specs this section describes, exactly two are declared: **`Eq`** above, and
+> **`Into[T]`** ([Types](types.md#into--the-conversion-that-happens-on-its-own)). `Ord`, `Hash`, `Error`,
+> `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
+> `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
+> `impl Ord for P` reports _error: no spec named `Ord`_, the ordinary message for a spec nobody wrote, and
+> `impl BitAnd for P` reports it too. Several of the **behaviours** are built in and reachable without their
+> spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err` names, a `chan`'s refcounted
+> close — but they are compiler-owned and a user type cannot join them: `<` on a `struct` reports
+> _NotImplemented: `<` on a P — an ordering comes from `Ord`, which this compiler does not generate_, with a
+> `#[derive(Eq)]` on the type or without one. Everything from here to the end of this chapter is specified
+> against that gap.
 
 The remaining specs are likewise **opt-in** — implement (or derive) the spec to gain the capability; a
 generic bound gates on it:

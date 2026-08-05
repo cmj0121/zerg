@@ -23,6 +23,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`time`](#time)       | `import "time"`    | clocks, and timers as channels                   |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
+| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                |
 | [`testing`](#testing) | `import "testing"` | assertion helpers for `#[test]` functions        |
 
@@ -72,6 +73,13 @@ self-synchronises, so a valid needle only matches at a code-point boundary); `in
 offset, like Go's `strings.Index`. Case folding is **ASCII-only** — a non-ASCII byte is passed through
 unchanged. An empty `split` separator, or a negative `repeat` count, raises `ValueError`.
 
+> **[deviation]** The error a standard-library function raises is **not a taxonomy kind**. `strings`,
+> `strconv` and `math` raise with a message rather than with one of the built-in kinds, so a caught error
+> answers `false` to `e is ValueError` and an uncaught one aborts with a bare `strings.repeat: negative count`
+> instead of the `Kind: message` shape the [abort contract](../conformance.md) specifies. The `io` and `fs`
+> functions do raise a real `IOError`, which is what makes this a gap in the pure-Zerg modules rather than in
+> the runtime.
+
 | Function                               | Summary                                             |
 | -------------------------------------- | --------------------------------------------------- |
 | `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)        |
@@ -95,23 +103,23 @@ unchanged. An empty `split` separator, or a negative `repeat` count, raises `Val
 ## `ascii`
 
 Single-byte **ASCII** classification — the honest tool for tokenising ASCII source (a byte ≥ 128 is never a
-letter/digit/space here). The predicate set mirrors C's `<ctype.h>`; `to_upper` / `to_lower` are the
+letter/digit/space here). The predicate set mirrors C's `<ctype.h>`; `fold_upper` / `fold_lower` are the
 single-byte counterparts of the `strings` case folds; `digit_val` / `hex_val` map a digit byte to its value
 (or `-1`) for hand-rolled number scanning. Every function is pure value arithmetic — no allocation.
 
-| Function                    | Summary                                                      |
-| --------------------------- | ------------------------------------------------------------ |
-| `is_digit(b: byte) -> bool` | `b` is `'0'..'9'`                                            |
-| `is_alpha(b: byte) -> bool` | `b` is `'A'..'Z'` or `'a'..'z'`                              |
-| `is_alnum(b: byte) -> bool` | `b` is a letter or a decimal digit                           |
-| `is_hex_digit(b: byte)`     | `b` is `'0'..'9'` / `'a'..'f'` / `'A'..'F'` (`-> bool`)      |
-| `is_upper(b: byte) -> bool` | `b` is `'A'..'Z'`                                            |
-| `is_lower(b: byte) -> bool` | `b` is `'a'..'z'`                                            |
-| `is_space(b: byte) -> bool` | `b` is ASCII whitespace (tab..CR, space) — the C isspace set |
-| `to_upper(b: byte) -> byte` | fold an ASCII lowercase letter to uppercase (else unchanged) |
-| `to_lower(b: byte) -> byte` | fold an ASCII uppercase letter to lowercase (else unchanged) |
-| `digit_val(b: byte) -> int` | value `0..9` of a decimal digit, or `-1`                     |
-| `hex_val(b: byte) -> int`   | value `0..15` of a hex digit (either case), or `-1`          |
+| Function                      | Summary                                                      |
+| ----------------------------- | ------------------------------------------------------------ |
+| `is_digit(b: byte) -> bool`   | `b` is `'0'..'9'`                                            |
+| `is_alpha(b: byte) -> bool`   | `b` is `'A'..'Z'` or `'a'..'z'`                              |
+| `is_alnum(b: byte) -> bool`   | `b` is a letter or a decimal digit                           |
+| `is_hex_digit(b: byte)`       | `b` is `'0'..'9'` / `'a'..'f'` / `'A'..'F'` (`-> bool`)      |
+| `is_upper(b: byte) -> bool`   | `b` is `'A'..'Z'`                                            |
+| `is_lower(b: byte) -> bool`   | `b` is `'a'..'z'`                                            |
+| `is_space(b: byte) -> bool`   | `b` is ASCII whitespace (tab..CR, space) — the C isspace set |
+| `fold_upper(b: byte) -> byte` | fold an ASCII lowercase letter to uppercase (else unchanged) |
+| `fold_lower(b: byte) -> byte` | fold an ASCII uppercase letter to lowercase (else unchanged) |
+| `digit_val(b: byte) -> int`   | value `0..9` of a decimal digit, or `-1`                     |
+| `hex_val(b: byte) -> int`     | value `0..15` of a hex digit (either case), or `-1`          |
 
 ## `strconv`
 
@@ -188,6 +196,26 @@ mut g := rand.seed(42)
 x := rand.next(g)        # g advances
 d := rand.below(g, 6)    # g advances; d in [0, 6)
 ```
+
+## `cli`
+
+A command line is **declared**, not parsed by hand: a `Command` names its arguments, its sub-commands and the
+function each one runs, and that declaration is the only description of the command line that exists — the
+parser reads it, the help renderer reads it, the validator reads it. `zerg`'s own command line is declared with
+it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
+
+| Function                                                | Summary                                          |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `command(name: str, about: str = "") -> Command`        | a command, the root or a sub-command             |
+| `argument(short, long, help, fallback) -> Argument`     | an option taking a value                         |
+| `flag(short, long, help) -> Argument`                   | an option that is present or absent              |
+| `positional(name, help) -> Argument`                    | a positional argument                            |
+| `Command.opt` / `.required` / `.flag` / `.pos`          | declare an argument inline, without building one |
+| `Command.add(a)` / `.sub(c)` / `.run(f)`                | attach an argument, a sub-command, its function  |
+| `Command.version` / `.usage` / `.epilog` / `.no_help`   | what `--help` and `--version` say                |
+| `Command.exec(args: list[str]) -> int`                  | parse, dispatch, and answer the process's status |
+| `Ctx.has` / `.get` / `.all` / `.int_of` / `.args`       | read what the parse produced                     |
+| `Argument.required` / `.repeated` / `.env` / `.section` | narrow a declared argument                       |
 
 ## `atomic`
 

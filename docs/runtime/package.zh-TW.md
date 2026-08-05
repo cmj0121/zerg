@@ -16,6 +16,14 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 
 把封裝／命名（`module`）與散布／API（`package`）分到兩層，正是讓 `pub` 有精確意義的原因。
 
+> **[not yet]** **package 這一層在本工具鏈中不存在**。沒有 manifest、沒有版本宣告、沒有解析器、也沒有相依下載：
+> 一次建置就是一個 entry 檔，加上它的 import 在磁碟上碰得到的那些 module。下文凡是提到 package 的部分——版本、
+> package DAG、單一版本選擇、以位置定義的 package-public、以及倚賴圖無環的 orphan rule——描述的都是還沒有任何
+> 實作的一層。`import "name"` 在磁碟上找不到對應物時會被靜默接受，只有 `zerg lint` 會提（`L101 unused import`）。
+>
+> **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
+> 沒有任何可見性檢查。見下方「可見性」。
+
 ### Program 與 entry point
 
 **program 是一次建置**，不是某種特殊的 package。你把 compiler 指向一個 **entry 檔**——`zerg build --emit bin entry.zg`——它就以
@@ -37,6 +45,10 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
   並以非零碼退出，未被攔截的 **abort** 則 unwind main stack 而 crash。預期失敗（`Right`）與 bug（abort）維持兩種
   不同的退出，而且 `?` 可以直接用在 `main` 裡。
 
+> **[deviation]** **`main` 的結果被丟棄**。`fn main() -> Result[nil]` 編得過，但從它回傳的 `Right` 不會印任何東西到
+> stderr，離開碼是 **0**；用 `?` 從 `main` 傳播出來的錯誤也一樣。程式表達「預期中的失敗」的唯一離開路徑，反而靜默
+> 地回報了成功。未被攔截的 **abort** 不受影響，仍以 1 離開。
+
 ### Program 生命週期與頂層初始化
 
 `main` 的 body 是**整個 program 的根 scope**：它一回傳，底下所有 scope-owned 的東西就會被釋放，任何還在跑的 coroutine
@@ -47,6 +59,10 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
+
+> **[deviation]** 頂層常數以**原始碼順序**初始化，不是依賴序，而且循環不會被診斷。初始化式讀到一個宣告在它**後面**
+> 的常數時，讀到的是那個常數的零值，程式照跑：`const A: int = B + 1` 寫在 `const B: int = 10` 上面，得到 `A == 1`。
+> 循環（`A` 讀 `B`、`B` 讀 `A`）編譯完全沒有任何 finding。兩者都是靜默的錯誤答案，而不是這裡所定的 compile error。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依
@@ -60,6 +76,16 @@ abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自�
 **不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
 半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
 
+> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，順序是
+> 整個程式的宣告序，而不是在擁有它的那個 module 首次被使用時。「恰好一次」與 module 內 FIFO 成立；「首次被使用時」
+> 不成立——所以一個執行從未碰到的 module，它的 `init()` 照樣會跑。
+>
+> **[not yet]** 兩個各自宣告 `init()` 的 module 會被具名拒絕——壓平後的命名空間分不出 `init__0` 與 `init__0`。
+> 因此跨 module 的初始化**順序**目前沒有任何程式觀察得到。
+>
+> **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
+> 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
+
 ### Package
 
 **package** 是一棵 module 樹，也是**散布、相依與版本**的單位——你發佈、依賴、釘版本的那個東西。package 形成一張
@@ -67,6 +93,8 @@ abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自�
 
 一次建置在整張圖裡對每個 package **只選一個版本**——同一個 package 絕不會在一個 program 裡出現兩種版本——因此一個
 package 的型別在全程式裡保有單一身分。
+
+> **[not yet]** 全部——見「四層」下的標記。沒有 package，就沒有版本、package 之間沒有圖，也沒有東西可選。
 
 ### Coherence 與 orphan rule
 
@@ -83,6 +111,9 @@ coherence **不需要全域註冊表**——orphan rule 加上**無環**的 pack
 另一個，任何第三方 package 也無法在不擁有其一的情況下同時指名兩者。所以該實作要是存在，就由構造保證唯一。單一版本
 選擇正是讓「一型別、一實作」有明確定義的前提。
 
+> **[not yet]** **orphan rule 未被強制**。第三個 module 可以寫 `impl Spec for T`，spec 與型別它都不擁有，照樣編得過。
+> 實際被檢查的是壓平命名空間看得到的那件較窄的事：同一次建置中兩個 `impl` 給同一型別同一個方法名，會被拒絕。
+
 ### Module
 
 **一個 module 就是一個目錄**；裡面的檔案是共享同一命名空間的實體切片——檔案數量是排版、不是語意。module 是預設的
@@ -98,6 +129,12 @@ module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** �
 
 無論佈局如何，唯一必須無環的是**頂層常數初始化**（見 Program 生命週期與頂層初始化）：那裡的循環沒有合法順序、是
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
+
+> **[deviation]** **entry 檔自己的目錄不是一個 module**。與 entry 檔並列的檔案不在它的命名空間裡，也不會被編進這次
+> 建置：指名該檔宣告的函式會得到 `undefined function`。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
+> 都成立；以 entry 檔為根的那個 module 是例外。
+>
+> **[deviation]** **import 循環不會被拒絕。** 兩個互相 import 的 module 編得過也跑得動。兩層都沒有任何東西偵測循環。
 
 ### 可見性——如何把宣告公開
 
@@ -116,6 +153,12 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 根本無法指名那個型別。一個型別的 **`pub` method 會隨它一起走**：一旦型別抵達公開表面，它的 `pub` method 也能
 被依賴者呼叫——method 上的可見性讀法與 function 完全相同。
 
+> **[deviation]** **這一節沒有任何一條被強制。** `pub` 會被 parse、會掛在宣告上，然後沒有任何規則去讀它：一個 module
+> 呼叫另一個 module 的 module-private 函式、讀它 module-private struct 的欄位、從 `pub` 簽章回傳一個 module-private
+> 型別，全都不會有 finding。每個 module 都被壓平進同一個命名空間——這也是兩個 module 宣告同名會相撞的原因，
+> 而那個拒絕針對的是名字、不是可見性。`pub` **確實**決定兩件事：`import pub` re-export，以及 `zerg lint` 會把哪些
+> 宣告當成死碼。
+
 ### 匯入與引用
 
 引用另一個宣告一律**顯式**——無 wildcard、無遞迴傳遞（import 一個 package 只給你它的公開表面，絕不給你它自己
@@ -133,6 +176,13 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 > **狀態。** 這些小節描述的表面今日已接好：**字串路徑 import**（`import "util/text"`）、**括號 import
 > 群組**（`import ( … )`），以及**一層 `import pub` re-export** 到 root module 的公開表面。（re-export 只有一層：
 > `import pub` 把所命名的 module 露到本 module 表面；它不會遞迴地 re-export 那個 module 自己 re-export 的東西。）
+>
+> **[deviation]** **「無遞迴傳遞」未被強制。** 因為每個 module 都壓平進同一個命名空間，只要一個 module 被這次建置
+> 觸及，它就是其他每個 module 都指名得到的 module——不論有沒有 import 它。import graph 決定的是什麼被**編進**建置，
+> 不是建置內部什麼看得見。
+>
+> **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
+> 這個成員——本節承諾的一等值到 module 邊界就停住了。
 
 ### Prelude 與 std（The prelude & std）
 
@@ -153,6 +203,13 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 因為 prelude 是 built-in、而不是隱式 import，「無 ambient import」就毫無例外地成立。
 
+> **[not yet]** prelude 承諾的 built-in spec 中，只有 **`Eq`** 與 **`Into[T]`** 存在。`Ord`、`Hash`、`Error`、
+> `Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Ord for P` 會回報程式中沒有任何東西以那個名字
+> 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
+>
+> **[deviation]** prelude 的名字**沒有被保留**。程式可以宣告 `struct list`、`struct Result`、`struct Ref` 或
+> `spec Eq`，沒有一個會被拒絕——所以那些運算子 desugar 的目標，確實可以被從語言底下抽走。
+
 ### 測試與可見性（Testing & visibility）
 
 測試就是普通程式碼、套同一套可見性規則——隱私**沒有測試專用後門**。這決定了測試該放哪：
@@ -166,9 +223,16 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
 
+> **[not yet]** **沒有 test build**。`*_test.zg` 確實被排除在一般建置之外，這是慣例中可用的那一半；會把它納入的那個
+> 指令——`zerg test`——並不存在，所以上面的白箱／黑箱位置目前只是「檔案該放哪」，不是「怎麼跑起來」。在那之前，
+> `testing` 模組的 `assert` 系列可以從一般程式呼叫。
+
 ### Target 條件式檔案
 
 平台與架構差異用**同一套方式**處理——在**檔案層級、由 build 工具依慣例**——而不是語言內的 `#ifdef` / `cfg` 構造
 （那會讓程式碎裂、違背 `small and crisp`）。一個 module 保留**各 target 的檔案**（像 `_linux` / `_darwin` 的名稱後
 綴，與 `_test` 慣例並列），build 只納入符合所選 target 的那些；語言本身維持 **target-agnostic**、不賦予檔名任何意義。
 確切的 target 命名與匹配方案屬 build 工具細節，**延後**。
+
+> **[not yet]** 沒有任何後綴被辨識。module 目錄裡每個 `.zg` 都會被編進建置，所以同時放著 `plat_linux.zg` 與
+> `plat_darwin.zg` 的 module 就是同一個名字宣告了兩次，會以碰撞被拒——這比挑錯一個要清楚，但仍然不是這個功能。

@@ -188,6 +188,10 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
+> **[not yet]** 這個模組會出貨，但**無法 import**。`Atomic[T]` 是 generic struct，而 generic struct 是本編譯器
+> 拒絕的形式之一，所以 `import "atomic"` 本身就會回報 `NotImplemented: a generic struct`Atomic[…]``。下表的
+簽章另外還提到 `Ref[T]`，那個型別也不存在。它是十二個模組中唯一無法乾淨 import 的一個。
+
 | 函式                                                           | 摘要                                |
 | -------------------------------------------------------------- | ----------------------------------- |
 | `atomic(v: int) -> Ref[int]`                                   | 建立持有 `v` 的共享 cell            |

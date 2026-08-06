@@ -1332,8 +1332,15 @@ fn fmt_wrap_group(
 	# shape of the groups that are already wrapped.
 	over := col + flat > fmt_wrap_max()
 	many := elems >= fmt_wrap_elems()
-	spans := fmt_wrap_spans(brk, open, shut)
-	return fmt_wrap_split(toks, brk, drop, wid, open, shut, depth) if spans and (over or many)
+
+	# A group that HOLDS A BLOCK is split whatever it measures, because the alternative is
+	# not "one line" — it is the half-broken shape this rule exists to prevent. Joining
+	# `f(a, guard { x } ?? 1)` onto one line does not put it on one line; the block breaks
+	# regardless and the `)` ends up alone after it. Neither threshold can see that, since
+	# both are about width.
+	holds := fmt_wrap_holds_block(toks, open, shut)
+	spans := fmt_wrap_spans(toks, brk, open, shut)
+	return fmt_wrap_split(toks, brk, drop, wid, open, shut, depth) if spans and (over or many or holds)
 	return fmt_wrap_join(toks, brk, drop, open, shut, col + flat)
 }
 
@@ -1412,7 +1419,7 @@ fn fmt_wrap_free(
 	flat: int,
 	depth: int
 ) -> Wrap {
-	return Wrap(shut + 1, col + flat) if not fmt_wrap_spans(brk, open, shut)
+	return Wrap(shut + 1, col + flat) if not fmt_wrap_spans(toks, brk, open, shut)
 	inner := (depth + 1) * fmt_wrap_tab()
 	fmt_wrap_break_at(brk, open + 1)
 	fmt_wrap_break_at(brk, shut)
@@ -1440,10 +1447,34 @@ fn fmt_wrap_break_at(mut &brk: list[int], at: int) {
 	}
 }
 
-fn fmt_wrap_spans(mut &brk: list[int], open: int, shut: int) -> bool {
+# fmt_wrap_spans reports whether the group from `open` to `shut` occupies more than one
+# line — either because its author broke it, or because it HOLDS A BLOCK.
+#
+# The second half is not a refinement. A `{` that opens a block always ends its line, which
+# is the printer's own rule and not a decision this pass gets to make, so a group holding
+# one spans lines however it was written. Measuring it flat is what made `zerg fmt`
+# non-idempotent on `print int(guard { … } ?? byte(7))`: F403 read a one-line group and left
+# it alone, the printer broke it at the block anyway, F105 then found a closer on a later
+# line than its opener and moved it — and the file that came back was one the NEXT run
+# formatted differently again. A formatter's one promise is that formatting formatted source
+# changes nothing, and it was being kept by every gate in the tree because no gated source
+# writes a block inside a call.
+fn fmt_wrap_spans(mut &toks: list[Token], mut &brk: list[int], open: int, shut: int) -> bool {
 	mut i := open + 1
 	for i <= shut {
 		return true if brk[i] > 0
+		i = i + 1
+	}
+	return fmt_wrap_holds_block(toks, open, shut)
+}
+
+# fmt_wrap_holds_block is the second half of fmt_wrap_spans asked on its own, which the
+# comma case needs separately: a group holding a block is split rather than merely known to
+# span lines.
+fn fmt_wrap_holds_block(mut &toks: list[Token], open: int, shut: int) -> bool {
+	mut i := open + 1
+	for i <= shut {
+		return true if is_lbrace(toks[i].kind) and fmt_opens_block(toks, i)
 		i = i + 1
 	}
 	return false

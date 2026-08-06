@@ -1,0 +1,587 @@
+# desugar — `zerg desugar` rewrites a source into the CORE forms its sugar is defined as.
+#
+# It is the other direction from `zerg fmt`. The formatter prefers the SHORTER surface:
+# where the language offers a shorter spelling for exactly what is written, F401 / F405 /
+# F408 pick it. This pass picks the LONGER one — the form GRAMMAR says the sugar means —
+# and it exists for one reason: two spellings of the same thing must build the same
+# program, and nothing in this tree was checking that. `make desugar` now does, by running
+# the corpus twice, once as written and once with every sugar undone.
+#
+# Every rule has a CODE, the way fmt's do, so it can be named on a command line that turns
+# it off:
+#
+#   D101  a postfix guard becomes the `if` block it is sugar for
+#   D102  a while-`for` becomes the infinite `for` it is sugar for
+#   D103  a range-`for` becomes the infinite `for` it is sugar for
+#
+# The D rules are a SEPARATE COMMAND rather than a mode of `zerg fmt`, and that is the
+# whole reason the codes are their own group: `zerg fmt`'s contract is that its output is
+# canonical, and canonical here means sugared. A `--desugar` flag would have been a mode
+# that switches three F4xx rules off and turns three others on, which is two formatters
+# wearing one name. The command boundary is what makes "off by default" free.
+#
+# For the same reason it applies none of fmt's sugar-preferring rules. It runs the D rules
+# and then fmt's layout and spacing, so its output is indented like the rest of the tree —
+# but running `zerg fmt` over that output would put every sugar back, and that is correct
+# rather than a conflict. The desugared text is an ARTIFACT, not a canonical source.
+#
+# It works from TOKENS, like fmt and for fmt's reason, and that is also the limit of what
+# it can undo. Four of the language's sugars need TYPES — `for x in xs` lowers one way for
+# a list, another for a map, another for a str and another for a channel — and a token
+# pass that guessed would be a tool that changes what a program does. Those decline, by
+# name, in docs/tooling/desugar.md. The three rules here are the ones a token pass can be
+# RIGHT about.
+
+# desugar_src_off is the whole pass: the D rules, then fmt's printer.
+pub fn desugar_src_off(src: str, off: list[str]) -> str {
+	mut toks := tokenize_trivia(src)
+	if not fmt_is_off(off, "D101") {
+		toks = dsg_guards(toks)
+	}
+	if not fmt_is_off(off, "D102") {
+		toks = dsg_whiles(toks)
+	}
+	if not fmt_is_off(off, "D103") {
+		toks = dsg_ranges(toks)
+	}
+
+	# F403 runs, and it is the only F4xx rule that does. It is not here for its own sake:
+	# where a wrapped group's closer goes (F105) is decided from the LINE its opener was on,
+	# and printing moves lines — so a source printed without F403 first came back with a
+	# `} ?? 7), 7)` that the next run broke apart, and this pass had no fixpoint. F403 is
+	# what settles a group's shape before the closers are placed against it, which is why
+	# `zerg fmt` runs the two together and why running one without the other does not work.
+	toks = fmt_wrap(toks)
+	return fmt_toks(toks, false)
+}
+
+# --- rule D101: a postfix guard becomes the `if` block it is sugar for ----------------------
+#
+# GRAMMAR defines `return x if c`, `return if c`, `break if c`, `continue if c` and
+# `raise e if c` AS `if c { … }` around the same jump — one postfix `if`, every diverge. So
+# this rule is F401 read backwards, and the two are each other's test: a source that goes
+# through both comes back to itself.
+#
+# Only the `return x if c` form reaches the emitter as a form of its own (SReturnIf); the
+# other four are desugared in the PARSER, which is why the C this rule produces is
+# byte-identical to the C the sugar produces. That is worth stating because it is not true
+# of D102 or D103, and the gate says which is which.
+#
+# It declines on a comment anywhere in the statement, for F401's reason in reverse: the
+# comment sits at the end of a line this rule is about to turn into four, and there is no
+# honest place to put it back.
+fn dsg_guards(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		g := dsg_guard_at(toks, i)
+		if g > 0 {
+			end := dsg_stmt_end(toks, i)
+			dsg_emit_block(toks, i, g, end, out)
+			i = end
+			if end < toks.len() and is_semi(toks[end].kind) {
+				i = end + 1
+			}
+		} else {
+			out.append(toks[i])
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# dsg_guard_at answers with the index of the guard's `if`, or 0 when the statement at `at`
+# is not a guarded jump. The `if` is the first one at bracket depth zero: a `return match n
+# { 1 if c => … }` carries one inside braces, and a `return f(if_ok)` carries none at all.
+#
+# There is no ambiguity to resolve at depth zero. `return if …` is ALWAYS the bare guard —
+# GRAMMAR gives the conditional EXPRESSION no place here, since an if-expression needs its
+# `else` and the parser reads `return if` as the guard before it ever looks for one.
+fn dsg_guard_at(mut &toks: list[Token], at: int) -> int {
+	return 0 if not is_jump(toks[at].kind) or not fmt_stmt_start(toks, at)
+	end := dsg_stmt_end(toks, at)
+	return 0 if dsg_span_comment(toks, at, end)
+
+	# the comment that ENDS the statement counts as one inside it. dsg_stmt_end stops at a
+	# trailing comment, so the span above cannot see it — and the rule fired, leaving the
+	# note that trailed `return 1 if n > 0` stranded on a line of its own after the block it
+	# no longer says anything about.
+	return 0 if end < toks.len() and is_comment(toks[end].kind)
+
+	mut depth := 0
+	mut i := at + 1
+	for i < end {
+		k := toks[i].kind
+		if is_open(k) or is_lbrace(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+		} else if depth == 0 and k == If {
+			return i
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# dsg_stmt_end is the index of the token that ends the statement starting at `at` — its
+# `;`, the `}` of the block it is the last statement of, or the comment that trails it.
+#
+# A TRAILING COMMENT ENDS IT, and that is not a nicety. The lexer inserts no `;` on a line
+# whose last token is a comment, so a statement read to the next `;` runs on through the
+# comment and swallows the line after it — which is exactly what this rule did to
+# `return a if a > b # guard`, producing an `if` whose condition was the next statement.
+fn dsg_stmt_end(mut &toks: list[Token], at: int) -> int {
+	mut depth := 0
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_open(k) or is_lbrace(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			return i if depth == 0
+			depth = depth - 1
+		} else if depth == 0 and (is_semi(k) or is_eof(k) or is_comment(k)) {
+			return i
+		}
+		i = i + 1
+	}
+	return toks.len()
+}
+
+# dsg_span_comment reports a comment in `[lo, hi)` at any depth. A statement this pass
+# rewrites is joined onto one line first, and a comment runs to the end of whichever line
+# it lands on — so one carried anywhere inside would take the rest of the rewrite with it.
+fn dsg_span_comment(mut &toks: list[Token], lo: int, hi: int) -> bool {
+	mut i := lo
+	for i < hi {
+		return true if is_comment(toks[i].kind)
+		i = i + 1
+	}
+	return false
+}
+
+# dsg_emit_block writes `if <cond> { <jump> <value?> }` from the pieces of `<jump> <value?>
+# if <cond>`. Every synthesized token takes the guard's own line, which is what the printer
+# reads to decide that no blank line belongs between them; the `;`s are what break them
+# onto lines of their own.
+fn dsg_emit_block(mut &toks: list[Token], at: int, g: int, end: int, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	out.append(Token(If, "if", "", ln, col))
+
+	# the condition: everything between the guard's `if` and the end of the statement
+	mut j := g + 1
+	for j < end {
+		out.append(fmt_on_line(toks[j], ln))
+		j = j + 1
+	}
+	out.append(Token(LBrace, "{", "", ln, col))
+
+	# the jump and its value, if it has one: everything up to the guard's `if`
+	mut k := at
+	for k < g {
+		out.append(fmt_on_line(toks[k], ln))
+		k = k + 1
+	}
+	out.append(Token(Semi, ";", "", ln, col))
+	out.append(Token(RBrace, "}", "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+}
+
+# --- rule D102: a while-`for` becomes the infinite `for` it is sugar for ---------------------
+#
+# GRAMMAR gives `for` three heads — infinite, while, and iterate — and the infinite one is
+# the core: `for c { … }` is `for { if not (c) { break } … }`, which is what the reader of
+# a `while` is holding in their head anyway.
+#
+# The condition is PARENTHESIZED rather than trusted to `not`'s precedence. `not a == b` is
+# not `not (a == b)`, and a rule that has to be right about every condition anyone writes
+# cannot be right by knowing the precedence table — it can only be right by not depending
+# on it.
+#
+# Unlike D103 this one needs no fixup for `continue`: a while-loop's `continue` re-tests
+# the condition, and so does this one, because the test is the first thing in the body.
+fn dsg_whiles(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		lb := dsg_while_at(toks, i)
+		if lb > 0 {
+			rb := fmt_block_end(toks, lb)
+			if rb > 0 {
+				dsg_emit_while(toks, i, lb, rb, out)
+				i = rb + 1
+				continue
+			}
+		}
+		out.append(toks[i])
+		i = i + 1
+	}
+	return out
+}
+
+# dsg_while_at answers with the `{` of a while-`for`'s block, or 0 for the other two heads.
+#
+# The three are told apart the way GRAMMAR tells them apart: a `{` straight after `for` is
+# the infinite form, `mut` or an `identifier in` is the iterate form, and anything else is
+# the condition. That last clause is why `for (v in r) { … }` is a while — the parenthesis
+# is what keeps a membership test from reading as an iteration, and it does so here too.
+fn dsg_while_at(mut &toks: list[Token], at: int) -> int {
+	return 0 if toks[at].kind != For or not fmt_stmt_start(toks, at)
+	n := fmt_next_code(toks, at)
+	return 0 if n < 0
+	k := toks[n].kind
+	return 0 if is_lbrace(k) or k == Mut or is_comment(k)
+
+	# `for select { … }` is the fourth head, and it is not a condition. Read as one it
+	# became `for { if not (select) { break } … }`, where the compiler says what it says
+	# about a `select` in expression position and the rewrite is the reason.
+	return 0 if k == Select
+	lb := fmt_block_start(toks, at)
+
+	return 0 if lb == 0 or dsg_iterates(toks, n)
+	return 0 if dsg_span_comment(toks, at + 1, lb)
+
+	return lb
+}
+
+# dsg_iterates reports the `for x in …` head: an identifier, then `in`.
+fn dsg_iterates(mut &toks: list[Token], n: int) -> bool {
+	return false if toks[n].kind != Ident
+	m := fmt_next_code(toks, n)
+	return false if m < 0
+	return toks[m].kind == In
+}
+
+fn dsg_emit_while(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	out.append(Token(For, "for", "", ln, col))
+	out.append(Token(LBrace, "{", "", ln, col))
+	out.append(Token(If, "if", "", ln, col))
+	out.append(Token(Not, "not", "", ln, col))
+	out.append(Token(LParen, "(", "", ln, col))
+
+	mut j := at + 1
+	for j < lb {
+		out.append(fmt_on_line(toks[j], ln))
+		j = j + 1
+	}
+	out.append(Token(RParen, ")", "", ln, col))
+	out.append(Token(LBrace, "{", "", ln, col))
+	out.append(Token(Break, "break", "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+	out.append(Token(RBrace, "}", "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+
+	# the body, with its own while-loops rewritten: the walk above resumes past this loop's
+	# `}`, so a nested one is only reached from here
+	mut body := dsg_span(toks, lb + 1, rb)
+	body = dsg_whiles(body)
+	dsg_append(body, out)
+	out.append(toks[rb])
+	out.append(Token(Semi, ";", "", ln, col))
+}
+
+# --- rule D103: a range-`for` becomes the infinite `for` it is sugar for ---------------------
+#
+# `for x in a..b { … }` is a counted loop, and the count is what the core form has to carry
+# by hand: an induction variable, an upper bound evaluated ONCE, a test, and a step.
+#
+# The two bounds are hoisted in the emitter's order — the upper bound first, then the
+# initial value — because that is the order `c_forrange` computes them in and this rule
+# claims to say the same thing, not merely to compute the same answer.
+#
+# THE INCLUSIVE FORM IS NOT `i <= hi`. `for i in 0..=MAX` has no value to step to after its
+# last one: the step overflows, which under this language's checked arithmetic RAISES
+# rather than wrapping. The emitter answers that with a flag that goes false at the last
+# value instead of stepping past it, and so does this — a `done` the step sets rather than
+# a comparison the step has to survive.
+#
+# The bindings it introduces are named for the line and column of the `for` they came from,
+# so two loops in one function cannot collide and the name says where it came from. They
+# are hoisted into the enclosing scope rather than wrapped in a block of their own because
+# a bare `{ … }` statement is a form this compiler refuses.
+fn dsg_ranges(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		lb := dsg_range_at(toks, i)
+		if lb > 0 {
+			rb := fmt_block_end(toks, lb)
+			if rb > 0 and dsg_body_steppable(toks, lb, rb) {
+				dsg_emit_range(toks, i, lb, rb, out)
+				i = rb + 1
+				continue
+			}
+		}
+		out.append(toks[i])
+		i = i + 1
+	}
+	return out
+}
+
+# dsg_range_at answers with the `{` of a range-`for`'s block, or 0.
+#
+# It takes the iterate head and NO OTHER, and only when the thing iterated is a range
+# written as one. `for x in xs` is the sugar this pass cannot undo — a list, a map, a str
+# and a channel lower four different ways and a token pass knows which only by guessing —
+# and `for x in f(0..n)` is that same case wearing a range inside a call, which is why the
+# `..` has to be at the head's own bracket depth.
+fn dsg_range_at(mut &toks: list[Token], at: int) -> int {
+	return 0 if toks[at].kind != For or not fmt_stmt_start(toks, at)
+	n := fmt_next_code(toks, at)
+	return 0 if n < 0 or not dsg_iterates(toks, n)
+	lb := fmt_block_start(toks, at)
+	return 0 if lb == 0 or dsg_span_comment(toks, at + 1, lb)
+
+	inx := fmt_next_code(toks, n)
+	op := dsg_range_op(toks, inx + 1, lb)
+	return 0 if op == 0
+
+	# `for i in 0..` has no upper bound, and neither has anything to count to: the compiler
+	# refuses it, so this rule leaves it for the compiler to refuse
+	return 0 if op + 1 >= lb
+	return 0 if inx + 1 >= op
+
+	return lb
+}
+
+# dsg_range_op is the index of the head's own `..` or `..=`, at bracket depth zero.
+fn dsg_range_op(mut &toks: list[Token], lo: int, lb: int) -> int {
+	mut depth := 0
+	mut i := lo
+	for i < lb {
+		k := toks[i].kind
+		if is_open(k) or is_lbrace(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+		} else if depth == 0 and (k == DotDot or k == DotDotEq) {
+			return i
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# dsg_body_steppable reports whether every `continue` in this loop's body is one this rule
+# can put a step in front of — which means at a statement's start, and with no postfix
+# guard of its own.
+#
+# A `continue` is the whole difficulty of this rule. In the sugared form the step belongs
+# to the loop header and `continue` runs it; in the core form the step is the last
+# statement of the body, and a `continue` that jumped over it would leave the induction
+# variable where it was — a loop that never ends, produced by a tool whose one promise is
+# that it changed nothing. So each one gets the step written in front of it, and the shapes
+# where that cannot be written decline the whole loop instead:
+#
+#   * `continue if c`, which is D101's job and is only still here when D101 was switched
+#     off — the step would run whether or not the guard held;
+#   * `P => continue` as a match arm's body, where two statements do not fit.
+#
+# A `continue` inside a NESTED loop belongs to that loop and is not this rule's to touch,
+# which is why the scan skips a nested `for` whole.
+fn dsg_body_steppable(mut &toks: list[Token], lb: int, rb: int) -> bool {
+	mut i := lb + 1
+	for i < rb {
+		if toks[i].kind == For and fmt_stmt_start(toks, i) {
+			nb := fmt_block_start(toks, i)
+			if nb > 0 {
+				ne := fmt_block_end(toks, nb)
+				if ne > 0 {
+					i = ne + 1
+					continue
+				}
+			}
+		}
+		if toks[i].kind == Continue {
+			return false if not fmt_stmt_start(toks, i)
+			return false if dsg_guard_at(toks, i) > 0
+		}
+		i = i + 1
+	}
+	return true
+}
+
+fn dsg_emit_range(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	nm := fmt_next_code(toks, at)
+	inx := fmt_next_code(toks, nm)
+	op := dsg_range_op(toks, inx + 1, lb)
+	incl := toks[op].kind == DotDotEq
+	iv := f"zgd_i{ln}c{col}"
+	hv := f"zgd_hi{ln}c{col}"
+	dv := f"zgd_done{ln}c{col}"
+
+	# the upper bound, once, before anything else — `c_forrange`'s `zgt_hi`
+	out.append(Token(Ident, hv, "", ln, col))
+	out.append(Token(Walrus, ":=", "", ln, col))
+	dsg_copy(toks, op + 1, lb, ln, out)
+	out.append(Token(Semi, ";", "", ln, col))
+
+	# the induction variable, at the range's low bound
+	out.append(Token(Mut, "mut", "", ln, col))
+	out.append(Token(Ident, iv, "", ln, col))
+	out.append(Token(Walrus, ":=", "", ln, col))
+	dsg_copy(toks, inx + 1, op, ln, out)
+	out.append(Token(Semi, ";", "", ln, col))
+
+	if incl {
+		out.append(Token(Mut, "mut", "", ln, col))
+		out.append(Token(Ident, dv, "", ln, col))
+		out.append(Token(Walrus, ":=", "", ln, col))
+		out.append(Token(Ident, iv, "", ln, col))
+		out.append(Token(Gt, ">", "", ln, col))
+		out.append(Token(Ident, hv, "", ln, col))
+		out.append(Token(Semi, ";", "", ln, col))
+	}
+
+	out.append(Token(For, "for", "", ln, col))
+	out.append(Token(LBrace, "{", "", ln, col))
+	out.append(Token(If, "if", "", ln, col))
+	if incl {
+		out.append(Token(Ident, dv, "", ln, col))
+	} else {
+		out.append(Token(Ident, iv, "", ln, col))
+		out.append(Token(Ge, ">=", "", ln, col))
+		out.append(Token(Ident, hv, "", ln, col))
+	}
+	out.append(Token(LBrace, "{", "", ln, col))
+	out.append(Token(Break, "break", "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+	out.append(Token(RBrace, "}", "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+
+	# the loop variable is a fresh binding per iteration, exactly as the sugar's is, and it
+	# keeps the name the author wrote
+	out.append(fmt_on_line(toks[nm], ln))
+	out.append(Token(Walrus, ":=", "", ln, col))
+	out.append(Token(Ident, iv, "", ln, col))
+	out.append(Token(Semi, ";", "", ln, col))
+
+	step := dsg_step(iv, hv, dv, incl, ln, col)
+	mut body := dsg_span(toks, lb + 1, rb)
+	body = dsg_ranges(body)
+	body = dsg_step_continues(body, step)
+	dsg_append(body, out)
+
+	# the trailing step takes the closing brace's line rather than the `for`'s. The printer
+	# writes a blank line wherever one line number follows another with a gap, and the step
+	# is the one thing this rule appends AFTER a body whose tokens carry their own lines —
+	# on the header's line it read as a step, then a blank, then the `}`.
+	dsg_append_on(step, toks[rb].line, out)
+	out.append(toks[rb])
+	out.append(Token(Semi, ";", "", ln, col))
+}
+
+# dsg_step is what runs at the end of every iteration, and in front of every `continue`.
+#
+# The exclusive form steps and lets the test catch the end. The inclusive form cannot: it
+# would have to step PAST its last value to fail a test, and at the type's maximum there is
+# no such value. So it asks whether it is standing on the last one, and stops rather than
+# stepping.
+fn dsg_step(iv: str, hv: str, dv: str, incl: bool, ln: int, col: int) -> list[Token] {
+	mut s: list[Token] = []
+	if not incl {
+		s.append(Token(Ident, iv, "", ln, col))
+		s.append(Token(Assign, "=", "", ln, col))
+		s.append(Token(Ident, iv, "", ln, col))
+		s.append(Token(Plus, "+", "", ln, col))
+		s.append(Token(Int, "1", "", ln, col))
+		s.append(Token(Semi, ";", "", ln, col))
+		return s
+	}
+	s.append(Token(If, "if", "", ln, col))
+	s.append(Token(Ident, iv, "", ln, col))
+	s.append(Token(EqEq, "==", "", ln, col))
+	s.append(Token(Ident, hv, "", ln, col))
+	s.append(Token(LBrace, "{", "", ln, col))
+	s.append(Token(Ident, dv, "", ln, col))
+	s.append(Token(Assign, "=", "", ln, col))
+	s.append(Token(True, "true", "", ln, col))
+	s.append(Token(Semi, ";", "", ln, col))
+	s.append(Token(RBrace, "}", "", ln, col))
+	s.append(Token(Else, "else", "", ln, col))
+	s.append(Token(LBrace, "{", "", ln, col))
+	s.append(Token(Ident, iv, "", ln, col))
+	s.append(Token(Assign, "=", "", ln, col))
+	s.append(Token(Ident, iv, "", ln, col))
+	s.append(Token(Plus, "+", "", ln, col))
+	s.append(Token(Int, "1", "", ln, col))
+	s.append(Token(Semi, ";", "", ln, col))
+	s.append(Token(RBrace, "}", "", ln, col))
+	s.append(Token(Semi, ";", "", ln, col))
+	return s
+}
+
+# dsg_step_continues writes the step in front of every `continue` this loop owns.
+# dsg_body_steppable has already refused the bodies where that cannot be written.
+fn dsg_step_continues(mut &body: list[Token], step: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < body.len() {
+		if body[i].kind == For and fmt_stmt_start(body, i) {
+			nb := fmt_block_start(body, i)
+			if nb > 0 {
+				ne := fmt_block_end(body, nb)
+				if ne > 0 {
+					# a nested loop's `continue` is the nested loop's
+					mut j := i
+					for j <= ne {
+						out.append(body[j])
+						j = j + 1
+					}
+					i = ne + 1
+					continue
+				}
+			}
+		}
+		if body[i].kind == Continue and fmt_stmt_start(body, i) {
+			for s in step {
+				out.append(fmt_on_line(s, body[i].line))
+			}
+		}
+		out.append(body[i])
+		i = i + 1
+	}
+	return out
+}
+
+# --- token plumbing ---------------------------------------------------------------------
+
+# dsg_span is the tokens in `[lo, hi)`, as a list of their own — what a rule hands its own
+# recursion when it rewrites a block's body.
+fn dsg_span(mut &toks: list[Token], lo: int, hi: int) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := lo
+	for i < hi {
+		out.append(toks[i])
+		i = i + 1
+	}
+	return out
+}
+
+fn dsg_append(src: list[Token], mut &out: list[Token]) {
+	for t in src {
+		out.append(t)
+	}
+}
+
+fn dsg_append_on(src: list[Token], ln: int, mut &out: list[Token]) {
+	for t in src {
+		out.append(fmt_on_line(t, ln))
+	}
+}
+
+# dsg_copy appends `[lo, hi)` onto one line, which is what makes a head this rule lifts out
+# of a loop read as the single statement it has become.
+fn dsg_copy(mut &toks: list[Token], lo: int, hi: int, ln: int, mut &out: list[Token]) {
+	mut i := lo
+	for i < hi {
+		out.append(fmt_on_line(toks[i], ln))
+		i = i + 1
+	}
+}

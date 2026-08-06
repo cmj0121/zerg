@@ -34,6 +34,16 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 [格式化與文字](../runtime/format.zh-TW.md)。內插命令字面量 `` f`…` ``（屬文法、未列於此）同樣為 **[not yet]**。上表其餘各
 desugar 一如所寫。
 
+## 把它還原回去
+
+`zerg desugar` 會把上表裡的 sugar 改寫回它 desugar 成的 core 形式,而 `make desugar` 會把兩種形式都建起來、都跑一
+遍,檢查它們是同一個程式——因為編譯器對每個 surface form 是直接 lowering 的,所以這裡某一列**點名**的那個 core 形式
+走的是 emitter 裡的另一條路徑,而沒有東西比較過兩者。
+
+今天有三列能被還原:postfix guard、while-`for`、range-`for`。其餘 decline,而每一條 decline 都是量出來的理由、不是
+缺口——`for x in xs` 需要 `xs` 的型別,而 range arm 的 core 形式目前建不起來。見
+[Desugar 規則](../tooling/desugar.zh-TW.md)。
+
 ## 刻意**不是**語法糖的
 
 為了讓核心誠實,有些看起來像糖的其實是獨立的東西,不是改寫:

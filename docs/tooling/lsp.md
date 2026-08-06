@@ -110,7 +110,16 @@ So those facts get a gate of their own — `make editor-align`:
 - every reserved word `lookup_keyword` returns is one `zerg.vim` colours, and every word it colours
   as a keyword is one the lexer reserves (built-in **type** names are held to the parser's list
   instead, since `int` is an ordinary identifier the lexer has never heard of);
-- the indent character the ftplugin configures is the one `zerg fmt` actually **writes**.
+- the indent **character** the ftplugin and `.editorconfig` configure is the one `zerg fmt` actually
+  **writes**;
+- the indent **width** they configure is the one `F403` measures a tab as. That is not decoration:
+  F403 decides whether a line has run past column 80 by counting a tab as `fmt_wrap_tab()`, so an
+  editor displaying it as anything else is applying a different 80-column rule than the formatter
+  did. One number, three places, one gate.
+
+`.editorconfig` is there for the editors this repository ships no plugin for — VSCode, JetBrains,
+Emacs, Zed all read it — and it is held to the same probe as the ftplugin rather than to the
+ftplugin, so the two cannot agree with each other and both be wrong.
 
 Neither is hypothetical. `zerg.vim`'s own comment records `close` having been missing from its list
 "entirely — the statement that ends a stream has never been coloured", found by reading. And the

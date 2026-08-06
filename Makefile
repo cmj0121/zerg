@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar lsp editor-align help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -218,11 +218,19 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # The compiler's OWN sources, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
 # needs no submodule, so it runs everywhere.
+# Every source this repository writes IN Zerg. It is one variable because `fmt` and
+# `fmt-self` have to name the same set: they were two globs, and the day the `lsp` module
+# was added it landed in neither — `make fmt` did not reach it and `make fmt-self` did not
+# notice, so a whole directory of the compiler was outside the rule that every other line
+# of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
+# size of whatever was added last.
+SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
+
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
-	@./bin/zerg fmt --check src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg \
+	@./bin/zerg fmt --check $(SELF_SRCS) \
 		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
-	@echo "fmt-self: $$(ls src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg | wc -l | tr -d ' ') sources are fmt's fixpoint"
+	@echo "fmt-self: $$(ls $(SELF_SRCS) | wc -l | tr -d ' ') sources are fmt's fixpoint"
 
 # A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
 # gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
@@ -331,6 +339,26 @@ oracle:                         # the seed and the shipping compiler agree about
 # agree", which an empty list satisfies.
 DESUGAR_MIN ?= 80
 
+# The language server has no analysis of its own — every answer it gives is a call into the
+# compiler's own `pub` surface — so the way it goes wrong is by growing one. This drives a
+# REAL session over stdio and holds what it publishes to what `zerg build` and `zerg lint`
+# say about the same file, which is `oracle`'s argument applied to the second front end.
+#
+# It is also the only thing in this tree that exercises the wire: Content-Length framing, a
+# request/response loop over a stream that does not end, and a reply for every id.
+LSP_MIN ?= 20
+
+lsp:                            # the language server says what the compiler says
+	$(MAKE) build
+	@MIN_SESSIONS=$(LSP_MIN) ./scripts/lsp-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null | head -40)
+
+# An editor file is the one place a language fact is REPEATED rather than asked for, so it
+# is the one place that needs a diff rather than a call. Two facts today: the reserved-word
+# list, and which character an indent is.
+editor-align:                   # no editor file states a language fact the compiler denies
+	$(MAKE) build
+	@./scripts/editor-align.sh
+
 desugar:                        # a program and the same program desugared do the same thing
 	$(MAKE) build
 	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
@@ -351,7 +379,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -397,6 +425,6 @@ lint-check:                     # every linter rule has a program that makes it 
 
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build
-	@for f in $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg; do \
+	@for f in $(SELF_SRCS); do \
 		./bin/zerg fmt $$f || { echo "fmt: failed on $$f"; exit 1; }; \
 	done

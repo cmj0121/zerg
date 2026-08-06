@@ -35,6 +35,18 @@ rejected too, so structural rendering is **[not yet]** — see
 [Formatting & Text](../runtime/format.md). The interpolating command literal `` f`…` `` (grammar, not listed here) is
 likewise **[not yet]**. Each desugaring above is otherwise exactly as written.
 
+## Undoing it
+
+`zerg desugar` rewrites the sugar in this table back into the core it desugars to, and
+`make desugar` builds and runs both forms to check that they are the same program — because
+the compiler lowers each surface form directly, so the core form a row here NAMES goes down a
+different path in the emitter, and nothing compared the two.
+
+Three rows are undone today: the postfix guard, the while-`for`, and the range-`for`. The rest
+decline, and each decline is a measured reason rather than a gap — `for x in xs` needs the type
+of `xs`, and a range arm's core form does not currently build. See
+[Desugar Rules](../tooling/desugar.md).
+
 ## What is deliberately **not** sugar
 
 To keep the core honest, some look-alikes are their own thing, not rewrites:

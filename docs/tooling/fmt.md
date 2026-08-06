@@ -228,6 +228,11 @@ Preferring the sugar is the general rule, not a special case for `return`: **whe
 language offers a shorter surface for exactly what is written, the canonical form is the
 shorter one**, and a reader stops having to notice that the two are the same thing.
 
+The rule that reads this one backwards is [`D101`](desugar.md), and the two are each other's
+test: a source through both comes back to itself. `zerg desugar` is where the rest of that
+argument lives — the sugared and the core form must build the same program, and `make desugar`
+is what asks.
+
 A jump that ALREADY carries its own guard keeps its block. There is no single `if` that says
 what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
 no compiler parses — so the rule declines rather than inventing one.
@@ -350,7 +355,14 @@ the line rather than the one worth breaking — in `return 0 if a or b or c(x, y
 `c`, whose two arguments would go on three lines while the condition that actually made
 the line long, and that has no brackets to break at, stayed as it was.
 
-A group with **no top-level comma** is exempt from both. A chain and a parenthesised
+There is one thing that DOES order a break: a group that **holds a block**. `f(guard { x } ?? 1)`
+has no one-line form to choose — the `{` of a block always ends its line, which is the printer's
+rule and not this one's — so measuring it flat produced a shape that was neither joined nor
+split, and left `F105` to move the closer on a LATER run. That made `zerg fmt` non-idempotent on
+the one input nothing in this tree writes: a block inside a call. A group holding one spans
+lines however it was written, and is split at every top-level comma.
+
+A group with **no top-level comma** is exempt from both thresholds. A chain and a parenthesised
 expression break where their author broke them — those breaks say where the steps are,
 not that the line ran out of room. What they get is the opener ending its own line, so
 every step starts in the same column:

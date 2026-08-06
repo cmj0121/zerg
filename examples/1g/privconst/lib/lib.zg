@@ -1,0 +1,11 @@
+# lib — one public module constant and one module-private one. A cross-module read of the
+# private constant is a compile error, the exact rule a private FUNCTION has always had:
+# `pub` is the one visibility marker, and a module constant is a real member it guards.
+pub LIMIT := 10
+
+# FLOOR is module-private: readable anywhere inside lib, never as lib.FLOOR.
+FLOOR := 2
+
+pub fn span() -> int {
+	return LIMIT - FLOOR
+}

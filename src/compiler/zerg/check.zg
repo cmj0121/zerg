@@ -123,9 +123,10 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	here := c_mod_of(em.at_path)
 	return if here == decl_mod
 
-	# And the reading module is unknown where the code being emitted belongs to no statement
-	# of its own: a module constant's initializer is emitted into the ENTRY's wrapper, and
-	# c_const_assigns clears the path rather than let this rule answer with the entry's.
+	# And the reading module is unknown where no marker covers the code being emitted —
+	# before the first statement of the first function, the marker still says nothing. A
+	# module constant's initializer is NOT that case any more: c_const_assigns points the
+	# marker at the declaration itself, so its module answers here like any other reader's.
 	return if here == ""
 
 	chk_at(em, f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
@@ -1557,35 +1558,23 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 
 # --- redeclaration ----------------------------------------------------------------
 #
-# A name is bound once per block. Shadowing across blocks is not only legal but load
-# bearing — `mut n := n` is how a function gets a writable copy of a parameter, and it is
-# written that way throughout this compiler — so the rule is about ONE block, not about
-# the name being visible.
+# There is deliberately NO rule here. docs/core/memory.md: a name may be re-declared —
+# in the same block or a nested one — and the new binding may differ in type and
+# mutability; re-declaration is declare-del-declare, so the right-hand side reads the OLD
+# binding and the name then rebinds afresh. A rule refusing the same-block half used to
+# live here, and the worked example in the chapter did not compile under it.
 #
-# It hangs off `c_let`, the DECLARATION, rather than off `c_add_var`, which every binding
-# passes through. That looks like the weaker hook and is the right one: a match arm's
-# binds are re-entered once per arm ON PURPOSE — every recv arm may call its variable `v`
-# — so the choke point for "a name entered the environment" is not the choke point for
-# "a program declared a name twice". A loop variable and an `if let` binding are covered
-# by their construct opening its own scope instead, which is what they always wanted.
-
-# chk_fresh_binding raises when `name` is already bound in the block being emitted.
-fn chk_fresh_binding(mut &em: Emitter, name: str) {
-	# `_` is the discard: it binds nothing a later statement can name, so writing it twice
-	# in a block says "ignore this" twice rather than naming one thing two ways
-	return if name == "_"
-
-	# c_live_idx answers the innermost binding STILL IN SCOPE, so this is a redeclaration
-	# exactly when that binding belongs to the block being emitted. A binding it finds in
-	# an enclosing block is one this declaration shadows, which is legal; one in a block
-	# that has ended is not visible to it at all.
-	idx := c_live_idx(em, name)
-
-	return if idx < 0
-	if em.env_scope[idx] == em.scope_cur {
-		chk_at(em, f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it")
-	}
-}
+# The emitter needs no machinery for the legality either: c_let renders the initializer
+# before c_add_var appends the new row, so the RHS resolves the old binding; c_live_idx
+# walks from the newest row, so every later use resolves the new one; the old row's C
+# name stays reserved (c_fresh_cname spells the new one apart) and its pending release
+# still pays at scope exit — which is exactly when an EXPLICIT `del`'s storage comes back
+# today, the [not yet] the chapter's `del` section owns.
+#
+# What survives is the `const` boundary (below): a `const` is shadow-proof in either
+# direction, so a re-declaration may neither take a const's name (chk_const_rebind) nor
+# mint a `const` over a name any visible binding holds (chk_const_mint) — same block
+# included.
 
 # --- `const` shadow-proofing ------------------------------------------------------
 #
@@ -1628,10 +1617,10 @@ fn chk_const_rebind(mut &em: Emitter, name: str) {
 }
 
 # chk_const_mint is direction two: this `const` takes a name some visible binding already
-# holds. The SAME-block case is left to chk_fresh_binding — that is a redeclaration,
-# `const` or not, and one mistake gets one message — and a collision with a visible
-# `const` is left to chk_const_rebind, whose message names the `const`: reporting both
-# directions of one collision would say one mistake twice.
+# holds — an outer block's or this very block's alike, since re-declaration is legal for a
+# plain binding and a `const` is precisely the binding that refuses to take part in it. A
+# collision with a visible `const` is left to chk_const_rebind, whose message names the
+# `const`: reporting both directions of one collision would say one mistake twice.
 fn chk_const_mint(mut &em: Emitter, name: str) {
 	return if name == "_"
 	return if chk_const_in_sight(em, name)
@@ -1639,7 +1628,6 @@ fn chk_const_mint(mut &em: Emitter, name: str) {
 	idx := c_live_idx(em, name)
 
 	return if idx < 0
-	return if em.env_scope[idx] == em.scope_cur
 
 	chk_at(em, f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
 }
@@ -1670,13 +1658,53 @@ fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 #
 # It walks `own` — the unit being emitted — rather than the whole program, because this
 # runs once per UNIT and the whole-program consts list would repeat the finding once per
-# module. The `unsafe { … }` group variant never reaches this rule at all: the parser
-# leaves that group's contents alone, and its drop stays a separate, documented deviation
-# (docs/runtime/ffi.md).
+# module. A `mut` binding inside a module-level `unsafe { … }` group is EXEMPT by name:
+# that group is the one home the language gives a mutable global (docs/runtime/ffi.md,
+# GRAMMAR group 12), the parser records the context on the declaration (in_unsafe), and
+# the binding lowers as an ordinary module global whose k_mut row keeps it writable.
 fn chk_top_muts(mut &em: Emitter, own: File) {
 	for c in own.consts {
-		if c.is_mut {
+		if c.is_mut and not c.in_unsafe {
 			chk_at_place(em, c.path, c.line, c.col, f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
+		}
+	}
+}
+
+# --- the rendering overrides -------------------------------------------------------
+#
+# docs/runtime/format.md: `display` and `debug` are the two built-in value renderings,
+# and an `impl` may override either — `fn display() -> str`, taking nothing beyond the
+# value and answering the text it shows as. The SHAPE is the contract: c_render_override
+# dispatches `print`, an f-string hole and `str(…)` through an override only when it has
+# this shape, so a method that takes an argument or answers something else would be
+# silently passed over — the exact quiet the overrides were rescued from. This rule makes
+# the mismatch a finding at the declaration instead.
+
+# chk_render_overrides refuses a `display` / `debug` method whose shape is not the
+# override contract's. It walks the whole program's declarations once, like
+# chk_spec_impls, and reports at each method's own place.
+#
+# The declaration list only says WHERE: every shape fact is read from the signature and
+# parameter tables (sig_nparams / sig_hasret / sig_rets / pr_ref) — the same rows
+# c_render_shape_ok dispatches by — so the shape this rule approves and the shape the
+# dispatcher accepts are one set of columns, not two readings of one contract that can
+# drift into the checker blessing a method the dispatcher then skips.
+fn chk_render_overrides(mut &em: Emitter, f: File) {
+	for fn_i in f.fns {
+		if fn_i.recv != "" and (fn_i.name == "display" or fn_i.name == "debug") {
+			key := c_sig_key(fn_i.recv, fn_i.name)
+			row := c_sig_row(em, key)
+
+			# row 0 of the parameters is the receiver the parser prepends; a `mut fn`
+			# makes it a `mut &`, and showing a value must not change it
+			if row < 0 or em.sig_nparams[row] != 1 {
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
+			} else if c_param_is_ref(em, key, 0) {
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
+			}
+			if row >= 0 and (not em.sig_hasret[row] or not c_is_str(em.sig_rets[row])) {
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
+			}
 		}
 	}
 }

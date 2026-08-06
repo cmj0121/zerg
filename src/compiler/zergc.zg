@@ -283,6 +283,19 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		return
 	}
 	if emit == "bin" {
+		# A program is a build rooted at an entry file that DEFINES `fn main`
+		# (docs/runtime/package.md; GRAMMAR group 10) — grammatically a main-less source is
+		# still Zerg, so no earlier stage objects to it, and nothing used to enforce the
+		# build rule: the emitter wrote no wrapper and the first complaint was the linker's
+		# `undefined symbol _main`, against generated code nobody wrote. The finding is
+		# about the FILE, not a line in it, so it points at 1:1 — where a `fn main` would
+		# begin. `--emit lib` stays main-less on purpose: an object file is what a module
+		# is for.
+		if not declares_main(files) {
+			mut nomain: list[zerg.Diag] = []
+			nomain.append(zerg.diag_at(files[0], 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+			report_diags(nomain, srcs, paths)
+		}
 		link_program(files[0], output, jobs)
 		return
 	}

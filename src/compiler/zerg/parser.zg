@@ -19,6 +19,12 @@ struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
 
+	# depth counts how many recursion levels of nesting the parser is inside — one per
+	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
+	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
+	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
+	# is the only answer a recursive-descent parser can give before that happens.
+	depth: int
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -55,6 +61,29 @@ fn p_place(mut &p: Parser, line: int, col: int) -> str {
 	c := strconv.to_string(col, 10)
 	return f"\n  --> {l}:{c}" if p.path == ""
 	return f"\n  --> {p.path}:{l}:{c}"
+}
+
+# ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
+# a language rule: this parser recurses once per nesting level, and on an 8 MB stack it
+# died of SIGSEGV — no diagnostic, exit 139 — at about 485 nested parentheses or list
+# literals, 650 nested calls, 1300 nested blocks; the weakest stage downstream, the emitter
+# on nested calls, died at about 302. 200 clears every one of those with room to spare
+# while sitting forty times above the deepest nesting anywhere in this repository, which is
+# five. The bound is a translation limit of this implementation
+# (docs/conformance.md), like C's own minimum of 63 nested parenthesized expressions.
+const ZG_MAX_NESTING := 200
+
+# p_deeper takes one nesting level, and refuses the program once the budget is spent —
+# BEFORE the recursion happens, so the stack the refusal is reported from is a healthy one.
+# Callers give the level back with a plain `p.depth = p.depth - 1` on their one fallthrough
+# exit; a raise between the two abandons the whole parse, so a skipped decrement can never
+# be observed by a later statement.
+fn p_deeper(mut &p: Parser) {
+	p.depth = p.depth + 1
+	return if p.depth <= ZG_MAX_NESTING
+
+	t := cur(p)
+	raise f"this program nests more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its parser recurses once per level of nested expressions, blocks and types, and refusing here is what a recursive parser can still say before the native stack it runs on overflows without a word" + p_place(p, t.line, t.col)
 }
 
 # p_name reads the NAME a declaration or a binding introduces, and refuses anything that is
@@ -141,12 +170,17 @@ fn ident_name(e: Expr) -> str {
 # It is one wrapper around the whole reader rather than a case inside it, because the
 # suffix follows a COMPLETE type — `list[int]?`, `P?`, `chan[int]?` — and every one of
 # those is built somewhere below.
+# parse_type counts a nesting level per type it reads, because types recurse without ever
+# touching parse_expr — `list[list[…]]`, `chan[chan[…]]`, a function type's parameters —
+# and each level is a frame of parse_base_type on the same native stack the expressions use.
 fn parse_type(mut &p: Parser) -> Ty {
-	t := parse_base_type(p)
+	p_deeper(p)
+	mut t := parse_base_type(p)
 	if p_at(p, Question) {
 		p_advance(p)
-		return TOpt(t)
+		t = TOpt(t)
 	}
+	p.depth = p.depth - 1
 	return t
 }
 
@@ -426,7 +460,7 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path)
+	mut p := Parser(toks, 0, "", path, 0)
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -443,12 +477,15 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 
-	# unsafe_depth tracks a module-level `unsafe { … }` group. What that group HOLDS is
-	# dropped today — a separate, documented deviation (docs/runtime/ffi.md) — and the
-	# binding arms below stay out of it so the two behaviours cannot bleed into each
-	# other: a `mut` binding inside the group keeps its own (wrong, owned) story, and the
-	# refusal below stays about safe code, which is the rule docs/runtime/package.md
-	# actually states. Every other arm behaves inside the group exactly as it always has.
+	# unsafe_depth tracks a module-level `unsafe { … }` group. The group's items go
+	# through the SAME arms as everything else — a `fn` was always read there, and the
+	# binding arms now fire inside it too, carrying `unsafe_depth > 0` onto the
+	# declaration (ConstDecl.in_unsafe) — because GRAMMAR group 12 makes the group a
+	# CONTEXT around ordinary declarations, not a dialect of its own. The depth decides
+	# exactly two things: whether a `mut` binding is the mutable global the group grants
+	# (chk_top_muts reads the flag) and whether a bare statement is refused rather than
+	# read as a top-level nop, since `unsafe-item ::= decorated-decl | binding` derives
+	# no statement.
 	mut unsafe_depth := 0
 	skip_semis(p)
 	for not p_at(p, Eof) {
@@ -491,7 +528,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
 			p_advance(p)
-			consts.append(p_top_binding(p, false, true, is_pub, t.line, t.col))
+			consts.append(p_top_binding(p, false, true, is_pub, unsafe_depth > 0, t.line, t.col))
 		} else if p_at(p, Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
 			# there is no visibility for a marker to grant (GRAMMAR:743 derives none)
@@ -515,24 +552,26 @@ pub fn parse_at(src: str, path: str) -> File {
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
 			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver"
-		} else if unsafe_depth == 0 and p_at(p, Mut) {
-			# a top-level `mut` binding in SAFE code — `mut x := 0` or `pub mut x := 0`,
-			# `pub` changing nothing about mutability. It is ill-formed — the top level is
-			# immutable outside a module-level `unsafe { … }` group (docs/runtime/
-			# package.md) — but it is PARSED rather than refused here, so the refusal
-			# (chk_top_muts) carries this declaration's place and lands beside every other
-			# finding of the run, instead of splitting into "compiles when unused" and
-			# `undefined name` at every use site.
+		} else if p_at(p, Mut) {
+			# a top-level `mut` binding — `mut x := 0` or `pub mut x := 0`, `pub` changing
+			# nothing about mutability. Inside a module-level `unsafe { … }` group it is
+			# the language's MUTABLE GLOBAL (docs/runtime/ffi.md, GRAMMAR group 12), and
+			# `in_unsafe` carries that context onto the declaration. In SAFE code it is
+			# ill-formed — the top level is immutable (docs/runtime/package.md) — but it
+			# is PARSED rather than refused here, so the refusal (chk_top_muts) carries
+			# this declaration's place and lands beside every other finding of the run,
+			# instead of splitting into "compiles when unused" and `undefined name` at
+			# every use site.
 			p_advance(p)
-			consts.append(p_top_binding(p, true, false, is_pub, t.line, t.col))
-		} else if unsafe_depth == 0 and p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+			consts.append(p_top_binding(p, true, false, is_pub, unsafe_depth > 0, t.line, t.col))
+		} else if p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
 			# a plain top-level binding — `COUNT := 3`, `pub COUNT := 3`, or `answer: int
 			# = compute()` — is the same module constant the `const` arm reads, without
 			# the shadow-proofing the keyword adds; docs/runtime/package.md puts it in the
 			# module's immutable state with `pub` as the visibility. It used to fall into
 			# the fallback below and vanish, so the module compiled WITHOUT the member and
 			# every use answered `undefined name` about a name the module plainly declares.
-			consts.append(p_top_binding(p, false, false, is_pub, t.line, t.col))
+			consts.append(p_top_binding(p, false, false, is_pub, unsafe_depth > 0, t.line, t.col))
 		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
 			# a standalone `unsafe fn` — GRAMMAR:304 has it in fn-decl (`'pub'? 'unsafe'?
 			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
@@ -546,28 +585,26 @@ pub fn parse_at(src: str, path: str) -> File {
 			# place a declaration owes.
 			raise "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
 		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
-			# a module-level `unsafe { … }` group opens. Its two tokens were skipped one
-			# at a time before, so consuming both here changes nothing the group's
-			# CONTENTS see — the arms above keep firing inside it exactly as they did —
-			# and the depth is what keeps the new binding arms out (see unsafe_depth).
+			# a module-level `unsafe { … }` group opens. Every item inside goes through
+			# the arms above exactly as it would outside — the group is a CONTEXT, not a
+			# grammar of its own — and the depth is what the binding arms record on each
+			# declaration (in_unsafe) and what keeps a bare statement out (below).
 			raise "`pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" if is_pub
 			p_advance(p)
-			p_advance(p)
-			unsafe_depth = unsafe_depth + 1
-		} else if unsafe_depth > 0 and p_at(p, LBrace) {
-			# a nested `{` inside the group — a dropped initializer's map literal, say —
-			# must not let its `}` end the group early
 			p_advance(p)
 			unsafe_depth = unsafe_depth + 1
 		} else if unsafe_depth > 0 and p_at(p, RBrace) {
 			p_advance(p)
 			unsafe_depth = unsafe_depth - 1
 		} else if unsafe_depth > 0 {
-			# the group's CONTENTS are dropped one token at a time — the separate,
-			# documented deviation docs/runtime/ffi.md owns, pinned by the corpus case
-			# unsafe_group_mut. The statement fallback below must not reach in here: a
-			# dropped declaration's tokens are not a statement to complete.
-			p_advance(p)
+			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding` derives no
+			# statement, so what is left here is ill-formed. It used to be dropped one
+			# token at a time, which is how the group's `mut` bindings vanished; now that
+			# every declaration form is read above, the honest answer for the remainder
+			# is a refusal that names the group, not a silent delete and not the
+			# top-level-statement nop below (the group grants an unsafe CONTEXT, and a
+			# statement nobody runs must not be blessed into it).
+			raise "a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
 			# GRAMMAR:47 makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
 			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
@@ -601,10 +638,12 @@ pub fn parse_at(src: str, path: str) -> File {
 # caller before it consumed the `pub` / `const` / `mut` in front of the name. A module
 # constant is a statement of no function, so nothing else (no FnDecl, no SAt marker) would
 # ever remember where it was written, and a declaration a rule can refuse owes a place.
-fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, line: int, col: int) -> ConstDecl {
+# `in_unsafe` is whether the binding sits inside a module-level `unsafe { … }` group — the
+# one place a top-level `mut` is legal (docs/runtime/ffi.md).
+fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
 	return match s {
-		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, value, p.path, line, col)
+		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
@@ -1380,7 +1419,11 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
 }
 
+# parse_block counts a nesting level per block, since statements nest through blocks and
+# never through parse_expr: `if` inside `if` is parse_block → parse_stmt → parse_block,
+# another recursion on the same stack the expression forms overflow.
 fn parse_block(mut &p: Parser) -> list[Stmt] {
+	p_deeper(p)
 	expect(p, LBrace)
 	mut body: list[Stmt] = []
 	skip_semis(p)
@@ -1393,6 +1436,7 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
+	p.depth = p.depth - 1
 	return body
 }
 
@@ -1644,7 +1688,11 @@ fn parse_if(mut &p: Parser) -> Stmt {
 			p_advance(p)
 			has_else_l = true
 			if p_at(p, If) {
+				# an `else if` recurses without opening a block first, so the chain is a
+				# nesting level parse_block never sees — counted here, like the plain form below
+				p_deeper(p)
 				else_body_l.append(parse_if(p))
+				p.depth = p.depth - 1
 			} else {
 				else_body_l = parse_block(p)
 			}
@@ -1660,8 +1708,12 @@ fn parse_if(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		has_else = true
 		if p_at(p, If) {
-			# else-if: the else block is a single nested if statement
+			# else-if: the else block is a single nested if statement — a recursion that
+			# opens no block, so the chain's depth is counted here or nowhere. A thousand
+			# of these in one chain killed the parser the same way a thousand parentheses did.
+			p_deeper(p)
 			else_body.append(parse_if(p))
+			p.depth = p.depth - 1
 		} else {
 			else_body = parse_block(p)
 		}
@@ -1716,8 +1768,15 @@ fn is_unary_op(k: Kind) -> bool {
 	return k == Minus or k == Not or k == Tilde or k == MinusMod
 }
 
+# parse_expr is where every nested expression re-enters the parser — a parenthesized
+# group, a call's argument, a list's element, an index — so it is where a nesting level is
+# counted. The ladder below it is not: one pass through coalesce → or → … → primary is one
+# level of the program, however many functions it takes.
 fn parse_expr(mut &p: Parser) -> Expr {
-	return parse_coalesce(p)
+	p_deeper(p)
+	e := parse_coalesce(p)
+	p.depth = p.depth - 1
+	return e
 }
 
 # parse_coalesce reads `a ?? b`, the OUTERMOST binary level. It sits there because its
@@ -1739,7 +1798,11 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 		jump.append(parse_stmt(p))
 		return ECoalesce(left, ENil, jump)
 	}
-	return ECoalesce(left, parse_coalesce(p), jump)
+
+	# the right-associative recursion is a nesting level of its own, so it re-enters
+	# through parse_expr — the one door that counts a level — rather than wrapping
+	# p_deeper by hand around a recursion parse_expr already spells
+	return ECoalesce(left, parse_expr(p), jump)
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its
@@ -1903,15 +1966,23 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 
 fn parse_unary(mut &p: Parser) -> Expr {
 	# `<-ch` receives. GRAMMAR gives it its own level (recv-base) so `<-a.b` reads as
-	# `<-(a.b)` and a chain of them nests, which is what recursing here gives.
+	# `<-(a.b)` and a chain of them nests, which is what recursing here gives. The
+	# recursion is a nesting level and is counted as one: a run of prefixes is written
+	# without a single bracket, so nothing else on the way down would.
 	if p_at(p, LArrow) {
 		p_advance(p)
-		return ERecv(parse_unary(p))
+		p_deeper(p)
+		e := ERecv(parse_unary(p))
+		p.depth = p.depth - 1
+		return e
 	}
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		return EUnary(op, parse_unary(p))
+		p_deeper(p)
+		e := EUnary(op, parse_unary(p))
+		p.depth = p.depth - 1
+		return e
 	}
 	return parse_postfix(p)
 }
@@ -2534,7 +2605,10 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path)
+
+	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
+	# native stack, so an f-string could not be a fresh budget even if it wanted one
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

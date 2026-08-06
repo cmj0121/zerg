@@ -94,7 +94,13 @@ vim.g.zerg_format_on_save = true  -- 每次寫入都跑 zerg fmt
 
 - `lookup_keyword` 回傳的每個保留字都是 `zerg.vim` 有上色的,而它當作關鍵字上色的每個字也都是 lexer 保留的(內建的
   **型別**名改為 held 到 parser 的清單,因為 `int` 是個普通的 identifier,lexer 從沒聽過它);
-- ftplugin 設定的縮排字元,就是 `zerg fmt` 實際**寫出**的那個。
+- ftplugin 與 `.editorconfig` 設定的縮排**字元**,就是 `zerg fmt` 實際**寫出**的那個;
+- 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 80 欄,是把 tab
+  算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 80 欄規則。一個數字、三個地方、
+  一道 gate。
+
+`.editorconfig` 是給這個 repository 沒有出 plugin 的那些編輯器用的——VSCode、JetBrains、Emacs、Zed 都會讀它——而且它
+是held 到與 ftplugin 同一次探測,而不是held 到 ftplugin,這樣兩者才不會互相同意卻同時是錯的。
 
 兩者都不是假想。`zerg.vim` 自己的註解記著 `close` 曾經「完全不在這份清單裡——那個結束一條 stream 的 statement 從來沒
 有被上過色」,而那是用讀的發現的。而 ftplugin 設了 `expandtab` 與四格 shift,`F101` 卻是用**tab** 縮排、`make

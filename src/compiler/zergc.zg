@@ -1,9 +1,13 @@
 # zerg — the self-hosting Zerg compiler.
 #
-# Four commands — build, fmt, lint, desugar — and the flags every tool owes its user:
-# --help, --version, and --emit to stop after a stage. There are four because there are
-# four JOBS: compiling is one of them however far along the pipeline you stop it, so the
+# Five commands — build, fmt, lint, desugar, lsp — and the flags every tool owes its user:
+# --help, --version, and --emit to stop after a stage. There are five because there are
+# five JOBS: compiling is one of them however far along the pipeline you stop it, so the
 # token stream, the tree, and the C are `--emit` values rather than commands of their own.
+#
+# `lsp` is the fifth, and it is the same compiler answering an editor rather than a shell.
+# One binary and not two: a sub-command makes version skew between the compiler and the
+# server physically impossible, and an editor needs nothing on PATH that is not there.
 #
 # `desugar` is a command rather than a mode of `fmt` because it is the OTHER answer to the
 # same question. `zerg fmt` writes the canonical form and canonical means sugared — it
@@ -20,6 +24,7 @@
 import (
 	"cli"
 	"io"
+	"lsp"
 	"strconv"
 
 	"zerg"
@@ -53,6 +58,7 @@ fn root() -> cli.Command {
 		.sub(fmt_cmd())
 		.sub(lint_cmd())
 		.sub(desugar_cmd())
+		.sub(lsp_cmd())
 	)
 }
 
@@ -101,6 +107,15 @@ fn desugar_cmd() -> cli.Command {
 	)
 }
 
+# lsp takes no arguments and no flags. The protocol is the interface: an editor starts the
+# process, speaks JSON-RPC over its standard input and output, and stops it by closing them.
+fn lsp_cmd() -> cli.Command {
+	return (
+		cli.command("lsp", "run the language server over stdio (JSON-RPC)")
+		.run(do_lsp)
+	)
+}
+
 # env_help is the part of the help no declaration can produce: where the compiler looks
 # for the things it is not carrying.
 fn env_help() -> str {
@@ -133,6 +148,22 @@ fn do_fmt(c: cli.Ctx) -> int {
 	return run_fmt_check(c.args(), c.all("off")) if c.has("check")
 	run_fmt(c.args(), c.all("off"))
 	return 0
+}
+
+# do_lsp hands the server the one thing it cannot do for itself: turn a path and an unsaved
+# buffer into the whole program that buffer belongs to. Resolving an import is 60 lines of
+# environment variables, an installation root and a checkout layout, all of it here already,
+# and none of it the protocol's business.
+fn do_lsp(c: cli.Ctx) -> int {
+	return lsp.serve(lsp_program)
+}
+
+fn lsp_program(path: str, text: str) -> lsp.Program {
+	mut seen: list[str] = []
+	mut srcs: list[str] = []
+	mut paths: list[str] = []
+	load_with(path, dir_of(path), seen, srcs, paths, Buffer(path, text))
+	return lsp.program(paths, srcs)
 }
 
 fn do_desugar(c: cli.Ctx) -> int {
@@ -1007,15 +1038,38 @@ fn path_tail(path: str) -> str {
 }
 
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
+	load_with(file, from_dir, seen, srcs, paths, Buffer("", ""))
+}
+
+# Buffer is the one source the loader must NOT read from disk: the file a language server
+# holds unsaved. An empty path means there is none, which is every build.
+struct Buffer {
+	path: str
+	text: str
+}
+
+# load_with is load_into with that substitution, and it is the same function because the
+# alternative is a second copy of the resolution rules — the part that actually decides what
+# a program is — kept in step by hand.
+#
+# The buffer also decides whether a LEXICAL error is fatal. On a command line it is: nothing
+# downstream can say anything true about text that does not tokenize, so `lex_check` reports
+# and exits. In a server there is no exiting — the session is the process — so the unreadable
+# source is skipped and `lex_diags` reports it to the editor instead.
+fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
 	seen.append(file)
-	src := str(io.read_file(file))
-	lex_check(src, file)
+	src := buffer_src(file, buf)
+	if buf.path == "" {
+		lex_check(src, file)
+	} else if zerg.lex_diags(src, file).len() > 0 {
+		return
+	}
 	for im in zerg.imports_of(src) {
 		for dep in module_files(im, from_dir) {
-			load_into(dep, from_dir, seen, srcs, paths)
+			load_with(dep, from_dir, seen, srcs, paths, buf)
 		}
 	}
 	srcs.append(src)
@@ -1024,6 +1078,12 @@ fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	# in discovery order and `srcs` in dependency order, and only the second is the one a
 	# path has to line up with
 	paths.append(file)
+}
+
+# buffer_src is the text of `file`: what the server is holding for it, or what the disk has.
+fn buffer_src(file: str, buf: Buffer) -> str {
+	return buf.text if file == buf.path
+	return str(io.read_file(file))
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,

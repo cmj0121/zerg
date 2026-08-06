@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#
+# editor-align — an editor file may not know a language fact the compiler contradicts.
+#
+# Everything else in this tree is held to the compiler by calling it. `zerg fmt` IS the
+# formatter, `zerg lsp` asks `emit_files_diag` rather than checking anything itself — so
+# there is no second copy to drift. The editor files are the exception and cannot be
+# anything else: vim highlights from a keyword list written in vimscript, and nvim has to be
+# told how to indent before any Zerg tool has run.
+#
+# So those two facts get a gate, one each:
+#
+#   * every reserved word `lookup_keyword` returns is a word the syntax file colours, and
+#     every word it colours as a keyword is one the lexer reserves;
+#   * the indent CHARACTER the ftplugin and .editorconfig configure is the one `zerg fmt`
+#     actually writes;
+#   * the indent WIDTH they configure is the one `F403` measures a tab as.
+#
+# Neither is hypothetical. `zerg.vim`'s own comment records `close` having been missing from
+# the list "entirely — the statement that ends a stream has never been coloured", found by
+# reading rather than by a gate. And the ftplugin set `expandtab` with a four-space shift
+# while F101 indents with a tab and `make fmt-self` holds every source in the tree to it, so
+# a person typing in nvim produced spaces that the next save turned into tabs: a whole-file
+# diff per write, from the editor and the formatter disagreeing about one rule.
+
+set -u
+
+ZERG=${ZERG:-./bin/zerg}
+TOKEN=${TOKEN:-src/compiler/zerg/token.zg}
+SYNTAX=${SYNTAX:-editors/nvim/syntax/zerg.vim}
+FTPLUGIN=${FTPLUGIN:-editors/nvim/ftplugin/zerg.vim}
+EDITORCONFIG=${EDITORCONFIG:-.editorconfig}
+FMT=${FMT:-src/compiler/zerg/fmt.zg}
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail=0
+
+# --- 1. the keyword list --------------------------------------------------------------
+#
+# The lexer's side is `lookup_keyword`, which is the one function that decides what a
+# reserved word IS — every other list in the compiler is downstream of it.
+awk '/^fn lookup_keyword/,/^}/' "$TOKEN" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u >"$tmp/lexer"
+
+# The syntax file's side is every word it names as a keyword, in any group. `syntax match`
+# counts too: `for` is written as one so that the `impl X for Y` override can win, which is
+# a highlighting decision and not a claim that `for` is unreserved.
+# The vim ARGUMENTS that may follow the group name — `contained`, `skipwhite`, a
+# `nextgroup=` — are not words of this language, and dropping them by name is the only way
+# to tell them from one: they are lowercase identifiers on the same line as the keywords.
+{
+	grep -oE '^syntax keyword zerg[A-Za-z]+ .*$' "$SYNTAX" |
+		sed -E 's/^syntax keyword zerg[A-Za-z]+ //' | tr ' ' '\n'
+	grep -oE '^syntax match zerg[A-Za-z]+ "\\<[a-z]+\\>"' "$SYNTAX" |
+		sed -E 's/.*\\<//; s/\\>.*//'
+} | grep -E '^[a-z]+$' |
+	grep -vxE 'contained|containedin|nextgroup|skipwhite|skipnl|skipempty|transparent|display|conceal|fold|extend|keepend|oneline' |
+	sort -u >"$tmp/syntax.all"
+
+# The TYPE names are named by the syntax file and are not reserved words — `int` is an
+# ordinary identifier the parser resolves, so a program may shadow it and the lexer has
+# never heard of it. They are held to their own list, in the parser, for the same reason.
+{
+	# the scalars, which the parser resolves by name
+	grep -oE 'return T[A-Za-z]+ if name == "[a-z]+"' src/compiler/zerg/parser.zg |
+		sed -E 's/.*"([a-z]+)"/\1/'
+
+	# and the containers, which it resolves by name AND a following `[`
+	grep -oE 'if name == "[a-z]+" and p_at\(p, LBrack\)' src/compiler/zerg/parser.zg |
+		sed -E 's/.*"([a-z]+)".*/\1/'
+
+	# `set[T]` is named by the syntax file and is not built: the specification has it and
+	# this compiler refuses it, which is the implemented-or-named contract rather than a
+	# drift. Highlighting a form the language HAS is what a syntax file is for.
+	echo set
+} | sort -u >"$tmp/types.all"
+
+# A word that is BOTH a reserved word and a type name — `nil` is the one — belongs to the
+# lexer's list, not the exclusion. Subtracting it as a type is what made this gate report
+# `nil` uncoloured while the syntax file colours it.
+comm -23 "$tmp/types.all" "$tmp/lexer" >"$tmp/types"
+comm -23 "$tmp/syntax.all" "$tmp/types" >"$tmp/syntax"
+
+missing=$(comm -23 "$tmp/lexer" "$tmp/syntax")
+extra=$(comm -13 "$tmp/lexer" "$tmp/syntax")
+
+if [ -n "$missing" ]; then
+	echo "UNCOLOURED  the lexer reserves these and $SYNTAX does not name them:"
+	echo "$missing" | sed 's/^/  /'
+	fail=$((fail + 1))
+fi
+if [ -n "$extra" ]; then
+	echo "INVENTED    $SYNTAX colours these as keywords and the lexer does not reserve them:"
+	echo "$extra" | sed 's/^/  /'
+	echo "  (a built-in TYPE name belongs in the zergType group, which this gate excludes)"
+	fail=$((fail + 1))
+fi
+
+n=$(wc -l <"$tmp/lexer" | tr -d ' ')
+if [ "$n" -lt "${MIN_KEYWORDS:-30}" ]; then
+	echo "EMPTY       only $n keywords were read from $TOKEN — this gate is measuring nothing"
+	fail=$((fail + 1))
+fi
+
+# --- 2. the indent character ------------------------------------------------------------
+#
+# Asked of `zerg fmt` rather than of F101's documentation, because what a person's editor
+# has to agree with is what the tool WRITES.
+printf 'fn main() {\n\tif true {\n\t\tprint 1\n\t}\n}\n' >"$tmp/indent.zg"
+"$ZERG" fmt "$tmp/indent.zg" >/dev/null 2>&1
+if grep -qE '^\t\tprint' "$tmp/indent.zg"; then
+	want_style=tab
+else
+	want_style=space
+fi
+
+if [ "$want_style" = tab ] && ! grep -qE '^setlocal noexpandtab' "$FTPLUGIN"; then
+	echo "INDENT      zerg fmt indents with a TAB and $FTPLUGIN does not set noexpandtab"
+	fail=$((fail + 1))
+fi
+if [ "$want_style" = space ] && grep -qE '^setlocal noexpandtab' "$FTPLUGIN"; then
+	echo "INDENT      zerg fmt does not indent with a tab and $FTPLUGIN sets noexpandtab"
+	fail=$((fail + 1))
+fi
+
+# --- 3. .editorconfig, for the editors this repository does not ship a plugin for --------
+#
+# `editors/nvim/` configures one editor; this is the file every other one reads. It is held
+# to the SAME probe rather than to the ftplugin, so the two cannot agree with each other and
+# both be wrong.
+#
+# `awk` and not an editorconfig library: the question is what one section of one file says,
+# and a dependency to read four lines is a dependency in CI.
+# The section is compared as TEXT and not as a pattern. `[*.zg]` is a glob, so every
+# character in it that would have to be escaped for a regex is one this had to escape
+# correctly — and awk's `-v` eats a backslash before it ever reaches the match, which is
+# how the first version of this silently found nothing and reported both values unset.
+section_value() {
+	awk -v sect="$1" -v key="$2" '
+		/^[[:space:]]*\[/ {
+			line = $0
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+			in_sect = (line == sect)
+			next
+		}
+		in_sect && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+			sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print
+		}
+	' "$EDITORCONFIG" | tail -1
+}
+
+if [ ! -f "$EDITORCONFIG" ]; then
+	echo "MISSING     $EDITORCONFIG — the rule that reaches every editor without a plugin here"
+	fail=$((fail + 1))
+else
+	got_style=$(section_value '[*.zg]' indent_style)
+	if [ "$got_style" != "$want_style" ]; then
+		echo "INDENT      zerg fmt indents with a $want_style and $EDITORCONFIG says [*.zg] indent_style = ${got_style:-<unset>}"
+		fail=$((fail + 1))
+	fi
+
+	# The WIDTH is a second claim and a real one. F403 decides whether a line has run past
+	# column 80 by counting a tab as `fmt_wrap_tab()`, so an editor displaying it as anything
+	# else is applying a different 80-column rule than the formatter did. One number, and the
+	# three places that hold it have to hold the same one.
+	want_width=$(awk '/^fn fmt_wrap_tab/,/^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1)
+	if [ -z "$want_width" ]; then
+		echo "EMPTY       fmt_wrap_tab() could not be read from $FMT — this check is measuring nothing"
+		fail=$((fail + 1))
+	else
+		got_width=$(section_value '[*.zg]' indent_size)
+		if [ "$got_width" != "$want_width" ]; then
+			echo "WIDTH       F403 counts a tab as $want_width and $EDITORCONFIG says [*.zg] indent_size = ${got_width:-<unset>}"
+			fail=$((fail + 1))
+		fi
+		if ! grep -qE "^setlocal tabstop=$want_width\$" "$FTPLUGIN"; then
+			echo "WIDTH       F403 counts a tab as $want_width and $FTPLUGIN does not set tabstop=$want_width"
+			fail=$((fail + 1))
+		fi
+	fi
+fi
+
+if [ $fail -ne 0 ]; then
+	echo "editor-align: $fail fact(s) an editor file states that the compiler does not"
+	exit 1
+fi
+echo "editor-align: $n reserved words are coloured; the ftplugin and .editorconfig indent the way fmt writes, ${want_width:-?} wide"

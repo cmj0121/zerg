@@ -1,0 +1,150 @@
+# Zerg Language Server
+
+`zerg lsp` — the compiler answering an editor's questions instead of a shell's. Part of the
+[Language Reference](../language.md). Also in [繁體中文](lsp.zh-TW.md).
+
+```sh
+zerg lsp        # speak JSON-RPC 2.0 over stdin/stdout; the editor starts and stops it
+```
+
+## The claim
+
+The language server is **not a new program**. It is the compiler that already exists, asked a
+different question: not _"lower this to C"_ but _"what is wrong with this buffer, right now"_. The
+compiler has always answered that one — `emit_files_diag` is what `zerg build` calls — so what ships
+here is the plumbing that carries the answer to where a person is looking.
+
+That is also the invariant, and it is enforced rather than asserted:
+
+> **If the server disagrees with `zerg build` about a program, the server is wrong.** It has no
+> analysis of its own.
+
+`make lsp` is that sentence as a gate. It drives a real session over stdio for every example and 40
+corpus programs, and holds what the server publishes to what `zerg build` and `zerg lint` say about
+the same file — errors against the command that refuses over one, information findings against the
+command that reports one. It is `make oracle`'s argument applied to the second front end.
+
+## Where it lives
+
+`src/compiler/lsp/` — a module of its own, importing `src/compiler/zerg/` across the `pub` boundary
+like any other consumer, wired in by one more `.sub(lsp_cmd())` in `zergc.zg`.
+
+**One binary, not two.** A sub-command makes version skew between the compiler and the server
+physically impossible — they are the same file — and an editor needs nothing on `PATH` that is not
+already there.
+
+**A separate module, not more files in `src/compiler/zerg/`.** A directory is the privacy unit, so
+inside that module the server would reach every private declaration and grow entangled the way
+everything else that could has. Forcing it through `pub` is what earns the option of splitting it
+out later.
+
+**It does not resolve `import`.** The driver already knows where a module lives — an environment
+variable, then an installation root, then the checkout — so `serve` takes a **function**: hand it a
+path and the text of a buffer, get back the whole program with that buffer standing in for what is
+on disk. The module owns the protocol; the driver owns the filesystem.
+
+## What is built
+
+| Request                                                       | Answered by                                        |
+| ------------------------------------------------------------- | -------------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | the session                                        |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_conversions` |
+| `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
+
+Every other request is answered with a **method-not-found error**, not with silence. A client left
+waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
+nothing said.
+
+**Diagnostics are checked against the whole program**, not the buffer alone. A file that imports
+another module has to be checked with that module or every name it borrowed reads as undefined —
+a server that underlines correct code is one a person turns off.
+
+**Two severities, from two places.** An **error** is what `emit_files_diag` reports and `zerg build`
+refuses over. The `L5xx` conversion findings are about **legal** programs — a value that changed type
+where the source does not say so — so they arrive as **information**. A server that paints a working
+program red teaches its user to ignore red.
+
+**An abort has no position.** A parse error and a `NotImplemented` refusal are `raise`d sentences,
+and the compiler does not carry a place on either — so they land as a zero-width range at the top of
+the file with the compiler's own words. Not the word at 1:1: an underline drawn under `fn` says the
+`fn` is wrong, and the one thing known about such a finding is that nobody knows where it is.
+
+## Positions
+
+The compiler answers with a 1-based line and a 1-based **byte** column marking where a thing starts.
+LSP wants a 0-based line, a 0-based character in **UTF-16 code units**, and a **range**. Both halves
+of that conversion are the server's, and neither is optional:
+
+- the **unit**, because a byte column and a UTF-16 column agree only while a line is ASCII, and this
+  tree's own sources are full of em-dashes;
+- the **range**, because `Diag` has no end position. Adding a field and filling it with the start
+  would be a span that is really a point wearing a second name, so the end is derived from the
+  **source**: the identifier at the position, or one character.
+
+## Neovim
+
+`make -C editors install` symlinks the syntax files and two more:
+
+- `ftplugin/zerg.lua` — starts the server for a `.zg` buffer;
+- `lua/zerg/lsp.lua` — `vim.lsp.start` (nvim 0.8+), no plugin manager and no `nvim-lspconfig`.
+
+```lua
+vim.g.zerg_lsp = false            -- do not start the server
+vim.g.zerg_lsp_cmd = { 'zerg', 'lsp' }
+vim.g.zerg_format_on_save = true  -- zerg fmt on every write
+```
+
+It answers **quietly** when `zerg` is not on `PATH`. A server that errors on every `.zg` file opened
+in a checkout without a built toolchain is one a person disables and never re-enables.
+
+## Keeping the editor honest
+
+Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
+and the server asks `emit_files_diag` rather than checking anything itself, so there is no second copy
+to drift. The editor files are the one exception and cannot be anything else: vim highlights from a
+keyword list written in vimscript, and nvim has to know how to indent before any Zerg tool has run.
+
+So those facts get a gate of their own — `make editor-align`:
+
+- every reserved word `lookup_keyword` returns is one `zerg.vim` colours, and every word it colours
+  as a keyword is one the lexer reserves (built-in **type** names are held to the parser's list
+  instead, since `int` is an ordinary identifier the lexer has never heard of);
+- the indent character the ftplugin configures is the one `zerg fmt` actually **writes**.
+
+Neither is hypothetical. `zerg.vim`'s own comment records `close` having been missing from its list
+"entirely — the statement that ends a stream has never been coloured", found by reading. And the
+ftplugin set `expandtab` with a four-space shift while `F101` indents with a **tab** and `make
+fmt-self` holds every source in the tree to it — so a person typing in nvim produced spaces that the
+next save turned into tabs: a whole-file diff per write, from the editor and the formatter
+disagreeing about one rule. Both are fixed here, and now both are measured.
+
+The rule the two gates express: **the server may not know a language fact the compiler could tell
+it, and where an editor file must repeat one, a diff holds the two together.**
+
+## What is not built, and what each one is waiting on
+
+| Missing                                       | Waiting on                                                       |
+| --------------------------------------------- | ---------------------------------------------------------------- |
+| `hover`, `definition`, `references`, `rename` | nothing maps a position to a declaration                         |
+| `completion`                                  | the same query surface                                           |
+| `documentSymbol`                              | `File` is `pub`; `FnDecl` and its siblings are not               |
+| `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
+| a diagnostic **code** as data                 | `F401` and `L502` are rendered into the message text             |
+| a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
+| the `lint_files` findings                     | they answer `list[str]` and carry no position to place           |
+| incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |
+
+The first row is the real gap and everything interactive is behind it. The information exists —
+`check.zg` computes all of it — and is discarded after the build. What is needed is not those types
+made public one by one but a **query surface**: given a path and a position, what is declared there,
+where was it declared, and what is its type.
+
+`semanticTokens` is a different kind of missing and worth naming as such: it would need a table
+mapping token kinds to LSP token types, which is exactly the sort of **repeated list of language
+facts** the section above exists to prevent. The vim syntax file already highlights Zerg, and it is
+gated.
+
+The last row is a cost, not a gap. The scheduler is cooperative and non-preemptive, so a long check
+occupies its worker until it finishes; `emit.zg` at 9264 lines is the worst case in this repository
+and is the number to measure against before designing anything here.

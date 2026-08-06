@@ -80,6 +80,7 @@ an intermediate, which builds the one that ships).
 | `zerg fmt <file>`           | rewrite source in the one canonical style                 |
 | `zerg lint <file>`          | report unused imports and dead private declarations       |
 | `zerg desugar <file>`       | rewrite source into the core forms its sugar stands for   |
+| `zerg lsp`                  | the language server, over stdio (JSON-RPC)                |
 
 `--emit` also takes `tokens`, `ast`, and `c` to print an intermediate form instead of
 producing a file. A program is built module by module: `-j` compiles several units at

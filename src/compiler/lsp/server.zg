@@ -54,6 +54,15 @@ struct Server {
 	docs: list[Doc]
 	buf: list[byte]
 	stop: bool
+	down: bool
+}
+
+# Change is what a `didChange` carried: the new text, and whether there WAS one. The flag is
+# not redundant with an empty string — a client that clears a file to nothing sends `""`,
+# and a client that sends no change at all must leave the buffer alone.
+struct Change {
+	ok: bool
+	text: str
 }
 
 # serve reads frames until standard input ends or `exit` arrives.
@@ -65,13 +74,19 @@ struct Server {
 pub fn serve(load: fn (str, str) -> Program) -> int {
 	mut docs: list[Doc] = []
 	mut buf: list[byte] = []
-	mut s := Server(docs, buf, false)
+	mut s := Server(docs, buf, false, false)
 	for {
 		body := ls_read_frame(s)
 		break if s.stop
 		ls_handle(s, body, load)
 	}
-	return 0
+
+	# THE EXIT STATUS IS PART OF THE PROTOCOL. `exit` after `shutdown` is an orderly close
+	# and exits 0; `exit` without one — or a standard input that simply ended — is the client
+	# having gone away, and exits 1. A server that always exits 0 tells its client that every
+	# crash was a clean shutdown.
+	return 0 if s.down
+	return 1
 }
 
 # --- the wire ------------------------------------------------------------------------------
@@ -182,9 +197,22 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 	id := jget(msg, "id")
 	has_id := not jis_null(id)
 
+	# After `shutdown` the session accepts nothing but `exit`. A request that arrives anyway
+	# is answered — with InvalidRequest, which is what the protocol says and, more to the
+	# point, is an answer: a client left waiting for a reply it will never get is one that
+	# stops sending the next one. A notification after shutdown is dropped, which is also
+	# what the protocol says.
+	if s.down and method != "exit" {
+		if has_id {
+			ls_error_reply(id, -32600, "zerg lsp has shut down and answers nothing but `exit`")
+		}
+		return
+	}
+
 	if method == "initialize" {
 		ls_reply(id, ls_initialize_result())
 	} else if method == "shutdown" {
+		s.down = true
 		ls_reply(id, jnull())
 	} else if method == "exit" {
 		s.stop = true
@@ -194,8 +222,11 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		ls_publish(s, uri, load)
 	} else if method == "textDocument/didChange" {
 		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
-		ls_put_doc(s, uri, ls_last_change(jget(jget(msg, "params"), "contentChanges")))
-		ls_publish(s, uri, load)
+		ch := ls_full_text(jget(jget(msg, "params"), "contentChanges"))
+		if ch.ok {
+			ls_put_doc(s, uri, ch.text)
+			ls_publish(s, uri, load)
+		}
 	} else if method == "textDocument/didSave" {
 		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
 
@@ -265,15 +296,26 @@ fn ls_initialize_result() -> JVal {
 	return jobj_of(fs)
 }
 
-# ls_last_change takes the text of the final content change. Under full sync there is exactly
-# one, and it carries the whole document; taking the last rather than the first is what
-# keeps that true if a client ever batches.
-fn ls_last_change(changes: JVal) -> str {
-	mut text := ""
+# ls_full_text takes the text of the final content change. Under full sync there is exactly
+# one and it carries the whole document; taking the last rather than the first keeps that
+# true if a client ever batches.
+#
+# It answers whether there was a change at all, and REFUSES one that is not a full document.
+# Both halves were defects. An empty `contentChanges` array replaced the buffer with the
+# empty string, so a change notification carrying nothing wiped the file the editor was
+# showing and every diagnostic with it. And a change carrying a `range` is an INCREMENTAL
+# edit — which this server never asked for, having declared full sync — so applying its
+# `text` would replace the whole document with a fragment of itself.
+fn ls_full_text(changes: JVal) -> Change {
+	mut out := Change(false, "")
 	for c in jarr(changes) {
-		text = jstr(jget(c, "text"))
+		if jhas(c, "range") {
+			ls_log("lsp: an incremental change arrived for a server that declared full sync; the buffer is left as it was")
+			return Change(false, "")
+		}
+		out = Change(true, jstr(jget(c, "text")))
 	}
-	return text
+	return out
 }
 
 # --- the document store ---------------------------------------------------------------

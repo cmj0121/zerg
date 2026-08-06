@@ -139,6 +139,13 @@ jobs:
       - name: The compiler and the stdlib are fmt's fixpoint
         run: make fmt-self
 
+      # An editor file repeats a language fact — a keyword list, an indent character —
+      # because it must, so it is the one place that needs a diff rather than a call. It
+      # runs here rather than in the docs job because it asks `zerg fmt` what an indent is,
+      # and that needs a built toolchain.
+      - name: No editor file states a language fact the compiler denies
+        run: make editor-align
+
       - name: Fetch test-data submodule
         id: corpus_fetch
         env:
@@ -198,6 +205,15 @@ jobs:
       - name: A program and the same program desugared do the same thing
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make desugar
+
+      # --- 8c. the second front end -----------------------------------------------
+      # `zerg lsp` answers an editor with the same compiler `zerg build` answers a shell
+      # with, and this is that sentence as a gate: a real stdio session per file, held to
+      # what the command line says about it. It also drives the wire, which nothing else
+      # in this repository does.
+      - name: The language server says what the compiler says
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make lsp
 
   # The C dialect the emitted code is compiled with. `-std=c17` is the default and what
   # every other job here uses, so this exists for the OTHER leg: the specification names

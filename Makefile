@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar lsp editor-align help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -104,13 +104,36 @@ PREFIX ?= /usr/local
 # submodule work under `make -j`, and what is installed must be the binary this run built.
 install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
 	$(MAKE) build
-	@install -d "$(PREFIX)/bin" "$(PREFIX)/lib/zerg/csrc" "$(PREFIX)/lib/zerg/stdlib"
+	@# `mkdir -p` and NOT `install -d`. BSD install(1) chmods the directory even when it
+	@# already exists, so `install -d /usr/local/bin` fails with
+	@#
+	@#     install: chmod 755 /usr/local/bin: Operation not permitted
+	@#
+	@# on any macOS where that directory belongs to root — which is the default. The chmod is
+	@# to the mode it already has, on a directory this target did not create and was only ever
+	@# going to write one file into. `mkdir -p` asks for exactly what is wanted: the path
+	@# exists, and nothing is said about a path that already did.
+	@mkdir -p "$(PREFIX)/bin" "$(PREFIX)/lib/zerg/csrc" "$(PREFIX)/lib/zerg/stdlib" 2>/dev/null || true
+	@# and then the question the user actually has to answer, asked before three commands fail
+	@# one at a time. `install` reports one path per failure; this reports what to do about it.
+	@[ -w "$(PREFIX)/bin" ] && [ -w "$(PREFIX)/lib/zerg/csrc" ] && [ -w "$(PREFIX)/lib/zerg/stdlib" ] || { \
+		echo "install: $(PREFIX) is not writable by $$(id -un)."; \
+		echo "    sudo make install                   install for everyone"; \
+		echo "    make install PREFIX=$$HOME/.local   install for you (put $$HOME/.local/bin on PATH)"; \
+		exit 1; }
 	install -m 0755 bin/zerg "$(PREFIX)/bin/zerg"
 	@# zrt_test.* is the C suite's harness and belongs to no program; the others are the
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
 	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
+
+# `make install` is the first command a user runs and was the one command nothing ran: every
+# other gate here uses the compiler out of ./bin, so a broken install was invisible until
+# somebody hit it. This does the round trip into a temporary prefix — install, compile and
+# RUN with nothing exported, uninstall, look at what is left.
+install-check:                  # the installed toolchain works, and uninstall takes it away
+	@./scripts/install-check.sh
 
 uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
 	rm -f "$(PREFIX)/bin/zerg"
@@ -379,7 +402,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

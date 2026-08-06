@@ -107,6 +107,15 @@ Measured against `zerg0` on 2026-07-31.
 | command literals `` `git status` ``                                    | the process-substitution literal |
 | `for k in m` over a map                                                | the iteration                    |
 
+One entry in this tier is a REFUSAL WITH THE WRONG SENTENCE, kept deliberately: the seed
+rejects a **same-block re-declaration** (`x := 1` then `x := 2`) as `"x" is already declared
+in this scope`. The language permits it — docs/core/memory.md specifies declare-del-declare,
+and `zerg` builds it (the corpus case redeclare_same_block) — so this is the seed being
+narrower, not a rule `zerg` lost. The self-host source never re-declares in one block (the
+seed could not build it if it did), so the rule costs the chain nothing, and rewriting the
+seed's scope tracking to lift it would move emitted C for no program the seed exists to
+build.
+
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
 `spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,
@@ -214,10 +223,18 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for
   two declarations. The seed builds and runs each of them. `zerg` refuses the pair, naming
   the two kinds when they differ.
+- **A mis-shaped `display` / `debug` override is accepted.** docs/runtime/format.md fixes
+  the override contract — `fn display() -> str`, the value alone in, its text out — and
+  `zerg` refuses a method of either name that takes an argument or answers something else,
+  at the declaration. The seed has no rendering dispatch, so the method is to it an
+  ordinary method and the program builds.
 - **Nesting deeper than `zerg`'s translation limit is accepted.** `zerg` counts its
   recursion and refuses a program that nests more than 200 levels of expressions, blocks
   or types (docs/conformance.md); the seed parses on Go's growable stack and accepts what
-  the shipping compiler's fixed native stack could never have survived. The gap is
+  the shipping compiler's fixed native stack could never have survived. The same limit is
+  counted again in `zerg`'s emitter walk, where it catches the shape the parser's counter
+  cannot see: a FLAT chain (`1 + 1 + … + 1`, a long method chain) parses in a loop, so
+  only the expression walk ever gets deep — and the seed accepts that too. The gap is
   harmless in the narrowing direction — the seed's only input, the compiler's own source,
   nests five levels — but it is a gap: the seed enforces no bound at all, and a deep
   enough program would end as a Go stack-limit panic rather than a diagnostic.

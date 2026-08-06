@@ -214,6 +214,13 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for
   two declarations. The seed builds and runs each of them. `zerg` refuses the pair, naming
   the two kinds when they differ.
+- **Nesting deeper than `zerg`'s translation limit is accepted.** `zerg` counts its
+  recursion and refuses a program that nests more than 200 levels of expressions, blocks
+  or types (docs/conformance.md); the seed parses on Go's growable stack and accepts what
+  the shipping compiler's fixed native stack could never have survived. The gap is
+  harmless in the narrowing direction — the seed's only input, the compiler's own source,
+  nests five levels — but it is a gap: the seed enforces no bound at all, and a deep
+  enough program would end as a Go stack-limit panic rather than a diagnostic.
 
 ## Changing the seed
 

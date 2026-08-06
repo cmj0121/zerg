@@ -81,24 +81,28 @@ first — `zerg` does, for the rules it checks.
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.
 
-The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its own
-because the two deviations that follow are breaches of it rather than of any one chapter:
+The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its
+own, because it is the yardstick every finding in this specification is measured against:
 
 **A form is either lowered correctly or refused by name.** It is never a crash, never a silently wrong answer,
 and never an error reported by the C compiler or the linker against generated code nobody wrote.
 
-> **[deviation]** **A family of everyday forms escapes to `cc`.** An expression that lowers to a GNU statement
-> expression is emitted directly inside the parentheses `if` and `while` already own, producing `if ({ … })`,
-> which a C compiler does not accept — so the diagnostic a reader gets is `error: expected expression` against
-> a line of generated C. The forms are `in` over a list or a map and `??` used as a whole condition, which
-> reaches `if`, `for`, and the postfix `return … if`, `break if`, `continue if` and `raise … if`. Binding the
-> same expression to a name first (`b := 2 in xs` then `if b`) compiles, which is why the behaviour looks
-> intermittent. A program with no `fn main` — the `nop` program the grammar opens with — fails in the linker
-> for the same reason: nothing refuses it first.
->
-> **[deviation]** **Deep nesting crashes the compiler.** Around 800 levels of nested parentheses, list
-> literals or calls exhausts the recursive-descent parser's stack and the process dies of `SIGSEGV` with no
-> diagnostic at all. There is no depth limit and no error; 400 levels are fine.
+One consequence is worth writing down here, because no single chapter owns it: a program with no `fn main` is
+grammatical — `program ::= stmt-list`, the `nop` program the grammar opens with — so what rejects it is the
+**build**. `--emit bin` reports that the entry file declares no `fn main`, with a place, before anything
+reaches cc or the linker (see [Packages & Programs](runtime/package.md) for the rule); `--emit lib` builds the
+same source to an object file, which is what a module is for.
+
+> **[implementation-defined]** **Nesting depth is a translation limit.** The parser counts its recursion — one
+> level per nested expression, block or type — and refuses a program that nests more than **200** levels deep
+> with a diagnostic naming the limit and the place, rather than parsing on until the native stack it runs on
+> overflows. The emitter counts the same limit again over its own expression walk, because a FLAT chain
+> (`1 + 1 + … + 1`, a long method chain) parses in a loop — the parser's depth never grows — while the walk
+> recurses once per link; however a program reaches 200 levels of expression, the answer is this refusal. The
+> number is measured headroom, not language: unbounded, the parser died of `SIGSEGV` at about 485 nested
+> parentheses on an 8 MB stack, and the expression walk gave out at about 310 method links (530 flat `+`
+> terms), while the deepest nesting anywhere in this repository is five levels. A conforming implementation
+> may set another bound; ISO C itself promises only 63 nested parenthesized expressions.
 
 ## Runtime abort contract
 

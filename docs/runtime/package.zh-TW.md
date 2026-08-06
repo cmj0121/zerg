@@ -41,13 +41,12 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 
 - **輸入。** 命令列參數——程式自己的介面——以**參數**進入。天生唯讀的 OS 環境事實（環境變數、時鐘、亂數）透過
   stdlib 取得、不進簽名；它們不是可變的全域狀態。
-- **結果。** `main` 回傳 `Result[nil]`，所以退出複用錯誤模型：`Left` 以 `0` 退出，`Right(err)` 把 `err` 印到 stderr
-  並以非零碼退出，未被攔截的 **abort** 則 unwind main stack 而 crash。預期失敗（`Right`）與 bug（abort）維持兩種
-  不同的退出，而且 `?` 可以直接用在 `main` 裡。
-
-> **[deviation]** **`main` 的結果被丟棄**。`fn main() -> Result[nil]` 編得過，但從它回傳的 `Right` 不會印任何東西到
-> stderr，離開碼是 **0**；用 `?` 從 `main` 傳播出來的錯誤也一樣。程式表達「預期中的失敗」的唯一離開路徑，反而靜默
-> 地回報了成功。未被攔截的 **abort** 不受影響，仍以 1 離開。
+- **結果。** `main` 回傳 `Result[nil]`，所以退出複用錯誤模型：`Left` 以 `0` 退出，`Right(err)` 把 `err` 以
+  `Kind: message` 印到 stderr 並以 `1` 退出，未被攔截的 **abort** 則 unwind main stack、在 stderr 留下自己的
+  一行後同樣以 `1` 退出。退出能分辨的是成功與失敗——狀態 `0` 對上狀態 `1` 加一則訊息——僅止於此：從 `main`
+  回傳的 `Right` 走的是 abort 所用的同一個 root handler，所以兩者是同一個狀態、同一行 stderr，`Kind:` 前綴也
+  分不出它們（runtime fault 與被 force 的 `Err` 用同一個形狀回報，`raise "msg"` 則是一行裸訊息）。`?` 可以
+  直接用在 `main` 裡。
 
 ### Program 生命週期與頂層初始化
 

@@ -1794,13 +1794,10 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 		return ECoalesce(left, ENil, jump)
 	}
 
-	# the right-associative recursion is a nesting level of its own: a chain of `??` never
-	# re-enters parse_expr, so left uncounted it would be the one expression shape with no
-	# depth bound
-	p_deeper(p)
-	e := ECoalesce(left, parse_coalesce(p), jump)
-	p.depth = p.depth - 1
-	return e
+	# the right-associative recursion is a nesting level of its own, so it re-enters
+	# through parse_expr — the one door that counts a level — rather than wrapping
+	# p_deeper by hand around a recursion parse_expr already spells
+	return ECoalesce(left, parse_expr(p), jump)
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its

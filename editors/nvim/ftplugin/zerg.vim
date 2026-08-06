@@ -82,4 +82,4 @@ function! s:BraceDelta(lnum) abort
   return l:depth
 endfunction
 
-let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< shiftwidth< softtabstop< foldmethod< foldexpr< foldlevel<'
+let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< tabstop< shiftwidth< softtabstop< foldmethod< foldexpr< foldlevel<'

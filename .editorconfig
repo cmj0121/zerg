@@ -1,0 +1,55 @@
+# EditorConfig — the indent rules, for the editors `make editor-align` cannot reach.
+#
+# `editors/nvim/` configures one editor. This is the file VSCode, JetBrains, Emacs, Zed and
+# the rest all read, so it is where the same rule goes for everybody else. Both are held to
+# `zerg fmt` by `make editor-align`, because an editor that disagrees with the formatter
+# about an indent produces a whole-file diff on every save — which is what the nvim ftplugin
+# did, silently, until that gate was written.
+#
+# https://editorconfig.org
+root = true
+
+# A TAB, everywhere, because that is what this tree is written in: the Zerg compiler and
+# stdlib (`F101`, held by `make fmt-self`), the Go seed (gofmt), the C runtime, the shell
+# scripts, and a Makefile where a recipe line has no other option. The exceptions below are
+# the three formats where something else already owns the answer.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = tab
+indent_size = 4
+
+# `indent_size = 4` is not decoration. `F403` decides whether a line has run past column 80
+# by counting a tab as FOUR — see `fmt_wrap_tab()` — so an editor displaying it as anything
+# else shows a different 80-column rule than the one the formatter applied. The two numbers
+# are the same number, and `make editor-align` says so.
+[*.zg]
+indent_style = tab
+indent_size = 4
+
+# Prettier owns markdown, YAML and JSON in this repository (see .pre-commit-config.yaml),
+# and it indents with spaces. These lines are not a second opinion — they are what prettier
+# already does, written where an editor can read it before prettier runs.
+[*.{md,markdown}]
+indent_style = space
+indent_size = 2
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+# vimscript, in the two files this repository ships. Two spaces is what they are written in
+# and what the vim world writes; nothing here formats them, so this is the whole rule.
+[*.vim]
+indent_style = space
+indent_size = 2
+
+# LICENSES/ holds VERBATIM copies of canonical license texts, fetched from the bodies that
+# publish them. pre-commit's end-of-file and trailing-whitespace hooks skip this directory
+# for that reason, and an editor that "fixed" one on save would be editing a legal document
+# to match a house style.
+[LICENSES/**]
+insert_final_newline = false
+trim_trailing_whitespace = false

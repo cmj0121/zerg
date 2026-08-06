@@ -13,16 +13,19 @@ available on every value without opting into anything:
   end user should read the value (a price, a date); the compiler never derives a semantic rendering, so a
   meaningful `display` is override-only.
 
-> **[deviation]** An **override is silently ignored**. `display` (and `debug`) are described as overridable,
-> and a `fn display() -> str` written in an `impl` is never consulted: `print m` on a value whose type
-> declares one renders the underlying scalar instead. On a `struct` the hole is rejected outright, by the
-> [not yet] below, so the override that is ignored rather than refused is the one on a `type X = Y`.
->
+An **override** is a method in the type's `impl` with a fixed shape: `fn display() -> str` (or
+`fn debug() -> str`) — it receives the value alone, answers the `str` it shows as, and never mutates
+(it is a plain `fn`, not a `mut fn`); a method of either name with any other shape is refused at its
+declaration. `print`, a format hole and `str(…)` all consult the override, and a type that writes only
+`debug` renders through it everywhere, since `display` defaults to it.
+
 > **Status.** Rendering a **scalar** or a **`str`** — through a plain `{x}` hole, `print`, or an f-string
-> — works. The **structural rendering of a composite** (a `struct`, `list`, or `map`) is
-> **[not yet]**: a composite in a format hole is **rejected at compile time** today, so the intended "every
-> value renders" holds for scalars and strings now, and for composites once structural `debug` lands. The
-> exact spelling of a structural `debug` string is therefore **not pinned** ([not yet]).
+> — works, and an **override is consulted** on any named type (`type X = Y`, a `struct`, an `enum`) that
+> declares one. The **structural default rendering of a composite** (a `struct`, `list`, or `map` with no
+> override) is **[not yet]**: such a composite in a format hole is **rejected at compile time** today, so
+> the intended "every value renders" holds for scalars, strings and overridden types now, and for the rest
+> once structural `debug` lands. The exact spelling of a structural `debug` string is therefore **not
+> pinned** ([not yet]).
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

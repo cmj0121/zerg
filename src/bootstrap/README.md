@@ -184,6 +184,16 @@ the program, which is what the assertion exists to catch.
   emitted as written and cc reports the type. `zerg` judges a default at the declaration.
 - **A store through a value is accepted.** `get()[0] = 99` takes the address of a call's
   result. `zerg` refuses any write whose path is not storage all the way down.
+- **A TOP-LEVEL binding's annotation is not checked against its value.** `answer: bool =
+42` builds and the global is whatever the seed makes of it; the same mismatch on a LOCAL
+  binding the seed does refuse. `zerg` honours a top-level annotation the way it honours a
+  local's — the global takes the declared type and the mismatch is refused at the
+  declaration.
+- **A module constant that takes a FUNCTION's name is accepted.** `const f := 1` beside
+  `fn f()` — in either source order — is emitted, and cc reports "redefinition of 'zg_f'"
+  against generated code: both flatten to one top-level namespace and one C symbol. `zerg`
+  refuses the collision at the constant's declaration. (A LOCAL named after a function
+  stays legal in both compilers — it shadows, which is the ordinary scoping rule.)
 - **`match` of an optional against a range is accepted.** `zerg` refuses the arm.
 - **An `int` narrowed to a `byte` parameter is accepted.** `take(1000)` on a `fn take(b:
 byte)` compiles to a truncation and cc warns about the generated C. `zerg` refuses it: a

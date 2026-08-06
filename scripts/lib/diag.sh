@@ -20,3 +20,11 @@ is_cc_diag() {
 has_place() {
 	printf '%s\n' "$1" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'
 }
+
+# place_is <text> <suffix-regex> — the positive half of has_place: some `-->` line's place
+# ENDS with the given regex (e.g. "case\.zg:1:1"), for a case that pins WHICH line a rule
+# points at rather than only that one exists. It lives here beside has_place because the
+# indented-arrow layout is one fact about this compiler's output, not a per-script detail.
+place_is() {
+	printf '%s\n' "$1" | grep -qE "^  --> .*$2\$"
+}

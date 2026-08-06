@@ -2034,6 +2034,19 @@ fn c_tuple_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
 			c_tuple_collect(fd.ty, out)
 		}
 	}
+
+	# an ENUM PAYLOAD spells a type the same way a struct field does, and it was the one
+	# declaration this sweep did not read: `enum Msg { Pos((int, int)) }` had its variant
+	# typedef name `zgt_tup_…` with nobody having written it, and cc reported the missing
+	# type against generated C. The dependency sweep already orders a tuple ahead of the
+	# enum that holds it (c_enum_deps names it) — the tuple only had to be in the list.
+	for ed in f.enums {
+		for v in ed.variants {
+			for t in v.fields {
+				c_tuple_collect(t, out)
+			}
+		}
+	}
 	for fn_i in f.fns {
 		c_tuple_collect(fn_i.ret, out)
 		for pm in fn_i.params {

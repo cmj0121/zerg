@@ -2050,18 +2050,22 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# binding", about the one literal in the language whose whole point is that it is a
 		# byte. The conversion node is the type the emitter already knows how to carry, and
 		# `byte(74)` has always worked; this is that, written the way a reader writes it.
+		#
+		# The VALUE arrives as the octet's decimal spelling, not the octet: re-reading the
+		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
+		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
+		return EConv(TByte, EInt(t.value), "byte")
 	}
 	if k == Rune {
 		p_advance(p)
 
-		# The literal's VALUE is its code point, decoded from the UTF-8 the source is written
-		# in — `'A'` is 65 and `'é'` is 233. It used to reach the fallback below, so `'A'` was
-		# the number zero with no diagnostic; then it was one byte only, so a multi-byte code
-		# point was named rather than read. rune_value is the lexer's, beside int_value, for
-		# the reason that one gives: what a lexeme is worth is a fact about the LEXEME.
-		return EConv(TRune, EInt(strconv.to_string(rune_value(t.value), 10)), "rune")
+		# The literal's VALUE is its code point, and it arrives as the point's decimal
+		# spelling — decoded by the lexer beside int_value, for the reason that one gives:
+		# what a lexeme is worth is a fact about the LEXEME. Decoding it HERE, from a str
+		# re-read out of the token, is what made `'\0'` impossible to lex at all, because a
+		# str cannot hold a NUL (scan_char_lit says why).
+		return EConv(TRune, EInt(t.value), "rune")
 	}
 	if k == Float {
 		p_advance(p)

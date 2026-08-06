@@ -1,0 +1,14 @@
+# unit — module constants whose types are SPELLED in C, not just held behind a runtime
+# pointer. A tuple and an optional each need a typedef in EVERY unit that declares the
+# global — including this one, which never lowers the values: only the entry unit assigns
+# constants. `pub SPAN := (1, 2)` reached cc as `unknown type name
+# 'zgt_tup_int64_t_int64_t'` on this module's own unit, because the typedef was only ever
+# registered where a value was lowered. A module constant is the one declaration site
+# outside the c_decl_types walk — its global is rendered after the on-demand typedef
+# stream, so c_const_globals registers what it spells at the moment it spells it.
+
+# SPAN is a tuple constant, its type INFERRED from the value.
+pub SPAN := (1, 2)
+
+# CAP is an optional constant, its type WRITTEN — the value alone would say nil.
+pub CAP: int? = nil

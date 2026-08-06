@@ -1170,6 +1170,73 @@ fn main() {
 }
 EOF
 
+# --- the escapes the decoder cannot read -------------------------------------------
+#
+# A malformed escape used to abort the COMPILER: `b'\xzz'` reached `byte(hi * 16 + lo)`
+# with hex_val's -1 in it and died as `OverflowError`, `'\u{}'` decoded to a NUL that the
+# str bridge refused as `EncodingError` — no file, no line, no form named. Worse were the
+# quiet ones: `b'\x1z'` compiled and meant 15, `\q` compiled and meant `q`, `'\u41'` read
+# its digits without the braces and meant whatever they said. One case per DISTINCT path
+# through the decoder and its callers; the shapes that share one (`b'\xz1'`, `'\x41'`,
+# `'\u{41'`) are the same fix and ride on these.
+
+reject byte-escape-with-non-hex-digits 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\xzz'))
+}
+EOF
+
+reject byte-escape-with-one-hex-digit 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\x1'))
+}
+EOF
+
+reject unicode-escape-in-a-byte-literal 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\u{41}'))
+}
+EOF
+
+reject unknown-escape-in-a-rune-literal 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\q'))
+}
+EOF
+
+reject unicode-escape-with-no-digits 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\u{}'))
+}
+EOF
+
+reject unicode-escape-without-braces 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\u41'))
+}
+EOF
+
+reject unknown-escape-in-a-string 'E109 invalid escape in a string literal' <<'EOF'
+fn main() {
+	print("a\qb")
+}
+EOF
+
+reject unknown-escape-in-a-triple-string 'E109 invalid escape in a string literal' <<'EOF'
+fn main() {
+	s := """
+a\qb
+"""
+	print(s)
+}
+EOF
+
+reject string-that-spells-a-nul 'E110 a string literal may not contain a NUL' <<'EOF'
+fn main() {
+	print("a\0b")
+}
+EOF
+
 # --- the forms that used to escape to cc -------------------------------------------
 #
 # `x == nil` is the first thing anyone reaches for to test an optional, and it lowered to a

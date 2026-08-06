@@ -384,9 +384,10 @@ EOF
 # docs/runtime/package.md: a top-level binding may not be `mut` outside a module-level
 # `unsafe { … }` group. The declaration used to be dropped by the parser's top-level skip,
 # which split the mistake into two wrong answers: unused, the program compiled; used,
-# every use site said `undefined name` about a name the program plainly declares. The
-# `unsafe { … }` group's own (different, documented) handling is pinned by the corpus case
-# unsafe_group_mut.
+# every use site said `undefined name` about a name the program plainly declares. Inside
+# the group the same spelling IS the language's mutable global — the corpus case
+# unsafe_group_mut pins that half, so the refusal here cannot leak into the group without
+# a gate noticing from both sides.
 
 reject top-level-mut-in-safe-code 'may not be `mut` outside a module-level' <<'EOF'
 mut counter := 0
@@ -418,6 +419,22 @@ fn main() {
 }
 EOF
 
+# A STATEMENT inside the group is ill-formed, not a nop: GRAMMAR:777 derives
+# `unsafe-item ::= decorated-decl | binding` and nothing else, and the top level's
+# statement fallback must not bless code into an unsafe CONTEXT nobody runs. Before the
+# group's contents were parsed at all, this was dropped one token at a time — the same
+# shredder that ate the group's `mut` bindings — so the case pins the refusal that
+# replaced the silence.
+reject statement-in-unsafe-group 'a statement runs in a function body, not in a group' <<'EOF'
+unsafe {
+	print "hello"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently
@@ -429,6 +446,20 @@ answer: bool = 42
 
 fn main() {
 	print answer
+}
+EOF
+
+# A finding INSIDE a module constant's initializer sits at the declaration, with a file. A
+# module constant belongs to no function, so no SAt marker ever covers its value: the
+# emitter used to clear the statement marker's path around the initializer walk (for the
+# visibility rule's sake) and a rule firing in there reported a bare `line:col` — the line
+# a STALE marker still held, near some use inside `main`. `at=1:1` is the whole claim:
+# the constant's own place, not a marker left over from whatever was emitted before it.
+reject const-initializer-reports-the-declaration 'operator `+` takes numeric operands' at=1:1 <<'EOF'
+const answer := 1 + "s"
+
+fn main() {
+	print 1
 }
 EOF
 
@@ -487,27 +518,22 @@ EOF
 
 # --- redeclaration ----------------------------------------------------------------
 #
-# A name is bound once per block. Shadowing across blocks is legal and load bearing, so
-# the sibling and nested cases below are NOT here — they belong to the corpus, which is
-# where programs that must run live.
+# Two cases stood here pinning "a name is bound once per block", and their retirement is
+# the rare one this file's header says must be justified: the rejection was never the
+# LANGUAGE's. docs/core/memory.md has always specified re-declaration as legal in the
+# same block — declare-del-declare, the RHS reading the old binding — and worked through
+# an example this compiler refused; the refusal was a compiler rule miscarrying a marker,
+# carried in the spec as a [deviation], and a [deviation] is a bug with a fix owed, not a
+# documented state. The legal half now lives where programs that must run live: the
+# corpus case redeclare_same_block. What survives HERE is the boundary that really is the
+# language's — a `const` is shadow-proof, so a re-declaration may not cross one in either
+# direction, same block included (the const cases above and below).
 
-reject redeclare-in-one-block "already declared in this block" <<'EOF'
+reject redeclare-plain-then-const-in-one-block 'shadows a binding already visible here' <<'EOF'
 fn main() {
 	x := 1
-	x := 2
-	print(f"{x}")
-}
-EOF
-
-reject redeclare-after-inner-block "already declared in this block" <<'EOF'
-fn main() {
-	a := 1
-	if true {
-		b := 2
-		print(f"{b}")
-	}
-	a := 3
-	print(f"{a}")
+	const x := 2
+	print x
 }
 EOF
 
@@ -2488,6 +2514,114 @@ EOF
 # the two that RAN. An int64_t into a double field and an int64_t into a uint8_t are both
 # legal C, so neither cc nor any gate had anything to say — the program simply answered
 # something other than what it was written to answer.
+
+# --- what only the driver can reject ------------------------------------------------
+#
+# A program build needs an entry point. `program ::= stmt-list` makes a main-less source
+# grammatical — script mode is real, and a module is exactly a source with no `fn main` —
+# so no parser or checker rule can own this: what is ill-formed is the BUILD, an entry
+# file handed to `--emit bin` that defines no entry (docs/runtime/package.md). Before the
+# driver said so, the answer was the LINKER's `undefined symbol _main` against an object
+# nobody wrote; the seed has enforced this rule all along, which is why no marker excuses
+# it below.
+
+reject program-without-fn-main 'declares no `fn main`' at=1:1 <<'EOF'
+x := 1
+EOF
+
+# The SAME source under `--emit lib` must stay accepted — a module is exactly a source
+# with no entry point. Nothing else in the repo builds a main-less object, so the
+# acceptance half of the build rule is asserted here, beside its rejection half: the
+# regression this catches is the entry-point check drifting somewhere every emit stage
+# passes through.
+printf 'x := 1\n' >"$tmp/module-without-main.zg"
+if "$ZERG" build --emit lib -o "$tmp/module-without-main" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
+	[ -f "$tmp/module-without-main.o" ]; then
+	pass=$((pass + 1))
+else
+	echo "LIB       module-without-main — a main-less module no longer builds with --emit lib"
+	fail=$((fail + 1))
+fi
+
+# --- the rendering overrides -------------------------------------------------------
+#
+# docs/runtime/format.md: a `display` / `debug` override is `fn display() -> str` — the
+# value alone in, the text it shows as out. The shape is what the render sites dispatch
+# on, so a mis-shaped one would be silently passed over; chk_render_overrides makes it a
+# finding at the declaration instead. The seed has no rendering dispatch and builds both
+# programs, hence seed-gap. The `mut fn` half of the same rule is pinned by the working
+# corpus case's boundary (a rendering may not mutate), and the seed refuses `mut fn` for
+# reasons of its own, so that spelling needs no case here.
+
+reject display-override-with-arguments 'takes no arguments beyond the value' seed-gap <<'EOF'
+struct Point {
+	x: int
+}
+
+impl Point {
+	fn display(width: int) -> str {
+		return "bad"
+	}
+}
+
+fn main() {
+	print Point(1).x
+}
+EOF
+
+reject display-override-wrong-answer 'answers the `str` the value shows as' seed-gap <<'EOF'
+struct Point {
+	x: int
+}
+
+impl Point {
+	fn display() -> int {
+		return 3
+	}
+}
+
+fn main() {
+	print Point(1).x
+}
+EOF
+
+# --- translation limits --------------------------------------------------------------
+#
+# Deep nesting is refused by count, not parsed until the stack runs out. The parser
+# recurses once per nested expression, block and type, and used to die of SIGSEGV — no
+# diagnostic, exit 139 — at about 485 nested parentheses on an 8 MB stack, with the
+# emitter's own recursion giving out not far above (about 302 on nested calls). The bound
+# is ZG_MAX_NESTING in parser.zg, a documented translation limit of this implementation
+# (docs/conformance.md), so exceeding it is a permanent answer and the case lives here
+# rather than with the not-yet-built forms. The source is GENERATED because a program that
+# nests 240 levels deep is not something to hand-maintain; 240 clears the 200 bound while
+# staying far under where the parser used to crash, so the refusal is the counter
+# answering, not luck. The seed inherits Go's growable stack and accepts this program —
+# a gap its own contract records (src/bootstrap/README.md).
+
+awk 'BEGIN {
+	s = "1"
+	for (i = 0; i < 240; i++) s = "(" s ")"
+	print "fn main() {"
+	print "\tprint " s
+	print "}"
+}' | reject deep-nesting-limit 'nests more than 200 levels deep' seed-gap
+
+# A FLAT chain is the shape the parser's counter cannot see: `1 + 1 + … + 1` parses in a
+# LOOP, so the parser's depth never grows, while the emitter's and checker's walk recurses
+# once per link and used to die of SIGSEGV — no diagnostic, exit 139 — at about 530 `+`
+# terms (about 310 method links, the weakest chain). The bound is the emitter's c_deeper,
+# the same ZG_MAX_NESTING at the walk's own altitude, so however a program reaches 200
+# levels of expression the answer is a refusal and never a crash. 240 terms clears the
+# bound while staying far under where the walk used to crash. The seed accepts it for the
+# reason it accepts the nested case: Go's growable stack.
+awk 'BEGIN {
+	s = "1"
+	for (i = 0; i < 240; i++) s = s " + 1"
+	print "fn main() {"
+	print "\tprint " s
+	print "}"
+}' | reject flat-chain-limit 'chains more than 200 levels deep' seed-gap
 
 # --- report ------------------------------------------------------------------------
 

@@ -413,7 +413,7 @@ fn c_opt_cname(elem: Ty) -> str {
 # c_opt_name registers the carrier for `T?` and answers its C name — the optional's half of
 # what c_carrier_name does for an Either.
 fn c_opt_name(mut &em: Emitter, elem: Ty) -> str {
-	c_carrier_register(em, TOpt(elem))
+	c_spelled_register(em, TOpt(elem))
 	return c_opt_cname(elem)
 }
 
@@ -855,16 +855,19 @@ fn c_res_mark_right(r: str) -> str {
 # operator that reads one back goes through the accessors above rather than writing `.ok` /
 # `.err` itself, which is what lets an optional and an either share the whole set.
 fn c_carrier_name(mut &em: Emitter, left: Ty, right: Ty) -> str {
-	c_carrier_register(em, TEither(left, right))
+	c_spelled_register(em, TEither(left, right))
 	return c_carrier_cname(left, right)
 }
 
-# c_carrier_register registers a carrier TYPE once per shape and appends its declaration
-# where the ordinary on-demand path wants it. c_carrier_decl is the declaration itself,
-# split out because the pre-pass below needs the same text placed somewhere else — in
-# declaration order, ahead of the struct typedefs that name it.
-fn c_carrier_register(mut &em: Emitter, c: Ty) {
-	d := c_carrier_emit(em, c)
+# c_spelled_register places a type's typedef into the on-demand stream — the registering
+# face of c_spelled_pre, for a type first met while a BODY is lowered rather than by the
+# declaration sweep. Like c_spelled_pre it is asked of ANY type: one that spells a scalar
+# or a runtime container answers "nothing to do" by itself, so a call site never dispatches
+# on the kind, and a third kind of spelled type inherits every site for free. That sentence
+# used to be aspiration: the carriers had this function, the tuples had c_tuple_name's tail,
+# and c_const_globals hand-wrote the dispatch a third time.
+fn c_spelled_register(mut &em: Emitter, t: Ty) {
+	d := c_spelled_pre(em, t)
 	if d != "" {
 		em.res_decls.append(d)
 	}
@@ -889,6 +892,11 @@ fn c_carrier_emit(mut &em: Emitter, c: Ty) -> str {
 # a field calls first: the tuple and the carrier renderers each ask it of their members, so
 # a tuple holding a carrier and a carrier holding a tuple both come out inner-first no
 # matter which of the two the program met first.
+#
+# The mutual recursion terminates the way c_needs_copy's does: a Ty is a finite tree, and
+# both arms descend only into strictly smaller components of it — a tuple's elements, a
+# carrier's payloads. c_carrier_emit also marks a shape before its declaration descends, so
+# even a shape the walk meets twice answers "" instead of being walked again.
 fn c_spelled_pre(mut &em: Emitter, t: Ty) -> str {
 	return c_tuple_decl(em, ty_tuple_elems(t)) if c_is_tuple(t)
 	return c_carrier_emit(em, t) if c_is_carrier(t)
@@ -2073,6 +2081,12 @@ fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 # variant's payload, a parameter, a result. A module constant is NOT here — its global is
 # rendered after the on-demand typedef sections, so c_const_globals registers what it
 # spells at the moment it spells it.
+#
+# c_check_named_types enumerates the SAME four sites for a different payload — the place
+# string and bound type parameters a refusal needs, which this walk has no use for — and
+# the two lists must agree. They are not folded into one walker because neither payload
+# fits the other's shape; the price is that a site added to one is OWED to the other, by
+# hand, which is exactly how the enum-payload site went missing from each in turn.
 fn c_decl_types(f: File, mut &tups: list[Ty], mut &cars: list[Ty]) {
 	for st in f.structs {
 		for fd in st.fields {
@@ -2150,9 +2164,14 @@ fn c_decl_collect_carrier(c: Ty, mut &tups: list[Ty], mut &cars: list[Ty]) {
 # self-hosted compiler has no Ref, so `std/atomic` reached cc as `zg_Ref` rather than being
 # turned away here.
 #
-# It runs over DECLARATIONS only — struct fields, parameters, results — because those are
-# written out before any body is, so this is the earliest point where the whole program's
-# type names are known and nothing has been emitted yet.
+# It runs over DECLARATIONS only — struct fields, enum variant payloads, parameters,
+# results — because those are written out before any body is, so this is the earliest point
+# where the whole program's type names are known and nothing has been emitted yet.
+#
+# Those four sites are c_decl_types's four sites, and the two lists must agree: that walk
+# collects the types themselves where this one carries each site's place string and bound
+# type parameters, which is why they stand apart. A site added there is owed here too — the
+# enum-payload site below was once missing from exactly one of the two.
 fn c_check_named_types(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
@@ -6321,12 +6340,8 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# lowers. `pub PAIR := (1, 2)` in a module reached cc as `unknown type name
 		# 'zgt_tup_int64_t_int64_t'` on the module's own unit, because nothing there ever
 		# built the value. The registered text lands in the on-demand sections, which the
-		# globals follow. A container spells `zrt_list`/`zrt_map` and needs nothing.
-		if c_is_tuple(ty) {
-			c_tuple_name(em, ty_tuple_elems(ty))
-		} else if c_is_carrier(ty) {
-			c_carrier_register(em, ty)
-		}
+		# globals follow; a scalar or a container answers "nothing to do" by itself.
+		c_spelled_register(em, ty)
 		if whole {
 			out = out + f"static {c_type(ty)} zg_{c.name};\n"
 		} else if c_const_in(own, c.name) {
@@ -7627,10 +7642,7 @@ fn c_tuple_decl(mut &em: Emitter, tys: list[Ty]) -> str {
 # `zg_opt_int64_t` into the earlier section, and cc reported it. One stream in met-order
 # cannot be wrong, because each declaration inlines what it spells (c_spelled_pre).
 fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
-	d := c_tuple_decl(em, tys)
-	if d != "" {
-		em.res_decls.append(d)
-	}
+	c_spelled_register(em, TTuple(tys))
 	return c_tuple_cname(tys)
 }
 

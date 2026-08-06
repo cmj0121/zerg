@@ -52,7 +52,22 @@ fn chk_at(mut &em: Emitter, msg: str) {
 # chk_at_place is the same, for a rule that KNOWS its place rather than reading the marker
 # the emission walk left. A rule about a signature is one: it runs before any statement is
 # emitted, so there is no marker yet to read.
+#
+# ONE MISTAKE EARNS ONE MESSAGE, so an exact repeat — same file, same line, same column,
+# same sentence — is dropped here rather than at whichever caller happens to run twice.
+# The walk revisits a statement for reasons of its own: a match arm's bindings are
+# registered up to three times (condition, body, and the body's type inference), and a
+# monomorphized generic emits its template body once per specialization — so one bad arm
+# bind collected SIX copies of one finding. Deduping in the arm code would fix the caller
+# of the week; every rule reports through here, so here is where the invariant lives. A
+# program that genuinely makes the same mistake twice is still reported twice, because two
+# occurrences differ in line or column — what cannot be told apart is two mistakes inside
+# ONE statement, and a single statement-level place is the SAt marker's already-documented
+# grain (see the header above).
 fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
+	for d in em.diags {
+		return if d.line == line and d.col == col and d.path == path and d.msg == msg
+	}
 	em.diags.append(Diag(path, line, col, msg))
 }
 

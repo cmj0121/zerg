@@ -51,14 +51,12 @@ dependency DAG.
   Ambient OS facts that are read-only by nature (environment variables, clock, randomness) are reached
   through the stdlib, not the signature; they are not mutable global state.
 - **Result.** `main` returns `Result[nil]`, so exit reuses the error model: a `Left` exits `0`, a
-  `Right(err)` prints `err` to stderr and exits non-zero, and an uncaught **abort** unwinds the main
-  stack and crashes. Expected failure (`Right`) and a bug (abort) stay two distinct exits, and `?`
-  works directly in `main`.
-
-> **[deviation]** `main`'s **result is discarded**. `fn main() -> Result[nil]` compiles, and a `Right`
-> returned from it prints nothing to stderr and exits **0** — as does an error propagated out of `main`
-> with `?`. So the one exit path a program has for expected failure reports success instead, silently.
-> An uncaught **abort** is unaffected and still exits 1.
+  `Right(err)` prints `err` to stderr as `Kind: message` and exits `1`, and an uncaught **abort** unwinds
+  the main stack and exits `1` with its own line on stderr. What the exit distinguishes is success from
+  failure — status `0` against status `1` with a message — and nothing finer: a `Right` returned from
+  `main` reports through the same root handler an abort uses, so the two are one status and one stderr
+  line, and the `Kind:` prefix does not tell them apart either (a runtime fault and a forced `Err`
+  report in that same shape, while `raise "msg"` is a bare line). `?` works directly in `main`.
 
 ### Program lifetime & top-level initialization
 

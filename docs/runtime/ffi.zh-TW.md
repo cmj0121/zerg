@@ -195,9 +195,6 @@ raw 綁定與它們的 wrapper 分在一組：
 > 程式碼呼叫，而且完全沒有診斷。這個關鍵字被 parse 了，然後沒有任何東西去讀它，所以 `unsafe` 只標示意圖、
 > 不帶來檢查。
 >
-> **[deviation]** module 層級 `unsafe { … }` 分組裡的 `mut` binding 會被接受、然後**丟棄**，並不會變成可變
-> global：宣告編得過，使用點回報 `error: undefined name`。同一組裡的 `fn` 宣告則保留下來。
->
 > **[deviation]** `handle` 型別的 binding 會漏到 `cc`。`mut h: handle? = nil` 不產生任何 Zerg 診斷，而是對著
 > 產生的 C 以 `error: unknown type name 'zg_handle'` 失敗——這是本章唯一一處形式以「抵達 C 編譯器」而非「被拒絕」
 > 的方式打破標準契約。

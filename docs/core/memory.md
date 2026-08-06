@@ -192,12 +192,9 @@ x := parse(x)        # RHS reads the old x; the old x is del-ed; the name rebind
 mut x := x           # shadow again — now mutable, seeded from the previous copy
 ```
 
-> **[deviation]** A name may **not** be re-declared in the same block. `x := read()` followed by
-> `x := parse(x)` is rejected with _`x` is already declared in this block — a name is bound once per block,
-> though an inner block may shadow it_, so the worked example above does not compile and the
-> declare-del-declare sequence it illustrates never runs. Shadowing in a **nested** block — a loop body, an
-> `if` arm, a function body — does work, and is the half the compiler's own sources are written in;
-> same-block rebinding is a form nothing in the corpus needed, so nothing measured it.
+A `const` takes no part in this: it is shadow-proof in either direction ([`GRAMMAR`](../../GRAMMAR)
+group 4), so a re-declaration may neither take a `const`'s name nor mint a `const` over a name any
+visible binding holds — the same block included.
 
 Because the old binding is dead the instant the RHS finishes, `x := transform(x)` needs no copy — the
 source is provably dead, so the move optimization applies and the old storage is reused.

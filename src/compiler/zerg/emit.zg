@@ -331,6 +331,14 @@ struct Emitter {
 	# c_add_var caller (parameters, loop variables, match binds) answers is_const false.
 	const_names: list[str]
 	const_scopes: list[int]
+
+	# depth counts how many recursion levels of the expression walk are active — one per
+	# c_expr or c_infer entry, the two doors every recursive descent into an expression
+	# goes through. The parser bounds NESTING, but a flat chain (`1 + 1 + … + 1`, or a
+	# long method chain) never gets deeper in the parser — it loops — while the walk here
+	# recurses once per link and died of SIGSEGV at about 310 links. c_deeper is the
+	# counted refusal that fires first.
+	depth: int
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1162,9 +1170,11 @@ fn c_reset_env(mut &em: Emitter) {
 		em.env_cnames.append("zg_" + em.k_names[i])
 		em.env_dead.append(0)
 
-		# a module binding is never writable — EXCEPT the top-level `mut` the checker has
-		# already refused (chk_top_muts), which stays writable so its writes do not each
-		# add a second finding about immutability on top of the one that counts
+		# a module binding is writable exactly when it was declared `mut` — legally so
+		# inside a module-level `unsafe { … }` group, where it is the language's mutable
+		# global (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but
+		# stays writable too, so its writes do not each add a second finding about
+		# immutability on top of the one that counts
 		em.env_mut.append(em.k_mut[i])
 
 		# scope 0 is the module: a constant is in scope in every function, and a local
@@ -3136,10 +3146,50 @@ fn c_bool(b: bool) -> str {
 
 # --- expression emission -------------------------------------------------------
 
+# c_deeper takes one level of the expression walk, and refuses the program once the budget
+# is spent — BEFORE the recursion happens, so the stack the refusal is reported from is a
+# healthy one. It is p_deeper's rule at the emitter's altitude, and it exists because the
+# parser's copy cannot see every deep input: a LEFT-DEEP operator chain (`1 + 1 + … + 1`),
+# a long string concatenation, and a long method chain all parse in a LOOP — the parser's
+# depth never grows — while c_expr and c_infer recurse once per link and died of SIGSEGV
+# with no diagnostic at about 310 method links / 530 `+` terms on an 8 MB stack. The
+# budget is ZG_MAX_NESTING, the parser's own: the walk here goes about as deep as the
+# expression tree is, so the parser's bound is this walk's bound for every nested shape,
+# and the weakest measured chain (310) clears 200 by the same margin the parser chose
+# that number by (its weakest was 302). One number is also one story for the reader:
+# however a program reaches 200 levels of expression, the answer is this refusal.
+#
+# The exits are balanced by the two wrappers below and nowhere else: every recursive
+# entry into an expression goes through c_expr or c_infer, so the pair is the natural
+# chokepoint, and a raise abandons the walk entirely so a skipped decrement can never be
+# observed by a later statement.
+fn c_deeper(mut &em: Emitter) {
+	em.depth = em.depth + 1
+	return if em.depth <= ZG_MAX_NESTING
+
+	l := strconv.to_string(em.at_line, 10)
+	c := strconv.to_string(em.at_col, 10)
+	mut place := f"\n  --> {l}:{c}"
+	if em.at_path != "" {
+		place = f"\n  --> {em.at_path}:{l}:{c}"
+	}
+	raise f"this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
+}
+
 # c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
 # an EIdent equal to `bind` emits `sub` verbatim instead of a mangled name — this is how a
 # match arm's bound scrutinee name is spliced into its guard and body.
+#
+# It counts a level of the expression walk (c_deeper) and hands the node to c_expr_node,
+# so every recursive render pays the depth check without each arm's helper knowing it.
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
+	c_deeper(em)
+	out := c_expr_node(em, e, sb)
+	em.depth = em.depth - 1
+	return out
+}
+
+fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex) => c_int_dec(em, lex)
 		EFloat(lex) => lex
@@ -3970,7 +4020,9 @@ fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
 # anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
 # display leaves are already in the runtime header for the seed's f-strings.
 fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
-	inner := c_expr(em, x, sb)
+	# the operand is rendered by the paths that emit it — the identity, bridge and
+	# override returns above them answer through c_copied or a method call instead, so a
+	# cell rendered here first would be built and thrown away
 	xt0 := c_infer(em, x)
 	if c_is_str(ty) {
 		em.used_str = true
@@ -4006,8 +4058,20 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 			return f"zrt_str_from_bytes({c_copied(em, xt0, x, sb)})"
 		}
 
+		# A USER OVERRIDE WINS before the built-in leaves are consulted: a type that
+		# declares `display()` (or `debug`, its default) renders through it — this is the
+		# path an f-string hole and `str(x)` share, so one dispatch serves both. The call
+		# answers a fresh owned cell, exactly what this branch's other returns answer, so
+		# the concat and print paths downstream release it the same way. A mis-shaped
+		# override (the "" state) already earned its finding at the declaration; an inert
+		# placeholder lets that finding print instead of a raise about a missing rendering.
+		if meth := c_render_override(em, xt0) {
+			return c_expr(em, EMethod(x, meth, []), sb) if meth != ""
+			return "\"\""
+		}
+
 		c_display_check(em, xt0)
-		return c_display(xt0, inner)
+		return c_display(xt0, c_expr(em, x, sb))
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -4022,6 +4086,8 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# is the raw octets and `list[rune](s)` the code points it is UTF-8 for. A str with
 		# any non-ASCII in it has different lengths under the two, which is the whole reason
 		# the language spells both rather than picking one.
+		inner := c_expr(em, x, sb)
+
 		return f"zrt_str_runes({inner})" if c_is_rune(c_list_elem(ty))
 		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — a `str` bridges to its bytes as `list[byte]` or its code points as `list[rune]`" if not c_is_byte(c_list_elem(ty))
 
@@ -4045,7 +4111,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# compiler exists to get in front of.
 		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{nm}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
 
-		return f"((int64_t)({inner}).tag)"
+		return f"((int64_t)({c_expr(em, x, sb)}).tag)"
 	}
 
 	# A `str` SOURCE is PARSED, never re-constructed: `int(s)` / `uint(s)` / `float(s)` read
@@ -4059,6 +4125,8 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# reached them.
 	if c_is_str(xt) {
 		em.used_rt = true
+
+		inner := c_expr(em, x, sb)
 
 		return f"zrt_parse_uint({inner})" if c_is_uint(ty)
 		return f"zrt_parse_int({inner})" if c_is_int(ty)
@@ -4076,7 +4144,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# alone, because the type it parsed to was TInt and the class table could not tell the
 	# two apart — a `uint` was a spelling rather than a type, and the deviation that admitted
 	# it stood right here. TUint answers for itself now.
-	return c_conv_scalar(em, c_scalar_class(ty), c_scalar_bits(ty), xt, ty, inner)
+	return c_conv_scalar(em, c_scalar_class(ty), c_scalar_bits(ty), xt, ty, c_expr(em, x, sb))
 }
 
 # The conversion-relevant SHAPE of a scalar: what the value is, independent of how wide it
@@ -4282,6 +4350,61 @@ fn c_conv_to_i64(sc: int, inner: str) -> str {
 	return f"zrt_conv_i_from_f((double)({inner}), {c_float_lo(64)}, {c_float_hi(SC_SIGNED, 64)})" if sc == SC_FLOAT
 
 	return f"(int64_t)({inner})"
+}
+
+# c_render_override answers the whole three-state rendering question in one place: which
+# method, if any, a value of `t` renders through. `print`, an f-string hole and `str(…)`
+# all ask here first, which is what makes an override an override: a `type X = Y` scalar
+# used to render its underlying number with the impl never consulted, and a struct's was
+# refused outright by the composite [not yet] below even when the impl supplied exactly
+# the rendering that refusal says is missing.
+#
+#   nil          the type declares neither `display` nor `debug` — the structural
+#                refusal downstream owns the answer.
+#   "display" /  the override to dispatch through — "debug" when only that one is
+#   "debug"      declared, since display's DEFAULT is debug (docs/runtime/format.md).
+#                Only a method with the OVERRIDE SHAPE — the receiver alone, by value,
+#                answering `str` — is answered.
+#   ""           declared but MIS-SHAPED. chk_render_overrides has already made that a
+#                finding at the declaration, so the caller emits an inert placeholder
+#                instead of raising its own refusal — a raise ends the run before
+#                collected findings print, and "a composite needs the structural Display"
+#                about a program that plainly wrote one is the wrong sentence. The
+#                placeholder never reaches cc: a finding ends the build first.
+#
+# One answer rather than an override/mis-shaped pair of questions, because the pair made
+# every rendering site call both in the right order — and the second re-scanned what the
+# first had just scanned.
+fn c_render_override(mut &em: Emitter, t: Ty) -> str? {
+	nm := c_named_of(t)
+
+	return nil if nm == ""
+	return "display" if c_render_shape_ok(em, nm, "display")
+	return "debug" if c_render_shape_ok(em, nm, "debug")
+	return "" if c_has_method(em, nm, "display") or c_has_method(em, nm, "debug")
+
+	return nil
+}
+
+# c_render_shape_ok is whether `recv` declares `meth` with the override contract's shape:
+# one parameter (the receiver the parser prepends), taken by value, answering `str`.
+# chk_render_overrides holds a declaration to the same rows, so what the checker approves
+# and what this dispatches cannot drift apart.
+fn c_render_shape_ok(mut &em: Emitter, recv: str, meth: str) -> bool {
+	key := c_sig_key(recv, meth)
+	row := c_sig_row(em, key)
+
+	return false if row < 0
+	return false if em.sig_nparams[row] != 1
+	return false if not em.sig_hasret[row]
+
+	return c_is_str(em.sig_rets[row]) and not c_param_is_ref(em, key, 0)
+}
+
+fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
+	row := c_param_row(em, key, idx)
+	return false if row < 0
+	return em.pr_ref[row]
 }
 
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
@@ -5826,7 +5949,17 @@ fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
 	return t
 }
 
+# c_infer types an expression. Like c_expr it counts a level of the expression walk
+# (c_deeper): the checker's recursion is this function, and a chain deep enough to
+# overflow it is refused by the same rule at the same number.
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
+	c_deeper(em)
+	t := c_infer_node(em, e)
+	em.depth = em.depth - 1
+	return t
+}
+
+fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
 		EInt(_) => TInt
 		EFloat(_) => TFloat
@@ -6287,7 +6420,19 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 # the single-unit build, where own IS the program and `static` is right.
 fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	mut out := ""
+
+	# This walk runs before any function body, so no SAt marker covers it — a finding
+	# c_infer raises from inside an initializer would otherwise carry whatever the marker
+	# last said, which at this point is nothing. The declaration's own place is the answer,
+	# same as c_const_assigns.
+	keep_path := em.at_path
+	keep_line := em.at_line
+	keep_col := em.at_col
 	for c in f.consts {
+		em.at_path = c.path
+		em.at_line = c.line
+		em.at_col = c.col
+
 		# Every module flattens into ONE namespace, so two that declare the same constant
 		# mangle to one symbol. The FUNCTION case has been refused by name since the tables
 		# were written; this one linked — two definitions of `zg_N`, tolerated by a linker
@@ -6350,6 +6495,9 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 			out = out + f"extern {c_type(ty)} zg_{c.name};\n"
 		}
 	}
+	em.at_path = keep_path
+	em.at_line = keep_line
+	em.at_col = keep_col
 	return out
 }
 
@@ -6364,15 +6512,23 @@ fn c_const_in(f: File, name: str) -> bool {
 fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 	# A module constant's initializer is emitted into the ENTRY's wrapper, so the statement
 	# marker still names the entry file while the code belongs to whichever module declared
-	# the constant. Clearing the path says that honestly — the visibility rule is quiet when
-	# it cannot tell which module is reading — rather than answering with the wrong one,
-	# which reported `m`'s own call to its own private function as a violation.
-	keep := em.at_path
-	em.at_path = ""
+	# the constant. The marker is pointed at the DECLARATION instead — ConstDecl carries its
+	# own path/line/col for exactly this — which answers two questions at once: a finding
+	# raised while rendering the value reports the constant's own place rather than a stale
+	# marker with no file (the `has_place` contract), and the visibility rule reads the
+	# declaring module as the one doing the reading, so `m`'s constant calling `m`'s own
+	# private function stays quiet. Clearing the path was the earlier answer to the second
+	# question, and it silently gave the first one away.
+	keep_path := em.at_path
+	keep_line := em.at_line
+	keep_col := em.at_col
 	mut out := ""
 	mut i := 0
 	for i < f.consts.len() {
 		c := f.consts[i]
+		em.at_path = c.path
+		em.at_line = c.line
+		em.at_col = c.col
 
 		# the value is rendered AGAINST the recorded type — row i of k_tys, appended by
 		# c_const_globals from this same list — so an annotated declaration gets c_let's
@@ -6387,7 +6543,9 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 		out = out + f"    zg_{c.name} = {val};\n"
 		i = i + 1
 	}
-	em.at_path = keep
+	em.at_path = keep_path
+	em.at_line = keep_line
+	em.at_col = keep_col
 	return out
 }
 
@@ -6427,15 +6585,26 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 # raise, so the handler would guard an empty unwind — and buying it would cost every trivial
 # program the whole runtime, which zergrt.h opens by recording that it does not pay.
 #
-# There is no `Result[nil]` arm, and its absence is the discarded-Result deviation
-# ([Modules, Packages & Programs](../../docs/runtime/package.md)) rather than an oversight
-# here: such a main falls to the nil shape, so its `Right` is dropped and the program exits
-# 0. The seed HAS the arm — `zrt_run` maps the Result to a status — which is why the two
-# compilers disagree about that one shape, and why no program can observe it: the seed
-# cannot build `Right` either.
+# The `Result[nil]` arm maps the entry's Result to the exit docs/runtime/package.md
+# specifies: a Left exits 0, and a Right REPORTS its Err on stderr and exits 1. The
+# reporting is zg_force_fail — the same funnel a forced Err already goes up, `Kind:
+# message` and all — raised from the wrapper, so the message travels the root handler's
+# own path and the exit status is the one every abort already has. Both used to be
+# dropped: such a main fell to the nil shape, its `Right` was discarded and the program
+# exited 0, which was this file's documented discarded-Result deviation. (The seed's
+# zrt_run maps the tag to a status and prints nothing; the sentence the spec makes about
+# stderr is `zerg`'s to keep.)
+#
+# Every OTHER declared result — a `str`, a struct, a `Result[int]` — is refused by name:
+# each of those used to fall to the nil shape too, the value silently discarded, and a
+# value computed for nobody is the same disease at a different type.
 fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
 	has_args := c_main_has_args(own)
-	ret_int := c_main_ret_is_int(own)
+	ret := c_main_ret(own)
+	ret_int := c_is_int(ret)
+	ret_res := c_is_result_nil(ret)
+
+	raise f"NotImplemented: `fn main() -> {ty_name(ret)}` — the entry's shapes are `fn main()`, `-> int` (the exit status) and `-> Result[nil]` (docs/runtime/package.md); any other result would be computed and silently discarded" if not ret_int and not ret_res and not c_is_nil_ty(ret)
 
 	if has_args and em.used_conc {
 		# The scheduler's program-entry shims all take a NULLARY function pointer, so
@@ -6443,6 +6612,29 @@ fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
 		# entry.c's zrt_run_args shows the SHAPE is fine; it is the scheduler's version
 		# of it that is missing.
 		raise "NotImplemented: main(args) in a program that uses concurrency"
+	}
+	if ret_res {
+		# The Result travels as an int64 exit code so the two shims `-> int` already has
+		# carry it — args or not, concurrent or not — rather than a third family of
+		# entry shims existing for one tag test. zg_force_fail is in the carrier
+		# prelude, which the `Result[nil]` in main's own signature guarantees is
+		# emitted; the raise lands on the root handler the shim armed, which reports
+		# the message and answers 1.
+		em.used_rt = true
+		rcn := c_carrier_ty_cname(ret)
+		mut callargs := ""
+		if has_args {
+			callargs = "__zerg_args"
+		}
+		mut body := f"    {rcn} zgt_r = zg_main({callargs});\n"
+		body = body + "    if (" + c_res_is_right("zgt_r") + ") { zg_force_fail(" + c_res_err("zgt_r") + "); }\n    return 0;\n"
+		if has_args {
+			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + body + "}\n\n"
+			return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args_int(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
+		}
+		wrap := "static int64_t __zerg_entry(void) {\n" + inits + body + "}\n\n"
+		shim := c_main_shim(em, "zrt_sched_main_int", "zrt_main_run_int")
+		return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
 	}
 
 	if not has_args and not c_needs_runtime(em) and not em.used_rt {
@@ -8052,13 +8244,11 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {
-	# the shadow rule OWNS the name when this binding takes a visible const's:
-	# c_add_var reports the re-bind below, and the redeclaration message's advice —
-	# "an inner block may shadow it" — is exactly what a `const` does not allow, so one
-	# mistake must not collect both sentences
-	if not chk_const_in_sight(em, name) {
-		chk_fresh_binding(em, name)
-	}
+	# RE-DECLARATION IS LEGAL, same block included (docs/core/memory.md): the initializer
+	# below is rendered before c_add_var appends the new row, so the RHS reads the OLD
+	# binding, the name then rebinds afresh, and the old row's storage pays at scope exit
+	# exactly as an explicit `del`'s does. The only name a binding may not take is a
+	# visible `const`'s (chk_const_rebind, in c_add_var).
 
 	# direction two of shadow-proofing is asked HERE and not in c_add_var, because only
 	# a `binding` can mint a `const` — a loop variable or a match-arm bind never can
@@ -8087,8 +8277,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	# `m["a"] = P(3,4)` silently read back a TRUNCATED value, and a carrier value was a cc
 	# error instead. The declared type is what the map is built with when one is written.
 	if has_type and c_is_map(eff) and c_is_maplit(ival) {
+		# the literal is rendered BEFORE the binding enters scope, like every other
+		# initializer here: an entry naming `name` means the OLD binding — a shadowed
+		# outer one, or the one this declaration re-declares — never the new variable
+		mval := c_map_lit_as(em, eff, ival, c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
-		return f"{ind}zrt_map {c_var_cname(em, name)} = {c_map_lit_as(em, eff, ival, c_nosub())};\n"
+		return f"{ind}zrt_map {c_var_cname(em, name)} = {mval};\n"
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)
@@ -8099,10 +8293,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
 	raise f"`{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival))
 
-	# a declared `T?` takes the value the declaration promises, wrapping a bare one
+	# a declared `T?` takes the value the declaration promises, wrapping a bare one; the
+	# value is rendered BEFORE the binding enters scope, so an initializer naming `name`
+	# reads the old binding rather than the uninitialized new one
 	if has_type and c_is_carrier(eff) {
-		c_add_var(em, name, eff, is_mut, is_const)
 		cval := c_carrier_fit(em, chk_binding_says(name), eff, ival, c_nosub())
+		c_add_var(em, name, eff, is_mut, is_const)
 		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {cval};\n"
 	}
 
@@ -8302,6 +8498,20 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# says which one was meant; printing the carrier itself used to reach cc as an integer
 	# cast of a struct.
 	raise f"`print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if c_is_opt(ty)
+
+	# A USER OVERRIDE WINS: a type that declares `display()` (or `debug`, its default —
+	# docs/runtime/format.md) prints through it. The call answers a fresh owned cell, so
+	# it is shown and released in one statement, the shape the owned-str arm below uses.
+	# A mis-shaped override (the "" state) already earned its finding at the declaration;
+	# an inert placeholder lets that finding print instead of a raise about a missing
+	# rendering.
+	if meth := c_render_override(em, ty) {
+		return f"{ind}/* mis-shaped render override */\n" if meth == ""
+
+		em.used_rt = true
+		call := c_expr(em, EMethod(e, meth, []), c_nosub())
+		return f"{ind}{{ const char* zgt_ps = {call}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+	}
 
 	# A COMPOSITE has no rendering: the structural one is `Display`'s job and this compiler
 	# generates none, so the arm below cast a struct, a list or a tuple to `long long` and
@@ -8520,6 +8730,15 @@ fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 # parenthesized, and wrapping those again produces `if ((a == b))` — which the C compiler
 # warns about, 112 times in one build of this compiler. That noise is not free: it is what
 # a real warning has to be spotted among, and one nearly was not.
+#
+# A GNU statement expression is the one rendering whose own parentheses do NOT satisfy
+# `if`: `(({ … }))` is what compiles — the inner pair belongs to the statement expression,
+# the outer to the `if` — and c_is_wrapped owns that fact, answering false for `({ … })`
+# so this site (and any future borrower) wraps it without asking a second question. That
+# one dropped pair is how every bool-valued form that lowers to a statement expression —
+# `in` over a list or a map, `??` as a whole condition — escaped to cc from `if`, `for`,
+# and the postfix conditionals, while the same forms compiled anywhere else an expression
+# goes.
 fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 	chk_condition(em, x, site)
 	rendered := c_expr(em, x, c_nosub())
@@ -8534,10 +8753,27 @@ fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 }
 
-# c_is_wrapped reports whether s is enclosed by ONE pair of parentheses — its first
-# character opening the pair its last character closes, rather than two adjacent groups
-# like `(a) + (b)`.
+# c_is_stmt_expr reports whether rendered C opens as a GNU statement expression `({ … }`.
+# The leading two characters are the whole test: every statement expression this emitter
+# writes begins with the literal pair `({`, and no ordinary parenthesized rendering does —
+# a `(` there is always followed by a value, a cast, or another `(`.
+fn c_is_stmt_expr(s: str) -> bool {
+	b := list[byte](s)
+	return false if b.len() < 2
+	return b[0] == b'(' and b[1] == b'{'
+}
+
+# c_is_wrapped reports whether s is enclosed by ONE pair of parentheses a caller may
+# BORROW — its first character opening the pair its last character closes, rather than
+# two adjacent groups like `(a) + (b)`.
+#
+# A GNU statement expression answers false even though its own pair encloses it: that
+# pair belongs to the `({ … })` form itself — reusing it as, say, the parens an `if`
+# requires spells `if ({ … })`, and a C parser reading if's condition meets `{` where an
+# expression must start. Answering false HERE is what makes the next borrower safe by
+# construction, instead of every caller asking a second question beside this one.
 fn c_is_wrapped(s: str) -> bool {
+	return false if c_is_stmt_expr(s)
 	b := list[byte](s)
 	return false if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')'
 	mut depth := 0
@@ -8925,23 +9161,28 @@ pub fn c_has_main(f: File) -> bool {
 	return false
 }
 
-# c_main_ret_is_int reports whether the entry point answers an `int`, which is the one
-# return shape that becomes the process exit code. `-> Result[nil]` is not one of these:
-# parse_type still erases it to nil, so it emits a void main and takes the nil path, which
-# is the same shim the seed picks for it.
-fn c_main_ret_is_int(f: File) -> bool {
+# c_main_ret is the entry point's declared result type — TNil both when it declares none
+# and when it spells `-> nil`, because the two mean the same entry shape. c_main_entry
+# reads every entry-shape question off this one answer: `int` (the exit status) as
+# `c_is_int`, `Result[nil]` as `c_is_result_nil`.
+fn c_main_ret(f: File) -> Ty {
 	mut i := 0
 	for i < f.fns.len() {
 		fn_i := f.fns[i]
-		if fn_i.name == "main" and fn_i.recv == "" and fn_i.has_ret {
-			return match fn_i.ret {
-				TInt => true
-				_    => false
-			}
+		if fn_i.name == "main" and fn_i.recv == "" {
+			return fn_i.ret if fn_i.has_ret
+			return TNil
 		}
 		i = i + 1
 	}
-	return false
+	return TNil
+}
+
+# c_is_result_nil is the `Result[nil]` entry shape — an Either whose left is nil and whose
+# right is the Err, which is what parse_type builds for the spelling.
+fn c_is_result_nil(t: Ty) -> bool {
+	return false if not c_is_either(t)
+	return c_is_nil_ty(c_either_left(t)) and c_is_err_ty(c_either_right(t))
 }
 
 fn c_main_has_args(f: File) -> bool {
@@ -9286,7 +9527,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0)
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -9321,6 +9562,11 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# and the specs, which need the same whole-program view for the same reason: an `impl`
 	# in one file names a spec declared in another, and the driver has already merged them
 	chk_spec_impls(em, f)
+
+	# and the rendering overrides: c_render_override dispatches through a `display` /
+	# `debug` method only when its shape is the contract's, so the mis-shaped one must be
+	# a finding at its declaration rather than a silent fall-through to the built-in
+	chk_render_overrides(em, f)
 
 	mut types := ""
 

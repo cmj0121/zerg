@@ -226,10 +226,6 @@ the thin wrapper you write is where you vouch. Group the raw bindings and their 
 > `unsafe { … }` group is callable from ordinary safe code with no diagnostic at all. The keyword is parsed
 > and nothing reads it, so `unsafe` marks intent and confers no checking.
 >
-> **[deviation]** A `mut` binding inside a module-level `unsafe { … }` group is accepted and then **dropped**
-> rather than becoming a mutable global: the declaration compiles and the use site reports
-> `error: undefined name`. The `fn` declarations in the same group survive.
->
 > **[deviation]** A `handle`-typed binding escapes to `cc`. `mut h: handle? = nil` produces no Zerg
 > diagnostic and fails as `error: unknown type name 'zg_handle'` against the generated C — the one place in
 > this chapter where a form breaks the standing contract by reaching the C compiler rather than being

@@ -360,6 +360,15 @@ pub struct Diag {
 	msg: str
 }
 
+# diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
+# program build whose entry declares no `fn main` — and the seed does not read a
+# module-qualified struct constructor (`zerg.Diag(…)` emits a type name in call position),
+# so the constructor lives here, beside the struct, as an ordinary function a caller in
+# another module can reach.
+pub fn diag_at(path: str, line: int, col: int, msg: str) -> Diag {
+	return Diag(path, line, col, msg)
+}
+
 # FieldDef is one struct field: its name and declared type.
 struct FieldDef {
 	name: str
@@ -455,9 +464,13 @@ struct ImplDecl {
 # statement of no function: by emission the whole program is one merged File, and there is
 # no FnDecl and no SAt marker left to remember where it was written.
 #
-# `is_mut` is carried, not legal: the top level is immutable outside a module-level
-# `unsafe { … }` group, and PARSING the offending binding is what lets the refusal name
-# its own declaration instead of answering `undefined name` at every use site.
+# `is_mut` is carried, and legal only with `in_unsafe`: the top level is immutable
+# outside a module-level `unsafe { … }` group (docs/runtime/package.md), and PARSING the
+# offending binding is what lets the refusal name its own declaration instead of
+# answering `undefined name` at every use site. `in_unsafe` records that the binding was
+# declared inside such a group — where a `mut` binding IS the language's mutable global
+# (docs/runtime/ffi.md, GRAMMAR group 12) — so chk_top_muts can tell the legal home of a
+# mutable global from the safe code it is banned in.
 # `is_pub` is the visibility chk_visible enforces: c_const_globals records it beside the
 # constant's module (k_mod / k_pub), and a cross-module read of a non-`pub` constant is
 # refused the way a private function's call is.
@@ -468,6 +481,7 @@ pub struct ConstDecl {
 	is_mut: bool
 	is_const: bool
 	is_pub: bool
+	in_unsafe: bool
 	value: Expr
 
 	path: str

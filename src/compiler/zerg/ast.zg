@@ -192,9 +192,15 @@ struct Arm {
 # the optional parts the subset's flat enums cannot express as optionals.
 enum Stmt {
 	# SLet is a binding: the name, its declared type, whether one was WRITTEN, whether it
-	# is `mut`, and the initializer. The two bools are in that order — has_type first —
-	# which is worth saying because they are the same type and a swap type-checks.
-	SLet(str, Ty, bool, bool, Expr)
+	# is `mut`, whether it is `const`, and the initializer. The three bools are in that
+	# order — has_type, then is_mut, then is_const — which is worth saying because they
+	# are the same type and a swap type-checks.
+	#
+	# is_const is carried rather than folded away because `const` means more than "not
+	# mut": GRAMMAR group 4 makes a `const` binding SHADOW-PROOF — a name collision with
+	# one, in either direction, is an error — and the emitter cannot enforce a property
+	# the tree no longer records.
+	SLet(str, Ty, bool, bool, bool, Expr)
 	SAssign(Expr, Expr)
 	SPrint(Expr)
 	SReturn(bool, Expr)
@@ -442,6 +448,32 @@ struct ImplDecl {
 	col: int
 }
 
+# ConstDecl is one module-level binding — `const K := 1`, `pub COUNT := 3`, or a plain
+# `COUNT := 3` — the module's immutable top-level state (docs/runtime/package.md), with
+# `pub` as its visibility. It mirrors SLet's fields and adds the three a DECLARATION owes
+# a diagnostic — the file and the position it starts at — because a module constant is a
+# statement of no function: by emission the whole program is one merged File, and there is
+# no FnDecl and no SAt marker left to remember where it was written.
+#
+# `is_mut` is carried, not legal: the top level is immutable outside a module-level
+# `unsafe { … }` group, and PARSING the offending binding is what lets the refusal name
+# its own declaration instead of answering `undefined name` at every use site.
+# `is_pub` is recorded from the source and read by nothing yet — visibility is enforced
+# on functions and on nothing else, the deviation docs/runtime/package.md owns.
+pub struct ConstDecl {
+	name: str
+	ty: Ty
+	has_ty: bool
+	is_mut: bool
+	is_const: bool
+	is_pub: bool
+	value: Expr
+
+	path: str
+	line: int
+	col: int
+}
+
 pub struct File {
 	imports: list[str]
 	structs: list[StructDecl]
@@ -455,9 +487,11 @@ pub struct File {
 	# have is one underlying type and an identity of their own.
 	types: list[TypeDecl]
 
-	# consts are the module-level `const` bindings, each an SLet. They are not statements
-	# of any function: they become C globals, assigned once before anything runs.
-	consts: list[Stmt]
+	# consts are the module-level bindings — the module's immutable state, `const`-marked
+	# or not, plus the `mut` ones kept so their refusal has a declaration to point at.
+	# They are not statements of any function: they become C globals, assigned once
+	# before anything runs.
+	consts: list[ConstDecl]
 
 	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
 	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
@@ -541,7 +575,7 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_ty, is_mut, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		SLet(name, ty, has_ty, is_mut, is_const, value) => f"{ind}let {name} = {expr_kind(value)}\n"
 		SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
 		SPrint(x) => f"{ind}print {expr_kind(x)}\n"
 		SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"

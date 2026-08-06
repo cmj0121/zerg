@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -104,13 +104,36 @@ PREFIX ?= /usr/local
 # submodule work under `make -j`, and what is installed must be the binary this run built.
 install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
 	$(MAKE) build
-	@install -d "$(PREFIX)/bin" "$(PREFIX)/lib/zerg/csrc" "$(PREFIX)/lib/zerg/stdlib"
+	@# `mkdir -p` and NOT `install -d`. BSD install(1) chmods the directory even when it
+	@# already exists, so `install -d /usr/local/bin` fails with
+	@#
+	@#     install: chmod 755 /usr/local/bin: Operation not permitted
+	@#
+	@# on any macOS where that directory belongs to root — which is the default. The chmod is
+	@# to the mode it already has, on a directory this target did not create and was only ever
+	@# going to write one file into. `mkdir -p` asks for exactly what is wanted: the path
+	@# exists, and nothing is said about a path that already did.
+	@mkdir -p "$(PREFIX)/bin" "$(PREFIX)/lib/zerg/csrc" "$(PREFIX)/lib/zerg/stdlib" 2>/dev/null || true
+	@# and then the question the user actually has to answer, asked before three commands fail
+	@# one at a time. `install` reports one path per failure; this reports what to do about it.
+	@[ -w "$(PREFIX)/bin" ] && [ -w "$(PREFIX)/lib/zerg/csrc" ] && [ -w "$(PREFIX)/lib/zerg/stdlib" ] || { \
+		echo "install: $(PREFIX) is not writable by $$(id -un)."; \
+		echo "    sudo make install                   install for everyone"; \
+		echo "    make install PREFIX=$$HOME/.local   install for you (put $$HOME/.local/bin on PATH)"; \
+		exit 1; }
 	install -m 0755 bin/zerg "$(PREFIX)/bin/zerg"
 	@# zrt_test.* is the C suite's harness and belongs to no program; the others are the
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
 	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
+
+# `make install` is the first command a user runs and was the one command nothing ran: every
+# other gate here uses the compiler out of ./bin, so a broken install was invisible until
+# somebody hit it. This does the round trip into a temporary prefix — install, compile and
+# RUN with nothing exported, uninstall, look at what is left.
+install-check:                  # the installed toolchain works, and uninstall takes it away
+	@./scripts/install-check.sh
 
 uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
 	rm -f "$(PREFIX)/bin/zerg"
@@ -218,11 +241,19 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # The compiler's OWN sources, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
 # needs no submodule, so it runs everywhere.
+# Every source this repository writes IN Zerg. It is one variable because `fmt` and
+# `fmt-self` have to name the same set: they were two globs, and the day the `lsp` module
+# was added it landed in neither — `make fmt` did not reach it and `make fmt-self` did not
+# notice, so a whole directory of the compiler was outside the rule that every other line
+# of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
+# size of whatever was added last.
+SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
+
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
-	@./bin/zerg fmt --check src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg \
+	@./bin/zerg fmt --check $(SELF_SRCS) \
 		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
-	@echo "fmt-self: $$(ls src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg | wc -l | tr -d ' ') sources are fmt's fixpoint"
+	@echo "fmt-self: $$(ls $(SELF_SRCS) | wc -l | tr -d ' ') sources are fmt's fixpoint"
 
 # A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
 # gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
@@ -331,6 +362,26 @@ oracle:                         # the seed and the shipping compiler agree about
 # agree", which an empty list satisfies.
 DESUGAR_MIN ?= 80
 
+# The language server has no analysis of its own — every answer it gives is a call into the
+# compiler's own `pub` surface — so the way it goes wrong is by growing one. This drives a
+# REAL session over stdio and holds what it publishes to what `zerg build` and `zerg lint`
+# say about the same file, which is `oracle`'s argument applied to the second front end.
+#
+# It is also the only thing in this tree that exercises the wire: Content-Length framing, a
+# request/response loop over a stream that does not end, and a reply for every id.
+LSP_MIN ?= 20
+
+lsp:                            # the language server says what the compiler says
+	$(MAKE) build
+	@MIN_SESSIONS=$(LSP_MIN) ./scripts/lsp-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null | head -40)
+
+# An editor file is the one place a language fact is REPEATED rather than asked for, so it
+# is the one place that needs a diff rather than a call. Two facts today: the reserved-word
+# list, and which character an indent is.
+editor-align:                   # no editor file states a language fact the compiler denies
+	$(MAKE) build
+	@./scripts/editor-align.sh
+
 desugar:                        # a program and the same program desugared do the same thing
 	$(MAKE) build
 	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
@@ -351,7 +402,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -397,6 +448,6 @@ lint-check:                     # every linter rule has a program that makes it 
 
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build
-	@for f in $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg; do \
+	@for f in $(SELF_SRCS); do \
 		./bin/zerg fmt $$f || { echo "fmt: failed on $$f"; exit 1; }; \
 	done

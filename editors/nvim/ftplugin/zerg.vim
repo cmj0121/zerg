@@ -9,10 +9,20 @@ let b:did_ftplugin = 1
 setlocal commentstring=#\ %s
 setlocal comments=:#
 
-" Small and crisp: 4-space indent, no tabs.
-setlocal expandtab
+" A TAB per nesting level, displayed four columns wide.
+"
+" This said `expandtab` and four spaces, which is not what this language is written in:
+" `zerg fmt`'s F101 indents with one tab per level, every source in the tree is indented
+" that way, and `make fmt-self` holds them there. So a person typing in nvim produced
+" spaces that the formatter turned into tabs on the next save — a whole-file diff on every
+" write, caused by the editor and the formatter disagreeing about the same rule.
+"
+" The width is a display choice and stays four; the character is the formatter's and is not
+" a choice at all.
+setlocal noexpandtab
+setlocal tabstop=4
 setlocal shiftwidth=4
-setlocal softtabstop=4
+setlocal softtabstop=0
 
 " Fold a block's BODY and leave the line that opens it visible, so a folded function still
 " shows its own signature. Syntax folding cannot do this: a syntax fold always begins on
@@ -72,4 +82,4 @@ function! s:BraceDelta(lnum) abort
   return l:depth
 endfunction
 
-let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< shiftwidth< softtabstop< foldmethod< foldexpr< foldlevel<'
+let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< tabstop< shiftwidth< softtabstop< foldmethod< foldexpr< foldlevel<'

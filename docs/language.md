@@ -74,6 +74,7 @@ other chapter relies on. Read it first.
 | ------------------------------------------ | --------------------------------------------------------- |
 | [Formatter & Linter Rules](tooling/fmt.md) | every rule `zerg fmt` and `zerg lint` apply, and its code |
 | [Desugar Rules](tooling/desugar.md)        | every rule `zerg desugar` applies, and its code           |
+| [Language Server](tooling/lsp.md)          | `zerg lsp` — what it answers, and what holds it honest    |
 
 ## Types
 

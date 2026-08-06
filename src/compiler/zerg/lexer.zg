@@ -513,6 +513,14 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 		return bad(l, "E103", "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
 	}
 	advance(l) # closing '
+
+	# A BYTE'S VALUE RIDES AS A DECIMAL SPELLING, not as the octet itself. Token.value is
+	# a `str`, and the str bridge validates: `str(sb)` RAISED for the one byte `\x80` (not
+	# UTF-8) and for `\x00` (an interior NUL), so the compiler itself aborted with
+	# `EncodingError` on half the range GRAMMAR's byte-escape grants — the values a `byte`
+	# exists for. An octet is not text and no str can be asked to carry one; the number
+	# always can, and it is already the spelling the parser's EInt wants to hold.
+	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), strconv.to_string(int(sb[0]), 10)) if byte_mode
 	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), str(sb))
 }
 

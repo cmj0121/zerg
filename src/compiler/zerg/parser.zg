@@ -2050,8 +2050,12 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# binding", about the one literal in the language whose whole point is that it is a
 		# byte. The conversion node is the type the emitter already knows how to carry, and
 		# `byte(74)` has always worked; this is that, written the way a reader writes it.
+		#
+		# The VALUE arrives as the octet's decimal spelling, not the octet: re-reading the
+		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
+		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
+		return EConv(TByte, EInt(t.value), "byte")
 	}
 	if k == Rune {
 		p_advance(p)

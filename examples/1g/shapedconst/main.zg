@@ -1,0 +1,12 @@
+# A module constant of a SPELLED type — a tuple, an optional — compiles in every unit,
+# including the module's own, which declares the global without lowering the value.
+#   zerg build examples/1g/shapedconst/main.zg
+# Expected output:
+#   3
+#   9
+import "unit"
+
+fn main() {
+	print unit.SPAN.0 + unit.SPAN.1 # 3 — a cross-module tuple constant
+	print unit.CAP ?? 9             # 9 — a cross-module optional constant, absent
+}

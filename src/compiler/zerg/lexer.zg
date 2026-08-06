@@ -285,44 +285,78 @@ fn utf8_encode(cp: int) -> list[byte] {
 	return r
 }
 
-# decode_escape consumes a backslash escape at the cursor and returns its decoded
-# bytes. byte_mode selects the '\xHH' form; otherwise '\u{...}' is accepted.
-fn decode_escape(mut &l: Lex, byte_mode: bool) -> list[byte] {
+# decode_escape consumes a backslash escape at the cursor and answers the VALUE it decodes
+# to — a code point, or in byte_mode the octet a '\xHH' spells — or -1 for a malformed one,
+# which the caller reports at the literal's own place (bad_escape). Answering -1 rather than
+# raising is the whole point: `b'\xzz'` used to reach `byte(hi * 16 + lo)` with hex_val's
+# -1 in it, and the COMPILER's own checked conversion aborted with `OverflowError` — no
+# file, no line, no form named. A malformed escape is a fact about the source, and the
+# person who wrote it is owed a place.
+#
+# Nothing here advances past a byte it has not accepted, so the caller's recovery starts
+# where the mistake does. An escape this table does not name is -1 too, as the seed has it:
+# quietly meaning `\q` as `q` reads as forgiveness right up until `\` gains a meaning.
+fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 	advance(l) # backslash
+	return -1 if eof(l)
 	c := advance(l)
-	mut r: list[byte] = []
-	if c == b'n' {
-		r.append(byte(10))
-	} else if c == b't' {
-		r.append(byte(9))
-	} else if c == b'r' {
-		r.append(byte(13))
-	} else if c == b'0' {
-		r.append(byte(0))
-	} else if c == b'\\' {
-		r.append(byte(92))
-	} else if c == b'\'' {
-		r.append(byte(39))
-	} else if c == b'"' {
-		r.append(byte(34))
-	} else if c == b'x' and byte_mode {
+
+	return 10 if c == b'n'
+	return 9 if c == b't'
+	return 13 if c == b'r'
+	return 0 if c == b'0'
+	return 92 if c == b'\\'
+	return 39 if c == b'\''
+	return 34 if c == b'"'
+
+	if c == b'x' and byte_mode {
+		return -1 if not ascii.is_hex_digit(at(l, 0)) or not ascii.is_hex_digit(at(l, 1))
+
 		hi := ascii.hex_val(advance(l))
 		lo := ascii.hex_val(advance(l))
-		r.append(byte(hi * 16 + lo))
-	} else if c == b'u' and not byte_mode {
+		return hi * 16 + lo
+	}
+	if c == b'u' and not byte_mode {
+		return -1 if at(l, 0) != b'{'
+
 		advance(l) # {
 		mut cp := 0
+		mut n := 0
 		for ascii.is_hex_digit(at(l, 0)) {
 			cp = cp * 16 + ascii.hex_val(advance(l))
+			n = n + 1
+
+			# clamped one past the code space, so a long run of digits cannot overflow the
+			# checked multiply above — the clamp value itself still reads as out of range
+			if cp > 1114111 {
+				cp = 1114112
+			}
 		}
+		return -1 if n == 0 or at(l, 0) != b'}'
+
 		advance(l) # }
-		for e in utf8_encode(cp) {
-			r.append(e)
-		}
-	} else {
-		r.append(c)
+
+		# past U+10FFFF or a surrogate: U+FFFD, which is what the seed's WriteRune answers.
+		# It cannot be refused here without refusing what the seed accepts, and it cannot be
+		# encoded as written without handing the str bridge bytes that are not UTF-8.
+		return 65533 if cp > 1114111 or (cp >= 55296 and cp <= 57343)
+		return cp
 	}
-	return r
+	return -1
+}
+
+# bad_escape reports a malformed backslash escape, after eating the rest of the literal up
+# to its closing quote — the recovery point is part of the diagnostic (the E103 note says
+# why), and the seed's second "unterminated" error for the same mistake is exactly what it
+# buys off. The noun names the literal form, as the seed's message does.
+fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
+	for not eof(l) and at(l, 0) != q and at(l, 0) != byte(10) {
+		advance(l)
+	}
+	if at(l, 0) == q {
+		advance(l)
+	}
+	return bad(l, "E109", f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
 fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -337,14 +371,28 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			break
 		}
 		if c == b'\\' {
-			for e in decode_escape(l, false) {
+			v := decode_escape(l, false)
+			return bad_escape(l, "string", b'"', sline, scol, soff) if v < 0
+
+			for e in utf8_encode(v) {
 				sb.append(e)
 			}
 		} else {
 			sb.append(advance(l))
 		}
 	}
+	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
 	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+# has_nul is the seed's NUL rule: a Zerg str is text, and the bridge that makes one refuses
+# an interior NUL — so a string literal that decodes to one must be refused HERE, by name,
+# or `"\0"` aborts the compiler itself with `EncodingError` at emit_val's `str(sb)`.
+fn has_nul(sb: list[byte]) -> bool {
+	for c in sb {
+		return true if c == byte(0)
+	}
+	return false
 }
 
 # scan_fstring scans an f-string as ONE token: the lexeme is the verbatim source `f"a{x}b"`
@@ -448,13 +496,29 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			break
 		}
 		if at(l, 0) == b'\\' {
-			for e in decode_escape(l, false) {
+			v := decode_escape(l, false)
+			if v < 0 {
+				# recovery to the closing """ by hand: bad_escape stops at a line break,
+				# and a line break is exactly what this literal is allowed to hold
+				for not eof(l) {
+					if at(l, 0) == b'"' and at(l, 1) == b'"' and at(l, 2) == b'"' {
+						advance(l)
+						advance(l)
+						advance(l)
+						break
+					}
+					advance(l)
+				}
+				return bad(l, "E109", "invalid escape in a string literal", sline, scol, lexeme_from(l, soff))
+			}
+			for e in utf8_encode(v) {
 				sb.append(e)
 			}
 		} else {
 			sb.append(advance(l))
 		}
 	}
+	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
 	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
@@ -469,6 +533,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		sb.append(advance(l))
 	}
 	advance(l) # closing "
+	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
 	return emit_val(l, RawStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
@@ -478,9 +543,12 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 	advance(l) # opening '
 	mut sb: list[byte] = []
 	return bad(l, "E102", "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
+	mut val := 0
 	if at(l, 0) == b'\\' {
-		for e in decode_escape(l, byte_mode) {
-			sb.append(e)
+		val = decode_escape(l, byte_mode)
+		if val < 0 {
+			return bad_escape(l, "byte", b'\'', sline, scol, soff) if byte_mode
+			return bad_escape(l, "rune", b'\'', sline, scol, soff)
 		}
 	} else {
 		# ONE CHARACTER IS ONE CODE POINT, and in UTF-8 that is one to four BYTES. Taking a
@@ -513,7 +581,24 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 		return bad(l, "E103", "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
 	}
 	advance(l) # closing '
-	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), str(sb))
+
+	# THE VALUE RIDES AS A DECIMAL SPELLING, not as the character itself. Token.value is a
+	# `str`, and the str bridge validates: `str(sb)` RAISED for the one byte `\x80` (not
+	# UTF-8) and for `\x00` (an interior NUL), so the compiler itself aborted with
+	# `EncodingError` on half the range GRAMMAR's byte-escape grants — the values a `byte`
+	# exists for — and again on the rune `'\0'`, which the seed accepts. A code point is not
+	# text any more than an octet is, and no str can be asked to carry either; the number
+	# always can, and it is already the spelling the parser's EInt wants to hold.
+	#
+	# An escape arrives with its value decoded (decode_escape); a character written plainly
+	# is read off its source bytes — one byte IS the value, and a multi-byte code point goes
+	# through rune_value, the audited decoder, exactly as the parser used to send it.
+	if sb.len() == 1 {
+		val = int(sb[0])
+	} else if sb.len() > 1 {
+		val = rune_value(str(sb))
+	}
+	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), strconv.to_string(val, 10))
 }
 
 fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {

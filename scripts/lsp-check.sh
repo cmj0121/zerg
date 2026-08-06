@@ -236,6 +236,131 @@ EOF
 	[ $rc -eq 0 ] || fail=$((fail + 1))
 fi
 
+# --- 3. the protocol, not the answers ------------------------------------------------
+#
+# Everything above asks whether the server says the right thing. This asks whether it
+# BEHAVES like a server, which is a different failure and a quieter one: an editor with a
+# corrupted buffer or a client left waiting reports nothing at all.
+#
+# Every case here failed once. They are the final audit of this branch, written down.
+if ! "$PY" - "$ZERG" "$tmp" <<'PYEOF'
+import json, os, subprocess, sys
+
+zerg, tmp = sys.argv[1], sys.argv[2]
+src = "fn main() {\n\t# a comment — with an em-dash and 註解\n\tx := 1\n\tx = 2\n}\n"
+path = os.path.join(tmp, "proto.zg")
+open(path, "w", encoding="utf-8").write(src)
+uri = "file://" + os.path.abspath(path)
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+
+def run(msgs, raw=b""):
+    wire = b"".join(frame(m) for m in msgs[:1]) + raw + b"".join(frame(m) for m in msgs[1:])
+    p = subprocess.run([zerg, "lsp"], input=wire, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, timeout=120)
+    out, frames, i = p.stdout, [], 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = None
+        for line in out[i:j].decode("ascii", "replace").split("\r\n"):
+            k, _, v = line.partition(":")
+            if k.strip().lower() == "content-length":
+                n = int(v.strip())
+        if n is None:
+            break
+        frames.append(json.loads(out[j + 4:j + 4 + n].decode("utf-8")))
+        i = j + 4 + n
+    return p.returncode, frames
+
+INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
+OPEN = {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": src}}}
+EXIT = {"jsonrpc": "2.0", "method": "exit"}
+DOWN = {"jsonrpc": "2.0", "id": 2, "method": "shutdown"}
+
+def diags(frames):
+    return [len(f["params"]["diagnostics"]) for f in frames
+            if f.get("method") == "textDocument/publishDiagnostics"]
+
+bad = 0
+def check(ok, what, got):
+    global bad
+    if not ok:
+        print("PROTOCOL  %s — got %r" % (what, got))
+        bad += 1
+
+# a diagnostic on a line that follows a line of non-ASCII: the column is UTF-16 units, and
+# a byte column would be several characters out
+_, fr = run([INIT, OPEN, EXIT])
+d = [f for f in fr if f.get("method") == "textDocument/publishDiagnostics"][0]["params"]["diagnostics"]
+check(len(d) == 1 and d[0]["range"]["start"] == {"line": 3, "character": 1},
+      "a position after a line of CJK is in UTF-16 units", d and d[0]["range"])
+
+# an EMPTY contentChanges must not replace the buffer with the empty string
+_, fr = run([INIT, OPEN, {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+    "textDocument": {"uri": uri, "version": 2}, "contentChanges": []}}, EXIT])
+check(diags(fr) == [1], "an empty change leaves the buffer alone", diags(fr))
+
+# an INCREMENTAL change is refused rather than applied as a fragment
+_, fr = run([INIT, OPEN, {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+    "textDocument": {"uri": uri, "version": 2}, "contentChanges": [
+        {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+         "text": "X"}]}}, EXIT])
+check(diags(fr) == [1], "an incremental change is refused, not applied", diags(fr))
+
+# a full change IS applied
+_, fr = run([INIT, OPEN, {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+    "textDocument": {"uri": uri, "version": 2},
+    "contentChanges": [{"text": "fn main() {\n\tprint 1\n}\n"}]}}, EXIT])
+check(diags(fr) == [1, 0], "a full change is applied", diags(fr))
+
+# after `shutdown`, a request is answered with InvalidRequest rather than served
+_, fr = run([INIT, DOWN, {"jsonrpc": "2.0", "id": 3, "method": "textDocument/formatting",
+                          "params": {"textDocument": {"uri": uri}, "options": {}}}, EXIT])
+after = [f for f in fr if f.get("id") == 3]
+check(len(after) == 1 and after[0].get("error", {}).get("code") == -32600,
+      "a request after shutdown is InvalidRequest", after)
+
+# the exit status is part of the protocol
+rc, _ = run([INIT, EXIT])
+check(rc == 1, "exit without shutdown exits 1", rc)
+rc, _ = run([INIT, DOWN, EXIT])
+check(rc == 0, "shutdown then exit exits 0", rc)
+
+# a notification is never answered, and a `$/` request is answered rather than dropped
+_, fr = run([INIT, {"jsonrpc": "2.0", "method": "$/setTrace", "params": {"value": "verbose"}},
+             {"jsonrpc": "2.0", "method": "workspace/didChangeConfiguration", "params": {}},
+             {"jsonrpc": "2.0", "id": 4, "method": "$/unknown", "params": {}}, EXIT])
+check(sorted(f.get("id") for f in fr) == [1, 4], "notifications get no reply and a request does", [f.get("id") for f in fr])
+
+# a frame that is not JSON is dropped and the session survives it
+_, fr = run([INIT, {"jsonrpc": "2.0", "id": 9, "method": "shutdown"}, EXIT],
+            raw=b"Content-Length: 7\r\n\r\n{not js")
+check([f.get("id") for f in fr] == [1, 9], "a malformed frame does not end the session", [f.get("id") for f in fr])
+
+# a string id comes back a string, not a number or null
+_, fr = run([{"jsonrpc": "2.0", "id": "abc-1", "method": "initialize", "params": {"capabilities": {}}}, EXIT])
+check(fr and fr[0].get("id") == "abc-1", "a string id is echoed as a string", fr and fr[0].get("id"))
+
+# a body larger than one read of the runtime's bounded leaf
+big = "fn main() {\n" + "".join("\tprint %d\n" % i for i in range(1200)) + "}\n"
+bigpath = os.path.join(tmp, "big.zg")
+open(bigpath, "w").write(big)
+biguri = "file://" + os.path.abspath(bigpath)
+_, fr = run([INIT, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": biguri, "languageId": "zerg", "version": 1, "text": big}}}, EXIT])
+check(diags(fr) == [0], "a %d-byte body is reassembled across reads" % len(big), diags(fr))
+
+sys.exit(1 if bad else 0)
+PYEOF
+then
+	fail=$((fail + 1))
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "lsp-check: $fail case(s) where the server does not say what the compiler says"
 	exit 1
@@ -245,4 +370,4 @@ if [ "$ran" -lt "${MIN_SESSIONS:-4}" ]; then
 	echo "lsp-check: only $ran sessions ran — the list is empty, or the server is not starting"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, and formatting is fmt's own answer"
+echo "lsp-check: $ran buffers agree with the compiler, formatting is fmt's own answer, and 10 protocol cases hold"

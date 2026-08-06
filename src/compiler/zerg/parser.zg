@@ -19,6 +19,12 @@ struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
 
+	# depth counts how many recursion levels of nesting the parser is inside — one per
+	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
+	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
+	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
+	# is the only answer a recursive-descent parser can give before that happens.
+	depth: int
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -55,6 +61,29 @@ fn p_place(mut &p: Parser, line: int, col: int) -> str {
 	c := strconv.to_string(col, 10)
 	return f"\n  --> {l}:{c}" if p.path == ""
 	return f"\n  --> {p.path}:{l}:{c}"
+}
+
+# ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
+# a language rule: this parser recurses once per nesting level, and on an 8 MB stack it
+# died of SIGSEGV — no diagnostic, exit 139 — at about 485 nested parentheses or list
+# literals, 650 nested calls, 1300 nested blocks; the weakest stage downstream, the emitter
+# on nested calls, died at about 302. 200 clears every one of those with room to spare
+# while sitting forty times above the deepest nesting anywhere in this repository, which is
+# five. The bound is a translation limit of this implementation
+# (docs/conformance.md), like C's own minimum of 63 nested parenthesized expressions.
+const ZG_MAX_NESTING := 200
+
+# p_deeper takes one nesting level, and refuses the program once the budget is spent —
+# BEFORE the recursion happens, so the stack the refusal is reported from is a healthy one.
+# Callers give the level back with a plain `p.depth = p.depth - 1` on their one fallthrough
+# exit; a raise between the two abandons the whole parse, so a skipped decrement can never
+# be observed by a later statement.
+fn p_deeper(mut &p: Parser) {
+	p.depth = p.depth + 1
+	return if p.depth <= ZG_MAX_NESTING
+
+	t := cur(p)
+	raise f"this program nests more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its parser recurses once per level of nested expressions, blocks and types, and refusing here is what a recursive parser can still say before the native stack it runs on overflows without a word" + p_place(p, t.line, t.col)
 }
 
 # p_name reads the NAME a declaration or a binding introduces, and refuses anything that is
@@ -141,12 +170,17 @@ fn ident_name(e: Expr) -> str {
 # It is one wrapper around the whole reader rather than a case inside it, because the
 # suffix follows a COMPLETE type — `list[int]?`, `P?`, `chan[int]?` — and every one of
 # those is built somewhere below.
+# parse_type counts a nesting level per type it reads, because types recurse without ever
+# touching parse_expr — `list[list[…]]`, `chan[chan[…]]`, a function type's parameters —
+# and each level is a frame of parse_base_type on the same native stack the expressions use.
 fn parse_type(mut &p: Parser) -> Ty {
-	t := parse_base_type(p)
+	p_deeper(p)
+	mut t := parse_base_type(p)
 	if p_at(p, Question) {
 		p_advance(p)
-		return TOpt(t)
+		t = TOpt(t)
 	}
+	p.depth = p.depth - 1
 	return t
 }
 
@@ -426,7 +460,7 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path)
+	mut p := Parser(toks, 0, "", path, 0)
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -1380,7 +1414,11 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
 }
 
+# parse_block counts a nesting level per block, since statements nest through blocks and
+# never through parse_expr: `if` inside `if` is parse_block → parse_stmt → parse_block,
+# another recursion on the same stack the expression forms overflow.
 fn parse_block(mut &p: Parser) -> list[Stmt] {
+	p_deeper(p)
 	expect(p, LBrace)
 	mut body: list[Stmt] = []
 	skip_semis(p)
@@ -1393,6 +1431,7 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
+	p.depth = p.depth - 1
 	return body
 }
 
@@ -1644,7 +1683,11 @@ fn parse_if(mut &p: Parser) -> Stmt {
 			p_advance(p)
 			has_else_l = true
 			if p_at(p, If) {
+				# an `else if` recurses without opening a block first, so the chain is a
+				# nesting level parse_block never sees — counted here, like the plain form below
+				p_deeper(p)
 				else_body_l.append(parse_if(p))
+				p.depth = p.depth - 1
 			} else {
 				else_body_l = parse_block(p)
 			}
@@ -1660,8 +1703,12 @@ fn parse_if(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		has_else = true
 		if p_at(p, If) {
-			# else-if: the else block is a single nested if statement
+			# else-if: the else block is a single nested if statement — a recursion that
+			# opens no block, so the chain's depth is counted here or nowhere. A thousand
+			# of these in one chain killed the parser the same way a thousand parentheses did.
+			p_deeper(p)
 			else_body.append(parse_if(p))
+			p.depth = p.depth - 1
 		} else {
 			else_body = parse_block(p)
 		}
@@ -1716,8 +1763,15 @@ fn is_unary_op(k: Kind) -> bool {
 	return k == Minus or k == Not or k == Tilde or k == MinusMod
 }
 
+# parse_expr is where every nested expression re-enters the parser — a parenthesized
+# group, a call's argument, a list's element, an index — so it is where a nesting level is
+# counted. The ladder below it is not: one pass through coalesce → or → … → primary is one
+# level of the program, however many functions it takes.
 fn parse_expr(mut &p: Parser) -> Expr {
-	return parse_coalesce(p)
+	p_deeper(p)
+	e := parse_coalesce(p)
+	p.depth = p.depth - 1
+	return e
 }
 
 # parse_coalesce reads `a ?? b`, the OUTERMOST binary level. It sits there because its
@@ -1739,7 +1793,14 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 		jump.append(parse_stmt(p))
 		return ECoalesce(left, ENil, jump)
 	}
-	return ECoalesce(left, parse_coalesce(p), jump)
+
+	# the right-associative recursion is a nesting level of its own: a chain of `??` never
+	# re-enters parse_expr, so left uncounted it would be the one expression shape with no
+	# depth bound
+	p_deeper(p)
+	e := ECoalesce(left, parse_coalesce(p), jump)
+	p.depth = p.depth - 1
+	return e
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its
@@ -1903,15 +1964,23 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 
 fn parse_unary(mut &p: Parser) -> Expr {
 	# `<-ch` receives. GRAMMAR gives it its own level (recv-base) so `<-a.b` reads as
-	# `<-(a.b)` and a chain of them nests, which is what recursing here gives.
+	# `<-(a.b)` and a chain of them nests, which is what recursing here gives. The
+	# recursion is a nesting level and is counted as one: a run of prefixes is written
+	# without a single bracket, so nothing else on the way down would.
 	if p_at(p, LArrow) {
 		p_advance(p)
-		return ERecv(parse_unary(p))
+		p_deeper(p)
+		e := ERecv(parse_unary(p))
+		p.depth = p.depth - 1
+		return e
 	}
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		return EUnary(op, parse_unary(p))
+		p_deeper(p)
+		e := EUnary(op, parse_unary(p))
+		p.depth = p.depth - 1
+		return e
 	}
 	return parse_postfix(p)
 }
@@ -2534,7 +2603,10 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path)
+
+	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
+	# native stack, so an f-string could not be a fresh budget even if it wanted one
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

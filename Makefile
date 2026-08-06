@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt desugar help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -318,6 +318,24 @@ oracle:                         # the seed and the shipping compiler agree about
 	$(MAKE) build
 	@./scripts/oracle-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null)
 
+# `oracle` compares two COMPILERS on one program. This compares two PROGRAMS on one
+# compiler: a source as written, and the same source with its sugar undone.
+#
+# GRAMMAR defines `return x if c`, a while-`for` and a range-`for` as something else, and
+# the emitter lowers each surface form directly — so the core form those definitions name
+# goes down a different path, and no gate compared the two paths. `zerg desugar` writes the
+# core form and this builds and runs both. The corpus is the input, so the gate grows with
+# the corpus rather than when somebody remembers to extend it.
+#
+# The floor is what makes the run mean something: every assertion inside is "these two
+# agree", which an empty list satisfies.
+DESUGAR_MIN ?= 80
+
+desugar:                        # a program and the same program desugared do the same thing
+	$(MAKE) build
+	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
+	@./scripts/desugar-golden.sh
+
 # Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
 # can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
 # from macOS. The docker flow that found them was driven by hand every time; this is it,
@@ -333,7 +351,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

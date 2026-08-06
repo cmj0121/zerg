@@ -190,6 +190,15 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make corpus
 
+      # --- 8b. the sugar and the core it is defined as ---------------------------
+      # Every gate above compiles each program ONE way. GRAMMAR defines `return x if c`, a
+      # while-`for` and a range-`for` as something else, the emitter lowers each surface
+      # form directly, and so the core form those definitions name goes down a path nothing
+      # here had ever taken. This desugars a copy of the whole corpus and compares the two.
+      - name: A program and the same program desugared do the same thing
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make desugar
+
   # The C dialect the emitted code is compiled with. `-std=c17` is the default and what
   # every other job here uses, so this exists for the OTHER leg: the specification names
   # C99 as the fallback, and until this job the fallback had never been compiled once —

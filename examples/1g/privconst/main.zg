@@ -1,0 +1,16 @@
+# visibility demo (negative): `FLOOR` is a module-private CONSTANT, so naming it across
+# the module boundary is a compile error — as the namespaced `lib.FLOOR` and as the bare
+# `FLOOR`, the same two shapes a private FUNCTION is refused in. Building this must fail —
+# that is what it is for. The constant used to slip through in both shapes: nothing
+# recorded which module a constant belongs to, and the bare name was bound into every
+# function with no visibility ask at all.
+#   zerg build examples/1g/privconst/main.zg
+#   error: `FLOOR` is not a public member of module `lib`
+#     --> examples/1g/privconst/main.zg:14:12
+import "lib"
+
+fn main() {
+	print lib.span() # fine: `span` is pub, and it reads FLOOR from inside lib
+	print lib.FLOOR  # error: `FLOOR` is not a public member of module `lib`
+	print FLOOR      # error again — the bare name is the same private member
+}

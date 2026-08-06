@@ -301,6 +301,34 @@ struct Emitter {
 	# two lists are what remembers it, recorded where the signature is.
 	sig_mod: list[str]
 	sig_pub: list[bool]
+
+	# k_const / k_mut ride beside k_names, per module constant and in its order (they sit
+	# HERE, like sig_mod / sig_pub away from sig_names, because the constructor is
+	# positional and the tail is the one place a field can join without renumbering it).
+	# k_const is whether the binding was declared with the `const` KEYWORD — shadow-proof,
+	# GRAMMAR group 4 — since a plain top-level `x := 1` is just as immutable but may
+	# still be shadowed. k_mut is whether it was declared `mut`, which the top level
+	# refuses (chk_top_muts); it is carried so c_reset_env can keep the name writable and
+	# the program earns exactly ONE finding, at the declaration, rather than a second
+	# "cannot assign" at every write.
+	k_const: list[bool]
+	k_mut: list[bool]
+
+	# k_mod / k_pub are the visibility halves of the same rows — the module a constant was
+	# declared in and whether it said `pub` — recorded the way sig_mod / sig_pub are for a
+	# function, and read by the same rule (chk_visible). Without them a module-private
+	# constant was readable from anywhere: the same `lib.helper` shape that is refused for
+	# a FUNCTION compiled for a constant, because nothing remembered whose it was.
+	k_mod: list[str]
+	k_pub: list[bool]
+
+	# const_names / const_scopes are the `const` bindings visible while a body is emitted
+	# — the module constants at scope 0 plus every local `const` c_add_var has been told
+	# about — for chk_const_rebind's open-scope walk. They are a registry of their own
+	# rather than a flag on the env rows because only c_let ever mints one: every other
+	# c_add_var caller (parameters, loop variables, match binds) answers is_const false.
+	const_names: list[str]
+	const_scopes: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1081,6 +1109,8 @@ fn c_reset_env(mut &em: Emitter) {
 	em.force_mark = ""
 	em.fn_mark_used = false
 	em.ref_names = []
+	em.const_names = []
+	em.const_scopes = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
 	# with them already bound
@@ -1091,13 +1121,21 @@ fn c_reset_env(mut &em: Emitter) {
 		em.env_cnames.append("zg_" + em.k_names[i])
 		em.env_dead.append(0)
 
-		# a `const` is the one binding the language never lets anyone write, so this is
-		# the only entry here whose answer is fixed rather than read off a declaration
-		em.env_mut.append(false)
+		# a module binding is never writable — EXCEPT the top-level `mut` the checker has
+		# already refused (chk_top_muts), which stays writable so its writes do not each
+		# add a second finding about immutability on top of the one that counts
+		em.env_mut.append(em.k_mut[i])
 
 		# scope 0 is the module: a constant is in scope in every function, and a local
 		# that shadows one is in a block of its own and so is not a redeclaration
 		em.env_scope.append(0)
+
+		# a KEYWORD `const` is shadow-proof in every function too, so it opens each
+		# body's registry the way a local `const` joins it (chk_const_rebind)
+		if em.k_const[i] {
+			em.const_names.append(em.k_names[i])
+			em.const_scopes.append(0)
+		}
 		i = i + 1
 	}
 }
@@ -1105,8 +1143,18 @@ fn c_reset_env(mut &em: Emitter) {
 # c_add_var binds a name. `is_mut` is whether it may be written afterwards, and every
 # caller answers it from the form it is emitting rather than from a default: a `mut`
 # binding and a `mut &` parameter say yes; a plain binding, a by-value parameter, a loop
-# variable and a pattern binding all say no.
-fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool) {
+# variable and a pattern binding all say no. `is_const` is whether the name was declared
+# with the `const` KEYWORD — only c_let can say yes, since `binding` is the one production
+# that mints a `const` — and it is answered here so the shadow-proofing registry has the
+# same one home the environment has.
+#
+# The rebind check runs FIRST: every name-introducing site — binding, loop variable,
+# match-arm bind, parameter — enters the environment through this gate, so this is where
+# "no later binding may take a const's name" covers all of them at once; and asking before
+# the rows are appended is what keeps a `const` from colliding with itself.
+fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool, is_const: bool) {
+	chk_const_rebind(em, name)
+
 	cname := c_fresh_cname(em, name)
 	em.env_names.append(name)
 	em.env_tys.append(t)
@@ -1114,6 +1162,12 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool) {
 	em.env_dead.append(0)
 	em.env_mut.append(is_mut)
 	em.env_scope.append(em.scope_cur)
+
+	# a `const` is shadow-proof from here to the end of its block
+	if is_const {
+		em.const_names.append(name)
+		em.const_scopes.append(em.scope_cur)
+	}
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -1132,8 +1186,15 @@ fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 # c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
 # the environment — their C names must not be handed out twice — but nothing may NAME them.
 fn c_in_scope(mut &em: Emitter, idx: int) -> bool {
-	for id in em.open_scopes {
-		return true if em.env_scope[idx] == id
+	return c_scope_live(em, em.env_scope[idx])
+}
+
+# c_scope_live is the same question about a block id itself, split out because the const
+# registry (const_names / const_scopes) records ids without an env row to index through.
+# (c_scope_open is taken: it is the function that OPENS a scope.)
+fn c_scope_live(mut &em: Emitter, id: int) -> bool {
+	for sid in em.open_scopes {
+		return true if sid == id
 	}
 	return false
 }
@@ -2775,15 +2836,15 @@ fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
 		# type Err, and `b.s` reached cc as an unmangled member of the wrong struct.
 		if a.binds.len() > 0 {
 			if c_result_tag(a.ctor) == 0 {
-				c_add_var(em, a.binds[0], c_either_left(st), false)
+				c_add_var(em, a.binds[0], c_either_left(st), false, false)
 			} else {
-				c_add_var(em, a.binds[0], c_either_right(st), false)
+				c_add_var(em, a.binds[0], c_either_right(st), false, false)
 			}
 		}
 	} else if a.pat == 3 {
 		mut i := 0
 		for i < a.binds.len() {
-			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i), false)
+			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i), false, false)
 			i = i + 1
 		}
 	}
@@ -4872,6 +4933,30 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str) {
 	chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
 }
 
+# c_chk_visible_const is the same rule for a module constant, against the rows
+# c_const_globals recorded. A name not in the table is quiet for the reason a missing sig
+# row is: the reference is answered elsewhere, and this rule only speaks about a
+# declaration whose module it knows.
+fn c_chk_visible_const(mut &em: Emitter, name: str) {
+	i := c_k_idx(em, name)
+	return if i < 0
+	chk_visible(em, name, em.k_mod[i], em.k_pub[i])
+}
+
+# c_k_idx is a name's row in the module-constant columns (k_names and what rides beside
+# it), or -1 when no module declares it. It exists because a module-QUALIFIED read must be
+# answered from these rows and nowhere else: resolving `lib.COUNT` through the environment
+# read the innermost live binding of `COUNT`, so a local of that name answered a question
+# that named `lib`.
+fn c_k_idx(mut &em: Emitter, name: str) -> int {
+	mut i := 0
+	for i < em.k_names.len() {
+		return i if em.k_names[i] == name
+		i = i + 1
+	}
+	return -1
+}
+
 # c_struct_args emits a struct constructor's arguments, giving each field's type as
 # context so an empty-list argument is initialised correctly.
 fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> str {
@@ -5275,6 +5360,17 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught
 	c_live_use(em, n)
+
+	# A BARE read of a module constant answers the same visibility question the qualified
+	# `lib.FLOOR` does (c_fieldref): c_reset_env binds every module's constants into every
+	# function at scope 0, so without this ask a private constant was readable by bare
+	# name from any module — silently, while the same shape of private FUNCTION is refused
+	# with a place. The scope-0 test is what keeps a LOCAL that shadows the constant out
+	# of it: the local answers the read, and a local is nobody's export.
+	idx := c_live_idx(em, n)
+	if idx >= 0 and em.env_scope[idx] == 0 {
+		c_chk_visible_const(em, n)
+	}
 	return c_var_cname(em, n)
 }
 
@@ -5962,7 +6058,7 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, is_mut, ival, ind)
+		SLet(name, ty, has_type, is_mut, is_const, ival) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
 		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
@@ -6156,24 +6252,58 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	mut out := ""
 	for c in f.consts {
-		name := c_let_name(c)
-
 		# Every module flattens into ONE namespace, so two that declare the same constant
 		# mangle to one symbol. The FUNCTION case has been refused by name since the tables
 		# were written; this one linked — two definitions of `zg_N`, tolerated by a linker
 		# that still allows a common symbol — and the reader got whichever the linker chose.
 		# On a toolchain with `-fno-common` it is a duplicate symbol instead.
-		raise f"NotImplemented: two modules both define `{name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.k_names, name)
+		raise f"NotImplemented: two modules both define `{c.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.k_names, c.name)
 
-		ty := c_infer(em, c_let_value(c))
-		em.k_names.append(name)
+		# A FUNCTION of the same name is a collision too: the top level is one namespace,
+		# so both mangle to `zg_<name>` and `const f := 1` beside `fn f()` reached cc as
+		# "redefinition of 'zg_f'" — against generated code, in either source order, since
+		# this walk runs after c_build_sigs has seen every declaration. A LOCAL named
+		# after a function is not this (it shadows, c_add_var's business); free functions
+		# only, because a method is keyed by its type and a generic template mangles per
+		# specialization, so neither ever shares the constant's symbol. Reported at the
+		# constant's declaration in `own`, so a multi-unit build says it once.
+		if c_is_free_fn(em, c.name) and c_const_in(own, c.name) {
+			chk_at_place(em, c.path, c.line, c.col, f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
+		}
+
+		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
+		# is chk_binding's — the value must fit the declared type, literals adopting the
+		# way they do at every typed position — and the global takes the DECLARED type.
+		# Inferring from the value alone made `answer: bool = 42` an int named answer:
+		# an annotation the compiler does not check is a comment, and this one was.
+		# The mismatch is reported at the declaration (chk_at_place, since a module
+		# constant is a statement of no function and no SAt marker knows it), and the
+		# row KEEPS the inferred type there, so c_const_assigns still renders a value
+		# that fits the global while the finding is what ends the build.
+		mut ty := c_infer(em, c.value)
+		if c.has_ty {
+			if chk_fits_expr(em, c.ty, ty, c.value) {
+				ty = c.ty
+			} else {
+				chk_at_place(em, c.path, c.line, c.col, f"cannot bind {ty_name(ty)} to a {ty_name(c.ty)} binding: `{c.name}`")
+			}
+		}
+		em.k_names.append(c.name)
 		em.k_tys.append(ty)
+		em.k_const.append(c.is_const)
+		em.k_mut.append(c.is_mut)
+
+		# the visibility halves, recorded exactly as a function signature's are
+		# (c_build_sigs): the module is the declaring file's directory, and a generated
+		# declaration's empty module is what keeps chk_visible quiet about it
+		em.k_mod.append(c_mod_of(c.path))
+		em.k_pub.append(c.is_pub)
 		if whole {
-			out = out + f"static {c_type(ty)} zg_{name};\n"
-		} else if c_const_in(own, name) {
-			out = out + f"{c_type(ty)} zg_{name};\n"
+			out = out + f"static {c_type(ty)} zg_{c.name};\n"
+		} else if c_const_in(own, c.name) {
+			out = out + f"{c_type(ty)} zg_{c.name};\n"
 		} else {
-			out = out + f"extern {c_type(ty)} zg_{name};\n"
+			out = out + f"extern {c_type(ty)} zg_{c.name};\n"
 		}
 	}
 	return out
@@ -6181,7 +6311,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 
 fn c_const_in(f: File, name: str) -> bool {
 	for c in f.consts {
-		return true if c_let_name(c) == name
+		return true if c.name == name
 	}
 	return false
 }
@@ -6196,25 +6326,25 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 	keep := em.at_path
 	em.at_path = ""
 	mut out := ""
-	for c in f.consts {
-		out = out + f"    zg_{c_let_name(c)} = {c_expr(em, c_let_value(c), c_nosub())};\n"
+	mut i := 0
+	for i < f.consts.len() {
+		c := f.consts[i]
+
+		# the value is rendered AGAINST the recorded type — row i of k_tys, appended by
+		# c_const_globals from this same list — so an annotated declaration gets c_let's
+		# own paths: a literal adopts the annotation (c_into) and a declared `T?` wraps a
+		# bare value (c_carrier_fit). On a mismatch c_const_globals kept the INFERRED
+		# type and reported, so what is rendered here still fits the global it fills.
+		ty := em.k_tys[i]
+		mut val := c_into(em, ty, c.value, c_nosub())
+		if c.has_ty and c_is_carrier(ty) {
+			val = c_carrier_fit(em, chk_binding_says(c.name), ty, c.value, c_nosub())
+		}
+		out = out + f"    zg_{c.name} = {val};\n"
+		i = i + 1
 	}
 	em.at_path = keep
 	return out
-}
-
-fn c_let_name(s: Stmt) -> str {
-	return match s {
-		SLet(n, _, _, _, _) => n
-		_ => ""
-	}
-}
-
-fn c_let_value(s: Stmt) -> Expr {
-	return match s {
-		SLet(_, _, _, _, v) => v
-		_ => ENil
-	}
 }
 
 # c_main_entry writes the program's C entry: a WRAPPER carrying the top-level
@@ -7513,9 +7643,14 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	en := c_qualified_variant(em, target, fld)
 	return TNamed(en) if en != ""
 
-	# `lib.LIMIT` — a module-qualified name is the name it ends with; see c_fieldref
+	# `lib.LIMIT` — a module-qualified name is the name it ends with, and its TYPE is the
+	# module row's (k_tys), not the environment's: a local shadowing the constant must not
+	# answer for it here any more than in c_fieldref
 	ns := c_ident_name(target)
-	return c_lookup_var(em, fld) if c_name_in(em.mod_names, ns) and c_is_bound(em, fld)
+	if c_name_in(em.mod_names, ns) {
+		ki := c_k_idx(em, fld)
+		return em.k_tys[ki] if ki >= 0
+	}
 
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
@@ -7564,16 +7699,34 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	ns := c_ident_name(target)
-	if c_name_in(em.mod_names, ns) and c_is_bound(em, fld) {
+	if c_name_in(em.mod_names, ns) {
 		# `lib.LIMIT` — a module-qualified NAME. A module flattens into this unit, so the
 		# qualifier says where the name came from and the last segment IS the name, which
 		# is the rule the CALL path has followed since it was written (`ascii.is_digit`).
-		return c_var_cname(em, fld)
-	}
+		#
+		# It is answered from the MODULE-CONSTANT ROWS (c_const_globals') and never from
+		# the environment. Resolving through c_var_cname read the innermost live binding,
+		# so under a local `COUNT := 9` the qualified `lib.COUNT` printed 9 — the question
+		# named `lib` and the answer came from the local. The global's C name is fixed
+		# (`zg_<name>`, c_reset_env's own spelling), so the local's shadow row cannot
+		# reach it. What this does NOT fix is the qualifier being taken on faith:
+		# `b.COUNT` still answers a constant module `a` declared, because every module
+		# flattens into one namespace — the same documented deviation the call path has
+		# (`b.total()` on `main`, docs/runtime/package.md), left to that one fix.
+		#
+		# Whether this module may read it is the same question a call asks
+		# (c_chk_visible_fn), against the rows c_const_globals recorded.
+		if c_k_idx(em, fld) >= 0 {
+			c_chk_visible_const(em, fld)
+			return "zg_" + fld
+		}
 
-	# a REAL module and a member it does not have. Falling through lowered `lib` as a value
-	# and said `undefined name lib` — about the qualifier, which is the part that is right.
-	raise f"module `{ns}` has no `{fld}`" if c_name_in(em.mod_names, ns)
+		# a REAL module and a member no module declares. Falling through lowered `lib` as
+		# a value and said `undefined name lib` — about the qualifier, which is the part
+		# that is right. A LOCAL of the asked-for name must not soften this into an
+		# answer: the question was the module's, and the module has no such member.
+		raise f"module `{ns}` has no `{fld}`"
+	}
 
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)
@@ -7659,7 +7812,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
 	outer_scope := c_scope_open(em)
-	c_add_var(em, var, TInt, false)
+	c_add_var(em, var, TInt, false, false)
 
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
@@ -7711,7 +7864,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
 	outer_scope := c_scope_open(em)
-	c_add_var(em, var, elem, false)
+	c_add_var(em, var, elem, false, false)
 	cv := c_var_cname(em, var)
 
 	# The loop's handle OWNS what it holds when the iterable was not already storage. `for v
@@ -7794,7 +7947,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	outer_scope := c_scope_open(em)
-	c_add_var(em, var, elem, false)
+	c_add_var(em, var, elem, false, false)
 	cv := c_var_cname(em, var)
 
 	# wrap in a block and COPY the iterable into a local. It used to be a header bit-copy —
@@ -7832,7 +7985,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	kc := c_type(kt)
 	it := c_expr(em, iter, c_nosub())
 	outer_scope := c_scope_open(em)
-	c_add_var(em, var, kt, false)
+	c_add_var(em, var, kt, false, false)
 
 	cv := c_var_cname(em, var)
 
@@ -7850,8 +8003,20 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	return out + ind + "}\n"
 }
 
-fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival: Expr, ind: str) -> str {
-	chk_fresh_binding(em, name)
+fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {
+	# the shadow rule OWNS the name when this binding takes a visible const's:
+	# c_add_var reports the re-bind below, and the redeclaration message's advice —
+	# "an inner block may shadow it" — is exactly what a `const` does not allow, so one
+	# mistake must not collect both sentences
+	if not chk_const_in_sight(em, name) {
+		chk_fresh_binding(em, name)
+	}
+
+	# direction two of shadow-proofing is asked HERE and not in c_add_var, because only
+	# a `binding` can mint a `const` — a loop variable or a match-arm bind never can
+	if is_const {
+		chk_const_mint(em, name)
+	}
 
 	mut eff := ty
 	if has_type {
@@ -7874,13 +8039,13 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# `m["a"] = P(3,4)` silently read back a TRUNCATED value, and a carrier value was a cc
 	# error instead. The declared type is what the map is built with when one is written.
 	if has_type and c_is_map(eff) and c_is_maplit(ival) {
-		c_add_var(em, name, eff, is_mut)
+		c_add_var(em, name, eff, is_mut, is_const)
 		return f"{ind}zrt_map {c_var_cname(em, name)} = {c_map_lit_as(em, eff, ival, c_nosub())};\n"
 	}
 
-	return c_let_list(em, name, eff, is_mut, ival, ind) if c_is_list(eff)
-	return c_let_chan(em, name, eff, is_mut, ival, ind) if ty_is_chan(eff)
-	return c_let_str(em, name, eff, is_mut, ival, ind) if c_is_str(eff)
+	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)
+	return c_let_chan(em, name, eff, is_mut, is_const, ival, ind) if ty_is_chan(eff)
+	return c_let_str(em, name, eff, is_mut, is_const, ival, ind) if c_is_str(eff)
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
@@ -7888,7 +8053,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
 	if has_type and c_is_carrier(eff) {
-		c_add_var(em, name, eff, is_mut)
+		c_add_var(em, name, eff, is_mut, is_const)
 		cval := c_carrier_fit(em, chk_binding_says(name), eff, ival, c_nosub())
 		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {cval};\n"
 	}
@@ -7903,7 +8068,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# `eff` is the INFERRED type when nothing was declared, and c_into is a no-op there
 	# because the value already has it.
 	val := c_into(em, eff, ival, c_nosub())
-	c_add_var(em, name, eff, is_mut)
+	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
 
 	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
@@ -7929,7 +8094,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 # handle up, so `senders` never reached zero on its own and every stream needed a statement
 # to end it. With both halves the counts move only where a handle moves, and every handle
 # has exactly one owner.
-fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
+fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
 	dir := c_chan_dir(eff)
@@ -7937,7 +8102,7 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	if c_is_lvalue(ival) {
 		val = f"{c_chan_copy_fn(dir)}({val})"
 	}
-	c_add_var(em, name, eff, is_mut)
+	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
 	give := c_pend_release(em, cn, c_chan_defer_thunk(dir), ind)
 	return f"{ind}zrt_chan *{cn} = {val};\n" + give
@@ -8040,10 +8205,10 @@ fn c_strs_take(xs: list[str], n: int) -> list[str] {
 # of its own (c_copied, which for a str is zrt_str_retain); a freshly produced one — a
 # concat, an f-string, a `str(bytes)`, a call's result — already carries exactly one and
 # this binding takes it over. A literal's cell is immortal, so both halves are no-ops on it.
-fn c_let_str(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
+fn c_let_str(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 	val := c_copied(em, eff, ival, c_nosub())
-	c_add_var(em, name, eff, is_mut)
+	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
 	give := c_pend_drop(em, eff, cn, ind)
 	return f"{ind}const char* {cn} = {val};\n" + give
@@ -8058,14 +8223,14 @@ fn c_let_str(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind
 # site a list leaves this scope by: `return xs` copies, and so does pushing one into a
 # channel, a struct field or a `spawn` capture. Each of those retains, so the holder dropped
 # here is never the last one when somebody else is still reading.
-fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
+fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 
 	# as in c_let: the initializer names what was in scope BEFORE this binding
 	if c_is_listlit(ival) {
 		et := c_type(c_list_elem(eff))
 		vals := c_elem_exprs(em, ival, c_list_elem(eff))
-		c_add_var(em, name, eff, is_mut)
+		c_add_var(em, name, eff, is_mut, is_const)
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
 		out = out + c_pend_drop(em, eff, cname, ind)
@@ -8075,7 +8240,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	# Anything else — another list, a call's result — binds through the one copy rule, the
 	# same one every other site uses.
 	val := c_copied(em, eff, ival, c_nosub())
-	c_add_var(em, name, eff, is_mut)
+	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
 	give := c_pend_drop(em, eff, cn, ind)
 	return f"{ind}zrt_list {cn} = {val};\n" + give
@@ -8235,7 +8400,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	# the initializer is rendered BEFORE the binding enters scope, as in c_let
 	val := c_expr(em, value, c_nosub())
 	outer_scope := c_scope_open(em)
-	c_add_var(em, name, elem, false)
+	c_add_var(em, name, elem, false, false)
 
 	cv := c_var_cname(em, name)
 	in2 := ind + "    "
@@ -8572,7 +8737,13 @@ fn c_loop_jump_err(kw: str, in_loop: bool) {
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
+	# the whole declaration's place, not just its path: a finding about a PARAMETER — a
+	# `const`'s name taken by one, say — is made before any statement of the body is
+	# emitted, so the SAt markers have said nothing yet and `em.at_*` still holds the
+	# previous function's last statement
 	em.at_path = fn_d.path
+	em.at_line = fn_d.line
+	em.at_col = fn_d.col
 	c_reset_env(em)
 	c_check_loop_jump(fn_d.body, false)
 
@@ -8582,7 +8753,9 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	em.fn_ret = fn_d.ret
 
 	# the parameters bind in a scope between the module and the body, so a parameter may
-	# shadow a module constant and the body may shadow a parameter — `mut n := n`
+	# shadow a PLAIN module binding and the body may shadow a parameter — `mut n := n`.
+	# A keyword `const` is the exception: it is shadow-proof everywhere, and c_add_var
+	# refuses a parameter that takes its name like any other binding.
 	c_scope_open(em)
 
 	# The FUNCTION's own mark, and the parameters registered against it. A parameter lives
@@ -8607,7 +8780,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 				sig = sig + ", "
 			}
 			pm := fn_d.params[i]
-			c_add_var(em, pm.name, pm.ty, pm.is_ref)
+			c_add_var(em, pm.name, pm.ty, pm.is_ref, false)
 
 			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
 			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
@@ -8798,7 +8971,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut specs: list[SpecDecl] = []
 	mut impls: list[ImplDecl] = []
 	mut fns: list[FnDecl] = []
-	mut consts: list[Stmt] = []
+	mut consts: list[ConstDecl] = []
 	mut types: list[TypeDecl] = []
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
@@ -9065,7 +9238,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -9128,6 +9301,11 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# after the typedefs, because a helper names the struct it copies, and before the
 	# prototypes and bodies, which are what call them
 	types = types + c_copy_helpers(em, f)
+
+	# the top level is immutable: a `mut` module binding is refused at its own declaration
+	# (over `own`, so a multi-unit build reports it once), before c_const_globals walks
+	# the values — a rule about the declaration should not wait on its initializer
+	chk_top_muts(em, own)
 
 	# the constants are declared before the prototypes, so a body may name one
 	globals := c_const_globals(em, f, own, whole)

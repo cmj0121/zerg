@@ -792,13 +792,19 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 			paths.append(f)
 		}
 	}
-	for src in srcs {
-		for im in zerg.imports_of(src) {
+
+	# indexed, because the import scan is a full parse and so the FIRST one a source
+	# meets: a refusal raised in it must already carry the file the place names, and
+	# `paths` rides beside `srcs` row for row
+	mut si := 0
+	for si < srcs.len() {
+		for im in zerg.imports_of_at(srcs[si], paths[si]) {
 			deps := module_files(im, from_dir)
 			if deps.len() > 0 {
 				load_unit(deps, im, from_dir, seen, units)
 			}
 		}
+		si = si + 1
 	}
 	units.append(Unit(name, srcs, paths))
 }
@@ -1067,7 +1073,10 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	} else if zerg.lex_diags(src, file).len() > 0 {
 		return
 	}
-	for im in zerg.imports_of(src) {
+
+	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
+	# no file — the loader is the first parse a source meets
+	for im in zerg.imports_of_at(src, file) {
 		for dep in module_files(im, from_dir) {
 			load_with(dep, from_dir, seen, srcs, paths, buf)
 		}

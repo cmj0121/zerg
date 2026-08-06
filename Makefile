@@ -187,7 +187,7 @@ EXAMPLE_MIN ?= 20
 # a typo does too. So the refusal is held to what it SAYS and to carrying a place, which is
 # the same standard `make reject` holds its own cases to. That gate takes single files from a
 # heredoc and this example is a module and an entry, which is why it is checked here.
-EXAMPLE_REFUSED ?= examples/1g/private/main.zg
+EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg
 EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 
 examples:                       # build every example with zerg itself, and run it

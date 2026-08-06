@@ -14,8 +14,9 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > this chapter calls a stdlib facility and [Built-ins](builtins.md) calls a built-in, exist in neither place.
 >
 > Two things here are not merely unbuilt but wrong today, and they are marked where they appear below: a
-> standalone `unsafe fn` is callable from safe code with no diagnostic, and a `handle`-typed binding escapes
-> to `cc` against generated C.
+> `fn` declared inside a module-level `unsafe { … }` group is callable from safe code with no diagnostic,
+> and a `handle`-typed binding escapes to `cc` against generated C. (A standalone `unsafe fn` declaration
+> is refused by name, with a place — an honest `[not yet]`, not a silent wrong answer.)
 
 ## Two edges, one contract
 
@@ -215,10 +216,15 @@ unsafe context (a `fn` inside is an unsafe fn, a `mut` binding is a mutable glob
 `unsafe mut` prefix**. Inside any of them the compiler makes no safety guarantee across the foreign call —
 the thin wrapper you write is where you vouch. Group the raw bindings and their wrappers together:
 
-> **[deviation]** **The trust boundary is not enforced.** A standalone `unsafe fn` is callable from ordinary
-> safe code with no diagnostic at all — `unsafe fn g() -> int { return 2 }` then `print g()` compiles and
-> prints 2 — and so is a `fn` declared inside a module-level `unsafe { … }` group. The keyword is parsed and
-> nothing reads it, so `unsafe` marks intent and confers no checking.
+> **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place**. Building it would
+> read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
+> form is turned away rather than silently disarmed. (It used to compile exactly that way:
+> `unsafe fn g() -> int { return 2 }` then `print g()` compiled, and `g` was callable from ordinary safe
+> code with no diagnostic at all.)
+>
+> **[deviation]** **The trust boundary is not enforced.** A `fn` declared inside a module-level
+> `unsafe { … }` group is callable from ordinary safe code with no diagnostic at all. The keyword is parsed
+> and nothing reads it, so `unsafe` marks intent and confers no checking.
 >
 > **[deviation]** A `mut` binding inside a module-level `unsafe { … }` group is accepted and then **dropped**
 > rather than becoming a mutable global: the declaration compiles and the use site reports

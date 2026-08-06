@@ -44,6 +44,19 @@ fn p_advance(mut &p: Parser) {
 	p.pos = p.pos + 1
 }
 
+# p_place renders a `--> file:line:col` trailer for a REFUSAL, in the exact layout
+# render_diag draws under a checked finding — one fact about this compiler's output, which
+# is what scripts/lib/diag.sh reads it by. The parser reports by raising, so it has no
+# Diag channel to put a place on; a refusal that knows its token appends this instead of
+# saying only what and never where. The pathless case matches diag_place's: a parse with
+# no file names the position alone.
+fn p_place(mut &p: Parser, line: int, col: int) -> str {
+	l := strconv.to_string(line, 10)
+	c := strconv.to_string(col, 10)
+	return f"\n  --> {l}:{c}" if p.path == ""
+	return f"\n  --> {p.path}:{l}:{c}"
+}
+
 # p_name reads the NAME a declaration or a binding introduces, and refuses anything that is
 # not an identifier.
 #
@@ -520,6 +533,18 @@ pub fn parse_at(src: str, path: str) -> File {
 			# the fallback below and vanish, so the module compiled WITHOUT the member and
 			# every use answered `undefined name` about a name the module plainly declares.
 			consts.append(p_top_binding(p, false, false, is_pub, t.line, t.col))
+		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
+			# a standalone `unsafe fn` — GRAMMAR:304 has it in fn-decl (`'pub'? 'unsafe'?
+			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
+			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
+			# reading the `fn` as safe would erase the one thing the keyword says — but it
+			# must be refused AS ITSELF: the statement fallback below answered
+			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
+			# told it had marked a statement, about a form that is a declaration. `is_pub` is
+			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
+			# one message; `t` is the declaration's first token, so the refusal carries the
+			# place a declaration owes.
+			raise "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
 		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
 			# a module-level `unsafe { … }` group opens. Its two tokens were skipped one
 			# at a time before, so consuming both here changes nothing the group's
@@ -607,8 +632,18 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 # imports_of returns just the import paths of a source, for the driver's module loader:
 # it resolves and loads a program's dependencies before anything is emitted, so it needs
 # the import list alone and not the cost of keeping a whole parse around.
+#
+# imports_of_at is the same scan told which FILE it is reading. The scan is a full parse,
+# so it is the FIRST parse a source meets — a refusal the parser raises with a place
+# (p_place) escapes from here before the pathed compile parse ever runs, and under the
+# pathless form the place it carried named a line of no file. The driver's loaders know
+# the path; only a caller that truly has none keeps imports_of.
 pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
+}
+
+pub fn imports_of_at(src: str, path: str) -> list[str] {
+	return parse_at(src, path).imports
 }
 
 # parse_fill reads the tail of `[v; N]` and expands it: the count is a const-expr, and an

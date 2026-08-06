@@ -21,6 +21,11 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,information 對上會回報
 它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
 
+除此之外它還帶了**十個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變
+更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位,以及大於
+runtime bounded leaf 一次讀取量的 body。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,或一個在乾等的 client,
+什麼都不會說。
+
 ## 它住在哪裡
 
 `src/compiler/lsp/`——自成一個 module,像任何其他消費者一樣跨 `pub` 邊界 import `src/compiler/zerg/`,由 `zergc.zg`
@@ -47,6 +52,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
+
+**session 是一台狀態機,而 exit status 是它的一部分。** `shutdown` 之後 server 只接受 `exit`;之後才到的 request 會收
+到 `InvalidRequest`,因為在等回覆的 client 會停止送下一個。`shutdown` 後的 `exit` 以 **0** 結束,沒有 `shutdown` 的
+`exit`——或者標準輸入就這樣結束了——以 **1** 結束。永遠回 0 的 server,是在告訴 client 每一次崩潰都是乾淨關閉。
+
+**同步是全文的,而不是全文的變更會被拒絕。** `textDocumentSync: 1` 表示 client 送整份文件,所以帶 `range` 的變更是
+這個 server 從來沒要求過的增量編輯,把它的 `text` 套上去會把整份文件換成它自己的一個片段。**空的**
+`contentChanges` 會讓 buffer 保持原狀,而不是換成空字串——那個旗標與空字串並不重複:client 把檔案清空時送的是 `""`。
 
 **診斷是對整個程式檢查的**,不是只對 buffer。一個 import 了別的 module 的檔案必須連同那個 module 一起檢查,否則它借來
 的每個名字都會讀成 undefined——會在正確的程式碼底下畫線的 server,是人會關掉的那種。

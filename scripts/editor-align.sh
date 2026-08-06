@@ -107,9 +107,15 @@ fi
 #
 # Asked of `zerg fmt` rather than of F101's documentation, because what a person's editor
 # has to agree with is what the tool WRITES.
+#
+# The pattern carries a LITERAL tab, built by printf, and is matched as a basic expression.
+# `grep -E '^\t\t'` is not the same question on two machines: BSD grep reads `\t` as a tab and
+# GNU grep reads it as an undefined escape, i.e. the letter `t` — so the probe answered "tab"
+# on macOS and "space" on Linux for the same formatter, and this gate failed in CI alone.
+tab=$(printf '\t')
 printf 'fn main() {\n\tif true {\n\t\tprint 1\n\t}\n}\n' >"$tmp/indent.zg"
 "$ZERG" fmt "$tmp/indent.zg" >/dev/null 2>&1
-if grep -qE '^\t\tprint' "$tmp/indent.zg"; then
+if grep -q "^$tab${tab}print" "$tmp/indent.zg"; then
 	want_style=tab
 else
 	want_style=space

@@ -1403,7 +1403,7 @@ EOF
 # A bound is a CONJUNCTION — `T: Eq + Show` asks for both — and the one that is not met is
 # the one named. The form itself is built; what is refused here is the type that does not
 # keep the promise.
-expect "$ZERG" generic-bound-unmet-in-a-conjunction "does not implement `Show`" <<'EOF'
+expect "$ZERG" generic-bound-unmet-in-a-conjunction 'does not implement `Show`' <<'EOF'
 spec Show {
 	fn show() -> str
 }

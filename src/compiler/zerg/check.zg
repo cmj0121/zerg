@@ -1572,6 +1572,92 @@ fn chk_fresh_binding(mut &em: Emitter, name: str) {
 	}
 }
 
+# --- `const` shadow-proofing ------------------------------------------------------
+#
+# GRAMMAR group 4: a `const` binding is immutable and SHADOW-PROOF — no later binding may
+# take its name, and it may not itself take a name a visible binding holds. A collision in
+# EITHER direction is an error; a plain `:=` may still be shadowed, so `mut n := n` stays
+# the ordinary way to get a writable copy of a parameter. Until now neither direction was
+# looked at: `k := 2` in a block under a module `const k := 1` compiled and printed 2,
+# silently, which is the exact answer the keyword exists to rule out.
+#
+# The consts in sight are two families under one rule: the module constants (the k_names
+# rows whose k_const flag is set — scope 0, open in every function) and the local `const`
+# bindings of the function being emitted (const_names / const_scopes, pushed by c_let and
+# reset with the env). Both are consulted through the same open-scope walk, so a `const`
+# in a block that has ENDED binds nothing and blocks nothing.
+#
+# The rule hangs off c_let, like the redeclaration rule and for its reason: the `binding`
+# production is what GRAMMAR marks shadow-proof, and c_let is that production's one home.
+# A loop variable or a match-arm bind that reuses a const's name is not reported — those
+# are their constructs' clauses, not `binding`s — which is the narrowest honest reading.
+
+# chk_const_shadow reports a collision between this binding and a `const`, in either
+# direction. It answers true when it REPORTED, which is what lets c_let skip
+# chk_fresh_binding for the same name: a same-block `const k := 1` then `k := 2` is one
+# mistake, and the message that names the `const` is the one whose advice is right —
+# "an inner block may shadow it" is exactly what a `const` does not allow.
+fn chk_const_shadow(mut &em: Emitter, name: str, is_const: bool) -> bool {
+	# `_` is the discard: it binds nothing a later statement can name, so it can neither
+	# shadow nor be shadowed
+	return false if name == "_"
+
+	# direction one: this binding — `const` or not — takes a name a visible `const` holds
+	if chk_const_in_sight(em, name) {
+		chk_at(em, f"`{name}` re-binds a `const` — a `const` binding is shadow-proof, so no later binding may take its name; pick another one")
+		return true
+	}
+	return false if not is_const
+
+	# direction two: this `const` takes a name some visible binding already holds. The
+	# SAME-block case is left to chk_fresh_binding — that is a redeclaration, `const` or
+	# not, and one mistake gets one message.
+	idx := c_live_idx(em, name)
+
+	return false if idx < 0
+	return false if em.env_scope[idx] == em.scope_cur
+
+	chk_at(em, f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
+	return true
+}
+
+# chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name.
+fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
+	mut i := 0
+	for i < em.const_names.len() {
+		return true if em.const_names[i] == name and c_scope_live(em, em.const_scopes[i])
+		i = i + 1
+	}
+	return false
+}
+
+# --- the top level is immutable ----------------------------------------------------
+#
+# docs/runtime/package.md: outside `main` lives only immutable top-level state, and "a
+# top-level binding may not be `mut` outside a module-level `unsafe { … }` group". The
+# declaration used to be dropped by the parser's top-level skip, which split the mistake
+# in two wrong answers: unused, the program compiled; used, every use site said
+# `undefined name` — the wrong message, at the wrong place, about a name the program
+# plainly declares.
+#
+# The binding is PARSED instead (p_top_binding) and refused here at its own declaration,
+# which is also what keeps the uses honest: the name resolves, writable (c_reset_env reads
+# k_mut), so the one finding points at the one line to fix and no second finding about
+# immutability muddies it.
+#
+# It walks `own` — the unit being emitted — rather than the whole program, because this
+# runs once per UNIT and the whole-program consts list would repeat the finding once per
+# module. The `unsafe { … }` group variant never reaches this rule at all: the parser
+# leaves that group's contents alone, and its drop stays a separate, documented deviation
+# (docs/runtime/ffi.md).
+fn chk_top_muts(mut &em: Emitter, own: File) {
+	for c in own.consts {
+		if c.is_mut {
+			chk_at_place(em, c.path, c.line, c.col, f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
+		}
+	}
+}
+
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,
 # `p.x`, `p.x.y`, `xs[0]` and `m["k"].f` alike. Anything that does not bottom out in a
 # name answers "".

@@ -419,7 +419,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut impls: list[ImplDecl] = []
 	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
-	mut consts: list[Stmt] = []
+	mut consts: list[ConstDecl] = []
 
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
@@ -427,17 +427,44 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut pending: list[str] = []
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
+
+	# unsafe_depth tracks a module-level `unsafe { … }` group. What that group HOLDS is
+	# dropped today — a separate, documented deviation (docs/runtime/ffi.md) — and the
+	# binding arms below stay out of it so the two behaviours cannot bleed into each
+	# other: a `mut` binding inside the group keeps its own (wrong, owned) story, and the
+	# refusal below stays about safe code, which is the rule docs/runtime/package.md
+	# actually states. Every other arm behaves inside the group exactly as it always has.
+	mut unsafe_depth := 0
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Import) {
 			parse_import(p, imports)
 		} else if p_at(p, Pub) {
 			# `pub` binds to the declaration that follows it
+			t := cur(p)
 			p_advance(p)
 			if p_at(p, Fn) {
 				fns.append(parse_fn(p, true, "", false))
 			} else if p_at(p, Type) {
 				types.append(parse_typedecl(p, true))
+			} else if unsafe_depth == 0 and p_at(p, Const) {
+				# `pub const K := 1`. The `pub` used to be consumed here and the
+				# `const` picked up by the NEXT iteration — it parsed, with the
+				# visibility silently dropped on the floor.
+				p_advance(p)
+				consts.append(p_top_binding(p, false, true, true, t.line, t.col))
+			} else if unsafe_depth == 0 and p_at(p, Mut) and peek_kind(p, 1) != Fn {
+				# `pub mut x := 0` — the same top-level `mut` the arm below refuses;
+				# `pub` changes nothing about mutability
+				p_advance(p)
+				consts.append(p_top_binding(p, true, false, true, t.line, t.col))
+			} else if unsafe_depth == 0 and p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+				# `pub COUNT := 3` — docs/runtime/package.md puts top-level constants
+				# in a module's immutable state with `pub` as the visibility. The
+				# declaration used to fall into the skip below, so the module compiled
+				# WITHOUT the member and the import site answered "module has no
+				# `COUNT`" about a name the module plainly declares.
+				consts.append(p_top_binding(p, false, false, true, t.line, t.col))
 			}
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, false, "", false))
@@ -454,8 +481,9 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
+			t := cur(p)
 			p_advance(p)
-			consts.append(parse_binding(p, false))
+			consts.append(p_top_binding(p, false, true, false, t.line, t.col))
 		} else if p_at(p, Init) {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
@@ -470,6 +498,39 @@ pub fn parse_at(src: str, path: str) -> File {
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
 			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver"
+		} else if unsafe_depth == 0 and p_at(p, Mut) {
+			# a top-level `mut` binding in SAFE code. It is ill-formed — the top level is
+			# immutable outside a module-level `unsafe { … }` group (docs/runtime/
+			# package.md) — but it is PARSED rather than refused here, so the refusal
+			# (chk_top_muts) carries this declaration's place and lands beside every other
+			# finding of the run, instead of splitting into "compiles when unused" and
+			# `undefined name` at every use site.
+			t := cur(p)
+			p_advance(p)
+			consts.append(p_top_binding(p, true, false, false, t.line, t.col))
+		} else if unsafe_depth == 0 and p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+			# a plain top-level binding — `COUNT := 3`, `answer: int = compute()`. The
+			# same module constant the `const` arm reads, without the shadow-proofing the
+			# keyword adds; it used to fall into the skip below and vanish, leaving its
+			# uses `undefined name`.
+			t := cur(p)
+			consts.append(p_top_binding(p, false, false, false, t.line, t.col))
+		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
+			# a module-level `unsafe { … }` group opens. Its two tokens were skipped one
+			# at a time before, so consuming both here changes nothing the group's
+			# CONTENTS see — the arms above keep firing inside it exactly as they did —
+			# and the depth is what keeps the new binding arms out (see unsafe_depth).
+			p_advance(p)
+			p_advance(p)
+			unsafe_depth = unsafe_depth + 1
+		} else if unsafe_depth > 0 and p_at(p, LBrace) {
+			# a nested `{` inside the group — a dropped initializer's map literal, say —
+			# must not let its `}` end the group early
+			p_advance(p)
+			unsafe_depth = unsafe_depth + 1
+		} else if unsafe_depth > 0 and p_at(p, RBrace) {
+			p_advance(p)
+			unsafe_depth = unsafe_depth - 1
 		} else {
 			p_advance(p)
 		}
@@ -487,6 +548,22 @@ pub fn parse_at(src: str, path: str) -> File {
 	raise f"`#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
 
 	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+}
+
+# p_top_binding reads one top-level binding and answers the module-constant DECLARATION it
+# is: the SLet parse_binding builds, rehomed onto a ConstDecl carrying the file and the
+# position the form started at — `line` / `col` are the FIRST token's, captured by the
+# caller before it consumed the `pub` / `const` / `mut` in front of the name. A module
+# constant is a statement of no function, so nothing else (no FnDecl, no SAt marker) would
+# ever remember where it was written, and a declaration a rule can refuse owes a place.
+fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, line: int, col: int) -> ConstDecl {
+	s := parse_binding(p, is_mut, is_const)
+	return match s {
+		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, value, p.path, line, col)
+
+		# parse_binding only ever answers SLet; this arm is exhaustiveness, not a path
+		_ => ConstDecl("", TUnknown, false, is_mut, is_const, is_pub, ENil, p.path, line, col)
+	}
 }
 
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
@@ -1395,11 +1472,11 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	}
 	if k == Mut {
 		p_advance(p)
-		return parse_binding(p, true)
+		return parse_binding(p, true, false)
 	}
 	if k == Const {
 		p_advance(p)
-		return parse_binding(p, false)
+		return parse_binding(p, false, true)
 	}
 
 	# A BINDING is `name := …` or `name: T = …`, and it is recognised by that shape — so a
@@ -1407,8 +1484,8 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# reported from the expression fallback as `` `:=` is not an expression``: the token
 	# after the name rather than the reserved word in it. `print := 1` and `this := 1` both
 	# arrived that way. Reaching parse_binding is what puts them in front of `p_name`.
-	return parse_binding(p, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
-	return parse_binding(p, false) if k == Ident and peek_kind(p, 1) == Colon
+	return parse_binding(p, false, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
+	return parse_binding(p, false, false) if k == Ident and peek_kind(p, 1) == Colon
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
@@ -1425,21 +1502,23 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	return SExpr(e)
 }
 
-# parse_binding parses `name := e` (inferred) or `name: T = e` (typed). const is folded
-# into an immutable let (is_mut false); the emitter treats both as a plain C local.
-fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
+# parse_binding parses `name := e` (inferred) or `name: T = e` (typed). A `const` still
+# lowers to a plain immutable C local, but its const-ness RIDES on the node now: `const`
+# marks a shadow-proof binding (GRAMMAR group 4), and folding the keyword away here was
+# why nothing downstream could enforce that.
+fn parse_binding(mut &p: Parser, is_mut: bool, is_const: bool) -> Stmt {
 	# the last naming position that still read whatever token was there: `print := 1` and
 	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
 	# not an expression`` — the token after the name rather than the reserved word in it.
 	name := p_name(p, "a binding")
 	if p_at(p, Walrus) {
 		p_advance(p)
-		return SLet(name, TUnknown, false, is_mut, parse_expr(p))
+		return SLet(name, TUnknown, false, is_mut, is_const, parse_expr(p))
 	}
 	expect(p, Colon)
 	ty := parse_type(p)
 	expect(p, Assign)
-	return SLet(name, ty, true, is_mut, parse_expr(p))
+	return SLet(name, ty, true, is_mut, is_const, parse_expr(p))
 }
 
 # parse_jump_guard reads the optional trailing `if cond` on a `break` or a `continue` —

@@ -4938,14 +4938,23 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str) {
 # row is: the reference is answered elsewhere, and this rule only speaks about a
 # declaration whose module it knows.
 fn c_chk_visible_const(mut &em: Emitter, name: str) {
+	i := c_k_idx(em, name)
+	return if i < 0
+	chk_visible(em, name, em.k_mod[i], em.k_pub[i])
+}
+
+# c_k_idx is a name's row in the module-constant columns (k_names and what rides beside
+# it), or -1 when no module declares it. It exists because a module-QUALIFIED read must be
+# answered from these rows and nowhere else: resolving `lib.COUNT` through the environment
+# read the innermost live binding of `COUNT`, so a local of that name answered a question
+# that named `lib`.
+fn c_k_idx(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.k_names.len() {
-		if em.k_names[i] == name {
-			chk_visible(em, name, em.k_mod[i], em.k_pub[i])
-			return
-		}
+		return i if em.k_names[i] == name
 		i = i + 1
 	}
+	return -1
 }
 
 # c_struct_args emits a struct constructor's arguments, giving each field's type as
@@ -5351,6 +5360,17 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught
 	c_live_use(em, n)
+
+	# A BARE read of a module constant answers the same visibility question the qualified
+	# `lib.FLOOR` does (c_fieldref): c_reset_env binds every module's constants into every
+	# function at scope 0, so without this ask a private constant was readable by bare
+	# name from any module — silently, while the same shape of private FUNCTION is refused
+	# with a place. The scope-0 test is what keeps a LOCAL that shadows the constant out
+	# of it: the local answers the read, and a local is nobody's export.
+	idx := c_live_idx(em, n)
+	if idx >= 0 and em.env_scope[idx] == 0 {
+		c_chk_visible_const(em, n)
+	}
 	return c_var_cname(em, n)
 }
 
@@ -6238,6 +6258,18 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# that still allows a common symbol — and the reader got whichever the linker chose.
 		# On a toolchain with `-fno-common` it is a duplicate symbol instead.
 		raise f"NotImplemented: two modules both define `{c.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.k_names, c.name)
+
+		# A FUNCTION of the same name is a collision too: the top level is one namespace,
+		# so both mangle to `zg_<name>` and `const f := 1` beside `fn f()` reached cc as
+		# "redefinition of 'zg_f'" — against generated code, in either source order, since
+		# this walk runs after c_build_sigs has seen every declaration. A LOCAL named
+		# after a function is not this (it shadows, c_add_var's business); free functions
+		# only, because a method is keyed by its type and a generic template mangles per
+		# specialization, so neither ever shares the constant's symbol. Reported at the
+		# constant's declaration in `own`, so a multi-unit build says it once.
+		if c_is_free_fn(em, c.name) and c_const_in(own, c.name) {
+			chk_at_place(em, c.path, c.line, c.col, f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
+		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
 		# is chk_binding's — the value must fit the declared type, literals adopting the
@@ -7611,9 +7643,14 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	en := c_qualified_variant(em, target, fld)
 	return TNamed(en) if en != ""
 
-	# `lib.LIMIT` — a module-qualified name is the name it ends with; see c_fieldref
+	# `lib.LIMIT` — a module-qualified name is the name it ends with, and its TYPE is the
+	# module row's (k_tys), not the environment's: a local shadowing the constant must not
+	# answer for it here any more than in c_fieldref
 	ns := c_ident_name(target)
-	return c_lookup_var(em, fld) if c_name_in(em.mod_names, ns) and c_is_bound(em, fld)
+	if c_name_in(em.mod_names, ns) {
+		ki := c_k_idx(em, fld)
+		return em.k_tys[ki] if ki >= 0
+	}
 
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
@@ -7662,19 +7699,34 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	ns := c_ident_name(target)
-	if c_name_in(em.mod_names, ns) and c_is_bound(em, fld) {
+	if c_name_in(em.mod_names, ns) {
 		# `lib.LIMIT` — a module-qualified NAME. A module flattens into this unit, so the
 		# qualifier says where the name came from and the last segment IS the name, which
 		# is the rule the CALL path has followed since it was written (`ascii.is_digit`).
+		#
+		# It is answered from the MODULE-CONSTANT ROWS (c_const_globals') and never from
+		# the environment. Resolving through c_var_cname read the innermost live binding,
+		# so under a local `COUNT := 9` the qualified `lib.COUNT` printed 9 — the question
+		# named `lib` and the answer came from the local. The global's C name is fixed
+		# (`zg_<name>`, c_reset_env's own spelling), so the local's shadow row cannot
+		# reach it. What this does NOT fix is the qualifier being taken on faith:
+		# `b.COUNT` still answers a constant module `a` declared, because every module
+		# flattens into one namespace — the same documented deviation the call path has
+		# (`b.total()` on `main`, docs/runtime/package.md), left to that one fix.
+		#
 		# Whether this module may read it is the same question a call asks
 		# (c_chk_visible_fn), against the rows c_const_globals recorded.
-		c_chk_visible_const(em, fld)
-		return c_var_cname(em, fld)
-	}
+		if c_k_idx(em, fld) >= 0 {
+			c_chk_visible_const(em, fld)
+			return "zg_" + fld
+		}
 
-	# a REAL module and a member it does not have. Falling through lowered `lib` as a value
-	# and said `undefined name lib` — about the qualifier, which is the part that is right.
-	raise f"module `{ns}` has no `{fld}`" if c_name_in(em.mod_names, ns)
+		# a REAL module and a member no module declares. Falling through lowered `lib` as
+		# a value and said `undefined name lib` — about the qualifier, which is the part
+		# that is right. A LOCAL of the asked-for name must not soften this into an
+		# answer: the question was the module's, and the module has no such member.
+		raise f"module `{ns}` has no `{fld}`"
+	}
 
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)

@@ -66,12 +66,13 @@ ZG
 `zerg` 就是那個編譯器——以 Zerg 寫成，位於 [`src/compiler/`](src/compiler)，並且由它自己編譯（種子只建出一個
 中繼，再由中繼建出最終出貨的那個）。
 
-| 指令                        | 作用                                        |
-| --------------------------- | ------------------------------------------- |
-| `zerg build <file>`         | 把一個模組編成 object（`--emit lib`，預設） |
-| `zerg build --emit bin <f>` | 連結成一支程式                              |
-| `zerg fmt <file>`           | 把原始碼改寫成唯一的正規風格                |
-| `zerg lint <file>`          | 回報未使用的 import 與死掉的私有宣告        |
+| 指令                        | 作用                                          |
+| --------------------------- | --------------------------------------------- |
+| `zerg build <file>`         | 把一個模組編成 object（`--emit lib`，預設）   |
+| `zerg build --emit bin <f>` | 連結成一支程式                                |
+| `zerg fmt <file>`           | 把原始碼改寫成唯一的正規風格                  |
+| `zerg lint <file>`          | 回報未使用的 import 與死掉的私有宣告          |
+| `zerg desugar <file>`       | 把 source 改寫成它的 sugar 所代表的 core 形式 |
 
 `--emit` 另外接受 `tokens`、`ast`、`c`，印出中間形式而不產生檔案。程式是逐模組建置的：`-j` 可同時編譯多個
 單元，結果以內容為鍵快取在 `.zerg-cache/`，所以只改一個模組的重建就只重編那一個模組。

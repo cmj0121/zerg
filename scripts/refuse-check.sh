@@ -26,9 +26,17 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 
-# expect <compiler> <name> <wanted-substring> — the program arrives on stdin.
+# expect <compiler> <name> <wanted-substring> [flags] — the program arrives on stdin.
+#
+#   place    the refusal must carry a `--> file:line:col` trailer. Most raises say only
+#            what and never where — the parser's marked gap, counted whole by
+#            reject-fuzz — so the flag is opt-in; but a refusal that has LEARNED its
+#            place must keep it, and nothing else here would notice it fall off, because
+#            the sentence still matches.
 expect() {
 	local cc=$1 name=$2 want=$3
+	shift 3
+	local flags=" $* "
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
@@ -78,6 +86,15 @@ expect() {
 		fail=$((fail + 1))
 		return
 	fi
+
+	case $flags in *" place "*)
+		if ! has_place "$out"; then
+			echo "NO PLACE  $name — the refusal does not say where: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+		fi
+		;;
+	esac
 
 	pass=$((pass + 1))
 }
@@ -1386,7 +1403,7 @@ EOF
 # A bound is a CONJUNCTION — `T: Eq + Show` asks for both — and the one that is not met is
 # the one named. The form itself is built; what is refused here is the type that does not
 # keep the promise.
-expect "$ZERG" generic-bound-unmet-in-a-conjunction "does not implement `Show`" <<'EOF'
+expect "$ZERG" generic-bound-unmet-in-a-conjunction 'does not implement `Show`' <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1484,6 +1501,35 @@ fn main() {
 		5
 	}
 	print n
+}
+EOF
+
+# A standalone `unsafe fn` is a DECLARATION — GRAMMAR:304 puts `unsafe` in fn-decl — and
+# it is refused as itself, with a place. It used to fall into the top-level statement
+# fallback and answer "NotImplemented: unsafe", the block-expression's sentence about a
+# form that is not a block; and reading the `fn` as safe instead would erase the one thing
+# the keyword says while the trust boundary stays unenforced (docs/runtime/ffi.md).
+expect "$ZERG" unsafe-fn-declaration 'a standalone `unsafe fn` declaration' place <<'EOF'
+unsafe fn g() -> int {
+	return 2
+}
+
+fn main() {
+	print g()
+}
+EOF
+
+# `pub unsafe fn` is the SAME declaration with its visibility marker, and it earns the
+# same sentence. It used to be told "`pub` binds to a declaration, and a statement takes
+# none" — which is false twice over: it IS a declaration, and the statement fallback was
+# never the right reader for it.
+expect "$ZERG" pub-unsafe-fn-declaration 'a standalone `unsafe fn` declaration' place <<'EOF'
+pub unsafe fn g() -> int {
+	return 2
+}
+
+fn main() {
+	print g()
 }
 EOF
 

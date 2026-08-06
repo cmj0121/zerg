@@ -1,0 +1,11 @@
+# lib — module constants declared as top-level bindings, no `const` keyword in sight.
+# `pub COUNT := 3` is the form docs/runtime/package.md puts in a module's immutable state;
+# the bare `COUNT2 := 4` is the same constant without the visibility, readable anywhere
+# inside `lib`.
+pub COUNT := 3
+
+COUNT2 := 4
+
+pub fn total() -> int {
+	return COUNT + COUNT2
+}

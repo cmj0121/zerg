@@ -82,6 +82,13 @@ reject() {
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
+	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
+	# whole claim is that the finding sits at the declaration, not at a use site.
+	local at="" fl
+	for fl in $flags; do
+		case $fl in at=*) at=${fl#at=} ;; esac
+	done
+
 	local out status
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
 	# only cc would reject looks accepted and assertions 3 and 4 can never fire. Linking
@@ -147,6 +154,21 @@ reject() {
 		fi
 		;;
 	esac
+	if [ -n "$at" ] && ! place_is "$out" "$name\.zg:$at"; then
+		echo "PLACE     $name — the finding does not sit at $at: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
+
+	# one-finding pins the COUNT, for a case whose claim is "exactly one message": a rule
+	# that keeps a refused name resolvable ON PURPOSE (so its uses do not each add a
+	# second finding) is asserted here, since a second message would match every other
+	# assertion and still be the regression.
+	if [ "${flags#* one-finding }" != "$flags" ] && [ "$(printf '%s\n' "$out" | grep -c '^error:')" -ne 1 ]; then
+		echo "COUNT     $name — wanted exactly one finding, got $(printf '%s\n' "$out" | grep -c '^error:')"
+		fail=$((fail + 1))
+		return
+	fi
 
 	# A third argument names a rule the SEED does not enforce yet, and says which. The
 	# oracle is worth having and the seed is not perfect; recording the exception beside the
@@ -245,6 +267,205 @@ fn main() {
 		i = 5
 		print(f"{i}")
 	}
+}
+EOF
+
+# --- `const` is shadow-proof, in BOTH directions ----------------------------------
+#
+# GRAMMAR group 4: a `const` binding is immutable and SHADOW-PROOF — no later binding may
+# take its name, and it may not itself take a name a visible binding holds. Neither
+# direction used to be checked: `k := 2` in a block under `const k := 1` compiled and
+# printed 2, silently, which is the exact answer the keyword exists to rule out. The
+# negative half — a plain `:=` may still be shadowed and `mut n := n` still works — is
+# pinned by the corpus (const_shadow_allowed), because a program that must COMPILE belongs
+# there, not here.
+
+reject shadow-a-const-from-an-inner-block 're-binds a `const`' <<'EOF'
+const k := 1
+
+fn main() {
+	if true {
+		k := 2
+		print k
+	}
+}
+EOF
+
+# a LOOP VARIABLE is a binding too. The rule rides c_add_var — the one gate every
+# name-introducing site enters the environment through — because D103 desugars this loop
+# to a core form that CONTAINS a binding: refusing the desugared program and accepting the
+# surface one would break `make desugar`'s contract that the two behave the same, and the
+# seed refuses the surface form as well.
+reject loop-variable-takes-a-const-name 're-binds a `const`' <<'EOF'
+const k := 1
+
+fn main() {
+	for k in 0..3 {
+		print k
+	}
+}
+EOF
+
+reject const-shadowing-an-outer-binding 'shadows a binding already visible here' <<'EOF'
+fn main() {
+	x := 1
+	if true {
+		const x := 2
+		print x
+	}
+	print x
+}
+EOF
+
+# the SAME-block collision is one mistake and gets one message — the const one, whose
+# advice is right. The redeclaration message says "an inner block may shadow it", which is
+# exactly what a `const` does not allow.
+reject const-collision-in-the-same-block 're-binds a `const`' <<'EOF'
+fn main() {
+	const k := 1
+	k := 2
+	print k
+}
+EOF
+
+# a match ARM's bind is registered up to three times — condition, body, and the body's
+# type inference — so this one mistake used to collect SIX findings, one per pass, all
+# identical. One mistake earns one message (chk_at_place drops an exact repeat), which is
+# what `one-finding` pins; the place is the whole STATEMENT's, the SAt marker's
+# documented grain, so the arm itself is not pointed at and this case does not claim it.
+reject const-rebound-by-a-match-arm 're-binds a `const`' one-finding <<'EOF'
+const v := 1
+
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := E.A(7)
+	x := match e { A(v) => v  B => 0 }
+	print x
+}
+EOF
+
+# --- a module constant may not take a function's name --------------------------------
+#
+# The top level is ONE namespace: a module constant and a free function both mangle to
+# `zg_<name>`, so `const f := 1` beside `fn f()` reached cc as "redefinition of 'zg_f'"
+# against generated code — in either source order, which is why both are here. A LOCAL
+# named after a function is not this (it shadows, and stays legal); the corpus pins that
+# half. The seed emits the collision too (its gap, src/bootstrap/README.md).
+reject const-taking-a-function-name 'declared as both a module constant and a function' at=1:1 seed-gap <<'EOF'
+const f := 1
+
+fn f() {
+	print "x"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject function-taking-a-const-name 'declared as both a module constant and a function' at=5:1 seed-gap <<'EOF'
+fn f() {
+	print "x"
+}
+
+const f := 1
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# --- the top level is immutable in safe code --------------------------------------
+#
+# docs/runtime/package.md: a top-level binding may not be `mut` outside a module-level
+# `unsafe { … }` group. The declaration used to be dropped by the parser's top-level skip,
+# which split the mistake into two wrong answers: unused, the program compiled; used,
+# every use site said `undefined name` about a name the program plainly declares. The
+# `unsafe { … }` group's own (different, documented) handling is pinned by the corpus case
+# unsafe_group_mut.
+
+reject top-level-mut-in-safe-code 'may not be `mut` outside a module-level' <<'EOF'
+mut counter := 0
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject top-level-pub-mut 'may not be `mut` outside a module-level' <<'EOF'
+pub mut counter := 0
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# A USED `mut` global earns exactly ONE finding, at the declaration — the name stays
+# resolvable and writable on purpose, so the program is told the one line to fix rather
+# than a second `undefined name` or `cannot assign` at every use site. `at=` and
+# `one-finding` are those two claims as markers; the case used to fork the helper's first
+# half by hand, and the fork silently lost the cache, cc-shape and seed assertions.
+reject top-level-mut-that-is-used 'may not be `mut` outside a module-level' at=1:1 one-finding <<'EOF'
+mut counter := 0
+
+fn main() {
+	counter = counter + 1
+	print counter
+}
+EOF
+
+# --- a top-level annotation is honoured --------------------------------------------
+#
+# `answer: bool = 42` used to compile: the top level inferred from the value and silently
+# discarded the annotation, so the program got an int named answer — an annotation the
+# compiler does not check is a comment. The positive half (the annotation DECIDING the
+# type, `half: float = 1` printing 0.5 for `half / 2`) is the corpus case topconst_typed.
+reject top-level-annotation-mismatch 'cannot bind int to a bool binding' at=1:1 seed-gap <<'EOF'
+answer: bool = 42
+
+fn main() {
+	print answer
+}
+EOF
+
+# --- `pub` binds to a declaration ---------------------------------------------------
+#
+# `pub` is a visibility flag on the declaration that follows it. The parser used to read
+# it in a second, hand-copied dispatch that fell off its end silently — `pub impl` dropped
+# the `pub` on the floor and picked the `impl` up as if the marker were never written.
+# There is now ONE dispatch, and a form that takes no `pub` (GRAMMAR derives none for an
+# `impl`, an `init()`, a decorator, or a statement) says so by name. The parser raises, so
+# the refusal carries no place — the one marked gap every parser rule shares.
+
+reject pub-on-an-impl-block 'does not go on an `impl` block' no-place <<'EOF'
+spec S {
+	fn f() -> int
+}
+
+struct A {
+	x: int
+}
+
+pub impl S for A {
+	fn f() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-before-a-statement '`pub` binds to a declaration' no-place <<'EOF'
+pub 42
+
+fn main() {
+	print "ok"
 }
 EOF
 

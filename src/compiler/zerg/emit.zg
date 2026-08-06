@@ -8520,10 +8520,19 @@ fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 # parenthesized, and wrapping those again produces `if ((a == b))` — which the C compiler
 # warns about, 112 times in one build of this compiler. That noise is not free: it is what
 # a real warning has to be spotted among, and one nearly was not.
+#
+# A GNU statement expression is the one rendering whose own parentheses do NOT satisfy
+# `if`: c_is_wrapped counts them as "already wrapped", but reusing them as the parens the
+# `if` requires spells `if ({ … })` — and a C parser reading if's condition meets `{` where
+# an expression must start. `(({ … }))` is what compiles: the inner pair belongs to the
+# statement expression, the outer to the `if`. That one dropped pair is how every
+# bool-valued form that lowers to a statement expression — `in` over a list or a map, `??`
+# as a whole condition — escaped to cc from `if`, `for`, and the postfix conditionals,
+# while the same forms compiled anywhere else an expression goes.
 fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 	chk_condition(em, x, site)
 	rendered := c_expr(em, x, c_nosub())
-	return rendered if c_is_wrapped(rendered)
+	return rendered if c_is_wrapped(rendered) and not c_is_stmt_expr(rendered)
 	return f"({rendered})"
 }
 
@@ -8532,6 +8541,16 @@ fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
 	chk_condition(em, cond, "an `if` expression")
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
+}
+
+# c_is_stmt_expr reports whether rendered C opens as a GNU statement expression `({ … }`.
+# The leading two characters are the whole test: every statement expression this emitter
+# writes begins with the literal pair `({`, and no ordinary parenthesized rendering does —
+# a `(` there is always followed by a value, a cast, or another `(`.
+fn c_is_stmt_expr(s: str) -> bool {
+	b := list[byte](s)
+	return false if b.len() < 2
+	return b[0] == b'(' and b[1] == b'{'
 }
 
 # c_is_wrapped reports whether s is enclosed by ONE pair of parentheses — its first

@@ -458,8 +458,9 @@ struct ImplDecl {
 # `is_mut` is carried, not legal: the top level is immutable outside a module-level
 # `unsafe { … }` group, and PARSING the offending binding is what lets the refusal name
 # its own declaration instead of answering `undefined name` at every use site.
-# `is_pub` is recorded from the source and read by nothing yet — visibility is enforced
-# on functions and on nothing else, the deviation docs/runtime/package.md owns.
+# `is_pub` is the visibility chk_visible enforces: c_const_globals records it beside the
+# constant's module (k_mod / k_pub), and a cross-module read of a non-`pub` constant is
+# refused the way a private function's call is.
 pub struct ConstDecl {
 	name: str
 	ty: Ty

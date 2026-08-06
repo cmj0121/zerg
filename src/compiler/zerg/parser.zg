@@ -477,12 +477,15 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 
-	# unsafe_depth tracks a module-level `unsafe { … }` group. What that group HOLDS is
-	# dropped today — a separate, documented deviation (docs/runtime/ffi.md) — and the
-	# binding arms below stay out of it so the two behaviours cannot bleed into each
-	# other: a `mut` binding inside the group keeps its own (wrong, owned) story, and the
-	# refusal below stays about safe code, which is the rule docs/runtime/package.md
-	# actually states. Every other arm behaves inside the group exactly as it always has.
+	# unsafe_depth tracks a module-level `unsafe { … }` group. The group's items go
+	# through the SAME arms as everything else — a `fn` was always read there, and the
+	# binding arms now fire inside it too, carrying `unsafe_depth > 0` onto the
+	# declaration (ConstDecl.in_unsafe) — because GRAMMAR group 12 makes the group a
+	# CONTEXT around ordinary declarations, not a dialect of its own. The depth decides
+	# exactly two things: whether a `mut` binding is the mutable global the group grants
+	# (chk_top_muts reads the flag) and whether a bare statement is refused rather than
+	# read as a top-level nop, since `unsafe-item ::= decorated-decl | binding` derives
+	# no statement.
 	mut unsafe_depth := 0
 	skip_semis(p)
 	for not p_at(p, Eof) {
@@ -525,7 +528,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
 			p_advance(p)
-			consts.append(p_top_binding(p, false, true, is_pub, t.line, t.col))
+			consts.append(p_top_binding(p, false, true, is_pub, unsafe_depth > 0, t.line, t.col))
 		} else if p_at(p, Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
 			# there is no visibility for a marker to grant (GRAMMAR:743 derives none)
@@ -549,24 +552,26 @@ pub fn parse_at(src: str, path: str) -> File {
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
 			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver"
-		} else if unsafe_depth == 0 and p_at(p, Mut) {
-			# a top-level `mut` binding in SAFE code — `mut x := 0` or `pub mut x := 0`,
-			# `pub` changing nothing about mutability. It is ill-formed — the top level is
-			# immutable outside a module-level `unsafe { … }` group (docs/runtime/
-			# package.md) — but it is PARSED rather than refused here, so the refusal
-			# (chk_top_muts) carries this declaration's place and lands beside every other
-			# finding of the run, instead of splitting into "compiles when unused" and
-			# `undefined name` at every use site.
+		} else if p_at(p, Mut) {
+			# a top-level `mut` binding — `mut x := 0` or `pub mut x := 0`, `pub` changing
+			# nothing about mutability. Inside a module-level `unsafe { … }` group it is
+			# the language's MUTABLE GLOBAL (docs/runtime/ffi.md, GRAMMAR group 12), and
+			# `in_unsafe` carries that context onto the declaration. In SAFE code it is
+			# ill-formed — the top level is immutable (docs/runtime/package.md) — but it
+			# is PARSED rather than refused here, so the refusal (chk_top_muts) carries
+			# this declaration's place and lands beside every other finding of the run,
+			# instead of splitting into "compiles when unused" and `undefined name` at
+			# every use site.
 			p_advance(p)
-			consts.append(p_top_binding(p, true, false, is_pub, t.line, t.col))
-		} else if unsafe_depth == 0 and p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+			consts.append(p_top_binding(p, true, false, is_pub, unsafe_depth > 0, t.line, t.col))
+		} else if p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
 			# a plain top-level binding — `COUNT := 3`, `pub COUNT := 3`, or `answer: int
 			# = compute()` — is the same module constant the `const` arm reads, without
 			# the shadow-proofing the keyword adds; docs/runtime/package.md puts it in the
 			# module's immutable state with `pub` as the visibility. It used to fall into
 			# the fallback below and vanish, so the module compiled WITHOUT the member and
 			# every use answered `undefined name` about a name the module plainly declares.
-			consts.append(p_top_binding(p, false, false, is_pub, t.line, t.col))
+			consts.append(p_top_binding(p, false, false, is_pub, unsafe_depth > 0, t.line, t.col))
 		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
 			# a standalone `unsafe fn` — GRAMMAR:304 has it in fn-decl (`'pub'? 'unsafe'?
 			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
@@ -580,28 +585,26 @@ pub fn parse_at(src: str, path: str) -> File {
 			# place a declaration owes.
 			raise "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
 		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
-			# a module-level `unsafe { … }` group opens. Its two tokens were skipped one
-			# at a time before, so consuming both here changes nothing the group's
-			# CONTENTS see — the arms above keep firing inside it exactly as they did —
-			# and the depth is what keeps the new binding arms out (see unsafe_depth).
+			# a module-level `unsafe { … }` group opens. Every item inside goes through
+			# the arms above exactly as it would outside — the group is a CONTEXT, not a
+			# grammar of its own — and the depth is what the binding arms record on each
+			# declaration (in_unsafe) and what keeps a bare statement out (below).
 			raise "`pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" if is_pub
 			p_advance(p)
-			p_advance(p)
-			unsafe_depth = unsafe_depth + 1
-		} else if unsafe_depth > 0 and p_at(p, LBrace) {
-			# a nested `{` inside the group — a dropped initializer's map literal, say —
-			# must not let its `}` end the group early
 			p_advance(p)
 			unsafe_depth = unsafe_depth + 1
 		} else if unsafe_depth > 0 and p_at(p, RBrace) {
 			p_advance(p)
 			unsafe_depth = unsafe_depth - 1
 		} else if unsafe_depth > 0 {
-			# the group's CONTENTS are dropped one token at a time — the separate,
-			# documented deviation docs/runtime/ffi.md owns, pinned by the corpus case
-			# unsafe_group_mut. The statement fallback below must not reach in here: a
-			# dropped declaration's tokens are not a statement to complete.
-			p_advance(p)
+			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding` derives no
+			# statement, so what is left here is ill-formed. It used to be dropped one
+			# token at a time, which is how the group's `mut` bindings vanished; now that
+			# every declaration form is read above, the honest answer for the remainder
+			# is a refusal that names the group, not a silent delete and not the
+			# top-level-statement nop below (the group grants an unsafe CONTEXT, and a
+			# statement nobody runs must not be blessed into it).
+			raise "a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
 			# GRAMMAR:47 makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
 			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
@@ -635,10 +638,12 @@ pub fn parse_at(src: str, path: str) -> File {
 # caller before it consumed the `pub` / `const` / `mut` in front of the name. A module
 # constant is a statement of no function, so nothing else (no FnDecl, no SAt marker) would
 # ever remember where it was written, and a declaration a rule can refuse owes a place.
-fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, line: int, col: int) -> ConstDecl {
+# `in_unsafe` is whether the binding sits inside a module-level `unsafe { … }` group — the
+# one place a top-level `mut` is legal (docs/runtime/ffi.md).
+fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
 	return match s {
-		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, value, p.path, line, col)
+		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into

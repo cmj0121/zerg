@@ -123,9 +123,10 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	here := c_mod_of(em.at_path)
 	return if here == decl_mod
 
-	# And the reading module is unknown where the code being emitted belongs to no statement
-	# of its own: a module constant's initializer is emitted into the ENTRY's wrapper, and
-	# c_const_assigns clears the path rather than let this rule answer with the entry's.
+	# And the reading module is unknown where no marker covers the code being emitted —
+	# before the first statement of the first function, the marker still says nothing. A
+	# module constant's initializer is NOT that case any more: c_const_assigns points the
+	# marker at the declaration itself, so its module answers here like any other reader's.
 	return if here == ""
 
 	chk_at(em, f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
@@ -1682,28 +1683,29 @@ fn chk_top_muts(mut &em: Emitter, own: File) {
 # chk_render_overrides refuses a `display` / `debug` method whose shape is not the
 # override contract's. It walks the whole program's declarations once, like
 # chk_spec_impls, and reports at each method's own place.
+#
+# The declaration list only says WHERE: every shape fact is read from the signature and
+# parameter tables (sig_nparams / sig_hasret / sig_rets / pr_ref) — the same rows
+# c_render_shape_ok dispatches by — so the shape this rule approves and the shape the
+# dispatcher accepts are one set of columns, not two readings of one contract that can
+# drift into the checker blessing a method the dispatcher then skips.
 fn chk_render_overrides(mut &em: Emitter, f: File) {
 	for fn_i in f.fns {
 		if fn_i.recv != "" and (fn_i.name == "display" or fn_i.name == "debug") {
-			# params[0] is the receiver the parser prepends; a `mut fn` makes it a
-			# `mut &`, and showing a value must not change it
-			if fn_i.params.len() != 1 {
+			key := c_sig_key(fn_i.recv, fn_i.name)
+			row := c_sig_row(em, key)
+
+			# row 0 of the parameters is the receiver the parser prepends; a `mut fn`
+			# makes it a `mut &`, and showing a value must not change it
+			if row < 0 or em.sig_nparams[row] != 1 {
 				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
-			} else if fn_i.params[0].is_ref {
+			} else if c_param_is_ref(em, key, 0) {
 				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
 			}
-			if not chk_render_ret_ok(fn_i) {
+			if row >= 0 and (not em.sig_hasret[row] or not c_is_str(em.sig_rets[row])) {
 				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
 			}
 		}
-	}
-}
-
-fn chk_render_ret_ok(fn_i: FnDecl) -> bool {
-	return false if not fn_i.has_ret
-	return match fn_i.ret {
-		TStr => true
-		_    => false
 	}
 }
 

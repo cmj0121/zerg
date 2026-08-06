@@ -153,8 +153,9 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 根本無法指名那個型別。一個型別的 **`pub` method 會隨它一起走**：一旦型別抵達公開表面，它的 `pub` method 也能
 被依賴者呼叫——method 上的可見性讀法與 function 完全相同。
 
-> **[deviation]** **函式已強制，其餘尚未。** 指名另一個 module 的 module-private **函式**是編譯錯誤，而且帶位置
-> ——裸呼叫與具名空間的 `lib.helper()` 兩種形狀都擋。module-private 的**型別**與**欄位**目前仍可跨界讀取：一個
+> **[deviation]** **函式與 module 常數已強制，其餘尚未。** 指名另一個 module 的 module-private **函式**是編譯錯誤，
+> 而且帶位置——裸呼叫與具名空間的 `lib.helper()` 兩種形狀都擋——讀取它的 module-private **常數**也一樣，
+> 同樣兩種形狀：裸名的 `FLOOR` 與具名空間的 `lib.FLOOR`。module-private 的**型別**與**欄位**目前仍可跨界讀取：一個
 > `pub fn` 可以回傳私有 struct，相依端也讀得到它的私有欄位，沒有任何 finding。每個 module 仍壓平進同一個命名空間
 > ——這也是兩個 module 宣告同名會相撞的原因，而那個拒絕針對的是名字、不是可見性。規則比較的是**宣告被讀進來的
 > 目錄**與**進行讀取的目錄**，也就是 module 邊界而非 package 邊界；上文的 **package-internal** 與

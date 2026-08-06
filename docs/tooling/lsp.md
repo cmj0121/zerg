@@ -24,6 +24,12 @@ corpus programs, and holds what the server publishes to what `zerg build` and `z
 the same file — errors against the command that refuses over one, information findings against the
 command that reports one. It is `make oracle`'s argument applied to the second front end.
 
+It carries **ten protocol cases** beside that, and every one of them failed once: the exit status, the
+post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification versus
+a `$/` request, a malformed frame, a string id, a UTF-16 column after a line of CJK, and a body larger
+than one read of the runtime's bounded leaf. Those are a different kind of failure and a quieter one —
+an editor with a corrupted buffer, or a client left waiting, reports nothing at all.
+
 ## Where it lives
 
 `src/compiler/lsp/` — a module of its own, importing `src/compiler/zerg/` across the `pub` boundary
@@ -55,6 +61,18 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 Every other request is answered with a **method-not-found error**, not with silence. A client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
 nothing said.
+
+**The session is a state machine, and the exit status is part of it.** `shutdown` closes the server
+to everything but `exit`; a request that arrives after it is answered with `InvalidRequest`, because a
+client left waiting for a reply stops sending the next one. `exit` after `shutdown` exits **0** and
+`exit` without one — or a standard input that simply ended — exits **1**. A server that always exits 0
+tells its client that every crash was a clean shutdown.
+
+**Sync is full, and a change that is not full is refused.** `textDocumentSync: 1` means the client
+sends the whole document, so a change carrying a `range` is an incremental edit this server never
+asked for, and applying its `text` would replace the document with a fragment of itself. An **empty**
+`contentChanges` leaves the buffer alone rather than replacing it with the empty string — the flag is
+not redundant with an empty string, since a client clearing a file to nothing sends `""`.
 
 **Diagnostics are checked against the whole program**, not the buffer alone. A file that imports
 another module has to be checked with that module or every name it borrowed reads as undefined —

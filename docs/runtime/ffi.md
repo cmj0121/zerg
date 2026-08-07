@@ -216,6 +216,13 @@ unsafe context (a `fn` inside is an unsafe fn, a `mut` binding is a mutable glob
 `unsafe mut` prefix**. Inside any of them the compiler makes no safety guarantee across the foreign call —
 the thin wrapper you write is where you vouch. Group the raw bindings and their wrappers together:
 
+The module-level group is **one context with a beginning and an end**, and both are checked:
+`unsafe-item ::= decorated-decl | binding` ([`GRAMMAR`](../../GRAMMAR) group 12) derives no nested group,
+so a group inside a group is refused, and a group left **unclosed** is refused at the `unsafe` that opened
+it rather than swallowing the rest of the file. Neither is pedantry about braces: a missing `}` makes every
+declaration below it read as being inside, which is exactly how a `mut` binding in safe code becomes a
+mutable global with nothing said.
+
 > **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place**. Building it would
 > read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
 > form is turned away rather than silently disarmed. (It used to compile exactly that way:

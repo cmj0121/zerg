@@ -190,14 +190,23 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 
 	return if em.env_mut[idx]
 
-	# A `const` is not an immutable binding that could have been written `mut`; it is a
-	# module constant, and there is no spelling of it that a program may write. Telling
-	# the reader to declare it `mut` would be advice that cannot be taken.
-	# ONE of the three sentences, never two. `raise` used to say that by leaving; a rule
-	# that records instead has to say it with a `return`, and forgetting to is how the
-	# first run of this reported the same assignment twice in two different words.
-	if chk_is_const(em, idx) {
-		chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+	# A MODULE binding is not an immutable local that could have been written `mut`, so
+	# "declare it `mut`" is advice that cannot be taken and the answer says why instead.
+	# There are TWO kinds of them and they are immutable for different reasons: a `const`
+	# (GRAMMAR group 4) has no writable spelling in the language at all, while a plain
+	# top-level binding is immutable because the TOP LEVEL is — `mut` there is legal only
+	# inside a module-level `unsafe` group (docs/runtime/package.md). One sentence for both
+	# called a plain `COUNT := 3` a `const`, which is a word the reader can go and look up
+	# and find they did not write.
+	# ONE of the sentences, never two. `raise` used to say that by leaving; a rule that
+	# records instead has to say it with a `return`, and forgetting to is how the first run
+	# of this reported the same assignment twice in two different words.
+	if chk_is_module_binding(em, idx) {
+		if em.env_const[idx] {
+			chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+		} else {
+			chk_at(em, f"cannot assign to `{root}`: it is a module binding, and the top level is immutable — bind a `mut` copy of it here, since a `mut` binding at the top level is legal only inside a module-level `unsafe` group (docs/runtime/package.md)")
+		}
 		return
 	}
 
@@ -218,11 +227,17 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	chk_at(em, f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
 }
 
-# chk_is_const is whether an environment slot is one of the module constants. c_reset_env
-# seeds every function's environment with them FIRST, so they hold exactly the lowest
-# indices; a local that shadows one binds above it and c_live_idx answers the inner one.
-fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
-	return idx < em.k_names.len()
+# chk_is_module_binding is whether an environment slot is one of the module-level bindings.
+# c_reset_env seeds every function's environment with them FIRST and in k_decls' order, so
+# they hold exactly the lowest indices and row `idx` IS `k_decls[idx]`; a local that shadows
+# one binds above it and c_live_idx answers the inner one.
+#
+# It answers MEMBERSHIP and nothing else. Which KIND of module binding it is — whether the
+# `const` keyword was written — is `env_const[idx]`, the flag the declaration carries, and
+# asking the flag is not a thing position can be made to answer: a plain `COUNT := 3` at
+# the top level is just as much a row here as a `const` is.
+fn chk_is_module_binding(mut &em: Emitter, idx: int) -> bool {
+	return idx < em.k_decls.len()
 }
 
 # --- a default is a property of the declaration ------------------------------------
@@ -1585,11 +1600,12 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 # looked at: `k := 2` in a block under a module `const k := 1` compiled and printed 2,
 # silently, which is the exact answer the keyword exists to rule out.
 #
-# The consts in sight are two families under one rule: the module constants (the k_names
-# rows whose k_const flag is set — scope 0, open in every function) and the local `const`
-# bindings of the function being emitted (const_names / const_scopes, pushed by c_add_var
-# and reset with the env). Both are consulted through the same open-scope walk, so a
-# `const` in a block that has ENDED binds nothing and blocks nothing.
+# The consts in sight are two families under one rule, and one list: the module constants
+# (the k_decls rows whose `is_const` is set, seeded at scope 0 and open in every function)
+# and the local `const` bindings of the function being emitted. Both are environment rows
+# with `env_const` set, so both are consulted through the same open-scope walk every other
+# name question uses, and a `const` in a block that has ENDED binds nothing and blocks
+# nothing.
 #
 # The two directions hang off DIFFERENT hooks, because they guard different acts. Taking
 # a const's name is something every name-introducing site can do — a binding, a loop
@@ -1632,11 +1648,14 @@ fn chk_const_mint(mut &em: Emitter, name: str) {
 	chk_at(em, f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
 }
 
-# chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name.
+# chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name. It
+# walks the ENVIRONMENT, because a `const` is an ordinary binding with one extra column:
+# c_add_var is already told `is_const` and records it beside the name and the block id it
+# was going to record anyway, so this is the same open-scope walk c_var_cname makes.
 fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
-	for i < em.const_names.len() {
-		return true if em.const_names[i] == name and c_scope_live(em, em.const_scopes[i])
+	for i < em.env_names.len() {
+		return true if em.env_const[i] and em.env_names[i] == name and c_in_scope(em, i)
 		i = i + 1
 	}
 	return false
@@ -1684,29 +1703,52 @@ fn chk_top_muts(mut &em: Emitter, own: File) {
 # override contract's. It walks the whole program's declarations once, like
 # chk_spec_impls, and reports at each method's own place.
 #
-# The declaration list only says WHERE: every shape fact is read from the signature and
-# parameter tables (sig_nparams / sig_hasret / sig_rets / pr_ref) — the same rows
-# c_render_shape_ok dispatches by — so the shape this rule approves and the shape the
-# dispatcher accepts are one set of columns, not two readings of one contract that can
-# drift into the checker blessing a method the dispatcher then skips.
+# The declaration list only says WHERE: the verdict is c_render_shape_ok's, the predicate
+# the dispatcher itself uses, so the shape this rule approves and the shape the dispatcher
+# accepts are ONE predicate rather than two readings of one contract that can drift into
+# the checker blessing a method the dispatcher then skips.
 fn chk_render_overrides(mut &em: Emitter, f: File) {
 	for fn_i in f.fns {
-		if fn_i.recv != "" and (fn_i.name == "display" or fn_i.name == "debug") {
-			key := c_sig_key(fn_i.recv, fn_i.name)
-			row := c_sig_row(em, key)
-
-			# row 0 of the parameters is the receiver the parser prepends; a `mut fn`
-			# makes it a `mut &`, and showing a value must not change it
-			if row < 0 or em.sig_nparams[row] != 1 {
-				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
-			} else if c_param_is_ref(em, key, 0) {
-				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
-			}
-			if row >= 0 and (not em.sig_hasret[row] or not c_is_str(em.sig_rets[row])) {
-				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.recv}.{fn_i.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
-			}
-		}
+		chk_render_shape(em, fn_i)
 	}
+}
+
+# chk_render_shape holds ONE declaration to the contract, and the gate is the DISPATCHER'S
+# OWN PREDICATE: c_render_shape_ok is what decides whether `print` goes through this method,
+# so asking it — rather than negating its clauses here — is what makes "approved by the
+# checker" and "dispatched to" the same question by construction. A clause added there can
+# no longer be owed here by hand.
+#
+# The clauses below therefore choose WORDING, not verdict, and the last needs no test: past
+# the two above it, the only way c_render_shape_ok can have answered false is the result.
+#
+# ONE sentence, never two — the rule chk_assignable states and enforces the same way. A
+# `fn display(w: int) -> int` is one mistaken declaration and earns one finding about it.
+fn chk_render_shape(mut &em: Emitter, fd: FnDecl) {
+	return if fd.recv == ""
+	return if fd.name != "display" and fd.name != "debug"
+	return if c_render_shape_ok(em, fd.recv, fd.name)
+
+	key := c_sig_key(fd.recv, fd.name)
+	row := c_sig_row(em, key)
+
+	# c_build_sigs runs first and registers every function in `f`, so there IS a row; the
+	# belt is here because saying nothing is the only honest answer if that ever changes,
+	# and the alternative — folding `row < 0` into the arity clause — printed a sentence
+	# about an arity nobody had looked at.
+	return if row < 0
+
+	# row 0 of the parameters is the receiver the parser prepends; a `mut fn` makes it a
+	# `mut &`, and showing a value must not change it
+	if em.sig_nparams[row] != 1 {
+		chk_at_place(em, fd.path, fd.line, fd.col, f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
+		return
+	}
+	if c_param_is_ref(em, key, 0) {
+		chk_at_place(em, fd.path, fd.line, fd.col, f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
+		return
+	}
+	chk_at_place(em, fd.path, fd.line, fd.col, f"`{fd.recv}.{fd.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
 }
 
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,

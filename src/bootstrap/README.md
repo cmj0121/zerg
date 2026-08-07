@@ -228,16 +228,18 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `zerg` refuses a method of either name that takes an argument or answers something else,
   at the declaration. The seed has no rendering dispatch, so the method is to it an
   ordinary method and the program builds.
-- **Nesting deeper than `zerg`'s translation limit is accepted.** `zerg` counts its
-  recursion and refuses a program that nests more than 200 levels of expressions, blocks
-  or types (docs/conformance.md); the seed parses on Go's growable stack and accepts what
-  the shipping compiler's fixed native stack could never have survived. The same limit is
-  counted again in `zerg`'s emitter walk, where it catches the shape the parser's counter
-  cannot see: a FLAT chain (`1 + 1 + … + 1`, a long method chain) parses in a loop, so
-  only the expression walk ever gets deep — and the seed accepts that too. The gap is
-  harmless in the narrowing direction — the seed's only input, the compiler's own source,
-  nests five levels — but it is a gap: the seed enforces no bound at all, and a deep
-  enough program would end as a Go stack-limit panic rather than a diagnostic.
+- **Nesting deeper than `zerg`'s translation limit is accepted.** `zerg` refuses a program
+  that nests more than 200 levels of expressions, blocks or types (docs/conformance.md) —
+  counting its own recursion, and measuring the depth of each expression tree it finishes,
+  which is what catches a FLAT chain (`1 + 1 + … + 1`, a long method chain) that parses in
+  a loop without the parser ever getting deeper. Its emitter counts a third time, over the
+  tree it WALKS rather than the one the program wrote, which is what catches a depth the
+  source never states — a defaulted argument backfilled into a call site composes the two.
+  The seed parses on Go's growable stack and accepts every one of those shapes, in every
+  position. The gap is harmless in the narrowing direction —
+  the seed's only input, the compiler's own source, nests five levels — but it is a gap:
+  the seed enforces no bound at all, and a deep enough program would end as a Go
+  stack-limit panic rather than a diagnostic.
 
 ## Changing the seed
 

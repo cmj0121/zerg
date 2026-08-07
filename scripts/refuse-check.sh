@@ -56,6 +56,11 @@ expect() {
 		fail=$((fail + 1))
 		return
 	fi
+	if is_crash "$status"; then
+		echo "CRASHED   $name — the compiler died of signal $((status - 128)) instead of refusing"
+		fail=$((fail + 1))
+		return
+	fi
 	case $out in
 	*"$want"*) ;;
 	*)

@@ -93,16 +93,27 @@ grammatical — `program ::= stmt-list`, the `nop` program the grammar opens wit
 reaches cc or the linker (see [Packages & Programs](runtime/package.md) for the rule); `--emit lib` builds the
 same source to an object file, which is what a module is for.
 
-> **[implementation-defined]** **Nesting depth is a translation limit.** The parser counts its recursion — one
-> level per nested expression, block or type — and refuses a program that nests more than **200** levels deep
-> with a diagnostic naming the limit and the place, rather than parsing on until the native stack it runs on
-> overflows. The emitter counts the same limit again over its own expression walk, because a FLAT chain
-> (`1 + 1 + … + 1`, a long method chain) parses in a loop — the parser's depth never grows — while the walk
-> recurses once per link; however a program reaches 200 levels of expression, the answer is this refusal. The
-> number is measured headroom, not language: unbounded, the parser died of `SIGSEGV` at about 485 nested
-> parentheses on an 8 MB stack, and the expression walk gave out at about 310 method links (530 flat `+`
-> terms), while the deepest nesting anywhere in this repository is five levels. A conforming implementation
-> may set another bound; ISO C itself promises only 63 nested parenthesized expressions.
+> **[implementation-defined]** **Nesting depth is a translation limit.** A program that nests more than **200**
+> levels deep is refused with a diagnostic naming the limit and the place, rather than parsed on until the
+> native stack it runs on overflows. The bound is enforced where the tree is BUILT, and in two ways, because
+> nesting reaches the parser by two routes: it counts its own recursion — one level per nested expression,
+> block or type, which is what `(((…)))` costs — and it measures the DEPTH of each finished expression tree,
+> which is what recursion cannot see, since a flat chain (`1 + 1 + … + 1`, a long method chain) parses in a
+> LOOP and deepens the tree without deepening the parser. So no expression a program WRITES is deeper than
+> 200, and every later pass that walks one — the checker, the linter, the language server, the substitution a
+> generic instantiation runs — inherits that bound rather than counting again.
+>
+> The limit is on the tree the implementation must WALK, which is not always one the program wrote: an
+> omitted defaulted argument is filled in at the call site, so a 190-level default backfilled into a
+> 190-level call is a 380-level walk that no expression in the source states. The emitter counts its own
+> depth for exactly that, and refuses with a sentence about a chain rather than about nesting. However a
+> program reaches 200 levels — written or composed — the answer is a refusal.
+>
+> The number is measured headroom, not language: unbounded, the parser died of `SIGSEGV` at about 485 nested
+> parentheses on an 8 MB stack, the expression walk gave out at about 310 method links (530 flat `+` terms)
+> and the substitution pass at about 400, while the deepest nesting anywhere in this repository is five
+> levels. A conforming implementation may set another bound; ISO C itself promises only 63 nested
+> parenthesized expressions.
 
 ## Runtime abort contract
 

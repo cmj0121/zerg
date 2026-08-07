@@ -539,7 +539,7 @@ looking one up is looking up a rule, not a type error.
 | `E106` | a raw string has no closing quote on this line                  |
 | `E107` | a command literal has no closing backtick                       |
 | `E108` | a based number needs at least one digit after its prefix        |
-| `E109` | an escape sequence is malformed for the literal it is in        |
+| `E109` | invalid escape in a string / rune / byte literal                |
 | `E110` | a string literal may not contain a NUL                          |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning

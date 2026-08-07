@@ -51,6 +51,15 @@ struct Emitter {
 	# `mut n := n` is the ordinary way to get a writable copy of one).
 	env_scope: list[int]
 
+	# env_const is whether each binding was declared with the `const` KEYWORD, in the same
+	# order — shadow-proof, GRAMMAR group 4, since a plain `x := 1` is just as immutable but
+	# may still be shadowed. It is a COLUMN here rather than a registry of its own because
+	# that is what it always was: every row of the registry it replaces was appended at the
+	# same moment, with the same name and the same block id, as an env row — so the two
+	# could only ever have gone out of step, never apart, and the open-scope walk the rule
+	# needs is the walk c_in_scope already does.
+	env_const: list[bool]
+
 	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
 	# it holds, in declaration order, paired with the runtime function that gives it back.
 	# Today only channel bindings are on it — a channel binding owns a holder count, and a
@@ -114,10 +123,18 @@ struct Emitter {
 	pr_hasdef: list[bool]
 	pr_def: list[Expr]
 
-	# k_names / k_tys are the module CONSTANTS. They are C globals, so they are in scope
+	# k_decls / k_tys are the module CONSTANTS. They are C globals, so they are in scope
 	# in every function — c_reset_env seeds the per-function env from them rather than
 	# starting empty, which is what lets a body name one.
-	k_names: list[str]
+	#
+	# The DECLARATION is kept whole rather than shredded into columns. It used to be six
+	# parallel lists, and four of them — the name, `const`, `mut`, `pub` — were a
+	# column-by-column copy of ConstDecl with nothing done to the value on the way in, while
+	# the module was `c_mod_of` of its path. A copied column can go stale against the row it
+	# was copied from and no rule notices; a row cannot. `k_tys` stays a column of its own
+	# because it is the one piece of NEW information: the type as INFERRED here, which for
+	# an annotated declaration that does not fit is deliberately not the one written.
+	k_decls: list[ConstDecl]
 	k_tys: list[Ty]
 
 	# tup_names are the tuple shapes already declared — one C struct per distinct shape,
@@ -303,34 +320,6 @@ struct Emitter {
 	# two lists are what remembers it, recorded where the signature is.
 	sig_mod: list[str]
 	sig_pub: list[bool]
-
-	# k_const / k_mut ride beside k_names, per module constant and in its order (they sit
-	# HERE, like sig_mod / sig_pub away from sig_names, because the constructor is
-	# positional and the tail is the one place a field can join without renumbering it).
-	# k_const is whether the binding was declared with the `const` KEYWORD — shadow-proof,
-	# GRAMMAR group 4 — since a plain top-level `x := 1` is just as immutable but may
-	# still be shadowed. k_mut is whether it was declared `mut`, which the top level
-	# refuses (chk_top_muts); it is carried so c_reset_env can keep the name writable and
-	# the program earns exactly ONE finding, at the declaration, rather than a second
-	# "cannot assign" at every write.
-	k_const: list[bool]
-	k_mut: list[bool]
-
-	# k_mod / k_pub are the visibility halves of the same rows — the module a constant was
-	# declared in and whether it said `pub` — recorded the way sig_mod / sig_pub are for a
-	# function, and read by the same rule (chk_visible). Without them a module-private
-	# constant was readable from anywhere: the same `lib.helper` shape that is refused for
-	# a FUNCTION compiled for a constant, because nothing remembered whose it was.
-	k_mod: list[str]
-	k_pub: list[bool]
-
-	# const_names / const_scopes are the `const` bindings visible while a body is emitted
-	# — the module constants at scope 0 plus every local `const` c_add_var has been told
-	# about — for chk_const_rebind's open-scope walk. They are a registry of their own
-	# rather than a flag on the env rows because only c_let ever mints one: every other
-	# c_add_var caller (parameters, loop variables, match binds) answers is_const false.
-	const_names: list[str]
-	const_scopes: list[int]
 
 	# depth counts how many recursion levels of the expression walk are active — one per
 	# c_expr or c_infer entry, the two doors every recursive descent into an expression
@@ -1145,6 +1134,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_dead = []
 	em.env_mut = []
 	em.env_scope = []
+	em.env_const = []
 
 	# scope 0 is the module: the constants below live there and it is open in every
 	# function. c_fn opens one more for the parameters, and the body block one after that.
@@ -1158,16 +1148,14 @@ fn c_reset_env(mut &em: Emitter) {
 	em.force_mark = ""
 	em.fn_mark_used = false
 	em.ref_names = []
-	em.const_names = []
-	em.const_scopes = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
 	# with them already bound
 	mut i := 0
-	for i < em.k_names.len() {
-		em.env_names.append(em.k_names[i])
+	for i < em.k_decls.len() {
+		em.env_names.append(em.k_decls[i].name)
 		em.env_tys.append(em.k_tys[i])
-		em.env_cnames.append("zg_" + em.k_names[i])
+		em.env_cnames.append("zg_" + em.k_decls[i].name)
 		em.env_dead.append(0)
 
 		# a module binding is writable exactly when it was declared `mut` — legally so
@@ -1175,18 +1163,15 @@ fn c_reset_env(mut &em: Emitter) {
 		# global (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but
 		# stays writable too, so its writes do not each add a second finding about
 		# immutability on top of the one that counts
-		em.env_mut.append(em.k_mut[i])
+		em.env_mut.append(em.k_decls[i].is_mut)
 
 		# scope 0 is the module: a constant is in scope in every function, and a local
 		# that shadows one is in a block of its own and so is not a redeclaration
 		em.env_scope.append(0)
 
-		# a KEYWORD `const` is shadow-proof in every function too, so it opens each
-		# body's registry the way a local `const` joins it (chk_const_rebind)
-		if em.k_const[i] {
-			em.const_names.append(em.k_names[i])
-			em.const_scopes.append(0)
-		}
+		# a KEYWORD `const` is shadow-proof in every function too, so the module row carries
+		# the flag into every body the way a local `const` sets it (chk_const_rebind)
+		em.env_const.append(em.k_decls[i].is_const)
 		i = i + 1
 	}
 }
@@ -1214,11 +1199,8 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool, is_const: bool) {
 	em.env_mut.append(is_mut)
 	em.env_scope.append(em.scope_cur)
 
-	# a `const` is shadow-proof from here to the end of its block
-	if is_const {
-		em.const_names.append(name)
-		em.const_scopes.append(em.scope_cur)
-	}
+	# a `const` is shadow-proof from here to the end of its block, which is this row's block
+	em.env_const.append(is_const)
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -1236,16 +1218,14 @@ fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 
 # c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
 # the environment — their C names must not be handed out twice — but nothing may NAME them.
+#
+# It used to have a twin that asked the same question about a block ID rather than a row,
+# because the `const` registry recorded ids with no env row to index through. That registry
+# is a column on these rows now (env_const), so every asker has a row and the twin has
+# nothing left to be for.
 fn c_in_scope(mut &em: Emitter, idx: int) -> bool {
-	return c_scope_live(em, em.env_scope[idx])
-}
-
-# c_scope_live is the same question about a block id itself, split out because the const
-# registry (const_names / const_scopes) records ids without an env row to index through.
-# (c_scope_open is taken: it is the function that OPENS a scope.)
-fn c_scope_live(mut &em: Emitter, id: int) -> bool {
 	for sid in em.open_scopes {
-		return true if sid == id
+		return true if sid == em.env_scope[idx]
 	}
 	return false
 }
@@ -2071,6 +2051,72 @@ fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 	return "?"
 }
 
+# Site is ONE place a DECLARATION spells a type: a struct field, an enum variant's payload,
+# a parameter, a result. It carries the type itself plus everything any reader of that fact
+# has ever needed — the place string a refusal quotes, the type parameters bound where it
+# was written, and the position, empty for the forms that carry none.
+#
+# A module constant is NOT a site here: its global is rendered after the on-demand typedef
+# sections, so c_const_globals registers what it spells at the moment it spells it.
+#
+# The list exists because three passes asked this one question and each answered it with a
+# walk of its own over f.structs, f.enums and f.fns — c_decl_types for the typedefs a site
+# needs written first, c_check_named_types for a name that resolves to nothing, and
+# c_scan_fnptr for whether `zg_fnptr` is spelled anywhere. Three enumerations of one list is
+# three chances to be short an entry, and every one of them has been: the enum-payload site
+# was missing from the tuple sweep, then from the carrier sweep, then from c_scan_fnptr —
+# where an enum holding a function and never constructed emitted `zg_fnptr` with no typedef
+# and left cc to report it against generated C nobody wrote.
+#
+# In a language with no closures, a materialized list IS the visitor. c_decl_sites answers
+# once and each consumer reads the fields it needs, so a site added here is added for all
+# three and cannot be owed to any of them by hand.
+struct Site {
+	ty: Ty
+	place: str
+	tparams: list[str]
+	path: str
+	line: int
+	col: int
+}
+
+# c_decl_sites is that list, in DECLARATION ORDER — structs, then enums, then functions,
+# and a function's result before its parameters. The order is load-bearing for two of the
+# three readers: typedefs are emitted in the order they are collected, and the first
+# unresolvable name is the one reported.
+fn c_decl_sites(f: File) -> list[Site] {
+	# a struct field and an enum payload are written where no type parameter is in scope and
+	# where the declaration carries no position — one empty list, spelled once
+	mut free: list[str] = []
+	mut out: list[Site] = []
+	for sd in f.structs {
+		for fd in sd.fields {
+			out.append(Site(fd.ty, f"field `{sd.name}.{fd.name}`", free, "", 0, 0))
+		}
+	}
+	for ed in f.enums {
+		for v in ed.variants {
+			mut i := 0
+			for i < v.fields.len() {
+				out.append(Site(v.fields[i], f"payload {strconv.to_string(i, 10)} of `{ed.name}.{v.name}`", free, "", 0, 0))
+				i = i + 1
+			}
+		}
+	}
+	for fn_i in f.fns {
+		# A TEMPLATE'S TYPE PARAMETERS ARE BOUND, and everything else in its signature is
+		# not: `fn f[T](x: T, y: Nope)` owes the same answer about `Nope` that a plain
+		# function does. So the bound names travel with the site rather than the template
+		# being skipped, which would have left an unknown type in a generic's signature to
+		# reach cc under whatever name a specialization gave it.
+		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, fn_i.path, fn_i.line, fn_i.col))
+		for pm in fn_i.params {
+			out.append(Site(pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`", fn_i.tparams, fn_i.path, fn_i.line, fn_i.col))
+		}
+	}
+	return out
+}
+
 # c_decl_types collects every TUPLE and every CARRIER a declaration spells, in ONE walk.
 # Those typedefs have to exist before the struct and enum typedefs that name them, and one
 # registered while a body is emitted lands after them: a struct holding a `Q?` reached cc
@@ -2084,37 +2130,9 @@ fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 # the declaration sites for itself, and each missed the same site the other did: an enum
 # variant's payload was left out of the tuple sweep and then, the same week, out of the
 # carrier sweep — `A((int, int))` and `A(int?)` both reached cc as an unknown type name.
-# Two lists of sites drift apart one site at a time; a site added here feeds both lists,
-# and a third kind of spelled type would get the sites for free.
-#
-# The sites are exactly the places a DECLARATION can spell a type: a struct field, an enum
-# variant's payload, a parameter, a result. A module constant is NOT here — its global is
-# rendered after the on-demand typedef sections, so c_const_globals registers what it
-# spells at the moment it spells it.
-#
-# c_check_named_types enumerates the SAME four sites for a different payload — the place
-# string and bound type parameters a refusal needs, which this walk has no use for — and
-# the two lists must agree. They are not folded into one walker because neither payload
-# fits the other's shape; the price is that a site added to one is OWED to the other, by
-# hand, which is exactly how the enum-payload site went missing from each in turn.
-fn c_decl_types(f: File, mut &tups: list[Ty], mut &cars: list[Ty]) {
-	for st in f.structs {
-		for fd in st.fields {
-			c_decl_collect(fd.ty, tups, cars)
-		}
-	}
-	for ed in f.enums {
-		for v in ed.variants {
-			for t in v.fields {
-				c_decl_collect(t, tups, cars)
-			}
-		}
-	}
-	for fn_i in f.fns {
-		c_decl_collect(fn_i.ret, tups, cars)
-		for pm in fn_i.params {
-			c_decl_collect(pm.ty, tups, cars)
-		}
+fn c_decl_types(sites: list[Site], mut &tups: list[Ty], mut &cars: list[Ty]) {
+	for s in sites {
+		c_decl_collect(s.ty, tups, cars)
 	}
 }
 
@@ -2123,6 +2141,12 @@ fn c_decl_types(f: File, mut &tups: list[Ty], mut &cars: list[Ty]) {
 # `list[T?]` needs the same carrier a bare `T?` does, and a tuple's elements are collected
 # too — `(int?, int)` spells the optional's carrier inside its own typedef, which is how a
 # tuple-only walk let it reach cc.
+#
+# A FUNCTION TYPE is opaque, which is where this walk and c_check_named_ty's part company
+# on purpose rather than by drift: every function type is one C type, `zg_fnptr`, so
+# nothing a `fn(int?) -> …` mentions is ever spelled in the C and nothing inside it needs a
+# typedef. c_check_named_ty descends into it because an unresolvable NAME in there is still
+# a name the reader wrote and is owed an answer about.
 fn c_decl_collect(t: Ty, mut &tups: list[Ty], mut &cars: list[Ty]) {
 	match t {
 		TTuple(ts)    => c_decl_collect_tuple(ts, tups, cars)
@@ -2174,56 +2198,33 @@ fn c_decl_collect_carrier(c: Ty, mut &tups: list[Ty], mut &cars: list[Ty]) {
 # self-hosted compiler has no Ref, so `std/atomic` reached cc as `zg_Ref` rather than being
 # turned away here.
 #
-# It runs over DECLARATIONS only — struct fields, enum variant payloads, parameters,
-# results — because those are written out before any body is, so this is the earliest point
-# where the whole program's type names are known and nothing has been emitted yet.
-#
-# Those four sites are c_decl_types's four sites, and the two lists must agree: that walk
-# collects the types themselves where this one carries each site's place string and bound
-# type parameters, which is why they stand apart. A site added there is owed here too — the
-# enum-payload site below was once missing from exactly one of the two.
-fn c_check_named_types(mut &em: Emitter, f: File) {
-	for s in f.structs {
-		for fd in s.fields {
-			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`", [])
-		}
-	}
-
-	# A VARIANT'S PAYLOAD is a type position like any other, and it was the one this pass
-	# did not walk — so `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote
-	# `zg_1` into a union member for cc to complain about. Found by the mutation fuzzer,
-	# which is the first thing that ever put a wrong type there.
-	for e in f.enums {
-		for v in e.variants {
-			mut i := 0
-			for i < v.fields.len() {
-				c_check_named_ty(em, v.fields[i], f"payload {strconv.to_string(i, 10)} of `{e.name}.{v.name}`", [])
-				i = i + 1
-			}
-		}
-	}
+# It runs over DECLARATIONS only — c_decl_sites's list, which is what "a declaration spells
+# a type" means for this compiler — because those are written out before any body is, so
+# this is the earliest point where the whole program's type names are known and nothing has
+# been emitted yet. A VARIANT'S PAYLOAD is on that list, and it was once the site this pass
+# did not walk: `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote `zg_1`
+# into a union member for cc to complain about.
+fn c_check_named_types(mut &em: Emitter, f: File, sites: list[Site]) {
+	# an `impl` on a PRIMITIVE arrives as a synthesized `this` of that type, and that is
+	# knowable here and nowhere below: `c_check_type_name` sees a name and a site string, so
+	# it had to claim "an `impl` on the built-in type" for any site and then print the site
+	# it was given — `… `int` (parameter `this` of `tag`)`. It is a question about the
+	# DECLARATION rather than about a type it spells, which is why it is not a site.
 	for fn_i in f.fns {
-		# the declaration's own place: this pass runs before any statement is emitted, so
-		# the SAt markers have said nothing and `em.at_*` still holds the last unit's
-		em.at_path = fn_i.path
-		em.at_line = fn_i.line
-		em.at_col = fn_i.col
-
-		# an `impl` on a PRIMITIVE arrives as a synthesized `this` of that type, and that is
-		# knowable here and nowhere below: `c_check_type_name` sees a name and a site string,
-		# so it had to claim "an `impl` on the built-in type" for any site and then print the
-		# site it was given — `… `int` (parameter `this` of `tag`)`.
 		raise f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
+	}
 
-		# A TEMPLATE'S TYPE PARAMETERS ARE BOUND, and everything else in its signature is
-		# not: `fn f[T](x: T, y: Nope)` owes the same answer about `Nope` that a plain
-		# function does. So the bound names travel with the check rather than the template
-		# being skipped, which would have left an unknown type in a generic's signature to
-		# reach cc under whatever name a specialization gave it.
-		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams)
-		for pm in fn_i.params {
-			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`", fn_i.tparams)
+	for s in sites {
+		# the declaration's own place, where the site has one: this pass runs before any
+		# statement is emitted, so the SAt markers have said nothing and `em.at_*` still
+		# holds the last unit's. A struct field and an enum payload carry no position, and
+		# leaving `em.at_*` alone for those is what they have always done.
+		if s.path != "" {
+			em.at_path = s.path
+			em.at_line = s.line
+			em.at_col = s.col
 		}
+		c_check_named_ty(em, s.ty, s.place, s.tparams)
 	}
 }
 
@@ -2343,27 +2344,20 @@ fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
 }
 
 # c_scan_fnptr decides up front whether the program spells a function type anywhere in a
-# DECLARATION — a struct field, a parameter, a result. It has to run before anything is
-# emitted, because those declarations are written out before any body is: a struct typedef
-# naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
-# it. (A body that merely holds a function in a local sets the flag as it goes; by then the
-# header has not been assembled yet.)
-fn c_scan_fnptr(mut &em: Emitter, f: File) {
-	for s in f.structs {
-		for fd in s.fields {
-			if c_is_fn(fd.ty) {
-				em.used_fnptr = true
-			}
-		}
-	}
-	for fn_i in f.fns {
-		if c_is_fn(fn_i.ret) {
+# DECLARATION. It has to run before anything is emitted, because those declarations are
+# written out before any body is: a struct or enum typedef naming `zg_fnptr` would otherwise
+# reach the C compiler ahead of the typedef that defines it. (A body that merely holds a
+# function in a local sets the flag as it goes; by then the header has not been assembled
+# yet, which is why only the declaration sites need a sweep of their own.)
+#
+# It reads c_decl_sites for the same reason its two neighbours do. Written as its own walk
+# it enumerated struct fields and function signatures and forgot an enum variant's payload,
+# so `enum E { Op(fn(int) -> int) }` — declared and never constructed, the one case no body
+# rescues — emitted `struct { zg_fnptr f0; }` above the typedef and cc reported it.
+fn c_scan_fnptr(mut &em: Emitter, sites: list[Site]) {
+	for s in sites {
+		if c_is_fn(s.ty) {
 			em.used_fnptr = true
-		}
-		for pm in fn_i.params {
-			if c_is_fn(pm.ty) {
-				em.used_fnptr = true
-			}
 		}
 	}
 }
@@ -3148,32 +3142,42 @@ fn c_bool(b: bool) -> str {
 
 # c_deeper takes one level of the expression walk, and refuses the program once the budget
 # is spent — BEFORE the recursion happens, so the stack the refusal is reported from is a
-# healthy one. It is p_deeper's rule at the emitter's altitude, and it exists because the
-# parser's copy cannot see every deep input: a LEFT-DEEP operator chain (`1 + 1 + … + 1`),
-# a long string concatenation, and a long method chain all parse in a LOOP — the parser's
-# depth never grows — while c_expr and c_infer recurse once per link and died of SIGSEGV
-# with no diagnostic at about 310 method links / 530 `+` terms on an 8 MB stack. The
-# budget is ZG_MAX_NESTING, the parser's own: the walk here goes about as deep as the
-# expression tree is, so the parser's bound is this walk's bound for every nested shape,
-# and the weakest measured chain (310) clears 200 by the same margin the parser chose
-# that number by (its weakest was 302). One number is also one story for the reader:
-# however a program reaches 200 levels of expression, the answer is this refusal.
+# healthy one. The budget is ZG_MAX_NESTING, the parser's own.
+#
+# It is not defence in depth. p_expr_root bounds every tree the parser BUILDS, so no
+# WRITTEN expression reaches this walk deeper than the budget — but the emitter does not
+# only walk written trees, it COMPOSES them, and a composed one is deeper than either half.
+# A default parameter is spliced into every call that omits it (c_defaults_from), so a
+# 190-term default backfilled into a 190-term call is a 380-level walk that no source
+# expression states. This counter is the ONLY thing that bounds a composed tree, which is
+# why the two are not one rule at two altitudes:
+#
+#   p_expr_root  — the tree as WRITTEN, refused where it is built, so lint, lsp and
+#                  monomorphization inherit the bound without a counter of their own.
+#   c_deeper     — the tree as WALKED, which is what the native stack actually pays for.
+#
+# The second was once the only one, and the arrangement held only for as long as every walk
+# running BEFORE the emitter remembered to count too. Monomorphization did not, and a
+# 400-term chain in a template some call instantiated died of SIGSEGV with nothing on
+# stderr. That is what p_expr_root fixed; it did not make this one redundant.
 #
 # The exits are balanced by the two wrappers below and nowhere else: every recursive
 # entry into an expression goes through c_expr or c_infer, so the pair is the natural
 # chokepoint, and a raise abandons the walk entirely so a skipped decrement can never be
-# observed by a later statement.
+# observed by a later statement. Both halves have a name (c_shallower) so both are
+# greppable; an increment that answers to a name and a decrement that does not is how the
+# two come to be in different numbers.
 fn c_deeper(mut &em: Emitter) {
 	em.depth = em.depth + 1
 	return if em.depth <= ZG_MAX_NESTING
 
-	l := strconv.to_string(em.at_line, 10)
-	c := strconv.to_string(em.at_col, 10)
-	mut place := f"\n  --> {l}:{c}"
-	if em.at_path != "" {
-		place = f"\n  --> {em.at_path}:{l}:{c}"
-	}
+	place := "\n" + place_line(em.at_path, em.at_line, em.at_col)
 	raise f"this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
+}
+
+# c_shallower gives back the level c_deeper took.
+fn c_shallower(mut &em: Emitter) {
+	em.depth = em.depth - 1
 }
 
 # c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
@@ -3185,7 +3189,7 @@ fn c_deeper(mut &em: Emitter) {
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	c_deeper(em)
 	out := c_expr_node(em, e, sb)
-	em.depth = em.depth - 1
+	c_shallower(em)
 	return out
 }
 
@@ -5099,18 +5103,19 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str) {
 fn c_chk_visible_const(mut &em: Emitter, name: str) {
 	i := c_k_idx(em, name)
 	return if i < 0
-	chk_visible(em, name, em.k_mod[i], em.k_pub[i])
+	chk_visible(em, name, c_mod_of(em.k_decls[i].path), em.k_decls[i].is_pub)
 }
 
-# c_k_idx is a name's row in the module-constant columns (k_names and what rides beside
-# it), or -1 when no module declares it. It exists because a module-QUALIFIED read must be
+# c_k_idx is a name's row in the module-constant table (k_decls and the k_tys beside it),
+# or -1 when no module declares it. It exists because a module-QUALIFIED read must be
 # answered from these rows and nowhere else: resolving `lib.COUNT` through the environment
 # read the innermost live binding of `COUNT`, so a local of that name answered a question
-# that named `lib`.
+# that named `lib`. It is also how "does any module declare this name" is asked, since the
+# names are a field of the rows rather than a list of their own.
 fn c_k_idx(mut &em: Emitter, name: str) -> int {
 	mut i := 0
-	for i < em.k_names.len() {
-		return i if em.k_names[i] == name
+	for i < em.k_decls.len() {
+		return i if em.k_decls[i].name == name
 		i = i + 1
 	}
 	return -1
@@ -5524,10 +5529,15 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# `lib.FLOOR` does (c_fieldref): c_reset_env binds every module's constants into every
 	# function at scope 0, so without this ask a private constant was readable by bare
 	# name from any module — silently, while the same shape of private FUNCTION is refused
-	# with a place. The scope-0 test is what keeps a LOCAL that shadows the constant out
+	# with a place. The membership test is what keeps a LOCAL that shadows the constant out
 	# of it: the local answers the read, and a local is nobody's export.
+	#
+	# chk_is_module_binding, not `env_scope[idx] == 0` spelled again. The two agree only
+	# because c_reset_env seeds the module rows first AND nothing else ever binds at scope
+	# 0; one predicate with two proxies in two files is a divergence waiting for the day
+	# either half stops being true.
 	idx := c_live_idx(em, n)
-	if idx >= 0 and em.env_scope[idx] == 0 {
+	if idx >= 0 and chk_is_module_binding(em, idx) {
 		c_chk_visible_const(em, n)
 	}
 	return c_var_cname(em, n)
@@ -5955,7 +5965,7 @@ fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	c_deeper(em)
 	t := c_infer_node(em, e)
-	em.depth = em.depth - 1
+	c_shallower(em)
 	return t
 }
 
@@ -6438,7 +6448,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# were written; this one linked — two definitions of `zg_N`, tolerated by a linker
 		# that still allows a common symbol — and the reader got whichever the linker chose.
 		# On a toolchain with `-fno-common` it is a duplicate symbol instead.
-		raise f"NotImplemented: two modules both define `{c.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.k_names, c.name)
+		raise f"NotImplemented: two modules both define `{c.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_k_idx(em, c.name) >= 0
 
 		# A FUNCTION of the same name is a collision too: the top level is one namespace,
 		# so both mangle to `zg_<name>` and `const f := 1` beside `fn f()` reached cc as
@@ -6469,16 +6479,13 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 				chk_at_place(em, c.path, c.line, c.col, f"cannot bind {ty_name(ty)} to a {ty_name(c.ty)} binding: `{c.name}`")
 			}
 		}
-		em.k_names.append(c.name)
-		em.k_tys.append(ty)
-		em.k_const.append(c.is_const)
-		em.k_mut.append(c.is_mut)
 
-		# the visibility halves, recorded exactly as a function signature's are
-		# (c_build_sigs): the module is the declaring file's directory, and a generated
-		# declaration's empty module is what keeps chk_visible quiet about it
-		em.k_mod.append(c_mod_of(c.path))
-		em.k_pub.append(c.is_pub)
+		# the DECLARATION as written, and beside it the one thing this walk worked out: the
+		# type. `const`, `mut`, `pub` and the declaring module are all read back off the row
+		# where they are needed — c_reset_env for the first two, chk_visible for the last
+		# two, whose module is `c_mod_of` of the row's path.
+		em.k_decls.append(c)
+		em.k_tys.append(ty)
 
 		# the global about to be rendered SPELLS `c_type(ty)`, and this walk runs in EVERY
 		# unit — including the one that defines a constant whose value only the entry unit
@@ -7164,6 +7171,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			em.env_dead.append(0)
 			em.env_mut.append(false)
 			em.env_scope.append(em.scope_cur)
+			em.env_const.append(false)
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
@@ -7227,6 +7235,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_dead := em.env_dead
 	saved_mut := em.env_mut
 	saved_scope := em.env_scope
+	saved_const := em.env_const
 	saved_open := em.open_scopes
 	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
@@ -7239,6 +7248,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.env_dead = saved_dead
 	em.env_mut = saved_mut
 	em.env_scope = saved_scope
+	em.env_const = saved_const
 	em.open_scopes = saved_open
 	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames
@@ -7274,7 +7284,7 @@ fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
 	}
 	collect_binds(body, bound)
 	for id in ids {
-		return id if not c_name_in(bound, id) and not c_name_in(em.k_names, id) and not c_name_in(em.sig_names, id)
+		return id if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id)
 	}
 	return ""
 }
@@ -9178,11 +9188,11 @@ fn c_main_ret(f: File) -> Ty {
 	return TNil
 }
 
-# c_is_result_nil is the `Result[nil]` entry shape — an Either whose left is nil and whose
-# right is the Err, which is what parse_type builds for the spelling.
+# c_is_result_nil is the `Result[nil]` entry shape — a Result whose element is nil, which
+# is what parse_type builds for the spelling. It asks c_is_result rather than respelling
+# its conjunction, so "an Either whose Right is `Err`" stays one fact in one place.
 fn c_is_result_nil(t: Ty) -> bool {
-	return false if not c_is_either(t)
-	return c_is_nil_ty(c_either_left(t)) and c_is_err_ty(c_either_right(t))
+	return c_is_result(t) and c_is_nil_ty(c_result_elem(t))
 }
 
 fn c_main_has_args(f: File) -> bool {
@@ -9527,7 +9537,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], 0)
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -9546,8 +9556,14 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
-	c_check_named_types(em, f)
-	c_scan_fnptr(em, f)
+
+	# THE DECLARATION SITES, once. Three passes below ask the same question of them — what
+	# types a declaration spells — and the list answers all three (c_decl_sites says why it
+	# is one list). Building it here rather than inside each is what makes that literal: a
+	# site added to it is added for all three, and none of them re-walks the program.
+	sites := c_decl_sites(f)
+	c_check_named_types(em, f, sites)
+	c_scan_fnptr(em, sites)
 	for im in f.imports {
 		em.mod_names.append(c_last_segment(im))
 	}
@@ -9576,7 +9592,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# no tuple literal, and a tuple holding a declared type has to come out after it.
 	mut tuples: list[Ty] = []
 	mut carriers: list[Ty] = []
-	c_decl_types(f, tuples, carriers)
+	c_decl_types(sites, tuples, carriers)
 
 	# the force helpers land on zg_force_fail, so it goes ahead of the FIRST carrier
 	# wherever that is — here when a declaration named one, with the on-demand carriers

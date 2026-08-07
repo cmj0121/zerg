@@ -345,17 +345,25 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 	return -1
 }
 
-# bad_escape reports a malformed backslash escape, after eating the rest of the literal up
-# to its closing quote — the recovery point is part of the diagnostic (the E103 note says
-# why), and the seed's second "unterminated" error for the same mistake is exactly what it
-# buys off. The noun names the literal form, as the seed's message does.
-fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
+# eat_to_quote is THE RECOVERY POINT a malformed literal reports from: the rest of it, up
+# to its closing quote or the line's end, whichever comes first. Returning from where the
+# scan gave up left the lexer standing INSIDE the literal, so `b'ba'` was read as one bad
+# token and then as a second rune literal starting at the surviving quote — one mistake,
+# two messages, the second of them nonsense. A recovery point is part of a diagnostic, and
+# it is one function because the two malformed-literal exits below both need exactly it.
+fn eat_to_quote(mut &l: Lex, q: byte) {
 	for not eof(l) and at(l, 0) != q and at(l, 0) != byte(10) {
 		advance(l)
 	}
 	if at(l, 0) == q {
 		advance(l)
 	}
+}
+
+# bad_escape reports a malformed backslash escape, after recovering to the end of the
+# literal. The noun names the literal form, as the seed's message does.
+fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
+	eat_to_quote(l, q)
 	return bad(l, "E109", f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
@@ -381,7 +389,7 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 		}
 	}
-	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
+	return nul_bad(l, sline, scol, soff) if has_nul(sb)
 	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
@@ -393,6 +401,13 @@ fn has_nul(sb: list[byte]) -> bool {
 		return true if c == byte(0)
 	}
 	return false
+}
+
+# nul_bad is that refusal, once. Three literal forms can decode to a NUL — a plain string,
+# a triple string and a raw string — and E110 is ONE row in docs/tooling/fmt.md, so the
+# sentence is written here rather than at each of the three exits.
+fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
 }
 
 # scan_fstring scans an f-string as ONE token: the lexeme is the verbatim source `f"a{x}b"`
@@ -518,7 +533,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 		}
 	}
-	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
+	return nul_bad(l, sline, scol, soff) if has_nul(sb)
 	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
@@ -533,7 +548,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		sb.append(advance(l))
 	}
 	advance(l) # closing "
-	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff)) if has_nul(sb)
+	return nul_bad(l, sline, scol, soff) if has_nul(sb)
 	return emit_val(l, RawStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
@@ -568,16 +583,7 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 		}
 	}
 	if at(l, 0) != b'\'' {
-		# EAT THE REST OF IT before reporting. Returning from where the scan gave up left the
-		# lexer standing inside the literal, so `b'ba'` was read as one bad token and then
-		# as a SECOND rune literal starting at the surviving quote — one mistake, two
-		# messages, the second of them nonsense. A recovery point is part of a diagnostic.
-		for not eof(l) and at(l, 0) != b'\'' and at(l, 0) != byte(10) {
-			advance(l)
-		}
-		if at(l, 0) == b'\'' {
-			advance(l)
-		}
+		eat_to_quote(l, b'\'')
 		return bad(l, "E103", "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
 	}
 	advance(l) # closing '

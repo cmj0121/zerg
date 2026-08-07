@@ -196,7 +196,7 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# ONE of the three sentences, never two. `raise` used to say that by leaving; a rule
 	# that records instead has to say it with a `return`, and forgetting to is how the
 	# first run of this reported the same assignment twice in two different words.
-	if chk_is_const(em, idx) {
+	if chk_is_module_binding(em, idx) {
 		chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
 		return
 	}
@@ -218,11 +218,17 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	chk_at(em, f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
 }
 
-# chk_is_const is whether an environment slot is one of the module constants. c_reset_env
-# seeds every function's environment with them FIRST, so they hold exactly the lowest
-# indices; a local that shadows one binds above it and c_live_idx answers the inner one.
-fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
-	return idx < em.k_names.len()
+# chk_is_module_binding is whether an environment slot is one of the module-level bindings.
+# c_reset_env seeds every function's environment with them FIRST and in k_decls' order, so
+# they hold exactly the lowest indices and row `idx` IS `k_decls[idx]`; a local that shadows
+# one binds above it and c_live_idx answers the inner one.
+#
+# It answers MEMBERSHIP and nothing else. Which KIND of module binding it is — whether the
+# `const` keyword was written — is `env_const[idx]`, the flag the declaration carries, and
+# asking the flag is not a thing position can be made to answer: a plain `COUNT := 3` at
+# the top level is just as much a row here as a `const` is.
+fn chk_is_module_binding(mut &em: Emitter, idx: int) -> bool {
+	return idx < em.k_decls.len()
 }
 
 # --- a default is a property of the declaration ------------------------------------
@@ -1585,11 +1591,12 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 # looked at: `k := 2` in a block under a module `const k := 1` compiled and printed 2,
 # silently, which is the exact answer the keyword exists to rule out.
 #
-# The consts in sight are two families under one rule: the module constants (the k_names
-# rows whose k_const flag is set — scope 0, open in every function) and the local `const`
-# bindings of the function being emitted (const_names / const_scopes, pushed by c_add_var
-# and reset with the env). Both are consulted through the same open-scope walk, so a
-# `const` in a block that has ENDED binds nothing and blocks nothing.
+# The consts in sight are two families under one rule, and one list: the module constants
+# (the k_decls rows whose `is_const` is set, seeded at scope 0 and open in every function)
+# and the local `const` bindings of the function being emitted. Both are environment rows
+# with `env_const` set, so both are consulted through the same open-scope walk every other
+# name question uses, and a `const` in a block that has ENDED binds nothing and blocks
+# nothing.
 #
 # The two directions hang off DIFFERENT hooks, because they guard different acts. Taking
 # a const's name is something every name-introducing site can do — a binding, a loop
@@ -1632,11 +1639,14 @@ fn chk_const_mint(mut &em: Emitter, name: str) {
 	chk_at(em, f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
 }
 
-# chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name.
+# chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name. It
+# walks the ENVIRONMENT, because a `const` is an ordinary binding with one extra column:
+# c_add_var is already told `is_const` and records it beside the name and the block id it
+# was going to record anyway, so this is the same open-scope walk c_var_cname makes.
 fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
-	for i < em.const_names.len() {
-		return true if em.const_names[i] == name and c_scope_live(em, em.const_scopes[i])
+	for i < em.env_names.len() {
+		return true if em.env_const[i] and em.env_names[i] == name and c_in_scope(em, i)
 		i = i + 1
 	}
 	return false

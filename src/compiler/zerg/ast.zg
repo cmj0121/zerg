@@ -488,9 +488,10 @@ struct ImplDecl {
 # declared inside such a group — where a `mut` binding IS the language's mutable global
 # (docs/runtime/ffi.md, GRAMMAR group 12) — so chk_top_muts can tell the legal home of a
 # mutable global from the safe code it is banned in.
-# `is_pub` is the visibility chk_visible enforces: c_const_globals records it beside the
-# constant's module (k_mod / k_pub), and a cross-module read of a non-`pub` constant is
-# refused the way a private function's call is.
+# `is_pub` is the visibility chk_visible enforces: c_const_globals keeps the whole
+# declaration in the emitter's k_decls rows, and chk_visible reads this flag and the
+# declaring module off the row, so a cross-module read of a non-`pub` constant is refused
+# the way a private function's call is.
 pub struct ConstDecl {
 	name: str
 	ty: Ty

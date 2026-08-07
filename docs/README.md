@@ -2,6 +2,9 @@
 
 Also in [繁體中文](README.zh-TW.md).
 
+This is everything about the **language**. What the toolchain is, how to build it, and where
+the project stands is the [project README](../README.md).
+
 ## Start here
 
 - **[Language Reference](language.md)** — the index. Every chapter, grouped, with a line

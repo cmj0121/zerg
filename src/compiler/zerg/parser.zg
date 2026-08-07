@@ -502,19 +502,17 @@ fn conv_ty(name: str) -> Ty {
 
 # --- declarations --------------------------------------------------------------
 
-# parse turns source into a File. Imports, structs, enums, functions, and `impl` blocks
+# parse_at turns source into a File. Imports, structs, enums, functions, and `impl` blocks
 # are recognised at the top level; any other top-level STATEMENT is read whole and treated
 # as a nop, which is compile mode's answer to the script mode `program ::= stmt-list`
 # grants.
-# parse reads a source with no path. Everything a diagnostic says about it will name the
-# line and the column and no file — which is what `--emit ast` and the import scan want,
-# since neither reports anything.
-pub fn parse(src: str) -> File {
-	return parse_at(src, "")
-}
-
-# parse_at reads a source that came from `path`, which every function it declares carries
-# so a diagnostic can name the file it was written in.
+#
+# It is told which FILE it is reading, and there is deliberately NO pathless twin. A parse
+# is where a refusal with a place (p_place) comes from, and a pathless one made that place
+# name a line of no file; the twin was kept for "a caller with genuinely no path" and the
+# last two — imports_of and declares_main — both turned out to have one. `path` may still
+# be empty, for a re-lex with no file behind it, but that is the caller saying so rather
+# than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0, "", path, 0, 0)
@@ -725,19 +723,16 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 	pending = []
 }
 
-# imports_of returns just the import paths of a source, for the driver's module loader:
+# imports_of_at returns just the import paths of a source, for the driver's module loader:
 # it resolves and loads a program's dependencies before anything is emitted, so it needs
 # the import list alone and not the cost of keeping a whole parse around.
 #
-# imports_of_at is the same scan told which FILE it is reading. The scan is a full parse,
-# so it is the FIRST parse a source meets — a refusal the parser raises with a place
-# (p_place) escapes from here before the pathed compile parse ever runs, and under the
-# pathless form the place it carried named a line of no file. The driver's loaders know
-# the path; only a caller that truly has none keeps imports_of.
-pub fn imports_of(src: str) -> list[str] {
-	return parse(src).imports
-}
-
+# It is told which FILE it is reading, and there is deliberately no pathless twin. The scan
+# is a full parse, so it is the FIRST parse a source meets — a refusal the parser raises
+# with a place (p_place) escapes from HERE, before the pathed compile parse ever runs, and
+# a pathless caller made that place name a line of no file. The twin was kept for "a caller
+# with genuinely no path" and no such caller ever appeared; what its existence did keep is
+# the one mistake this signature was introduced to make impossible.
 pub fn imports_of_at(src: str, path: str) -> list[str] {
 	return parse_at(src, path).imports
 }

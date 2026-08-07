@@ -207,18 +207,34 @@ fn default_stage(emit: str, files: list[str]) -> str {
 # user pointed at. A file that cannot be read or parsed answers false and the ordinary
 # pipeline reports why — this must not be the thing that says a source is broken.
 #
-# It parses the entry a SECOND time, deliberately: `lib` and `bin` are two pipelines that
-# diverge at the top of build_stage, so there is no one parse already in hand to read this
-# off, and one file's parse against a whole C compile is noise.
+# It reads and parses the file itself because its ONE caller runs before any pipeline has:
+# default_stage decides which pipeline to run, so nothing has been loaded yet and there is
+# no parse in hand to read this off. The rule inside `--emit bin` asks the same question of
+# sources already loaded, and asks it with entry_has_main instead — a second read of a file
+# the build has in memory is not a cheaper way to learn the same thing.
 fn declares_main(files: list[str]) -> bool {
 	return false if files.len() == 0
 
 	mut found := false
 	guard {
 		src := str(io.read_file(files[0]))
-		found = zerg.c_has_main(zerg.parse(src))
+		found = zerg.c_has_main(zerg.parse_at(src, files[0]))
 	}
 	return found
+}
+
+# entry_has_main is that question asked of the sources this build already holds. `srcs` is
+# in DEPENDENCY order — a module's imports are appended before the module — so the entry is
+# not row zero; it is the row whose path is the file the user pointed at, which is exactly
+# what diag_source looks up for a finding. One spelling of "the loaded text of this path",
+# so the `srcs` rides beside `paths` row for row invariant is asserted in one place.
+#
+# An empty answer is "no such row" and "an empty file" at once, and neither declares a
+# `main`, so the two do not need telling apart here.
+fn entry_has_main(entry: str, srcs: list[str], paths: list[str]) -> bool {
+	src := diag_source(entry, srcs, paths)
+	return false if src == ""
+	return zerg.c_has_main(zerg.parse_at(src, entry))
 }
 
 # build_stage runs the pipeline as far as `emit` asks and no further. The early stages
@@ -291,7 +307,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		# about the FILE, not a line in it, so it points at 1:1 — where a `fn main` would
 		# begin. `--emit lib` stays main-less on purpose: an object file is what a module
 		# is for.
-		if not declares_main(files) {
+		if not entry_has_main(files[0], srcs, paths) {
 			mut nomain: list[zerg.Diag] = []
 			nomain.append(zerg.diag_at(files[0], 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 			report_diags(nomain, srcs, paths)

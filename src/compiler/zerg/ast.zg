@@ -669,6 +669,108 @@ fn expr_kind(e: Expr) -> str {
 	}
 }
 
+# expr_parts is an expression's SUB-EXPRESSIONS, in written order — the one place this
+# compiler says what "nested inside" means for an Expr. It is what lets the nesting bound
+# be a property of the TREE rather than of a walk: the parser measures the tree through
+# this list once, where it is built, and every later walk — the emitter's, the checker's,
+# monomorphization's, and any added tomorrow — inherits the bound without a counter of its
+# own. A third counter was the alternative, and a fourth would have followed it.
+#
+# Every variant is named, leaves included, and there is deliberately NO catch-all: a `_`
+# here answers "no parts" for a node that has them, which is a hole in the bound that
+# nothing reports. A new Expr variant must say what it contains.
+#
+# A BLOCK is not a part. `guard { … }`, a closure body and `?? break` carry STATEMENTS,
+# and a statement's expressions are each measured on their own where that statement is
+# read (parser.zg's p_expr_root) — descending here would need a second walk over Stmt to
+# reach the same answer.
+fn expr_parts(e: Expr) -> list[Expr] {
+	return match e {
+		EInt(_) => expr_parts_none()
+		EFloat(_) => expr_parts_none()
+		EStr(_) => expr_parts_none()
+		EBool(_) => expr_parts_none()
+		ENil => expr_parts_none()
+		EIdent(_) => expr_parts_none()
+		EUnary(_, x) => [x]
+		EBinary(_, a, b) => [a, b]
+		ECall(_, args, _) => args
+		EField(x, _) => [x]
+		EOptChain(x, _) => [x]
+		ETry(x) => [x]
+		EIndex(x, i) => [x, i]
+		EMethod(x, _, args) => expr_parts_cons(x, args)
+		EListLit(elems) => elems
+		EConv(_, x, _) => [x]
+		EIf(c, a, b) => [c, a, b]
+		EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
+		ERange(lo, hi, _) => [lo, hi]
+		ETuple(elems) => elems
+		EMapLit(ks, vs) => expr_parts_cat(ks, vs)
+		EFn(ps, _, _, _) => expr_parts_defs(ps)
+		EChanNew(_, cap) => [cap]
+		ERecv(ch) => [ch]
+		EForce(x) => [x]
+		ECoalesce(a, b, _) => [a, b]
+		EGuard(_) => expr_parts_none()
+		EIs(x, _) => [x]
+		EIn(x, set) => [x, set]
+	}
+}
+
+# expr_parts_none is "this node contains no expression". It is a function rather than a
+# bare `[]` because the seed that compiles this compiler cannot infer an empty list
+# literal's element type inside a match arm, and a leaf is where that literal would be.
+fn expr_parts_none() -> list[Expr] {
+	mut out: list[Expr] = []
+	return out
+}
+
+# expr_parts_cons puts a node's target in front of its argument list, which is the order a
+# method call is written in and the order a reader looking for the deep one expects.
+fn expr_parts_cons(x: Expr, xs: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = [x]
+	for k in xs {
+		out.append(k)
+	}
+	return out
+}
+
+fn expr_parts_cat(xs: list[Expr], ys: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for k in xs {
+		out.append(k)
+	}
+	for k in ys {
+		out.append(k)
+	}
+	return out
+}
+
+# an arm's literal, its guard and its body are all expressions of the match that holds
+# them — the body especially, since `match … { _ => <deep> }` is one expression tree
+fn expr_parts_arms(scrut: Expr, arms: list[Arm]) -> list[Expr] {
+	mut out: list[Expr] = [scrut]
+	for a in arms {
+		out.append(a.lit)
+		out.append(a.guard_expr)
+		out.append(a.body)
+	}
+	return out
+}
+
+# a closure literal's parameter DEFAULTS are expressions written inside the enclosing one,
+# so they are parts of it; the body is a block and is measured statement by statement
+fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for pm in ps {
+		if pm.has_def {
+			out.append(pm.def)
+		}
+	}
+	return out
+}
+
 # ty_name spells a type the way the source does.
 # either_name spells an Either the way it is written: the one whose Right is `Err` is
 # `Result[T]`, which is the name the language gives that case.

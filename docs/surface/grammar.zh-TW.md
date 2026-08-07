@@ -538,9 +538,9 @@ chan-type   ::= 'chan' '[' type ']'           # 雙向
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
 for-select  ::= 'for' 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | '_' '=>' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
-send-arm    ::= expr '<-' expr '=>' expr
+select-arm  ::= recv-arm | send-arm | '_' '=>' stmt
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
+send-arm    ::= expr '<-' expr '=>' stmt
 ```
 
 - **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel
@@ -623,7 +623,7 @@ del-stmt   ::= 'del' identifier
 
 ```text
 unsafe-expr  ::= 'unsafe' block            # 函式內：block-expression；unsafe 操作僅此合法
-unsafe-group ::= 'unsafe' '{' unsafe-item* '}'   # module 層級：分組 unsafe 宣告 + 可變全域
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # 一個宣告（此處即 unsafe）；'mut' 綁定是可變全域
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——單一函式形式
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標

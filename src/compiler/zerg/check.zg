@@ -211,7 +211,7 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	}
 
 	# `this` is the third of these: it is never DECLARED, so `mut this := …` is advice the
-	# grammar has no spelling for. A method's receiver is a copy (GRAMMAR:301) and the form
+	# grammar has no spelling for. A method's receiver is a copy (GRAMMAR#fn-decl) and the form
 	# that writes through it is `mut fn`, which is what the reader has to reach for.
 	if root == "this" {
 		chk_at(em, "cannot assign to `this`: a method's receiver is a copy, and the form that writes through it is `mut fn` — the one that marks a method as mutating the instance it is called on")
@@ -336,7 +336,7 @@ fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 		row := c_param_row(em, key, i)
 		chk_argument(em, key, row, i + 1, args[i])
 
-		# A `mut &` may not be CAPTURED. GRAMMAR:314 says a borrow "cannot ESCAPE (be
+		# A `mut &` may not be CAPTURED. GRAMMAR#param says a borrow "cannot ESCAPE (be
 		# captured by a spawn or stored past the call)", and both of these statements store
 		# their arguments in an env to be used later — a spawn's may outlive the frame the
 		# reference points into entirely. `spawn` refused this in a pass of its own;
@@ -445,7 +445,7 @@ fn chk_spec_index(f: File, name: str) -> int {
 
 # chk_impl_covers checks one `impl` against one spec AND every spec that one extends.
 #
-# `spec Ord: Eq` makes an `impl Ord` also require `Eq` (GRAMMAR:544), and the whole clause
+# `spec Ord: Eq` makes an `impl Ord` also require `Eq` (GRAMMAR#spec-decl), and the whole clause
 # used to be swallowed by the scan for `{`. `seen` is what keeps a diamond — two supers
 # extending one spec — from being checked twice, and a cycle from not terminating.
 fn chk_impl_covers(mut &em: Emitter, f: File, ip: ImplDecl, si: int, mut &seen: list[str]) {
@@ -638,7 +638,7 @@ fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 		return
 	}
 
-	# TWO INDEPENDENT CONTROLS MEET HERE (GRAMMAR:308-313): the CALLER decides whether its
+	# TWO INDEPENDENT CONTROLS MEET HERE (GRAMMAR#param): the CALLER decides whether its
 	# variable is `mut`, the CALLEE decides via `mut &` whether it writes back, and "a
 	# caller-visible mutation needs BOTH". Only the callee's half was read, so `bump(k)` on
 	# an immutable `k` wrote through it and printed the changed value — a write to a binding
@@ -696,7 +696,7 @@ const CHK_ANSWER := "what this function answers"
 
 # chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
 #
-# GRAMMAR:313 — a `mut &` "cannot ALIAS (the same variable to two `mut &` in one call),
+# GRAMMAR#param — a `mut &` "cannot ALIAS (the same variable to two `mut &` in one call),
 # which keeps it safe with no borrow checker". That sentence is the reason there is no
 # borrow checker, and nothing was holding it: `two(k, k)` passed one address twice, so the
 # callee's two names were one variable and the second write landed on top of the first.

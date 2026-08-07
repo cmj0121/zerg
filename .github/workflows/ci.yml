@@ -53,6 +53,16 @@ jobs:
       - name: Check every docs path the repo cites
         run: make docs-links
 
+      # Same job, same reason: a GRAMMAR citation is a plain-text mention no tool
+      # but this one reads. It needs the same nothing — no toolchain, no submodule.
+      - name: Check every GRAMMAR citation the repo makes
+        run: make grammar-cites
+
+      # And the productions the prose companion copies out of GRAMMAR, in both
+      # languages — a second copy of a language fact, with nothing else reading it.
+      - name: Check the grammar's prose companion against GRAMMAR
+        run: make grammar-mirror
+
   bootstrap-and-examples:
     name: bootstrap + examples (${{ matrix.os }})
     strategy:

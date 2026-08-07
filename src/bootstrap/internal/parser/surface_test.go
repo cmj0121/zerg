@@ -8,7 +8,7 @@ import (
 )
 
 // TestTopLevelStatements checks the widened top level (Slice-E W1): Zerg
-// supports script mode, so GRAMMAR:36 'program ::= stmt-list' means any
+// supports script mode, so GRAMMAR#program 'program ::= stmt-list' means any
 // statement is legal at the top level, not only the module surface. The bare
 // expression, print, if, and for below must parse cleanly and become File.Items,
 // while declarations continue to parse as before.

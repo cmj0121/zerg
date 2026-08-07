@@ -36,8 +36,8 @@ src/compiler/
 ## 怎麼使用
 
 ```sh
-zerg build <file.zg>    # 把一個模組編成 object（--emit bin 則連結成程式）
-zerg build --emit bin -j8 app.zg   # 一個程式，同時編八個單元
+zerg build <file.zg>    # entry 宣告 `main` 時產生程式，否則產生 object
+zerg build -j8 app.zg   # 同上，並同時編八個單元
 zerg build --emit c <file.zg>      # 停在 C；`tokens` 與 `ast` 同理
 zerg fmt <file.zg>...   # 就地把原始碼重寫成標準形式
 zerg lint <file.zg>...  # 回報未使用的 import 與死掉的私有程式碼；有發現則非零結束

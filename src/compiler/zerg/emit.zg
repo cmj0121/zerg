@@ -9188,11 +9188,11 @@ fn c_main_ret(f: File) -> Ty {
 	return TNil
 }
 
-# c_is_result_nil is the `Result[nil]` entry shape — an Either whose left is nil and whose
-# right is the Err, which is what parse_type builds for the spelling.
+# c_is_result_nil is the `Result[nil]` entry shape — a Result whose element is nil, which
+# is what parse_type builds for the spelling. It asks c_is_result rather than respelling
+# its conjunction, so "an Either whose Right is `Err`" stays one fact in one place.
 fn c_is_result_nil(t: Ty) -> bool {
-	return false if not c_is_either(t)
-	return c_is_nil_ty(c_either_left(t)) and c_is_err_ty(c_either_right(t))
+	return c_is_result(t) and c_is_nil_ty(c_result_elem(t))
 }
 
 fn c_main_has_args(f: File) -> bool {

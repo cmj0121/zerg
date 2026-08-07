@@ -27,6 +27,9 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# shellcheck source=scripts/lib/grammar.sh
+. "$(dirname "$0")/lib/grammar.sh"
+
 GRAMMAR_FILE=${GRAMMAR_FILE:-GRAMMAR}
 
 if [ ! -f "$GRAMMAR_FILE" ]; then
@@ -36,11 +39,12 @@ fi
 
 # --- what the grammar defines -----------------------------------------------------------
 #
-# A production is a name at the start of a line followed by '::='. Continuation lines of an
-# alternation begin with whitespace, so they cannot be mistaken for a definition, and a
-# comment begins with '#'.
+# Through the same extractor grammar-mirror reads it with, and for the reason set out in
+# scripts/lib/grammar.sh: what counts as a production is one fact, and a second copy of it
+# would fail open here — an extractor that matched nothing would report every citation as
+# unknown, and one that matched everything would pass every citation while checking none.
 productions() {
-	sed -nE 's/^([A-Za-z][A-Za-z0-9-]*)[[:space:]]*::=.*/\1/p' "$GRAMMAR_FILE"
+	grammar_productions "$GRAMMAR_FILE" | cut -f1
 }
 
 known=" $(productions | sort -u | tr '\n' ' ') "
@@ -52,34 +56,39 @@ if [ "$count" -lt 2 ]; then
 	exit 1
 fi
 
-# self_test holds the extractor to what this gate assumes about it. A `productions` that has
-# quietly become "match nothing" fails loudly above; one that has become "match everything"
-# would pass every citation silently, which is the failure this catches.
+# The extractor is held to its own cases in the library that owns it; what is left for this
+# gate to check is the LOOKUP built from it. `known` is a space-delimited string and every
+# verdict below is a substring test against it, so a membership test that has quietly become
+# "always true" would pass every citation while checking none.
 self_test() {
 	local bad=0
 	case $known in
 	*" program "*) ;;
 	*)
-		echo "SELFTEST  'program' is a production in $GRAMMAR_FILE and the extractor missed it"
+		echo "SELFTEST  'program' is a production in $GRAMMAR_FILE and the lookup does not hold it"
 		bad=1
 		;;
 	esac
 	case $known in
 	*" no-such-production "*)
-		echo "SELFTEST  'no-such-production' is not a production and the extractor found one"
+		echo "SELFTEST  'no-such-production' is not a production and the lookup answers that it is"
 		bad=1
 		;;
 	esac
-	# A continuation line ('             | other') must not read as a definition.
-	if printf '%s\n' "             | 'x' ::= y" | sed -nE 's/^([A-Za-z][A-Za-z0-9-]*)[[:space:]]*::=.*/\1/p' | grep -q .; then
-		echo "SELFTEST  an indented continuation line was read as a production definition"
+	# A name that is a SUBSTRING of a real one must not be found: `arg` is a production and
+	# `ar` is not, and an unspaced `case` would answer that both are.
+	case $known in
+	*" ar "*)
+		echo "SELFTEST  'ar' is not a production and the lookup matched it inside another name"
 		bad=1
-	fi
+		;;
+	esac
 	[ $bad -eq 0 ] && return 0
-	echo "grammar-cites: the extractor no longer behaves as documented, so nothing was checked"
+	echo "grammar-cites: the production lookup no longer behaves as documented, so nothing was checked"
 	return 1
 }
 
+grammar_self_test || { echo "grammar-cites: nothing was checked"; exit 1; }
 self_test || exit 1
 
 # --- every citation in the tree ----------------------------------------------------------

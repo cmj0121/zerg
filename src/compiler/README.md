@@ -40,8 +40,8 @@ src/compiler/
 ## Using it
 
 ```sh
-zerg build <file.zg>    # compile a module to an object (--emit bin links a program)
-zerg build --emit bin -j8 app.zg   # a program, eight units compiling at once
+zerg build <file.zg>    # a program when the entry declares `main`, else an object
+zerg build -j8 app.zg   # the same, with eight units compiling at once
 zerg build --emit c <file.zg>      # stop at the C; likewise `tokens` and `ast`
 zerg fmt <file.zg>...   # rewrite sources in the canonical style, in place
 zerg lint <file.zg>...  # report unused imports and dead private code; nonzero if any

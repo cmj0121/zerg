@@ -12,6 +12,11 @@
 # source of truth for what is syntactically well-formed; the prose companion lives in
 # docs/surface/grammar.md (and docs/surface/grammar.zh-TW.md).
 #
+# The rest of the repo cites this file as 'GRAMMAR#<production>' — the production's NAME,
+# and with it the comment block above it, where a rule is stated in prose. Never a line
+# number: a line moves whenever anything above it grows, and silently. `make grammar-cites`
+# holds every citation to a production this file actually derives.
+#
 # ----------------------------------------------------------------------------------
 # Notation (W3C-style EBNF)
 # ----------------------------------------------------------------------------------

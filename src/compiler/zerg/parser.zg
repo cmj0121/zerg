@@ -52,15 +52,13 @@ fn p_advance(mut &p: Parser) {
 
 # p_place renders a `--> file:line:col` trailer for a REFUSAL, in the exact layout
 # render_diag draws under a checked finding — one fact about this compiler's output, which
-# is what scripts/lib/diag.sh reads it by. The parser reports by raising, so it has no
+# is what scripts/lib/diag.sh reads it by, and which is why both go through place_line
+# rather than each spelling the layout out. The parser reports by raising, so it has no
 # Diag channel to put a place on; a refusal that knows its token appends this instead of
-# saying only what and never where. The pathless case matches diag_place's: a parse with
-# no file names the position alone.
+# saying only what and never where. What the newline adds is the one difference: a raise
+# carries its place inside the message, where a Diag has a line of its own for it.
 fn p_place(mut &p: Parser, line: int, col: int) -> str {
-	l := strconv.to_string(line, 10)
-	c := strconv.to_string(col, 10)
-	return f"\n  --> {l}:{c}" if p.path == ""
-	return f"\n  --> {p.path}:{l}:{c}"
+	return "\n" + place_line(p.path, line, col)
 }
 
 # ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not

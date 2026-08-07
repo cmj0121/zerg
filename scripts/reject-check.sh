@@ -261,6 +261,20 @@ fn main() {
 }
 EOF
 
+# A plain top-level binding is a module binding too, and immutable for a DIFFERENT reason:
+# not because `const` says so, but because the top level is (docs/runtime/package.md). Both
+# used to answer "it is a module `const`", which sends the reader to look up a keyword they
+# did not write; the two sentences are asserted apart because one message covering two
+# rules is how a message comes to be wrong about one of them.
+reject assign-to-module-binding "it is a module binding" <<'EOF'
+N := 5
+
+fn main() {
+	N = 6
+	print(f"{N}")
+}
+EOF
+
 reject assign-to-loop-variable "it is immutable" <<'EOF'
 fn main() {
 	for i in 0..2 {
@@ -435,6 +449,40 @@ fn main() {
 }
 EOF
 
+# THE GROUP HAS TO END. The context was tracked as loop state that nothing checked at
+# `Eof`, so a missing `}` left every declaration below it inside the group — and this
+# program built, ran and printed 1: `counter` became the language's mutable global and
+# chk_top_muts' refusal, the whole reason the flag exists, was switchable by a typo with
+# no diagnostic anywhere. The place is the `unsafe` that was never closed, which is where
+# the reader has to go, so `at=` pins it rather than accepting an answer at the last line.
+reject unsafe-group-never-closed 'group is never closed' at=1:1 <<'EOF'
+unsafe {
+	fn raw() -> int { return 1 }
+
+mut counter := 0
+
+fn main() {
+	counter = counter + raw()
+	print counter
+}
+EOF
+
+# `unsafe-item ::= decorated-decl | binding` derives no GROUP, so a group inside a group is
+# not a form. It used to nest, which is the other half of the same counter: the inner `}`
+# closed the outer one as far as it could tell, leaving the tail of the file outside a
+# context the reader thinks it is in.
+reject unsafe-group-nested 'does not nest' at=2:2 <<'EOF'
+unsafe {
+	unsafe {
+		mut counter := 0
+	}
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently
@@ -469,10 +517,16 @@ EOF
 # it in a second, hand-copied dispatch that fell off its end silently — `pub impl` dropped
 # the `pub` on the floor and picked the `impl` up as if the marker were never written.
 # There is now ONE dispatch, and a form that takes no `pub` (GRAMMAR derives none for an
-# `impl`, an `init()`, a decorator, or a statement) says so by name. The parser raises, so
-# the refusal carries no place — the one marked gap every parser rule shares.
+# `import`, an `impl`, an `init()`, a decorator, an `unsafe { … }` group, or a statement)
+# says so by name — and every one of them says WHERE, at the declaration's own first
+# token. `at=` pins that: the place must be the marker the reader wrote, not wherever the
+# parser happened to stop.
+#
+# ONE ARM PER FORM, because the dispatch is a chain and a form that takes no `pub` is
+# exactly a form whose arm has to say so; a case for one of them proves nothing about the
+# next. These are the six.
 
-reject pub-on-an-impl-block 'does not go on an `impl` block' no-place <<'EOF'
+reject pub-on-an-impl-block 'does not go on an `impl` block' at=9:1 <<'EOF'
 spec S {
 	fn f() -> int
 }
@@ -492,8 +546,47 @@ fn main() {
 }
 EOF
 
-reject pub-before-a-statement '`pub` binds to a declaration' no-place <<'EOF'
+reject pub-before-a-statement '`pub` binds to a declaration' at=1:1 <<'EOF'
 pub 42
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-an-import '`pub import` is not a form' at=1:1 <<'EOF'
+pub import "std/io"
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-init 'does not go on `init()`' at=1:1 <<'EOF'
+pub init() {
+	print "ok"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-before-a-decorator 'a decorator leads its declaration' at=1:1 <<'EOF'
+pub #[derive(Eq)]
+struct A {
+	x: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-an-unsafe-group 'does not go on an `unsafe { … }` group' at=1:1 <<'EOF'
+pub unsafe {
+	mut counter := 0
+}
 
 fn main() {
 	print "ok"
@@ -1706,7 +1799,7 @@ EOF
 # GRAMMAR:301-304 — `mut fn` is meaningful only on a method; "a free function or closure
 # has no receiver, so it is never `mut fn`". The token fell into the top-level skip, so the
 # `mut` was swallowed and the function compiled as if it had never been written.
-reject mut-fn-free-function 'a free function is never `mut fn`' no-place seed-gap <<'EOF'
+reject mut-fn-free-function 'a free function is never `mut fn`' at=1:1 seed-gap <<'EOF'
 mut fn f() -> int {
 	return 1
 }
@@ -2587,41 +2680,79 @@ EOF
 
 # --- translation limits --------------------------------------------------------------
 #
-# Deep nesting is refused by count, not parsed until the stack runs out. The parser
-# recurses once per nested expression, block and type, and used to die of SIGSEGV — no
-# diagnostic, exit 139 — at about 485 nested parentheses on an 8 MB stack, with the
-# emitter's own recursion giving out not far above (about 302 on nested calls). The bound
-# is ZG_MAX_NESTING in parser.zg, a documented translation limit of this implementation
-# (docs/conformance.md), so exceeding it is a permanent answer and the case lives here
-# rather than with the not-yet-built forms. The source is GENERATED because a program that
-# nests 240 levels deep is not something to hand-maintain; 240 clears the 200 bound while
-# staying far under where the parser used to crash, so the refusal is the counter
-# answering, not luck. The seed inherits Go's growable stack and accepts this program —
-# a gap its own contract records (src/bootstrap/README.md).
+# Deep nesting is refused by count, not parsed until the stack runs out. Every pass that
+# handles an expression recurses once per level — the parser, the checker, the emitter,
+# monomorphization — and each of them died of SIGSEGV, no diagnostic, exit 139, somewhere
+# between 300 and 500 levels on an 8 MB stack. The bound is ZG_MAX_NESTING in parser.zg,
+# a documented translation limit of this implementation (docs/conformance.md), so
+# exceeding it is a permanent answer and the cases live here rather than with the
+# not-yet-built forms.
+#
+# The claim is UNIVERSAL — however a program reaches 200 levels, the answer is this one
+# refusal — so it is asserted as a matrix rather than as an example. Two SHAPES, because
+# they reach the parser by different routes: `(((…)))` recurses without deepening the
+# tree, and `1 + 1 + …` deepens the tree without recursing, since the precedence levels
+# build a left-deep chain in a LOOP. Four PLACES, because the shape reaches a different
+# set of walks in each: an ordinary body is emitted directly, a generic template body is
+# rewritten by subst_expr BEFORE the emitter counts anything (a 400-term chain there was
+# an unreported SIGSEGV, and it took `zerg lsp` down with it, since a guard catches a
+# raise and cannot catch a signal), a module constant is emitted on its own path, and a
+# default parameter is spliced into each call site.
+#
+# The refusal comes from the PARSER for all eight, because that is where the bound now
+# is: a tree too deep is refused where it is built, so no later walk needs a counter to
+# stay honest. `reject` asserts a non-zero exit AND the sentence, so a case that returned
+# to crashing would report as a message mismatch on empty output — and the signal check
+# in `reject` names it as the crash it is.
+#
+# The sources are GENERATED because a program that nests 240 levels deep is not something
+# to hand-maintain; 240 clears the 200 bound while staying far under where any of the
+# walks used to crash, so the refusal is the counter answering, not luck. The seed
+# inherits Go's growable stack and accepts all eight — a gap its own contract records
+# (src/bootstrap/README.md).
 
-awk 'BEGIN {
-	s = "1"
-	for (i = 0; i < 240; i++) s = "(" s ")"
-	print "fn main() {"
-	print "\tprint " s
-	print "}"
-}' | reject deep-nesting-limit 'nests more than 200 levels deep' seed-gap
+# deep_expr <nested|flat> writes ONE too-deep expression, with no statement around it, so
+# the four placements below differ only in where they put it.
+deep_expr() {
+	awk -v shape="$1" 'BEGIN {
+		s = "1"
+		for (i = 0; i < 240; i++) {
+			if (shape == "nested") s = "(" s ")"
+			else s = s " + 1"
+		}
+		printf "%s", s
+	}'
+}
 
-# A FLAT chain is the shape the parser's counter cannot see: `1 + 1 + … + 1` parses in a
-# LOOP, so the parser's depth never grows, while the emitter's and checker's walk recurses
-# once per link and used to die of SIGSEGV — no diagnostic, exit 139 — at about 530 `+`
-# terms (about 310 method links, the weakest chain). The bound is the emitter's c_deeper,
-# the same ZG_MAX_NESTING at the walk's own altitude, so however a program reaches 200
-# levels of expression the answer is a refusal and never a crash. 240 terms clears the
-# bound while staying far under where the walk used to crash. The seed accepts it for the
-# reason it accepts the nested case: Go's growable stack.
-awk 'BEGIN {
-	s = "1"
-	for (i = 0; i < 240; i++) s = s " + 1"
-	print "fn main() {"
-	print "\tprint " s
-	print "}"
-}' | reject flat-chain-limit 'chains more than 200 levels deep' seed-gap
+for shape in nested flat; do
+	e=$(deep_expr "$shape")
+
+	printf 'fn main() {\n\tprint %s\n}\n' "$e" |
+		reject "deep-$shape-in-a-body" 'nests more than 200 levels deep' seed-gap
+
+	printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e" |
+		reject "deep-$shape-in-an-instantiated-generic" 'nests more than 200 levels deep' seed-gap
+
+	printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e" |
+		reject "deep-$shape-in-a-module-constant" 'nests more than 200 levels deep' seed-gap
+
+	printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e" |
+		reject "deep-$shape-in-a-default-parameter" 'nests more than 200 levels deep' seed-gap
+done
+
+# The ninth case, and the only one the PARSER cannot answer: a tree the compiler COMPOSES.
+# Neither expression below is 200 levels deep as written, so p_expr_root passes both — but
+# a call that omits a defaulted parameter has the default spliced in (c_defaults_from), and
+# the emitter then walks 190 terms of default underneath 190 terms of call. The bound that
+# fires is the EMITTER's (c_deeper), which is why its sentence differs, and why the counter
+# is not the defence-in-depth its own header used to claim: it is the only mechanism that
+# sees a depth no source expression states.
+#
+# 190 is chosen to sit UNDER the 200 bound on each half and over it once composed; the two
+# halves are the same chain so the arithmetic is visible rather than tuned.
+half=$(awk 'BEGIN { s = "1"; for (i = 0; i < 190; i++) s = s " + 1"; printf "%s", s }')
+printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half" |
+	reject deep-composed-by-a-default-splice 'chains more than 200 levels deep' seed-gap
 
 # --- report ------------------------------------------------------------------------
 

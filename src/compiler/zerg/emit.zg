@@ -3148,32 +3148,42 @@ fn c_bool(b: bool) -> str {
 
 # c_deeper takes one level of the expression walk, and refuses the program once the budget
 # is spent — BEFORE the recursion happens, so the stack the refusal is reported from is a
-# healthy one. It is p_deeper's rule at the emitter's altitude, and it exists because the
-# parser's copy cannot see every deep input: a LEFT-DEEP operator chain (`1 + 1 + … + 1`),
-# a long string concatenation, and a long method chain all parse in a LOOP — the parser's
-# depth never grows — while c_expr and c_infer recurse once per link and died of SIGSEGV
-# with no diagnostic at about 310 method links / 530 `+` terms on an 8 MB stack. The
-# budget is ZG_MAX_NESTING, the parser's own: the walk here goes about as deep as the
-# expression tree is, so the parser's bound is this walk's bound for every nested shape,
-# and the weakest measured chain (310) clears 200 by the same margin the parser chose
-# that number by (its weakest was 302). One number is also one story for the reader:
-# however a program reaches 200 levels of expression, the answer is this refusal.
+# healthy one. The budget is ZG_MAX_NESTING, the parser's own.
+#
+# It is not defence in depth. p_expr_root bounds every tree the parser BUILDS, so no
+# WRITTEN expression reaches this walk deeper than the budget — but the emitter does not
+# only walk written trees, it COMPOSES them, and a composed one is deeper than either half.
+# A default parameter is spliced into every call that omits it (c_defaults_from), so a
+# 190-term default backfilled into a 190-term call is a 380-level walk that no source
+# expression states. This counter is the ONLY thing that bounds a composed tree, which is
+# why the two are not one rule at two altitudes:
+#
+#   p_expr_root  — the tree as WRITTEN, refused where it is built, so lint, lsp and
+#                  monomorphization inherit the bound without a counter of their own.
+#   c_deeper     — the tree as WALKED, which is what the native stack actually pays for.
+#
+# The second was once the only one, and the arrangement held only for as long as every walk
+# running BEFORE the emitter remembered to count too. Monomorphization did not, and a
+# 400-term chain in a template some call instantiated died of SIGSEGV with nothing on
+# stderr. That is what p_expr_root fixed; it did not make this one redundant.
 #
 # The exits are balanced by the two wrappers below and nowhere else: every recursive
 # entry into an expression goes through c_expr or c_infer, so the pair is the natural
 # chokepoint, and a raise abandons the walk entirely so a skipped decrement can never be
-# observed by a later statement.
+# observed by a later statement. Both halves have a name (c_shallower) so both are
+# greppable; an increment that answers to a name and a decrement that does not is how the
+# two come to be in different numbers.
 fn c_deeper(mut &em: Emitter) {
 	em.depth = em.depth + 1
 	return if em.depth <= ZG_MAX_NESTING
 
-	l := strconv.to_string(em.at_line, 10)
-	c := strconv.to_string(em.at_col, 10)
-	mut place := f"\n  --> {l}:{c}"
-	if em.at_path != "" {
-		place = f"\n  --> {em.at_path}:{l}:{c}"
-	}
+	place := "\n" + place_line(em.at_path, em.at_line, em.at_col)
 	raise f"this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
+}
+
+# c_shallower gives back the level c_deeper took.
+fn c_shallower(mut &em: Emitter) {
+	em.depth = em.depth - 1
 }
 
 # c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
@@ -3185,7 +3195,7 @@ fn c_deeper(mut &em: Emitter) {
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	c_deeper(em)
 	out := c_expr_node(em, e, sb)
-	em.depth = em.depth - 1
+	c_shallower(em)
 	return out
 }
 
@@ -5955,7 +5965,7 @@ fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	c_deeper(em)
 	t := c_infer_node(em, e)
-	em.depth = em.depth - 1
+	c_shallower(em)
 	return t
 }
 

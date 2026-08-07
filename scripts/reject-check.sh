@@ -71,6 +71,16 @@ fail=0
 #   contains an apostrophe DOUBLE-quote it, or the apostrophe closes the single quote and
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
+# has_flag <flags> <marker> — one BOOLEAN marker is present. The flags arrive as a
+# space-padded list, so a marker is matched as a whole word: `no-place` must not answer
+# true for a hypothetical `no-place-yet`. It exists because the three boolean markers were
+# each asked for in a different way — a `case`, and two spellings of `${flags#* … }` — and
+# the fourth would have picked a fourth.
+has_flag() {
+	case $1 in *" $2 "*) return 0 ;; esac
+	return 1
+}
+
 reject() {
 	local name=$1 want=$2
 	shift 2
@@ -81,6 +91,13 @@ reject() {
 	local flags=" $* "
 	local src="$tmp/$name.zg"
 	cat >"$src"
+
+	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
+	# whole claim is that the finding sits at the declaration, not at a use site.
+	local at="" fl
+	for fl in $flags; do
+		case $fl in at=*) at=${fl#at=} ;; esac
+	done
 
 	local out status
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
@@ -93,6 +110,11 @@ reject() {
 
 	if [ $status -eq 0 ]; then
 		echo "ACCEPTED  $name — the compiler emitted an ill-formed program instead of rejecting it"
+		fail=$((fail + 1))
+		return
+	fi
+	if is_crash "$status"; then
+		echo "CRASHED   $name — the compiler died of signal $((status - 128)) instead of refusing"
 		fail=$((fail + 1))
 		return
 	fi
@@ -132,21 +154,36 @@ reject() {
 	# once, and `reject-fuzz` counts the whole class. Marking the case keeps a permanent
 	# LANGUAGE rule in this file, where its lifetime says it belongs, instead of filing it
 	# with the not-yet-built forms next door to dodge one assertion.
-	case $flags in *" no-place "*)
+	if has_flag "$flags" no-place; then
 		if has_place "$out"; then
 			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
 			fail=$((fail + 1))
 			return
 		fi
-		;;
-	*)
-		if ! has_place "$out"; then
-			echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
+	elif ! has_place "$out"; then
+		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
+	if [ -n "$at" ] && ! place_is "$out" "$name\.zg:$at"; then
+		echo "PLACE     $name — the finding does not sit at $at: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
+
+	# one-finding pins the COUNT, for a case whose claim is "exactly one message": a rule
+	# that keeps a refused name resolvable ON PURPOSE (so its uses do not each add a
+	# second finding) is asserted here, since a second message would match every other
+	# assertion and still be the regression.
+	if has_flag "$flags" one-finding; then
+		local found
+		found=$(printf '%s\n' "$out" | grep -c '^error:')
+		if [ "$found" -ne 1 ]; then
+			echo "COUNT     $name — wanted exactly one finding, got $found"
 			fail=$((fail + 1))
 			return
 		fi
-		;;
-	esac
+	fi
 
 	# A third argument names a rule the SEED does not enforce yet, and says which. The
 	# oracle is worth having and the seed is not perfect; recording the exception beside the
@@ -155,7 +192,7 @@ reject() {
 	# It asserts the OPPOSITE, so the exception retires itself: an xfail that merely returns
 	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
 	# marker and its entry in the seed's README would rot with nothing to say so.
-	if [ "${flags#* seed-gap }" != "$flags" ]; then
+	if has_flag "$flags" seed-gap; then
 		if seed_refuses "$name" "$src"; then
 			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
 			fail=$((fail + 1))
@@ -239,12 +276,335 @@ fn main() {
 }
 EOF
 
+# A plain top-level binding is a module binding too, and immutable for a DIFFERENT reason:
+# not because `const` says so, but because the top level is (docs/runtime/package.md). Both
+# used to answer "it is a module `const`", which sends the reader to look up a keyword they
+# did not write; the two sentences are asserted apart because one message covering two
+# rules is how a message comes to be wrong about one of them.
+reject assign-to-module-binding "it is a module binding" <<'EOF'
+N := 5
+
+fn main() {
+	N = 6
+	print(f"{N}")
+}
+EOF
+
 reject assign-to-loop-variable "it is immutable" <<'EOF'
 fn main() {
 	for i in 0..2 {
 		i = 5
 		print(f"{i}")
 	}
+}
+EOF
+
+# --- `const` is shadow-proof, in BOTH directions ----------------------------------
+#
+# GRAMMAR group 4: a `const` binding is immutable and SHADOW-PROOF — no later binding may
+# take its name, and it may not itself take a name a visible binding holds. Neither
+# direction used to be checked: `k := 2` in a block under `const k := 1` compiled and
+# printed 2, silently, which is the exact answer the keyword exists to rule out. The
+# negative half — a plain `:=` may still be shadowed and `mut n := n` still works — is
+# pinned by the corpus (const_shadow_allowed), because a program that must COMPILE belongs
+# there, not here.
+
+reject shadow-a-const-from-an-inner-block 're-binds a `const`' <<'EOF'
+const k := 1
+
+fn main() {
+	if true {
+		k := 2
+		print k
+	}
+}
+EOF
+
+# a LOOP VARIABLE is a binding too. The rule rides c_add_var — the one gate every
+# name-introducing site enters the environment through — because D103 desugars this loop
+# to a core form that CONTAINS a binding: refusing the desugared program and accepting the
+# surface one would break `make desugar`'s contract that the two behave the same, and the
+# seed refuses the surface form as well.
+reject loop-variable-takes-a-const-name 're-binds a `const`' <<'EOF'
+const k := 1
+
+fn main() {
+	for k in 0..3 {
+		print k
+	}
+}
+EOF
+
+reject const-shadowing-an-outer-binding 'shadows a binding already visible here' <<'EOF'
+fn main() {
+	x := 1
+	if true {
+		const x := 2
+		print x
+	}
+	print x
+}
+EOF
+
+# the SAME-block collision is one mistake and gets one message — the const one, whose
+# advice is right. The redeclaration message says "an inner block may shadow it", which is
+# exactly what a `const` does not allow.
+reject const-collision-in-the-same-block 're-binds a `const`' <<'EOF'
+fn main() {
+	const k := 1
+	k := 2
+	print k
+}
+EOF
+
+# a match ARM's bind is registered up to three times — condition, body, and the body's
+# type inference — so this one mistake used to collect SIX findings, one per pass, all
+# identical. One mistake earns one message (chk_at_place drops an exact repeat), which is
+# what `one-finding` pins; the place is the whole STATEMENT's, the SAt marker's
+# documented grain, so the arm itself is not pointed at and this case does not claim it.
+reject const-rebound-by-a-match-arm 're-binds a `const`' one-finding <<'EOF'
+const v := 1
+
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := E.A(7)
+	x := match e { A(v) => v  B => 0 }
+	print x
+}
+EOF
+
+# --- a module constant may not take a function's name --------------------------------
+#
+# The top level is ONE namespace: a module constant and a free function both mangle to
+# `zg_<name>`, so `const f := 1` beside `fn f()` reached cc as "redefinition of 'zg_f'"
+# against generated code — in either source order, which is why both are here. A LOCAL
+# named after a function is not this (it shadows, and stays legal); the corpus pins that
+# half. The seed emits the collision too (its gap, src/bootstrap/README.md).
+reject const-taking-a-function-name 'declared as both a module constant and a function' at=1:1 seed-gap <<'EOF'
+const f := 1
+
+fn f() {
+	print "x"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject function-taking-a-const-name 'declared as both a module constant and a function' at=5:1 seed-gap <<'EOF'
+fn f() {
+	print "x"
+}
+
+const f := 1
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# --- the top level is immutable in safe code --------------------------------------
+#
+# docs/runtime/package.md: a top-level binding may not be `mut` outside a module-level
+# `unsafe { … }` group. The declaration used to be dropped by the parser's top-level skip,
+# which split the mistake into two wrong answers: unused, the program compiled; used,
+# every use site said `undefined name` about a name the program plainly declares. Inside
+# the group the same spelling IS the language's mutable global — the corpus case
+# unsafe_group_mut pins that half, so the refusal here cannot leak into the group without
+# a gate noticing from both sides.
+
+reject top-level-mut-in-safe-code 'may not be `mut` outside a module-level' <<'EOF'
+mut counter := 0
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject top-level-pub-mut 'may not be `mut` outside a module-level' <<'EOF'
+pub mut counter := 0
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# A USED `mut` global earns exactly ONE finding, at the declaration — the name stays
+# resolvable and writable on purpose, so the program is told the one line to fix rather
+# than a second `undefined name` or `cannot assign` at every use site. `at=` and
+# `one-finding` are those two claims as markers; the case used to fork the helper's first
+# half by hand, and the fork silently lost the cache, cc-shape and seed assertions.
+reject top-level-mut-that-is-used 'may not be `mut` outside a module-level' at=1:1 one-finding <<'EOF'
+mut counter := 0
+
+fn main() {
+	counter = counter + 1
+	print counter
+}
+EOF
+
+# A STATEMENT inside the group is ill-formed, not a nop: GRAMMAR:777 derives
+# `unsafe-item ::= decorated-decl | binding` and nothing else, and the top level's
+# statement fallback must not bless code into an unsafe CONTEXT nobody runs. Before the
+# group's contents were parsed at all, this was dropped one token at a time — the same
+# shredder that ate the group's `mut` bindings — so the case pins the refusal that
+# replaced the silence.
+reject statement-in-unsafe-group 'a statement runs in a function body, not in a group' <<'EOF'
+unsafe {
+	print "hello"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# THE GROUP HAS TO END. The context was tracked as loop state that nothing checked at
+# `Eof`, so a missing `}` left every declaration below it inside the group — and this
+# program built, ran and printed 1: `counter` became the language's mutable global and
+# chk_top_muts' refusal, the whole reason the flag exists, was switchable by a typo with
+# no diagnostic anywhere. The place is the `unsafe` that was never closed, which is where
+# the reader has to go, so `at=` pins it rather than accepting an answer at the last line.
+reject unsafe-group-never-closed 'group is never closed' at=1:1 <<'EOF'
+unsafe {
+	fn raw() -> int { return 1 }
+
+mut counter := 0
+
+fn main() {
+	counter = counter + raw()
+	print counter
+}
+EOF
+
+# `unsafe-item ::= decorated-decl | binding` derives no GROUP, so a group inside a group is
+# not a form. It used to nest, which is the other half of the same counter: the inner `}`
+# closed the outer one as far as it could tell, leaving the tail of the file outside a
+# context the reader thinks it is in.
+reject unsafe-group-nested 'does not nest' at=2:2 <<'EOF'
+unsafe {
+	unsafe {
+		mut counter := 0
+	}
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# --- a top-level annotation is honoured --------------------------------------------
+#
+# `answer: bool = 42` used to compile: the top level inferred from the value and silently
+# discarded the annotation, so the program got an int named answer — an annotation the
+# compiler does not check is a comment. The positive half (the annotation DECIDING the
+# type, `half: float = 1` printing 0.5 for `half / 2`) is the corpus case topconst_typed.
+reject top-level-annotation-mismatch 'cannot bind int to a bool binding' at=1:1 seed-gap <<'EOF'
+answer: bool = 42
+
+fn main() {
+	print answer
+}
+EOF
+
+# A finding INSIDE a module constant's initializer sits at the declaration, with a file. A
+# module constant belongs to no function, so no SAt marker ever covers its value: the
+# emitter used to clear the statement marker's path around the initializer walk (for the
+# visibility rule's sake) and a rule firing in there reported a bare `line:col` — the line
+# a STALE marker still held, near some use inside `main`. `at=1:1` is the whole claim:
+# the constant's own place, not a marker left over from whatever was emitted before it.
+reject const-initializer-reports-the-declaration 'operator `+` takes numeric operands' at=1:1 <<'EOF'
+const answer := 1 + "s"
+
+fn main() {
+	print 1
+}
+EOF
+
+# --- `pub` binds to a declaration ---------------------------------------------------
+#
+# `pub` is a visibility flag on the declaration that follows it. The parser used to read
+# it in a second, hand-copied dispatch that fell off its end silently — `pub impl` dropped
+# the `pub` on the floor and picked the `impl` up as if the marker were never written.
+# There is now ONE dispatch, and a form that takes no `pub` (GRAMMAR derives none for an
+# `import`, an `impl`, an `init()`, a decorator, an `unsafe { … }` group, or a statement)
+# says so by name — and every one of them says WHERE, at the declaration's own first
+# token. `at=` pins that: the place must be the marker the reader wrote, not wherever the
+# parser happened to stop.
+#
+# ONE ARM PER FORM, because the dispatch is a chain and a form that takes no `pub` is
+# exactly a form whose arm has to say so; a case for one of them proves nothing about the
+# next. These are the six.
+
+reject pub-on-an-impl-block 'does not go on an `impl` block' at=9:1 <<'EOF'
+spec S {
+	fn f() -> int
+}
+
+struct A {
+	x: int
+}
+
+pub impl S for A {
+	fn f() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-before-a-statement '`pub` binds to a declaration' at=1:1 <<'EOF'
+pub 42
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-an-import '`pub import` is not a form' at=1:1 <<'EOF'
+pub import "std/io"
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-init 'does not go on `init()`' at=1:1 <<'EOF'
+pub init() {
+	print "ok"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-before-a-decorator 'a decorator leads its declaration' at=1:1 <<'EOF'
+pub #[derive(Eq)]
+struct A {
+	x: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject pub-on-an-unsafe-group 'does not go on an `unsafe { … }` group' at=1:1 <<'EOF'
+pub unsafe {
+	mut counter := 0
+}
+
+fn main() {
+	print "ok"
 }
 EOF
 
@@ -266,27 +626,22 @@ EOF
 
 # --- redeclaration ----------------------------------------------------------------
 #
-# A name is bound once per block. Shadowing across blocks is legal and load bearing, so
-# the sibling and nested cases below are NOT here — they belong to the corpus, which is
-# where programs that must run live.
+# Two cases stood here pinning "a name is bound once per block", and their retirement is
+# the rare one this file's header says must be justified: the rejection was never the
+# LANGUAGE's. docs/core/memory.md has always specified re-declaration as legal in the
+# same block — declare-del-declare, the RHS reading the old binding — and worked through
+# an example this compiler refused; the refusal was a compiler rule miscarrying a marker,
+# carried in the spec as a [deviation], and a [deviation] is a bug with a fix owed, not a
+# documented state. The legal half now lives where programs that must run live: the
+# corpus case redeclare_same_block. What survives HERE is the boundary that really is the
+# language's — a `const` is shadow-proof, so a re-declaration may not cross one in either
+# direction, same block included (the const cases above and below).
 
-reject redeclare-in-one-block "already declared in this block" <<'EOF'
+reject redeclare-plain-then-const-in-one-block 'shadows a binding already visible here' <<'EOF'
 fn main() {
 	x := 1
-	x := 2
-	print(f"{x}")
-}
-EOF
-
-reject redeclare-after-inner-block "already declared in this block" <<'EOF'
-fn main() {
-	a := 1
-	if true {
-		b := 2
-		print(f"{b}")
-	}
-	a := 3
-	print(f"{a}")
+	const x := 2
+	print x
 }
 EOF
 
@@ -949,6 +1304,73 @@ fn main() {
 }
 EOF
 
+# --- the escapes the decoder cannot read -------------------------------------------
+#
+# A malformed escape used to abort the COMPILER: `b'\xzz'` reached `byte(hi * 16 + lo)`
+# with hex_val's -1 in it and died as `OverflowError`, `'\u{}'` decoded to a NUL that the
+# str bridge refused as `EncodingError` — no file, no line, no form named. Worse were the
+# quiet ones: `b'\x1z'` compiled and meant 15, `\q` compiled and meant `q`, `'\u41'` read
+# its digits without the braces and meant whatever they said. One case per DISTINCT path
+# through the decoder and its callers; the shapes that share one (`b'\xz1'`, `'\x41'`,
+# `'\u{41'`) are the same fix and ride on these.
+
+reject byte-escape-with-non-hex-digits 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\xzz'))
+}
+EOF
+
+reject byte-escape-with-one-hex-digit 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\x1'))
+}
+EOF
+
+reject unicode-escape-in-a-byte-literal 'E109 invalid escape in a byte literal' <<'EOF'
+fn main() {
+	print(int(b'\u{41}'))
+}
+EOF
+
+reject unknown-escape-in-a-rune-literal 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\q'))
+}
+EOF
+
+reject unicode-escape-with-no-digits 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\u{}'))
+}
+EOF
+
+reject unicode-escape-without-braces 'E109 invalid escape in a rune literal' <<'EOF'
+fn main() {
+	print(int('\u41'))
+}
+EOF
+
+reject unknown-escape-in-a-string 'E109 invalid escape in a string literal' <<'EOF'
+fn main() {
+	print("a\qb")
+}
+EOF
+
+reject unknown-escape-in-a-triple-string 'E109 invalid escape in a string literal' <<'EOF'
+fn main() {
+	s := """
+a\qb
+"""
+	print(s)
+}
+EOF
+
+reject string-that-spells-a-nul 'E110 a string literal may not contain a NUL' <<'EOF'
+fn main() {
+	print("a\0b")
+}
+EOF
+
 # --- the forms that used to escape to cc -------------------------------------------
 #
 # `x == nil` is the first thing anyone reaches for to test an optional, and it lowered to a
@@ -1392,7 +1814,7 @@ EOF
 # GRAMMAR:301-304 — `mut fn` is meaningful only on a method; "a free function or closure
 # has no receiver, so it is never `mut fn`". The token fell into the top-level skip, so the
 # `mut` was swallowed and the function compiled as if it had never been written.
-reject mut-fn-free-function 'a free function is never `mut fn`' no-place seed-gap <<'EOF'
+reject mut-fn-free-function 'a free function is never `mut fn`' at=1:1 seed-gap <<'EOF'
 mut fn f() -> int {
 	return 1
 }
@@ -2200,6 +2622,152 @@ EOF
 # the two that RAN. An int64_t into a double field and an int64_t into a uint8_t are both
 # legal C, so neither cc nor any gate had anything to say — the program simply answered
 # something other than what it was written to answer.
+
+# --- what only the driver can reject ------------------------------------------------
+#
+# A program build needs an entry point. `program ::= stmt-list` makes a main-less source
+# grammatical — script mode is real, and a module is exactly a source with no `fn main` —
+# so no parser or checker rule can own this: what is ill-formed is the BUILD, an entry
+# file handed to `--emit bin` that defines no entry (docs/runtime/package.md). Before the
+# driver said so, the answer was the LINKER's `undefined symbol _main` against an object
+# nobody wrote; the seed has enforced this rule all along, which is why no marker excuses
+# it below.
+
+reject program-without-fn-main 'declares no `fn main`' at=1:1 <<'EOF'
+x := 1
+EOF
+
+# The SAME source under `--emit lib` must stay accepted — a module is exactly a source
+# with no entry point. Nothing else in the repo builds a main-less object, so the
+# acceptance half of the build rule is asserted here, beside its rejection half: the
+# regression this catches is the entry-point check drifting somewhere every emit stage
+# passes through.
+printf 'x := 1\n' >"$tmp/module-without-main.zg"
+if "$ZERG" build --emit lib -o "$tmp/module-without-main" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
+	[ -f "$tmp/module-without-main.o" ]; then
+	pass=$((pass + 1))
+else
+	echo "LIB       module-without-main — a main-less module no longer builds with --emit lib"
+	fail=$((fail + 1))
+fi
+
+# --- the rendering overrides -------------------------------------------------------
+#
+# docs/runtime/format.md: a `display` / `debug` override is `fn display() -> str` — the
+# value alone in, the text it shows as out. The shape is what the render sites dispatch
+# on, so a mis-shaped one would be silently passed over; chk_render_overrides makes it a
+# finding at the declaration instead. The seed has no rendering dispatch and builds both
+# programs, hence seed-gap. The `mut fn` half of the same rule is pinned by the working
+# corpus case's boundary (a rendering may not mutate), and the seed refuses `mut fn` for
+# reasons of its own, so that spelling needs no case here.
+
+reject display-override-with-arguments 'takes no arguments beyond the value' seed-gap <<'EOF'
+struct Point {
+	x: int
+}
+
+impl Point {
+	fn display(width: int) -> str {
+		return "bad"
+	}
+}
+
+fn main() {
+	print Point(1).x
+}
+EOF
+
+reject display-override-wrong-answer 'answers the `str` the value shows as' seed-gap <<'EOF'
+struct Point {
+	x: int
+}
+
+impl Point {
+	fn display() -> int {
+		return 3
+	}
+}
+
+fn main() {
+	print Point(1).x
+}
+EOF
+
+# --- translation limits --------------------------------------------------------------
+#
+# Deep nesting is refused by count, not parsed until the stack runs out. Every pass that
+# handles an expression recurses once per level — the parser, the checker, the emitter,
+# monomorphization — and each of them died of SIGSEGV, no diagnostic, exit 139, somewhere
+# between 300 and 500 levels on an 8 MB stack. The bound is ZG_MAX_NESTING in parser.zg,
+# a documented translation limit of this implementation (docs/conformance.md), so
+# exceeding it is a permanent answer and the cases live here rather than with the
+# not-yet-built forms.
+#
+# The claim is UNIVERSAL — however a program reaches 200 levels, the answer is this one
+# refusal — so it is asserted as a matrix rather than as an example. Two SHAPES, because
+# they reach the parser by different routes: `(((…)))` recurses without deepening the
+# tree, and `1 + 1 + …` deepens the tree without recursing, since the precedence levels
+# build a left-deep chain in a LOOP. Four PLACES, because the shape reaches a different
+# set of walks in each: an ordinary body is emitted directly, a generic template body is
+# rewritten by subst_expr BEFORE the emitter counts anything (a 400-term chain there was
+# an unreported SIGSEGV, and it took `zerg lsp` down with it, since a guard catches a
+# raise and cannot catch a signal), a module constant is emitted on its own path, and a
+# default parameter is spliced into each call site.
+#
+# The refusal comes from the PARSER for all eight, because that is where the bound now
+# is: a tree too deep is refused where it is built, so no later walk needs a counter to
+# stay honest. `reject` asserts a non-zero exit AND the sentence, so a case that returned
+# to crashing would report as a message mismatch on empty output — and the signal check
+# in `reject` names it as the crash it is.
+#
+# The sources are GENERATED because a program that nests 240 levels deep is not something
+# to hand-maintain; 240 clears the 200 bound while staying far under where any of the
+# walks used to crash, so the refusal is the counter answering, not luck. The seed
+# inherits Go's growable stack and accepts all eight — a gap its own contract records
+# (src/bootstrap/README.md).
+
+# deep_expr <nested|flat> writes ONE too-deep expression, with no statement around it, so
+# the four placements below differ only in where they put it.
+deep_expr() {
+	awk -v shape="$1" 'BEGIN {
+		s = "1"
+		for (i = 0; i < 240; i++) {
+			if (shape == "nested") s = "(" s ")"
+			else s = s " + 1"
+		}
+		printf "%s", s
+	}'
+}
+
+for shape in nested flat; do
+	e=$(deep_expr "$shape")
+
+	printf 'fn main() {\n\tprint %s\n}\n' "$e" |
+		reject "deep-$shape-in-a-body" 'nests more than 200 levels deep' seed-gap
+
+	printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e" |
+		reject "deep-$shape-in-an-instantiated-generic" 'nests more than 200 levels deep' seed-gap
+
+	printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e" |
+		reject "deep-$shape-in-a-module-constant" 'nests more than 200 levels deep' seed-gap
+
+	printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e" |
+		reject "deep-$shape-in-a-default-parameter" 'nests more than 200 levels deep' seed-gap
+done
+
+# The ninth case, and the only one the PARSER cannot answer: a tree the compiler COMPOSES.
+# Neither expression below is 200 levels deep as written, so p_expr_root passes both — but
+# a call that omits a defaulted parameter has the default spliced in (c_defaults_from), and
+# the emitter then walks 190 terms of default underneath 190 terms of call. The bound that
+# fires is the EMITTER's (c_deeper), which is why its sentence differs, and why the counter
+# is not the defence-in-depth its own header used to claim: it is the only mechanism that
+# sees a depth no source expression states.
+#
+# 190 is chosen to sit UNDER the 200 bound on each half and over it once composed; the two
+# halves are the same chain so the arithmetic is visible rather than tuned.
+half=$(awk 'BEGIN { s = "1"; for (i = 0; i < 190; i++) s = s " + 1"; printf "%s", s }')
+printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half" |
+	reject deep-composed-by-a-default-splice 'chains more than 200 levels deep' seed-gap
 
 # --- report ------------------------------------------------------------------------
 

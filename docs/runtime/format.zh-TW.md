@@ -12,14 +12,16 @@
 - **`display`——給人看的視圖。** 它的**預設就是 `debug`**，所以永遠存在。override 它來決定終端使用者該怎麼讀這個值
   （金額、日期）；compiler 永不衍生語意化渲染，所以有意義的 `display` 只能 override。
 
-> **[deviation]** **override 會被靜默忽略。** `display`（與 `debug`）被描述為可 override，但寫在 `impl` 裡的
-> `fn display() -> str` 從來不會被採用：對一個其型別宣告了它的值 `print m`，印出來的是底層的 scalar。在 `struct`
-> 上該 hole 會被下方的 [not yet] 直接拒絕，所以「被忽略而非被拒絕」的那個 override，是寫在 `type X = Y` 上的那個。
->
-> **狀態。** 渲染一個**純量**或一個 **`str`**——透過純 `{x}` 洞、`print`，或 f-string——可用。
-> **複合值的結構化渲染**（`struct`、`list`、`map`）為 **[not yet]**：今日格式洞裡的複合值會在**編譯期被拒絕**，
-> 所以「每個值都能渲染」對純量與字串現已成立，複合值則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切拼法
-> **尚未被釘定**（[not yet]）。
+**override** 是寫在該型別 `impl` 裡、形狀固定的 method：`fn display() -> str`（或 `fn debug() -> str`）——
+它只接收這個值本身、回答該值顯示成的 `str`，而且絕不改動它（是普通 `fn`、不是 `mut fn`）；同名而形狀不同的
+method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用 override，而只寫了 `debug` 的型別在每個渲染點
+都透過它渲染，因為 `display` 預設就是它。
+
+> **狀態。** 渲染一個**純量**或一個 **`str`**——透過純 `{x}` 洞、`print`，或 f-string——可用，而且任何宣告了
+> override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。**沒有 override 的複合值**
+> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日格式洞裡這樣的複合值會在**編譯期被拒
+> 絕**，所以「每個值都能渲染」對純量、字串與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構
+> 化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

@@ -192,9 +192,15 @@ struct Arm {
 # the optional parts the subset's flat enums cannot express as optionals.
 enum Stmt {
 	# SLet is a binding: the name, its declared type, whether one was WRITTEN, whether it
-	# is `mut`, and the initializer. The two bools are in that order — has_type first —
-	# which is worth saying because they are the same type and a swap type-checks.
-	SLet(str, Ty, bool, bool, Expr)
+	# is `mut`, whether it is `const`, and the initializer. The three bools are in that
+	# order — has_type, then is_mut, then is_const — which is worth saying because they
+	# are the same type and a swap type-checks.
+	#
+	# is_const is carried rather than folded away because `const` means more than "not
+	# mut": GRAMMAR group 4 makes a `const` binding SHADOW-PROOF — a name collision with
+	# one, in either direction, is an error — and the emitter cannot enforce a property
+	# the tree no longer records.
+	SLet(str, Ty, bool, bool, bool, Expr)
 	SAssign(Expr, Expr)
 	SPrint(Expr)
 	SReturn(bool, Expr)
@@ -354,6 +360,32 @@ pub struct Diag {
 	msg: str
 }
 
+# diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
+# program build whose entry declares no `fn main` — and the seed does not read a
+# module-qualified struct constructor (`zerg.Diag(…)` emits a type name in call position),
+# so the constructor lives here, beside the struct, as an ordinary function a caller in
+# another module can reach.
+pub fn diag_at(path: str, line: int, col: int, msg: str) -> Diag {
+	return Diag(path, line, col, msg)
+}
+
+# place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
+# beneath its first line. It lives here for the same reason diag_at does: it is ONE fact
+# about the output — the fact scripts/lib/diag.sh tells a diagnostic of ours from one of
+# cc's by, and the one `has_place` and `place_is` both read — and it was spelled out three
+# times, in the parser's refusals (p_place), in the emitter's depth limit and in the
+# driver's renderer. Three copies of a layout that a shell gate treats as one.
+#
+# The pathless form is not a fallback but a real case: a parse with no file behind it —
+# an f-string hole re-lexed on its own, a driver stage handed text — knows the position and
+# not the file, and naming a file it does not have would be worse than saying less.
+pub fn place_line(path: str, line: int, col: int) -> str {
+	l := strconv.to_string(line, 10)
+	c := strconv.to_string(col, 10)
+	return f"  --> {l}:{c}" if path == ""
+	return f"  --> {path}:{l}:{c}"
+}
+
 # FieldDef is one struct field: its name and declared type.
 struct FieldDef {
 	name: str
@@ -442,6 +474,39 @@ struct ImplDecl {
 	col: int
 }
 
+# ConstDecl is one module-level binding — `const K := 1`, `pub COUNT := 3`, or a plain
+# `COUNT := 3` — the module's immutable top-level state (docs/runtime/package.md), with
+# `pub` as its visibility. It mirrors SLet's fields and adds the three a DECLARATION owes
+# a diagnostic — the file and the position it starts at — because a module constant is a
+# statement of no function: by emission the whole program is one merged File, and there is
+# no FnDecl and no SAt marker left to remember where it was written.
+#
+# `is_mut` is carried, and legal only with `in_unsafe`: the top level is immutable
+# outside a module-level `unsafe { … }` group (docs/runtime/package.md), and PARSING the
+# offending binding is what lets the refusal name its own declaration instead of
+# answering `undefined name` at every use site. `in_unsafe` records that the binding was
+# declared inside such a group — where a `mut` binding IS the language's mutable global
+# (docs/runtime/ffi.md, GRAMMAR group 12) — so chk_top_muts can tell the legal home of a
+# mutable global from the safe code it is banned in.
+# `is_pub` is the visibility chk_visible enforces: c_const_globals keeps the whole
+# declaration in the emitter's k_decls rows, and chk_visible reads this flag and the
+# declaring module off the row, so a cross-module read of a non-`pub` constant is refused
+# the way a private function's call is.
+pub struct ConstDecl {
+	name: str
+	ty: Ty
+	has_ty: bool
+	is_mut: bool
+	is_const: bool
+	is_pub: bool
+	in_unsafe: bool
+	value: Expr
+
+	path: str
+	line: int
+	col: int
+}
+
 pub struct File {
 	imports: list[str]
 	structs: list[StructDecl]
@@ -455,9 +520,11 @@ pub struct File {
 	# have is one underlying type and an identity of their own.
 	types: list[TypeDecl]
 
-	# consts are the module-level `const` bindings, each an SLet. They are not statements
-	# of any function: they become C globals, assigned once before anything runs.
-	consts: list[Stmt]
+	# consts are the module-level bindings — the module's immutable state, `const`-marked
+	# or not, plus the `mut` ones kept so their refusal has a declaration to point at.
+	# They are not statements of any function: they become C globals, assigned once
+	# before anything runs.
+	consts: list[ConstDecl]
 
 	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
 	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
@@ -541,7 +608,7 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_ty, is_mut, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		SLet(name, ty, has_ty, is_mut, is_const, value) => f"{ind}let {name} = {expr_kind(value)}\n"
 		SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
 		SPrint(x) => f"{ind}print {expr_kind(x)}\n"
 		SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"
@@ -601,6 +668,108 @@ fn expr_kind(e: Expr) -> str {
 		EIn(x, set) => "in"
 		_ => "?"
 	}
+}
+
+# expr_parts is an expression's SUB-EXPRESSIONS, in written order — the one place this
+# compiler says what "nested inside" means for an Expr. It is what lets the nesting bound
+# be a property of the TREE rather than of a walk: the parser measures the tree through
+# this list once, where it is built, and every later walk — the emitter's, the checker's,
+# monomorphization's, and any added tomorrow — inherits the bound without a counter of its
+# own. A third counter was the alternative, and a fourth would have followed it.
+#
+# Every variant is named, leaves included, and there is deliberately NO catch-all: a `_`
+# here answers "no parts" for a node that has them, which is a hole in the bound that
+# nothing reports. A new Expr variant must say what it contains.
+#
+# A BLOCK is not a part. `guard { … }`, a closure body and `?? break` carry STATEMENTS,
+# and a statement's expressions are each measured on their own where that statement is
+# read (parser.zg's p_expr_root) — descending here would need a second walk over Stmt to
+# reach the same answer.
+fn expr_parts(e: Expr) -> list[Expr] {
+	return match e {
+		EInt(_) => expr_parts_none()
+		EFloat(_) => expr_parts_none()
+		EStr(_) => expr_parts_none()
+		EBool(_) => expr_parts_none()
+		ENil => expr_parts_none()
+		EIdent(_) => expr_parts_none()
+		EUnary(_, x) => [x]
+		EBinary(_, a, b) => [a, b]
+		ECall(_, args, _) => args
+		EField(x, _) => [x]
+		EOptChain(x, _) => [x]
+		ETry(x) => [x]
+		EIndex(x, i) => [x, i]
+		EMethod(x, _, args) => expr_parts_cons(x, args)
+		EListLit(elems) => elems
+		EConv(_, x, _) => [x]
+		EIf(c, a, b) => [c, a, b]
+		EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
+		ERange(lo, hi, _) => [lo, hi]
+		ETuple(elems) => elems
+		EMapLit(ks, vs) => expr_parts_cat(ks, vs)
+		EFn(ps, _, _, _) => expr_parts_defs(ps)
+		EChanNew(_, cap) => [cap]
+		ERecv(ch) => [ch]
+		EForce(x) => [x]
+		ECoalesce(a, b, _) => [a, b]
+		EGuard(_) => expr_parts_none()
+		EIs(x, _) => [x]
+		EIn(x, set) => [x, set]
+	}
+}
+
+# expr_parts_none is "this node contains no expression". It is a function rather than a
+# bare `[]` because the seed that compiles this compiler cannot infer an empty list
+# literal's element type inside a match arm, and a leaf is where that literal would be.
+fn expr_parts_none() -> list[Expr] {
+	mut out: list[Expr] = []
+	return out
+}
+
+# expr_parts_cons puts a node's target in front of its argument list, which is the order a
+# method call is written in and the order a reader looking for the deep one expects.
+fn expr_parts_cons(x: Expr, xs: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = [x]
+	for k in xs {
+		out.append(k)
+	}
+	return out
+}
+
+fn expr_parts_cat(xs: list[Expr], ys: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for k in xs {
+		out.append(k)
+	}
+	for k in ys {
+		out.append(k)
+	}
+	return out
+}
+
+# an arm's literal, its guard and its body are all expressions of the match that holds
+# them — the body especially, since `match … { _ => <deep> }` is one expression tree
+fn expr_parts_arms(scrut: Expr, arms: list[Arm]) -> list[Expr] {
+	mut out: list[Expr] = [scrut]
+	for a in arms {
+		out.append(a.lit)
+		out.append(a.guard_expr)
+		out.append(a.body)
+	}
+	return out
+}
+
+# a closure literal's parameter DEFAULTS are expressions written inside the enclosing one,
+# so they are parts of it; the body is a block and is measured statement by statement
+fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for pm in ps {
+		if pm.has_def {
+			out.append(pm.def)
+		}
+	}
+	return out
 }
 
 # ty_name spells a type the way the source does.

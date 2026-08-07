@@ -155,11 +155,8 @@ x := parse(x)        # 右側讀到舊 x；舊 x 被 del；名字重新綁到新
 mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為初值
 ```
 
-> **[deviation]** 一個名字**不能**在同一個 block 裡重新宣告。`x := read()` 之後 `x := parse(x)` 會被拒絕、報
-> _`x` is already declared in this block — a name is bound once per block, though an inner block may shadow it_,
-> 所以上面那段範例編不過,它所示範的 declare-del-declare 次序也從來沒跑過。在**巢狀** block 裡遮蔽——一個迴圈
-> body、一個 `if` arm、一個函式 body——確實可用,而那正是編譯器自己的原始碼所用的那一半;同 block 的重新綁定是語料
-> 庫從不需要的形式,所以也從來沒有人量過它。
+`const` 不參與這件事：它在兩個方向上都是遮蔽免疫的（[`GRAMMAR`](../../GRAMMAR) 第 4 組），所以重新宣告既不能拿走
+`const` 的名字，也不能對任何可見 binding 已持有的名字鑄造一個 `const`——同一個 block 也包括在內。
 
 因為舊 binding 在右側算完的當下就死亡，`x := transform(x)` 不需複製——來源已被證明死亡，move 最佳化即生效、
 直接重用舊的儲存。

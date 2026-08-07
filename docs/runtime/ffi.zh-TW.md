@@ -12,8 +12,9 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 > `pub` 宣告會被排除在 header 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md)
 > 稱之為 built-in——兩處都沒有。
 >
-> 這裡有兩件事不只是沒建、而是今天就是錯的，它們標在下方各自出現的位置：獨立的 `unsafe fn` 可以從安全程式碼
-> 呼叫且沒有任何診斷，以及 `handle` 型別的 binding 會對著產生的 C 漏到 `cc`。
+> 這裡有兩件事不只是沒建、而是今天就是錯的，它們標在下方各自出現的位置：宣告在 module 層級 `unsafe { … }`
+> 分組裡的 `fn` 可以從安全程式碼呼叫且沒有任何診斷，以及 `handle` 型別的 binding 會對著產生的 C 漏到 `cc`。
+> （獨立的 `unsafe fn` 宣告則被指名拒絕、帶位置——是誠實的 `[not yet]`，不是靜默的錯誤答案。）
 
 ## 兩條邊、一份契約
 
@@ -185,12 +186,20 @@ fn`**，其整個本體都是 unsafe、且只能從 unsafe 呼叫；以及一個
 前綴**。在其中任何一種裡，compiler 都不對這次外部呼叫作安全保證——你寫的那層薄 wrapper 就是你擔保之處。把
 raw 綁定與它們的 wrapper 分在一組：
 
-> **[deviation]** **信任邊界未被強制。** 一個獨立的 `unsafe fn` 可以從普通的安全程式碼呼叫，而且完全沒有診斷
-> ——`unsafe fn g() -> int { return 2 }` 之後 `print g()` 編得過並印出 2——宣告在 module 層級 `unsafe { … }`
-> 分組裡的 `fn` 也一樣。這個關鍵字被 parse 了，然後沒有任何東西去讀它，所以 `unsafe` 只標示意圖、不帶來檢查。
+module 層級的分組是**一個有開頭也有結尾的情境**，兩端都會被檢查：`unsafe-item ::= decorated-decl | binding`
+（[`GRAMMAR`](../../GRAMMAR) group 12）推不出巢狀的分組，所以分組裡再開一個分組會被拒絕；而沒有閉合的分組會
+在**開啟它的那個 `unsafe`** 上被拒絕，而不是把檔案剩下的部分整個吞進去。這兩件事都不是在計較大括號：少一個
+`}`，它底下每一個宣告都會被讀成在分組**裡面**——安全程式碼裡的一個 `mut` binding 就是這樣一聲不吭地變成可變
+global 的。
+
+> **[not yet]** 一個獨立的 `unsafe fn` 宣告會被**指名拒絕、帶位置**。把它蓋起來就等於把 `fn` 當安全的讀——
+> 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。（它以前
+> 正是那樣編過的：`unsafe fn g() -> int { return 2 }` 之後 `print g()` 編得過，`g` 從普通安全程式碼可呼叫、
+> 完全沒有診斷。）
 >
-> **[deviation]** module 層級 `unsafe { … }` 分組裡的 `mut` binding 會被接受、然後**丟棄**，並不會變成可變
-> global：宣告編得過，使用點回報 `error: undefined name`。同一組裡的 `fn` 宣告則保留下來。
+> **[deviation]** **信任邊界未被強制。** 宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從普通的安全
+> 程式碼呼叫，而且完全沒有診斷。這個關鍵字被 parse 了，然後沒有任何東西去讀它，所以 `unsafe` 只標示意圖、
+> 不帶來檢查。
 >
 > **[deviation]** `handle` 型別的 binding 會漏到 `cc`。`mut h: handle? = nil` 不產生任何 Zerg 診斷，而是對著
 > 產生的 C 以 `error: unknown type name 'zg_handle'` 失敗——這是本章唯一一處形式以「抵達 C 編譯器」而非「被拒絕」

@@ -208,37 +208,37 @@ discriminants), `match` with exhaustiveness checking, `list[T]` and `map[K, V]`,
 bytes, `mut &` parameters, optionals with `?` / `??` / `?.` / `!`, the whole value tier
 (`Either[X, Y]` / `Result[T]` / `Left` / `Right`), `guard` / `raise` with cause chaining,
 `defer` and `del`, ranges, f-strings, inherent `impl` and `spec` / `impl Spec for T`,
-modules with `pub` and `init()`, generic **functions** whose type arguments are solved from
-the call, `#[derive(Eq)]` and the `==` it writes on a struct or a fieldless enum, list
-slicing, `for` over a `str`'s runes, checked integer arithmetic with the wrapping `%`-suffixed
-forms beside it, and the whole concurrency chapter — `spawn`, `chan[T]`, directional ends,
-`close`, `select` and `for select` with the non-blocking `_` arm, and `time.after` /
-`time.ticker`.
+modules with `pub` and `init()` — including module constants, whose `pub` is enforced across
+the boundary in both the bare and the qualified spelling — generic **functions** whose type
+arguments are solved from the call, `#[derive(Eq)]` and the `==` it writes on a struct or a
+fieldless enum, list slicing, `for` over a `str`'s runes, checked integer arithmetic with the
+wrapping `%`-suffixed forms beside it, a `display` / `debug` override consulted by `print`, an
+f-string hole and `str(…)` alike, mutable globals inside a module-level `unsafe { … }` group,
+and the whole concurrency chapter — `spawn`, `chan[T]`, directional ends, `close`, `select`
+and `for select` with the non-blocking `_` arm, and `time.after` / `time.ticker`.
 
 **Not yet (each refused by name).** A generic `struct`, `enum` or method, and a generic type
 alias; `derive` on a payload enum, and `Ord` / `Hash` / `Encode` / `Decode`; `spec`
 provided methods; closures that capture; named arguments at a call; `set[T]`; fixed arrays
 `[T; N]`; `list` / `map` equality; tuple, struct and list patterns, or-patterns and
 destructuring bindings; a block used as an expression, and so as a `match` arm body; f-string
-conversions (`!r` / `!s` / `!a`), format specs and `{x=}`; structural rendering of a
-composite; `Ref[T]` and the `atomic` module; command literals; `unsafe`, raw pointers and
-inline assembly; the `is` type-test for non-error types; the `Reader` I/O surface; and the
-`zerg test` runner.
+conversions (`!r` / `!s` / `!a`), format specs and `{x=}`; the structural rendering a
+composite falls back on when it declares no override; `Ref[T]` and the `atomic` module;
+command literals; the standalone `unsafe fn`, raw pointers and inline assembly; the `is`
+type-test for non-error types; the `Reader` I/O surface; and the `zerg test` runner.
 
-**Known deviations (bugs the spec records against current behavior).** Five of these are
+**Known deviations (bugs the spec records against current behavior).** Three of these are
 **silent** — the program compiles and the answer is wrong — and they are the ones to know
 first: a `str` literal `match` arm never fires; an if-expression does not check that its
-branches agree on a type; `~` on a `byte` yields the unmasked 64-bit complement; `main`'s
-`Result[nil]` is discarded, so a returned `Right` exits 0; and a module-level inferred
-binding is dropped rather than refused.
-Two more break the contract in the other direction: `in` and `??` used as a **whole
-condition** reach `cc` against generated C, and 800 levels of nesting is a SIGSEGV.
+branches agree on a type; and `~` on a `byte` yields the unmasked 64-bit complement.
 
-Then the structural ones: a refusal carries no position — a checked rule reports
-`file:line:col` with the source line and a caret, and a form the compiler has not built names
-the form and nothing else; module visibility is enforced on functions and not yet on types
-or fields — a module still reads another module's private struct and its private fields;
-top-level constants initialize in source order, so a forward reference reads zero;
+Then the structural ones: some refusals still carry no position — a checked rule reports
+`file:line:col` with the source line and a caret, and so does every refusal that has learned
+its place, but a parser-level `raise` that names the form and nothing else is still the
+larger half (`make reject-fuzz` counts them); module visibility is enforced on functions and
+module constants, and not yet on types or fields — a module still reads another module's
+private struct and its private fields; top-level constants initialize in source order, so a
+forward reference reads zero;
 left-to-right evaluation order of call arguments and operands is not enforced; and the
 scheduler is **cooperative, not preemptive** — nothing takes a coroutine off
 its worker until it parks, so a CPU-bound coroutine occupies one, and as many of them as there

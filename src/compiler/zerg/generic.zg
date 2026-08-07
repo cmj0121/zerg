@@ -200,7 +200,7 @@ fn subst_block(names: list[str], args: list[Ty], b: list[Stmt]) -> list[Stmt] {
 
 fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
 	return match s {
-		SLet(nm, ty, ht, im, v) => SLet(nm, subst_ty(names, args, ty), ht, im, subst_expr(names, args, v))
+		SLet(nm, ty, ht, im, ic, v) => SLet(nm, subst_ty(names, args, ty), ht, im, ic, subst_expr(names, args, v))
 		SAssign(l, r) => SAssign(subst_expr(names, args, l), subst_expr(names, args, r))
 		SPrint(v) => SPrint(subst_expr(names, args, v))
 		SReturn(hv, v) => SReturn(hv, subst_expr(names, args, v))

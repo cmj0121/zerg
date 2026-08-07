@@ -204,7 +204,7 @@ func TestMatch(t *testing.T) {
 	}
 }
 
-// TestOneTupleRejected pins GRAMMAR:267 — a tuple literal needs 2+ elements, so
+// TestOneTupleRejected pins GRAMMAR#tuple-lit — a tuple literal needs 2+ elements, so
 // the trailing-comma '(a,)' is a syntax error, not a silently accepted 1-tuple
 // that fmt would rewrite to grouping '(a)'.
 func TestOneTupleRejected(t *testing.T) {

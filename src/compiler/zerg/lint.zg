@@ -85,7 +85,7 @@ pub fn lint_files(srcs: list[str]) -> list[str] {
 # lint_idle_mut_fn reports a `mut fn` whose body never writes through `this`.
 #
 # `mut fn` is not a hint: it makes the receiver a `mut &`, so EVERY call site has to hold
-# the instance in a `mut` binding (GRAMMAR:302). A method that only reads charges its
+# the instance in a `mut` binding (GRAMMAR#fn-decl). A method that only reads charges its
 # callers that and gives nothing back — and the caller cannot see why, because the
 # signature is the whole contract and `mut fn` is all it says.
 #
@@ -138,7 +138,7 @@ fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
 
 # lint_ambiguous_variants reports a variant name that TWO enums declare.
 #
-# A bare name is a variant when it resolves to one (GRAMMAR:428), and resolution takes the
+# A bare name is a variant when it resolves to one (GRAMMAR#variant-pat), and resolution takes the
 # FIRST declaration — silently. Two enums that both have a `Red` make `c := Red` a coin
 # toss decided by declaration order, and moving an `enum` in the file changes what the
 # program means with nothing said.
@@ -571,7 +571,7 @@ fn collect_binds_let(name: str, value: Expr, mut &names: list[str]) {
 }
 
 # collect_binds_expr descends into the one EXPRESSION that carries a block of its own.
-# `guard` is an expression (GRAMMAR:614), so a binding made inside one is reached from the
+# `guard` is an expression (GRAMMAR#guard-expr), so a binding made inside one is reached from the
 # statement that holds the guard rather than from a statement of its own.
 fn collect_binds_expr(e: Expr, mut &names: list[str]) {
 	match e {

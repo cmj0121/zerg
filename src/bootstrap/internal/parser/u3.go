@@ -169,7 +169,7 @@ func (p *parser) parseParenOrTuple() ast.Expr {
 			elems = append(elems, p.parseExpr())
 		}
 		rp := p.expect(token.RParen)
-		// GRAMMAR:267 — a tuple literal is 2+ elements; '(a)' is grouping and a
+		// GRAMMAR#tuple-lit — a tuple literal is 2+ elements; '(a)' is grouping and a
 		// trailing-comma '(a,)' is not a 1-tuple, it is a syntax error.
 		if len(elems) < 2 {
 			p.fail(span(lp.Span.Start, rp.Span.End), "a tuple literal needs 2 or more elements")
@@ -421,7 +421,7 @@ func (p *parser) parseAssignTarget() ast.AssignTarget {
 			}
 		}
 		rp := p.expect(token.RParen)
-		// same 2+-element rule as a tuple literal (GRAMMAR:267)
+		// same 2+-element rule as a tuple literal (GRAMMAR#tuple-lit)
 		if len(elems) < 2 {
 			p.fail(span(lp.Span.Start, rp.Span.End), "a tuple target needs 2 or more elements")
 		}

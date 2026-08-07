@@ -617,9 +617,9 @@ chan-type   ::= 'chan' '[' type ']'           # bidirectional
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
 for-select  ::= 'for' 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | '_' '=>' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
-send-arm    ::= expr '<-' expr '=>' expr
+select-arm  ::= recv-arm | send-arm | '_' '=>' stmt
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
+send-arm    ::= expr '<-' expr '=>' stmt
 ```
 
 - **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe
@@ -714,7 +714,7 @@ The one door to bare-metal. Everything here is legal **only inside `unsafe`**; t
 
 ```text
 unsafe-expr  ::= 'unsafe' block            # in a function: block-expression; unsafe ops legal only here
-unsafe-group ::= 'unsafe' '{' unsafe-item* '}'   # at module level: groups unsafe decls + mut globals
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # a decl (unsafe here); a 'mut' binding is a mutable global
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn' — the single-function form
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = raw address; 'ptr[T]' = typed pointer

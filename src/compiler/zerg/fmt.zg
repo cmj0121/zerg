@@ -1672,7 +1672,7 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 		break if is_eof(t.kind)
 
 		# A `;` INSIDE BRACKETS is not a statement separator: it is the fill/array form's
-		# own separator (GRAMMAR:475's `[type ';' const-expr]`, and `[v; N]`). Breaking the
+		# own separator (GRAMMAR#array-type's `[type ';' const-expr]`, and `[v; N]`). Breaking the
 		# line there turned `[0; 8]` — eight zeros — into `[0` / `8]`, a list of TWO, which
 		# is the one thing a formatter may never do: change what the program means.
 		#

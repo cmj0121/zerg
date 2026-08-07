@@ -305,7 +305,7 @@ fn main() {
 }
 EOF
 
-# An arm's guard goes BEFORE the `=>` (GRAMMAR:422). Written after the body it was silently
+# An arm's guard goes BEFORE the `=>` (GRAMMAR#match-arm). Written after the body it was silently
 # DROPPED, so the arm compiled unconditional AND counted toward exhaustiveness as if it had
 # no guard — the two halves of the guard rule, both wrong, from one easy typo.
 expect "$ZERG" arm-guard-after-the-body "goes before the \`=>\`" <<'EOF'
@@ -322,7 +322,7 @@ fn main() {
 EOF
 
 # A guard makes an arm conditional, so it covers nothing: the compiler cannot prove the guard
-# holds (GRAMMAR:410), and `A` below is uncovered even though it is named.
+# holds (GRAMMAR#match-arm), and `A` below is uncovered even though it is named.
 expect "$ZERG" guarded-arm-covers-nothing "missing variant K.A" <<'EOF'
 enum K {
 	A
@@ -361,7 +361,7 @@ fn main() {
 }
 EOF
 
-# A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR:573): a payload
+# A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR#variant): a payload
 # enum's tag is opaque and match-only, so neither direction of the reading is offered on it.
 expect "$ZERG" discriminant-of-a-payload-enum "tag is opaque" <<'EOF'
 enum E {
@@ -883,7 +883,7 @@ fn main() {
 }
 EOF
 
-# A NAMED ARGUMENT is GRAMMAR:239 and the sanctioned way to skip a defaulted parameter in
+# A NAMED ARGUMENT is GRAMMAR#arg's `( identifier ':' )? expr`, the sanctioned way to skip
 # the middle (docs/code/functions.md). This compiler is positional-only, and the `:` used to
 # reach parse_primary, which answered "`:` is not an expression this compiler reads" — a
 # token, about a form the language specifies and the seed builds.
@@ -1215,7 +1215,7 @@ fn main() { print forced(2) ?? -1 }
 EOF
 
 
-# GRAMMAR:316 — "There is NO plain `mut x` parameter". It was accepted and the keyword
+# GRAMMAR#param — "There is NO plain `mut x` parameter". It was accepted and the keyword
 # dropped, so a write in the body said `cannot assign through b: it is immutable` about a
 # parameter the programmer had marked `mut`.
 expect "$ZERG" a-plain-mut-parameter "a parameter is \`mut &\` or nothing" <<'EOF'
@@ -1232,7 +1232,7 @@ fn main() {
 }
 EOF
 
-# GRAMMAR:490 — `Type.f(…)` is an ASSOCIATED FUNCTION, the named-constructor form
+# GRAMMAR#impl-decl — `Type.f(…)` is an ASSOCIATED FUNCTION, the named-constructor form
 # (`User.from_json(…)`). The parser gives every `fn` in an `impl` a receiver, so there is
 # no such function to call; the answer used to be "the method `make` on a ?", which points
 # at inference having nothing to say rather than at the form.
@@ -1509,7 +1509,7 @@ fn main() {
 }
 EOF
 
-# A standalone `unsafe fn` is a DECLARATION — GRAMMAR:304 puts `unsafe` in fn-decl — and
+# A standalone `unsafe fn` is a DECLARATION — GRAMMAR#fn-decl is where `unsafe` sits — and
 # it is refused as itself, with a place. It used to fall into the top-level statement
 # fallback and answer "NotImplemented: unsafe", the block-expression's sentence about a
 # form that is not a block; and reading the `fn` as safe instead would erase the one thing

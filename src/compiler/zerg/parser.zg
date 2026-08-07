@@ -149,7 +149,7 @@ fn p_expr_root(mut &p: Parser, e: Expr, line: int, col: int) {
 # Every naming position used to take `cur(p).lexeme` — whatever token happened to be there —
 # so a RESERVED WORD passed straight through as a name. `this` went through all of them:
 # `fn f(this: int)`, `struct P { this: int }`, `fn this()`, `struct this`, `enum E { this }`,
-# `A(this) =>`. GRAMMAR:117 lists it as a keyword and GRAMMAR:330 says outright that `this`
+# `A(this) =>`. GRAMMAR#keyword lists it as a keyword and GRAMMAR#param says outright that `this`
 # is NOT a parameter; `print` and `with` were turned away only because the parser routes
 # them as statements somewhere else, which is not a rule about names at all.
 #
@@ -254,7 +254,7 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 		# the comma is REQUIRED between elements and absent before the `)`. Advancing on one
 		# only when it is there made it optional, so `(int int)` parsed as a two-element
 		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
-		# GRAMMAR:480, and both said nothing.
+		# GRAMMAR#tuple-type, and both said nothing.
 		if not p_at(p, RParen) {
 			expect(p, Comma)
 		}
@@ -264,7 +264,7 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 }
 
 fn parse_base_type(mut &p: Parser) -> Ty {
-	# `[T; N]` — an ARRAY TYPE (GRAMMAR:459). It is not built, and it was not turned away
+	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type). It is not built, and it was not turned away
 	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
 	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
 	# different tokens, neither of them the form.
@@ -277,7 +277,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return TChan(ty_chan_elem(inner), 2)
 	}
 
-	# `(A, B)` — a TUPLE TYPE (GRAMMAR:480), two elements or more. The value form has
+	# `(A, B)` — a TUPLE TYPE (GRAMMAR#tuple-type), two elements or more. The value form has
 	# always worked, so `t := (1, "a")` was fine and there was simply no way to WRITE the
 	# type it has: every position that wants one — a typed binding, a parameter, a return,
 	# a field, a list element — fell through to the name below and reported whatever token
@@ -407,7 +407,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TNamed(name)
 }
 
-# parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR:545) — into the spec names
+# parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR#bound) — into the spec names
 # it conjoins, dropping each one's type arguments. It is the same production after a type
 # parameter's `:` and after a spec's, which is why one function reads both.
 # join_bounds carries a conjunction in the one string a type parameter owns. A bound is read
@@ -573,14 +573,14 @@ pub fn parse_at(src: str, path: str) -> File {
 			p_advance(p)
 		}
 		if p_at(p, Import) {
-			# a re-export puts the marker on the import-spec (GRAMMAR:741), so a leading
+			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
 			raise "`pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
 			parse_import(p, imports)
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, is_pub, "", false))
 		} else if p_at(p, Struct) {
-			# a struct may be declared `pub` (GRAMMAR:494); like a field's marker
+			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
 			# (parse_struct), it is read and dropped — type visibility is not enforced,
 			# the deviation docs/runtime/package.md owns ("enforced on functions, and on
 			# nothing else"), so recording it here would be a flag nothing reads
@@ -602,23 +602,23 @@ pub fn parse_at(src: str, path: str) -> File {
 			consts.append(p_top_binding(p, false, true, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
-			# there is no visibility for a marker to grant (GRAMMAR:743 derives none)
+			# there is no visibility for a marker to grant (GRAMMAR#init-decl derives none)
 			raise "`pub` does not go on `init()` — the runtime calls it, so it has no visibility to grant" + p_place(p, t.line, t.col) if is_pub
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
-			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR:498
+			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
 			raise "`pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
 			parse_impl(p, fns, impls)
 		} else if p_at(p, Type) {
 			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, Hash) {
-			# GRAMMAR:68 — a decorator LEADS the declaration and `pub` sits inside it, so
+			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise "a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
 			parse_decorator(p, pending)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
-			# GRAMMAR:301-304 — `mut fn` marks a METHOD that mutates its receiver, and "a
+			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
@@ -644,7 +644,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# every use answered `undefined name` about a name the module plainly declares.
 			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
-			# a standalone `unsafe fn` — GRAMMAR:304 has it in fn-decl (`'pub'? 'unsafe'?
+			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
 			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
 			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
 			# reading the `fn` as safe would erase the one thing the keyword says — but it
@@ -662,7 +662,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# declaration (in_unsafe) and what keeps a bare statement out (below).
 			raise "`pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" + p_place(p, t.line, t.col) if is_pub
 
-			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding`, which derives no
+			# GRAMMAR#unsafe-item — `unsafe-item ::= decorated-decl | binding`, which derives no
 			# group, so a group inside a group is not a form. It used to nest, and the
 			# inner `}` closed the outer one as far as the counter was concerned.
 			raise "a module-level `unsafe { … }` group does not nest — the group marks one context, and everything declared in it is already in that context (GRAMMAR group 12)" + p_place(p, t.line, t.col) if in_unsafe
@@ -676,7 +676,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			p_advance(p)
 			in_unsafe = false
 		} else if in_unsafe {
-			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding` derives no
+			# GRAMMAR#unsafe-item — `unsafe-item ::= decorated-decl | binding` derives no
 			# statement, so what is left here is ill-formed. It used to be dropped one
 			# token at a time, which is how the group's `mut` bindings vanished; now that
 			# every declaration form is read above, the honest answer for the remainder
@@ -685,7 +685,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# statement nobody runs must not be blessed into it).
 			raise "a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
-			# GRAMMAR:47 makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
+			# GRAMMAR#program makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
 			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
 			# must never be is SHREDDED: this fallback used to advance ONE TOKEN, so a
 			# statement's remaining tokens were re-dispatched as items of their own —
@@ -805,7 +805,7 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 		}
 		pname := p_name(p, "a parameter")
 
-		# A CLOSURE parameter may omit its `: type` (GRAMMAR:328) — the compiler infers it
+		# A CLOSURE parameter may omit its `: type` (GRAMMAR#closure-param) — the compiler infers it
 		# from the function type the closure is checked against. This one does not infer,
 		# and it did not say so: the `expect` below reported `expected `:`, found `)``,
 		# which reads as a typo in a form the grammar allows.
@@ -1011,7 +1011,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 		expect(p, RBrack)
 	}
 
-	# `spec Ord: Eq + Hash` — a SUPER-SPEC (GRAMMAR:544), a conjunction. An `impl Ord` must
+	# `spec Ord: Eq + Hash` — a SUPER-SPEC (GRAMMAR#spec-decl), a conjunction. An `impl Ord` must
 	# satisfy every one of them; the whole clause used to be swallowed by the scan for `{`.
 	#
 	# `spec Ord: Eq[int]` used to make `int` a SECOND super, so the impl was told `Ord`
@@ -1026,7 +1026,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	skip_semis(p)
 	mut reqs: list[FnDecl] = []
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
-		# `mut fn` is part of a fn-sig (GRAMMAR:599), and it is INTERFACE: a `mut fn` method
+		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
 		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
 		# the requirement silent in both directions — a spec asking for `mut fn` was
 		# satisfied by a plain one, and a plain one by a `mut fn`.
@@ -1206,7 +1206,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			payload = true
 		}
 
-		# `= const-expr` gives the variant an explicit DISCRIMINANT (GRAMMAR:572). It used
+		# `= const-expr` gives the variant an explicit DISCRIMINANT (GRAMMAR#variant). It used
 		# to be read as the next variant's name — `A = 3` declared three variants, one of
 		# them called "=" — so an enum that spelled its own values compiled to nonsense with
 		# nothing said about it.
@@ -1223,7 +1223,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	}
 	expect(p, RBrace)
 
-	# GRAMMAR:573 — a discriminant belongs to a C-style integer enum, and only to one: a
+	# GRAMMAR#variant — a discriminant belongs to a C-style integer enum, and only to one: a
 	# payload enum's tag is opaque and match-only, so there is nothing for a value to be.
 	# The spelled list is what makes this exact: a variant whose declared value HAPPENS to
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
@@ -1287,7 +1287,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		expect(p, Colon)
 		fty := parse_type(p)
 
-		# `x: int = 7` — a field DEFAULT (GRAMMAR:571), which feeds the constructor. It was
+		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor. It was
 		# not read here, so the `=` began the next field: the struct gained a field named `=`
 		# of type `7`, and the error named those instead of the form that was written.
 		raise f"NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Assign)
@@ -1298,7 +1298,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-# parse_decorator reads `#[ … ]` as ONE item (GRAMMAR:532). It used to reach the top-level
+# parse_decorator reads `#[ … ]` as ONE item (GRAMMAR#decorator). It used to reach the top-level
 # fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
 # items and anything inside it that happened to parse as a declaration was read as one.
 #
@@ -1366,7 +1366,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 		mut recv_mut := false
 		if p_at(p, Mut) {
 			# `mut fn` marks a method that mutates `this` IN PLACE — exactly the `mut &this`
-			# case (GRAMMAR:301). So the receiver becomes a `mut &` parameter and everything
+			# case (GRAMMAR#fn-decl). So the receiver becomes a `mut &` parameter and everything
 			# below the parser follows: the body writes through it, the call site is checked
 			# for a `mut` binding, and the borrow cannot escape or alias. A receiver passed
 			# BY VALUE is what made this impossible before — the method ran, the copy
@@ -1378,7 +1378,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 		if p_at(p, Fn) {
 			fns.append(parse_fn(p, is_pub, target, recv_mut))
 		} else if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
-			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR:495). It was skipped a token
+			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
 			raise f"NotImplemented: an associated value binding `{cur(p).lexeme} := …` in an `impl`"
 		} else if p_at(p, Type) {
@@ -1465,7 +1465,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 		if p_at(p, Mut) {
 			p_advance(p)
 
-			# `mut x: T` is NOT a parameter form (GRAMMAR:316): a by-value parameter is the
+			# `mut x: T` is NOT a parameter form (GRAMMAR#param): a by-value parameter is the
 			# callee's own copy and writing to it changes nothing the caller can see, so the
 			# `mut` reads as a promise the language does not make. It was accepted and the
 			# keyword dropped, and a write in the body then said `cannot assign through b:
@@ -1572,8 +1572,8 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	k := cur_kind(p)
 
-	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR:52's `compound-stmt ::= block`). Reaching
-	# the expression parser instead, it was read as a map literal or as whatever its first
+	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR#compound-stmt — `compound-stmt ::= block`).
+	# Reaching the expression parser instead, it was read as a map literal or as whatever its first
 	# statement made of it, and the message named that.
 	# A RESERVED WORD IN THE NAME SLOT is checked before the statement keywords below, or
 	# the one that owns the keyword answers first: `print := 1` reached the `print`
@@ -1591,15 +1591,15 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 
 	raise "NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
 
-	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR:200). The `{` after a type
-	# name reached the expression parser, which reported a block used as an expression.
+	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR#bind-target). The `{` after
+	# a type name reached the expression parser, which reported a block used as an expression.
 	#
 	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
 	# EXPRESSION, so the names in it came out undefined rather than bound.
 	raise f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
 
 	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
-	# (GRAMMAR:196, :198, :201). It is named HERE, where the `(` that opens it is the first
+	# (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#assign-target). It is named HERE, where the
 	# token of a statement, because each spelling failed differently otherwise: the `:=` one
 	# reached the expression fallback and was named after its walrus, the `mut` one reported
 	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
@@ -1619,7 +1619,7 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 
 		e := parse_expr(p)
 
-		# `from cause` records the cause as the new Err's `unwrap()` (GRAMMAR:616). It was
+		# `from cause` records the cause as the new Err's `unwrap()` (GRAMMAR#raise). It was
 		# never read here: `parse_expr` stopped at the `from`, and the rest of the line was
 		# skipped by parse_stmt's fallback — so the cause was DROPPED, silently, and the
 		# chain a `guard` reads back had a link missing.
@@ -1831,7 +1831,7 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	}
 
 	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
-	# (GRAMMAR:393). The `mut` was not read here, so it fell into the condition expression
+	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
 	# and was reported as whatever that made of it.
 	raise "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
 
@@ -1939,7 +1939,7 @@ fn parse_and(mut &p: Parser) -> Expr {
 }
 
 # parse_cmp is non-associative: at most one comparison operator, or one `is` type test
-# (GRAMMAR:219 puts the two at the same level and allows only one of them).
+# (GRAMMAR#cmp-expr puts the two at the same level and allows only one of them).
 fn parse_cmp(mut &p: Parser) -> Expr {
 	left := parse_range(p)
 	if is_cmp_op(cur_kind(p)) {
@@ -2156,7 +2156,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			# built as `ECall("", args)`, which the emitter reported as ``undefined function
 			# ` ``` — an empty name, naming nothing, for a program with no typo in it:
 			#
-			#   f[T](x)    explicit type arguments (GRAMMAR:236, group 7)
+			#   f[T](x)    explicit type arguments (GRAMMAR#postfix, group 7)
 			#   fs[0](x)   a call through a function VALUE held in a container
 			#   p?.get()   an optional method call
 			#
@@ -2200,7 +2200,7 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 	p_advance(p) # '('
 	mut args: list[Expr] = []
 	for not p_at(p, RParen) and not p_at(p, Eof) {
-		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR:239, and the sanctioned way to skip a
+		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR#arg, and the sanctioned way to skip a
 		# defaulted parameter in the middle (docs/code/functions.md). This compiler is
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
@@ -2280,7 +2280,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 
 	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
 	# so the parser saw a call with a stray token after it and said `expected `)`, found
-	# ``echo {n}```. GRAMMAR:284 makes it a form of its own — one that runs through a shell
+	# ``echo {n}```. GRAMMAR#fcmd-lit makes it a form of its own — one that runs through a shell
 	# and shell-quotes each hole — and it is refused as one.
 	raise "NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Ident and t.lexeme == "f" and peek_kind(p, 1) == Cmd
 
@@ -2318,7 +2318,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EChanNew(elem, cap)
 	}
 	if k == Guard {
-		# `guard { … }` is an EXPRESSION (GRAMMAR:614) yielding Result[T], not a statement.
+		# `guard { … }` is an EXPRESSION (GRAMMAR#guard-expr) yielding Result[T], not a statement.
 		# It was read as one before, which is why `n := guard { f() } ?? 0` — the form the
 		# spec writes the operator with — was refused outright, and why a statement-position
 		# guard lowered to a bare block that caught nothing at all.
@@ -2410,7 +2410,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# tuple expression before the walrus was reached; a `..` in a pattern means a LIST
 	# pattern. Naming the token names the wreckage rather than what was written.
 
-	# A bare `..` is a RANGE with nothing on its left (GRAMMAR:265): `xs[..2]` is the open
+	# A bare `..` is a RANGE with nothing on its left (GRAMMAR#range-expr): `xs[..2]` is the open
 	# form of a slice. It was named as a list pattern, which is a different form the same
 	# token opens — advice about something nobody wrote.
 	raise "NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have" if k == DotDot
@@ -2487,7 +2487,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			name = p_name(p, "a variant pattern")
 		}
 
-		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR:390). `P{…}` after a name in arm
+		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR#struct-pat). `P{…}` after a name in arm
 		# position is that and nothing else, and it fell through to the arrow check, so the
 		# message was `expected `=>`, found `{`` — the token after the form rather than the
 		# form. The tuple and list patterns beside it are already refused by name.
@@ -2517,7 +2517,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 		lit = parse_expr(p)
 	}
 
-	# `pattern as name` — the AS BINDING (GRAMMAR:388), which binds the whole matched value
+	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
 	# while the pattern keeps destructuring. It fell through to the arrow check, so the
 	# message named `as` rather than the form it opens.
 	raise "NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts" if p_at(p, As)
@@ -2543,7 +2543,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Assign)
 	raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, LArrow)
 
-	# An arm's guard goes BEFORE the `=>` (GRAMMAR:422). Written after the body it was
+	# An arm's guard goes BEFORE the `=>` (GRAMMAR#match-arm). Written after the body it was
 	# silently DROPPED — `Right(e) => 0 if e is ValueError` compiled to an unconditional arm,
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
 	raise "a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, If)

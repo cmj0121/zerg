@@ -245,7 +245,7 @@ func (p *parser) tryTopStmt() (s ast.Stmt) {
 }
 
 // parseTopStmt parses one item of the program's top-level stmt-list. Zerg's top
-// level is a full statement list (GRAMMAR:36 'program ::= stmt-list') because the
+// level is a full statement list (GRAMMAR#program 'program ::= stmt-list') because the
 // language supports SCRIPT MODE, so any statement is legal here — not only the
 // module surface. This routes the items that need top-level-specific treatment
 // (imports, the 'unsafe { … }' declaration GROUP vs. the block-expression, and
@@ -419,7 +419,7 @@ func (p *parser) syncStmt() {
 	}
 }
 
-// requireStmtSep enforces GRAMMAR:41 — statements in a stmt-list are separated by
+// requireStmtSep enforces GRAMMAR#stmt-sep — statements in a stmt-list are separated by
 // stmt-sep+ (a newline, which the lexer turns into an ASI ';', or an explicit
 // ';'). After a statement the cursor must be at a ';', a closing '}', or EOF; any
 // other token means two statements share a line with no separator, so it reports
@@ -959,7 +959,7 @@ func (p *parser) parseMatch() ast.Expr {
 	}
 	rb := p.expect(token.RBrace)
 	if !sawArm {
-		// GRAMMAR:421 'match-body ::= match-arm+' — at least one arm is required.
+		// GRAMMAR#match-expr derives 'match-arm+' — at least one arm is required.
 		// This is syntactic arity (not 1b exhaustiveness); anchor it at the match.
 		// Only reported when the braces were genuinely empty: a malformed arm that
 		// was diagnosed and skipped already carries its own error, so this must not

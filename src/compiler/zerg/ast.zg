@@ -151,21 +151,21 @@ enum Expr {
 	# non-empty the second is ignored.
 	ECoalesce(Expr, Expr, list[Stmt])
 
-	# EGuard is `guard { … }`, and it is an EXPRESSION (GRAMMAR:614) yielding `Result[T]`
+	# EGuard is `guard { … }`, and it is an EXPRESSION (GRAMMAR#guard-expr) yielding `Result[T]`
 	# where T is the block's value: an abort inside the block becomes Right(err) instead of
 	# ending the program, a normal completion becomes Left(v). It is the sole way back from
 	# the abort tier, which is why it carries a whole block rather than an expression — the
 	# thing being guarded is usually several statements.
 	EGuard(list[Stmt])
 
-	# EIs is the type test `x is Name` (GRAMMAR:219, at the comparison level and equally
+	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
 	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
 	# what a name means. This phase answers only the built-in error kinds, which are the
 	# one taxonomy carrying a runtime tag to compare.
 	EIs(Expr, str)
 
-	# EIn is the membership test `x in s` (GRAMMAR:226, beside `is` and equally
+	# EIn is the membership test `x in s` (GRAMMAR#cmp-expr, beside `is` and equally
 	# non-associative). The right side is a SET, and what a set is depends on what is named:
 	# an error KIND names itself and everything below it in the taxonomy, a container names its
 	# elements, a range names its members. One rule — "is this a member of that" — which is
@@ -418,7 +418,7 @@ pub struct TypeDecl {
 # variant), and its DISCRIMINANT — the integer the variant is, which defaults to the
 # previous one plus one (from 0) and so is its position until a declaration says otherwise.
 #
-# It is a field rather than the position it used to be because GRAMMAR:572 lets a fieldless
+# It is a field rather than the position it used to be because GRAMMAR#variant lets a fieldless
 # enum spell its own values (`A = 3`), and those values are OBSERVABLE: `int(v)` reads one
 # back and `E.of(n)` reverses it. A payload enum keeps its tag opaque and may not spell one.
 struct VariantDef {

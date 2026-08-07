@@ -448,7 +448,7 @@ fn main() {
 }
 EOF
 
-# A STATEMENT inside the group is ill-formed, not a nop: GRAMMAR:777 derives
+# A STATEMENT inside the group is ill-formed, not a nop: GRAMMAR#unsafe-item derives
 # `unsafe-item ::= decorated-decl | binding` and nothing else, and the top level's
 # statement fallback must not bless code into an unsafe CONTEXT nobody runs. Before the
 # group's contents were parsed at all, this was dropped one token at a time — the same
@@ -1471,7 +1471,7 @@ EOF
 
 # --- a borrow may not be captured --------------------------------------------------
 #
-# GRAMMAR:314: a `mut &` "cannot ESCAPE (be captured by a spawn or stored past the call)".
+# GRAMMAR#param: a `mut &` "cannot ESCAPE (be captured by a spawn or stored past the call)".
 # `spawn` refused it in a pass of its own and `defer`, which the same sentence covers,
 # reached cc — so the refusal moved to the choke point both of them share.
 
@@ -1651,8 +1651,8 @@ EOF
 
 # --- `this` is a method's receiver, and nothing else -----------------------------
 #
-# GRAMMAR:117 makes `this` a reserved word, :330 says it is NOT a parameter, :332 that a
-# `fn` whose body uses it with no instance bound is a compile error, and :333 that the self
+# GRAMMAR#keyword makes `this` a reserved word, and GRAMMAR#param says it is NOT a parameter,
+# that a `fn` whose body uses it with no instance bound is a compile error, and that the self
 # type is `This`. The seed enforces all of it. `zerg` enforced none of it: every naming
 # position read `cur(p).lexeme` — whatever token was there — so `this` passed as a
 # parameter, a field, a function, a type, a variant, a pattern binding. In a METHOD it
@@ -1763,7 +1763,7 @@ EOF
 
 # --- a borrow needs both halves, and may not alias -------------------------------
 #
-# GRAMMAR:308-313 — "the CALLER decides whether its variable is `mut`, the CALLEE decides
+# GRAMMAR#param — "the CALLER decides whether its variable is `mut`, the CALLEE decides
 # via `mut &` whether it writes back, so a caller-visible mutation needs BOTH", and a
 # borrow "cannot ALIAS (the same variable to two `mut &` in one call), which keeps it safe
 # with no borrow checker". Only the callee's half was ever read.
@@ -1811,7 +1811,7 @@ fn main() {
 }
 EOF
 
-# GRAMMAR:301-304 — `mut fn` is meaningful only on a method; "a free function or closure
+# GRAMMAR#fn-decl — `mut fn` is meaningful only on a method; "a free function or closure
 # has no receiver, so it is never `mut fn`". The token fell into the top-level skip, so the
 # `mut` was swallowed and the function compiled as if it had never been written.
 reject mut-fn-free-function 'a free function is never `mut fn`' at=1:1 seed-gap <<'EOF'
@@ -2475,7 +2475,7 @@ EOF
 
 # --- a tuple type has two elements ------------------------------------------------
 #
-# GRAMMAR:480 says two or more. `(T)` is a grouped type everywhere else in the language and
+# GRAMMAR#tuple-type says two or more. `(T)` is a grouped type everywhere else in the language and
 # `()` is not a type at all — a function with no result returns nothing, which `-> ` says by
 # being absent. The whole tuple TYPE was unparsed until this branch, so every position that
 # wanted one reported whatever token came next instead: five positions, five messages.

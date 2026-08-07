@@ -1,0 +1,24 @@
+# A module-level binding is a REAL member: `pub COUNT := 3` needs no `const` keyword to be
+# a module constant, and `pub` is its visibility. The declaration used to be swallowed by
+# the parser's top-level skip, so the module compiled WITHOUT the member and this import
+# answered "module `lib` has no `COUNT`" about a name the module plainly declares.
+#
+# The LOCAL `COUNT` below is the other half of the claim: a module-qualified read resolves
+# THROUGH THE MODULE. `lib.COUNT` used to be answered by the innermost live binding of the
+# bare name, so under this local it printed 9 — the question named `lib` and the answer
+# came from the local. The `raise` is what makes that half a gate: the examples target
+# only builds and runs, so a silently wrong answer has to become a non-zero exit.
+#   zerg build examples/1g/pubconst/main.zg
+# Expected output:
+#   9
+#   3
+#   7
+import "lib"
+
+fn main() {
+	COUNT := 9 # a plain local may shadow the constant (no `const` keyword in sight)
+	print COUNT # 9 — the bare name reads the innermost binding, as ever
+	print lib.COUNT # 3 — the qualified name reads the MODULE, never the local
+	raise ValueError("`lib.COUNT` was answered by the local binding") if lib.COUNT != 3
+	print lib.total() # 7 — the bare binding is a member too, read from inside `lib`
+}

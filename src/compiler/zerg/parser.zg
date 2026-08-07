@@ -19,6 +19,20 @@ struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
 
+	# depth counts how many recursion levels of nesting the parser is inside — one per
+	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
+	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
+	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
+	# is the only answer a recursive-descent parser can give before that happens.
+	depth: int
+
+	# edepth counts how many parse_expr calls are open. It is not a second budget — it
+	# answers one question, "is the expression now finished the OUTERMOST one", so the
+	# tree's own depth is measured once per expression instead of once per level. A
+	# statement resets it, because a statement is where an expression tree ends: the block
+	# inside a `guard` or a closure holds statements, and each of their expressions is a
+	# root of its own.
+	edepth: int
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -42,6 +56,91 @@ fn p_at(mut &p: Parser, k: Kind) -> bool {
 
 fn p_advance(mut &p: Parser) {
 	p.pos = p.pos + 1
+}
+
+# p_place renders a `--> file:line:col` trailer for a REFUSAL, in the exact layout
+# render_diag draws under a checked finding — one fact about this compiler's output, which
+# is what scripts/lib/diag.sh reads it by, and which is why both go through place_line
+# rather than each spelling the layout out. The parser reports by raising, so it has no
+# Diag channel to put a place on; a refusal that knows its token appends this instead of
+# saying only what and never where. What the newline adds is the one difference: a raise
+# carries its place inside the message, where a Diag has a line of its own for it.
+fn p_place(mut &p: Parser, line: int, col: int) -> str {
+	return "\n" + place_line(p.path, line, col)
+}
+
+# ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
+# a language rule: this parser recurses once per nesting level, and on an 8 MB stack it
+# died of SIGSEGV — no diagnostic, exit 139 — at about 485 nested parentheses or list
+# literals, 650 nested calls, 1300 nested blocks; the weakest stage downstream, the emitter
+# on nested calls, died at about 302. 200 clears every one of those with room to spare
+# while sitting forty times above the deepest nesting anywhere in this repository, which is
+# five. The bound is a translation limit of this implementation
+# (docs/conformance.md), like C's own minimum of 63 nested parenthesized expressions.
+const ZG_MAX_NESTING := 200
+
+# p_deeper takes one nesting level, and refuses the program once the budget is spent —
+# BEFORE the recursion happens, so the stack the refusal is reported from is a healthy one.
+# Callers give the level back with p_shallower on their one fallthrough exit; a raise
+# between the two abandons the whole parse, so a skipped decrement can never be observed by
+# a later statement.
+fn p_deeper(mut &p: Parser) {
+	p.depth = p.depth + 1
+	return if p.depth <= ZG_MAX_NESTING
+
+	t := cur(p)
+	p_too_deep(p, t.line, t.col)
+}
+
+# p_shallower gives back the level p_deeper took. It is a named pair rather than a bare
+# `p.depth = p.depth - 1` so that both halves are greppable: an increment answers to a name
+# and a decrement did not, and a decrement that goes missing is not a crash but a budget
+# that shrinks quietly for the rest of the parse.
+fn p_shallower(mut &p: Parser) {
+	p.depth = p.depth - 1
+}
+
+# p_too_deep is the ONE sentence for exceeding the bound, and it is one sentence because
+# the claim docs/conformance.md makes is one: however a program reaches 200 levels, this
+# is the answer. Two callers reach it for two reasons — the parser's own recursion, and
+# the depth of the tree it built — and a reader who hit either needs the same instruction.
+fn p_too_deep(mut &p: Parser, line: int, col: int) {
+	raise f"this program nests more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its parser recurses once per level of nested expressions, blocks and types, and every later pass walks the tree it built the same way, so refusing here is what this compiler can still say before the native stack it runs on overflows without a word" + p_place(p, line, col)
+}
+
+# p_expr_root bounds the expression TREE, once, on the outermost expression of a
+# statement — which is the only place the bound can be stated as a property of the AST
+# rather than of whoever is walking it.
+#
+# p_deeper cannot do this job. It counts the parser's RECURSION, and the two shapes come
+# apart: `(((…)))` recurses without deepening the tree, and `1 + 1 + … + 1` deepens the
+# tree without recursing, because the precedence levels build a left-deep chain in a LOOP.
+# The chain was therefore invisible here and left to be caught downstream — which held
+# only for as long as every downstream walk remembered to count. It did not: `subst_expr`
+# is a third walk, it runs BEFORE the emitter's counter, and a 400-term chain inside a
+# generic template that some call instantiates died of SIGSEGV with nothing on stderr.
+# `zerg lint` died the same way, and `zerg lsp` — which catches a `raise` and cannot catch
+# a signal — took the editor's server down with it.
+#
+# So the tree is measured where it is BUILT, and "no Expr in this AST is deeper than
+# ZG_MAX_NESTING" is true from the parser on. The walk here is iterative — a worklist, not
+# recursion — because a walk that measures depth must not be able to fail at depth. Its
+# one fact about the node set is expr_parts, in ast.zg beside the enum.
+fn p_expr_root(mut &p: Parser, e: Expr, line: int, col: int) {
+	mut nodes: list[Expr] = [e]
+	mut lvl: list[int] = [1]
+	mut i := 0
+	for i < nodes.len() {
+		d := lvl[i]
+		if d > ZG_MAX_NESTING {
+			p_too_deep(p, line, col)
+		}
+		for k in expr_parts(nodes[i]) {
+			nodes.append(k)
+			lvl.append(d + 1)
+		}
+		i = i + 1
+	}
 }
 
 # p_name reads the NAME a declaration or a binding introduces, and refuses anything that is
@@ -128,12 +227,17 @@ fn ident_name(e: Expr) -> str {
 # It is one wrapper around the whole reader rather than a case inside it, because the
 # suffix follows a COMPLETE type — `list[int]?`, `P?`, `chan[int]?` — and every one of
 # those is built somewhere below.
+# parse_type counts a nesting level per type it reads, because types recurse without ever
+# touching parse_expr — `list[list[…]]`, `chan[chan[…]]`, a function type's parameters —
+# and each level is a frame of parse_base_type on the same native stack the expressions use.
 fn parse_type(mut &p: Parser) -> Ty {
-	t := parse_base_type(p)
+	p_deeper(p)
+	mut t := parse_base_type(p)
 	if p_at(p, Question) {
 		p_advance(p)
-		return TOpt(t)
+		t = TOpt(t)
 	}
+	p_shallower(p)
 	return t
 }
 
@@ -398,20 +502,20 @@ fn conv_ty(name: str) -> Ty {
 
 # --- declarations --------------------------------------------------------------
 
-# parse turns source into a File. Imports, structs, enums, functions, and `impl` blocks
-# are recognised at the top level; any other top-level token is skipped.
-# parse reads a source with no path. Everything a diagnostic says about it will name the
-# line and the column and no file — which is what `--emit ast` and the import scan want,
-# since neither reports anything.
-pub fn parse(src: str) -> File {
-	return parse_at(src, "")
-}
-
-# parse_at reads a source that came from `path`, which every function it declares carries
-# so a diagnostic can name the file it was written in.
+# parse_at turns source into a File. Imports, structs, enums, functions, and `impl` blocks
+# are recognised at the top level; any other top-level STATEMENT is read whole and treated
+# as a nop, which is compile mode's answer to the script mode `program ::= stmt-list`
+# grants.
+#
+# It is told which FILE it is reading, and there is deliberately NO pathless twin. A parse
+# is where a refusal with a place (p_place) comes from, and a pathless one made that place
+# name a line of no file; the twin was kept for "a caller with genuinely no path" and the
+# last two — imports_of and declares_main — both turned out to have one. `path` may still
+# be empty, for a re-lex with no file behind it, but that is the caller saying so rather
+# than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path)
+	mut p := Parser(toks, 0, "", path, 0, 0)
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -419,7 +523,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut impls: list[ImplDecl] = []
 	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
-	mut consts: list[Stmt] = []
+	mut consts: list[ConstDecl] = []
 
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
@@ -427,51 +531,169 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut pending: list[str] = []
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
+
+	# in_unsafe tracks a module-level `unsafe { … }` group. The group's items go
+	# through the SAME arms as everything else — a `fn` was always read there, and the
+	# binding arms fire inside it too, carrying `in_unsafe` onto the declaration
+	# (ConstDecl.in_unsafe) — because GRAMMAR group 12 makes the group a CONTEXT around
+	# ordinary declarations, not a dialect of its own. It decides exactly two things:
+	# whether a `mut` binding is the mutable global the group grants (chk_top_muts reads
+	# the flag) and whether a bare statement is refused rather than read as a top-level
+	# nop, since `unsafe-item ::= decorated-decl | binding` derives no statement.
+	#
+	# A FLAG AND NOT A DEPTH, and the group's own place beside it. As a counter this was
+	# state of the loop that nothing checked at `Eof`: a missing `}` left the rest of the
+	# file silently inside the group, so `mut counter := 0` below it became a mutable
+	# global and chk_top_muts' refusal — the whole point of the flag — was switchable by a
+	# typo, with no diagnostic anywhere. `unsafe-item` also derives no nested group, so the
+	# counter's only other reachable value was ill-formed too. Both are refused now, and
+	# `unsafe_line` / `unsafe_col` are what lets the unterminated one point at the `unsafe`
+	# that was never closed rather than at the end of the file.
+	mut in_unsafe := false
+	mut unsafe_line := 0
+	mut unsafe_col := 0
 	skip_semis(p)
 	for not p_at(p, Eof) {
-		if p_at(p, Import) {
-			parse_import(p, imports)
-		} else if p_at(p, Pub) {
-			# `pub` binds to the declaration that follows it
+		# `pub` is a VISIBILITY FLAG on the declaration that follows, not a dispatch of its
+		# own. It used to open a second, hand-copied Fn/Type/Const/… chain that had already
+		# drifted from the one below — and `pub struct` fell off its end with no `else`, so
+		# the `pub` was silently dropped and the declaration was picked up as PRIVATE on
+		# the next iteration. One flag, one dispatch: every declaration is parsed exactly
+		# once, with its visibility in hand, and a form that takes no `pub` says so.
+		#
+		# `t` is the DECLARATION'S FIRST TOKEN, taken before the marker is consumed, and
+		# every refusal below carries it (p_place). The parser has no Diag channel, so a
+		# place is something each raise appends or nobody does — and the arms here were
+		# split, two saying where and five not, in one dispatch reading one token. What is
+		# refused is the declaration that starts at `t`, whichever arm reaches that answer.
+		t := cur(p)
+		mut is_pub := false
+		if p_at(p, Pub) {
+			is_pub = true
 			p_advance(p)
-			if p_at(p, Fn) {
-				fns.append(parse_fn(p, true, "", false))
-			} else if p_at(p, Type) {
-				types.append(parse_typedecl(p, true))
-			}
+		}
+		if p_at(p, Import) {
+			# a re-export puts the marker on the import-spec (GRAMMAR:741), so a leading
+			# `pub` has nothing it could bind to
+			raise "`pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
+			parse_import(p, imports)
 		} else if p_at(p, Fn) {
-			fns.append(parse_fn(p, false, "", false))
+			fns.append(parse_fn(p, is_pub, "", false))
 		} else if p_at(p, Struct) {
+			# a struct may be declared `pub` (GRAMMAR:494); like a field's marker
+			# (parse_struct), it is read and dropped — type visibility is not enforced,
+			# the deviation docs/runtime/package.md owns ("enforced on functions, and on
+			# nothing else"), so recording it here would be a flag nothing reads
 			sd := parse_struct(p)
 			p_take_derives(sd.name, pending, derive_on, derive_spec)
 			structs.append(sd)
 		} else if p_at(p, Enum) {
+			# `pub enum` — read and dropped, the struct arm's reason
 			ed := parse_enum(p)
 			p_take_derives(ed.name, pending, derive_on, derive_spec)
 			enums.append(ed)
 		} else if p_at(p, Spec) {
+			# `pub spec` — read and dropped, the struct arm's reason
 			specs.append(parse_spec(p))
 		} else if p_at(p, Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
 			p_advance(p)
-			consts.append(parse_binding(p, false))
+			consts.append(p_top_binding(p, false, true, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, Init) {
+			# an `init()` is called by the RUNTIME, not by a reader in another module, so
+			# there is no visibility for a marker to grant (GRAMMAR:743 derives none)
+			raise "`pub` does not go on `init()` — the runtime calls it, so it has no visibility to grant" + p_place(p, t.line, t.col) if is_pub
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
+			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR:498
+			# derives no `pub` for it — visibility lives on the spec and on the type
+			raise "`pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
 			parse_impl(p, fns, impls)
 		} else if p_at(p, Type) {
-			types.append(parse_typedecl(p, false))
+			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, Hash) {
+			# GRAMMAR:68 — a decorator LEADS the declaration and `pub` sits inside it, so
+			# the order is `#[…] pub fn`, never `pub #[…]`
+			raise "a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
 			parse_decorator(p, pending)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
 			# GRAMMAR:301-304 — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
-			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver"
-		} else {
+			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver" + p_place(p, t.line, t.col)
+		} else if p_at(p, Mut) {
+			# a top-level `mut` binding — `mut x := 0` or `pub mut x := 0`, `pub` changing
+			# nothing about mutability. Inside a module-level `unsafe { … }` group it is
+			# the language's MUTABLE GLOBAL (docs/runtime/ffi.md, GRAMMAR group 12), and
+			# `in_unsafe` carries that context onto the declaration. In SAFE code it is
+			# ill-formed — the top level is immutable (docs/runtime/package.md) — but it
+			# is PARSED rather than refused here, so the refusal (chk_top_muts) carries
+			# this declaration's place and lands beside every other finding of the run,
+			# instead of splitting into "compiles when unused" and `undefined name` at
+			# every use site.
 			p_advance(p)
+			consts.append(p_top_binding(p, true, false, is_pub, in_unsafe, t.line, t.col))
+		} else if p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+			# a plain top-level binding — `COUNT := 3`, `pub COUNT := 3`, or `answer: int
+			# = compute()` — is the same module constant the `const` arm reads, without
+			# the shadow-proofing the keyword adds; docs/runtime/package.md puts it in the
+			# module's immutable state with `pub` as the visibility. It used to fall into
+			# the fallback below and vanish, so the module compiled WITHOUT the member and
+			# every use answered `undefined name` about a name the module plainly declares.
+			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
+		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
+			# a standalone `unsafe fn` — GRAMMAR:304 has it in fn-decl (`'pub'? 'unsafe'?
+			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
+			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
+			# reading the `fn` as safe would erase the one thing the keyword says — but it
+			# must be refused AS ITSELF: the statement fallback below answered
+			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
+			# told it had marked a statement, about a form that is a declaration. `is_pub` is
+			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
+			# one message; `t` is the declaration's first token, so the refusal carries the
+			# place a declaration owes.
+			raise "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
+		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
+			# a module-level `unsafe { … }` group opens. Every item inside goes through
+			# the arms above exactly as it would outside — the group is a CONTEXT, not a
+			# grammar of its own — and the depth is what the binding arms record on each
+			# declaration (in_unsafe) and what keeps a bare statement out (below).
+			raise "`pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" + p_place(p, t.line, t.col) if is_pub
+
+			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding`, which derives no
+			# group, so a group inside a group is not a form. It used to nest, and the
+			# inner `}` closed the outer one as far as the counter was concerned.
+			raise "a module-level `unsafe { … }` group does not nest — the group marks one context, and everything declared in it is already in that context (GRAMMAR group 12)" + p_place(p, t.line, t.col) if in_unsafe
+
+			p_advance(p)
+			p_advance(p)
+			in_unsafe = true
+			unsafe_line = t.line
+			unsafe_col = t.col
+		} else if in_unsafe and p_at(p, RBrace) {
+			p_advance(p)
+			in_unsafe = false
+		} else if in_unsafe {
+			# GRAMMAR:777 — `unsafe-item ::= decorated-decl | binding` derives no
+			# statement, so what is left here is ill-formed. It used to be dropped one
+			# token at a time, which is how the group's `mut` bindings vanished; now that
+			# every declaration form is read above, the honest answer for the remainder
+			# is a refusal that names the group, not a silent delete and not the
+			# top-level-statement nop below (the group grants an unsafe CONTEXT, and a
+			# statement nobody runs must not be blessed into it).
+			raise "a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
+		} else {
+			# GRAMMAR:47 makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
+			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
+			# must never be is SHREDDED: this fallback used to advance ONE TOKEN, so a
+			# statement's remaining tokens were re-dispatched as items of their own —
+			# `xs.each(fn (n: int) { … })` answered "a function needs a name" about a
+			# lambda that was never a declaration. One COMPLETE statement is consumed, and
+			# what becomes of it is decided once, here: nothing.
+			raise "`pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
+			parse_stmt(p)
 		}
 		skip_semis(p)
 	}
@@ -486,7 +708,42 @@ pub fn parse_at(src: str, path: str) -> File {
 	# or named, never quietly dropped.
 	raise f"`#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
 
+	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
+	# one this function did not look at. The loop simply ran to `Eof` with the group still
+	# open, so every declaration after the missing brace was read as if it were inside —
+	# which turns a `mut` binding into the language's mutable global and silently disarms
+	# the refusal that keeps one out of safe code. The place is the `unsafe` that opened it,
+	# not the end of the file, because that is where the reader has to go.
+	raise "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
+
 	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+}
+
+# p_top_binding reads one top-level binding and answers the module-constant DECLARATION it
+# is: the SLet parse_binding builds, rehomed onto a ConstDecl carrying the file and the
+# position the form started at — `line` / `col` are the FIRST token's, captured by the
+# caller before it consumed the `pub` / `const` / `mut` in front of the name. A module
+# constant is a statement of no function, so nothing else (no FnDecl, no SAt marker) would
+# ever remember where it was written, and a declaration a rule can refuse owes a place.
+# `in_unsafe` is whether the binding sits inside a module-level `unsafe { … }` group — the
+# one place a top-level `mut` is legal (docs/runtime/ffi.md).
+fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ConstDecl {
+	s := parse_binding(p, is_mut, is_const)
+	return match s {
+		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
+
+		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
+		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
+		# the module's constants as an unnamed `zg_` global
+		_ => p_not_a_binding()
+	}
+}
+
+# p_not_a_binding is p_top_binding's impossible arm made loud. It is typed as answering
+# the ConstDecl it never builds because a match arm is an expression and every arm must
+# yield the match's one type — the same shape as c_range_unsupported.
+fn p_not_a_binding() -> ConstDecl {
+	raise "parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else"
 }
 
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
@@ -498,11 +755,18 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 	pending = []
 }
 
-# imports_of returns just the import paths of a source, for the driver's module loader:
+# imports_of_at returns just the import paths of a source, for the driver's module loader:
 # it resolves and loads a program's dependencies before anything is emitted, so it needs
 # the import list alone and not the cost of keeping a whole parse around.
-pub fn imports_of(src: str) -> list[str] {
-	return parse(src).imports
+#
+# It is told which FILE it is reading, and there is deliberately no pathless twin. The scan
+# is a full parse, so it is the FIRST parse a source meets — a refusal the parser raises
+# with a place (p_place) escapes from HERE, before the pathed compile parse ever runs, and
+# a pathless caller made that place name a line of no file. The twin was kept for "a caller
+# with genuinely no path" and no such caller ever appeared; what its existence did keep is
+# the one mistake this signature was introduced to make impossible.
+pub fn imports_of_at(src: str, path: str) -> list[str] {
+	return parse_at(src, path).imports
 }
 
 # parse_fill reads the tail of `[v; N]` and expands it: the count is a const-expr, and an
@@ -1239,7 +1503,11 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
 }
 
+# parse_block counts a nesting level per block, since statements nest through blocks and
+# never through parse_expr: `if` inside `if` is parse_block → parse_stmt → parse_block,
+# another recursion on the same stack the expression forms overflow.
 fn parse_block(mut &p: Parser) -> list[Stmt] {
+	p_deeper(p)
 	expect(p, LBrace)
 	mut body: list[Stmt] = []
 	skip_semis(p)
@@ -1252,6 +1520,7 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
+	p_shallower(p)
 	return body
 }
 
@@ -1287,7 +1556,20 @@ fn p_starts_destructure(mut &p: Parser) -> bool {
 	return false
 }
 
+# parse_stmt reads one statement, and it is a wrapper because a statement is where an
+# expression tree ENDS: the block inside a `guard`, a closure's body, and the jump after
+# `??` are all statements written INSIDE an expression, and each of their expressions is a
+# root of its own — expr_parts stops at a block for that reason. Zeroing the counter here
+# is what makes p_expr_root's "outermost expression" true at every altitude.
 fn parse_stmt(mut &p: Parser) -> Stmt {
+	outer := p.edepth
+	p.edepth = 0
+	s := parse_stmt_node(p)
+	p.edepth = outer
+	return s
+}
+
+fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	k := cur_kind(p)
 
 	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR:52's `compound-stmt ::= block`). Reaching
@@ -1395,11 +1677,11 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	}
 	if k == Mut {
 		p_advance(p)
-		return parse_binding(p, true)
+		return parse_binding(p, true, false)
 	}
 	if k == Const {
 		p_advance(p)
-		return parse_binding(p, false)
+		return parse_binding(p, false, true)
 	}
 
 	# A BINDING is `name := …` or `name: T = …`, and it is recognised by that shape — so a
@@ -1407,8 +1689,8 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# reported from the expression fallback as `` `:=` is not an expression``: the token
 	# after the name rather than the reserved word in it. `print := 1` and `this := 1` both
 	# arrived that way. Reaching parse_binding is what puts them in front of `p_name`.
-	return parse_binding(p, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
-	return parse_binding(p, false) if k == Ident and peek_kind(p, 1) == Colon
+	return parse_binding(p, false, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
+	return parse_binding(p, false, false) if k == Ident and peek_kind(p, 1) == Colon
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
@@ -1425,21 +1707,23 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	return SExpr(e)
 }
 
-# parse_binding parses `name := e` (inferred) or `name: T = e` (typed). const is folded
-# into an immutable let (is_mut false); the emitter treats both as a plain C local.
-fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
+# parse_binding parses `name := e` (inferred) or `name: T = e` (typed). A `const` still
+# lowers to a plain immutable C local, but its const-ness RIDES on the node now: `const`
+# marks a shadow-proof binding (GRAMMAR group 4), and folding the keyword away here was
+# why nothing downstream could enforce that.
+fn parse_binding(mut &p: Parser, is_mut: bool, is_const: bool) -> Stmt {
 	# the last naming position that still read whatever token was there: `print := 1` and
 	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
 	# not an expression`` — the token after the name rather than the reserved word in it.
 	name := p_name(p, "a binding")
 	if p_at(p, Walrus) {
 		p_advance(p)
-		return SLet(name, TUnknown, false, is_mut, parse_expr(p))
+		return SLet(name, TUnknown, false, is_mut, is_const, parse_expr(p))
 	}
 	expect(p, Colon)
 	ty := parse_type(p)
 	expect(p, Assign)
-	return SLet(name, ty, true, is_mut, parse_expr(p))
+	return SLet(name, ty, true, is_mut, is_const, parse_expr(p))
 }
 
 # parse_jump_guard reads the optional trailing `if cond` on a `break` or a `continue` —
@@ -1500,11 +1784,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 		if p_at(p, Else) {
 			p_advance(p)
 			has_else_l = true
-			if p_at(p, If) {
-				else_body_l.append(parse_if(p))
-			} else {
-				else_body_l = parse_block(p)
-			}
+			else_body_l = p_else_body(p)
 		}
 		return SIfLet(name, value, then_body, has_else_l, else_body_l)
 	}
@@ -1516,14 +1796,26 @@ fn parse_if(mut &p: Parser) -> Stmt {
 	if p_at(p, Else) {
 		p_advance(p)
 		has_else = true
-		if p_at(p, If) {
-			# else-if: the else block is a single nested if statement
-			else_body.append(parse_if(p))
-		} else {
-			else_body = parse_block(p)
-		}
+		else_body = p_else_body(p)
 	}
 	return SIf(cond, then_body, has_else, else_body)
+}
+
+# p_else_body reads what follows an `else`, for BOTH `if` forms — the plain one and
+# `if let`. It was written out twice, four identical lines each, and there is exactly one
+# rule in it: `else if` is a single nested if statement rather than a block.
+#
+# That recursion opens no block, so the chain's depth is counted here or nowhere — a
+# thousand `else if` in one chain killed the parser the same way a thousand parentheses
+# did, and parse_block never sees them.
+fn p_else_body(mut &p: Parser) -> list[Stmt] {
+	return parse_block(p) if not p_at(p, If)
+
+	mut body: list[Stmt] = []
+	p_deeper(p)
+	body.append(parse_if(p))
+	p_shallower(p)
+	return body
 }
 
 fn parse_for(mut &p: Parser) -> Stmt {
@@ -1573,8 +1865,26 @@ fn is_unary_op(k: Kind) -> bool {
 	return k == Minus or k == Not or k == Tilde or k == MinusMod
 }
 
+# parse_expr is where every nested expression re-enters the parser — a parenthesized
+# group, a call's argument, a list's element, an index — so it is where a nesting level is
+# counted. The ladder below it is not: one pass through coalesce → or → … → primary is one
+# level of the program, however many functions it takes.
 fn parse_expr(mut &p: Parser) -> Expr {
-	return parse_coalesce(p)
+	p_deeper(p)
+	t := cur(p)
+	p.edepth = p.edepth + 1
+	e := parse_coalesce(p)
+	p.edepth = p.edepth - 1
+
+	# the outermost expression of a statement is the whole tree, so it is measured here
+	# and once — see p_expr_root for why the parser's own counter cannot see it. The place
+	# is the expression's FIRST token, not the one the reader stopped on: what is too deep
+	# is what starts here.
+	if p.edepth == 0 {
+		p_expr_root(p, e, t.line, t.col)
+	}
+	p_shallower(p)
+	return e
 }
 
 # parse_coalesce reads `a ?? b`, the OUTERMOST binary level. It sits there because its
@@ -1596,7 +1906,11 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 		jump.append(parse_stmt(p))
 		return ECoalesce(left, ENil, jump)
 	}
-	return ECoalesce(left, parse_coalesce(p), jump)
+
+	# the right-associative recursion is a nesting level of its own, so it re-enters
+	# through parse_expr — the one door that counts a level — rather than wrapping
+	# p_deeper by hand around a recursion parse_expr already spells
+	return ECoalesce(left, parse_expr(p), jump)
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its
@@ -1760,15 +2074,23 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 
 fn parse_unary(mut &p: Parser) -> Expr {
 	# `<-ch` receives. GRAMMAR gives it its own level (recv-base) so `<-a.b` reads as
-	# `<-(a.b)` and a chain of them nests, which is what recursing here gives.
+	# `<-(a.b)` and a chain of them nests, which is what recursing here gives. The
+	# recursion is a nesting level and is counted as one: a run of prefixes is written
+	# without a single bracket, so nothing else on the way down would.
 	if p_at(p, LArrow) {
 		p_advance(p)
-		return ERecv(parse_unary(p))
+		p_deeper(p)
+		e := ERecv(parse_unary(p))
+		p_shallower(p)
+		return e
 	}
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		return EUnary(op, parse_unary(p))
+		p_deeper(p)
+		e := EUnary(op, parse_unary(p))
+		p_shallower(p)
+		return e
 	}
 	return parse_postfix(p)
 }
@@ -1907,18 +2229,22 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# binding", about the one literal in the language whose whole point is that it is a
 		# byte. The conversion node is the type the emitter already knows how to carry, and
 		# `byte(74)` has always worked; this is that, written the way a reader writes it.
+		#
+		# The VALUE arrives as the octet's decimal spelling, not the octet: re-reading the
+		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
+		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
+		return EConv(TByte, EInt(t.value), "byte")
 	}
 	if k == Rune {
 		p_advance(p)
 
-		# The literal's VALUE is its code point, decoded from the UTF-8 the source is written
-		# in — `'A'` is 65 and `'é'` is 233. It used to reach the fallback below, so `'A'` was
-		# the number zero with no diagnostic; then it was one byte only, so a multi-byte code
-		# point was named rather than read. rune_value is the lexer's, beside int_value, for
-		# the reason that one gives: what a lexeme is worth is a fact about the LEXEME.
-		return EConv(TRune, EInt(strconv.to_string(rune_value(t.value), 10)), "rune")
+		# The literal's VALUE is its code point, and it arrives as the point's decimal
+		# spelling — decoded by the lexer beside int_value, for the reason that one gives:
+		# what a lexeme is worth is a fact about the LEXEME. Decoding it HERE, from a str
+		# re-read out of the token, is what made `'\0'` impossible to lex at all, because a
+		# str cannot hold a NUL (scan_char_lit says why).
+		return EConv(TRune, EInt(t.value), "rune")
 	}
 	if k == Float {
 		p_advance(p)
@@ -2387,7 +2713,12 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path)
+
+	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
+	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
+	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
+	# enclosing tree, which is measured as one whole, so the hole is not a root.
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

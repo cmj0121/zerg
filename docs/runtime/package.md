@@ -51,14 +51,12 @@ dependency DAG.
   Ambient OS facts that are read-only by nature (environment variables, clock, randomness) are reached
   through the stdlib, not the signature; they are not mutable global state.
 - **Result.** `main` returns `Result[nil]`, so exit reuses the error model: a `Left` exits `0`, a
-  `Right(err)` prints `err` to stderr and exits non-zero, and an uncaught **abort** unwinds the main
-  stack and crashes. Expected failure (`Right`) and a bug (abort) stay two distinct exits, and `?`
-  works directly in `main`.
-
-> **[deviation]** `main`'s **result is discarded**. `fn main() -> Result[nil]` compiles, and a `Right`
-> returned from it prints nothing to stderr and exits **0** — as does an error propagated out of `main`
-> with `?`. So the one exit path a program has for expected failure reports success instead, silently.
-> An uncaught **abort** is unaffected and still exits 1.
+  `Right(err)` prints `err` to stderr as `Kind: message` and exits `1`, and an uncaught **abort** unwinds
+  the main stack and exits `1` with its own line on stderr. What the exit distinguishes is success from
+  failure — status `0` against status `1` with a message — and nothing finer: a `Right` returned from
+  `main` reports through the same root handler an abort uses, so the two are one status and one stderr
+  line, and the `Kind:` prefix does not tell them apart either (a runtime fault and a forced `Err`
+  report in that same shape, while `raise "msg"` is a bare line). `?` works directly in `main`.
 
 ### Program lifetime & top-level initialization
 
@@ -200,11 +198,13 @@ surface** (whether module-private, or package-internal and never re-exported), b
 not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
 its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
 
-> **[deviation]** **Enforced on functions, and on nothing else yet.** Naming another module's
-> module-private FUNCTION is a compile error, reported with a place — both as a bare call and as the
-> namespaced `lib.helper()`. A module-private TYPE and a module-private FIELD are still readable across the
-> boundary: a `pub fn` may return a private struct and a dependent may read a private field of it, with no
-> finding. Every module is flattened into one namespace, which is also why two modules that declare the same
+> **[deviation]** **Enforced on functions and module constants, and on nothing else yet.** Naming another
+> module's module-private FUNCTION is a compile error, reported with a place — both as a bare call and as
+> the namespaced `lib.helper()` — and so is reading its module-private CONSTANT, in the same two shapes:
+> the bare `FLOOR` and the namespaced `lib.FLOOR`. A
+> module-private TYPE and a module-private FIELD are still readable across the boundary: a `pub fn` may
+> return a private struct and a dependent may read a private field of it, with no finding. Every module is
+> flattened into one namespace, which is also why two modules that declare the same
 > name collide — that refusal is about the name, not about the visibility. What the rule compares is the
 > DIRECTORY a declaration was read from against the directory doing the reading, which is the module
 > boundary and not the package one; **package-internal** and **package-public** above still need a package

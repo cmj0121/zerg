@@ -433,7 +433,7 @@ docs-links:                     # every docs path the repo cites must resolve
 # one thing about this target worth knowing from the Makefile: it reads bin/ instead of
 # filling it, so it must be run after a build rather than instead of one. What it compares
 # and why nothing else can see it are set out in the script.
-version-check:                  # VERSION, the generated source, and both compilers agree
+version-check:                  # VERSION, the generated source, both compilers and the READMEs agree
 	./scripts/version-check.sh
 
 lint:                           # lint the compiler and stdlib with zerg itself

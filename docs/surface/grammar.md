@@ -714,7 +714,7 @@ The one door to bare-metal. Everything here is legal **only inside `unsafe`**; t
 
 ```text
 unsafe-expr  ::= 'unsafe' block            # in a function: block-expression; unsafe ops legal only here
-unsafe-group ::= 'unsafe' '{' unsafe-item* '}'   # at module level: groups unsafe decls + mut globals
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # a decl (unsafe here); a 'mut' binding is a mutable global
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn' — the single-function form
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = raw address; 'ptr[T]' = typed pointer

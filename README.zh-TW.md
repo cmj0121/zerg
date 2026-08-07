@@ -187,9 +187,11 @@ Zerg 處於 Phase-1 MVP。出貨的編譯器是 **`zerg`**——以 Zerg 寫成�
 **已建置的部分。** struct 與 enum(payload、遞迴,以及可觀察的 discriminant)、帶窮盡性檢查的 `match`、
 `list[T]` 與 `map[K, V]`、字串與 byte、`mut &` 參數、帶 `?` / `??` / `?.` / `!` 的 optional、完整的
 value tier(`Either[X, Y]` / `Result[T]` / `Left` / `Right`)、`guard` / `raise` 與 cause 串接、`defer`
-與 `del`、range、f-string、inherent `impl` 與 `spec` / `impl Spec for T`、帶 `pub` 與 `init()` 的模組、
-型別引數由呼叫端解出的泛型**函式**、`#[derive(Eq)]` 以及它為 struct 或無 payload enum 寫出的 `==`、
-list slicing、對 `str` 的 rune 迭代、帶檢查的整數算術與並列的 `%` 後綴 wrapping 形式,
+與 `del`、range、f-string、inherent `impl` 與 `spec` / `impl Spec for T`、帶 `pub` 與 `init()` 的模組
+——包含模組常數,其 `pub` 在裸名與限定名兩種寫法上都跨邊界強制——型別引數由呼叫端解出的泛型**函式**、
+`#[derive(Eq)]` 以及它為 struct 或無 payload enum 寫出的 `==`、list slicing、對 `str` 的 rune 迭代、
+帶檢查的整數算術與並列的 `%` 後綴 wrapping 形式、`print`／f-string hole／`str(…)` 三者都會走的
+`display` / `debug` override、module 層級 `unsafe { … }` 分組裡的可變 global,
 以及整章並行——`spawn`、`chan[T]`、有向端點、`close`、`select` 與 `for select`(含非阻塞的 `_` arm),
 還有 `time.after` / `time.ticker`。
 
@@ -198,18 +200,17 @@ list slicing、對 `str` 的 rune 迭代、帶檢查的整數算術與並列的 
 以及 `Ord` / `Hash` / `Encode` / `Decode`;`spec` 的 provided method;會捕獲的 closure;呼叫端的具名引數;
 `set[T]`;定長陣列 `[T; N]`;`list` / `map` 的相等比較;tuple、struct 與 list pattern、or-pattern 與
 解構繫結;block 當成表達式,連帶當 `match` arm body;f-string 的轉換(`!r` / `!s` / `!a`)、format spec
-與 `{x=}`;複合值的結構化渲染;`Ref[T]` 與 `atomic` 模組;command literal;`unsafe`、裸指標與內嵌組語;
-非錯誤型別的 `is` 測試;`Reader` I/O 介面;以及 `zerg test` runner。
+與 `{x=}`;複合值在沒有宣告 override 時會退回的結構化渲染;`Ref[T]` 與 `atomic` 模組;command literal;
+獨立的 `unsafe fn`、裸指標與內嵌組語;非錯誤型別的 `is` 測試;`Reader` I/O 介面;以及 `zerg test` runner。
 
-**已知偏差（規格對照目前行為記錄的 bug）。** 其中五項是**靜默的**——程式編得過、答案是錯的——這幾項最該先知道：
-`str` 字面值的 `match` arm 永遠不成立；if-expression 不檢查各分支型別是否一致；`byte` 上的 `~` 給出未遮罩的
-64-bit 補數；`main` 的 `Result[nil]` 被丟棄，所以回傳 `Right`
-仍以 0 離開；模組層的推導式 binding 被丟棄而非被拒絕。另有兩項是往另一個方向破壞契約：`in` 與 `??` 當作**整個
-條件**使用時會漏到 `cc`，而 800 層巢狀是一次 SIGSEGV。
+**已知偏差（規格對照目前行為記錄的 bug）。** 其中三項是**靜默的**——程式編得過、答案是錯的——這幾項最該先知道：
+`str` 字面值的 `match` arm 永遠不成立；if-expression 不檢查各分支型別是否一致；以及 `byte` 上的 `~` 給出未遮罩的
+64-bit 補數。
 
-其餘是結構性的：拒絕不帶位置——被檢查的規則會報 `file:line:col`、原始行與 caret，而編譯器尚未實作的形式只說出
-形式的名字，別的都沒有；模組可見性只對函式強制、型別與欄位尚未——一個模組仍讀得到另一個模組的私有 struct 與其私有欄位；頂層常數以原始碼順序初始化，
-所以前向參照讀到 0；call 引數與運算元的左到右求值順序尚未強制；排程器是**協作式、非搶佔式**——在一條 coroutine
+其餘是結構性的：仍有一部分拒絕不帶位置——被檢查的規則會報 `file:line:col`、原始行與 caret，已經學會位置的拒絕
+也會，但只說出形式名字的 parser 層 `raise` 仍佔較大的一半（`make reject-fuzz` 會數它們）；模組可見性只對函式
+與模組常數強制、型別與欄位尚未——一個模組仍讀得到另一個模組的私有 struct 與其私有欄位；頂層常數以原始碼順序
+初始化，所以前向參照讀到 0；call 引數與運算元的左到右求值順序尚未強制；排程器是**協作式、非搶佔式**——在一條 coroutine
 自己 park 之前沒有東西能把它從 worker 上拿下來，所以一個 CPU-bound 的 coroutine 會佔住一條，數量到達 worker
 數就讓整個程式停擺。每一項都在規格對應處標註。
 

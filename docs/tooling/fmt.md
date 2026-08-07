@@ -667,11 +667,12 @@ nothing back — and they cannot see why, because the signature is the whole con
 | `L501` | a **value** converted — `f: float = i`        |
 | `L502` | a **literal** took a type that is not its own |
 
-Every implicit conversion is a finding, literals included
-([Types](../core/types.md#into--the-conversion-that-happens-on-its-own)) — so `1.5 + 1` is
-reported and `1.5 + 1.0` is not. None of it is an error: the language allows every one, and
-what the rule says is that the page does not show what the program means. `1` and `1.0` should
-be different types to a **reader**, not only to the compiler.
+An adoption away from a literal's default, and every conversion the bootstrap still applies at
+a position, is a finding ([Types](../core/types.md#into--an-ordinary-conversion-spec)) — so
+`1.5 + 1` is reported and `1.5 + 1.0` is not. `L502` is advisory: adoption is legal, and the
+page should show it — `1` and `1.0` should be different types to a **reader**, not only to the
+compiler. `L501` reports a path the specification has since made a refusal (a value converted
+at a position, a **[deviation]** while the bootstrap still applies it), and retires with it.
 
 These two are the only rules the linter does not answer from the parsed tree. A conversion is a
 fact about **types**, so the lowering walk records it and `zerg lint` asks the walk — the C it

@@ -29,6 +29,7 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 
 | 章節                                      | 涵蓋                                                     |
 | ----------------------------------------- | -------------------------------------------------------- |
+| [型別系統](core/type-system.zh-TW.md)     | 型別規則所推導自的概念——型別是什麼,以及型別如何被決定    |
 | [型別](core/types.zh-TW.md)               | primitive、`struct`、`enum`、tuple、strong-typedef、轉換 |
 | [值與記憶體](core/memory.zh-TW.md)        | scope ownership、`mut &`、`del` / `defer`、`Ref[T]`      |
 | [Spec 與 Generics](core/specs.zh-TW.md)   | `spec` 作 bound / conformance / 型別；泛型；`is` 測試    |

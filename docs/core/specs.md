@@ -163,7 +163,7 @@ than by the argument's type, use an `enum` instead.
 > with the first instead of being told apart by the very argument that is supposed to distinguish them. The
 > `Indexable[int]` / `Indexable[Range]` pair above therefore cannot be declared, and the three-outcome
 > resolution it feeds has nothing to resolve between. It is the same root cause as the one `Into` per type in
-> [Types](types.md#into--the-conversion-that-happens-on-its-own).
+> [Types](types.md#into--an-ordinary-conversion-spec).
 
 ## Type tests — `is`
 
@@ -299,7 +299,7 @@ too narrow to earn an operator. Equality, where a type opts into it, is the **st
 tests) — "what concrete type is boxed here?", never "are these two the same value?".
 
 > **[not yet]** Of the built-in specs this section describes, exactly two are declared: **`Eq`** above, and
-> **`Into[T]`** ([Types](types.md#into--the-conversion-that-happens-on-its-own)). `Ord`, `Hash`, `Error`,
+> **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Ord`, `Hash`, `Error`,
 > `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
 > `impl Ord for P` reports _error: no spec named `Ord`_, the ordinary message for a spec nobody wrote, and
@@ -328,8 +328,9 @@ generic bound gates on it:
 - **`Add` / `Sub` / `Mul` / `Div` / … and the bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
   `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
   `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](../code/collections.md)).
-- **the cast spec** — an opt-in auto-conversion: single-step, at an explicit target (see Type
-  Conversion).
+- **`Into[T]`** — the conversion spec: a type declares what it converts to and generic code bounds on
+  it; a conversion is always **written**, never applied by a position (see
+  [Type Conversion](types.md#into--an-ordinary-conversion-spec)).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead

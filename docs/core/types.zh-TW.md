@@ -9,16 +9,18 @@
 （`i8`、`i16`、`u32`、`f64`……）是一組 **stdlib 型別、不是新語法**——型別名不過就是一個 identifier，所以像 `u32`
 這樣的寬度只是多加一個 stdlib 型別、完全不動語法：
 
-| 型別    | 說明                                                       |
-| ------- | ---------------------------------------------------------- |
-| `bool`  | `true` / `false`                                           |
-| `byte`  | unsigned 8-bit——Zerg 的 char                               |
-| `rune`  | 單一個有效的 Unicode code point                            |
-| `int`   | signed 64-bit 整數                                         |
-| `uint`  | unsigned 64-bit 整數                                       |
-| `float` | IEEE-754 double（f64）                                     |
-| `str`   | immutable、null-terminated 的 Unicode（不含 embedded NUL） |
-| `nil`   | `T?` 的 placeholder 值                                     |
+| 型別    | 說明                                           |
+| ------- | ---------------------------------------------- |
+| `bool`  | `true` / `false`                               |
+| `byte`  | unsigned 8-bit——Zerg 的 char                   |
+| `rune`  | 單一個有效的 Unicode code point                |
+| `int`   | signed 64-bit 整數                             |
+| `uint`  | unsigned 64-bit 整數                           |
+| `float` | IEEE-754 double（f64）                         |
+| `str`   | immutable 的 Unicode 文字（不含 embedded NUL） |
+
+`nil` 不是一個自己的型別——它是 `T?` 的 placeholder 值（[Null-safety 與錯誤處理](../code/errors.zh-TW.md));
+而 `str` 在記憶體裡以 NUL 結尾,是 C 邊界的事（[FFI](../runtime/ffi.zh-TW.md)),不是這個型別的性質。
 
 > **[not yet]** 固定寬度階梯一個都不存在:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib 型別,而沒有任何
 > stdlib 宣告過其中一個。因為一個寬度不過是普通的 identifier、不是關鍵字,連拒絕都不是具名的——`i32(x)` 報的是
@@ -26,7 +28,8 @@
 > 建置。
 
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
-  （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）；`int`/`uint`/`byte`/`rune` 絕不環繞（要環繞就用下方的 `+%`/`-%`/`*%`）。
+  （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）；`int`/`uint`/`byte`/`rune` 絕不環繞
+  （要環繞就用下方的 `+%`/`-%`/`*%`）。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
 - **`str` 以 `rune` 迭代、不可索引**——想要原始位元組，就轉成 `list[byte]`
   （見 [Collection](../code/collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永遠不含 NUL）。
@@ -40,8 +43,9 @@
 
 - **Bitwise**——`&`、`|`、`^`、`~`（and、or、xor、complement）與位移 `<<`、`>>`，適用 `int`/`uint`/`byte`。`>>` 對 signed
   `int` 是 **arithmetic**（補符號位）、對 unsigned `uint`/`byte` 是 **logical**（補 0）——由型別的正負號決定，所以不
-  需另設 logical-shift 運算子；位移量 **≥ 型別寬度**會 raise（`OverflowError`）。這些 desugar 到 spec（user type 可
-  多載——見 [內建 spec](specs.zh-TW.md)），且 bitwise **符號**永不與邏輯**關鍵字** `not`/`and`/`or` 撞臉。
+  需另設 logical-shift 運算子；位移量**超出型別寬度**——負數、或 ≥ 寬度——會 raise（`OverflowError`）。
+  這些 desugar 到 spec（user type 可多載——見 [內建 spec](specs.zh-TW.md)），且 bitwise **符號**永不與邏輯
+  **關鍵字** `not`/`and`/`or` 撞臉。
 - **Wrapping**——`+`、`-`、`*` 溢位 raise；**`%` 後綴**的 `+%`、`-%`、`*%`（及一元 `-%`）改為 **mod 2^n 環繞**——供
   hashing、checksum、bit-mixing 這類「刻意繞回」的場景。**checked** 版已經是 `guard { a + b }` → `Result`（不需
   `checked_*`）；**saturating** 延後。
@@ -55,7 +59,8 @@
 - **`//` 的結果恆為 `int`**——`a // b` 就是同一個 Euclidean 除法，只是換一種寫法讓讀者一眼看出結果是整數、
   不必先看運算元。兩個整數時它**就是** `/`：語言只有**一條**整數除法規則，再加一條對負除數行為不同的
   規則會是陷阱而非功能。兩個 `float` 時它以 double 相除，再經過 `int(x)` 用的同一道範圍檢查落回 `int`，
-  所以 `7.5 // 2.0` 是 `3`、`-7.5 // 2.0` 是 `-4`，不需要 `int(...)` 來回一趟。`/` 完全不變、維持型別驅動
+  所以 `7.5 // 2.0` 是 `3`、`-7.5 // 2.0` 是 `-4`，不需要 `int(...)` 來回一趟（`7 // 2.0` 也一樣——untyped 的
+  `7` 從它的運算元採用 `float`）。`/` 完全不變、維持型別驅動
   ——`int / int` 是 `int`、`float / float` 是 `float`——因為已具型別的 `int` 值永遠不會隱式變成 `float`
   （見下方「數值字面值」）。`//` **不會**開啟註解——Zerg 的註解以 `#` 起始。
 
@@ -81,7 +86,7 @@
 
 ### 有型別的位置（Typed positions）
 
-底下有好幾條規則講的都是**一個值遇上一個宣告型別** —— 什麼放得進去、字面量採用什麼、什麼會被轉換。它們需要的是同
+底下有好幾條規則講的都是**一個值遇上一個宣告型別** —— 什麼放得進去、字面量採用什麼、什麼會被拒絕。它們需要的是同
 一個問題的答案,所以那個答案只講一次、講在這裡,其他規則引用它:**一個有型別的位置**,就是語言已經知道要什麼型別的
 地方。
 
@@ -107,21 +112,17 @@
 位置是**結構性**的,不是語法上的:它取決於這個運算式**對它外面那個構造來說是什麼**,而不是它怎麼被寫出來。**分組用
 的括號不是位置** —— `(e)` 跟 `e` 是同一個位置 —— 這正是「用位置陳述的規則」不會被多打幾個括號繞過的原因。
 
-**一個位置最多發生一次轉換。** 底下的規則若要把一個值轉成宣告的型別,每個位置只走一步;一個值跨過兩個位置,就可以
-在各自的位置各轉一次。
+**一個位置可以把值包起來;絕不改值的型別。** 位置替值建的東西是 carrier(下一段)或 spec 的盒子
+([Spec 與 Generics](specs.zh-TW.md))——裡面的值保持自己的型別。放不進位置的值會被拒絕,修法是**寫出來**的轉換
+`T(x)`(下方「型別轉換」)。
 
 **carrier 不會終結一個位置——它把位置往內移一層。** 當宣告的型別是 `T?`、`Result[T]` 或 `Either[X, Y]` 時,真正跟
 值相遇的是它的 **payload**,而那個 payload 就是同一個位置:`x: int? = e` 把 `e` 放在 binding 的位置上、對著 `int`;
 `return Left(e)` 則把它放在 `return` 的位置上。底下每一條規則在那裡讀到的都是 `T`,永遠不是外面那層 wrapper。
 
-> **[deviation]** 這份清單是契約;編譯器是一個一個到達它的,而每一個它還沒被告知的位置,都是一個被靜默放進不合身型
-> 別裡的值。這份清單之所以存在,正是因為那件事反覆發生:它本來是括號裡的四個例子,而那四個一次一個 miscompile 地長
-> 成了十四個。一個新的語法形式欠一個「這是不是有型別的位置」的答案,而那個答案屬於這裡,不屬於第一個注意到它的規
-> 則。
->
-> carrier 那句話是同一個故事的裡面那一半:編譯器先把 **wrapper** 裝好,再走另一條路把 payload 降下去,而那條路上
-> 沒有掛任何規則。`x: float? = i`(`i` 是 `int` 值)印出 `5`,而 `i = 300` 的 `Left(i)` 放進 `Result[byte]` 靜靜地
-> 被截斷——正是同一組規則在上面一層早就拒絕的那兩個錯誤。
+> **[deviation]** 這份清單是一次一個靜默 miscompile 長出來的——每一個編譯器還沒被告知的位置,都是一個被靜默放進不
+> 合身型別裡的值,carrier 的情形也在內(`x: float? = i` 印出 `5`;`Left(300)` 放進 `Result[byte]` 靜靜被截斷)。
+> 這份清單是契約:一個新的語法形式欠一個「這是不是有型別的位置」的答案,而答案屬於這裡。
 >
 > **[deviation]** **另一個運算元**是那十四個位置裡,唯一不會拒絕一個放不進它的字面量的位置。一個放不進另一個運算
 > 元型別的整數字面量,不會成為編譯錯誤,而是靜靜地把**整個運算式**改定型為 `int`:`b: byte = 1` 之後
@@ -131,24 +132,25 @@
 
 ### 數值字面量（Numeric literals）
 
-數值字面量是 **untyped** 的——它採用 context 要求的型別，在上面**任何一個有型別的位置**，並在**編譯期**檢查。無 context 時，整數字面量預設為 `int`、帶小數/指數的字面量（`1.0`、`1e3`）
-預設為 `float`；非十進位 `0x…` / `0o…` / `0b…` 也是普通整數字面量。
+數值字面量是 **untyped** 的——它採用 context 要求的型別,在上面**任何一個有型別的位置**,並在**編譯期**檢查。
+無 context 時,整數字面量預設為 `int`、帶小數/指數的字面量（`1.0`、`1e3`）預設為 `float`；
+非十進位 `0x…` / `0o…` / `0b…` 也是普通整數字面量。
 
 - 字面量**放不進**要求的型別 → **compile error**（`byte = 300`、`uint = -1`、超過 i64 的 `int` 字面量）——不是
-  runtime overflow。這是 [`Into`](#into--自己會發生的那個轉換) 的**常數**那一半:目標的型別是已
-  知的、值也是已知的,所以答案現在就是已知的。
+  runtime overflow。它是寫出來的轉換的常數雙生(`byte(300)`,
+  [型別轉換](#into--一個普通的轉換-spec)):目標的型別是已知的、值也是已知的,所以答案現在就是已知的。
 
-- **有型別的 `float` context 接受一個 untyped 整數字面量**:`x: float = 1` 合法,而 `x: float = i`(`i` 是 `int`
-  值)同樣合法——前者是採用、後者是轉換,而 `int → float` 正是內建 `Into` 之一。它們的差別在於答案**何時**得出,而
-  不在於允不允許:字面量在編譯期定案,值在執行期。帶小數或指數的字面量(`1.0`、`1e3`)從一開始就是 `float`、絕不
-  是 `int`。
+- **有型別的 `float` context 接受一個 untyped 整數字面量——而且只接受字面量**:`x: float = 1` 合法(字面量採
+  用),而 `x: float = i`(`i` 是 `int` 值)是一次**轉換**、要寫出來——`x: float = float(i)`。帶小數或指數的字面
+  量(`1.0`、`1e3`)從一開始就是 `float`、絕不是 `int`。
 
-- **字面量是採用,值是轉換,而這兩者值得分清楚。** `b: byte = 5` 寫下一個 byte,完全沒有轉換;`b: byte = n`(`n`
-  是 `int` 值)寫下的是那個轉換,而它可能 raise。所以 `b: byte = 300` 是 **compile error**——已知這個常數放不進去
-  ——而 `n == 300` 時的 `b: byte = n` 是執行期的 **`OverflowError`**。同一條規則,兩個時刻。
+- **字面量是採用,值是轉換,而這兩者值得分清楚。** `b: byte = 5` 寫下一個 byte,完全沒有轉換;而
+  `b: byte = 300` 是 **compile error**——已知這個常數放不進去。`b: byte = n`(`n` 是 `int` 值)是一次**轉換**,
+  而轉換要寫出來:`b: byte = byte(n)`,它在執行期可能 raise `OverflowError`。採用在編譯期定案;寫出來的轉換才會
+  執行。
 
-  每一個這樣的轉換都是一個 **lint** 發現(`L5xx`),因為讀 `xs: list[byte] = [1, 2]` 的人應該在頁面上看見 byte,
-  而不是從宣告去推斷它。
+  偏離字面量預設的採用是一個 **lint** 發現(`L502`),因為讀 `xs: list[byte] = [1, 2]` 的人應該在頁面上看見
+  byte,而不是從宣告去推斷它。
 
 > **[not yet]** **`uint` 的上半段**寫不成字面量。每一個整數字面量都是先對著 `int` 量、才去問它所在的位置,所以
 > `u: uint = 18446744073709551615` 會被拒絕、報 _the integer literal … does not fit an `int`_,即使那個值是一個普
@@ -208,20 +210,23 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 一個 **tuple**——`(int, str)`，欄位以位置存取 `.0`、`.1`——不過就是一個**匿名 `struct`**：同一個積型別，只是不具名、
 供一次性的位置束用（多重回傳、`divmod -> (int, int)`）。因為匿名，它是全語言**唯一結構化定型**的形式——`(int, str)`
 不管寫在哪都是同一個型別，而每個具名 `struct` 與 `enum` 仍是 **nominal**。它沿用整套積型別機制——copy-by-value、
-以及編譯器的結構化 `Eq` / `Ord` / `Hash` / … 衍生（見 [Spec 與 Generics](specs.zh-TW.md)）——但因為沒有名字可掛，**沒有 inherent
-method、也沒有自己的 `spec` impl**：一旦某個值需要行為、nominal 身分、或值得閱讀的欄位名，就改用具名 `struct`。
-tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制（見 [模式比對](../code/control-flow.zh-TW.md)）。
+以及結構層的一條規則:**具名型別自己 opt-in;無名形式繼承它組成的 opt-in。** 一個 tuple(array 也一樣)在**每個
+組成**都有 `Eq` / `Ord` / `Hash` 時就有——不需要宣告,因為無名形式沒有宣告點,而它的組成已經各自 opt-in 過了
+（見 [Spec 與 Generics](specs.zh-TW.md)）。它不能帶的是**自己的**行為——沒有 inherent method、沒有手寫的
+`spec` impl：一旦某個值需要行為、nominal 身分、或值得閱讀的欄位名，就改用具名 `struct`。
+tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制
+（見 [模式比對](../code/control-flow.zh-TW.md)）。
 
-> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——
-> _NotImplemented: `==` on a (int, int) — structural equality over a container is unbuilt, and a container has
-> no declaration to derive it on_——而那句訊息本身就是機制:衍生由掛在**宣告**上的 `#[derive(…)]` 驅動,而匿名正好
-> 讓 tuple 沒有東西可掛。**解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報
+> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——上面的
+> 組成繼承規則已是規格,而無名形式上的衍生尚未建置(出貨的訊息仍把原因怪在沒有宣告可掛上)。
+> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報
 > _NotImplemented: `,` is not an expression this compiler reads_——所以 tuple 的結果如規範般可存、可傳,但只能用
 > `.0` / `.1` 讀回來。
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
-兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。一個**單型**的 `type X = Y`
+兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。有一項繼承是刻意不給的:
+`X` **不**承接 `Y` 的 `Into` impl——`X` 能轉換成什麼,是 `X` 自己的宣告。一個**單型**的 `type X = Y`
 在 runtime **降低成 `Y`**——區別**只在編譯期**,所以 `Celsius = int` 不花任何成本(無 box、無包裝),而一個 `Celsius`
 沒有明確的 `int(c)` / `Celsius(x)` 就永遠不是 `int`。一個**泛型** alias `type X[T] = …` 這個階段**尚未支援**(會被
 解析、但被拒絕)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作一個裸 `int` 或
@@ -272,8 +277,9 @@ Zerg **以重新建構（re-construction）轉換、絕不以重新詮釋（rein
 [型別測試](specs.zh-TW.md)——這個階段 **[not yet]** 支援非錯誤型別,今天只有錯誤分類可 `is` 測試）、以及**絕不**
 把一種型別的儲存重新詮釋成另一種。
 
-轉換**預設顯式**——`int` 不是 `bool`；要轉就用 constructor 風格呼叫建一個（`bool(8)`、`int(c)`）。primitive 之間的
-轉換由**編譯器內建**；使用者型別不能對 primitive 加。
+轉換**預設顯式**——`int` 不是 `bool`；要轉就用 constructor 風格呼叫建一個（`bool(8)`、`int(c)`）。`bool(x)` 作用
+在數字上回答的是 `x != 0`——truthiness 本來要問的那個問題被寫了出來,所以它永遠不會沒寫就進到條件裡。primitive
+之間的轉換由**編譯器內建**；使用者型別不能對 primitive 加。
 
 **窄化一個 primitive** 可能丟失值，因此比照算術檢查：
 
@@ -283,17 +289,11 @@ Zerg **以重新建構（re-construction）轉換、絕不以重新詮釋（rein
 - **`float` → 整數**捨去小數（`int(3.7)` 是 `3`——是本意、非 bug），但當整數部分**超出範圍**、或 float 是
   `NaN` / `±Inf` 時 raise。
 
-### `Into` —— 自己會發生的那個轉換
+### `Into` —— 一個普通的轉換 spec
 
-`T(x)` 是你**寫出來**的轉換。`Into` 是在**目標型別已經知道的地方**發生的那一個 —— 也就是在一個
-[有型別的位置](#有型別的位置typed-positions) —— 而它不過就是編譯器幫你寫了 `.into()`:
-
-```text
-x: float = 1.5 + 1          # 你寫的
-x: float = 1.5 + 1.into()   # 它的意思
-```
-
-**`Into` 是一個普通的 spec**,所以一個型別靠實作它來加入,而內建型別已經實作了:
+轉換是**寫出來的**。`T(x)` 在 scalar 之間轉換;使用者型別經由 constructor 或具名函式轉換;沒有東西會自己轉換——
+**position 只會把值包起來,絕不改值的型別**(見上方「有型別的位置」)。`Into` 不是語言替你執行的機制:它是**替
+「可轉換」命名的 spec**,讓泛型程式碼可以要求這個能力——
 
 ```text
 spec Into[T] {
@@ -301,60 +301,50 @@ spec Into[T] {
 }
 ```
 
-- **它可能 raise,而由 caller 處理。** 縮小會掉值 —— `int → byte` 不可能總是成功 —— 所以內建的數值實作 raise
-  `OverflowError`,跟 `byte(300)` 今天 raise 的是同一個失敗、同一個名字。使用者的實作 raise 什麼由它自己的理由決
-  定;`ValueError` 是自然的那個,而 `OverflowError` 是它的一種。
-- **一步,絕不串接** —— `X → Y` 和 `Y → Z` 不會給你 `X → Z`。寫兩步,或自己宣告 `X → Z`。
-- **每個位置一步。** 一個值跨過兩個位置就可以在各自的位置各轉一次 —— 這正是 `demo: Z = x + y` 對 `x: X`、`y: Y`
-  合法的原因:`x` 在運算元位置到達 `Y`,而那個和在 binding 位置到達 `Z`。那是兩個位置,不是一條 chain。
-- **`.into()` 需要一個目標。** `x := 1.into()` 是編譯錯誤 —— 那裡沒有任何東西能說出是哪一個 `Into`。手寫的
-  `.into()` 合法的地方,恰好就是編譯器會幫你寫的地方。
+- **型別靠實作它來加入**;下方的內建 scalar 對就是語言出貨的那些 impl。
+- **泛型程式碼以它為 bound**——`fn keyed[T: Into[str]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。其他地方,
+  `x.into()` 恰好在「只有一個目標型別在眼前」時合法(`s: str = x.into()`);沒有東西能定出目標,就是編譯錯誤。
+- **一步,絕不串接**——`X → Y` 和 `Y → Z` 不會給你 `X → Z`。寫兩步,或自己宣告 `X → Z`。
 
-> **[not yet]** 手寫的 `.into()` 根本不存在:`1.into()` 報 _NotImplemented: the method `into` on a int_,不論寫在
-> 哪裡、目標是什麼都一樣。所以上面那一對的第二行——`x: float = 1.5 + 1.into()`,也就是「它的意思」那一半——不是這
-> 個編譯器建得出來的程式,儘管它所解釋的 `x: float = 1.5 + 1` 是。編譯器幫自己寫的那次轉換已經建好,下面那張內建
-> 矩陣也是真的;缺的只有讀者能親手寫出來的那個寫法,而這正是它沒被發現的原因:這個功能要能運作,誰都不必說出
-> `.into()`。
+> **[not yet]** 手寫的 `.into()` 不存在:`1.into()` 報 _NotImplemented: the method `into` on a int_,不論寫在哪
+> 裡、目標是什麼都一樣——所以今天 `Into` 既不能被呼叫、也不能被 bound,真正在跑的轉換是寫出來的 `T(x)` 內建。
 
-**一個運算式的型別,只由它的運算元決定** —— 永遠不由它要被指派給誰決定。所以是兩個運算元先談攏,然後結果才去見宣
-告的型別:
+**運算子的兩個運算元必須已經是同一個型別。** untyped literal 會採用另一個運算元——上方的「另一個運算元」位置——
+所以 `1.5 + 1` 是兩個 `float`。兩個**已定型**、型別不同的運算元是編譯錯誤,不論哪一對:`i + f` 和 `i + u` 是同一
+個錯、同一個修法——把一側寫成 cast(`float(i) + f`、`int(u) + i`)。每一對都是同一條規則;沒有東西被 promote,也
+沒有任何目標會被往下推進運算式。
 
-- 型別**相同**的運算元維持那個型別,什麼都不轉。
-- **不同**的取**兩者都能一步到達的最大型別** —— 最大指的是值集合包含另一個的那個,而那也正是不會失敗的方向。
-  `1.5 + 1` 是 `float`,因為 `int → float` 存在而 `float → int` 不存在。
-- 如果沒有這樣的型別,或有兩個而彼此互不包含,這個運算式的型別就是 **undetermined** —— 編譯錯誤,轉換必須寫出來。
+內建的 `Into` impl 就是這些,沒有別的——泛型 `[T: Into[U]]` bound 能倚靠的對,每一對也都能寫成 `T(x)`:
 
-因為目標永遠不往下推,`demo: Z = x + (y + z)` 可能是錯誤而 `demo: Z = x + y + z` 不是:括號改變了哪兩個運算元先相
-遇,而每一次相遇都是各自解析的。
+| from   | to      | 會 raise | 說明                              |
+| ------ | ------- | -------- | --------------------------------- |
+| `byte` | `int`   | 否       | 每一個 byte 都是一個 int          |
+| `rune` | `int`   | 否       | 每一個 code point 都是一個 int    |
+| `int`  | `float` | 否       | 不會失敗;超過 2^53 可能失精度     |
+| `int`  | `byte`  | 是       | 超出範圍 → `OverflowError`        |
+| `int`  | `rune`  | 是       | 不是 code point → `OverflowError` |
+| `int`  | `uint`  | 是       | 負數 → `OverflowError`            |
+| `uint` | `int`   | 是       | 超過有號數上限 → `OverflowError`  |
 
-內建的實作就是這些,沒有別的 —— 不在表上的一對,用 `T(x)` 轉:
+沒有 `float → int` 的 impl:丟掉小數是一個決定,所以它有自己的寫法——`int(x)`,或用 `//` 那個本來就落在整數的除
+法。也沒有 `byte → float`:那會是 `byte → int → float`,一步規則禁止的那條 chain——寫成兩步。
 
-| from   | to      | 會 raise | 說明                               |
-| ------ | ------- | -------- | ---------------------------------- |
-| `byte` | `int`   | 否       | 每一個 byte 都是一個 int           |
-| `rune` | `int`   | 否       | 每一個 code point 都是一個 int     |
-| `int`  | `float` | 否       | 不會失敗;可能失精度,而 `L5xx` 會說 |
-| `int`  | `byte`  | 是       | 超出範圍 → `OverflowError`         |
-| `int`  | `rune`  | 是       | 不是 code point → `OverflowError`  |
-| `int`  | `uint`  | 是       | 負數 → `OverflowError`             |
-| `uint` | `int`   | 是       | 超過有號數上限 → `OverflowError`   |
+**編譯器算得出來的轉換就會被算出來。** `byte(300)` 是良構的 —— 然後它以**常數**的身分失敗:值是已知的,轉換已知
+會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;`if false { b := byte(300) }` 是同一個錯誤。它也
+穿過 monomorphize 之後的泛型呼叫:對 `fn id[T](x: T) -> T` 而言,`byte(id(300))` 是同一個已知常數,在同一個編譯期
+被拒絕。
 
-**`int` 與 `uint` 不混用**,而這是掉出來的結果、不是一條自己的規則:兩個方向都存在,但兩者的值集合互不包含,所以
-`i + u` 沒有最大型別,是 undetermined。把其中一邊轉掉 —— `int(u) + i` 或 `u + uint(i)`。
+**偏離字面量預設的採用是一個 lint finding**(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議而不是語言
+規則:`1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。
 
-沒有 `float → int`:丟掉小數是一個決定,所以要寫出來(`int(x)`,或用 `//` 那個本來就給整數的除法)。也沒有
-`byte → float` —— 那會是 `byte → int → float`,正是一步規則禁止的那條 chain。
-
-**編譯器算得出來的轉換就會被算出來。** `x: byte = 300` 是良構的 —— `int → byte` 存在,所以型別檢查過 —— 然後它以
-**常數**的身分失敗:值是已知的,轉換已知會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;
-`if false { b: byte = 300 }` 是同一個錯誤。
-
-**每一次隱式轉換都是一個 lint finding**(`L5xx`),含字面量 —— 所以 `1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議
-而不是語言規則:重點在於 `1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。
-
+> **[deviation]** bootstrap 仍在 position 上**轉換**:`x: float = i` 編得過(每一次套用由 `L501` 報出)、
+> `i + f` 以 promote 編過,而 `b: byte = n` 編得過並在執行期 raise `OverflowError`——每一條都是本節現在拒絕的
+> 路,`L501` 也隨它們一起退役。
+>
 > **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個。方法是用**名字**當 key 的,所以第二個
 > `impl Into[…] for X` 會跟第一個相撞、並被具名拒絕——而內建矩陣光是從 `int` 出去就有四個。要做到好幾個,需要把
 > spec 方法改成用 (spec, 型別引數) 當 key,而那也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
 
-這也是讓一個值、一個 `Err` 或 `nil` 能在有型別的位置直接注入 `Either`、無需明確包裝的機制
-（見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）——仍是建構出目標值，絕非 reinterpret。
+一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
+（見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是
+建構,絕不是 reinterpret。

@@ -123,7 +123,7 @@ impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range)
 > shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
 > **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
 > `Indexable[int]` / `Indexable[Range]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
-> [型別](types.zh-TW.md#into--自己會發生的那個轉換) 裡「每個型別只能有一個 `Into`」是同一個根因。
+> [型別](types.zh-TW.md#into--一個普通的轉換-spec) 裡「每個型別只能有一個 `Into`」是同一個根因。
 
 ## 型別測試（Type tests）——`is`
 
@@ -133,7 +133,8 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
-guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派(見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
+guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
+(見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
 ——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
 存在性測試 `x is T` 是 **[not yet]**。
 
@@ -234,7 +235,7 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 型別？」，而非「這兩個是不是同一個值？」。
 
 > **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
-> （見 [型別轉換](types.zh-TW.md#into--自己會發生的那個轉換)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
+> （見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
 > `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
 > 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
@@ -257,12 +258,14 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 - **`Add` / `Sub` / `Mul` / `Div` / … 與 bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
   `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，所以 `+` 會
   **串接**成新字串（見 [Collection](../code/collections.zh-TW.md)）。
-- **cast spec**——opt-in 自動轉換：single-step、於明確目標（見 [型別轉換](types.zh-TW.md)）。
+- **`Into[T]`**——轉換 spec:型別宣告它能轉成什麼,泛型程式碼以它為 bound;轉換永遠**寫出來**、絕不由
+  position 套用（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
 型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(this)` 在最後一個持有者的 scope 退出時
 **跑一次**。編譯器提供計數與 by-ref 複製；只有 `drop` 的內容由使用者寫。`Ref` 是 **sealed** 的——唯二實作者是內建的
-**`chan`**（其 `drop` 即 close）與 stdlib 的 **`Ref[T]`** 資源盒（見 [值與記憶體](memory.zh-TW.md)）。一般程式碼**使用 `Ref[T]`、
+**`chan`**（其 `drop` 即 close）與 stdlib 的 **`Ref[T]`** 資源盒（見 [值與記憶體](memory.zh-TW.md)）。
+一般程式碼**使用 `Ref[T]`、
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
 **運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。

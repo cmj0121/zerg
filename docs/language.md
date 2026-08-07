@@ -33,6 +33,7 @@ other chapter relies on. Read it first.
 
 | Chapter                                     | Covers                                                            |
 | ------------------------------------------- | ----------------------------------------------------------------- |
+| [Type System](core/type-system.md)          | what a type is, and how one is decided                            |
 | [Types](core/types.md)                      | primitives, `struct`, `enum`, tuples, strong-typedefs, conversion |
 | [Values & Memory](core/memory.md)           | scope ownership, `mut &`, `del` / `defer`, `Ref[T]`               |
 | [Specs & Generics](core/specs.md)           | `spec` as bound / conformance / type; generics; the `is` test     |

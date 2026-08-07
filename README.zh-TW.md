@@ -2,6 +2,9 @@
 
 [English](README.md) | 繁體中文
 
+[![CI](https://github.com/cmj0121/zerg/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/zerg/actions/workflows/ci.yml)
+[![version](https://img.shields.io/badge/version-0.1.0-blue)](VERSION)
+
 > 想到什麼就寫什麼——做一件事，只有一種、也是唯一一種方法。
 
 Zerg 是一門**編譯式、通用型程式語言**。編譯器把你的原始碼轉譯成 **C**（**C17**；`ZERG_CSTD` 指定時可用 **C99** /

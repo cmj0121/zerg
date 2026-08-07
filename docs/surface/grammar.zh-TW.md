@@ -623,7 +623,7 @@ del-stmt   ::= 'del' identifier
 
 ```text
 unsafe-expr  ::= 'unsafe' block            # 函式內：block-expression；unsafe 操作僅此合法
-unsafe-group ::= 'unsafe' '{' unsafe-item* '}'   # module 層級：分組 unsafe 宣告 + 可變全域
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # 一個宣告（此處即 unsafe）；'mut' 綁定是可變全域
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——單一函式形式
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標

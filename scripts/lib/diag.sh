@@ -9,6 +9,16 @@
 # fails OPEN. When `#line` made cc name the `.zg`, the older test (looking for a
 # `.zerg-cache` path) stopped matching anything and would have gone on passing forever.
 
+# is_crash <status> — the compiler died of a signal. A crash is a NON-ZERO EXIT too, so
+# every wording assertion in both scripts reports it as a message that drifted: a SIGSEGV
+# writes nothing to stderr, and the case fails as `wanted X, got:` with an empty tail. It
+# is the one outcome the standing rule never allows (docs/conformance.md), so it is named
+# — and it lives here because both `reject` and `expect` run the same sequence and both
+# had the same blind spot.
+is_crash() {
+	[ "$1" -ge 128 ]
+}
+
 # is_cc_diag <text> — cc opens a line with `path:line:col: error:`. This compiler opens
 # with `error:` and puts the place on an indented `-->` line beneath it, so the two are
 # told apart by SHAPE rather than by the path inside them.

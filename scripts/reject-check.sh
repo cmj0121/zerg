@@ -71,6 +71,16 @@ fail=0
 #   contains an apostrophe DOUBLE-quote it, or the apostrophe closes the single quote and
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
+# has_flag <flags> <marker> — one BOOLEAN marker is present. The flags arrive as a
+# space-padded list, so a marker is matched as a whole word: `no-place` must not answer
+# true for a hypothetical `no-place-yet`. It exists because the three boolean markers were
+# each asked for in a different way — a `case`, and two spellings of `${flags#* … }` — and
+# the fourth would have picked a fourth.
+has_flag() {
+	case $1 in *" $2 "*) return 0 ;; esac
+	return 1
+}
+
 reject() {
 	local name=$1 want=$2
 	shift 2
@@ -100,6 +110,11 @@ reject() {
 
 	if [ $status -eq 0 ]; then
 		echo "ACCEPTED  $name — the compiler emitted an ill-formed program instead of rejecting it"
+		fail=$((fail + 1))
+		return
+	fi
+	if is_crash "$status"; then
+		echo "CRASHED   $name — the compiler died of signal $((status - 128)) instead of refusing"
 		fail=$((fail + 1))
 		return
 	fi
@@ -139,21 +154,17 @@ reject() {
 	# once, and `reject-fuzz` counts the whole class. Marking the case keeps a permanent
 	# LANGUAGE rule in this file, where its lifetime says it belongs, instead of filing it
 	# with the not-yet-built forms next door to dodge one assertion.
-	case $flags in *" no-place "*)
+	if has_flag "$flags" no-place; then
 		if has_place "$out"; then
 			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
 			fail=$((fail + 1))
 			return
 		fi
-		;;
-	*)
-		if ! has_place "$out"; then
-			echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
-			fail=$((fail + 1))
-			return
-		fi
-		;;
-	esac
+	elif ! has_place "$out"; then
+		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
 	if [ -n "$at" ] && ! place_is "$out" "$name\.zg:$at"; then
 		echo "PLACE     $name — the finding does not sit at $at: $(echo "$out" | head -1)"
 		fail=$((fail + 1))
@@ -164,10 +175,14 @@ reject() {
 	# that keeps a refused name resolvable ON PURPOSE (so its uses do not each add a
 	# second finding) is asserted here, since a second message would match every other
 	# assertion and still be the regression.
-	if [ "${flags#* one-finding }" != "$flags" ] && [ "$(printf '%s\n' "$out" | grep -c '^error:')" -ne 1 ]; then
-		echo "COUNT     $name — wanted exactly one finding, got $(printf '%s\n' "$out" | grep -c '^error:')"
-		fail=$((fail + 1))
-		return
+	if has_flag "$flags" one-finding; then
+		local found
+		found=$(printf '%s\n' "$out" | grep -c '^error:')
+		if [ "$found" -ne 1 ]; then
+			echo "COUNT     $name — wanted exactly one finding, got $found"
+			fail=$((fail + 1))
+			return
+		fi
 	fi
 
 	# A third argument names a rule the SEED does not enforce yet, and says which. The
@@ -177,7 +192,7 @@ reject() {
 	# It asserts the OPPOSITE, so the exception retires itself: an xfail that merely returns
 	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
 	# marker and its entry in the seed's README would rot with nothing to say so.
-	if [ "${flags#* seed-gap }" != "$flags" ]; then
+	if has_flag "$flags" seed-gap; then
 		if seed_refuses "$name" "$src"; then
 			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
 			fail=$((fail + 1))

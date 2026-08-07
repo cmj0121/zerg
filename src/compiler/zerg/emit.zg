@@ -1680,7 +1680,7 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		# A NAME DECLARED TWICE, and the two halves of that are different rules.
 		#
 		# On a TYPE it is the language's: "Every method and associated fn on a type shares
-		# one namespace, spec or inherent alike; a duplicate is an error" (GRAMMAR:498) —
+		# one namespace, spec or inherent alike; a duplicate is an error" (GRAMMAR#impl-decl) —
 		# which is also how a second `impl Spec for T` arrives, since a type has one
 		# canonical implementation of a spec (docs/core/specs.md). It used to be reported as
 		# two modules colliding, about one module and one type.
@@ -2268,7 +2268,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# is emitted, because a specialization has a real type in its place.
 	return if c_name_in(bound, nm)
 
-	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
+	# `This` is the SELF TYPE (GRAMMAR#param), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
 	# means there was none, and saying "no type named `This`" invites the reader to go and
 	# declare one. Checked rather than refused, for the reason c_ident gives.
@@ -2829,7 +2829,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 }
 
 # c_is_flat_enum reports whether a name is a declared enum whose every variant is tag-only.
-# That is the enum GRAMMAR:573 gives an observable integer value to — `int(v)` reads it and
+# That is the enum GRAMMAR#variant gives an observable integer value to — `int(v)` reads it and
 # `E.of(n)` reverses it; a payload enum's tag is opaque and match-only.
 #
 # It is read off the tables already there rather than recorded beside the name: vf_variant
@@ -4098,7 +4098,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		return f"zrt_str_bytes({inner})"
 	}
 
-	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR:577), which is the tag field —
+	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR#variant), which is the tag field —
 	# not the value, which is a struct. Casting the struct is what this used to emit, and C
 	# rejected it against a file in .zerg-cache that nobody wrote.
 	xt := c_infer(em, x)
@@ -4829,7 +4829,7 @@ fn c_ident_name(e: Expr) -> str {
 	}
 }
 
-# c_enum_of lowers `E.of(n)` (GRAMMAR:578): the variant whose discriminant is `n`, or nil.
+# c_enum_of lowers `E.of(n)` (GRAMMAR#variant): the variant whose discriminant is `n`, or nil.
 # It answers a `E?` rather than an `E` because the reverse is PARTIAL — an integer that no
 # variant claims has no variant to be, and the language's way of saying so is an optional.
 #
@@ -4877,7 +4877,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 # compiler pointing at generated code. `s.len()` is the common way in: a str has no
 # methods here, and the message now says so at the Zerg level.
 fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
-	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR:490) — the named-constructor form,
+	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR#impl-decl) — the named-constructor form,
 	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the
 	# answer used to be "the method `make` on a ?": the target is a type rather than a
 	# value, so inference had nothing to name and the message pointed at the hole rather
@@ -4912,7 +4912,7 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 	# method takes it BY VALUE, so it is copied, and a `mut fn` declared it `mut &`, so it
 	# takes the caller's variable itself. Routing it here rather than copying it outright is
 	# what makes `mut fn` work at all — and it brings the borrow's own rules with it, which
-	# GRAMMAR:302 asks for by name: "the call site must hold the receiver in a `mut`
+	# GRAMMAR#fn-decl asks for by name: "the call site must hold the receiver in a `mut`
 	# binding". `pos` is 0 because a receiver has no written position; chk_ref_arg says
 	# "the receiver" rather than an argument number for it.
 	recv := c_arg(em, key, 0, 0, target, sb)
@@ -5496,8 +5496,8 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	#
 	# A module constant, a struct name and a variant are all bound by the time a body is
 	# emitted, so the check is one question: did anything bind it?
-	# `this` is not an ordinary unknown name. GRAMMAR:330 says it is not a parameter and
-	# GRAMMAR:332 that a `fn` whose body uses it with no instance bound is a compile error —
+	# `this` is not an ordinary unknown name. GRAMMAR#param says it is not a parameter and
+	# GRAMMAR#param that a `fn` whose body uses it with no instance bound is a compile error —
 	# so the thing to say is which rule was broken, not that the name is unknown. It is
 	# bound exactly when the enclosing `fn` was declared in an `impl` or a `spec`, because
 	# that is where the parser puts the receiver.
@@ -5675,8 +5675,8 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # tolerate; the seed has refused both since it had enums, so this is the shipped compiler
 # catching up to it, message included.
 #
-# A GUARDED arm does not count toward coverage (GRAMMAR:410 — the compiler cannot prove the
-# guard holds), so `A if c => …` still leaves `A` uncovered.
+# A GUARDED arm does not count toward coverage (GRAMMAR#match-arm — the compiler cannot
+# prove the guard holds), so `A if c => …` still leaves `A` uncovered.
 fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	# an unguarded catch-all covers whatever the arms above it did not
 	ca := c_catchall_at(arms)
@@ -7926,7 +7926,7 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 
 fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# `Color.Red` — a variant NAMED BY ITS ENUM. The bare `Red` is what the grammar makes
-	# normative (a bare name is a variant when it resolves to one, GRAMMAR:428), and it
+	# normative (a bare name is a variant when it resolves to one, GRAMMAR#variant-pat), and it
 	# stays; this is the same value said unambiguously, which is what a reader reaches for
 	# when two enums are in scope and the bare names do not say which is meant. It is
 	# answered before inference for the reason `E.of(n)` is: an enum name is not a binding,
@@ -9100,7 +9100,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	}
 	sig = sig + ") {\n"
 
-	# A BLOCK'S VALUE IS ITS LAST STATEMENT'S (docs/surface/grammar.md:396), and a function
+	# A BLOCK'S VALUE IS ITS LAST STATEMENT'S (GRAMMAR#block), and a function
 	# body is a block. Written without a `return`, the value used to be computed and thrown
 	# away: `fn(a: int) -> int { a + 5 }` emitted `(zgt_a + 5);` and then fell off the end of
 	# a non-void C function, so the call answered whatever was in the return register.

@@ -182,11 +182,11 @@ the program, which is what the assertion exists to catch.
   literal's lexeme and refuses it, which is the first rule in the type chapter where the
   SHIPPING compiler is the narrower of the two.
 - **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
-  segfaults.** GRAMMAR:314 makes a `mut &` valid only for the call and its argument a `mut`
+  segfaults.** GRAMMAR#param makes a `mut &` valid only for the call and its argument a `mut`
   lvalue; a default has no caller variable to point at. The seed emits the default
   expression where a pointer goes, so `f(5)` on `fn f(a: int, mut &b: int = 0)` dereferences
   a literal. `zerg` refuses it at the declaration.
-- **A `mut &` argument crossing a `defer` is accepted.** GRAMMAR:314 says a borrow cannot
+- **A `mut &` argument crossing a `defer` is accepted.** GRAMMAR#param says a borrow cannot
   escape; the seed hands the deferred thunk the value where a pointer goes. `zerg` refuses
   it at the callsite.
 - **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is

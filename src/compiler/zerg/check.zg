@@ -190,14 +190,23 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 
 	return if em.env_mut[idx]
 
-	# A `const` is not an immutable binding that could have been written `mut`; it is a
-	# module constant, and there is no spelling of it that a program may write. Telling
-	# the reader to declare it `mut` would be advice that cannot be taken.
-	# ONE of the three sentences, never two. `raise` used to say that by leaving; a rule
-	# that records instead has to say it with a `return`, and forgetting to is how the
-	# first run of this reported the same assignment twice in two different words.
+	# A MODULE binding is not an immutable local that could have been written `mut`, so
+	# "declare it `mut`" is advice that cannot be taken and the answer says why instead.
+	# There are TWO kinds of them and they are immutable for different reasons: a `const`
+	# (GRAMMAR group 4) has no writable spelling in the language at all, while a plain
+	# top-level binding is immutable because the TOP LEVEL is — `mut` there is legal only
+	# inside a module-level `unsafe` group (docs/runtime/package.md). One sentence for both
+	# called a plain `COUNT := 3` a `const`, which is a word the reader can go and look up
+	# and find they did not write.
+	# ONE of the sentences, never two. `raise` used to say that by leaving; a rule that
+	# records instead has to say it with a `return`, and forgetting to is how the first run
+	# of this reported the same assignment twice in two different words.
 	if chk_is_module_binding(em, idx) {
-		chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+		if em.env_const[idx] {
+			chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+		} else {
+			chk_at(em, f"cannot assign to `{root}`: it is a module binding, and the top level is immutable — bind a `mut` copy of it here, since a `mut` binding at the top level is legal only inside a module-level `unsafe` group (docs/runtime/package.md)")
+		}
 		return
 	}
 

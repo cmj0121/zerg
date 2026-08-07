@@ -392,7 +392,7 @@ fn render_diag(d: zerg.Diag, src: str) -> str {
 	mut out := f"error: {d.msg}\n"
 	line_s := strconv.to_string(d.line, 10)
 	if d.line > 0 {
-		out = out + f"  --> {diag_place(d)}\n"
+		out = out + zerg.place_line(d.path, d.line, d.col) + "\n"
 	}
 
 	text := source_line(src, d.line)
@@ -427,13 +427,6 @@ fn caret_pad(text: str, col: int) -> str {
 		i = i + 1
 	}
 	return str(out)
-}
-
-fn diag_place(d: zerg.Diag) -> str {
-	l := strconv.to_string(d.line, 10)
-	c := strconv.to_string(d.col, 10)
-	return f"{l}:{c}" if d.path == ""
-	return f"{d.path}:{l}:{c}"
 }
 
 # caret_col is the 1-based column the caret goes under.

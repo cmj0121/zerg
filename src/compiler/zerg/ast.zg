@@ -369,6 +369,23 @@ pub fn diag_at(path: str, line: int, col: int, msg: str) -> Diag {
 	return Diag(path, line, col, msg)
 }
 
+# place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
+# beneath its first line. It lives here for the same reason diag_at does: it is ONE fact
+# about the output — the fact scripts/lib/diag.sh tells a diagnostic of ours from one of
+# cc's by, and the one `has_place` and `place_is` both read — and it was spelled out three
+# times, in the parser's refusals (p_place), in the emitter's depth limit and in the
+# driver's renderer. Three copies of a layout that a shell gate treats as one.
+#
+# The pathless form is not a fallback but a real case: a parse with no file behind it —
+# an f-string hole re-lexed on its own, a driver stage handed text — knows the position and
+# not the file, and naming a file it does not have would be worse than saying less.
+pub fn place_line(path: str, line: int, col: int) -> str {
+	l := strconv.to_string(line, 10)
+	c := strconv.to_string(col, 10)
+	return f"  --> {l}:{c}" if path == ""
+	return f"  --> {path}:{l}:{c}"
+}
+
 # FieldDef is one struct field: its name and declared type.
 struct FieldDef {
 	name: str

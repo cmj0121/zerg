@@ -223,20 +223,6 @@ fn declares_main(files: list[str]) -> bool {
 	return found
 }
 
-# entry_has_main is that question asked of the sources this build already holds. `srcs` is
-# in DEPENDENCY order — a module's imports are appended before the module — so the entry is
-# not row zero; it is the row whose path is the file the user pointed at, which is exactly
-# what diag_source looks up for a finding. One spelling of "the loaded text of this path",
-# so the `srcs` rides beside `paths` row for row invariant is asserted in one place.
-#
-# An empty answer is "no such row" and "an empty file" at once, and neither declares a
-# `main`, so the two do not need telling apart here.
-fn entry_has_main(entry: str, srcs: list[str], paths: list[str]) -> bool {
-	src := diag_source(entry, srcs, paths)
-	return false if src == ""
-	return zerg.c_has_main(zerg.parse_at(src, entry))
-}
-
 # build_stage runs the pipeline as far as `emit` asks and no further. The early stages
 # print to stdout because they are something a person is reading; the two that produce a
 # FILE take an output path, defaulting to the entry file's name.
@@ -285,34 +271,30 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		return
 	}
 
-	mut paths: list[str] = []
-	srcs := load_sources_at(files, paths)
-	mut diags: list[zerg.Diag] = []
-	lex_diags_of(srcs, paths, diags)
-	report_diags(diags, srcs, paths)
-	code := zerg.emit_files_diag(srcs, paths, diags)
-	report_diags(diags, srcs, paths)
+	# `bin` DOES NOT COME THROUGH HERE. A whole-program emit answers the `c` stage's
+	# question — one C file for the merged program — and a link does not want that file:
+	# link_program compiles unit by unit so a rebuild that changes one module recompiles
+	# one module, and it loads, parses and emits everything itself. Running both meant
+	# every source was read twice, parsed twice and lowered twice, and the whole-program
+	# C was written into a `str` and dropped. Cutting it is a THIRD of a cold `--emit bin`
+	# self-build, and the diagnostics do not move: every rule that spoke here is a rule
+	# c_emit_unit runs, and it runs it with the same whole-program view (merge_asts) over
+	# every unit rather than once over the merge.
+	if emit == "bin" {
+		link_program(files[0], output, jobs)
+		return
+	}
 	if emit == "c" {
+		mut paths: list[str] = []
+		srcs := load_sources_at(files, paths)
+		mut diags: list[zerg.Diag] = []
+		lex_diags_of(srcs, paths, diags)
+		report_diags(diags, srcs, paths)
+		code := zerg.emit_files_diag(srcs, paths, diags)
+		report_diags(diags, srcs, paths)
 		guard {
 			io.write(code)
 		}
-		return
-	}
-	if emit == "bin" {
-		# A program is a build rooted at an entry file that DEFINES `fn main`
-		# (docs/runtime/package.md; GRAMMAR group 10) — grammatically a main-less source is
-		# still Zerg, so no earlier stage objects to it, and nothing used to enforce the
-		# build rule: the emitter wrote no wrapper and the first complaint was the linker's
-		# `undefined symbol _main`, against generated code nobody wrote. The finding is
-		# about the FILE, not a line in it, so it points at 1:1 — where a `fn main` would
-		# begin. `--emit lib` stays main-less on purpose: an object file is what a module
-		# is for.
-		if not entry_has_main(files[0], srcs, paths) {
-			mut nomain: list[zerg.Diag] = []
-			nomain.append(zerg.diag_at(files[0], 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
-			report_diags(nomain, srcs, paths)
-		}
-		link_program(files[0], output, jobs)
 		return
 	}
 	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
@@ -595,6 +577,24 @@ fn link_program(entry: str, output: str, jobs: int) {
 	# every unit is emitted before anything is reported, so one run answers for the whole
 	# program rather than for its first bad module
 	report_diags(diags, unit_srcs(units), unit_paths(units))
+
+	# A program is a build rooted at an entry file that DEFINES `fn main`
+	# (docs/runtime/package.md; GRAMMAR group 10) — grammatically a main-less source is
+	# still Zerg, so no earlier stage objects to it, and nothing used to enforce the build
+	# rule: the emitter wrote no wrapper and the first complaint was the linker's
+	# `undefined symbol _main`, against generated code nobody wrote. The finding is about
+	# the FILE, not a line in it, so it points at 1:1 — where a `fn main` would begin.
+	# `--emit lib` stays main-less on purpose: an object file is what a module is for.
+	#
+	# It is asked HERE because here is where the answer already is: `trees` holds every
+	# unit parsed once, and the entry is the LAST of them — load_unit appends a unit after
+	# the ones it imports, which is the same fact `--emit lib` reads it by. Asked in the
+	# driver it cost a second read of the entry off disk and a second parse of it.
+	if not zerg.c_has_main(trees[trees.len() - 1]) {
+		mut nomain: list[zerg.Diag] = []
+		nomain.append(zerg.diag_at(entry, 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		report_diags(nomain, unit_srcs(units), unit_paths(units))
+	}
 
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link

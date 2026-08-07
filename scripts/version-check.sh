@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# version-check — one version, three derivations, and they agree.
+# version-check — one version, four derivations, and they agree.
 #
 # The root VERSION file is the source of truth, and each thing downstream of it is derived
 # by a mechanism of its own: a generated Zerg source the shipping compiler compiles in, the
-# linker's -X into the seed, and the file itself read back. Three mechanisms is three
-# chances to drift, and the failure mode is silent by construction — a stale `--version` is
-# a string that prints happily and is simply not true. No build breaks, no test fails, and
-# the number a user quotes in a bug report names the wrong compiler.
+# linker's -X into the seed, a hand-written badge URL in the READMEs, and the file itself
+# read back. Four mechanisms is four chances to drift, and the failure mode is silent by
+# construction — a stale `--version` is a string that prints happily and is simply not true.
+# No build breaks, no test fails, and the number a user quotes in a bug report names the
+# wrong compiler.
 #
 # So the derivations are not trusted; they are compared. What this asserts is that the
 # NUMBER matches, plus the ONE WORD that says which compiler answered — not that the banners
@@ -219,8 +220,34 @@ ask() {
 ask "$ZERG --version" "$ZERG" "(self-hosted)"
 ask "$ZERG0 --version" "$ZERG0" "(seed)"
 
+# --- 4. the number the READMEs show a visitor -------------------------------------------
+#
+# The version badge is a STATIC shields.io URL, because there is nothing dynamic to point it
+# at: VERSION is plain text rather than JSON, and the repo cuts no GitHub release for a tag
+# badge to read. So it is a fourth derivation of the same number, written by hand, in the one
+# place a person looks first — and it drifts exactly the way the others do, silently, with a
+# rendered image that is simply not true.
+#
+# `-` is shields.io's field separator, so a prerelease VERSION such as `0.1.0-rc.1` is spelled
+# `0.1.0--rc.1` in the URL. The doubling is undone before comparing; every other byte of a
+# SemVer passes through the URL as itself.
+for readme in README.md README.zh-TW.md; do
+	if [ ! -f "$readme" ]; then
+		echo "MISSING   $readme — the version badge lives at the top of it"
+		fail=$((fail + 1))
+		continue
+	fi
+	badge="$(sed -n 's|.*img\.shields\.io/badge/version-\(.*\)-[A-Za-z0-9#]*).*|\1|p' "$readme" | head -1)"
+	if [ -z "$badge" ]; then
+		echo "MISSING   $readme has no img.shields.io version badge to check"
+		fail=$((fail + 1))
+		continue
+	fi
+	agree "$readme badge" "${badge//--/-}" ""
+done
+
 if [ $fail -ne 0 ]; then
 	echo "version-check: $fail finding(s) — the toolchain does not carry the version in $VERSION_FILE"
 	exit 1
 fi
-echo "version-check: the generated source and both compilers carry $want"
+echo "version-check: the generated source, both compilers and both READMEs carry $want"

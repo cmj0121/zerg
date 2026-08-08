@@ -546,7 +546,7 @@ fn c_is_lit_tree(e: Expr) -> bool {
 # checks come first, explicitly, and c_lit_checked is what every caller must use.
 fn c_lit_as_float(e: Expr) -> str {
 	return match e {
-		EInt(lex) => f"((double){strconv.to_string(int_value(lex), 10)})"
+		EInt(lex, _, _) => f"((double){strconv.to_string(int_value(lex), 10)})"
 		EUnary(_, x) => f"(-{c_lit_as_float(x)})"
 		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
 		_ => ""
@@ -567,7 +567,7 @@ fn c_lit_checked(mut &em: Emitter, e: Expr) -> str {
 # is c_lit_as_float's, and what is wanted here is only the finding.
 fn c_lit_widths(mut &em: Emitter, e: Expr) {
 	match e {
-		EInt(lex) => chk_int_literal(em, lex)
+		EInt(lex, _, _) => chk_int_literal(em, lex)
 		EUnary(_, x) => c_lit_widths(em, x)
 		EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
 		_ => c_skip()
@@ -3240,7 +3240,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex) => c_int_dec(em, lex)
+		EInt(lex, _, _) => c_int_dec(em, lex)
 		EFloat(lex) => lex
 		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
@@ -3833,8 +3833,8 @@ fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
 # source, which is what makes `-1` a constant rather than a negation.
 fn c_is_int_lit(x: Expr) -> bool {
 	return match x {
-		EInt(_) => true
-		_       => false
+		EInt(_, _, _) => true
+		_             => false
 	}
 }
 
@@ -6055,7 +6055,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 
 fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
-		EInt(_) => TInt
+		EInt(_, _, _) => TInt
 		EFloat(_) => TFloat
 		EStr(_) => TStr
 		EBool(_) => TBool

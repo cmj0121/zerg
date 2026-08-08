@@ -68,7 +68,7 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 	for d in em.diags {
 		return if d.line == line and d.col == col and d.path == path and d.msg == msg
 	}
-	em.diags.append(Diag(path, line, col, msg))
+	em.diags.append(Diag(path, line, col, msg, ""))
 }
 
 # --- visibility -------------------------------------------------------------------
@@ -154,14 +154,20 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 #
 # It keys on the STATEMENT's place, which is all `chk_at`'s marker carries — so two conversions
 # on one line collapse into one finding. That under-reports rather than over-reports, and the
-# second appears once the first is fixed.
+# second appears once the first is fixed. A caller that KNOWS a narrower place says so with
+# chk_note_at, and an integer literal is the one node that does: it carries the token's own
+# line and column, because a fix an editor can apply has to point at what it would rewrite.
 fn chk_note(mut &em: Emitter, msg: str) {
+	chk_note_at(em, em.at_line, em.at_col, msg, "")
+}
+
+fn chk_note_at(mut &em: Emitter, line: int, col: int, msg: str, fix: str) {
 	return if not em.want_lints
 
 	for d in em.lints {
-		return if d.line == em.at_line and d.col == em.at_col and d.path == em.at_path and d.msg == msg
+		return if d.line == line and d.col == col and d.path == em.at_path and d.msg == msg
 	}
-	em.lints.append(Diag(em.at_path, em.at_line, em.at_col, msg))
+	em.lints.append(Diag(em.at_path, line, col, msg, fix))
 }
 
 # --- mutability ------------------------------------------------------------------
@@ -978,7 +984,7 @@ fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 
 fn chk_lit_leaves_fit(e: Expr) -> bool {
 	return match e {
-		EInt(lex) => int_fits(lex)
+		EInt(lex, _, _) => int_fits(lex)
 		EUnary(_, x) => chk_lit_leaves_fit(x)
 		EBinary(_, a, b) => chk_lit_leaves_fit(a) and chk_lit_leaves_fit(b)
 		_ => false
@@ -1035,7 +1041,7 @@ fn chk_lit_offender_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr, neg: bool
 fn chk_lit_says(e: Expr, neg: bool) -> str {
 	return match e {
 		EUnary(_, x) => chk_lit_says(x, not neg)
-		EInt(lex) => chk_lit_sign(lex, neg)
+		EInt(lex, _, _) => chk_lit_sign(lex, neg)
 		EBinary(_, _, _) => chk_lit_folded_says(e, neg)
 		_ => "this"
 	}
@@ -1089,8 +1095,39 @@ fn chk_lit_note_leaves(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
 	match e {
 		EUnary(_, x) => chk_lit_note_leaves(em, want, x, not neg)
 		EBinary(_, a, b) => chk_lit_note_pair(em, want, a, b)
-		_ => chk_note(em, f"L502 the literal `{chk_lit_says(e, neg)}` is a {ty_name(want)} here — write `{chk_lit_shown(want, e, neg)}` and the page shows it")
+		_ => chk_lit_note_leaf(em, want, e, neg)
 	}
+}
+
+# chk_lit_note_leaf reports ONE leaf, at the LEAF's own place rather than the statement's.
+#
+# That is what makes the finding actionable rather than only true. `x: float = 1 / 2` has two
+# of them on one line, and a finding that points at the statement points at both — an editor
+# cannot rewrite "the `1`" when the place it is given is the `x`. The token's line and column
+# ride on `EInt` for exactly this, and they are also what stops the two from deduping into one:
+# chk_note_at keys on the place, and these two places differ.
+fn chk_lit_note_leaf(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
+	shown := chk_lit_shown(want, e, neg)
+	msg := f"L502 the literal `{chk_lit_says(e, neg)}` is a {ty_name(want)} here — write `{shown}` and the page shows it"
+
+	# THE SENTENCE AND THE FIX ARE ONE DECISION, made here and carried in one Diag. A server
+	# that read `shown` back out of `msg` would be a second copy of it, and the day the wording
+	# changes the copy silently rewrites source into something else.
+	#
+	# A NEGATED leaf is not offered one: the `-` is a node ABOVE the digits and the place is the
+	# digits', so replacing at that place would drop the sign — `-1` would become `1.0`. The
+	# finding still reports; what it withholds is the mechanical answer, which is the honest
+	# thing to withhold when the place and the thing to rewrite are not the same span.
+	match e {
+		EInt(_, line, col) => chk_note_at(em, line, col, msg, chk_fix_unless(neg, shown))
+		_ => chk_note(em, msg)
+	}
+}
+
+fn chk_fix_unless(neg: bool, shown: str) -> str {
+	return "" if neg
+
+	return shown
 }
 
 fn chk_lit_note_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr) {
@@ -1164,7 +1201,7 @@ fn chk_lit_in_range(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> bool {
 	return match e {
 		EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
 		EBinary(o, a, b) => chk_lit_pair_in_range(em, want, o, a, b, neg)
-		EInt(lex) => chk_int_in_range(em, want, int_value(lex), neg)
+		EInt(lex, _, _) => chk_int_in_range(em, want, int_value(lex), neg)
 		_ => false
 	}
 }
@@ -1239,8 +1276,8 @@ fn chk_lit_eval(e: Expr) -> Folded {
 		# said "this divides by a constant `0`" about `n % 99999999999999999999`, naming a
 		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
 		# happen, which is what `ok` is for.
-		EInt(lex) => Folded(int_fits(lex), int_value(lex))
-		EUnary(o, x) => chk_lit_eval_pair(o, EInt("0"), x)
+		EInt(lex, _, _) => Folded(int_fits(lex), int_value(lex))
+		EUnary(o, x) => chk_lit_eval_pair(o, EInt("0", 0, 0), x)
 		EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
 		_ => Folded(false, 0)
 	}

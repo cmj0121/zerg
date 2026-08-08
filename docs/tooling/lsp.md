@@ -57,6 +57,7 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
 | `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_conversions` |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
+| `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 
 Every other request is answered with a **method-not-found error**, not with silence. A client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
@@ -115,6 +116,41 @@ vim.g.zerg_format_on_save = true  -- zerg fmt on every write
 
 It answers **quietly** when `zerg` is not on `PATH`. A server that errors on every `.zg` file opened
 in a checkout without a built toolchain is one a person disables and never re-enables.
+
+The quick fixes need no configuration — `vim.lsp.buf.code_action()` is nvim's own, and the server
+declares itself a `quickfix` provider so a client that asks for that kind alone still gets them.
+
+## A quick fix is the compiler's answer, not the server's
+
+A **code action** is what an editor offers at a diagnostic: a named edit the user can apply with a
+keystroke. `L502` has one — the finding already says what to write, so the editor may as well write
+it:
+
+```zerg
+x: float = 1 / 2      # two findings: the `1` is a float here, and so is the `2`
+                      # quick fix on each: Write `1.0`, Write `2.0`
+```
+
+Two things had to be true first, and neither was:
+
+- **The finding has to point at the literal.** `Diag` carries the place of the STATEMENT, which is
+  the grain the compiler's marker has — and both literals above are in one statement, so an editor
+  told to fix "the `1`" would have been handed the position of the `x`. An integer literal now
+  carries the token's own line and column, which is also what stops two findings on one line from
+  deduping into one.
+- **The replacement has to come from the compiler.** It rides in `Diag.fix`, beside the message,
+  because the two are one decision. A server that read `1.0` back out of the sentence "write `1.0`"
+  would be the second copy this page exists to forbid — and the day the wording changes, the copy
+  rewrites source into whatever it managed to parse.
+
+A finding with no mechanical answer carries no `fix` and offers no action. An editor that offers a
+quick fix and then does nothing is worse than one that offers none, because the user learns the menu
+lies.
+
+The rewrite is **not** `zerg fmt`'s. The formatter reads tokens and must work on source the compiler
+cannot compile ([Formatter & Linter](fmt.md)); knowing that `1` became a `float` needs types, so a
+formatter that did this would fail in exactly the buffer a person reaches for it in. It is also an
+opinion — `1.5 + 1` is a legal program — and the formatter has none.
 
 ## Keeping the editor honest
 

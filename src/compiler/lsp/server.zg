@@ -239,6 +239,10 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, [])))
 	} else if method == "textDocument/formatting" {
 		ls_reply(id, ls_formatting_result(s, jstr(jat3(msg, "params", "textDocument", "uri"))))
+	} else if method == "textDocument/codeAction" {
+		params := jget(msg, "params")
+		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
+		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -285,6 +289,13 @@ fn ls_initialize_result() -> JVal {
 	mut caps := jfields()
 	jput_int(caps, "textDocumentSync", 1)
 	jput_bool(caps, "documentFormattingProvider", true)
+
+	# The code actions this server offers are all QUICK FIXES, and saying so is not decoration:
+	# an editor uses the kind to decide what a keystroke reaches and what only a menu does, and
+	# a client that asks `only: ["quickfix"]` gets nothing from a server that declares no kinds.
+	mut ca := jfields()
+	jput(ca, "codeActionKinds", jarr_of([jstr_of("quickfix")]))
+	jput(caps, "codeActionProvider", jobj_of(ca))
 
 	mut info := jfields()
 	jput_str(info, "name", "zerg")
@@ -493,6 +504,22 @@ fn ls_diagnostic_at(text: str, line: int, col: int, msg: str, severity: int) -> 
 # the word at the position — an identifier if there is one there, one character otherwise.
 
 fn ls_word_range(text: str, line: int, col: int) -> JVal {
+	sp := ls_word_span(text, line, col)
+	return ls_range_of(sp.sl, sp.sc, sp.el, sp.ec)
+}
+
+# Span is a range as four numbers rather than as JSON. A code action needs to COMPARE one
+# against the range the client asked about, and comparing two JVals means reading back out of
+# the thing just built — so the numbers exist before the object does, and both the diagnostic
+# and the action are rendered from them.
+struct Span {
+	sl: int
+	sc: int
+	el: int
+	ec: int
+}
+
+fn ls_word_span(text: str, line: int, col: int) -> Span {
 	ln := ls_line_at(text, line - 1)
 	b := list[byte](ln)
 	mut lo := col - 1
@@ -509,7 +536,24 @@ fn ls_word_range(text: str, line: int, col: int) -> JVal {
 	if hi == lo and lo < b.len() {
 		hi = lo + 1
 	}
-	return ls_range_of(line - 1, ls_utf16_col(b, lo), line - 1, ls_utf16_col(b, hi))
+	return Span(line - 1, ls_utf16_col(b, lo), line - 1, ls_utf16_col(b, hi))
+}
+
+# ls_span_touches is whether a finding is one the client is asking about. It is an OVERLAP and
+# not containment: an editor sends the cursor as an empty range, and a cursor sitting anywhere
+# in `100` — including at either end of it — is a person asking about that literal.
+fn ls_span_touches(sp: Span, req: Span) -> bool {
+	return false if ls_pos_lt(sp.el, sp.ec, req.sl, req.sc)
+	return false if ls_pos_lt(req.el, req.ec, sp.sl, sp.sc)
+
+	return true
+}
+
+fn ls_pos_lt(al: int, ac: int, bl: int, bc: int) -> bool {
+	return true if al < bl
+	return false if al > bl
+
+	return ac < bc
 }
 
 fn ls_range_of(sl: int, sc: int, el: int, ec: int) -> JVal {
@@ -559,6 +603,97 @@ fn ls_line_at(text: str, idx: int) -> str {
 }
 
 # --- formatting ------------------------------------------------------------------------
+
+# ls_code_action_result answers `textDocument/codeAction`: the quick fixes for the findings the
+# client's range touches.
+#
+# THE FIX IS THE COMPILER'S, not the server's. A finding that has a mechanical answer carries it
+# in `Diag.fix`, and all this does is put it where the editor expects — a title, a kind, and one
+# edit over the finding's own range. The alternative, reading the replacement back out of the
+# message text, is the second copy of a language fact this file is written to avoid: today the
+# sentence says "write `1.0`", and the day it says something else the copy would rewrite source
+# into whatever it managed to parse.
+#
+# It re-lints rather than remembering what was published. Phase 1 re-checks the whole program per
+# keystroke anyway, so a cache would be a second answer to a question already being asked — and
+# a stale one exactly when the buffer has just changed, which is when a fix is asked for.
+fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> Program) -> JVal {
+	mut out: list[JVal] = []
+	return jarr_of(out) if not ls_has_doc(s, uri)
+
+	text := ls_doc_text(s, uri)
+	path := ls_uri_path(uri)
+	for d in ls_fixable(path, text, load) {
+		sp := ls_word_span(text, d.line, d.col)
+		if ls_span_touches(sp, req) {
+			out.append(ls_quick_fix(uri, sp, d))
+		}
+	}
+	return jarr_of(out)
+}
+
+# ls_fixable is every finding on THIS file that carries a fix. A finding without one is not an
+# action: an editor that offers "quick fix" and then does nothing is worse than an editor that
+# offers nothing, because the user learns the menu lies.
+fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg.Diag] {
+	mut out: list[zerg.Diag] = []
+	res := guard {
+		load(path, text)
+	}
+	prog := match res {
+		Left(p)  => p
+		Right(_) => program([], [])
+	}
+	return out if prog.srcs.len() == 0
+
+	lints := match guard {
+		zerg.lint_conversions(prog.srcs, prog.paths)
+	} {
+		Left(ls) => ls
+		Right(_) => []
+	}
+	for d in lints {
+		if d.path == path and d.fix != "" {
+			out.append(d)
+		}
+	}
+	return out
+}
+
+# ls_quick_fix is one action. The DIAGNOSTIC rides along so the editor can attach the action to
+# the underline the user is looking at rather than to the line in general.
+fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
+	mut ed := jfields()
+	jput(ed, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
+	jput_str(ed, "newText", d.fix)
+
+	mut changes := jfields()
+	jput(changes, uri, jarr_of([jobj_of(ed)]))
+
+	mut wsp := jfields()
+	jput(wsp, "changes", jobj_of(changes))
+
+	mut diag := jfields()
+	jput(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
+	jput_int(diag, "severity", 3)
+	jput_str(diag, "source", "zerg")
+	jput_str(diag, "message", d.msg)
+
+	mut fs := jfields()
+	jput_str(fs, "title", f"Write `{d.fix}`")
+	jput_str(fs, "kind", "quickfix")
+	jput(fs, "diagnostics", jarr_of([jobj_of(diag)]))
+	jput(fs, "edit", jobj_of(wsp))
+	return jobj_of(fs)
+}
+
+# ls_req_span reads the range a codeAction request asks about.
+fn ls_req_span(params: JVal) -> Span {
+	r := jget(params, "range")
+	st := jget(r, "start")
+	en := jget(r, "end")
+	return Span(jint(jget(st, "line")), jint(jget(st, "character")), jint(jget(en, "line")), jint(jget(en, "character")))
+}
 
 fn ls_formatting_result(s: Server, uri: str) -> JVal {
 	mut edits: list[JVal] = []

@@ -6,6 +6,6 @@
 import "unit"
 
 fn main() {
-	print unit.SEED   # 5 — read across the module boundary
+	print unit.SEED     # 5 — read across the module boundary
 	print unit.seeded() # 7 — and from inside the unit that declares it
 }

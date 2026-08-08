@@ -1841,7 +1841,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-argument 'takes float as argument 1' place <<'EOF'
+expect "$ZERG" position-argument 'argument 1 of `f` is float' place <<'EOF'
 fn f(x: float) -> float {
 	return x
 }
@@ -1852,7 +1852,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-return 'answers float, and this returns int' place <<'EOF'
+expect "$ZERG" position-return "this function's answer is float" place <<'EOF'
 fn f() -> float {
 	i := 5
 	return i

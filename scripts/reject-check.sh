@@ -848,7 +848,7 @@ fn main() {
 }
 EOF
 
-reject typedef-value-into-its-underlying '`f` takes int as argument 1, and this gives Celsius' <<'EOF'
+reject typedef-value-into-its-underlying 'argument 1 of `f` is int, and this gives Celsius' <<'EOF'
 type Celsius = int
 
 fn f(n: int) -> int {
@@ -1015,7 +1015,7 @@ EOF
 # A signature is a promise. The conditional `return` is here on its own because it takes a
 # different path through the emitter than the plain one.
 
-reject return-str-from-int-fn 'this function answers int, and this returns str' <<'EOF'
+reject return-str-from-int-fn "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> int {
 	return "nope"
 }
@@ -1025,7 +1025,7 @@ fn main() {
 }
 EOF
 
-reject return-int-from-bool-fn 'this function answers bool, and this returns int' <<'EOF'
+reject return-int-from-bool-fn "this function's answer is bool, and this gives int" <<'EOF'
 fn f() -> bool {
 	return 1
 }
@@ -1035,7 +1035,7 @@ fn main() {
 }
 EOF
 
-reject conditional-return-wrong-type 'this function answers int, and this returns str' <<'EOF'
+reject conditional-return-wrong-type "this function's answer is int, and this gives str" <<'EOF'
 fn f(n: int) -> int {
 	return "x" if n > 0
 	return 0
@@ -1108,7 +1108,7 @@ EOF
 # written, so the parameter index and the argument's place on the line differ by one, and
 # the message says the one the reader can count.
 
-reject float-argument-into-int-parameter '`f` takes int as argument 1, and this gives float' <<'EOF'
+reject float-argument-into-int-parameter 'argument 1 of `f` is int, and this gives float' <<'EOF'
 fn f(a: int) -> int {
 	return a
 }
@@ -1118,7 +1118,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-int-parameter '`add` takes int as argument 2, and this gives str' <<'EOF'
+reject str-argument-into-int-parameter 'argument 2 of `add` is int, and this gives str' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -1129,7 +1129,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-a-method '`P.add` takes int as argument 1, and this gives str' <<'EOF'
+reject str-argument-into-a-method 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
 struct P {
 	x: int
 }
@@ -1216,7 +1216,7 @@ fn main() {
 }
 EOF
 
-reject pass-a-struct-where-another-goes '`take` takes A as argument 1, and this gives B' <<'EOF'
+reject pass-a-struct-where-another-goes 'argument 1 of `take` is A, and this gives B' <<'EOF'
 struct A {
 	x: int
 }
@@ -1234,7 +1234,7 @@ fn main() {
 }
 EOF
 
-reject return-a-struct-the-signature-does-not-name 'this function answers A, and this returns B' <<'EOF'
+reject return-a-struct-the-signature-does-not-name "this function's answer is A, and this gives B" <<'EOF'
 struct A {
 	x: int
 }
@@ -1403,7 +1403,7 @@ fn main() {
 }
 EOF
 
-reject defer-with-the-wrong-argument-type '`note` takes str as argument 1, and this gives int' <<'EOF'
+reject defer-with-the-wrong-argument-type 'argument 1 of `note` is str, and this gives int' <<'EOF'
 fn note(s: str) {
 	print(s)
 }
@@ -2599,7 +2599,7 @@ fn main() {
 }
 EOF
 
-reject str-into-a-result-left 'what this function answers is int, and this gives str' <<'EOF'
+reject str-into-a-result-left "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> Result[int] {
 	return Left("hi")
 }
@@ -2609,7 +2609,7 @@ fn main() {
 }
 EOF
 
-reject int-into-an-either-right 'what this function answers is str, and this gives int' <<'EOF'
+reject int-into-an-either-right "this function's answer is str, and this gives int" <<'EOF'
 fn f() -> Either[int, str] {
 	return Right(7)
 }

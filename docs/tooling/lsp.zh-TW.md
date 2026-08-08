@@ -49,6 +49,7 @@ module 擁有協定;driver 擁有檔案系統。
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                           |
 | `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_conversions` |
 | `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式         |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix       |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -96,6 +97,35 @@ vim.g.zerg_format_on_save = true  -- 每次寫入都跑 zerg fmt
 
 當 `zerg` 不在 `PATH` 上時它**安靜地**回答。在一個沒有建好 toolchain 的 checkout 裡,每開一個 `.zg` 就報錯的 server,
 是人會停用而且再也不會啟用的那種。
+
+quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己的,而 server 宣告自己是 `quickfix` provider,所以
+即使 client 只要求這一種 kind 也拿得到。
+
+## quick fix 是編譯器的答案,不是 server 的
+
+**code action** 是編輯器在一則診斷上提供的東西:一個具名的編輯,使用者按一個鍵就能套用。`L502` 有一個——finding 本來
+就說了該寫什麼,那不如讓編輯器直接寫:
+
+```zerg
+x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 也是
+                      # 各自的 quick fix:Write `1.0`、Write `2.0`
+```
+
+有兩件事必須先成立,而兩件都還不成立:
+
+- **finding 必須指在那個 literal 上。** `Diag` 帶的是**敘述**的位置,那是編譯器 marker 的粒度——而上面兩個 literal 在
+  同一個敘述裡,所以一個被要求去修「那個 `1`」的編輯器,拿到的會是 `x` 的位置。整數 literal 現在帶著 token 自己的行與
+  列,而那也正是讓同一行的兩則 finding 不會被去重成一則的東西。
+- **替換文字必須來自編譯器。** 它跟訊息一起放在 `Diag.fix` 裡,因為兩者是同一個決定。一個從「write `1.0`」這句話裡把
+  `1.0` 讀回來的 server,就是本頁要禁止的那份第二拷貝——而措辭改動的那一天,拷貝會把原始碼改寫成它剛好剖析得出來的
+  東西。
+
+沒有機械答案的 finding 不帶 `fix`,也就不提供 action。一個提供了 quick fix 然後什麼也不做的編輯器,比一個什麼都不提供
+的更糟,因為使用者學到的是「這個選單會騙人」。
+
+這個改寫**不是** `zerg fmt` 的工作。formatter 讀的是 token,而且必須能在編譯器編不過的原始碼上運作(見
+[Formatter 與 Linter](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
+最需要它的那種 buffer 裡失效。它同時也是一個意見——`1.5 + 1` 是合法程式——而 formatter 沒有意見。
 
 ## 讓編輯器保持誠實
 

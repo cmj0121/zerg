@@ -506,7 +506,84 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
+	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
+	# `0` in a double. The literals took the position's type before the operator ran, so the
+	# operator runs on doubles — which is the whole of what "guess, then compute in the guessed
+	# type" means at this end of the compiler.
+	#
+	# An integer target needs nothing here. Every operand and every intermediate was measured
+	# against it by chk_lit_pair_in_range, so the C arithmetic and the checked arithmetic the
+	# checker folded with cannot disagree about a value both have already agreed fits.
+	return c_lit_checked(em, e) if c_is_float(want) and c_is_lit_tree(e)
+
 	return c_copied(em, want, e, sb)
+}
+
+# c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# float, asked here rather than restated, so the emitter cannot render a tree the checker did
+# not admit — with one thing added: an OPERATOR has to stand somewhere in it. A bare literal
+# is a literal tree and needs no help, because C reads `2` into a double as `2.0`; what needs
+# help is an operator standing between two of them.
+fn c_is_lit_tree(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and c_is_lit_tree(x)
+		EBinary(_, _, _) => chk_lit_float_tree(e)
+		_ => false
+	}
+}
+
+# c_lit_as_float renders the tree with every leaf a double, so C's own promotion rules never
+# get a chance to make an integer of it. The leaf is written from its VALUE rather than from
+# its lexeme, because a lexeme may carry a base prefix or a digit separator that C does not
+# read the same way — `0xFF` it would, `1_000` it would not.
+#
+# IT IS THE ONLY WALK THE TREE GETS, and that is the trap in it. Every other expression is
+# rendered by c_expr, which visits each node and carries the checks with it — c_int_dec asks
+# whether the lexeme fits i64, c_binexpr asks chk_binary and with it the constant divisor. A
+# tree rendered here is never walked by c_expr at all, so both questions went unasked:
+# `x: float = 99999999999999999999 + 1` printed `1`, and `n + 1 / 0` printed `inf`. So the
+# checks come first, explicitly, and c_lit_checked is what every caller must use.
+fn c_lit_as_float(e: Expr) -> str {
+	return match e {
+		EInt(lex, _, _) => f"((double){strconv.to_string(int_value(lex), 10)})"
+		EUnary(_, x) => f"(-{c_lit_as_float(x)})"
+		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
+		_ => ""
+	}
+}
+
+# c_lit_checked is c_lit_as_float with the walk's questions asked of every node first: the
+# width of each leaf, and a constant zero divisor anywhere in the tree. Rendering carries on
+# after a finding, as every rule here does — the C is thrown away once the list is non-empty.
+fn c_lit_checked(mut &em: Emitter, e: Expr) -> str {
+	c_lit_widths(em, e)
+	c_skip_bool(chk_const_divisors(em, e))
+
+	return c_lit_as_float(e)
+}
+
+# c_lit_widths asks c_int_dec's question of every leaf without taking its answer: the rendering
+# is c_lit_as_float's, and what is wanted here is only the finding.
+fn c_lit_widths(mut &em: Emitter, e: Expr) {
+	match e {
+		EInt(lex, _, _) => chk_int_literal(em, lex)
+		EUnary(_, x) => c_lit_widths(em, x)
+		EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
+		_ => c_skip()
+	}
+}
+
+fn c_lit_widths_pair(mut &em: Emitter, a: Expr, b: Expr) {
+	c_lit_widths(em, a)
+	c_lit_widths(em, b)
+}
+
+# a match arm is an expression, so discarding a bool needs a name to discard it into
+fn c_skip_bool(b: bool) {
+	return if b
+
+	return
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -3163,7 +3240,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex) => c_int_dec(em, lex)
+		EInt(lex, _, _) => c_int_dec(em, lex)
 		EFloat(lex) => lex
 		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
@@ -3566,9 +3643,17 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		}
 	}
 
-	ca := c_expr(em, a, sb)
-	cb := c_expr(em, b, sb)
-	return c_floordiv(em, ta, c_infer(em, b), ca, cb) if oper == "//"
+	# THE OTHER OPERAND IS A POSITION, so a literal tree standing beside a float is a tree of
+	# floats — and C will not read it that way on its own. `n + 1 / 2` for a float `n` was
+	# `2`: the checker had already typed the `1 / 2` as float (chk_lit_fits, at the operand
+	# slot), and then this line rendered it with c_expr, which divides two integers. Silent,
+	# and in every mixed expression — the same shape of miss c_into's comment describes at the
+	# six slots it serves, at the seventh nobody had told.
+	tb := c_infer(em, b)
+	pair_is_float := c_is_float(ta) or c_is_float(tb)
+	ca := c_operand(em, pair_is_float, a, sb)
+	cb := c_operand(em, pair_is_float, b, sb)
+	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
@@ -3576,6 +3661,18 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_operand renders one side of a binary expression. It is c_expr, plus the one thing c_expr
+# cannot know: whether the OTHER side made this one a float.
+#
+# The pair's floatness is asked rather than the result's, because a comparison answers `bool`
+# and its operands are still two floats — `n < 1 / 2` has to divide as a float exactly as
+# `n + 1 / 2` adds as one.
+fn c_operand(mut &em: Emitter, pair_is_float: bool, e: Expr, sb: Subst) -> str {
+	return c_lit_checked(em, e) if pair_is_float and c_is_lit_tree(e)
+
+	return c_expr(em, e, sb)
 }
 
 # c_eq_legal is "does `==` mean anything on this type" — ONE predicate, asked by the operator
@@ -3736,8 +3833,8 @@ fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
 # source, which is what makes `-1` a constant rather than a negation.
 fn c_is_int_lit(x: Expr) -> bool {
 	return match x {
-		EInt(_) => true
-		_       => false
+		EInt(_, _, _) => true
+		_             => false
 	}
 }
 
@@ -5353,6 +5450,25 @@ fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 	return c_fit_copied(em, chk_slot_says(key, idx + 1), em.pr_ty[row], a, c_nosub())
 }
 
+# c_captured_ty is the type of the FIELD c_captured's value is stored in, and the pair is why it
+# exists: `spawn` and `defer` each build an environment struct, and each typed its fields from
+# `c_infer` of the ARGUMENT while c_captured rendered the value at the PARAMETER's type. The two
+# agree until a position does something to a value on its way in — and then they do not:
+#
+#     spawn work(3 / 2)      # work(v: float)
+#     zgt_se2->f0 = (((double)3) / ((double)2));   /* 1.5, into an int64_t field */
+#
+# printed `1`. It is the same disagreement `spawn work(1.5)` on a `float?` parameter turned into
+# a cc error against generated C — the carrier is built at the parameter's type and stored in a
+# field shaped like the argument. One function answers for both, beside the one that renders the
+# value, because the two answers are one decision.
+fn c_captured_ty(mut &em: Emitter, key: str, idx: int, a: Expr) -> Ty {
+	row := c_param_row(em, key, idx)
+	return c_infer(em, a) if row < 0 or ty_is_chan(em.pr_ty[row])
+
+	return em.pr_ty[row]
+}
+
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
 	row := c_param_row(em, fname, idx)
 	return TUnknown if row < 0
@@ -5939,7 +6055,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 
 fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
-		EInt(_) => TInt
+		EInt(_, _, _) => TInt
 		EFloat(_) => TFloat
 		EStr(_) => TStr
 		EBool(_) => TBool
@@ -6916,7 +7032,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut i := 0
 	for i < args.len() {
 		fi := "f" + strconv.to_string(i, 10)
-		at := c_infer(em, args[i])
+		at := c_captured_ty(em, cal.key, i, args[i])
 		fields = fields + " " + c_type(at) + " " + fi + ";"
 		if i > 0 {
 			call = call + ", "
@@ -7303,7 +7419,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	mut call := ""
 	mut i := 0
 	for i < args.len() {
-		ft := c_type(c_infer(em, args[i]))
+		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
 			vals = vals + ", "

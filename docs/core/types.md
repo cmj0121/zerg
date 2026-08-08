@@ -175,7 +175,18 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 
   An adoption away from the literal's default is a **lint** finding (`L502`), because the reader of
   `xs: list[byte] = [1, 2]` should be able to see bytes on the page rather than infer them from the
-  declaration.
+  declaration. The finding names each literal and hands over the spelling that shows it — `1.0` for a
+  `float`, `byte(1)` where the type has no literal form of its own.
+
+- **An expression of literals is a literal.** Nothing in `100 + 100` has a type of its own, so the whole
+  of it adopts: `x: byte = 100 + 100` is byte arithmetic answering `200`. Each part is measured against
+  the target **before** the operator runs — `x: byte = 300 - 100` is refused, naming the `300`, not the
+  `200` it would come to — and the arithmetic that follows is the target's own, so `x: byte = 200 + 100`
+  is refused too. A `float` target makes the operators float operators: **`x: float = 1 / 2` is `0.5`**,
+  because both literals are floats before the `/` runs.
+
+  A division by a constant `0` is a compile error wherever it is written, reachable or not — the same
+  argument as a literal that does not fit, at the one operator that fails without any type being wrong.
 
 > **[not yet]** The **upper half of `uint`** cannot be written as a literal. Every integer literal is measured
 > against `int` before its position is consulted, so `u: uint = 18446744073709551615` is rejected with

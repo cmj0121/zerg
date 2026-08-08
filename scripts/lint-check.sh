@@ -181,18 +181,11 @@ EOF
 
 # --- L5xx — conversion ------------------------------------------------------------
 #
-# The family that needs TYPES, which is why the linter asks the lowering walk for it. Both
-# halves are here: a VALUE that converted, and a LITERAL that took a type the page does not
-# show. `1.5 + 1.0` is in the second program on purpose — it must NOT be reported, which is
-# the whole argument for reporting `1.5 + 1`.
-
-lint L501 'converts to float here' <<'EOF'
-fn main() {
-	i := 200
-	f: float = i
-	print f
-}
-EOF
+# The family that needs TYPES, which is why the linter asks the lowering walk for it. `L501`
+# stood here too, over a VALUE that converted at a position; that program is a compile error
+# now, so the case went with the rule. What is left is the LITERAL that took a type the page
+# does not show — and `1.5 + 1.0` is in the program on purpose, because it must NOT be
+# reported, which is the whole argument for reporting `1.5 + 1`.
 
 lint L502 'the page does not show it' <<'EOF'
 fn main() {

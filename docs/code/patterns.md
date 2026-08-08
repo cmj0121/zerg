@@ -16,8 +16,9 @@ functional chains. Three ways to keep closures readable, in order of preference:
 1. **Name the function** — first-class functions pass by name, so a named `fn` is reusable, testable, and
    clutter-free at the call site.
 2. **Write a `for` loop** — often the clearest, and the most procedural-first.
-3. **Inline `fn` with inferred types** — for a one-off, when the function type is known at the call site the
-   parameter and result types may be omitted.
+3. **Inline `fn` that fits its slot** — for a one-off, an untyped parameter takes its type from the
+   function type the closure is checked against; the result type is still written — an absent `-> type`
+   means nil, never an inference ([Type System](../core/type-system.md)).
 
    > **[not yet]** An inline `fn` whose parameters carry no type is refused: `xs.map(fn(x) { return x *% 2 })`
    > reports _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the
@@ -54,10 +55,10 @@ for x in xs {
 }
 ```
 
-When an inline function is genuinely one-off, inferred types keep it short:
+When an inline function is genuinely one-off, the parameter type its position supplies keeps it short:
 
 ```text
-ys := xs.map(fn(x) { return x *% 2 })      # x: int and -> int inferred from xs
+ys := xs.map(fn(x) -> int { return x *% 2 })   # x: int taken from xs; -> int written
 ```
 
 > **[not yet]** This one line is refused twice over — for the untyped `x` and for `map`, both marked above.

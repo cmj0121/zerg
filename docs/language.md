@@ -81,8 +81,8 @@ other chapter relies on. Read it first.
 
 The scalar primitives every program starts from — `bool`, `byte`, `rune`, `int`, `uint`, `float`,
 `str` — and the **product** (`struct`) and **sum** (`enum`) types, tuples, and strong-typedefs you
-build on them: how a type is declared, constructed, and converted (always by re-construction, never a
-reinterpret). See **[Types](core/types.md)**.
+build on them: how a type is declared, constructed, and converted (always written, always by
+re-construction, never a reinterpret). See **[Types](core/types.md)**.
 
 ## Specs & Generics
 

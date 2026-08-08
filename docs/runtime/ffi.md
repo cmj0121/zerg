@@ -119,7 +119,7 @@ foreign. The resource is released **only** by an explicit paired **foreign free*
 
 Wrap the raw `handle` in a **`Ref[handle]`** — the reference-counted resource box (Language Reference)
 whose `drop` is the paired foreign free — inside a **newtype you own** (a single-field `struct`, the
-pattern from [package.md](package.md), **without** the auto-cast that would re-expose the box). Its
+pattern from [package.md](package.md), **without** the accessor that would re-expose the box). Its
 **private field makes it opaque** outside its module, so it offers only safe methods, and `Ref[T]` makes
 the close **exact**: copied, returned, or sent across `spawn`, every `Db` names one connection that closes
 **once**, at the last holder's scope exit:

@@ -131,8 +131,8 @@ it for that foreign type — you own the spec, so the orphan rule is satisfied. 
 type a new capability is a first-class, everyday move, not a workaround. The only combination the rule
 forbids is a **foreign spec on a foreign type** — implementing another package's spec for another
 package's type, owning neither; for that rarer case, wrap the type in a **newtype** you own (a
-single-field struct, with an opt-in auto-cast to smooth the wrapping) and implement the spec on the
-wrapper.
+single-field struct: construction wraps it, and the way back out is a written accessor — nothing
+casts on its own) and implement the spec on the wrapper.
 
 Coherence needs **no global registry** — the orphan rule plus the **acyclic** package graph guarantee
 it. To author an implementation of `(type, spec)` a package must name both; because the dependency

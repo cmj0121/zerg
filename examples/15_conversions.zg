@@ -22,15 +22,15 @@ fn main() {
 
 	# a narrowing conversion that does not fit raises, and `guard` demotes it
 	check("byte fits", int(byte(200)), 200)
-	check("uint(-5) raises", int(guard { uint(0 - 5) } ?? 7), 7)
-	check("byte(300) raises", int(guard { byte(300) } ?? 7), 7)
+	check("uint(-5) raises", int(guard { uint(0 - 5) } ?? uint(7)), 7)
+	check("byte(300) raises", int(guard { byte(300) } ?? byte(7)), 7)
 	check("int(1e30) raises", guard { int(1e30) } ?? 7, 7)
 
 	# float -> int truncates toward zero, and 255.7 still fits a byte
 	check("truncation", int(3.9), 3)
 	check("truncation is toward zero", int(0.0 - 3.9), -3)
 	check("byte(255.7)", int(byte(255.7)), 255)
-	check("byte(256.0) raises", int(guard { byte(256.0) } ?? 7), 7)
+	check("byte(256.0) raises", int(guard { byte(256.0) } ?? byte(7)), 7)
 
 	# a malformed string is a ValueError, not a zero
 	check("a malformed str raises", guard { int("nope") } ?? 7, 7)

@@ -16,8 +16,8 @@
 import "lib"
 
 fn main() {
-	COUNT := 9 # a plain local may shadow the constant (no `const` keyword in sight)
-	print COUNT # 9 — the bare name reads the innermost binding, as ever
+	COUNT := 9      # a plain local may shadow the constant (no `const` keyword in sight)
+	print COUNT     # 9 — the bare name reads the innermost binding, as ever
 	print lib.COUNT # 3 — the qualified name reads the MODULE, never the local
 	raise ValueError("`lib.COUNT` was answered by the local binding") if lib.COUNT != 3
 	print lib.total() # 7 — the bare binding is a member too, read from inside `lib`

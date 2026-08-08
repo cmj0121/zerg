@@ -2221,7 +2221,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	k := t.kind
 	if k == Int {
 		p_advance(p)
-		return EInt(t.lexeme)
+		return EInt(t.lexeme, t.line, t.col)
 	}
 	if k == Byte {
 		# a byte literal `b'x'` is its code point AS A BYTE. It used to be a bare EInt, so it
@@ -2234,7 +2234,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
 		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(t.value), "byte")
+		return EConv(TByte, EInt(t.value, t.line, t.col), "byte")
 	}
 	if k == Rune {
 		p_advance(p)
@@ -2244,7 +2244,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# what a lexeme is worth is a fact about the LEXEME. Decoding it HERE, from a str
 		# re-read out of the token, is what made `'\0'` impossible to lex at all, because a
 		# str cannot hold a NUL (scan_char_lit says why).
-		return EConv(TRune, EInt(t.value), "rune")
+		return EConv(TRune, EInt(t.value, t.line, t.col), "rune")
 	}
 	if k == Float {
 		p_advance(p)
@@ -2310,7 +2310,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		elem := parse_type(p)
 		expect(p, RBrack)
 		expect(p, LParen)
-		mut cap: Expr = EInt("0")
+		mut cap: Expr = EInt("0", 0, 0)
 		if not p_at(p, RParen) {
 			cap = parse_expr(p)
 		}

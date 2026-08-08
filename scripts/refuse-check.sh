@@ -2002,6 +2002,71 @@ fn main() {
 }
 EOF
 
+# --- a folded literal is measured in the type it guessed ------------------------------
+#
+# An all-literal expression takes the type its position asks for and the arithmetic then
+# happens IN that type, so every step is measured against it — the operands first, and then
+# what they make. The sentence names the number the reader has to change, which is not always
+# the one the expression folds to: `300 - 100` folds to `200`, a perfectly good byte, and what
+# is wrong with the line is the `300`.
+
+expect "$ZERG" folded-result-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 200 + 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-operand-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 300 - 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-negative-into-uint '`-1` is not a value a uint holds' place <<'EOF'
+fn main() {
+	x: uint = 0 - 1
+	print int(x)
+}
+EOF
+
+# A SHAPE THE TARGET CANNOT CARRY is not a value out of range, and gets the ordinary sentence
+# rather than a false one about `1` not being a float: no double carries `%`, so the tree does
+# not adopt at all.
+expect "$ZERG" folded-shape-a-float-cannot-carry 'cannot bind int to a float binding' place <<'EOF'
+fn main() {
+	x: float = 1 % 2
+	print x
+}
+EOF
+
+# A LITERAL TREE IS RENDERED WHOLE, so it is the one expression c_expr never walks — and both
+# questions that walk asks had to be carried to it by hand. Neither is hypothetical: the first
+# printed `inf`, the second printed `1`.
+expect "$ZERG" folded-divisor-at-the-other-operand 'divides by a constant `0`' place <<'EOF'
+fn main() {
+	n: float = 4.0
+	print n + 1 / 0
+}
+EOF
+
+expect "$ZERG" folded-leaf-past-int 'does not fit an `int`' place <<'EOF'
+fn main() {
+	x: float = 99999999999999999999 + 1
+	print x
+}
+EOF
+
+# THE FOLD LEAVES i64 while every leaf fits it, which is not a value out of range and does not
+# get that sentence: 2^63 is a perfectly good `uint`, and the compiler never worked it out.
+expect "$ZERG" folded-past-what-an-int-holds "past what an \`int\` holds" place <<'EOF'
+fn main() {
+	x: uint = 9223372036854775807 + 1
+	print int(x)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

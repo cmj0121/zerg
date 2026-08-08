@@ -138,17 +138,17 @@ that does not fit its position is refused, and the fix is the **written** conver
 position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Left(e)` puts it at
 the `return`'s. Every rule below reads `T` there, never the wrapper.
 
-> **[deviation]** The list grew one silent miscompile at a time — each position the compiler had not yet
-> been told about lowered a value into a type it did not fit, the carrier cases included (`x: float? = i`
-> printed `5`; `Left(300)` into a `Result[byte]` truncated in silence). The list is the contract: a new
-> syntactic form owes an answer to "is this a typed position", and the answer belongs here.
->
-> **[deviation]** **The other operand** is the one position of the fourteen that does not reject a literal too
-> large for it. An integer literal that does not fit the other operand's type silently retypes the **whole
-> expression** to `int` rather than being a compile error: `b: byte = 1` followed by `print b + 300` compiles
-> and writes `301`. A literal that does fit adopts `byte` and is then checked like any other byte arithmetic,
-> so `b: byte = 100` makes `b + 200` an `OverflowError` at run time — the rule is present and working, and only
-> the out-of-range literal escapes it, by widening the very operand it was supposed to be measured against.
+The list grew one silent miscompile at a time — each position the compiler had not yet been told about
+lowered a value into a type it did not fit, the carrier cases included (`x: float? = i` printed `5`;
+`Left(300)` into a `Result[byte]` truncated in silence). The list is the contract: a new syntactic form
+owes an answer to "is this a typed position", and the answer belongs here. Each position now refuses a
+value of another type, and names the place it refused.
+
+**A literal that does not fit is refused at every one of them, the other operand included.** `b: byte = 1`
+followed by `b + 300` is a compile error: `300` is not a value of `byte`, so it does not adopt, and what
+is left is a `byte` beside an `int` — two types, no expression. It used to retype the whole expression to
+`int` and write `301`, which made the operand slot the one position where a literal escaped the range it
+was supposed to be measured against.
 
 ### Numeric literals
 
@@ -403,10 +403,6 @@ same error. It holds through a generic call once monomorphized, too: `byte(id(30
 `1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different
 types on the page, so a reader never has to infer a literal's type from its surroundings.
 
-> **[deviation]** The bootstrap still **converts at positions**: `x: float = i` compiles (`L501`
-> reports each such application), `i + f` compiles by promoting, and `b: byte = n` compiles and raises
-> `OverflowError` at run time — each a path this section now refuses, and `L501` retires with them.
->
 > **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
 > NAME, so a second `impl Into[…] for X` collides with the first and is refused by name — while the
 > built-in matrix has four out of `int` alone. Reaching several needs a spec method keyed by the spec

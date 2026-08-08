@@ -6348,8 +6348,13 @@ fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 }
 
 fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
+	# THE LABEL IS THE CHECKER'S, character for character. Both walks reach the same bad
+	# element and both report at the statement's place, so an identical sentence is one
+	# finding after chk_at_place's dedupe and two if the wording drifts by a word.
+	mut i := 0
 	for e in elems {
-		out.append(c_fit_copied(em, "an element of this list literal", elem, e, c_nosub()))
+		i = i + 1
+		out.append(c_fit_copied(em, chk_elem_says(i), elem, e, c_nosub()))
 	}
 }
 

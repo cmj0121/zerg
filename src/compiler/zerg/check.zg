@@ -847,10 +847,38 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 # untyped literal adopting `byte` from a byte VALUE being widened.
 fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 	we := c_list_elem(want)
+
+	# IT REPORTS HERE AND ANSWERS YES, which reads backwards and is the point. Answering no
+	# sent the caller to its own sentence, and the caller compares the two CONTAINERS — so a
+	# literal whose first element is right and whose third is wrong was reported as
+	# "cannot bind list[float] to a list[float] binding", the same type printed twice. A
+	# reader is told nothing is wrong, in an error.
+	#
+	# The element is where the mistake is, so the element is what the sentence names, by
+	# POSITION, exactly as a struct literal's field does — the two are the same shape of
+	# mistake and now read the same way. Every bad element is named, not only the first: the
+	# dedupe in chk_at_place is per message, so three wrong elements are three sentences.
+	mut reported := false
+	mut i := 0
 	for e in c_listlit_elems(ival) {
-		return false if not chk_fits_expr(em, we, c_infer(em, e), e)
+		i = i + 1
+		got := c_infer(em, e)
+		if not chk_fits_expr(em, we, got, e) {
+			chk_at(em, f"{chk_elem_says(i)} is {ty_name(we)}, and this gives {ty_name(got)}")
+			reported = true
+		}
 	}
+	return true if reported
+
 	return true
+}
+
+# chk_elem_says names a list literal's element BY POSITION, the way chk_field_says names a
+# struct's field, and it is shared with the emitter's element floor — because a slot named two
+# ways is two findings about one mistake, and chk_at_place can only dedupe sentences that
+# match. `pos` arrives 1-based, which is this file's convention for both.
+pub fn chk_elem_says(pos: int) -> str {
+	return f"element {strconv.to_string(pos, 10)} of this list literal"
 }
 
 # chk_into_builtin is the built-in `Into` matrix — docs/core/types.md's table of seven pairs,

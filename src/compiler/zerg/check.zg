@@ -690,9 +690,13 @@ pub fn chk_binding_says(name: str) -> str {
 }
 
 # CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
-# so what the sentence can point at is the SIGNATURE — which is also what chk_returned says
-# above it, in its own better words.
-const CHK_ANSWER := "what this function answers"
+# so what the sentence can point at is the SIGNATURE.
+#
+# chk_returned uses it too, and that is the whole reason it is a name rather than a string at
+# each site: both walks reach the same bad `return` and both report at the statement's place,
+# so an identical sentence is ONE finding after chk_at_place's dedupe — and two the day the
+# wording drifts by a word. It drifted, and a reader was told twice.
+const CHK_ANSWER := "this function's answer"
 
 # chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
 #
@@ -1139,7 +1143,7 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
 	if not chk_fits_expr(em, declared, got, e) {
-		chk_at(em, f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}")
+		chk_at(em, f"{CHK_ANSWER} is {ty_name(declared)}, and this gives {ty_name(got)}")
 	}
 	return got
 }
@@ -1300,7 +1304,14 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 	want := em.pr_ty[row]
 	got := c_infer(em, arg)
 	if not chk_fits_expr(em, want, got, arg) {
-		chk_at(em, f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}")
+		# THE SENTENCE IS chk_slot_says', which is what the emitter's argument floor writes
+		# too. It used to be a shape of its own — "`f` takes float as argument 1" — saying
+		# exactly what the floor said in different words, so one bad argument was reported
+		# twice: chk_at_place dedupes per sentence, and two synonyms are two sentences.
+		#
+		# It also puts an argument in the same shape as a struct field and a list element,
+		# so the four positional slots read as one family a reader learns once.
+		chk_at(em, f"{chk_slot_says(key, pos)} is {ty_name(want)}, and this gives {ty_name(got)}")
 	}
 }
 

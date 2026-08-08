@@ -1813,6 +1813,195 @@ fn main() {
 }
 EOF
 
+# --- a position wraps a value; it never converts one --------------------------------
+#
+# docs/core/type-system.md's second rule, at every position that used to break it. Each of
+# these compiled until the type-system pass: the value was converted where it landed, the
+# lint said so afterwards (`L501`, retired with the route), and the source said nothing. The
+# fix in every sentence is the same one — write the conversion — so the cases are here as a
+# GROUP, because the failure they guard against is one position being forgotten rather than
+# the rule being lost. That is the shape this file has caught four times.
+#
+# The seed refuses all of them too, and has all along; `place` is asked of every one because
+# a refusal a reader cannot locate is half a diagnostic.
+
+expect "$ZERG" position-binding-int-to-float 'cannot bind int to a float binding' place <<'EOF'
+fn main() {
+	i := 5
+	x: float = i
+	print x
+}
+EOF
+
+expect "$ZERG" position-binding-int-to-byte 'cannot bind int to a byte binding' place <<'EOF'
+fn main() {
+	n := 5
+	b: byte = n
+	print int(b)
+}
+EOF
+
+expect "$ZERG" position-argument 'takes float as argument 1' place <<'EOF'
+fn f(x: float) -> float {
+	return x
+}
+
+fn main() {
+	i := 5
+	print f(i)
+}
+EOF
+
+expect "$ZERG" position-return 'answers float, and this returns int' place <<'EOF'
+fn f() -> float {
+	i := 5
+	return i
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+expect "$ZERG" position-assignment 'cannot assign int to `acc`' place <<'EOF'
+fn main() {
+	mut acc: float = 0.0
+	i := 5
+	acc = i
+	print acc
+}
+EOF
+
+expect "$ZERG" position-struct-field 'is float, and this gives int' place <<'EOF'
+struct R {
+	deg: float
+}
+
+fn main() {
+	i := 5
+	print R(i).deg
+}
+EOF
+
+expect "$ZERG" position-list-element 'cannot bind list[int] to a list[float] binding' place <<'EOF'
+fn main() {
+	i := 5
+	xs: list[float] = [i]
+	print xs[0]
+}
+EOF
+
+# A CARRIER WRAPS, and the value inside it is at the position one level in — so the payload
+# is checked exactly as the bare binding above is. This is the case the old route reached
+# LAST: `x: float? = i` printed 5 for a year after the bare form had a rule.
+expect "$ZERG" position-carrier-payload 'is float, and this gives int' place <<'EOF'
+fn main() {
+	i := 5
+	x: float? = i
+	print x!
+}
+EOF
+
+# A CALL SOLVES ITS OWN PARAMETERS and the demand neither solves them nor converts the
+# answer, so `T` is `int` here and the `int` is refused at the binding. It used to raise
+# `OverflowError` at RUN TIME, one monomorphization later.
+expect "$ZERG" position-generic-answer 'cannot bind int to a byte binding' place <<'EOF'
+fn id[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	b: byte = id(300)
+	print int(b)
+}
+EOF
+
+# A USER `Into` IS A SPEC, not a position's licence. The method exists and `c.into()` runs
+# (test-data/codegen/into_user.zg); what is refused is the position performing it.
+expect "$ZERG" position-user-into 'cannot bind C to a int binding' place <<'EOF'
+struct C {
+	deg: int
+}
+
+impl Into[int] for C {
+	fn into() -> int {
+		return this.deg
+	}
+}
+
+fn main() {
+	c := C(20)
+	n: int = c
+	print n
+}
+EOF
+
+# --- an operator's operands are already one type ------------------------------------
+#
+# `i + u` was refused and `i + f` was promoted, and the difference between them was a
+# containment table nothing in the source mentions. One rule, one sentence, one fix.
+
+expect "$ZERG" operands-int-and-float 'must already be one type' place <<'EOF'
+fn main() {
+	i := 5
+	f := 1.5
+	print i + f
+}
+EOF
+
+expect "$ZERG" operands-int-and-uint 'must already be one type' place <<'EOF'
+fn main() {
+	i := 5
+	u := uint(2)
+	print i + u
+}
+EOF
+
+expect "$ZERG" operands-byte-and-int 'must already be one type' place <<'EOF'
+fn main() {
+	b := b'A'
+	n := 200
+	print b + n
+}
+EOF
+
+# ORDER ASKS THE SAME QUESTION, which is where the C trap lives: in C the signed operand
+# converts to unsigned, so `-1 < 1u` is false.
+expect "$ZERG" operands-compared 'must already be one type' place <<'EOF'
+fn main() {
+	i := 0 - 1
+	u := uint(1)
+	print str(i < u)
+}
+EOF
+
+# --- a form with no type, and no position to take one from ---------------------------
+#
+# "ambiguity is an error" — the consequence with no demand and no declared default to fall
+# back on. All three were quiet: `[]` reached cc against generated C in a cache file nobody
+# wrote, and the other two compiled in silence.
+
+expect "$ZERG" typeless-empty-list 'the empty list `[]`' place <<'EOF'
+fn main() {
+	x := []
+	print 1
+}
+EOF
+
+expect "$ZERG" typeless-empty-map 'the empty map `{:}`' place <<'EOF'
+fn main() {
+	x := {:}
+	print 2
+}
+EOF
+
+expect "$ZERG" typeless-nil '`nil`' place <<'EOF'
+fn main() {
+	x := nil
+	print 3
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

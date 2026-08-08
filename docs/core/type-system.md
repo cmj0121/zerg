@@ -52,7 +52,11 @@ Five notes carry the rules into the language:
   `GRAMMAR#literal`), the containers `[]` and `{:}`, `nil`, and an untyped closure parameter
   (`GRAMMAR#closure-param`). Everything else brings its type with it.
 - **A demand stops at parts.** It descends only through the four forms — never into an expression whose
-  parts already decided — and an operator chain meets pairwise, each meeting its own position.
+  parts already decided — and an operator chain meets pairwise, each meeting its own position. An
+  expression whose parts are **all** typeless has decided nothing, so the demand passes through it:
+  `x: byte = 100 + 100` is byte arithmetic, and `x: float = 1 / 2` is `0.5`, because the literals take
+  the type before the operator runs. A part that does not fit is refused where it is written — `300`
+  in `x: byte = 300 - 100` — and the arithmetic that follows is the target's own, overflow and all.
 - **A carrier moves the position in.** `x: int? = e` puts `e` against `int` — a position may **wrap**
   a value this way (a carrier, a spec's box); it never converts one.
 - **A spec-typed position builds.** The spec's box goes around the value, one way — no cast comes back,

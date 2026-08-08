@@ -841,7 +841,7 @@ fn main() {
 }
 EOF
 
-reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' <<'EOF'
+reject bind-int-list-to-str-list 'element 1 of this list literal is str' <<'EOF'
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
@@ -1252,7 +1252,7 @@ fn main() {
 }
 EOF
 
-reject bind-a-nested-list-of-the-wrong-element 'cannot bind list[list[int]] to a list[list[str]] binding' <<'EOF'
+reject bind-a-nested-list-of-the-wrong-element 'element 1 of this list literal is str' <<'EOF'
 fn main() {
 	xs: list[list[str]] = [[1]]
 	print(f"{xs.len()}")
@@ -2573,7 +2573,7 @@ EOF
 # a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
 # carrier, is where the declared type lives.
 
-reject str-into-an-optional-list-element 'an element of this list literal is int' <<'EOF'
+reject str-into-an-optional-list-element 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]
 	print xs.len()

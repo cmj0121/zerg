@@ -515,7 +515,7 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	# An integer target needs nothing here. Every operand and every intermediate was measured
 	# against it by chk_lit_pair_in_range, so the C arithmetic and the checked arithmetic the
 	# checker folded with cannot disagree about a value both have already agreed fits.
-	return c_lit_as_float(e) if c_is_float(want) and c_is_lit_tree(e)
+	return c_lit_checked(em, e) if c_is_float(want) and c_is_lit_tree(e)
 
 	return c_copied(em, want, e, sb)
 }
@@ -538,8 +538,12 @@ fn c_is_lit_tree(e: Expr) -> bool {
 # its lexeme, because a lexeme may carry a base prefix or a digit separator that C does not
 # read the same way — `0xFF` it would, `1_000` it would not.
 #
-# It takes no Emitter because it declares nothing and needs nothing: a literal tree is a
-# self-contained piece of C, which is the same reason it can be rendered at all.
+# IT IS THE ONLY WALK THE TREE GETS, and that is the trap in it. Every other expression is
+# rendered by c_expr, which visits each node and carries the checks with it — c_int_dec asks
+# whether the lexeme fits i64, c_binexpr asks chk_binary and with it the constant divisor. A
+# tree rendered here is never walked by c_expr at all, so both questions went unasked:
+# `x: float = 99999999999999999999 + 1` printed `1`, and `n + 1 / 0` printed `inf`. So the
+# checks come first, explicitly, and c_lit_checked is what every caller must use.
 fn c_lit_as_float(e: Expr) -> str {
 	return match e {
 		EInt(lex) => f"((double){strconv.to_string(int_value(lex), 10)})"
@@ -547,6 +551,39 @@ fn c_lit_as_float(e: Expr) -> str {
 		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
 		_ => ""
 	}
+}
+
+# c_lit_checked is c_lit_as_float with the walk's questions asked of every node first: the
+# width of each leaf, and a constant zero divisor anywhere in the tree. Rendering carries on
+# after a finding, as every rule here does — the C is thrown away once the list is non-empty.
+fn c_lit_checked(mut &em: Emitter, e: Expr) -> str {
+	c_lit_widths(em, e)
+	c_skip_bool(chk_const_divisors(em, e))
+
+	return c_lit_as_float(e)
+}
+
+# c_lit_widths asks c_int_dec's question of every leaf without taking its answer: the rendering
+# is c_lit_as_float's, and what is wanted here is only the finding.
+fn c_lit_widths(mut &em: Emitter, e: Expr) {
+	match e {
+		EInt(lex) => chk_int_literal(em, lex)
+		EUnary(_, x) => c_lit_widths(em, x)
+		EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
+		_ => c_skip()
+	}
+}
+
+fn c_lit_widths_pair(mut &em: Emitter, a: Expr, b: Expr) {
+	c_lit_widths(em, a)
+	c_lit_widths(em, b)
+}
+
+# a match arm is an expression, so discarding a bool needs a name to discard it into
+fn c_skip_bool(b: bool) {
+	return if b
+
+	return
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -3633,7 +3670,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 # and its operands are still two floats — `n < 1 / 2` has to divide as a float exactly as
 # `n + 1 / 2` adds as one.
 fn c_operand(mut &em: Emitter, pair_is_float: bool, e: Expr, sb: Subst) -> str {
-	return c_lit_as_float(e) if pair_is_float and c_is_lit_tree(e)
+	return c_lit_checked(em, e) if pair_is_float and c_is_lit_tree(e)
 
 	return c_expr(em, e, sb)
 }
@@ -5413,6 +5450,25 @@ fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 	return c_fit_copied(em, chk_slot_says(key, idx + 1), em.pr_ty[row], a, c_nosub())
 }
 
+# c_captured_ty is the type of the FIELD c_captured's value is stored in, and the pair is why it
+# exists: `spawn` and `defer` each build an environment struct, and each typed its fields from
+# `c_infer` of the ARGUMENT while c_captured rendered the value at the PARAMETER's type. The two
+# agree until a position does something to a value on its way in — and then they do not:
+#
+#     spawn work(3 / 2)      # work(v: float)
+#     zgt_se2->f0 = (((double)3) / ((double)2));   /* 1.5, into an int64_t field */
+#
+# printed `1`. It is the same disagreement `spawn work(1.5)` on a `float?` parameter turned into
+# a cc error against generated C — the carrier is built at the parameter's type and stored in a
+# field shaped like the argument. One function answers for both, beside the one that renders the
+# value, because the two answers are one decision.
+fn c_captured_ty(mut &em: Emitter, key: str, idx: int, a: Expr) -> Ty {
+	row := c_param_row(em, key, idx)
+	return c_infer(em, a) if row < 0 or ty_is_chan(em.pr_ty[row])
+
+	return em.pr_ty[row]
+}
+
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
 	row := c_param_row(em, fname, idx)
 	return TUnknown if row < 0
@@ -6976,7 +7032,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut i := 0
 	for i < args.len() {
 		fi := "f" + strconv.to_string(i, 10)
-		at := c_infer(em, args[i])
+		at := c_captured_ty(em, cal.key, i, args[i])
 		fields = fields + " " + c_type(at) + " " + fi + ";"
 		if i > 0 {
 			call = call + ", "
@@ -7363,7 +7419,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	mut call := ""
 	mut i := 0
 	for i < args.len() {
-		ft := c_type(c_infer(em, args[i]))
+		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
 			vals = vals + ", "

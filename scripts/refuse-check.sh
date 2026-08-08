@@ -2041,6 +2041,32 @@ fn main() {
 }
 EOF
 
+# A LITERAL TREE IS RENDERED WHOLE, so it is the one expression c_expr never walks — and both
+# questions that walk asks had to be carried to it by hand. Neither is hypothetical: the first
+# printed `inf`, the second printed `1`.
+expect "$ZERG" folded-divisor-at-the-other-operand 'divides by a constant `0`' place <<'EOF'
+fn main() {
+	n: float = 4.0
+	print n + 1 / 0
+}
+EOF
+
+expect "$ZERG" folded-leaf-past-int 'does not fit an `int`' place <<'EOF'
+fn main() {
+	x: float = 99999999999999999999 + 1
+	print x
+}
+EOF
+
+# THE FOLD LEAVES i64 while every leaf fits it, which is not a value out of range and does not
+# get that sentence: 2^63 is a perfectly good `uint`, and the compiler never worked it out.
+expect "$ZERG" folded-past-what-an-int-holds "past what an \`int\` holds" place <<'EOF'
+fn main() {
+	x: uint = 9223372036854775807 + 1
+	print int(x)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

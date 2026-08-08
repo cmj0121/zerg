@@ -13,6 +13,10 @@
 --   vim.g.zerg_lsp            set to false to not start the server at all
 --   vim.g.zerg_lsp_cmd        the command to run, default {'zerg', 'lsp'}
 --   vim.g.zerg_format_on_save set to true for `zerg fmt` on every write
+--
+-- Quick fixes need nothing here. The server declares itself a `quickfix` provider, and
+-- `vim.lsp.buf.code_action()` is nvim's own — so an `L502` finding offers "Write `1.0`"
+-- wherever the user has already bound that, and this file stays the twenty lines it is.
 
 local M = {}
 

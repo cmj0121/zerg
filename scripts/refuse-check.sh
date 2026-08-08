@@ -1883,7 +1883,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-list-element 'cannot bind list[int] to a list[float] binding' place <<'EOF'
+expect "$ZERG" position-list-element 'element 1 of this list literal is float' place <<'EOF'
 fn main() {
 	i := 5
 	xs: list[float] = [i]

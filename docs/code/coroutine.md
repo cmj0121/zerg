@@ -280,9 +280,10 @@ A bare `chan[T]` is **bidirectional**. It **narrows** to a one-way end — **sen
 for a producer) or **receive-only** (`<-ch`, for a consumer).
 
 **Narrowing is one-way**, never back to bidirectional — the safety guarantee: a send-only end
-**cannot** receive (steal) values, a receive-only end cannot inject. It is a safe built-in upcast at
-a directional-typed target (parameter, `return`, typed binding) and does **not** drop your own hold —
-the target gets a narrowed view while you keep your bidirectional end. A narrowed binding takes a
+**cannot** receive (steal) values, a receive-only end cannot inject. A directional-typed target
+(parameter, `return`, typed binding) **wraps** the end in the narrowed view — a position wraps a
+value, never converts one ([Type System](../core/type-system.md)) — and does **not** drop your own
+hold: the target gets its narrowed view while you keep your bidirectional end. A narrowed binding takes a
 reference **of its own**, so ending its scope gives that reference back: to drop your own
 contribution, end the binding's scope (the factory above, or a tighter block), `close(ch)` to end the
 stream while keeping the handle, or `del ch` to give up the hold and the name together.

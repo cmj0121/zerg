@@ -76,8 +76,8 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 ## 型別（Types）
 
 每個程式起步的純量 primitive——`bool`、`byte`、`rune`、`int`、`uint`、`float`、`str`——以及你在其上建立的**積型別**
-（`struct`）與**和型別**（`enum`）、tuple 與 strong-typedef：一個型別如何宣告、建構,以及如何轉換（一律 re-construction、
-絕不 reinterpret）。見 **[型別](core/types.zh-TW.md)**。
+（`struct`）與**和型別**（`enum`）、tuple 與 strong-typedef：一個型別如何宣告、建構,以及如何轉換（一律寫出來、一律
+re-construction、絕不 reinterpret）。見 **[型別](core/types.zh-TW.md)**。
 
 ## Spec 與 Generics（Specs & Generics）
 

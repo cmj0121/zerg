@@ -65,7 +65,7 @@ module 擁有協定;driver 擁有檔案系統。
 的每個名字都會讀成 undefined——會在正確的程式碼底下畫線的 server,是人會關掉的那種。
 
 **兩種嚴重度,來自兩個地方。** **error** 是 `emit_files_diag` 回報、`zerg build` 會為此拒絕的東西。`L5xx` conversion
-findings 是關於**合法**程式的——一個在原始碼沒說的地方改變了型別的值——所以它們以 **information** 抵達。把一個能動的
+findings 是關於**合法**程式的——一個取了紙面上看不出來之型別的字面值——所以它們以 **information** 抵達。把一個能動的
 程式塗成紅色的 server,是在教它的使用者忽略紅色。
 
 **abort 沒有位置。** parse error 與 `NotImplemented` refusal 都是被 `raise` 的句子,而編譯器兩者都沒有帶地點——所以它

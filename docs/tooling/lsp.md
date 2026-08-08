@@ -79,8 +79,8 @@ another module has to be checked with that module or every name it borrowed read
 a server that underlines correct code is one a person turns off.
 
 **Two severities, from two places.** An **error** is what `emit_files_diag` reports and `zerg build`
-refuses over. The `L5xx` conversion findings are about **legal** programs — a value that changed type
-where the source does not say so — so they arrive as **information**. A server that paints a working
+refuses over. The `L5xx` conversion findings are about **legal** programs — a literal that took a type
+the page does not show — so they arrive as **information**. A server that paints a working
 program red teaches its user to ignore red.
 
 **An abort has no position.** A parse error and a `NotImplemented` refusal are `raise`d sentences,

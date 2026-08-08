@@ -66,9 +66,9 @@ Five notes carry the rules into the language:
 > type are each refused by name — of the spec positions, the error tier (`Err` in a `Result[T]`) is the
 > one built.
 >
-> **[deviation]** The unconstrained refusals are not loud yet: `[]` escapes to `cc`, and `x := {:}` and
-> `x := nil` pass in silence. A position also still **converts** (`x: float = i` compiles) where this
-> chapter says it only wraps.
+> Both compilers hold the rest of this chapter, and say where: a position that converts, an operator
+> whose operands are two types, and a typeless form with no position to take one from are each refused
+> with a place.
 
 ## Why these nine
 

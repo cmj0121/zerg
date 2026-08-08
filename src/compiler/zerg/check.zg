@@ -932,6 +932,7 @@ fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
 	# literal tree at a typed position is rendered by c_into and never reaches it.
 	return if chk_const_divisors(em, e)
 	return if chk_lit_adopts(em, want, e)
+	return if chk_const_unfoldable(em, want, e)
 
 	chk_at(em, f"`{chk_lit_offender(em, want, e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
 }
@@ -956,6 +957,32 @@ fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 
 	chk_at(em, f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
 	return true
+}
+
+# chk_const_unfoldable is the tree whose ARITHMETIC leaves i64, as against the one whose answer
+# leaves the target. The two need different sentences and got one: `x: uint = 9223372036854775807
+# + 1` said "`this` is not a value a uint holds", which is false twice over — 2^63 is a perfectly
+# good `uint`, and the compiler never worked the value out to have an opinion about it. What
+# happened is the fold overflowing the `int` every literal is measured against, which is the same
+# limit that makes the upper half of `uint` unwritable (docs/core/types.md marks it).
+#
+# A leaf past i64 is somebody else's finding — chk_int_literal reports it where the lexeme is —
+# so this speaks only when every leaf fits and the arithmetic between them does not.
+fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
+	f := chk_lit_eval(e)
+	return false if f.ok or not chk_lit_leaves_fit(e)
+
+	chk_at(em, f"this expression's value is past what an `int` holds, so it cannot be measured against {ty_name(want)} — every literal is measured against `int` before its position is consulted")
+	return true
+}
+
+fn chk_lit_leaves_fit(e: Expr) -> bool {
+	return match e {
+		EInt(lex) => int_fits(lex)
+		EUnary(_, x) => chk_lit_leaves_fit(x)
+		EBinary(_, a, b) => chk_lit_leaves_fit(a) and chk_lit_leaves_fit(b)
+		_ => false
+	}
 }
 
 # chk_const_divisors is the same question asked of a whole literal tree, for the trees that
@@ -1207,7 +1234,12 @@ struct Folded {
 # nothing — which is what a `not` over a literal should fold to.
 fn chk_lit_eval(e: Expr) -> Folded {
 	return match e {
-		EInt(lex) => Folded(true, int_value(lex))
+		# A LEXEME PAST i64 HAS NO VALUE HERE. int_value answers `0` for one — deliberately,
+		# because the width is reported where the place is known — and a fold that believed it
+		# said "this divides by a constant `0`" about `n % 99999999999999999999`, naming a
+		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
+		# happen, which is what `ok` is for.
+		EInt(lex) => Folded(int_fits(lex), int_value(lex))
 		EUnary(o, x) => chk_lit_eval_pair(o, EInt("0"), x)
 		EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
 		_ => Folded(false, 0)

@@ -355,12 +355,22 @@ the line rather than the one worth breaking — in `return 0 if a or b or c(x, y
 `c`, whose two arguments would go on three lines while the condition that actually made
 the line long, and that has no brackets to break at, stayed as it was.
 
-There is one thing that DOES order a break: a group that **holds a block**. `f(guard { x } ?? 1)`
-has no one-line form to choose — the `{` of a block always ends its line, which is the printer's
+There is one thing that DOES order a break: a group that **holds a block**. `f(match n { … })`
+has no one-line form to choose — the `{` of a block ends its line, which is the printer's
 rule and not this one's — so measuring it flat produced a shape that was neither joined nor
 split, and left `F105` to move the closer on a LATER run. That made `zerg fmt` non-idempotent on
 the one input nothing in this tree writes: a block inside a call. A group holding one spans
 lines however it was written, and is split at every top-level comma.
+
+**A `guard` block the author wrote on one line is not one of them.** `guard { e } ?? d` is an
+expression inside a line, and `check("max + 1 raises", guard { max + 1 } ?? 7, 7)` reads as the
+line it is — exploded it costs seven, and one example carried eighteen. So the printer's block
+rule is not applied to it: no break after the `{`, no line of its own for the `}`, no level in
+between, and the group around it is measured like any other. The exemption is earned per guard,
+not granted to the keyword — every token through the `}` must sit on the author's line, and none
+may be a comment (it runs to end of line) or a `;` (a second statement is a block again). A guard
+whose block its author broke keeps the block shape, breaks and all: this rule never **joins**, it
+only declines to break.
 
 A group with **no top-level comma** is exempt from both thresholds. A chain and a parenthesised
 expression break where their author broke them — those breaks say where the steps are,

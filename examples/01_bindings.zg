@@ -7,7 +7,7 @@
 fn main() {
 	greeting := "welcome" # inferred as str
 	mut count := 3        # a mutable int
-	ratio: float = 2      # typed float; the int literal 2 becomes 2.0
+	ratio: float = 2      # typed float; the untyped literal adopts it -> 2.0
 	const limit := 10     # a constant
 
 	count = count + 1 # only a `mut` binding may be reassigned

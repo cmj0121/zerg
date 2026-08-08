@@ -2002,6 +2002,45 @@ fn main() {
 }
 EOF
 
+# --- a folded literal is measured in the type it guessed ------------------------------
+#
+# An all-literal expression takes the type its position asks for and the arithmetic then
+# happens IN that type, so every step is measured against it — the operands first, and then
+# what they make. The sentence names the number the reader has to change, which is not always
+# the one the expression folds to: `300 - 100` folds to `200`, a perfectly good byte, and what
+# is wrong with the line is the `300`.
+
+expect "$ZERG" folded-result-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 200 + 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-operand-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 300 - 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-negative-into-uint '`-1` is not a value a uint holds' place <<'EOF'
+fn main() {
+	x: uint = 0 - 1
+	print int(x)
+}
+EOF
+
+# A SHAPE THE TARGET CANNOT CARRY is not a value out of range, and gets the ordinary sentence
+# rather than a false one about `1` not being a float: no double carries `%`, so the tree does
+# not adopt at all.
+expect "$ZERG" folded-shape-a-float-cannot-carry 'cannot bind int to a float binding' place <<'EOF'
+fn main() {
+	x: float = 1 % 2
+	print x
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

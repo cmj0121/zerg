@@ -187,7 +187,7 @@ EOF
 # does not show — and `1.5 + 1.0` is in the program on purpose, because it must NOT be
 # reported, which is the whole argument for reporting `1.5 + 1`.
 
-lint L502 'the page does not show it' <<'EOF'
+lint L502 'is a float here — write `1.0`' <<'EOF'
 fn main() {
 	print 1.5 + 1
 	print 1.5 + 1.0

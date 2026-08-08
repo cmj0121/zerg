@@ -820,7 +820,7 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# raises — chk_const_into's sentence, which points at the number rather than at the
 	# annotation. And `x: byte = n` for an `int` binding is now neither: it is a value being
 	# re-typed, which is a refusal with `byte(n)` as the fix.
-	if chk_int_lit(e) and chk_into_builtin(want, got) {
+	if chk_int_lit(e) and chk_into_builtin(want, got) and chk_lit_shaped(want, e) {
 		chk_const_into(em, want, e)
 		return true
 	}
@@ -924,9 +924,81 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 # error — for the reason Go gives about the same construct: a constant that cannot exist is
 # not made acceptable by not being reached.
 fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
+	# THE DIVISOR FIRST, because a tree that cannot be computed has no value to be out of
+	# range. `x: byte = 1 / 0` said "`this` is not a value a byte holds" — true, and about the
+	# wrong thing: nothing is wrong with the range, the division cannot happen. And at a FLOAT
+	# target there is no range question at all, so `x: float = 1 / 0` reached the emitter and
+	# answered `inf`. chk_binary asks the same question of every other expression, but a
+	# literal tree at a typed position is rendered by c_into and never reaches it.
+	return if chk_const_divisors(em, e)
 	return if chk_lit_adopts(em, want, e)
 
-	chk_at(em, f"`{chk_lit_says(e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+	chk_at(em, f"`{chk_lit_offender(em, want, e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+}
+
+# chk_const_divisor refuses a division whose divisor is a constant zero.
+#
+# It is the const rule of docs/core/types.md at the one operator that can fail without any type
+# being wrong: the compiler holds the divisor, the divisor is `0`, and the division is known to
+# raise. Reachability does not enter into it — `if false { 1 / 0 }` is the same error — for the
+# reason Go gives about the same construct, that a value which cannot exist is not made
+# acceptable by not being reached.
+#
+# It is asked HERE, of every binary expression, rather than inside the fold: the fold runs only
+# where a literal ADOPTS a type, and `x := 1 / 0` adopts nothing (`int` is already the default),
+# while `x: float = 1 / 0` folds no integers at all and used to answer `inf`. One question, one
+# place, every operator that divides.
+fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
+	return false if oper != "/" and oper != "%" and oper != "//"
+
+	f := chk_lit_eval(eb)
+	return false if not f.ok or f.value != 0
+
+	chk_at(em, f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
+	return true
+}
+
+# chk_const_divisors is the same question asked of a whole literal tree, for the trees that
+# never reach chk_binary — the ones c_into renders itself. It answers whether it reported, so
+# the caller can stop: a tree that cannot be computed has no value to measure.
+fn chk_const_divisors(mut &em: Emitter, e: Expr) -> bool {
+	return match e {
+		EUnary(_, x) => chk_const_divisors(em, x)
+		EBinary(o, a, b) => chk_const_divisors_pair(em, o, a, b)
+		_ => false
+	}
+}
+
+fn chk_const_divisors_pair(mut &em: Emitter, o: str, a: Expr, b: Expr) -> bool {
+	# every side is walked before the answer is taken, so two bad divisors are two findings
+	l := chk_const_divisors(em, a)
+	r := chk_const_divisors(em, b)
+	here := chk_const_divisor(em, o, b)
+
+	return l or r or here
+}
+
+# chk_lit_offender names the number the reader has to change, which in a folded expression is
+# not always the one it folds to. `x: byte = 300 - 100` folds to `200`, and `200` is a perfectly
+# good byte — what is wrong with the line is the `300`, and a sentence about `200` sends the
+# reader looking for a mistake that is not there.
+#
+# So it descends to the DEEPEST part that does not fit and names that; when every part fits and
+# only the answer does not — `200 + 100` — the answer is the deepest thing wrong, and it is
+# named. One rule, both cases.
+fn chk_lit_offender(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
+	return match e {
+		EUnary(_, x) => chk_lit_offender(em, want, x, not neg)
+		EBinary(_, a, b) => chk_lit_offender_pair(em, want, a, b, neg, e)
+		_ => chk_lit_says(e, neg)
+	}
+}
+
+fn chk_lit_offender_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr, neg: bool, whole: Expr) -> str {
+	return chk_lit_offender(em, want, a, false) if not chk_lit_in_range(em, want, a, false)
+	return chk_lit_offender(em, want, b, false) if not chk_lit_in_range(em, want, b, false)
+
+	return chk_lit_says(whole, neg)
 }
 
 # chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
@@ -936,9 +1008,25 @@ fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
 fn chk_lit_says(e: Expr, neg: bool) -> str {
 	return match e {
 		EUnary(_, x) => chk_lit_says(x, not neg)
-		EInt(lex)    => chk_lit_sign(lex, neg)
-		_            => "this"
+		EInt(lex) => chk_lit_sign(lex, neg)
+		EBinary(_, _, _) => chk_lit_folded_says(e, neg)
+		_ => "this"
 	}
+}
+
+# chk_lit_folded_says names a folded constant by the VALUE it folded to, which is the number
+# the reader has to change. Naming the expression instead — "`200 + 100`" — would repeat the
+# line back at them; what is wrong with `x: byte = 200 + 100` is that it is `300`, and `300`
+# is what the sentence says. A fold that failed has no value to name and falls back to "this",
+# which is the same answer every other unfoldable expression gets.
+fn chk_lit_folded_says(e: Expr, neg: bool) -> str {
+	f := chk_lit_eval(e)
+	return "this" if not f.ok
+
+	v := f.value
+	return strconv.to_string(0 - v, 10) if neg
+
+	return strconv.to_string(v, 10)
 }
 
 fn chk_lit_sign(lex: str, neg: bool) -> str {
@@ -959,7 +1047,38 @@ fn chk_lit_sign(lex: str, neg: bool) -> str {
 fn chk_lit_note(mut &em: Emitter, want: Ty, e: Expr) {
 	return if c_is_int(want)
 
-	chk_note(em, f"L502 the literal `{chk_lit_says(e, false)}` is a {ty_name(want)} here, and the page does not show it")
+	chk_lit_note_leaves(em, want, e, false)
+}
+
+# chk_lit_note_leaves reports the LEAVES of a literal tree, one finding each, rather than the
+# tree as a whole.
+#
+# The tree has no spelling of its own to show — and the number it folds to is not one the
+# reader can act on. `x: float = 1 / 2` reported ``the literal `0` is a float here``: `0` is
+# the INTEGER fold of an expression this compiler computes as `0.5`, so the finding named a
+# value the program never holds. The leaves are what the reader would change, and what a fix
+# would rewrite: `1` and `2` each become `1.0` and `2.0`, and the type is on the page.
+fn chk_lit_note_leaves(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
+	match e {
+		EUnary(_, x) => chk_lit_note_leaves(em, want, x, not neg)
+		EBinary(_, a, b) => chk_lit_note_pair(em, want, a, b)
+		_ => chk_note(em, f"L502 the literal `{chk_lit_says(e, neg)}` is a {ty_name(want)} here — write `{chk_lit_shown(want, e, neg)}` and the page shows it")
+	}
+}
+
+fn chk_lit_note_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr) {
+	chk_lit_note_leaves(em, want, a, false)
+	chk_lit_note_leaves(em, want, b, false)
+}
+
+# chk_lit_shown is the literal written so that its type is visible — the fix the finding hands
+# over, and the rewrite an editor can apply from it. Only `float` has a second spelling to
+# offer; a `byte` or a `uint` literal has no surface form of its own, so for those the finding
+# names the type and the reader writes the annotation.
+fn chk_lit_shown(want: Ty, e: Expr, neg: bool) -> str {
+	return f"{ty_name(want)}({chk_lit_says(e, neg)})" if not c_is_float(want)
+
+	return f"{chk_lit_says(e, neg)}.0"
 }
 
 # chk_lit_adopts is the fit AND the finding, because a literal that takes a type is L502
@@ -998,9 +1117,14 @@ fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 	# itself `int?` and the diagnostic became one about printing a carrier.
 	return false if not chk_into_side(want)
 
-	# a float takes any literal, so it needs only the SHAPE test; every other target needs
-	# the walk anyway, and chk_lit_in_range accepts exactly the expressions chk_int_lit does
-	return chk_int_lit(e) if c_is_float(want)
+	# THE SHAPE BEFORE THE RANGE, and it is chk_lit_shaped's answer rather than a second copy
+	# of it — chk_fits_expr asks the same question before it ever reaches here, and a tree the
+	# two of them disagreed about would adopt at one caller and not at the other.
+	return false if not chk_lit_shaped(want, e)
+
+	# A FLOAT CARRIES NO BOUNDS, so the shape is the whole of its test; every other target has
+	# a range, and chk_lit_in_range accepts exactly the expressions chk_int_lit does.
+	return true if c_is_float(want)
 
 	return chk_lit_in_range(em, want, e, false)
 }
@@ -1012,9 +1136,116 @@ fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 fn chk_lit_in_range(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> bool {
 	return match e {
 		EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
-		EInt(lex)    => chk_int_in_range(em, want, int_value(lex), neg)
-		_            => false
+		EBinary(o, a, b) => chk_lit_pair_in_range(em, want, o, a, b, neg)
+		EInt(lex) => chk_int_in_range(em, want, int_value(lex), neg)
+		_ => false
 	}
+}
+
+# chk_lit_pair_in_range is the fold, and WHERE it happens is the whole rule: the literals take
+# the type the position demands and the arithmetic then happens IN THAT TYPE, so every step is
+# measured against it — the operands first, and then what they make.
+#
+# That order is the difference between two designs that agree about `x: byte = 100 + 100` and
+# disagree about everything harder. Folding FIRST, at some wider precision, and range-checking
+# only the answer would accept `x: byte = 300 - 100`, where a reader is shown a `300` in a byte
+# context and told nothing — and, worse, would make `x: float = 1 / 2` an INTEGER division
+# folded to `0` and then widened, which is the silent-integer-division trap the language
+# refuses `int + float` to avoid. Here the two literals are floats before the `/` runs.
+#
+# So an operand that does not fit is out of range, and a RESULT that does not fit is out of
+# range, and the sentence a reader gets is chk_const_into's — about the value, not the
+# annotation. The compiler is doing early what the runtime would do late, with the same
+# checked rules, which is what keeps the two answers from drifting.
+fn chk_lit_pair_in_range(mut &em: Emitter, want: Ty, o: str, a: Expr, b: Expr, neg: bool) -> bool {
+	return false if not chk_lit_oper(o)
+	return false if not chk_lit_in_range(em, want, a, false) or not chk_lit_in_range(em, want, b, false)
+
+	# a float carries no bounds to test — chk_lit_fits never asks it — so a pair reaching here
+	# is an integer one, and it is folded as one
+	f := chk_lit_eval_pair(o, a, b)
+	return false if not f.ok
+
+	return chk_folded_in_range(em, want, f.value, neg)
+}
+
+# chk_folded_in_range hands a SIGNED fold to chk_int_in_range, which speaks magnitude-and-sign
+# because that is the shape a literal arrives in: the `-` is a node above the digits, never
+# part of them. A fold has no such node — it has a number — so the sign is split back out
+# here rather than at each caller, and `uint = 0 - 1` is refused instead of passing a negative
+# magnitude to a test that reads it as a large positive one.
+fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
+	return chk_int_in_range(em, want, v, neg) if v >= 0
+
+	return match guard { 0 - v } {
+		Left(m)  => chk_int_in_range(em, want, m, not neg)
+		Right(_) => false
+	}
+}
+
+# Folded is a constant the compiler worked out, or the news that it could not. `ok` is false
+# for a division by zero and for a fold that leaves i64 — neither is a value, and neither is
+# this function's to report: an expression that cannot be folded is simply not one that adopts,
+# and the position then says what it always said about a value of the wrong type.
+struct Folded {
+	ok: bool
+	value: int
+}
+
+# chk_lit_eval works out an all-literal expression's value.
+#
+# THE COMPILER'S OWN ARITHMETIC IS CHECKED, which is the trap here: folding `a * b` for two
+# large literals would raise inside the compiler and take the process down, reporting an
+# overflow in the compiler about an overflow in the program. `guard` is exactly the tool for
+# that — it demotes the raise to a value — so the fold asks for the answer and is told when
+# there is none.
+#
+# A UNARY MINUS IS `0 - x`, and it folds as one rather than through a negation of its own: it
+# is the same subtraction the runtime would perform, so it reaches the same overflow at i64's
+# floor, where negation is the one place unary arithmetic has an answer it cannot hold. Any
+# OTHER unary operator is not arithmetic chk_lit_oper knows, so the pair below folds it to
+# nothing — which is what a `not` over a literal should fold to.
+fn chk_lit_eval(e: Expr) -> Folded {
+	return match e {
+		EInt(lex) => Folded(true, int_value(lex))
+		EUnary(o, x) => chk_lit_eval_pair(o, EInt("0"), x)
+		EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
+		_ => Folded(false, 0)
+	}
+}
+
+fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
+	# THE OPERATOR IS ASKED FIRST, because chk_lit_apply has to end in some number and would
+	# hand back `0` for one it does not know — a value, and the wrong one. Asked here, an
+	# unknown operator is the absence of a value instead, which is what it is.
+	return Folded(false, 0) if not chk_lit_oper(o)
+
+	fa := chk_lit_eval(a)
+	fb := chk_lit_eval(b)
+	return Folded(false, 0) if not fa.ok or not fb.ok
+
+	return match guard { chk_lit_apply(o, fa.value, fb.value) } {
+		Left(v)  => Folded(true, v)
+		Right(_) => Folded(false, 0)
+	}
+}
+
+# chk_lit_apply is the arithmetic itself, under the guard above. It is written with the
+# language's own operators rather than with a table of C semantics, so a constant and the
+# runtime that would have computed it cannot disagree — `/` and `%` are Euclidean in both
+# because they are the same operator.
+#
+# The last line is unreachable — chk_lit_eval_pair has already refused every operator this
+# list does not name — and is here because a function ends in a value.
+fn chk_lit_apply(o: str, x: int, y: int) -> int {
+	return x + y if o == "+"
+	return x - y if o == "-"
+	return x * y if o == "*"
+	return x / y if o == "/"
+	return x % y if o == "%"
+	return x // y if o == "//"
+
+	return 0
 }
 
 # a match arm takes no guard, so the `-` test is its own function rather than a condition on
@@ -1080,7 +1311,50 @@ fn chk_rune_ok(v: int) -> bool {
 fn chk_int_lit(e: Expr) -> bool {
 	return match e {
 		EUnary(o, x) => o == "-" and chk_int_lit(x)
-		_            => c_is_int_lit(e)
+		EBinary(o, a, b) => chk_lit_oper(o) and chk_int_lit(a) and chk_int_lit(b)
+		_ => c_is_int_lit(e)
+	}
+}
+
+# chk_lit_oper is the arithmetic an all-literal expression may be built from. Comparison and
+# the logical operators are absent because they answer `bool`, which is not a type a number
+# adopts; the `%`-suffixed wrapping forms are absent because they are an opt-OUT of the
+# checked rule this fold is an early application of, and a constant has no reason to wrap.
+fn chk_lit_oper(o: str) -> bool {
+	return o == "+" or o == "-" or o == "*" or o == "/" or o == "%" or o == "//"
+}
+
+# chk_lit_float_oper is that list minus the two a DOUBLE cannot carry, and it stands next to
+# it because the subtraction is the whole of the difference. C has no `%` on a double, and the
+# floor form is a lowering of its own, so neither is arithmetic the emitter can hand a double:
+# a literal tree using either does not adopt a float at all, and the position then writes its
+# ordinary sentence. It is the checker's half of the agreement c_lit_as_float keeps at the
+# other end — accepting a form the two halves would answer differently is how a checker and an
+# emitter come to disagree in silence.
+fn chk_lit_float_oper(o: str) -> bool {
+	return o == "+" or o == "-" or o == "*" or o == "/"
+}
+
+# chk_lit_shaped is whether this tree is one that COULD adopt `want` at all, asked before the
+# range is, because the two failures deserve different sentences. A tree of the wrong shape —
+# `x: float = 1 % 2`, whose `%` no double carries — is not a value out of range, and saying
+# "`1` is not a value a float holds" about it is false twice over. It simply does not adopt,
+# and the position then writes its ordinary sentence about a value of the wrong type.
+fn chk_lit_shaped(want: Ty, e: Expr) -> bool {
+	return chk_lit_float_tree(e) if c_is_float(want)
+
+	return true
+}
+
+# chk_lit_float_tree is chk_int_lit over chk_lit_float_oper instead of chk_lit_oper: the same
+# walk, asking the narrower list at every node rather than only at the top. The emitter asks
+# it too — c_is_lit_tree is this question plus "and an operator stands somewhere in it" — so
+# the tree the checker admits and the tree c_lit_as_float renders are one tree by construction.
+fn chk_lit_float_tree(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and chk_lit_float_tree(x)
+		EBinary(o, a, b) => chk_lit_float_oper(o) and chk_lit_float_tree(a) and chk_lit_float_tree(b)
+		_ => c_is_int_lit(e)
 	}
 }
 
@@ -1342,6 +1616,8 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 # would walk the whole left spine again at every link of it.
 fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
+
+	chk_const_divisor(em, oper, eb)
 
 	# An OPTIONAL is not an operand of ANY of them. `x == nil` is the first thing a person
 	# reaches for to test one, and it lowered to a comparison between the carrier struct

@@ -506,7 +506,47 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
+	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
+	# `0` in a double. The literals took the position's type before the operator ran, so the
+	# operator runs on doubles — which is the whole of what "guess, then compute in the guessed
+	# type" means at this end of the compiler.
+	#
+	# An integer target needs nothing here. Every operand and every intermediate was measured
+	# against it by chk_lit_pair_in_range, so the C arithmetic and the checked arithmetic the
+	# checker folded with cannot disagree about a value both have already agreed fits.
+	return c_lit_as_float(e) if c_is_float(want) and c_is_lit_tree(e)
+
 	return c_copied(em, want, e, sb)
+}
+
+# c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# float, asked here rather than restated, so the emitter cannot render a tree the checker did
+# not admit — with one thing added: an OPERATOR has to stand somewhere in it. A bare literal
+# is a literal tree and needs no help, because C reads `2` into a double as `2.0`; what needs
+# help is an operator standing between two of them.
+fn c_is_lit_tree(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and c_is_lit_tree(x)
+		EBinary(_, _, _) => chk_lit_float_tree(e)
+		_ => false
+	}
+}
+
+# c_lit_as_float renders the tree with every leaf a double, so C's own promotion rules never
+# get a chance to make an integer of it. The leaf is written from its VALUE rather than from
+# its lexeme, because a lexeme may carry a base prefix or a digit separator that C does not
+# read the same way — `0xFF` it would, `1_000` it would not.
+#
+# It takes no Emitter because it declares nothing and needs nothing: a literal tree is a
+# self-contained piece of C, which is the same reason it can be rendered at all.
+fn c_lit_as_float(e: Expr) -> str {
+	return match e {
+		EInt(lex) => f"((double){strconv.to_string(int_value(lex), 10)})"
+		EUnary(_, x) => f"(-{c_lit_as_float(x)})"
+		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
+		_ => ""
+	}
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -3566,9 +3606,17 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		}
 	}
 
-	ca := c_expr(em, a, sb)
-	cb := c_expr(em, b, sb)
-	return c_floordiv(em, ta, c_infer(em, b), ca, cb) if oper == "//"
+	# THE OTHER OPERAND IS A POSITION, so a literal tree standing beside a float is a tree of
+	# floats — and C will not read it that way on its own. `n + 1 / 2` for a float `n` was
+	# `2`: the checker had already typed the `1 / 2` as float (chk_lit_fits, at the operand
+	# slot), and then this line rendered it with c_expr, which divides two integers. Silent,
+	# and in every mixed expression — the same shape of miss c_into's comment describes at the
+	# six slots it serves, at the seventh nobody had told.
+	tb := c_infer(em, b)
+	pair_is_float := c_is_float(ta) or c_is_float(tb)
+	ca := c_operand(em, pair_is_float, a, sb)
+	cb := c_operand(em, pair_is_float, b, sb)
+	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
@@ -3576,6 +3624,18 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_operand renders one side of a binary expression. It is c_expr, plus the one thing c_expr
+# cannot know: whether the OTHER side made this one a float.
+#
+# The pair's floatness is asked rather than the result's, because a comparison answers `bool`
+# and its operands are still two floats — `n < 1 / 2` has to divide as a float exactly as
+# `n + 1 / 2` adds as one.
+fn c_operand(mut &em: Emitter, pair_is_float: bool, e: Expr, sb: Subst) -> str {
+	return c_lit_as_float(e) if pair_is_float and c_is_lit_tree(e)
+
+	return c_expr(em, e, sb)
 }
 
 # c_eq_legal is "does `==` mean anything on this type" — ONE predicate, asked by the operator

@@ -806,23 +806,24 @@ fn chk_call_name(key: str) -> str {
 # The pair `_expr` / plain is this file's existing shape for one question asked two ways —
 # c_is_nil_lit and c_is_nil_expr are the same twins.
 fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
-	# THE TWO LAYERS OF `Into`, and they are two sentences in docs/core/types.md rather than
-	# one. `x: byte = 300` is WELL-TYPED — `int → byte` is in the matrix, so it type-checks —
-	# and then fails as a CONSTANT, because the compiler knows the value and knows the
-	# conversion raises. `x: byte = i` for a binding is the same well-typedness with the
-	# failure left to run. So a literal is decided here and anything else is let through to
-	# the conversion the emitter writes.
-	if chk_into_builtin(want, got) {
-		if chk_int_lit(e) {
-			chk_const_into(em, want, e)
-		}
+	# A LITERAL ADOPTS ITS POSITION; A VALUE DOES NOT. That is the whole of what a position
+	# does to a number — docs/core/type-system.md's "a position may WRAP a value; it never
+	# CONVERTS one" — so the only expression this clause lets across a type boundary is one
+	# that has no type of its own to keep.
+	#
+	# `x: byte = 5` is a byte written as a byte. `x: byte = 300` is the same well-typedness
+	# failing as a CONSTANT, because the compiler holds the value and knows the conversion
+	# raises — chk_const_into's sentence, which points at the number rather than at the
+	# annotation. And `x: byte = n` for an `int` binding is now neither: it is a value being
+	# re-typed, which is a refusal with `byte(n)` as the fix.
+	if chk_int_lit(e) and chk_into_builtin(want, got) {
+		chk_const_into(em, want, e)
 		return true
 	}
 
-	# A USER `Into` reaches this position too, and by the same rule — one step, declared, at a
-	# place where the target type is known. The built-in matrix is over scalars and this is
-	# over whatever anyone wrote `impl Into[T] for S` for; nothing else about them differs.
-	return true if c_into_user(em, want, got)
+	# A USER `Into` DOES NOT FIRE HERE EITHER, and for the same one sentence. `impl Into[int]
+	# for S` declares what `S` converts to; it does not make `n: int = s` that conversion.
+	# Written `s.into()`, the position sees an `int` and never asks.
 
 	# A LIST LITERAL is built INTO its destination, element by element, with the declared
 	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer and
@@ -1036,14 +1037,6 @@ fn chk_rune_ok(v: int) -> bool {
 	return v < 55296 or v > 57343
 }
 
-# chk_int_to_float names the ONE widening chk_fits accepts on the type alone. It is written
-# here rather than twice because chk_fits accepts it and chk_fits_expr intercepts it: two
-# spellings of one pair drift apart silently, since the accepting one is the line the
-# intercepting one falls through to.
-fn chk_int_to_float(want: Ty, got: Ty) -> bool {
-	return c_is_float(want) and c_is_int(got)
-}
-
 # chk_int_lit is whether an expression is an UNTYPED integer literal — the literal itself,
 # or one behind a unary minus, which is how a negative one is written. Anything else is a
 # value with a type of its own, however small the expression is.
@@ -1063,21 +1056,18 @@ fn chk_int_lit(e: Expr) -> bool {
 fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
-	return true if chk_int_to_float(want, got)
 
-	# NO SCALAR WIDENS HERE, and that is the division of labour rather than a rule. This
-	# function is asked of TYPES alone, and a conversion between two scalars is `Into`'s —
-	# chk_fits_expr asks chk_into_builtin above, at a POSITION, which is the only place a
-	# conversion is allowed to happen at all. Answering yes here as well would let one in
-	# where there is no position to hang it on: chk_arm_types compares two match arms, and a
-	# `byte` arm beside an `int` arm is two answers to one question, not a value entering a
-	# slot.
+	# NO SCALAR WIDENS HERE, AND NONE WIDENS ANYWHERE. A conversion between two scalars is
+	# written — `int(b)`, `float(i)` — and there is no longer a second route through a
+	# position for it to take, so this function has nothing to make an exception for.
 	#
-	# The history is worth keeping, because it is the argument for putting it there. A byte
-	# used to widen right here, on the type alone; then it stopped, because widening a VALUE
-	# silently is what `int(b)` exists to make visible; and now it converts again — but by a
-	# named mechanism, at an enumerated position, with a lint finding on it. The three states
-	# differ in WHERE the rule lives, not in whether a byte can reach an int.
+	# The history is worth keeping, because it is four states of one question. A byte widened
+	# right here, on the type alone; then it stopped, because widening a VALUE silently is
+	# what `int(b)` exists to make visible; then it converted again by a named mechanism at an
+	# enumerated position, with a lint finding on it; and now the position wraps and never
+	# converts, which retires both the mechanism and the finding. `int → float` was the last
+	# pair still taking the first route, and it took it on the TYPE alone — where there is no
+	# position to hang a conversion on at all, and so no place a reader could be shown one.
 
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits
@@ -1139,6 +1129,44 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	if not chk_fits_expr(em, declared, got, ival) {
 		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
 	}
+}
+
+# chk_needs_type is the other half of chk_binding: the binding that declares NO type, given a
+# form that HAS none. `x := []`, `x := {:}` and `x := nil` name a value with nothing to say
+# what it is — docs/core/type-system.md's "ambiguity is an error", the consequence with no
+# demand and no declared default to fall back on — and the fix is the annotation, which is
+# what the sentence hands the reader.
+#
+# THE THREE WENT THREE DIFFERENT WAYS, all of them quiet. `x := []` lowered to a list of
+# zero-byte elements and reached `cc`, which reported incompatible types against generated C
+# in a cache file nobody wrote; `x := {:}` and `x := nil` compiled in silence and bound
+# something the rest of the program then read. A form the language says has no type must be
+# refused where it has no position, not given one by accident of lowering.
+fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) {
+	what := chk_typeless_form(ival)
+	return if what == ""
+
+	chk_at(em, f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
+}
+
+# chk_typeless_form names the form when an expression is one of the ones that carry no type,
+# and is the empty string otherwise. It is the list docs/core/type-system.md calls exhaustive,
+# less the two that cannot reach a binding's right-hand side: a numeric literal has a default
+# and so is never without a type, and an untyped closure parameter is refused by name.
+fn chk_typeless_form(e: Expr) -> str {
+	return match e {
+		EListLit(elems) => chk_empty_says(elems.len(), "the empty list `[]`")
+		EMapLit(ks, vs) => chk_empty_says(ks.len(), "the empty map `{:}`")
+		ENil => "`nil`"
+		_ => ""
+	}
+}
+
+# a match arm takes no guard, so "empty, and therefore typeless" is asked here
+fn chk_empty_says(n: int, says: str) -> str {
+	return "" if n > 0
+
+	return says
 }
 
 # chk_typedef is what a `type X = Y` declaration must satisfy. The name is a TYPE name, so
@@ -1437,23 +1465,21 @@ fn chk_is_scalar(t: Ty) -> bool {
 	return chk_is_num(t) or c_is_str(t) or c_is_bool_ty(t)
 }
 
-# chk_operand_pair is docs/core/types.md's rule for two operands: the same type stays itself,
-# and two different ones take the LARGEST both reach in one step — a compile error if there is
-# none, because then there is no type the expression could be.
+# chk_operand_pair is docs/core/types.md's rule for two operands, and it is now one line of
+# prose: AN OPERATOR'S OPERANDS MUST ALREADY BE ONE TYPE. A literal adopts the other operand's
+# type, because that slot is one of the typed positions; anything else is two types meeting,
+# which is no type at all.
 #
-# IT REPLACES chk_mixed_sign, and that is the point of it. `int + uint` is still refused, and
-# it is refused now because the general rule finds no answer rather than because a line was
-# written about that one pair: both directions exist in the matrix, and neither type's values
-# contain the other's. The special case was the spec's own prediction — "that falls out rather
-# than being a rule of its own".
+# IT USED TO PICK THE LARGEST TYPE BOTH REACH, which is the machinery Option B deleted from the
+# specification. That rule made `i + f` a `float` and `i + u` an error, and the difference
+# between them was not a difference a reader could see: both are two typed values of different
+# types in one expression, and the answer was decided by a containment table nothing in the
+# source mentions. Now they are one refusal with one fix — convert a side — and the `int`/`uint`
+# case stops being a special inconvenience and becomes the ordinary answer.
 #
-# What it also catches, which the special case could not, is `byte + float`: there is no
-# one-step `byte -> float` (that would be `byte -> int -> float`), so the pair has no type.
-# It used to answer 66.5.
-#
-# The C signed/unsigned trap is still the reason the `int`/`uint` half is worth its
-# inconvenience — in C the signed operand converts to unsigned, so `-1 < 1u` is false — and it
-# is why the ORDER family asks this as well as the arithmetic one.
+# The C signed/unsigned trap is why that inconvenience was worth defending on its own — in C
+# the signed operand converts to unsigned, so `-1 < 1u` is false — and it is why the ORDER
+# family asks this as well as the arithmetic one. It is no longer the argument, only a case.
 fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	# the cheap questions first: this is asked of every binary expression in the program
 	return if ty_eq(ta, tb) or c_is_unknown(ta) or c_is_unknown(tb)
@@ -1467,31 +1493,7 @@ fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: E
 	# one place a literal adopts a type it is not a value of.
 	return if chk_lit_adopts(em, ta, eb) or chk_lit_adopts(em, tb, ea)
 
-	return if not c_is_unknown(chk_into_max(ta, tb))
-
-	chk_at(em, f"operator `{oper}` has {ty_name(ta)} on one side and {ty_name(tb)} on the other, and neither reaches the other in one step — so there is no type this expression could be; convert one side with `{ty_name(ta)}(…)` or `{ty_name(tb)}(…)`")
-}
-
-# chk_into_max is the type two operands both reach, or TUnknown when there is none. LARGEST
-# means the one whose values include the other's, which docs/core/types.md notes is also the
-# direction that cannot fail — so both halves of the question are already answered elsewhere,
-# by chk_into_builtin (the one step) and c_lossless (the containment).
-pub fn chk_into_max(ta: Ty, tb: Ty) -> Ty {
-	return tb if chk_into_widens(ta, tb)
-	return ta if chk_into_widens(tb, ta)
-
-	return TUnknown
-}
-
-# chk_into_widens is `src` reaching `dst` in ONE step and losing nothing on the way. Two types
-# can never widen to each other, which is what makes chk_into_max's answer unique when it has
-# one: `int` and `uint` each reach the other and neither contains it, so there is none.
-#
-# `from` would be the word, and it is a keyword — `raise … from cause`.
-fn chk_into_widens(src: Ty, dst: Ty) -> bool {
-	return false if not chk_into_builtin(dst, src)
-
-	return c_lossless(c_scalar_class(src), c_scalar_bits(src), c_scalar_class(dst), c_scalar_bits(dst))
+	chk_at(em, f"operator `{oper}` has {ty_name(ta)} on one side and {ty_name(tb)} on the other, and an operator's operands must already be one type — convert one side with `{ty_name(ta)}(…)` or `{ty_name(tb)}(…)`")
 }
 
 # chk_is_num is THE list of numeric types, and chk_is_scalar builds on it rather than

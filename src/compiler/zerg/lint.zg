@@ -44,13 +44,19 @@
 # a lint finding, literals included" — and the reason is a reading one: `1` and `1.0` should
 # mean different types on the page, so `1.5 + 1` is reported and `1.5 + 1.0` is not.
 #
-#   L501  a VALUE converted — `f: float = i` for an `int` binding. It is legal, it is one
-#         step, and it is invisible; `float(i)` says the same thing out loud
 #   L502  a LITERAL took a type that is not its own — `b: byte = 5`, or the `1` in `1.5 + 1`
 #
-# THESE TWO ARE NOT ANSWERED HERE, and they are the only ones that are not. Everything above
-# comes from the parsed File; a conversion is a fact about TYPES, so the LOWERING WALK records
-# it and lint_conversions (emit.zg) hands it back. The driver asks both and prints both.
+# `L501` STOOD BESIDE IT AND HAS RETIRED. It reported a VALUE that converted — `f: float = i`
+# for an `int` binding — which was legal, one step, and invisible. It is no longer legal: a
+# position wraps a value and never converts one (docs/core/type-system.md), so the finding's
+# whole subject is a refusal now, and a lint whose programs the compiler rejects reports
+# nothing on any program it is given. What it was for, `float(i)` said out loud, is what the
+# language requires.
+#
+# THIS ONE IS NOT ANSWERED HERE, and it is the only one that is not. Everything above comes
+# from the parsed File; a literal's adopted type is a fact about TYPES, so the LOWERING WALK
+# records it and lint_conversions (emit.zg) hands it back. The driver asks both and prints
+# both.
 #
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.

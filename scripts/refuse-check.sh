@@ -2114,6 +2114,44 @@ fn main() {
 }
 EOF
 
+# --- a bound names the spec AND its arguments ------------------------------------------
+#
+# The arguments are what the bound MEANS, so a type meeting `Into[int]` does not meet
+# `Into[str]` — and the registry keys on them too, or the two impls would be one entry.
+
+expect "$ZERG" bound-with-the-wrong-argument 'does not implement `Into[str]`' <<'EOF'
+struct S {
+	v: int
+}
+
+impl Into[int] for S {
+	fn into() -> int {
+		return this.v
+	}
+}
+
+fn take[T: Into[str]](x: T) -> str {
+	return x.into()
+}
+
+fn main() {
+	print take(S(3))
+}
+EOF
+
+# A SUPER-SPEC still refuses its arguments, and that is a DIFFERENT missing thing: a super's
+# arguments have to be substituted into the named spec's own parameters before its signatures
+# can be compared, where a bound's are only ever matched.
+expect "$ZERG" parameterized-super-spec 'as a super-spec' <<'EOF'
+spec Ord: Eq[int] {
+	fn cmp() -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

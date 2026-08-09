@@ -1665,7 +1665,7 @@ fn chk_empty_says(n: int, says: str) -> str {
 # it collides with the same things a struct or an enum name would, and the underlying type
 # has to be one that exists — a `type X = Nope` used to be dropped on the floor along with
 # the whole declaration, so nothing said anything at all.
-fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
+fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
 	# registries exist, so asking would always answer no — c_build_type_names is the pass
 	# that already asks it of every kind of type name at once, and the typedef joins it.
@@ -1673,7 +1673,15 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
 	# catching here rather than at the first use of it
 	nm := c_named_of(td.under)
-	if nm != "" and not c_is_type_name(em, nm) {
+
+	# THE FILE IS ASKED TOO, for the same reason the collision is not asked at all: with the
+	# registries unbuilt, `c_is_type_name` answers no for every struct and enum the program
+	# declares, so `type Alias = P` three lines under `struct P` was told "`P` is not
+	# declared in this program". A diagnostic that states something false about the reader's
+	# own source is worse than none — it sends them looking for a declaration that is already
+	# there. With the name found, the declaration falls through to the rule below, which is
+	# the true one: this phase carries a scalar underneath, and a struct is not one.
+	if nm != "" and not c_is_type_name(em, nm) and not chk_file_declares_ty(f, nm) {
 		# THE FOURTH POSITION A WIDTH CAN APPEAR, and the one the ladder's own commit missed
 		# while claiming to cover them all: `type W = u8` reported "names no type — `u8` is not
 		# declared", which is the unnamed refusal the rule exists to kill, one type position
@@ -1695,6 +1703,19 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 		return TUnknown
 	}
 	return td.under
+}
+
+# chk_file_declares_ty is whether the program declares a type by this name, asked of the
+# parsed File rather than of the emitter's registries for the one caller that runs before
+# they are built. `f` is the merged whole-program tree, so a struct in another module counts.
+fn chk_file_declares_ty(f: File, nm: str) -> bool {
+	for sd in f.structs {
+		return true if sd.name == nm
+	}
+	for ed in f.enums {
+		return true if ed.name == nm
+	}
+	return false
 }
 
 # chk_slot_fits is a value entering a POSITIONAL slot named by `where` — a struct literal's

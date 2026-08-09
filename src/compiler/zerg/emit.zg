@@ -2628,7 +2628,7 @@ fn c_build_typedefs(mut &em: Emitter, f: File) {
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
 		em.ty_names.append(td.name)
-		em.ty_unders.append(chk_typedef(em, td))
+		em.ty_unders.append(chk_typedef(em, td, f))
 	}
 }
 

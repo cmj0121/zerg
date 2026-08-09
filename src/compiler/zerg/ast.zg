@@ -467,6 +467,27 @@ struct SpecDecl {
 	col: int
 }
 
+# spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
+# where there are none. Both the parser (a type parameter's bound) and the emitter (the impl
+# registry) build it from the same function, which is what makes a bound and an impl comparable
+# without either side knowing how the other rendered its types.
+#
+# A `+` never appears in it, which is what keeps join_bounds' separator unambiguous.
+pub fn spec_key(name: str, args: list[Ty]) -> str {
+	return name if args.len() == 0
+
+	mut out := name + "["
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + ty_name(args[i])
+		i = i + 1
+	}
+	return out + "]"
+}
+
 # ImplDecl is an `impl Spec[args] for Target` head. The ARGS are kept: a parameterized
 # spec counts its parameters into the (spec, type) pair (docs/core/specs.md), so they are
 # both what the coherence key needs and what says which type the spec's `K` stands for

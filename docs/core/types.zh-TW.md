@@ -304,11 +304,13 @@ spec Into[T] {
   (見 [Format](../runtime/format.zh-TW.md)),所以 `str(x)` 對每個型別都有答案——想要文字的泛型完全不需要 bound。
 - **剩下的是語言沒有的那種轉換**:`impl Into[Meters] for Feet`,以寫出來的 `x.into()` 呼叫。內建型別上的 `into`
   會被指名拒絕,並說出該改寫什麼。
-- **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。
+- **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。**引數
+  是 bound 的一部分**:一個實作了 `Into[Feet]` 的型別並不滿足 `Into[Meters]`。
 - **一步,絕不串接**——`X → Y` 和 `Y → Z` 不會給你 `X → Z`。寫兩步,或自己宣告 `X → Z`。
 
-> **[not yet]** `Into` 還不能被 **bound**:`[T: Into[U]]` 報 _NotImplemented: a parameterized `Into[…]` as a
-> type parameter's bound_,因為 spec 的型別引數目前只掛在 `impl` 上。實作了它的型別,手寫的 `x.into()` 是會跑的。
+> **[not yet]** **super-spec** 仍然會丟掉它的引數:`spec Ord: Eq[int]` 會被指名拒絕。bound 的引數只需要跟 impl
+> 的**比對**,那正是這個編譯器現在做的;而 super 的引數必須先**代入**被指名 spec 自己的參數,它的簽章才能被比較,
+> 而那個代入還不存在。
 
 **運算子的兩個運算元必須已經是同一個型別。** untyped literal 會採用另一個運算元——上方的「另一個運算元」位置——
 所以 `1.5 + 1` 是兩個 `float`。兩個**已定型**、型別不同的運算元是編譯錯誤,不論哪一對:`i + f` 和 `i + u` 是同一

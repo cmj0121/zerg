@@ -2,6 +2,7 @@ package sema
 
 import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -183,5 +184,28 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 		c.errorf(n.Span(), "cannot convert %s to %s: only a scalar converts by re-construction", src, name)
 		return target
 	}
+	// A CONSTANT KNOWN TO FAIL IS REPORTED NOW, not raised later. docs/core/types.md says so of
+	// `byte(300)` by name — "the value is known, the conversion is known to raise" — and the
+	// range check existed only for a literal ADOPTING a type (`b: byte = 300`, checkExpr's
+	// IntLit arm), never for the WRITTEN conversion, which is the spelling the sentence uses.
+	// Both halves now ask checkIntRange, so the two cannot disagree about what fits.
+	c.checkConstConversion(n.Args[0].Value, target)
 	return target
+}
+
+// checkConstConversion range-checks a conversion whose operand is an integer literal, sign and
+// all. A conversion of a VALUE is checked where it runs — that is what makes it a conversion
+// rather than a constant — so anything but a literal is left alone here.
+func (c *checker) checkConstConversion(arg ast.Expr, target Type) {
+	switch lit := arg.(type) {
+	case *ast.IntLit:
+		c.checkIntRange(lit, target, false)
+	case *ast.Unary:
+		if lit.Op != token.Minus && lit.Op != token.MinusMod {
+			return
+		}
+		if inner, ok := lit.X.(*ast.IntLit); ok {
+			c.checkIntRange(inner, target, true)
+		}
+	}
 }

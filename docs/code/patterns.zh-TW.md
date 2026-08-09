@@ -13,7 +13,8 @@ Zerg 的匿名函式 `fn(…) -> R { … }` **就是** closure——first-class,
 
 1. **把函式命名**——first-class 函式可具名傳遞,具名的 `fn` 可重用、可測試,呼叫端也乾淨。
 2. **寫 `for` 迴圈**——往往最清楚,也最 procedural-first。
-3. **inline `fn` + 型別推論**——一次性用途,且 use-site 已知函式型別時,參數與回傳型別可省。
+3. **貼合槽位的 inline `fn`**——一次性用途時,沒寫型別的參數從 closure 被檢查的函式型別取得型別;回傳型別
+   仍要寫出——沒寫 `-> type` 就是 nil,不是推論（[型別系統](../core/type-system.zh-TW.md)）。
 
    > **[not yet]** 參數不帶型別的 inline `fn` 會被拒絕：`xs.map(fn(x) { return x *% 2 })` 報
    > _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the function
@@ -49,10 +50,10 @@ for x in xs {
 }
 ```
 
-若 inline 函式真的只用一次,型別推論能讓它短:
+若 inline 函式真的只用一次,由 position 供給的參數型別能讓它短:
 
 ```text
-ys := xs.map(fn(x) { return x *% 2 })      # 由 xs 推得 x: int、-> int
+ys := xs.map(fn(x) -> int { return x *% 2 })   # x: int 取自 xs;-> int 寫出來
 ```
 
 > **[not yet]** 這一行被拒絕兩次——為了沒有型別的 `x`，也為了 `map`，兩者都標在上面。它留在這裡，是因為這就是

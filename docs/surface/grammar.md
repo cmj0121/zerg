@@ -167,7 +167,7 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — r
 
 - **Numbers.** An integer is decimal or based — `0x1F`, `0o17`, `0b1010`. A float has a fractional part,
   an exponent, or both — `1.0`, `1e3`, `6.022e23`. A numeric literal is **untyped**: it adopts the type
-  its context demands (an integer defaults to `int`, a fractional/exponent literal to `float`). A `_` may
+  its position demands (an integer defaults to `int`, a fractional/exponent literal to `float`). A `_` may
   **group digits** between digits only — `1_000_000`, `0xDE_AD_BE_EF`. A sign is not part of the literal;
   `-5` is unary minus (an operator) applied to `5`.
 - **`rune` and `byte`.** A **`rune`** is one Unicode code point in single quotes — `'a'`, `'\n'`,
@@ -265,8 +265,8 @@ map-entry ::= expr ':' expr
   index** — `t.0`, `t.1` — not `t[i]`: a tuple is heterogeneous, so the index must be a compile-time constant
   for the element's type to be known (`a.0.1` is `(a.0).1`, never a float). There is **no tuple struct** —
   `type P = (A, B)` is the named positional type, `struct` the named-field one.
-- **List `[1, 2, 3]`** (empty `[]`), ordered. In a context typed `[T; N]`, a list literal of the right
-  length **coerces** to that array. The **fill form `[v; N]`** is `N` copies of `v` (`N` a const-expr,
+- **List `[1, 2, 3]`** (empty `[]`), ordered. In a position typed `[T; N]`, a list literal of the right
+  length **adopts** that array type. The **fill form `[v; N]`** is `N` copies of `v` (`N` a const-expr,
   mirroring the `[T; N]` array type's `;`) — the way to build a large array without spelling every element.
 - **Map `{k: v}`** (empty `{:}`). The `:` is what tells a `{…}` **map** from a **block** — `k: v` is not a
   statement, so a braced map is unambiguous, whereas a **bare-element** `{…}` is **always a block**.

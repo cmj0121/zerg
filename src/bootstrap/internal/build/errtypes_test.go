@@ -34,7 +34,8 @@ func TestErrorGuardDemotesIntrinsic(t *testing.T) {
 	src := "fn main() {\n" +
 		"\tprint guard { int(\"xx\") } ?? -1\n" + // ValueError -> -1
 		"\tprint guard { int(\"42\") } ?? -1\n" + // parses -> 42
-		"\tprint guard { byte(300) } ?? -1\n" + // OverflowError -> -1
+		"\tn := 300\n" +
+		"\tprint guard { int(byte(n)) } ?? -1\n" + // OverflowError -> -1
 		"}\n"
 	got := runProgramRT(t, src)
 	if want := "-1\n42\n-1\n"; got != want {

@@ -839,21 +839,6 @@ fn main() {
 }
 EOF
 
-
-expect "$ZERG" parameterized-super-spec "NotImplemented: a parameterized \`Eq[…]\` as a super-spec" <<'EOF'
-spec Eq[T] {
-	fn eq(o: T) -> bool
-}
-
-spec Ord: Eq[int] {
-	fn lt() -> bool
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 expect "$ZERG" parameterized-bound "NotImplemented: a parameterized \`Eq[…]\` as a type parameter" <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool
@@ -1810,6 +1795,370 @@ EOF
 expect "$ZERG" in-over-a-range '`in` over a range' <<'EOF'
 fn main() {
 	print str(3 in 0..10)
+}
+EOF
+
+# --- a position wraps a value; it never converts one --------------------------------
+#
+# docs/core/type-system.md's second rule, at every position that used to break it. Each of
+# these compiled until the type-system pass: the value was converted where it landed, the
+# lint said so afterwards (`L501`, retired with the route), and the source said nothing. The
+# fix in every sentence is the same one — write the conversion — so the cases are here as a
+# GROUP, because the failure they guard against is one position being forgotten rather than
+# the rule being lost. That is the shape this file has caught four times.
+#
+# The seed refuses all of them too, and has all along; `place` is asked of every one because
+# a refusal a reader cannot locate is half a diagnostic.
+
+expect "$ZERG" position-binding-int-to-float 'cannot bind int to a float binding' place <<'EOF'
+fn main() {
+	i := 5
+	x: float = i
+	print x
+}
+EOF
+
+expect "$ZERG" position-binding-int-to-byte 'cannot bind int to a byte binding' place <<'EOF'
+fn main() {
+	n := 5
+	b: byte = n
+	print int(b)
+}
+EOF
+
+expect "$ZERG" position-argument 'argument 1 of `f` is float' place <<'EOF'
+fn f(x: float) -> float {
+	return x
+}
+
+fn main() {
+	i := 5
+	print f(i)
+}
+EOF
+
+expect "$ZERG" position-return "this function's answer is float" place <<'EOF'
+fn f() -> float {
+	i := 5
+	return i
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+expect "$ZERG" position-assignment 'cannot assign int to `acc`' place <<'EOF'
+fn main() {
+	mut acc: float = 0.0
+	i := 5
+	acc = i
+	print acc
+}
+EOF
+
+expect "$ZERG" position-struct-field 'is float, and this gives int' place <<'EOF'
+struct R {
+	deg: float
+}
+
+fn main() {
+	i := 5
+	print R(i).deg
+}
+EOF
+
+expect "$ZERG" position-list-element 'element 1 of this list literal is float' place <<'EOF'
+fn main() {
+	i := 5
+	xs: list[float] = [i]
+	print xs[0]
+}
+EOF
+
+# A CARRIER WRAPS, and the value inside it is at the position one level in — so the payload
+# is checked exactly as the bare binding above is. This is the case the old route reached
+# LAST: `x: float? = i` printed 5 for a year after the bare form had a rule.
+expect "$ZERG" position-carrier-payload 'is float, and this gives int' place <<'EOF'
+fn main() {
+	i := 5
+	x: float? = i
+	print x!
+}
+EOF
+
+# A CALL SOLVES ITS OWN PARAMETERS and the demand neither solves them nor converts the
+# answer, so `T` is `int` here and the `int` is refused at the binding. It used to raise
+# `OverflowError` at RUN TIME, one monomorphization later.
+expect "$ZERG" position-generic-answer 'cannot bind int to a byte binding' place <<'EOF'
+fn id[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	b: byte = id(300)
+	print int(b)
+}
+EOF
+
+# A USER `Into` IS A SPEC, not a position's licence. The method exists and `c.into()` runs
+# (test-data/codegen/into_user.zg); what is refused is the position performing it.
+expect "$ZERG" position-user-into 'cannot bind C to a int binding' place <<'EOF'
+struct C {
+	deg: int
+}
+
+impl Into[int] for C {
+	fn into() -> int {
+		return this.deg
+	}
+}
+
+fn main() {
+	c := C(20)
+	n: int = c
+	print n
+}
+EOF
+
+# --- an operator's operands are already one type ------------------------------------
+#
+# `i + u` was refused and `i + f` was promoted, and the difference between them was a
+# containment table nothing in the source mentions. One rule, one sentence, one fix.
+
+expect "$ZERG" operands-int-and-float 'must already be one type' place <<'EOF'
+fn main() {
+	i := 5
+	f := 1.5
+	print i + f
+}
+EOF
+
+expect "$ZERG" operands-int-and-uint 'must already be one type' place <<'EOF'
+fn main() {
+	i := 5
+	u := uint(2)
+	print i + u
+}
+EOF
+
+expect "$ZERG" operands-byte-and-int 'must already be one type' place <<'EOF'
+fn main() {
+	b := b'A'
+	n := 200
+	print b + n
+}
+EOF
+
+# ORDER ASKS THE SAME QUESTION, which is where the C trap lives: in C the signed operand
+# converts to unsigned, so `-1 < 1u` is false.
+expect "$ZERG" operands-compared 'must already be one type' place <<'EOF'
+fn main() {
+	i := 0 - 1
+	u := uint(1)
+	print str(i < u)
+}
+EOF
+
+# --- a form with no type, and no position to take one from ---------------------------
+#
+# "ambiguity is an error" — the consequence with no demand and no declared default to fall
+# back on. All three were quiet: `[]` reached cc against generated C in a cache file nobody
+# wrote, and the other two compiled in silence.
+
+expect "$ZERG" typeless-empty-list 'the empty list `[]`' place <<'EOF'
+fn main() {
+	x := []
+	print 1
+}
+EOF
+
+expect "$ZERG" typeless-empty-map 'the empty map `{:}`' place <<'EOF'
+fn main() {
+	x := {:}
+	print 2
+}
+EOF
+
+expect "$ZERG" typeless-nil '`nil`' place <<'EOF'
+fn main() {
+	x := nil
+	print 3
+}
+EOF
+
+# --- a folded literal is measured in the type it guessed ------------------------------
+#
+# An all-literal expression takes the type its position asks for and the arithmetic then
+# happens IN that type, so every step is measured against it — the operands first, and then
+# what they make. The sentence names the number the reader has to change, which is not always
+# the one the expression folds to: `300 - 100` folds to `200`, a perfectly good byte, and what
+# is wrong with the line is the `300`.
+
+expect "$ZERG" folded-result-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 200 + 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-operand-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 300 - 100
+	print int(x)
+}
+EOF
+
+expect "$ZERG" folded-negative-into-uint '`-1` is not a value a uint holds' place <<'EOF'
+fn main() {
+	x: uint = 0 - 1
+	print int(x)
+}
+EOF
+
+# A SHAPE THE TARGET CANNOT CARRY is not a value out of range, and gets the ordinary sentence
+# rather than a false one about `1` not being a float: no double carries `%`, so the tree does
+# not adopt at all.
+expect "$ZERG" folded-shape-a-float-cannot-carry 'cannot bind int to a float binding' place <<'EOF'
+fn main() {
+	x: float = 1 % 2
+	print x
+}
+EOF
+
+# A LITERAL TREE IS RENDERED WHOLE, so it is the one expression c_expr never walks — and both
+# questions that walk asks had to be carried to it by hand. Neither is hypothetical: the first
+# printed `inf`, the second printed `1`.
+expect "$ZERG" folded-divisor-at-the-other-operand 'divides by a constant `0`' place <<'EOF'
+fn main() {
+	n: float = 4.0
+	print n + 1 / 0
+}
+EOF
+
+expect "$ZERG" folded-leaf-past-int 'does not fit an `int`' place <<'EOF'
+fn main() {
+	x: float = 99999999999999999999 + 1
+	print x
+}
+EOF
+
+# THE FOLD LEAVES i64 while every leaf fits it, which is not a value out of range and does not
+# get that sentence: 2^63 is a perfectly good `uint`, and the compiler never worked it out.
+expect "$ZERG" folded-past-what-an-int-holds "past what an \`int\` holds" place <<'EOF'
+fn main() {
+	x: uint = 9223372036854775807 + 1
+	print int(x)
+}
+EOF
+
+# --- an `if` expression answers ONE type -----------------------------------------------
+#
+# `match` has had this rule since its arms could answer at all; `if` did not, so
+# `x := if false { 1 } else { 2.5 }` printed `2` — the float arm truncated into the int the
+# first branch settled on — and a pair with no C conversion between them escaped to cc.
+
+expect "$ZERG" if-branches-int-and-float 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { 2.5 }
+	print x
+}
+EOF
+
+expect "$ZERG" if-branches-int-and-bool 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { true }
+	print x
+}
+EOF
+
+expect "$ZERG" if-branches-int-and-str 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { "s" }
+	print x
+}
+EOF
+
+# --- no built-in type implements `Into` -----------------------------------------------
+#
+# It is a REFUSAL and not a gap, which is why it has a sentence of its own rather than the
+# generic unknown-method one: between numbers the conversion is written `T(x)`, and to text it
+# is `str(x)`, which every type answers through `display`. An `.into()` beside either would
+# need the position to say which target it meant, and a demand never does that.
+
+expect "$ZERG" into-on-an-int 'no built-in type implements it' <<'EOF'
+fn main() {
+	print 1.into()
+}
+EOF
+
+expect "$ZERG" into-on-a-str 'no built-in type implements it' <<'EOF'
+fn main() {
+	s := "a"
+	print s.into()
+}
+EOF
+
+# --- a bound names the spec AND its arguments ------------------------------------------
+#
+# The arguments are what the bound MEANS, so a type meeting `Into[int]` does not meet
+# `Into[str]` — and the registry keys on them too, or the two impls would be one entry.
+
+expect "$ZERG" bound-with-the-wrong-argument 'does not implement `Into[str]`' <<'EOF'
+struct S {
+	v: int
+}
+
+impl Into[int] for S {
+	fn into() -> int {
+		return this.v
+	}
+}
+
+fn take[T: Into[str]](x: T) -> str {
+	return x.into()
+}
+
+fn main() {
+	print take(S(3))
+}
+EOF
+
+# --- the fixed-width ladder is unbuilt, and says so ------------------------------------
+#
+# A `[not yet]` is a legitimate state; an UNNAMED refusal is not. Because a width is an
+# ordinary identifier rather than a keyword, `i32(x)` reported "undefined function `i32`" — the
+# message any misspelled call gets — so a reader was told the name is unknown rather than that
+# the ladder is not built, and would go looking for their own typo.
+#
+# HERE AND NOT IN reject-check, which is the file for programs that are not Zerg. These ARE
+# Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
+# compiler has not caught up to, which is exactly what this file is for.
+
+expect "$ZERG" fixed-width-conversion 'the fixed-width ladder' <<'EOF'
+fn main() {
+	print i32(5)
+}
+EOF
+
+expect "$ZERG" fixed-width-annotation 'the fixed-width ladder' <<'EOF'
+fn main() {
+	x: u8 = 5
+	print int(x)
+}
+EOF
+
+expect "$ZERG" fixed-width-float 'the fixed-width ladder' <<'EOF'
+fn main() {
+	print f32(1.5)
+}
+EOF
+
+expect "$ZERG" fixed-width-typedef 'the fixed-width ladder' <<'EOF'
+type W = u8
+
+fn main() {
+	print 1
 }
 EOF
 

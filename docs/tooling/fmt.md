@@ -7,18 +7,18 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group       | Is                                                   |
-| ------ | ----------- | ---------------------------------------------------- |
-| `F1xx` | layout      | where the line breaks and how far it is indented     |
-| `F2xx` | spacing     | where a space goes between two tokens                |
-| `F3xx` | trivia      | what happens to what a person wrote for a person     |
-| `F4xx` | rewrites    | the rules that MOVE code rather than space it        |
-| `L1xx` | dead code   | things written that nothing reaches                  |
-| `L2xx` | null safety | an optional operator that does not do what it says   |
-| `L3xx` | capture     | what a coroutine or a deferred call actually took    |
-| `L4xx` | resolution  | a name that answers to more than one thing           |
-| `L5xx` | conversion  | a type that changed where the source does not say so |
-| `E1xx` | lexical     | text that is not a token                             |
+| Prefix | Group       | Is                                                 |
+| ------ | ----------- | -------------------------------------------------- |
+| `F1xx` | layout      | where the line breaks and how far it is indented   |
+| `F2xx` | spacing     | where a space goes between two tokens              |
+| `F3xx` | trivia      | what happens to what a person wrote for a person   |
+| `F4xx` | rewrites    | the rules that MOVE code rather than space it      |
+| `L1xx` | dead code   | things written that nothing reaches                |
+| `L2xx` | null safety | an optional operator that does not do what it says |
+| `L3xx` | capture     | what a coroutine or a deferred call actually took  |
+| `L4xx` | resolution  | a name that answers to more than one thing         |
+| `L5xx` | conversion  | a literal that took a type the page does not show  |
+| `E1xx` | lexical     | text that is not a token                           |
 
 ## `zerg fmt`
 
@@ -355,12 +355,22 @@ the line rather than the one worth breaking — in `return 0 if a or b or c(x, y
 `c`, whose two arguments would go on three lines while the condition that actually made
 the line long, and that has no brackets to break at, stayed as it was.
 
-There is one thing that DOES order a break: a group that **holds a block**. `f(guard { x } ?? 1)`
-has no one-line form to choose — the `{` of a block always ends its line, which is the printer's
+There is one thing that DOES order a break: a group that **holds a block**. `f(match n { … })`
+has no one-line form to choose — the `{` of a block ends its line, which is the printer's
 rule and not this one's — so measuring it flat produced a shape that was neither joined nor
 split, and left `F105` to move the closer on a LATER run. That made `zerg fmt` non-idempotent on
 the one input nothing in this tree writes: a block inside a call. A group holding one spans
 lines however it was written, and is split at every top-level comma.
+
+**A `guard` block the author wrote on one line is not one of them.** `guard { e } ?? d` is an
+expression inside a line, and `check("max + 1 raises", guard { max + 1 } ?? 7, 7)` reads as the
+line it is — exploded it costs seven, and one example carried eighteen. So the printer's block
+rule is not applied to it: no break after the `{`, no line of its own for the `}`, no level in
+between, and the group around it is measured like any other. The exemption is earned per guard,
+not granted to the keyword — every token through the `}` must sit on the author's line, and none
+may be a comment (it runs to end of line) or a `;` (a second statement is a block again). A guard
+whose block its author broke keeps the block shape, breaks and all: this rule never **joins**, it
+only declines to break.
 
 A group with **no top-level comma** is exempt from both thresholds. A chain and a parenthesised
 expression break where their author broke them — those breaks say where the steps are,
@@ -664,19 +674,24 @@ nothing back — and they cannot see why, because the signature is the whole con
 
 | Code   | Rule                                          |
 | ------ | --------------------------------------------- |
-| `L501` | a **value** converted — `f: float = i`        |
 | `L502` | a **literal** took a type that is not its own |
 
-Every implicit conversion is a finding, literals included
-([Types](../core/types.md#into--the-conversion-that-happens-on-its-own)) — so `1.5 + 1` is
-reported and `1.5 + 1.0` is not. None of it is an error: the language allows every one, and
-what the rule says is that the page does not show what the program means. `1` and `1.0` should
-be different types to a **reader**, not only to the compiler.
+An adoption away from a literal's default is a finding
+([Types](../core/types.md#into--an-ordinary-conversion-spec)) — so `1.5 + 1` is reported and
+`1.5 + 1.0` is not. It is advisory: adoption is legal, and the page should show it — `1` and
+`1.0` should be different types to a **reader**, not only to the compiler.
 
-These two are the only rules the linter does not answer from the parsed tree. A conversion is a
-fact about **types**, so the lowering walk records it and `zerg lint` asks the walk — the C it
-produces is thrown away. A program that does not compile reports none of them, which is right:
-there is nothing to advise about the types of a program whose types are wrong.
+`L501` stood beside it and has **retired**. It reported a value that converted at a position
+— `f: float = i` — which was legal, one step, and invisible. A position wraps a value and
+never converts one ([Type System](../core/type-system.md)), so its whole subject is a refusal
+now, and a lint whose programs the compiler rejects reports nothing on any program it is
+given. The number is not reused: a reader who meets `L501` in an old log should find what it
+was and why it went.
+
+This one is the only rule the linter does not answer from the parsed tree. A literal's adopted
+type is a fact about **types**, so the lowering walk records it and `zerg lint` asks the walk —
+the C it produces is thrown away. A program that does not compile reports none of them, which
+is right: there is nothing to advise about the types of a program whose types are wrong.
 
 ## Adding a rule
 

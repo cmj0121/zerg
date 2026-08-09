@@ -841,14 +841,14 @@ fn main() {
 }
 EOF
 
-reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' <<'EOF'
+reject bind-int-list-to-str-list 'element 1 of this list literal is str' <<'EOF'
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
 }
 EOF
 
-reject typedef-value-into-its-underlying '`f` takes int as argument 1, and this gives Celsius' <<'EOF'
+reject typedef-value-into-its-underlying 'argument 1 of `f` is int, and this gives Celsius' <<'EOF'
 type Celsius = int
 
 fn f(n: int) -> int {
@@ -985,7 +985,7 @@ fn main() {
 }
 EOF
 
-reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' seed-gap <<'EOF'
+reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' <<'EOF'
 struct P {
 	x: byte
 }
@@ -996,14 +996,14 @@ fn main() {
 }
 EOF
 
-reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' seed-gap <<'EOF'
+reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' <<'EOF'
 fn main() {
 	b: byte = 300
 	print(f"{b}")
 }
 EOF
 
-reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' seed-gap <<'EOF'
+reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' <<'EOF'
 fn main() {
 	u: uint = -1
 	print(f"{u}")
@@ -1015,7 +1015,7 @@ EOF
 # A signature is a promise. The conditional `return` is here on its own because it takes a
 # different path through the emitter than the plain one.
 
-reject return-str-from-int-fn 'this function answers int, and this returns str' <<'EOF'
+reject return-str-from-int-fn "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> int {
 	return "nope"
 }
@@ -1025,7 +1025,7 @@ fn main() {
 }
 EOF
 
-reject return-int-from-bool-fn 'this function answers bool, and this returns int' <<'EOF'
+reject return-int-from-bool-fn "this function's answer is bool, and this gives int" <<'EOF'
 fn f() -> bool {
 	return 1
 }
@@ -1035,7 +1035,7 @@ fn main() {
 }
 EOF
 
-reject conditional-return-wrong-type 'this function answers int, and this returns str' <<'EOF'
+reject conditional-return-wrong-type "this function's answer is int, and this gives str" <<'EOF'
 fn f(n: int) -> int {
 	return "x" if n > 0
 	return 0
@@ -1108,7 +1108,7 @@ EOF
 # written, so the parameter index and the argument's place on the line differ by one, and
 # the message says the one the reader can count.
 
-reject float-argument-into-int-parameter '`f` takes int as argument 1, and this gives float' <<'EOF'
+reject float-argument-into-int-parameter 'argument 1 of `f` is int, and this gives float' <<'EOF'
 fn f(a: int) -> int {
 	return a
 }
@@ -1118,7 +1118,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-int-parameter '`add` takes int as argument 2, and this gives str' <<'EOF'
+reject str-argument-into-int-parameter 'argument 2 of `add` is int, and this gives str' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -1129,7 +1129,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-a-method '`P.add` takes int as argument 1, and this gives str' <<'EOF'
+reject str-argument-into-a-method 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
 struct P {
 	x: int
 }
@@ -1216,7 +1216,7 @@ fn main() {
 }
 EOF
 
-reject pass-a-struct-where-another-goes '`take` takes A as argument 1, and this gives B' <<'EOF'
+reject pass-a-struct-where-another-goes 'argument 1 of `take` is A, and this gives B' <<'EOF'
 struct A {
 	x: int
 }
@@ -1234,7 +1234,7 @@ fn main() {
 }
 EOF
 
-reject return-a-struct-the-signature-does-not-name 'this function answers A, and this returns B' <<'EOF'
+reject return-a-struct-the-signature-does-not-name "this function's answer is A, and this gives B" <<'EOF'
 struct A {
 	x: int
 }
@@ -1252,7 +1252,7 @@ fn main() {
 }
 EOF
 
-reject bind-a-nested-list-of-the-wrong-element 'cannot bind list[list[int]] to a list[list[str]] binding' <<'EOF'
+reject bind-a-nested-list-of-the-wrong-element 'element 1 of this list literal is str' <<'EOF'
 fn main() {
 	xs: list[list[str]] = [[1]]
 	print(f"{xs.len()}")
@@ -1403,7 +1403,7 @@ fn main() {
 }
 EOF
 
-reject defer-with-the-wrong-argument-type '`note` takes str as argument 1, and this gives int' <<'EOF'
+reject defer-with-the-wrong-argument-type 'argument 1 of `note` is str, and this gives int' <<'EOF'
 fn note(s: str) {
 	print(s)
 }
@@ -1620,7 +1620,7 @@ fn main() {
 }
 EOF
 
-reject store-through-a-call-result 'cannot store through a call result' seed-gap <<'EOF'
+reject store-through-a-call-result 'cannot store through a call result' <<'EOF'
 fn get() -> list[int] {
 	return [1, 2]
 }
@@ -2550,7 +2550,7 @@ EOF
 # `take(1000)` on a `byte` parameter is the CONSTANT layer of Into: `int -> byte` is a real
 # conversion, so it type-checks, and then the compiler evaluates it and reports the value
 # rather than emitting the truncation cc used to complain about.
-reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' seed-gap <<'EOF'
+reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' <<'EOF'
 fn take(b: byte) -> int {
 	return int(b)
 }
@@ -2573,7 +2573,7 @@ EOF
 # a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
 # carrier, is where the declared type lives.
 
-reject str-into-an-optional-list-element 'an element of this list literal is int' <<'EOF'
+reject str-into-an-optional-list-element 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]
 	print xs.len()
@@ -2599,7 +2599,7 @@ fn main() {
 }
 EOF
 
-reject str-into-a-result-left 'what this function answers is int, and this gives str' <<'EOF'
+reject str-into-a-result-left "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> Result[int] {
 	return Left("hi")
 }
@@ -2609,7 +2609,7 @@ fn main() {
 }
 EOF
 
-reject int-into-an-either-right 'what this function answers is str, and this gives int' <<'EOF'
+reject int-into-an-either-right "this function's answer is str, and this gives int" <<'EOF'
 fn f() -> Either[int, str] {
 	return Right(7)
 }
@@ -2770,6 +2770,315 @@ printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + 
 	reject deep-composed-by-a-default-splice 'chains more than 200 levels deep' seed-gap
 
 # --- report ------------------------------------------------------------------------
+
+# --- the bad paths that reached cc ------------------------------------------------------
+#
+# Each of these compiled to C and was reported by the C compiler, against a file under
+# .zerg-cache that nobody wrote — the standing rule ("lowered correctly, or refused by name",
+# docs/conformance.md) breached six times in one sweep. They are written here BEFORE the rules
+# that turn them away, so the sentence each one is owed is decided by what a reader needs and
+# not by whatever the fix happened to produce.
+
+reject add-two-lists 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs + [2]
+	print ys.len()
+}
+EOF
+
+reject subtract-two-lists 'operator `-` takes numeric operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs - [2]
+	print ys.len()
+}
+EOF
+
+reject add-two-maps 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	n := {"b": 2}
+	o := m + n
+	print o.len()
+}
+EOF
+
+# THE SAME HOLE IN FOUR OF THE FIVE OPERATOR FAMILIES. Each family asks "is this a scalar of
+# the wrong kind", which answers NO for a value that is not a scalar at all — so every
+# aggregate walked past every one of them. Only ORDER had a rule of its own (`Ord`).
+
+reject bitwise-on-two-lists 'operator `&` takes int operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs & [2]
+	print ys.len()
+}
+EOF
+
+reject logical-on-two-lists 'operator `and` takes bool operands' <<'EOF'
+fn main() {
+	xs := [1]
+	print str(xs and [2])
+}
+EOF
+
+reject negate-a-list 'operator `-` takes a numeric operand' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := -xs
+	print ys.len()
+}
+EOF
+
+reject complement-a-list 'operator `~` takes an int operand' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := ~xs
+	print ys.len()
+}
+EOF
+
+reject index-a-map-with-the-wrong-key 'a key of this map[str, int] is str, and this gives int' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m[1]
+}
+EOF
+
+reject call-a-binding-that-shadows-a-function 'holds an int, and an int is not callable' <<'EOF'
+fn f() -> int {
+	return 1
+}
+
+fn main() {
+	f := 2
+	print f()
+}
+EOF
+
+reject field-on-a-non-struct 'no field `a` on int' <<'EOF'
+fn main() {
+	n := 5
+	print n.a
+}
+EOF
+
+# --- bad paths, sweep two: tuples, slices, iteration ------------------------------------
+
+reject tuple-index-past-its-arity 'a tuple of 2 has no `.5`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	print t.5
+}
+EOF
+
+reject tuple-index-on-a-non-tuple 'is not a tuple' <<'EOF'
+fn main() {
+	n := 5
+	print n.0
+}
+EOF
+
+# SILENT: a str bound on a slice was accepted and lowered, so the range walked from a pointer
+reject slice-with-a-str-bound 'a slice bound is an int' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	ys := xs["a"..1]
+	print ys.len()
+}
+EOF
+
+# The message named the LOOP VARIABLE as undefined, which is the consequence: the loop gave it
+# no type because the thing being walked is not walkable, and `x` was blamed for it.
+reject for-over-a-non-iterable 'is not iterable' <<'EOF'
+fn main() {
+	n := 5
+	for x in n {
+		print x
+	}
+}
+EOF
+
+# --- bad paths, sweep three: a crash and a silent import --------------------------------
+
+# THE COMPILER SEGFAULTED on this one-line program. The cycle detector catches an indirect
+# cycle (`A` holding `B` holding `A`) and one through a carrier (`p: P?`), and skipped the
+# simplest case of all — a field of the struct's own type — so the copy helper recursed until
+# the stack ran out. A compiler that dies says nothing at all, about anything.
+reject struct-holding-itself-by-value 'part of a cycle of by-value declarations' no-place <<'EOF'
+struct P {
+	p: P
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# SILENT: the import resolved to nothing and the program ran. Using the module then reported
+# "the method `thing` on a ?", which names neither the module nor the import.
+reject import-a-module-that-does-not-exist 'cannot resolve import' no-place <<'EOF'
+import "nope"
+
+fn main() {
+	print 1
+}
+EOF
+
+# --- bad paths, sweep four: what `raise` takes ------------------------------------------
+#
+# `raise e` carries an `Err`, and `raise "…"` is the shorthand that builds one from a message
+# (docs/code/errors.md). Anything else was handed to the runtime's unwind as though it were an
+# Err — `raise 5` reached cc as an incompatible-type argument, and a struct the same way.
+
+reject raise-an-int 'raise carries an `Err`' <<'EOF'
+fn main() {
+	raise 5
+}
+EOF
+
+reject raise-a-struct 'raise carries an `Err`' <<'EOF'
+struct P {
+	a: int
+}
+
+fn main() {
+	raise P(1)
+}
+EOF
+
+# --- bad paths, sweep five: a constant known to fail ------------------------------------
+#
+# docs/core/types.md: "A conversion the compiler can carry out is carried out. `byte(300)` is
+# well-formed — and then fails as a CONSTANT: the value is known, the conversion is known to
+# raise, and it is reported at compile time rather than left to run." That was implemented for
+# a literal ADOPTING a type (`b: byte = 300`) and not for the WRITTEN conversion beside it,
+# which is the spelling the sentence uses.
+
+reject written-byte-conversion-out-of-range 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	print int(byte(300))
+}
+EOF
+
+reject written-rune-conversion-out-of-range 'is not a value a rune holds' place <<'EOF'
+fn main() {
+	print int(rune(1114112))
+}
+EOF
+
+reject written-uint-conversion-negative 'is not a value a uint holds' place <<'EOF'
+fn main() {
+	print int(uint(-1))
+}
+EOF
+
+# --- bad paths, sweep six: what an assignment may be written to -------------------------
+#
+# An assignment needs a PLACE — a name, a field, an index. A call's result and a literal are
+# values with nowhere to live, and both were rendered to the left of a C `=`.
+
+reject assign-to-a-call 'is not a place' place <<'EOF'
+fn f() -> int {
+	return 1
+}
+
+fn main() {
+	f() = 2
+	print 1
+}
+EOF
+
+reject assign-to-a-literal 'is not a place' place <<'EOF'
+fn main() {
+	5 = 2
+	print 1
+}
+EOF
+
+# --- a list index is a typed position too -----------------------------------------------
+#
+# The map's KEY gained its rule and the list's INDEX did not, so the subscript accepted
+# anything at all: `xs["a"]` reached cc, and `xs[1.5]` and `xs[true]` COMPILED AND RAN — the
+# float silently truncated to 1 by a C conversion cc only warned about, the bool read as 1.
+
+reject index-a-list-with-a-str 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs["a"]
+}
+EOF
+
+reject index-a-list-with-a-float 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[1.5]
+}
+EOF
+
+reject index-a-list-with-a-bool 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[true]
+}
+EOF
+
+reject index-assign-a-list-with-a-str 'a list index is an int' place <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	xs["a"] = 5
+	print xs.len()
+}
+EOF
+
+# An ANNOTATION HAS TO NAME A TYPE. A parameter's is checked where it is resolved and a
+# `type X = Y`'s underlying name too; a local's was the one that did not have to, and reported
+# "cannot bind int to a Nope binding" — a sentence about the VALUE that treats an unknown name
+# as a type the value failed to be.
+reject local-annotation-names-no-type 'no type of that name is declared' place <<'EOF'
+fn main() {
+	x: Nope = 5
+	print 1
+}
+EOF
+
+# --- one step past each edge ------------------------------------------------------------
+#
+# The refusals above use comfortable numbers — 300 for a byte, 1000 for a narrowing — and a
+# comfortable number cannot tell `<=` from `<`. These are the FIRST value each rule turns away,
+# paired one for one with the last it admits in test-data/codegen/type_boundaries.zg. A range
+# rule's defects live entirely at its ends.
+
+reject byte-one-past-the-last 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 256
+	print int(x)
+}
+EOF
+
+reject rune-one-past-the-last 'is not a value a rune holds' place <<'EOF'
+fn main() {
+	r: rune = 1114112
+	print int(r)
+}
+EOF
+
+reject uint-one-past-the-last 'does not fit an `int`' place <<'EOF'
+fn main() {
+	u: uint = 18446744073709551616
+	print u
+}
+EOF
+
+# AND THE FOLD'S OWN EDGE, which has two: `200 + 55` is `255` and adopts, `200 + 56` is `256`
+# and does not — the answer measured after the operands, both of which fit either way.
+reject fold-one-past-the-last 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 200 + 56
+	print int(x)
+}
+EOF
 
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"

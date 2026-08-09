@@ -37,18 +37,10 @@ fn main() {
 	min = min -% 1
 
 	# overflow raises, and the wrapping form still wraps
-	check("max + 1 raises", guard {
-			max + 1
-		} ?? 7, 7)
-	check("min - 1 raises", guard {
-			min - 1
-		} ?? 7, 7)
-	check("mul raises", guard {
-			max * 2
-		} ?? 7, 7)
-	check("neg of min raises", guard {
-			-min
-		} ?? 7, 7)
+	check("max + 1 raises", guard { max + 1 } ?? 7, 7)
+	check("min - 1 raises", guard { min - 1 } ?? 7, 7)
+	check("mul raises", guard { max * 2 } ?? 7, 7)
+	check("neg of min raises", guard { -min } ?? 7, 7)
 	check("max +% 1 wraps", max +% 1, min)
 	check("min -% 1 wraps", min -% 1, max)
 
@@ -68,22 +60,14 @@ fn main() {
 
 	# a zero divisor, and the one division that overflows
 	mut zero := 0
-	check("a / 0 raises", guard {
-			7 / zero
-		} ?? 7, 7)
-	check("a % 0 raises", guard {
-			7 % zero
-		} ?? 7, 7)
+	check("a / 0 raises", guard { 7 / zero } ?? 7, 7)
+	check("a % 0 raises", guard { 7 % zero } ?? 7, 7)
 	mut neg1 := 0 - 1
-	check("min / -1 raises", guard {
-			min / neg1
-		} ?? 7, 7)
+	check("min / -1 raises", guard { min / neg1 } ?? 7, 7)
 	check("min % -1 is zero", min % neg1, 0)
 
 	# a shift outside the width, at both ends
-	check("1 << 64 raises", guard {
-			1 << 64
-		} ?? 7, 7)
+	check("1 << 64 raises", guard { 1 << 64 } ?? 7, 7)
 	check("1 << 62", 1 << 62, 4611686018427387904)
 	check("int >> is arithmetic", (0 - 8) >> 1, 0 - 4)
 
@@ -92,33 +76,23 @@ fn main() {
 	check(
 		"byte 255+255 raises",
 		int(
-			guard {
-				byte(255) + byte(255)
-			} ?? byte(7)
+			guard { byte(255) + byte(255) } ?? byte(7)
 		),
 		7
 	)
-	check("byte << 8 raises", int(guard {
-				byte(1) << 8
-			} ?? byte(7)), 7)
+	check("byte << 8 raises", int(guard { byte(1) << 8 } ?? byte(7)), 7)
 	check("byte 200/3", int(byte(200) / byte(3)), 66)
 	check("byte 200%3", int(byte(200) % byte(3)), 2)
 	mut zbyte := byte(0)
-	check("byte / 0 raises", int(guard {
-				byte(1) / zbyte
-			} ?? byte(7)), 7)
+	check("byte / 0 raises", int(guard { byte(1) / zbyte } ?? byte(7)), 7)
 	mut five := byte(5)
-	check("negating a byte raises", int(guard {
-				-five
-			} ?? byte(7)), 7)
+	check("negating a byte raises", int(guard { -five } ?? byte(7)), 7)
 
 	# the two kinds are distinguishable, which is what makes them worth reifying
 	check_str(
 		"a zero divisor",
 		kind_of(
-			match guard {
-				7 / zero
-			} {
+			match guard { 7 / zero } {
 				Left(_)  => ValueError("did not raise")
 				Right(e) => e
 			}
@@ -128,9 +102,7 @@ fn main() {
 	check_str(
 		"an overflow",
 		kind_of(
-			match guard {
-				max + 1
-			} {
+			match guard { max + 1 } {
 				Left(_)  => ValueError("did not raise")
 				Right(e) => e
 			}
@@ -174,16 +146,12 @@ fn main() {
 	check("another base parses", strconv.parse_int("-ff", 16), 0 - 255)
 	check(
 		"one past the top raises",
-		guard {
-			strconv.parse_int("9223372036854775808", 10)
-		} ?? 7,
+		guard { strconv.parse_int("9223372036854775808", 10) } ?? 7,
 		7
 	)
 	check(
 		"one past the bottom raises",
-		guard {
-			strconv.parse_int("-9223372036854775809", 10)
-		} ?? 7,
+		guard { strconv.parse_int("-9223372036854775809", 10) } ?? 7,
 		7
 	)
 
@@ -201,13 +169,9 @@ fn main() {
 	check("-7.5 // 2.0", (0.0 - f75) // f2, 0 - 4)
 	check("7.5 // -2.0", f75 // fneg2, 0 - 3)
 	check("-7.5 // -2.0", (0.0 - f75) // fneg2, 4)
-	check("a zero divisor still raises", guard {
-			7 // zero
-		} ?? 7, 7)
+	check("a zero divisor still raises", guard { 7 // zero } ?? 7, 7)
 	mut fzero := 0.0
-	check("a zero float divisor raises", guard {
-			f75 // fzero
-		} ?? 7, 7)
+	check("a zero float divisor raises", guard { f75 // fzero } ?? 7, 7)
 
 	# mixed operands: an untyped integer literal adopts the float context, and the
 	# operation is the float one. Handing the emitter the LEFT operand's type instead of

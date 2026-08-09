@@ -68,8 +68,22 @@ func TestGuardExpr(t *testing.T) {
 
 // TestRaiseDiverges accepts a 'raise' statement: it aborts, so it needs no value
 // context (DESIGN-1b §6).
+//
+// The operand used to be an `int`, chosen when `raise` accepted anything at all — which is
+// the fact TestRaiseOperand below now pins separately. Divergence is what THIS test is about,
+// and it is about it with an operand `raise` actually carries.
 func TestRaiseDiverges(t *testing.T) {
-	wantOK(t, "fn f(x: int) {\n  raise x\n}")
+	wantOK(t, "fn f(x: str) {\n  raise x\n}")
+}
+
+// TestRaiseOperand checks what `raise` carries: an Err, or a message to build one from
+// (docs/code/errors.md). Anything else was handed to the runtime's `zrt_err_new`, whose
+// parameter is a `const char *`, so `raise 5` reached cc as an incompatible-type argument.
+func TestRaiseOperand(t *testing.T) {
+	wantOK(t, "fn f() {\n  raise \"boom\"\n}")
+	wantOK(t, "fn f() {\n  raise ValueError(\"bad\")\n}")
+	wantErr(t, "fn f() {\n  raise 5\n}", "raise carries an `Err`")
+	wantErr(t, "struct P {\n  a: int\n}\nfn f() {\n  raise P(1)\n}", "raise carries an `Err`")
 }
 
 // TestResultOkWidening checks the context-typed Ok/Left widening (Phase 1f U0): a T

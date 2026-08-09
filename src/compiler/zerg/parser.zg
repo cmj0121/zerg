@@ -425,19 +425,51 @@ fn join_bounds(specs: list[str]) -> str {
 	return out
 }
 
-fn parse_bound(mut &p: Parser, whose: str) -> list[str] {
+# parse_supers reads a spec's super list, keeping each super's NAME and its TYPE ARGUMENTS
+# apart. A bound bakes its arguments into the name (spec_key) because a bound is only ever
+# MATCHED against an impl's; a super's have to be SUBSTITUTED into the named spec's own
+# parameters before its signatures can be compared, and a substitution needs the types
+# themselves rather than a rendering of them.
+#
+# It is a reader of its own rather than a flag on parse_bound for that reason: the two want
+# different things out of the same production, and one function returning both shapes would be
+# answering two questions to serve one caller each.
+fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[Ty]]) {
+	for p_at(p, Ident) {
+		names.append(cur(p).lexeme)
+		p_advance(p)
+		args.append(parse_ty_args(p))
+		return if not p_at(p, Plus)
+
+		p_advance(p) # '+'
+	}
+}
+
+fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 	mut out: list[str] = []
 	for p_at(p, Ident) {
 		name := cur(p).lexeme
 		p_advance(p)
 
-		# A super's or a bound's own TYPE ARGUMENTS are not carried. Dropping them silently
-		# left the named spec's parameters unsubstituted, so `spec Ord: Eq[int]` refused
-		# every correct `impl Ord` with "parameter `o` is int, and the spec declares T" —
-		# a valid program turned away for a reason that is about the compiler.
-		raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl`, so it has nothing to substitute the parameters with here" if p_at(p, LBrack)
+		# A TYPE PARAMETER'S BOUND carries its arguments, because they are what the bound
+		# MEANS: `[T: Into[Meters]]` asks whether T converts to Meters, and a bound that kept
+		# only the name asked whether it converts to anything — the one question `Into` is
+		# never worth asking. They ride in the name as `Into[Meters]`, rendered by ty_name, and
+		# the impl registry renders its own the same way, so the two agree by construction
+		# rather than by a comparison somebody has to keep true.
+		#
+		# A SUPER-SPEC still refuses them, and that is a different missing thing: a super's
+		# arguments have to be SUBSTITUTED into the named spec's own parameters before its
+		# signatures can be compared, and dropping them silently made `spec Ord: Eq[int]`
+		# refuse every correct `impl Ord` with "parameter `o` is int, and the spec declares T"
+		# — a valid program turned away for a reason about the compiler.
+		if p_at(p, LBrack) {
+			raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here" if not allow_args
 
-		out.append(name)
+			out.append(spec_key(name, parse_ty_args(p)))
+		} else {
+			out.append(name)
+		}
 		return out if not p_at(p, Plus)
 
 		p_advance(p) # '+'
@@ -1002,7 +1034,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 			params.append(p_name(p, "a spec's type parameter"))
 			if p_at(p, Colon) {
 				p_advance(p)
-				parse_bound(p, "a type parameter's bound")
+				parse_bound(p, "a type parameter's bound", false)
 			}
 			if p_at(p, Comma) {
 				p_advance(p)
@@ -1017,9 +1049,10 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	# `spec Ord: Eq[int]` used to make `int` a SECOND super, so the impl was told `Ord`
 	# extends a spec named `int`. It is named rather than dropped — see parse_bound.
 	mut supers: list[str] = []
+	mut super_args: list[list[Ty]] = []
 	if p_at(p, Colon) {
 		p_advance(p)
-		supers = parse_bound(p, "a super-spec")
+		parse_supers(p, supers, super_args)
 	}
 
 	expect(p, LBrace)
@@ -1053,7 +1086,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
-	return SpecDecl(name, params, supers, reqs, p.path, kw.line, kw.col)
+	return SpecDecl(name, params, supers, super_args, reqs, p.path, kw.line, kw.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -1422,7 +1455,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# own type parameters and with a super-spec. A second reader here would be a
 			# second answer to the same production — and a narrower one, since that reader
 			# also refuses a bound carrying type arguments.
-			bound = join_bounds(parse_bound(p, "a type parameter's bound"))
+			bound = join_bounds(parse_bound(p, "a type parameter's bound", true))
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -2221,7 +2254,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	k := t.kind
 	if k == Int {
 		p_advance(p)
-		return EInt(t.lexeme)
+		return EInt(t.lexeme, t.line, t.col)
 	}
 	if k == Byte {
 		# a byte literal `b'x'` is its code point AS A BYTE. It used to be a bare EInt, so it
@@ -2234,7 +2267,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
 		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(t.value), "byte")
+		return EConv(TByte, EInt(t.value, t.line, t.col), "byte")
 	}
 	if k == Rune {
 		p_advance(p)
@@ -2244,7 +2277,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# what a lexeme is worth is a fact about the LEXEME. Decoding it HERE, from a str
 		# re-read out of the token, is what made `'\0'` impossible to lex at all, because a
 		# str cannot hold a NUL (scan_char_lit says why).
-		return EConv(TRune, EInt(t.value), "rune")
+		return EConv(TRune, EInt(t.value, t.line, t.col), "rune")
 	}
 	if k == Float {
 		p_advance(p)
@@ -2310,7 +2343,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		elem := parse_type(p)
 		expect(p, RBrack)
 		expect(p, LParen)
-		mut cap: Expr = EInt("0")
+		mut cap: Expr = EInt("0", 0, 0)
 		if not p_at(p, RParen) {
 			cap = parse_expr(p)
 		}

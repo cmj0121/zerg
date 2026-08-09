@@ -104,8 +104,8 @@ struct 也照樣像其他值一樣深拷貝（reference-counted 的值仍是 `ch
 外部東西。資源**只**由一次明確、配對的**外部 free** 釋放。
 
 把 raw `handle` **包進一個 `Ref[handle]`**——那個 reference-counted 資源盒（見語言參考），其 `drop` 就是配對的
-外部 free——再放進一個你自己擁有的 newtype（一個單欄位 `struct`，[package.zh-TW.md](package.zh-TW.md) 的模式，**不**採
-那個會把盒子再度外洩的 auto-cast）。它的**私有欄位使它在 module 外不透明**，所以只對外提供安全方法，而 `Ref[T]` 讓
+外部 free——再放進一個你自己擁有的 newtype（一個單欄位 `struct`，[package.zh-TW.md](package.zh-TW.md) 的模式，**不**提供
+那個會把盒子再度外洩的 accessor）。它的**私有欄位使它在 module 外不透明**，所以只對外提供安全方法，而 `Ref[T]` 讓
 close **精確**：被複製、回傳、或跨 `spawn` 送出，每個 `Db` 都命名同一條連線、在最後一個持有者的 scope 退出時**關閉一次**：
 
 ```text

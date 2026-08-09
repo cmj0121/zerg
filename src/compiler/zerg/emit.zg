@@ -517,10 +517,36 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	# checker folded with cannot disagree about a value both have already agreed fits.
 	return c_lit_checked(em, e) if c_is_float(want) and c_is_lit_tree(e)
 
+	# A LITERAL PAST i64 AT A `uint` POSITION is rendered from its own bound, and here rather
+	# than in c_int_dec because here is where the target is known. c_int_dec measures against
+	# `int` — correct for a literal with nothing to ask, and the reason the upper half of `uint`
+	# was unwritable — and it would report the value it cannot hold instead of writing it.
+	return c_uint_lit(e) if c_is_uint(want) and c_is_wide_uint_lit(e)
+
 	return c_copied(em, want, e, sb)
 }
 
 # c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
+# c_int_dec cannot render. One that fits both goes the ordinary way, so this changes nothing
+# about a literal any position could already carry.
+fn c_is_wide_uint_lit(e: Expr) -> bool {
+	return match e {
+		EInt(lex, _, _) => uint_fits(lex) and not int_fits(lex)
+		_ => false
+	}
+}
+
+# c_uint_lit writes the value with C's unsigned-long-long suffix. Without it the constant is a
+# decimal C reads as a `long long`, which cannot hold it — the compiler would hand cc a number
+# it then complains about, against generated code nobody wrote.
+fn c_uint_lit(e: Expr) -> str {
+	return match e {
+		EInt(lex, _, _) => str(uint_value(lex)) + "ULL"
+		_ => ""
+	}
+}
+
 # float, asked here rather than restated, so the emitter cannot render a tree the checker did
 # not admit — with one thing added: an OPERATOR has to stand somewhere in it. A bare literal
 # is a literal tree and needs no help, because C reads `2` into a double as `2.0`; what needs
@@ -1198,25 +1224,15 @@ fn c_reset_env(mut &em: Emitter) {
 	# with them already bound
 	mut i := 0
 	for i < em.k_decls.len() {
-		em.env_names.append(em.k_decls[i].name)
-		em.env_tys.append(em.k_tys[i])
-		em.env_cnames.append("zg_" + em.k_decls[i].name)
-		em.env_dead.append(0)
-
-		# a module binding is writable exactly when it was declared `mut` — legally so
-		# inside a module-level `unsafe { … }` group, where it is the language's mutable
-		# global (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but
-		# stays writable too, so its writes do not each add a second finding about
-		# immutability on top of the one that counts
-		em.env_mut.append(em.k_decls[i].is_mut)
-
-		# scope 0 is the module: a constant is in scope in every function, and a local
-		# that shadows one is in a block of its own and so is not a redeclaration
-		em.env_scope.append(0)
-
-		# a KEYWORD `const` is shadow-proof in every function too, so the module row carries
-		# the flag into every body the way a local `const` sets it (chk_const_rebind)
-		em.env_const.append(em.k_decls[i].is_const)
+		# a module binding is writable exactly when it was declared `mut` — legally so inside
+		# a module-level `unsafe { … }` group, where it is the language's mutable global
+		# (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but stays writable
+		# too, so its writes do not each add a second finding about immutability on top of the
+		# one that counts. Scope 0 is the module, so a constant is in scope in every function
+		# and a local that shadows one is in a block of its own; and a KEYWORD `const` is
+		# shadow-proof in every body the way a local `const` is (chk_const_rebind). All of that
+		# is c_const_bind's, which c_const_globals also calls as it registers each row.
+		c_const_bind(em, em.k_decls[i], em.k_tys[i])
 		i = i + 1
 	}
 }
@@ -4134,6 +4150,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# override returns above them answer through c_copied or a method call instead, so a
 	# cell rendered here first would be built and thrown away
 	xt0 := c_infer(em, x)
+
+	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one
+	# still refused: a conversion's operand is rendered before the target reaches c_conv_scalar,
+	# so the literal met c_int_dec's `int` bound and reported a value it could not hold. The
+	# target is in hand right here, which is the same reason c_into can answer for a typed
+	# position — and the conversion is a no-op besides, the value already being of the type.
+	return c_uint_lit(x) if c_is_uint(ty) and c_is_wide_uint_lit(x)
+
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true
@@ -5976,7 +6000,16 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
 		chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
-		return f"({s} == {c_expr(em, a.lit, sb)})"
+
+		# AND THE GUARD, which this arm alone did not add. Every other shape does — the
+		# constructor pattern above, the range beside it, the wildcard below — so
+		# `match 1 { 1 if false => 10  _ => 0 }` answered `10`: the arm matched on the literal
+		# and the `if` was read, type-checked, and then dropped on the floor. A guard that
+		# parses and does nothing is worse than one that is refused.
+		eq := c_arm_eq(em, a, s, st, sb)
+		return f"({eq} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
+
+		return eq
 	}
 
 	if a.pat == 3 {
@@ -6019,6 +6052,19 @@ fn c_is_or_pattern(e: Expr) -> bool {
 # c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
 # as TEXT and so meet no operand rule of their own — a third spelling of the same equality
 # problem, eight lines from the comment that said there were two.
+# c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
+# comparison is strcmp's — the same answer c_binexpr gives `a == b`, and for the same reason:
+# C's `==` on two `const char *` compares the POINTERS.
+#
+# `match s { "y" => 1  _ => -1 }` answered `-1` for `s = "y"`. Two string literals that are equal
+# may or may not share storage, so the arm did not merely fail — it failed unpredictably, which
+# is the one kind of wrong answer a test can pass over.
+fn c_arm_eq(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	return f"(strcmp({s}, {c_expr(em, a.lit, sb)}) == 0)" if c_is_str(st)
+
+	return f"({s} == {c_expr(em, a.lit, sb)})"
+}
+
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)
@@ -6566,7 +6612,24 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	keep_path := em.at_path
 	keep_line := em.at_line
 	keep_col := em.at_col
-	for c in f.consts {
+
+	# IN DEPENDENCY ORDER, for the same reason the assignments are — and for a second one.
+	# This walk INFERS each constant's type, and it infers it by asking c_infer, which reads
+	# the environment; so `const A := B` registered `A` as TUnknown when `B` had no row yet,
+	# and a TUnknown row is a name c_is_bound answers no about. The use then reported
+	# "undefined name `A`" — naming the constant that IS declared, about a line that reads it,
+	# while the emitted C was correct all along.
+	#
+	# `const A := B + 0` worked, which is the tell: c_infer_binary falls back to TInt when both
+	# sides are unknown, so the arithmetic accidentally supplied what the bare name could not.
+	#
+	# Scope 0 is opened here because nothing has opened it yet: c_reset_env does it before each
+	# function body, and this walk runs first. A row in env_names that no OPEN scope covers is
+	# a row c_live_idx does not see, so seeding without this changed nothing at all.
+	em.scope_cur = 0
+	em.open_scopes = [0]
+	for i in c_const_order(em, f) {
+		c := f.consts[i]
 		em.at_path = c.path
 		em.at_line = c.line
 		em.at_col = c.col
@@ -6615,6 +6678,12 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		em.k_decls.append(c)
 		em.k_tys.append(ty)
 
+		# AND INTO SCOPE 0 AS IT IS REGISTERED, so the next constant in this same walk can
+		# name it. c_reset_env seeds these rows before every function body, which is what
+		# makes a constant visible to ordinary code — but that runs later, and this walk is
+		# the one that needs the answer.
+		c_const_bind(em, c, ty)
+
 		# the global about to be rendered SPELLS `c_type(ty)`, and this walk runs in EVERY
 		# unit — including the one that defines a constant whose value only the entry unit
 		# lowers. `pub PAIR := (1, 2)` in a module reached cc as `unknown type name
@@ -6634,6 +6703,19 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	em.at_line = keep_line
 	em.at_col = keep_col
 	return out
+}
+
+# c_const_bind puts one constant's row into scope 0, which is what c_reset_env does for all of
+# them before every function body. It is spelled once and called from both, because a row
+# written two ways is two rows the day one of them gains a field.
+fn c_const_bind(mut &em: Emitter, c: ConstDecl, ty: Ty) {
+	em.env_names.append(c.name)
+	em.env_tys.append(ty)
+	em.env_cnames.append("zg_" + c.name)
+	em.env_dead.append(0)
+	em.env_mut.append(c.is_mut)
+	em.env_scope.append(0)
+	em.env_const.append(c.is_const)
 }
 
 fn c_const_in(f: File, name: str) -> bool {
@@ -6658,8 +6740,17 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 	keep_line := em.at_line
 	keep_col := em.at_col
 	mut out := ""
-	mut i := 0
-	for i < f.consts.len() {
+
+	# IN DEPENDENCY ORDER, NOT SOURCE ORDER. These are assignments that RUN, so a constant
+	# naming another has to be assigned after it — and they used to run top to bottom, so
+	# `const A := B + 1` written above `const B := 5` read `B` as the zero its global was
+	# still holding and answered `1`. Silent, and the reader has no reason to suspect the
+	# order of two declarations that do not look ordered at all.
+	#
+	# GRAMMAR puts no ordering requirement on a declaration, and the rest of this compiler
+	# does not either: a function may call one declared below it. A constant is the only
+	# top-level form whose meaning depended on where it was written.
+	for i in c_const_order(em, f) {
 		c := f.consts[i]
 		em.at_path = c.path
 		em.at_line = c.line
@@ -6670,18 +6761,106 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 		# own paths: a literal adopts the annotation (c_into) and a declared `T?` wraps a
 		# bare value (c_carrier_fit). On a mismatch c_const_globals kept the INFERRED
 		# type and reported, so what is rendered here still fits the global it fills.
-		ty := em.k_tys[i]
+		# BY NAME, not by position. `k_tys` is appended by c_const_globals in DEPENDENCY order
+		# and `f.consts` is in source order, so the two indices stopped being the same one the
+		# moment this walk was ordered — `const ALIAS := BASE` took the row of whichever
+		# constant happened to be registered third and rendered an int through
+		# `zrt_str_retain`. c_k_idx is the lookup that cannot drift, and it is the same one the
+		# duplicate-name check already uses.
+		ty := em.k_tys[c_k_idx(em, c.name)]
 		mut val := c_into(em, ty, c.value, c_nosub())
 		if c.has_ty and c_is_carrier(ty) {
 			val = c_carrier_fit(em, chk_binding_says(c.name), ty, c.value, c_nosub())
 		}
 		out = out + f"    zg_{c.name} = {val};\n"
-		i = i + 1
 	}
 	em.at_path = keep_path
 	em.at_line = keep_line
 	em.at_col = keep_col
 	return out
+}
+
+# c_const_order is the constants' indices, each after every constant it names.
+#
+# It is a repeated sweep rather than a proper topological walk, which is the right trade at
+# this size: the list is a program's whole constant table, the inner test is a name lookup, and
+# the alternative needs an edge set built first. What matters is the TERMINATION — a sweep that
+# places nothing has found a cycle, and a cycle is refused by name rather than left to whatever
+# order the sweep happened to reach.
+fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
+	n := f.consts.len()
+	mut done: list[bool] = []
+	mut i := 0
+	for i < n {
+		done.append(false)
+		i = i + 1
+	}
+
+	mut out: list[int] = []
+	for out.len() < n {
+		mut placed := 0
+		mut j := 0
+		for j < n {
+			if not done[j] and c_const_ready(f, f.consts[j].value, done) {
+				done[j] = true
+				out.append(j)
+				placed = placed + 1
+			}
+			j = j + 1
+		}
+		raise c_const_cycle_says(f, done) if placed == 0
+	}
+	return out
+}
+
+# c_const_ready is whether every constant this initializer names has been assigned already. A
+# name that is not a constant is not this rule's business — a function call is ordinary code and
+# runs when the assignment does.
+fn c_const_ready(f: File, e: Expr, done: list[bool]) -> bool {
+	idx := c_const_idx(f, e)
+	return done[idx] if idx >= 0
+
+	for p in expr_parts(e) {
+		return false if not c_const_ready(f, p, done)
+	}
+	return true
+}
+
+# c_const_idx is the row this expression names, or -1 when it names no constant. Only a bare
+# identifier can: a qualified `m.K` is a field read to this parser, and a module's constants
+# flatten into one namespace before they reach here.
+fn c_const_idx(f: File, e: Expr) -> int {
+	return match e {
+		EIdent(nm) => c_const_row(f, nm)
+		_          => 0 - 1
+	}
+}
+
+fn c_const_row(f: File, nm: str) -> int {
+	mut i := 0
+	for i < f.consts.len() {
+		return i if f.consts[i].name == nm
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# c_const_cycle_says names the constants still waiting, which is the cycle plus anything that
+# depends on it. Naming the whole waiting set rather than trying to isolate the loop is the
+# honest answer: every one of them is a constant this program cannot give a value to.
+fn c_const_cycle_says(f: File, done: list[bool]) -> str {
+	mut names := ""
+	mut i := 0
+	for i < f.consts.len() {
+		if not done[i] {
+			if names != "" {
+				names = names + ", "
+			}
+			names = names + "`" + f.consts[i].name + "`"
+		}
+		i = i + 1
+	}
+	return f"these constants depend on each other and none can be given a value first: {names} — a constant's initializer may name a constant declared anywhere, but not one that names it back"
 }
 
 # c_main_entry writes the program's C entry: a WRAPPER carrying the top-level
@@ -8883,6 +9062,7 @@ fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 # checked before it is rendered — a match arm has nowhere to put a statement.
 fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
 	chk_condition(em, cond, "an `if` expression")
+	chk_branch_types(em, then_e, else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 }
 

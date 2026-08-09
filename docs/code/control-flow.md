@@ -29,14 +29,13 @@ statement, as an expression (with a trailing `else`), and as a returned if-expre
 use(x) } else { fallback }`). It carries a non-POD `str?` too — the unwrapped `str` binds in the
 then-block only.
 
-> **[deviation]** The rule that **every branch must yield the same type** is not checked for `if`.
-> `x := if false { 1 } else { 2.5 }` compiles and prints `2` — the `float` arm truncated into the `int` the
-> first arm settled on — and `if false { 1 } else { true }` prints `1`. When the two types have no C
-> conversion between them the mismatch escapes the compiler entirely and `cc` reports it, against the
-> generated C rather than against the Zerg that caused it. The same rule IS checked for `match`
-> (`error: a match answers ONE type, and its arms give int and str`), which is what makes this an omission
-> in one construct rather than a decision about how branches are typed.
->
+**Every branch must yield the same type**, and both constructs say so in the same words —
+`an if expression answers ONE type, and its branches give int and float`, beside `match`'s. A
+`nil` branch is the exception, and not one: it carries no type to disagree with, so
+`x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence on the
+other. Every other branch brings its own type, a literal included — a branch is not a typed
+position for its sibling, the same way one match arm is not one for the next.
+
 > **[not yet]** Two shapes of the value form are refused by name. An **`else if` chain** in an if-expression
 > (`x := if a { 1 } else if b { 2 } else { 3 }`) is one: the expression form takes a single trailing `else`,
 > and the chain stays a statement. **if-let in an expression position** is the other — `return if x := opt {
@@ -106,13 +105,10 @@ matches by containment), all fire. An **or-pattern** (`A | B =>`, and the bindin
 `A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
 (`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and the list pattern even type-checks.
 
-> **[deviation]** A **`str` literal** arm never fires. `match s { "y" => 1  "n" => 0  _ => -1 }` answers
-> `-1` for `s == "y"`: `--emit c` shows the arm lowered to a **pointer** comparison between the subject and
-> the arm's literal, while `"y" == "y"` written as an expression in the same file lowers to
-> `strcmp(…) == 0`. The `int`, `bool`, `rune` and negative-literal arms all compare by value as specified;
-> only `str` is wrong, and it is wrong **silently** — there is no diagnostic, the trailing `_` absorbs every
-> miss, and a `match` over strings behaves exactly as if the subject matched no case at all.
->
+A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's `==` uses. It lowered to
+a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
+the trailing `_` absorbs every miss and two equal literals may or may not share storage.
+
 > **[not yet]** A **nested pattern** does not parse: `Left(Some(v))`, and `L(0)` too, are turned away with
 > ``a pattern binding needs a name, and `(` is not one`` — a payload position takes a name and nothing else,
 > so every pattern is one level deep. That also empties the Note below on nested exhaustiveness: there is no

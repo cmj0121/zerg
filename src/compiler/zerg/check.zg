@@ -616,6 +616,37 @@ fn c_is_fieldref(e: Expr) -> bool {
 # at: a later arm answering something else was rendered into the same conditional and cc
 # reported the mismatch — as a WARNING under clang, so the program linked. Every arm has to
 # be typed with its OWN payload bound, which is why this is a walk and not a comparison.
+# chk_branch_types is chk_arm_types for the OTHER construct that answers one type from two
+# places. `x := if false { 1 } else { 2.5 }` printed `2` — the float arm truncated into the int
+# the first arm settled on — and where the two types have no C conversion between them the
+# mismatch escaped the compiler entirely and `cc` reported it, against generated C.
+#
+# `match` has had the rule since arms could answer at all, and the sentence is deliberately the
+# same shape: two constructs, one question, and a reader who has met one of these has met both.
+# That an omission in one construct went unnoticed while the other was checked is the shape this
+# compiler keeps finding — one rule, N places, written at fewer.
+#
+# THE OTHER OPERAND is not what decides here. Both branches are values with types of their own,
+# so this is chk_fits and not the adoption question: a literal branch adopts nothing from its
+# sibling, exactly as one match arm adopts nothing from the next.
+fn chk_branch_types(mut &em: Emitter, then_e: Expr, else_e: Expr) {
+	want := c_infer(em, then_e)
+	got := c_infer(em, else_e)
+
+	return if c_is_unknown(want) or c_is_unknown(got)
+	return if ty_eq(want, TVoid) or ty_eq(got, TVoid)
+
+	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the four typeless forms, so
+	# `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence
+	# on the other — two spellings of one `int?` and not two answers. Every OTHER branch does
+	# bring its type, a literal included: a branch is not a typed position for its sibling, the
+	# same way one match arm is not one for the next.
+	return if ty_eq(want, TNil) or ty_eq(got, TNil)
+	return if chk_fits(em, want, got) or chk_fits(em, got, want)
+
+	chk_at(em, f"an `if` expression answers ONE type, and its branches give {ty_name(want)} and {ty_name(got)}")
+}
+
 fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	return if arms.len() < 2
 
@@ -1190,6 +1221,13 @@ fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 	# a range, and chk_lit_in_range accepts exactly the expressions chk_int_lit does.
 	return true if c_is_float(want)
 
+	# THE UPPER HALF OF `uint` IS A LITERAL TOO. Every integer literal is measured against `int`
+	# by the walk that reads it — the right bound for one with no position to ask, and the wrong
+	# one here: `u: uint = 18446744073709551615` was rejected with "does not fit an `int`" about
+	# a value that is an ordinary `uint` and reachable by arithmetic. The position says which
+	# bound applies, and this is where the position is known.
+	return true if c_is_uint(want) and chk_uint_lit_fits(e)
+
 	return chk_lit_in_range(em, want, e, false)
 }
 
@@ -1409,6 +1447,16 @@ fn chk_lit_float_oper(o: str) -> bool {
 # `x: float = 1 % 2`, whose `%` no double carries — is not a value out of range, and saying
 # "`1` is not a value a float holds" about it is false twice over. It simply does not adopt,
 # and the position then writes its ordinary sentence about a value of the wrong type.
+# chk_uint_lit_fits is the u64 bound asked of a BARE literal. A tree is not asked: the fold
+# runs on i64 and there is no `uint` arithmetic behind it, so `u: uint = X + 1` for an X past
+# i64 stays refused — which is honest, and narrower than pretending the fold reached there.
+fn chk_uint_lit_fits(e: Expr) -> bool {
+	return match e {
+		EInt(lex, _, _) => uint_fits(lex)
+		_ => false
+	}
+}
+
 fn chk_lit_shaped(want: Ty, e: Expr) -> bool {
 	return chk_lit_float_tree(e) if c_is_float(want)
 

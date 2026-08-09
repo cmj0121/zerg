@@ -2067,6 +2067,33 @@ fn main() {
 }
 EOF
 
+# --- an `if` expression answers ONE type -----------------------------------------------
+#
+# `match` has had this rule since its arms could answer at all; `if` did not, so
+# `x := if false { 1 } else { 2.5 }` printed `2` — the float arm truncated into the int the
+# first branch settled on — and a pair with no C conversion between them escaped to cc.
+
+expect "$ZERG" if-branches-int-and-float 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { 2.5 }
+	print x
+}
+EOF
+
+expect "$ZERG" if-branches-int-and-bool 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { true }
+	print x
+}
+EOF
+
+expect "$ZERG" if-branches-int-and-str 'an `if` expression answers ONE type' place <<'EOF'
+fn main() {
+	x := if false { 1 } else { "s" }
+	print x
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

@@ -2997,6 +2997,41 @@ fn main() {
 }
 EOF
 
+# --- a list index is a typed position too -----------------------------------------------
+#
+# The map's KEY gained its rule and the list's INDEX did not, so the subscript accepted
+# anything at all: `xs["a"]` reached cc, and `xs[1.5]` and `xs[true]` COMPILED AND RAN — the
+# float silently truncated to 1 by a C conversion cc only warned about, the bool read as 1.
+
+reject index-a-list-with-a-str 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs["a"]
+}
+EOF
+
+reject index-a-list-with-a-float 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[1.5]
+}
+EOF
+
+reject index-a-list-with-a-bool 'a list index is an int' place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[true]
+}
+EOF
+
+reject index-assign-a-list-with-a-str 'a list index is an int' place <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	xs["a"] = 5
+	print xs.len()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

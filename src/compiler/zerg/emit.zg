@@ -9793,7 +9793,11 @@ fn c_derive_variants(ed: EnumDecl, target: str) -> str {
 # the cost the size of the program.
 fn c_build_impls(mut &em: Emitter, f: File) {
 	for ip in f.impls {
-		em.impl_on.append(ip.on)
+		# THE KEY IS THE SPEC AND ITS ARGUMENTS, which is what docs/core/specs.md says a
+		# parameterized spec's identity is. Recording the name alone made `impl Into[Meters]`
+		# and `impl Into[Feet]` the same entry, so a bound asking for one was satisfied by the
+		# other — and the bound could not ask for either, having dropped its own arguments too.
+		em.impl_on.append(spec_key(ip.on, ip.args))
 		em.impl_target.append(ip.target)
 	}
 }

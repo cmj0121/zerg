@@ -425,19 +425,31 @@ fn join_bounds(specs: list[str]) -> str {
 	return out
 }
 
-fn parse_bound(mut &p: Parser, whose: str) -> list[str] {
+fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 	mut out: list[str] = []
 	for p_at(p, Ident) {
 		name := cur(p).lexeme
 		p_advance(p)
 
-		# A super's or a bound's own TYPE ARGUMENTS are not carried. Dropping them silently
-		# left the named spec's parameters unsubstituted, so `spec Ord: Eq[int]` refused
-		# every correct `impl Ord` with "parameter `o` is int, and the spec declares T" —
-		# a valid program turned away for a reason that is about the compiler.
-		raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl`, so it has nothing to substitute the parameters with here" if p_at(p, LBrack)
+		# A TYPE PARAMETER'S BOUND carries its arguments, because they are what the bound
+		# MEANS: `[T: Into[Meters]]` asks whether T converts to Meters, and a bound that kept
+		# only the name asked whether it converts to anything — the one question `Into` is
+		# never worth asking. They ride in the name as `Into[Meters]`, rendered by ty_name, and
+		# the impl registry renders its own the same way, so the two agree by construction
+		# rather than by a comparison somebody has to keep true.
+		#
+		# A SUPER-SPEC still refuses them, and that is a different missing thing: a super's
+		# arguments have to be SUBSTITUTED into the named spec's own parameters before its
+		# signatures can be compared, and dropping them silently made `spec Ord: Eq[int]`
+		# refuse every correct `impl Ord` with "parameter `o` is int, and the spec declares T"
+		# — a valid program turned away for a reason about the compiler.
+		if p_at(p, LBrack) {
+			raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here" if not allow_args
 
-		out.append(name)
+			out.append(spec_key(name, parse_ty_args(p)))
+		} else {
+			out.append(name)
+		}
 		return out if not p_at(p, Plus)
 
 		p_advance(p) # '+'
@@ -1002,7 +1014,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 			params.append(p_name(p, "a spec's type parameter"))
 			if p_at(p, Colon) {
 				p_advance(p)
-				parse_bound(p, "a type parameter's bound")
+				parse_bound(p, "a type parameter's bound", false)
 			}
 			if p_at(p, Comma) {
 				p_advance(p)
@@ -1019,7 +1031,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	mut supers: list[str] = []
 	if p_at(p, Colon) {
 		p_advance(p)
-		supers = parse_bound(p, "a super-spec")
+		supers = parse_bound(p, "a super-spec", false)
 	}
 
 	expect(p, LBrace)
@@ -1422,7 +1434,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# own type parameters and with a super-spec. A second reader here would be a
 			# second answer to the same production — and a narrower one, since that reader
 			# also refuses a bound carrying type arguments.
-			bound = join_bounds(parse_bound(p, "a type parameter's bound"))
+			bound = join_bounds(parse_bound(p, "a type parameter's bound", true))
 		}
 		names.append(nm)
 		bounds.append(bound)

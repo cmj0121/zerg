@@ -64,22 +64,10 @@
   ——`int / int` 是 `int`、`float / float` 是 `float`——因為已具型別的 `int` 值永遠不會隱式變成 `float`
   （見下方「數值字面值」）。`//` **不會**開啟註解——Zerg 的註解以 `#` 起始。
 
-> **[deviation]** `~` 作用在 `byte` 上算的是 **64 位元**的補數、而且從不遮罩回八個 bit,所以只有在結果立刻落進一個
-> `byte` 槽時答案才是對的。以 `b: byte = 12` 為例,規範的結果在下面三處都是 `243`:`c: byte = ~b` 給出它,因為那個
-> binding 自己的轉換把值縮了回去;而 `print ~b` 印出 `18446744073709551603`、`int(~b)` 給出 `-13`。這個補數是以 C 的
-> `~` 作用在已提升的運算元上產生的,而一個測試最自然會採取的那種寫法——把結果直接存回一個 `byte`——正好就是把它藏
-> 起來的那一種。
->
 > **[not yet]** bitwise 運算子並不 desugar 到任何 user type 能實作的東西。`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`
 > 與 `Shr` 這些 spec 在任何地方都沒有被宣告,所以指名其中一個會報 _error: no spec named `BitAnd`_——那是「沒有人寫
 > 過這個 spec」的普通訊息——而複合值上的 `&` 沒有任何路徑通往使用者寫的 body。運算子本身在 `int` / `uint` / `byte`
 > 上是內建的、如規範般運作;缺的是這道 desugar 存在的目的:多載（見 [Spec 與 Generics](specs.zh-TW.md)）。
->
-> **[deviation]** `%` 後綴的運算子在 `int` 與 `uint` 上環繞,在 `byte` 上卻會 **raise**:`byte(255) +% byte(1)` 以
-> `OverflowError: integer conversion out of range` abort,而不是給出 `0`,`-%` 與 `*%` 也一樣。環繞是在已提升的寬度
-> 上做的,結果再由普通的**檢查式**轉換窄回 `byte`——而那正是 `%` 這個寫法存在的目的所要迴避的那次 raise,於是這個運
-> 算子成了它本來要繞開的那個的別名。每一個 hashing 與 checksum 的案例都寫在那兩個較寬的型別上,所以沒有人量過
-> `byte`。
 >
 > **[deviation]** 讓 `/` 與 `%` 成為 Euclidean 的那個修正是**無條件**產生的,並未在兩個運算元都可證明非負時
 > elide——上面說的「最常見情況零成本」是意圖中的 codegen、不是今天的。語意不受影響:那是成本、不是錯的答案。

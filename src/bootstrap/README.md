@@ -169,7 +169,7 @@ The seed is deliberately the narrower compiler, and it refuses most of what it h
 built. These are the places it does NOT — where it does not turn a program away ITSELF, so
 `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
 
-"Itself" is the whole of it. Three of the three below were counted as refusals for a year
+"Itself" is the whole of it. Two of the two remaining were counted as refusals for a year
 because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 `-Waddress-of-temporary` are errors there and warnings under gcc, so the same seed and the
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
@@ -185,8 +185,6 @@ the program, which is what the assertion exists to catch.
   it at the callsite.
 - **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is
   emitted as written and cc reports the type. `zerg` judges a default at the declaration.
-- **A store through a value is accepted.** `get()[0] = 99` takes the address of a call's
-  result. `zerg` refuses any write whose path is not storage all the way down.
 - **A TOP-LEVEL binding's annotation is not checked against its value.** `answer: bool =
 42` builds and the global is whatever the seed makes of it; the same mismatch on a LOCAL
   binding the seed does refuse. `zerg` honours a top-level annotation the way it honours a

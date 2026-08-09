@@ -476,7 +476,13 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 		}
 		return c.synth(e), m, nm, true
 	}
-	return c.synth(e), true, "", true
+	// EVERYTHING ELSE IS NOT A PLACE, and the fall-through used to say the opposite of that:
+	// it answered "resolved, mutable, no name" for any expression at all, so `f() = 2` and
+	// `5 = 2` were checked as assignments and emitted to the left of a C `=`. cc answered
+	// "expression is not assignable" about generated code. An assignment needs somewhere for
+	// the value to live, and a call's result and a literal have nowhere.
+	c.errorf(e.Span(), "this is not a place, and an assignment needs one — a name, or a field or an index reached from one")
+	return c.synth(e), false, "", false
 }
 
 // --- operators ----------------------------------------------------------------

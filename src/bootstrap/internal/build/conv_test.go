@@ -58,8 +58,8 @@ func TestConvMaskToTruncateRuns(t *testing.T) {
 // a float whose integer part does not fit.
 func TestConvOverflowAborts(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
-		{"fn main() {\n\tprint byte(300)\n}\n", "integer conversion out of range"},
-		{"fn main() {\n\tprint uint(-5)\n}\n", "integer conversion out of range"},
+		{"fn main() {\n\tn := 300\n\tprint byte(n)\n}\n", "integer conversion out of range"},
+		{"fn main() {\n\tn := -5\n\tprint uint(n)\n}\n", "integer conversion out of range"},
 		{"fn main() {\n\tprint byte(256.0)\n}\n", "float conversion out of range"},
 		{"fn main() {\n\tprint int(1e30)\n}\n", "float conversion out of range"},
 	} {
@@ -74,7 +74,8 @@ func TestConvOverflowAborts(t *testing.T) {
 // abort into a Result, so `??` supplies a default instead of the program dying.
 func TestConvGuardDemotesRuns(t *testing.T) {
 	got := runProgramRT(t, "fn main() {\n"+
-		"\tbad := guard { byte(300) } ?? 7\n"+
+		"\tn := 300\n"+
+		"\tbad := guard { byte(n) } ?? 7\n"+
 		"\tprint bad\n"+
 		"\tgood := guard { byte(42) } ?? 7\n"+
 		"\tprint good\n"+
@@ -125,7 +126,7 @@ func TestConvFixedWidthRuns(t *testing.T) {
 
 // TestConvFixedWidthOverflowAborts checks the same bounds apply to the fixed widths.
 func TestConvFixedWidthOverflowAborts(t *testing.T) {
-	out := runProgramRTAbort(t, "fn main() {\n\tprint i8(128)\n}\n")
+	out := runProgramRTAbort(t, "fn main() {\n\tn := 128\n\tprint i8(n)\n}\n")
 	if !strings.Contains(out, "OverflowError") {
 		t.Fatalf("i8(128) should raise OverflowError, got:\n%s", out)
 	}

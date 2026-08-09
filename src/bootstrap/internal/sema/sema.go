@@ -265,6 +265,81 @@ func (c *checker) collectTypes(file *ast.File) {
 			c.fillAlias(n)
 		}
 	}
+	c.checkSizeCycles(file)
+}
+
+// checkSizeCycles refuses a struct that contains itself BY VALUE, however indirectly.
+//
+// Such a type has no size: `struct P { p: P }` is P plus a P plus a P. There was no check here
+// at all, so the seed accepted it and handed cc a struct containing itself — and the shipping
+// compiler, whose declaration sweep skipped a self-dependency, died of signal 11 on the same
+// three lines, which is what sent anybody looking.
+//
+// Only a BY-VALUE field is an edge. A `list[P]` field holds a heap buffer, a `P?` holds a
+// carrier, and an enum's self-recursive payload is auto-boxed: those are the ways to write a
+// recursive shape, and none of them is a size that depends on itself.
+func (c *checker) checkSizeCycles(file *ast.File) {
+	state := map[string]sizeState{}
+	for _, d := range file.Items {
+		if n, ok := d.(*ast.StructDecl); ok {
+			c.sizeWalk(n.Name, state, n)
+		}
+	}
+}
+
+// sizeState is where one declaration stands in the walk below.
+type sizeState uint8
+
+const (
+	sizeUnvisited sizeState = iota
+	sizeOnStack
+	sizeSettled
+)
+
+// sizeWalk is the depth-first half, and it reports whether `name` is on the walk's own stack —
+// which is what a cycle is. `blame` is the declaration the report hangs on: the one the walk
+// started from, since a cycle has no first member and the reader is looking at theirs.
+func (c *checker) sizeWalk(name string, state map[string]sizeState, blame *ast.StructDecl) bool {
+	switch state[name] {
+	case sizeOnStack:
+		return true
+	case sizeSettled:
+		return false
+	}
+	// settled on EVERY exit, including the one that reports: a name is walked once, so a
+	// diamond of by-value fields costs one visit rather than one per path into it.
+	state[name] = sizeOnStack
+	defer func() { state[name] = sizeSettled }()
+
+	sym := c.module.local(name)
+	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Struct == nil {
+		return false
+	}
+	for _, f := range sym.TypeDef.Struct.Fields {
+		nm, ok := byValueStructName(f.Type)
+		if !ok {
+			continue
+		}
+		if c.sizeWalk(nm, state, blame) {
+			c.errorf(blame.Span(), "%q is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload", blame.Name)
+			return false
+		}
+	}
+	return false
+}
+
+// byValueStructName is the named struct a field holds DIRECTLY, if it holds one.
+//
+// A field spelled with a struct's NAME resolves to the STRUCT type, not to a *types.Named
+// wrapping it — which a first attempt at this asked for, and so matched nothing at all.
+// Anything reached through a list, a map, a carrier or a channel is behind an indirection and
+// contributes no edge.
+func byValueStructName(t types.Type) (string, bool) {
+	st, ok := t.(*types.Struct)
+	if !ok || st.Def == nil {
+		return "", false
+	}
+	return st.Def.Name, true
 }
 
 // fillAlias resolves a strong typedef's underlying representation into its TypeDef
@@ -904,10 +979,16 @@ func (c *checker) checkStmt(s ast.Stmt) {
 			c.revoke(sym)
 		}
 	case *ast.RaiseStmt:
-		// 'raise e (from c)' diverges (never). With no stdlib Error spec yet, any
-		// value is accepted as the error and its cause (FORK-4); the operands are
-		// still synthesized so nested errors surface.
-		c.synth(n.Value)
+		// 'raise e (from c)' diverges (never). What it carries is an Err, or a MESSAGE to
+		// build one from (docs/code/errors.md) — and nothing else: the operand was accepted
+		// whatever it was and handed to the runtime's `zrt_err_new`, whose parameter is a
+		// `const char *`, so `raise 5` reached cc as an incompatible-type argument and a
+		// struct the same way. The `from` cause has always had this rule in the shipping
+		// compiler; one statement, two operands, and only one of them was ever asked.
+		vt := c.synth(n.Value)
+		if !bad(vt) && vt != errType && vt != types.Str {
+			c.errorf(n.Value.Span(), "raise carries an `Err`, or a message to build one from — %s is neither; write `ValueError(…)`, or a `str`", vt)
+		}
 		if n.From != nil {
 			c.synth(n.From)
 		}

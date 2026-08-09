@@ -1436,30 +1436,49 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-# parse_decorator reads `#[ … ]` as ONE item (GRAMMAR#decorator). It used to reach the top-level
-# fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
-# items and anything inside it that happened to parse as a declaration was read as one.
+# parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
+# which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate items and
+# anything inside it that happened to parse as a declaration was read as one.
 #
-# `derive`'s ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They
-# used to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a
-# type meant nothing, so `==` on it either was refused or — on an enum — silently compared
-# tags. Every other decorator is named, because a decorator that changes what a declaration
-# MEANS cannot be ignored without changing the program.
+# The brackets hold a COMMA LIST of items — `deco-item ( ',' deco-item )*` — which this read
+# as one item with a bag of identifiers in it. Every name inside that was not `derive` went
+# onto `pending` as though it were a derive argument, so `#[derive(Eq), sealed]` asked to
+# derive `sealed`: advice that makes no sense, about a decorator parse_deco_item refuses by
+# name the moment it is written alone.
 fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	p_advance(p) # '#['
+	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		parse_deco_item(p, pending)
+		break if not p_at(p, Comma)
+		p_advance(p)
+	}
+	expect(p, RBrack)
+}
+
+# parse_deco_item reads ONE `name` or `name( args )` (GRAMMAR#deco-item). Only `derive` is
+# built, and every other decorator is NAMED rather than skipped, because a decorator that
+# changes what a declaration MEANS cannot be ignored without changing the program.
+#
+# derive's ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They used
+# to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a type
+# meant nothing, so `==` on it either was refused or — on an enum — silently compared tags.
+fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	name := cur(p).lexeme
 	raise f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
 
-	# `#[` is ONE token (the lexer joins it), and a decorator's arguments are names and
-	# const-exprs — neither opens a bracket — so the group ends at the first `]`. An argument
-	# is an identifier, which is what tells a spec name from the punctuation around it.
-	for not p_at(p, RBrack) and not p_at(p, Eof) {
-		if p_at(p, Ident) and cur(p).lexeme != "derive" {
+	p_advance(p)
+	return if not p_at(p, LParen)
+
+	# a derive ARGUMENT is a spec name; the arguments a decorator may take in general are
+	# const-exprs, and none of them opens a bracket, so the item ends at its own `)`
+	p_advance(p)
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		if p_at(p, Ident) {
 			pending.append(cur(p).lexeme)
 		}
 		p_advance(p)
 	}
-	expect(p, RBrack)
+	expect(p, RParen)
 }
 
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
@@ -2271,6 +2290,7 @@ fn parse_unary(mut &p: Parser) -> Expr {
 		p_shallower(p)
 		return e
 	}
+
 	# A UNARY OPERATOR'S OPERAND INCLUDES THE GROUP-8 POSTFIXES: GRAMMAR is
 	# `unary-expr ::= unary-op unary-expr | postfix-expr` with `?`, `!` and `?.` among the
 	# postfixes, so `-x!` is `-(x!)`. The operand was read with parse_unary, one level short of

@@ -979,10 +979,16 @@ func (c *checker) checkStmt(s ast.Stmt) {
 			c.revoke(sym)
 		}
 	case *ast.RaiseStmt:
-		// 'raise e (from c)' diverges (never). With no stdlib Error spec yet, any
-		// value is accepted as the error and its cause (FORK-4); the operands are
-		// still synthesized so nested errors surface.
-		c.synth(n.Value)
+		// 'raise e (from c)' diverges (never). What it carries is an Err, or a MESSAGE to
+		// build one from (docs/code/errors.md) — and nothing else: the operand was accepted
+		// whatever it was and handed to the runtime's `zrt_err_new`, whose parameter is a
+		// `const char *`, so `raise 5` reached cc as an incompatible-type argument and a
+		// struct the same way. The `from` cause has always had this rule in the shipping
+		// compiler; one statement, two operands, and only one of them was ever asked.
+		vt := c.synth(n.Value)
+		if !bad(vt) && vt != errType && vt != types.Str {
+			c.errorf(n.Value.Span(), "raise carries an `Err`, or a message to build one from — %s is neither; write `ValueError(…)`, or a `str`", vt)
+		}
 		if n.From != nil {
 			c.synth(n.From)
 		}

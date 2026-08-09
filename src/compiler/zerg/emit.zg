@@ -9270,6 +9270,20 @@ fn c_raise(mut &em: Emitter, x: Expr, has_cause: bool, cause: Expr, ind: str) ->
 # and anything else — a bare message — has one built around it.
 fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 	return c_expr(em, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
+
+	# AND OTHERWISE A MESSAGE, which the fallback below assumed rather than checked: it wraps
+	# the operand in `zrt_err_new`, whose parameter is a `const char *`, so `raise 5` reached cc
+	# as an incompatible-type argument and `raise P(1)` as a struct passed where a pointer goes.
+	# The `from` side of the same statement has had this rule all along (c_err_cause) — one
+	# statement, two operands, and only one of them was asked.
+	t := c_infer(em, x)
+	if not c_is_str(t) and not c_is_unknown(t) {
+		# REPORTED rather than raised, so it carries the place: `raise` is a statement, so a
+		# marker is set, and this is a statement about a program the language rejects rather
+		# than a form the compiler has not built. Emission carries on and the C is discarded.
+		chk_at(em, f"raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
+	}
+
 	return f"zrt_err_new({c_expr(em, x, c_nosub())})"
 }
 

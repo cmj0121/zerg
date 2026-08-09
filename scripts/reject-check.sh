@@ -2926,6 +2926,28 @@ fn main() {
 }
 EOF
 
+# --- bad paths, sweep four: what `raise` takes ------------------------------------------
+#
+# `raise e` carries an `Err`, and `raise "…"` is the shorthand that builds one from a message
+# (docs/code/errors.md). Anything else was handed to the runtime's unwind as though it were an
+# Err — `raise 5` reached cc as an incompatible-type argument, and a struct the same way.
+
+reject raise-an-int 'raise carries an `Err`' <<'EOF'
+fn main() {
+	raise 5
+}
+EOF
+
+reject raise-a-struct 'raise carries an `Err`' <<'EOF'
+struct P {
+	a: int
+}
+
+fn main() {
+	raise P(1)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

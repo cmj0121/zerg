@@ -50,6 +50,15 @@ fn peek_kind(mut &p: Parser, n: int) -> Kind {
 	return Eof
 }
 
+# peek_lexeme is peek_kind's other half: the TEXT of a token ahead, read without consuming
+# it, which is what a refusal needs to name the form the parser is standing in front of.
+# Past the end it answers "", the lexeme `cur` already gives for the Eof token.
+fn peek_lexeme(mut &p: Parser, n: int) -> str {
+	j := p.pos + n
+	return p.toks[j].lexeme if j < p.toks.len()
+	return ""
+}
+
 fn p_at(mut &p: Parser, k: Kind) -> bool {
 	return cur_kind(p) == k
 }
@@ -205,6 +214,15 @@ fn ident_name(e: Expr) -> str {
 	}
 }
 
+# is_or_expr reports whether an expression is a bitwise-or at its top, which in a match arm
+# is the shape an or-pattern over LITERALS arrives in — parse_expr swallows the `|`.
+fn is_or_expr(e: Expr) -> bool {
+	return match e {
+		EBinary(oper, x, y) => oper == "|"
+		_ => false
+	}
+}
+
 # --- types ---------------------------------------------------------------------
 
 # parse_type reads a type expression, including the two DIRECTIONAL channel spellings
@@ -302,6 +320,16 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# declares — without it the qualifier parses as a type of its own and the emitter
 	# spells a name nothing declared.
 	for p_at(p, Dot) {
+		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER, and dropping the qualifier made them the
+		# same thing: `I.Item` PROJECTS a type the implementer of `I` supplies (GRAMMAR#base-type,
+		# chainable as `I.Item.Sub`), so keeping only `Item` left it reading as an undeclared
+		# type — the message a misspelling gets.
+		#
+		# The two are told apart by CASE, which the language already decides: a module is named
+		# by its directory and is snake_case, a spec is PascalCase. So `cli.Opt` is a qualifier
+		# and `It.Item` is a projection.
+		raise f"NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if c_is_ctor(name)
+
 		p_advance(p)
 		name = cur(p).lexeme
 		p_advance(p)
@@ -1456,6 +1484,16 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# second answer to the same production — and a narrower one, since that reader
 			# also refuses a bound carrying type arguments.
 			bound = join_bounds(parse_bound(p, "a type parameter's bound", true))
+
+			# A VALUE GENERIC PARAMETER, `fn f[N: int]` (GRAMMAR#type-param): a bound that names a
+			# CONCRETE TYPE rather than a spec makes the parameter a compile-time VALUE, not a
+			# type. Nothing here rejected it, so `N` was carried as a type parameter bounded by
+			# a spec named `int` — and the call site `f[3]()` then reported "calling index",
+			# two steps from the form and naming neither the parameter nor the argument.
+			#
+			# Spec or concrete is told by CASE, the same distinction an associated type uses:
+			# a spec is PascalCase, and every concrete type this language spells is not.
+			raise f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not c_is_ctor(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -2358,12 +2396,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EGuard(parse_block(p))
 	}
-	if k == Unsafe {
-		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and
-		# its statements never ran
-		raise "NotImplemented: unsafe"
-	}
-	raise "NotImplemented: asm" if k == Asm
+	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
+	# and does not build. The `unsafe` block used to be swallowed whole with its statements
+	# never run, and naming it was only half the fix: both markers were the keyword and
+	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
+	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
+	raise "NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value" + p_place(p, t.line, t.col) if k == Unsafe
+	raise "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Asm
+
 	if k == Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
 		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
@@ -2549,6 +2589,16 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	} else {
 		lit = parse_expr(p)
 	}
+
+	# AN OR-PATTERN, `A | B =>` (GRAMMAR#pattern), which this compiler does not lower. It
+	# arrives in TWO shapes and the rule was written at one of them: a literal pattern lets
+	# parse_expr swallow the `|` as the bitwise operator, so `1 | 2` reached the emitter as a
+	# folded value and was named there; a name pattern stops before the `|`, and the parser
+	# died on "expected `=>`" — the message a typo gets, for a form GRAMMAR has.
+	#
+	# Both shapes are one rule, so it is written once, HERE: the parser is the only place
+	# that sees the bitwise-or expression and the leftover `|` token alike.
+	raise "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Pipe) or is_or_expr(lit)
 
 	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
 	# while the pattern keeps destructuring. It fell through to the arrow check, so the

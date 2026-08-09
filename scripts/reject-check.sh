@@ -3032,6 +3032,17 @@ fn main() {
 }
 EOF
 
+# An ANNOTATION HAS TO NAME A TYPE. A parameter's is checked where it is resolved and a
+# `type X = Y`'s underlying name too; a local's was the one that did not have to, and reported
+# "cannot bind int to a Nope binding" — a sentence about the VALUE that treats an unknown name
+# as a type the value failed to be.
+reject local-annotation-names-no-type 'no type of that name is declared' place <<'EOF'
+fn main() {
+	x: Nope = 5
+	print 1
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

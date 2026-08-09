@@ -22,10 +22,10 @@
 `nil` 不是一個自己的型別——它是 `T?` 的 placeholder 值（[Null-safety 與錯誤處理](../code/errors.zh-TW.md));
 而 `str` 在記憶體裡以 NUL 結尾,是 C 邊界的事（[FFI](../runtime/ffi.zh-TW.md)),不是這個型別的性質。
 
-> **[not yet]** 固定寬度階梯一個都不存在:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib 型別,而沒有任何
-> stdlib 宣告過其中一個。因為一個寬度不過是普通的 identifier、不是關鍵字,連拒絕都不是具名的——`i32(x)` 報的是
-> _undefined function `i32`_,任何拼錯的呼叫都會拿到的那句話,所以讀者被告知的是這個名字不存在,而不是這道階梯尚未
-> 建置。
+> **[not yet]** `zerg` 沒有固定寬度階梯的任何一部分:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib
+> 型別,而沒有任何 stdlib 宣告過其中一個。它是**具名**被拒的——一個寬度不過是普通的 identifier、不是關鍵字,所以
+> 拒絕曾經是 _undefined function `i32`_,任何拼錯的呼叫都會拿到的那句話,讀者被告知的是自己的名字不存在。**seed**
+> 建得起也跑得動它們,這使本章成為唯一一處 seed 比較寬的地方。
 
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
   （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）；`int`/`uint`/`byte`/`rune` 絕不環繞

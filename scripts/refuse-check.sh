@@ -2182,6 +2182,14 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" fixed-width-typedef 'the fixed-width ladder' <<'EOF'
+type W = u8
+
+fn main() {
+	print 1
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

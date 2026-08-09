@@ -205,6 +205,28 @@ fn skip_semis(mut &p: Parser) {
 	}
 }
 
+# p_stmt_sep is skip_semis with the separator REQUIRED. GRAMMAR#stmt-list writes a statement
+# list as `statement ( stmt-sep+ statement )*`, so two statements in a row with nothing
+# between them is not a program — and every loop here called skip_semis, which skips a
+# separator when there is one and says nothing when there is not. So a second statement on
+# the same line was read as a statement, and quietly: `print "a" "b"` printed `a`, `x := 1 2`
+# bound 1, `print f() f()` called `f` once. Nothing was reported because nothing was wrong as
+# far as the loop could tell — it had a statement, and it asked for the next one. The seed
+# has refused this since it was written, so the two compilers disagreed about which programs
+# exist.
+#
+# `end` is the token that closes the list — `}` for a block or a module-level `unsafe { … }`
+# group, the end of file at the top level — since arriving at it is the other way a statement
+# may be followed by no separator.
+fn p_stmt_sep(mut &p: Parser, end: Kind) {
+	at := p.pos
+	skip_semis(p)
+	return if p.pos != at or p_at(p, end) or p_at(p, Eof)
+
+	t := cur(p)
+	raise f"expected a newline or `;` to separate statements, found `{t.lexeme}`" + p_place(p, t.line, t.col)
+}
+
 # ident_name extracts the identifier spelling from an EIdent expression (the assignment
 # and call targets in the subset), or "" for anything else.
 fn ident_name(e: Expr) -> str {
@@ -732,6 +754,12 @@ pub fn parse_at(src: str, path: str) -> File {
 			in_unsafe = true
 			unsafe_line = t.line
 			unsafe_col = t.col
+
+			# OPENING the group is not an item, so nothing separates it from the first one:
+			# ASI inserts a `;` after a token that can END an item (GRAMMAR group 2) and `{`
+			# is not one. This is the one pass round the loop that reads no item, so it is
+			# also the one that must not ask for the separator below.
+			continue
 		} else if in_unsafe and p_at(p, RBrace) {
 			p_advance(p)
 			in_unsafe = false
@@ -755,7 +783,16 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise "`pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
 			parse_stmt(p)
 		}
-		skip_semis(p)
+
+		# The top level's end is the end of FILE, except inside a module-level `unsafe { … }`
+		# group (GRAMMAR#unsafe-group), whose items this same loop reads and whose end is its
+		# `}`. The group is a brace this loop opens and closes rather than a block it
+		# descends into, so it is the one place where the terminator is not fixed.
+		mut end := Eof
+		if in_unsafe {
+			end = RBrace
+		}
+		p_stmt_sep(p, end)
 	}
 
 	# The `impl` check is NOT here. A spec may be declared in another file of the same
@@ -994,9 +1031,23 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 	p_advance(p) # '{'
 	mut ks: list[Expr] = []
 	mut vs: list[Expr] = []
+
+	# ASI FIRES INSIDE A BRACE. It is suppressed inside an unclosed `(` or `[` and nowhere
+	# else (GRAMMAR group 2), so a map literal written over several lines carries a `;` after
+	# every entry whose line does not end in the `,`:
+	#
+	#     m := {
+	#         "a": 1        <- an int can END an item, so ASI inserts a `;` here
+	#     }
+	#
+	# and this loop demanded `}` or a `,`, so that program got "expected `}`, found `;`" —
+	# a table written the way anyone writes one. With a trailing comma it worked, because a
+	# `,` cannot end an item and no `;` was inserted; the two spellings disagreed.
+	skip_semis(p)
 	if p_at(p, Colon) {
 		# the empty map, `{:}`
 		p_advance(p)
+		skip_semis(p)
 		expect(p, RBrace)
 		return EMapLit(ks, vs)
 	}
@@ -1010,8 +1061,10 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
+		skip_semis(p)
 		break if not p_at(p, Comma)
 		p_advance(p)
+		skip_semis(p)
 	}
 	expect(p, RBrace)
 	return EMapLit(ks, vs)
@@ -1612,7 +1665,7 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		t := cur(p)
 		body.append(SAt(t.line, t.col))
 		body.append(parse_stmt(p))
-		skip_semis(p)
+		p_stmt_sep(p, RBrace)
 	}
 	expect(p, RBrace)
 	p_shallower(p)

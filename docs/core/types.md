@@ -174,11 +174,11 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
   A division by a constant `0` is a compile error wherever it is written, reachable or not — the same
   argument as a literal that does not fit, at the one operator that fails without any type being wrong.
 
-> **[not yet]** The **upper half of `uint`** cannot be written as a literal. Every integer literal is measured
-> against `int` before its position is consulted, so `u: uint = 18446744073709551615` is rejected with
-> _the integer literal … does not fit an `int`_ even though the value is an ordinary `uint` and is reachable
-> by arithmetic. The rule above stands — a literal adopts the type its position demands — but the range it is
-> checked against is fixed at the signed one, so the `uint` half of "what fits" is unwritable.
+- **The bound is the position's.** An integer literal is measured against `int` where nothing asks for
+  anything else, and against `uint` where a `uint` position does — so `u: uint = 18446744073709551615` is
+  that value and not an error, while `x := 18446744073709551615` and `int(18446744073709551615)` are still
+  refused. A literal past **both** bounds is a compile error whatever the position: it is not a number this
+  machine holds.
 
 ## User-Defined Types
 

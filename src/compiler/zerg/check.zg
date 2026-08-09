@@ -1221,6 +1221,13 @@ fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 	# a range, and chk_lit_in_range accepts exactly the expressions chk_int_lit does.
 	return true if c_is_float(want)
 
+	# THE UPPER HALF OF `uint` IS A LITERAL TOO. Every integer literal is measured against `int`
+	# by the walk that reads it — the right bound for one with no position to ask, and the wrong
+	# one here: `u: uint = 18446744073709551615` was rejected with "does not fit an `int`" about
+	# a value that is an ordinary `uint` and reachable by arithmetic. The position says which
+	# bound applies, and this is where the position is known.
+	return true if c_is_uint(want) and chk_uint_lit_fits(e)
+
 	return chk_lit_in_range(em, want, e, false)
 }
 
@@ -1440,6 +1447,16 @@ fn chk_lit_float_oper(o: str) -> bool {
 # `x: float = 1 % 2`, whose `%` no double carries — is not a value out of range, and saying
 # "`1` is not a value a float holds" about it is false twice over. It simply does not adopt,
 # and the position then writes its ordinary sentence about a value of the wrong type.
+# chk_uint_lit_fits is the u64 bound asked of a BARE literal. A tree is not asked: the fold
+# runs on i64 and there is no `uint` arithmetic behind it, so `u: uint = X + 1` for an X past
+# i64 stays refused — which is honest, and narrower than pretending the fold reached there.
+fn chk_uint_lit_fits(e: Expr) -> bool {
+	return match e {
+		EInt(lex, _, _) => uint_fits(lex)
+		_ => false
+	}
+}
+
 fn chk_lit_shaped(want: Ty, e: Expr) -> bool {
 	return chk_lit_float_tree(e) if c_is_float(want)
 

@@ -113,8 +113,16 @@ while IFS= read -r hit; do
 	esac
 done <<EOF
 $(grep -rEno "GRAMMAR#[A-Za-z][A-Za-z0-9-]*" \
-	--exclude-dir=.git --exclude-dir=bin --exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
+	--exclude-dir=.git --exclude-dir=bin --exclude-dir=.zerg-cache \
+	--exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
 EOF
+
+# `.zerg-cache` is EXCLUDED beside `bin`, for the same reason and one this gate learned the
+# hard way: a compiled object embeds the compiler's own string literals, so the first refusal
+# message to cite a production put `GRAMMAR#import-path` inside four `.o` files, and grep
+# answered "Binary file … matches" — which this loop then read as a file name, a line number
+# and a production name all at once. A citation this repo MAKES lives in a source, never in
+# something a build wrote.
 
 # The old form, wherever it survives. It is not a broken citation yet — the line may well be
 # right today — but it is the one that goes wrong without anyone touching it.
@@ -127,7 +135,8 @@ while IFS= read -r hit; do
 	fail=$((fail + 1))
 done <<EOF
 $(grep -rEno "GRAMMAR:[0-9]+" \
-	--exclude-dir=.git --exclude-dir=bin --exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
+	--exclude-dir=.git --exclude-dir=bin --exclude-dir=.zerg-cache \
+	--exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
 EOF
 
 if [ $fail -ne 0 ]; then

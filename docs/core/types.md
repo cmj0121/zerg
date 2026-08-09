@@ -364,13 +364,15 @@ spec Into[T] {
 - **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
   as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
 - **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed
-  by the bound.
+  by the bound. The **arguments are part of the bound**: a type implementing `Into[Feet]` does not
+  meet `Into[Meters]`.
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
 
-> **[not yet]** `Into` cannot be **bounded** on: `[T: Into[U]]` reports _NotImplemented: a
-> parameterized `Into[…]` as a type parameter's bound_, because a spec's type arguments are carried
-> only on an `impl`. A written `x.into()` on a type that implements it does run.
+> **[not yet]** A **super-spec** still drops its arguments: `spec Ord: Eq[int]` is refused by name.
+> A bound's arguments are only ever MATCHED against an impl's, which is what this compiler now does;
+> a super's have to be **substituted** into the named spec's own parameters before its signatures can
+> be compared, and that substitution does not exist.
 
 **An operator's operands must already be one type.** An untyped literal adopts the other operand — the
 _other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different

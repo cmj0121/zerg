@@ -425,6 +425,26 @@ fn join_bounds(specs: list[str]) -> str {
 	return out
 }
 
+# parse_supers reads a spec's super list, keeping each super's NAME and its TYPE ARGUMENTS
+# apart. A bound bakes its arguments into the name (spec_key) because a bound is only ever
+# MATCHED against an impl's; a super's have to be SUBSTITUTED into the named spec's own
+# parameters before its signatures can be compared, and a substitution needs the types
+# themselves rather than a rendering of them.
+#
+# It is a reader of its own rather than a flag on parse_bound for that reason: the two want
+# different things out of the same production, and one function returning both shapes would be
+# answering two questions to serve one caller each.
+fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[Ty]]) {
+	for p_at(p, Ident) {
+		names.append(cur(p).lexeme)
+		p_advance(p)
+		args.append(parse_ty_args(p))
+		return if not p_at(p, Plus)
+
+		p_advance(p) # '+'
+	}
+}
+
 fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 	mut out: list[str] = []
 	for p_at(p, Ident) {
@@ -1029,9 +1049,10 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	# `spec Ord: Eq[int]` used to make `int` a SECOND super, so the impl was told `Ord`
 	# extends a spec named `int`. It is named rather than dropped — see parse_bound.
 	mut supers: list[str] = []
+	mut super_args: list[list[Ty]] = []
 	if p_at(p, Colon) {
 		p_advance(p)
-		supers = parse_bound(p, "a super-spec", false)
+		parse_supers(p, supers, super_args)
 	}
 
 	expect(p, LBrace)
@@ -1065,7 +1086,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
-	return SpecDecl(name, params, supers, reqs, p.path, kw.line, kw.col)
+	return SpecDecl(name, params, supers, super_args, reqs, p.path, kw.line, kw.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation

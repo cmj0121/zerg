@@ -469,14 +469,41 @@ fn chk_impl_covers(mut &em: Emitter, f: File, ip: ImplDecl, si: int, mut &seen: 
 	for req in sp.reqs {
 		chk_impl_member(em, f, ip, sp, req)
 	}
-	for sup in sp.supers {
+
+	# A SUPER'S ARGUMENTS ARE SUBSTITUTED BEFORE THE RECURSION, which is the whole of what a
+	# parameterized super means: `spec Ord: Same[int]` says Ord extends Same AT int, so what the
+	# implementer owes is Same's signatures with `int` where Same's own `T` stands. The
+	# recursion used to carry the OUTER impl's arguments down, which is the right answer only
+	# when the super has none of its own.
+	#
+	# The substitution runs through the CURRENT impl first, so a super written at the outer
+	# spec's own parameter — `spec A[T]: Same[T]` — reaches Same with whatever the impl bound T
+	# to, rather than with the letter `T`.
+	mut si2 := 0
+	for si2 < sp.supers.len() {
+		sup := sp.supers[si2]
 		up := chk_spec_index(f, sup)
 		if up < 0 {
 			chk_at_place(em, sp.path, sp.line, sp.col, f"`{sp.name}` extends `{sup}`, and nothing in this program declares a spec by that name")
+			si2 = si2 + 1
 			continue
 		}
-		chk_impl_covers(em, f, ip, up, seen)
+		chk_impl_covers(em, f, chk_super_impl(sp, ip, sp.super_args[si2]), up, seen)
+		si2 = si2 + 1
 	}
+}
+
+# chk_super_impl is the ImplDecl the SUPER is checked against: the same target, carrying the
+# super's own arguments in place of the outer spec's. An empty argument list leaves the impl
+# alone, which is what keeps an ordinary `spec Ord: Eq` behaving exactly as it did.
+fn chk_super_impl(sp: SpecDecl, ip: ImplDecl, args: list[Ty]) -> ImplDecl {
+	return ip if args.len() == 0
+
+	mut out: list[Ty] = []
+	for a in args {
+		out.append(chk_spec_subst(a, sp, ip))
+	}
+	return ImplDecl(ip.on, out, ip.target, ip.path, ip.line, ip.col)
 }
 
 # chk_impl_member finds what the impl supplies for one required member, and compares it.

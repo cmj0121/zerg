@@ -460,6 +460,17 @@ struct SpecDecl {
 	name: str
 	params: list[str]
 	supers: list[str]
+
+	# super_args are the TYPE ARGUMENTS each super was written with, row for row beside
+	# `supers` — `spec Ord: Same[int]` keeps the `[int]`. They are a parallel list rather than
+	# a field on a pair type because a super is a NAME everywhere else in this file, and the
+	# arguments are read at exactly one place: the recursion that checks what the super
+	# requires, which has to substitute them into the named spec's own parameters first.
+	#
+	# Dropping them is what made a parameterized super refusable-only: the parameter stayed
+	# unsubstituted, so every correct `impl Ord` was turned away with "parameter `o` is int, and
+	# the spec declares T".
+	super_args: list[list[Ty]]
 	reqs: list[FnDecl]
 
 	path: str

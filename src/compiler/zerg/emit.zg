@@ -1982,7 +1982,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut es2: list[EnumDecl] = []
 		for ed in es {
-			if c_deps_done(c_enum_deps(ed), ed.name, done, all) {
+			if c_deps_done(c_enum_deps(ed), ed.name, true, done, all) {
 				out = out + c_enum_typedef(ed)
 				done.append(ed.name)
 			} else {
@@ -1993,7 +1993,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut ss2: list[StructDecl] = []
 		for sd in ss {
-			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
+			if c_deps_done(c_struct_deps(sd), sd.name, false, done, all) {
 				out = out + c_struct_typedef(sd)
 
 				# the copy helper's PROTOTYPE, here rather than with its body: this sweep
@@ -2015,7 +2015,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		mut cs2: list[Ty] = []
 		for c in cs {
 			cn := c_carrier_ty_cname(c)
-			if c_deps_done(c_carrier_deps(c), cn, done, all) {
+			if c_deps_done(c_carrier_deps(c), cn, true, done, all) {
 				# through the emit gate, not c_carrier_decl directly: a carrier already
 				# written inline by a tuple that spells it answers "" here instead of a
 				# second `zg_force_…` definition
@@ -2035,7 +2035,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for t in ts {
 			elems := ty_tuple_elems(t)
 			tn := c_tuple_cname(elems)
-			if c_deps_done(c_ty_list_deps(elems), tn, done, all) {
+			if c_deps_done(c_ty_list_deps(elems), tn, true, done, all) {
 				out = out + c_tuple_decl(em, elems)
 				done.append(tn)
 			} else {
@@ -2044,6 +2044,11 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		}
 		ts = ts2
 
+		# IT SAYS WHICH TYPE AND NOT WHERE, and that is a gap this compiler owes once rather
+		# than here: a StructDecl and an EnumDecl carry no position at all, so there is nothing
+		# to point at — and unlike every rule about a statement, a cycle is a property of the
+		# declarations and of nothing that runs, so no marker has been set either. The NAME is
+		# what a reader searches for, which is why the sentence leads with it.
 		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
 	}
 	return out
@@ -2052,9 +2057,24 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
 # out. A name this program does not declare — a scalar, a runtime container — needs nothing
 # ahead of it, and a SELF reference is boxed rather than held.
-fn c_deps_done(deps: list[str], own: str, mut &done: list[str], mut &all: list[str]) -> bool {
+# c_deps_done is whether everything a declaration needs has already been written.
+#
+# `self_ok` IS THE DIFFERENCE BETWEEN A POINTER AND A FIELD, and it used to be assumed.
+#
+# An ENUM may name itself: a self-recursive payload is auto-boxed, so what the variant holds is
+# a pointer and its size is known — the compiler's own `Ty` is one. A STRUCT may not: a field of
+# its own type has no size, and skipping the self-dependency let such a struct declare itself
+# satisfied. The sweep then never reported the cycle, C was handed a struct containing itself,
+# and before cc could say so the copy helper walked the field, asked about the same struct, and
+# recursed until the stack ran out. The compiler died of signal 11 on a three-line program.
+#
+# The indirect cycles were caught all along — `A` holding `B` holding `A`, and `p: P?` through
+# the carrier — because neither dep IS `own`. One skip made the simplest case the only invisible
+# one. A field holding the type behind a `list` contributes no dep at all and is unaffected:
+# that, and the boxed enum payload, are the two ways to write a recursive shape.
+fn c_deps_done(deps: list[str], own: str, self_ok: bool, mut &done: list[str], mut &all: list[str]) -> bool {
 	for dep in deps {
-		if dep != own and c_name_in(all, dep) {
+		if c_name_in(all, dep) and not (self_ok and dep == own) {
 			return false if not c_name_in(done, dep)
 		}
 	}

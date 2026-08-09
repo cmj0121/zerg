@@ -822,9 +822,8 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	for si < srcs.len() {
 		for im in zerg.imports_of_at(srcs[si], paths[si]) {
 			deps := module_files(im, from_dir)
-			if deps.len() > 0 {
-				load_unit(deps, im, from_dir, seen, units)
-			}
+			import_resolved(im, deps)
+			load_unit(deps, im, from_dir, seen, units)
 		}
 		si = si + 1
 	}
@@ -994,6 +993,19 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # of them — the compiler's own `zerg` module is the second kind, and its files are read in
 # the sorted order the runtime guarantees so the emitted C never depends on the
 # filesystem. An unresolvable import yields an empty list; the caller reports it.
+# import_resolved refuses an import that names no module.
+#
+# AN UNRESOLVED IMPORT USED TO BE SKIPPED — both loaders read the list of files it resolved to,
+# found none, and moved on. `import "nope"` compiled and ran, and the first USE of the module
+# reported "the method `thing` on a ?", naming neither the module nor the import. A dependency
+# that is not there is the one thing a loader cannot work around, and the seed has said so
+# since 1g; the two compilers now agree, in the same words.
+fn import_resolved(im: str, deps: list[str]) {
+	return if deps.len() > 0
+
+	raise f"cannot resolve import `{im}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+}
+
 fn module_files(path: str, from_dir: str) -> list[str] {
 	mut roots: list[str] = []
 	roots.append(from_dir)
@@ -1099,7 +1111,9 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
 	for im in zerg.imports_of_at(src, file) {
-		for dep in module_files(im, from_dir) {
+		deps := module_files(im, from_dir)
+		import_resolved(im, deps)
+		for dep in deps {
 			load_with(dep, from_dir, seen, srcs, paths, buf)
 		}
 	}

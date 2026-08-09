@@ -2900,6 +2900,32 @@ fn main() {
 }
 EOF
 
+# --- bad paths, sweep three: a crash and a silent import --------------------------------
+
+# THE COMPILER SEGFAULTED on this one-line program. The cycle detector catches an indirect
+# cycle (`A` holding `B` holding `A`) and one through a carrier (`p: P?`), and skipped the
+# simplest case of all — a field of the struct's own type — so the copy helper recursed until
+# the stack ran out. A compiler that dies says nothing at all, about anything.
+reject struct-holding-itself-by-value 'part of a cycle of by-value declarations' no-place <<'EOF'
+struct P {
+	p: P
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# SILENT: the import resolved to nothing and the program ran. Using the module then reported
+# "the method `thing` on a ?", which names neither the module nor the import.
+reject import-a-module-that-does-not-exist 'cannot resolve import' no-place <<'EOF'
+import "nope"
+
+fn main() {
+	print 1
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

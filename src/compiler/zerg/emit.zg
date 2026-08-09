@@ -1982,7 +1982,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut es2: list[EnumDecl] = []
 		for ed in es {
-			if c_deps_done(c_enum_deps(ed), ed.name, true, done, all) {
+			if c_deps_done(c_enum_deps(ed), done, all) {
 				out = out + c_enum_typedef(ed)
 				done.append(ed.name)
 			} else {
@@ -1993,7 +1993,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut ss2: list[StructDecl] = []
 		for sd in ss {
-			if c_deps_done(c_struct_deps(sd), sd.name, false, done, all) {
+			if c_deps_done(c_struct_deps(sd), done, all) {
 				out = out + c_struct_typedef(sd)
 
 				# the copy helper's PROTOTYPE, here rather than with its body: this sweep
@@ -2015,7 +2015,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		mut cs2: list[Ty] = []
 		for c in cs {
 			cn := c_carrier_ty_cname(c)
-			if c_deps_done(c_carrier_deps(c), cn, true, done, all) {
+			if c_deps_done(c_carrier_deps(c), done, all) {
 				# through the emit gate, not c_carrier_decl directly: a carrier already
 				# written inline by a tuple that spells it answers "" here instead of a
 				# second `zg_force_…` definition
@@ -2035,7 +2035,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for t in ts {
 			elems := ty_tuple_elems(t)
 			tn := c_tuple_cname(elems)
-			if c_deps_done(c_ty_list_deps(elems), tn, true, done, all) {
+			if c_deps_done(c_ty_list_deps(elems), done, all) {
 				out = out + c_tuple_decl(em, elems)
 				done.append(tn)
 			} else {
@@ -2056,25 +2056,24 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
 # out. A name this program does not declare — a scalar, a runtime container — needs nothing
-# ahead of it, and a SELF reference is boxed rather than held.
-# c_deps_done is whether everything a declaration needs has already been written.
+# ahead of it.
 #
-# `self_ok` IS THE DIFFERENCE BETWEEN A POINTER AND A FIELD, and it used to be assumed.
-#
-# An ENUM may name itself: a self-recursive payload is auto-boxed, so what the variant holds is
-# a pointer and its size is known — the compiler's own `Ty` is one. A STRUCT may not: a field of
-# its own type has no size, and skipping the self-dependency let such a struct declare itself
-# satisfied. The sweep then never reported the cycle, C was handed a struct containing itself,
-# and before cc could say so the copy helper walked the field, asked about the same struct, and
-# recursed until the stack ran out. The compiler died of signal 11 on a three-line program.
+# A SELF REFERENCE IS A DEPENDENCY LIKE ANY OTHER HERE, and it used to be skipped for every
+# kind of declaration. That skip is an ENUM's — c_enum_deps makes it now, where the reason for
+# it is — and it was wrong for a STRUCT: a field of its own type has no size, and skipping the
+# self-dependency let such a struct declare itself satisfied. The sweep then never reported the
+# cycle, C was handed a struct containing itself, and before cc could say so the copy helper
+# walked the field, asked about the same struct, and recursed until the stack ran out. The
+# compiler died of signal 11 on a three-line program.
 #
 # The indirect cycles were caught all along — `A` holding `B` holding `A`, and `p: P?` through
-# the carrier — because neither dep IS `own`. One skip made the simplest case the only invisible
-# one. A field holding the type behind a `list` contributes no dep at all and is unaffected:
-# that, and the boxed enum payload, are the two ways to write a recursive shape.
-fn c_deps_done(deps: list[str], own: str, self_ok: bool, mut &done: list[str], mut &all: list[str]) -> bool {
+# the carrier — because neither dep IS the declaration's own name. One skip made the simplest
+# case the only invisible one. A field holding the type behind a `list` contributes no dep at
+# all and is unaffected: that, and the boxed enum payload, are the two ways to write a
+# recursive shape.
+fn c_deps_done(deps: list[str], mut &done: list[str], mut &all: list[str]) -> bool {
 	for dep in deps {
-		if c_name_in(all, dep) and not (self_ok and dep == own) {
+		if c_name_in(all, dep) {
 			return false if not c_name_in(done, dep)
 		}
 	}
@@ -2089,6 +2088,11 @@ fn c_struct_deps(sd: StructDecl) -> list[str] {
 	return deps
 }
 
+# c_enum_deps leaves the enum's OWN name out, and that omission IS THE DIFFERENCE BETWEEN A
+# POINTER AND A FIELD: a self-recursive payload is auto-boxed, so what the variant holds is a
+# pointer and its size is known — the compiler's own `Ty` is one. Nothing has to be emitted
+# ahead of a pointer, so it is not a dependency, and saying so here is what keeps the sweep
+# itself free of exceptions.
 fn c_enum_deps(ed: EnumDecl) -> list[str] {
 	mut deps: list[str] = []
 	for v in ed.variants {
@@ -2096,7 +2100,14 @@ fn c_enum_deps(ed: EnumDecl) -> list[str] {
 			c_ty_struct_deps(t, deps)
 		}
 	}
-	return deps
+
+	mut out: list[str] = []
+	for dep in deps {
+		if dep != ed.name {
+			out.append(dep)
+		}
+	}
+	return out
 }
 
 fn c_carrier_deps(c: Ty) -> list[str] {
@@ -8019,13 +8030,6 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	return out + " zgt_mm; })"
 }
 
-# c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
-# needs no node of its own.
-#
-# The elements are copied into a fresh list rather than shared with the source. A list is
-# a value in this language, so a slice that aliased its source would be the odd one out —
-# and the runtime has no slice primitive to alias with anyway. The source is materialised
-# into a temp first, so a call result is indexed once rather than per element.
 # c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
 # c_range_needs_hi has already had its say about.
 fn c_slice_bound(mut &em: Emitter, e: Expr) {
@@ -8037,6 +8041,13 @@ fn c_slice_bound(mut &em: Emitter, e: Expr) {
 	chk_at(em, f"a slice bound is an int, and this is {ty_name(t)}")
 }
 
+# c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
+# needs no node of its own.
+#
+# The elements are copied into a fresh list rather than shared with the source. A list is
+# a value in this language, so a slice that aliased its source would be the odd one out —
+# and the runtime has no slice primitive to alias with anyway. The source is materialised
+# into a temp first, so a call result is indexed once rather than per element.
 fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
 	c_range_needs_hi(idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
 
@@ -8376,19 +8387,20 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	tgt := c_expr(em, target, sb)
+	tt := c_infer(em, target)
+
 	if c_all_digits(fld) {
 		# `.0` IS A TUPLE'S ACCESSOR AND NOTHING ELSE'S, and it was spelled `.f0` onto whatever
 		# stood to its left: `n.0` on an int reached cc as "member reference base type
 		# 'int64_t' is not a structure or union", and `t.5` on a 2-tuple as "no member named
 		# 'f5'". A tuple is read by STATIC index precisely so the element's type is known —
 		# which means the index is checkable here, and was not checked at all.
-		c_tuple_index_ok(em, c_infer(em, target), fld)
+		c_tuple_index_ok(em, tt, fld)
 
 		return f"{tgt}.f{fld}"
 	}
 
 	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
-	tt := c_infer(em, target)
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported

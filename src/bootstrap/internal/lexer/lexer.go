@@ -18,6 +18,7 @@ package lexer
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
@@ -541,11 +542,24 @@ func (l *Lexer) scanUnicodeEscape(sb *strings.Builder) bool {
 	for isHex(l.at(0)) {
 		r = r<<4 | rune(hexVal(l.advance()))
 		n++
+		// clamped one past the code space, so a long run of digits cannot overflow the
+		// shift above; the clamp value itself still reads as out of range below.
+		if r > utf8.MaxRune {
+			r = utf8.MaxRune + 1
+		}
 	}
 	if n == 0 || l.at(0) != '}' {
 		return false
 	}
 	l.advance() // }
+
+	// Past U+10FFFF, or a surrogate: NOT a code point, so not an escape. WriteRune used to
+	// substitute U+FFFD here and say nothing, so `'\u{110000}'` and `'\u{D800}'` both became
+	// 65533 — a program that named one character got another. `false` is "not a valid
+	// escape", which the caller reports as E109, and it is what the shipping compiler says.
+	if !utf8.ValidRune(r) {
+		return false
+	}
 	sb.WriteRune(r)
 	return true
 }

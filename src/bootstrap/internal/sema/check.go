@@ -969,13 +969,37 @@ func (c *checker) checkIntRange(lit *ast.IntLit, want Type, neg bool) {
 		}
 		return
 	}
-	f, ok := want.(*types.Fixed)
-	if !ok || f.Float {
+	// THE SCALAR TABLE, not the *Fixed cast this used to make. `byte` and `uint` are
+	// *Primitive, so the cast failed and the check returned silently for the two narrow and
+	// unsigned types the language actually HAS — `b: byte = 300` and `uint(0 - 1)` were both
+	// accepted. The fixed-width ladder the cast was written for is still unbuilt, and it joins
+	// by having a class and a width here, which is what ScalarOf already answers for everyone.
+	sc, ok := ScalarOf(want)
+	if !ok || sc.Class == ScalarFloat || sc.Class == ScalarBool {
 		return
 	}
-	if !fitsFixed(v, f) {
+	if !fitsScalar(v, sc) {
 		c.errorf(lit.Span(), "literal %d overflows %s", v, want)
 	}
+}
+
+// fitsScalar reports whether v is representable in the scalar sc. It is fitsFixed asked of the
+// class-and-width pair every scalar has, rather than of the one type shape that carries them
+// in a struct.
+func fitsScalar(v int64, sc Scalar) bool {
+	if sc.Class == ScalarUnsigned {
+		if v < 0 {
+			return false
+		}
+		if sc.Bits >= 64 {
+			return true
+		}
+		return v <= int64(1)<<sc.Bits-1
+	}
+	if sc.Bits >= 64 {
+		return true
+	}
+	return v >= -(int64(1)<<(sc.Bits-1)) && v <= int64(1)<<(sc.Bits-1)-1
 }
 
 // IsRune is "a single valid Unicode code point" (docs/core/types.md), the compile-time

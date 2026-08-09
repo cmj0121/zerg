@@ -4202,6 +4202,18 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# cell rendered here first would be built and thrown away
 	xt0 := c_infer(em, x)
 
+	# A CONSTANT KNOWN TO FAIL IS REPORTED NOW. docs/core/types.md says so of `byte(300)` by
+	# name — "the value is known, the conversion is known to raise" — and the rule was built for
+	# the literal ADOPTING a type (`b: byte = 300`) and never wired to the WRITTEN conversion,
+	# which is the spelling the sentence uses. chk_const_into is that rule; all it needed was a
+	# caller that has a target and a literal in hand, which is exactly what this is.
+	#
+	# It is asked of a scalar target only, and only of an all-literal operand: a conversion of a
+	# VALUE is checked where it runs, which is what makes it a conversion rather than a constant.
+	if chk_into_side(ty) and chk_int_lit(x) {
+		chk_const_into(em, ty, x)
+	}
+
 	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one
 	# still refused: a conversion's operand is rendered before the target reaches c_conv_scalar,
 	# so the literal met c_int_dec's `int` bound and reported a value it could not hold. The

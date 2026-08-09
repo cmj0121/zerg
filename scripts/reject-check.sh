@@ -985,7 +985,7 @@ fn main() {
 }
 EOF
 
-reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' seed-gap <<'EOF'
+reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' <<'EOF'
 struct P {
 	x: byte
 }
@@ -996,14 +996,14 @@ fn main() {
 }
 EOF
 
-reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' seed-gap <<'EOF'
+reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' <<'EOF'
 fn main() {
 	b: byte = 300
 	print(f"{b}")
 }
 EOF
 
-reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' seed-gap <<'EOF'
+reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' <<'EOF'
 fn main() {
 	u: uint = -1
 	print(f"{u}")
@@ -2550,7 +2550,7 @@ EOF
 # `take(1000)` on a `byte` parameter is the CONSTANT layer of Into: `int -> byte` is a real
 # conversion, so it type-checks, and then the compiler evaluates it and reports the value
 # rather than emitting the truncation cc used to complain about.
-reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' seed-gap <<'EOF'
+reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' <<'EOF'
 fn take(b: byte) -> int {
 	return int(b)
 }
@@ -2945,6 +2945,32 @@ struct P {
 
 fn main() {
 	raise P(1)
+}
+EOF
+
+# --- bad paths, sweep five: a constant known to fail ------------------------------------
+#
+# docs/core/types.md: "A conversion the compiler can carry out is carried out. `byte(300)` is
+# well-formed — and then fails as a CONSTANT: the value is known, the conversion is known to
+# raise, and it is reported at compile time rather than left to run." That was implemented for
+# a literal ADOPTING a type (`b: byte = 300`) and not for the WRITTEN conversion beside it,
+# which is the spelling the sentence uses.
+
+reject written-byte-conversion-out-of-range 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	print int(byte(300))
+}
+EOF
+
+reject written-rune-conversion-out-of-range 'is not a value a rune holds' place <<'EOF'
+fn main() {
+	print int(rune(1114112))
+}
+EOF
+
+reject written-uint-conversion-negative 'is not a value a uint holds' place <<'EOF'
+fn main() {
+	print int(uint(-1))
 }
 EOF
 

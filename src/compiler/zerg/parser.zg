@@ -2271,11 +2271,21 @@ fn parse_unary(mut &p: Parser) -> Expr {
 		p_shallower(p)
 		return e
 	}
+	# A UNARY OPERATOR'S OPERAND INCLUDES THE GROUP-8 POSTFIXES: GRAMMAR is
+	# `unary-expr ::= unary-op unary-expr | postfix-expr` with `?`, `!` and `?.` among the
+	# postfixes, so `-x!` is `-(x!)`. The operand was read with parse_unary, one level short of
+	# parse_try — which sits ABOVE this level deliberately, so that `<-ch!` forces what the
+	# receive answered rather than the channel. The `!` therefore landed on the NEGATION's
+	# result, and `-x!` on an `int?` answered "operator `-` takes a numeric operand, and this
+	# one is int?", about an operand the program never wrote that way.
+	#
+	# Only THIS operand moves up to parse_try. The receive above keeps parse_unary, which is
+	# what leaves the `!` outside for parse_try to put around the ERecv.
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
 		p_deeper(p)
-		e := EUnary(op, parse_unary(p))
+		e := EUnary(op, parse_try(p))
 		p_shallower(p)
 		return e
 	}

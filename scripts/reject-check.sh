@@ -3043,6 +3043,43 @@ fn main() {
 }
 EOF
 
+# --- one step past each edge ------------------------------------------------------------
+#
+# The refusals above use comfortable numbers — 300 for a byte, 1000 for a narrowing — and a
+# comfortable number cannot tell `<=` from `<`. These are the FIRST value each rule turns away,
+# paired one for one with the last it admits in test-data/codegen/type_boundaries.zg. A range
+# rule's defects live entirely at its ends.
+
+reject byte-one-past-the-last 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 256
+	print int(x)
+}
+EOF
+
+reject rune-one-past-the-last 'is not a value a rune holds' place <<'EOF'
+fn main() {
+	r: rune = 1114112
+	print int(r)
+}
+EOF
+
+reject uint-one-past-the-last 'does not fit an `int`' place <<'EOF'
+fn main() {
+	u: uint = 18446744073709551616
+	print u
+}
+EOF
+
+# AND THE FOLD'S OWN EDGE, which has two: `200 + 55` is `255` and adopts, `200 + 56` is `256`
+# and does not — the answer measured after the operands, both of which fit either way.
+reject fold-one-past-the-last 'is not a value a byte holds' place <<'EOF'
+fn main() {
+	x: byte = 200 + 56
+	print int(x)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

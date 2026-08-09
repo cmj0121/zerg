@@ -2804,7 +2804,42 @@ fn main() {
 }
 EOF
 
-reject index-a-map-with-the-wrong-key 'is indexed by str, and this gives int' <<'EOF'
+# THE SAME HOLE IN FOUR OF THE FIVE OPERATOR FAMILIES. Each family asks "is this a scalar of
+# the wrong kind", which answers NO for a value that is not a scalar at all — so every
+# aggregate walked past every one of them. Only ORDER had a rule of its own (`Ord`).
+
+reject bitwise-on-two-lists 'operator `&` takes int operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs & [2]
+	print ys.len()
+}
+EOF
+
+reject logical-on-two-lists 'operator `and` takes bool operands' <<'EOF'
+fn main() {
+	xs := [1]
+	print str(xs and [2])
+}
+EOF
+
+reject negate-a-list 'operator `-` takes a numeric operand' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := -xs
+	print ys.len()
+}
+EOF
+
+reject complement-a-list 'operator `~` takes an int operand' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := ~xs
+	print ys.len()
+}
+EOF
+
+reject index-a-map-with-the-wrong-key 'a key of this map[str, int] is str, and this gives int' <<'EOF'
 fn main() {
 	m := {"a": 1}
 	print m[1]

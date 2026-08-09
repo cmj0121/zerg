@@ -2295,6 +2295,10 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 		# subtraction `a - b` the same way the two arrows are told apart: by whether anything
 		# to its left could be an operand. It cannot go in is_unary_prefix, which asks only
 		# what a token IS, and `-` is both.
+		#
+		# `-%` IS BOTH IN THE SAME WAY — the wrapping negate and the wrapping subtraction — so
+		# it is asked here rather than there, and `-%b` comes out tight while `lo -% byte(1)`
+		# keeps its spaces. It was in neither place, and printed `-% b`.
 		return false
 	}
 	return true
@@ -2316,8 +2320,9 @@ fn ends_operand(k: Kind) -> bool {
 
 fn is_minus(k: Kind) -> bool {
 	return match k {
-		Minus => true
-		_     => false
+		Minus    => true
+		MinusMod => true
+		_        => false
 	}
 }
 
@@ -2470,10 +2475,26 @@ fn is_colon(k: Kind) -> bool {
 # is_unary_prefix reports the tokens that attach to what follows them: `&` in `mut &p`.
 # `not` is deliberately NOT here — it is a WORD, and `not x` written as `notx` is a
 # different identifier, not a negation.
+# is_unary_prefix is every operator that is ONLY ever a prefix, and so is tight to its operand
+# without anything having to be asked about its neighbours (F203).
+#
+# `-` and `<-` are absent because they are not only-ever: each is also an infix operator, and
+# which one it is depends on what stands to the LEFT — that question is asked further down, of
+# those two by name.
+#
+# `~` is here because it IS only-ever, and it was missing: `zerg fmt` wrote `~ b`, which reads
+# as an infix operator with its left side torn off. Nothing caught it because no gated source
+# complements a value — the same shape of blind spot as the map literal this rule's neighbour
+# was wrong about, and found the same way, by a case written for something else.
+#
+# `-%` is NOT here, for the same reason `-` is not: it is the wrapping negate AND the wrapping
+# subtraction, so `-%b` is tight and `lo -% byte(1)` is not. Putting it here printed the second
+# as `lo -%byte(1)`, which is the first mistake with the sides swapped.
 fn is_unary_prefix(k: Kind) -> bool {
 	return match k {
-		Amp => true
-		_   => false
+		Amp   => true
+		Tilde => true
+		_     => false
 	}
 }
 

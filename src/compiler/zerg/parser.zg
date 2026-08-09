@@ -1890,6 +1890,37 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 	return SIf(parse_expr(p), body, false, none)
 }
 
+# p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
+# condition — which is what makes it an if-EXPRESSION rather than a postfix `if` on a jump
+# (GRAMMAR#return's disambiguation). It reads without consuming.
+#
+# A `{` inside a `(` or a `[` belongs to something else, so the scan is depth-aware; the
+# statement's own end is where it gives up, since a conditional return has nothing after
+# its condition.
+#
+# desugar.zg's dsg_if_has_block asks this same question and stays a second function on
+# purpose. It runs BEFORE any parse, over a token stream whose statement end dsg_stmt_end
+# has already found; this one has the Parser's cursor and nothing else, so it must stop
+# itself at the separator. Folding them together would hand one of the two a bound it does
+# not have.
+fn p_if_has_block(mut &p: Parser, at: int) -> bool {
+	mut depth := 0
+	mut i := at
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		return false if (k == Semi or k == Eof) and depth == 0
+		if k == LParen or k == LBrack {
+			depth = depth + 1
+		} else if k == RParen or k == RBrack {
+			depth = depth - 1
+		} else if k == LBrace and depth == 0 {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
 	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
@@ -1901,6 +1932,14 @@ fn parse_return(mut &p: Parser) -> Stmt {
 	# if-EXPRESSION with no block, which swallowed the rest of the function — silently, and
 	# only where the formatter had just produced the form.
 	if p_at(p, If) {
+		# THE ONE AMBIGUITY, which GRAMMAR#return spells out: "a leading `if` whose condition
+		# is followed by a `{` block is instead an if-EXPRESSION being returned; the
+		# conditional-return `if` takes a bare condition and NO block." Nothing here looked
+		# past the condition, so `return if c { 1 } else { 2 }` was always the bare early exit
+		# under `c`, and the `{ 1 } else { 2 }` left over became whatever the statement loop
+		# could make of it.
+		return SReturn(true, parse_expr(p)) if p_if_has_block(p, p.pos + 1)
+
 		p_advance(p)
 		mut body: list[Stmt] = []
 		body.append(SReturn(false, ENil))
@@ -2520,6 +2559,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EGuard(parse_block(p))
 	}
+
 	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
 	# and does not build. The `unsafe` block used to be swallowed whole with its statements
 	# never run, and naming it was only half the fix: both markers were the keyword and
@@ -2576,23 +2616,8 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RBrack)
 		return EListLit(elems)
 	}
-	if k == If {
-		# if-expression: if cond { expr } else { expr }
-		p_advance(p)
-		cond := parse_expr(p)
-		expect(p, LBrace)
-		skip_semis(p)
-		then_e := parse_expr(p)
-		skip_semis(p)
-		expect(p, RBrace)
-		expect(p, Else)
-		expect(p, LBrace)
-		skip_semis(p)
-		else_e := parse_expr(p)
-		skip_semis(p)
-		expect(p, RBrace)
-		return EIf(cond, then_e, else_e)
-	}
+
+	return parse_if_expr(p) if k == If
 	return parse_match(p) if k == Match
 
 	# A STATEMENT standing where an expression is wanted. The common way in is a match
@@ -2640,6 +2665,52 @@ fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
 
 	return k == Spawn or k == Select or k == For or k == With
+}
+
+# parse_if_expr reads `if cond { e } else { e }` — the if-EXPRESSION (GRAMMAR#if-expr),
+# whose `else` is mandatory because it yields the taken branch's value.
+#
+# The `else if` CHAIN is why this is a function and not the inline arm it used to be.
+# GRAMMAR writes the else-arm of an `if` as another `if`, and the inline version demanded a
+# `{` after `else` — so `if a { 1 } else if b { 2 } else { 3 }`, which is how anyone writes
+# three cases, got "expected `{`, found `if`". The chain is right-nested here, which is
+# exactly what it means, so the emitter's two-branch lowering takes any length of it
+# unchanged.
+fn parse_if_expr(mut &p: Parser) -> Expr {
+	p_advance(p) # 'if'
+	t := cur(p)
+
+	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head), which runs the branch only when
+	# `e` is present. It is grammatical in expression position and this compiler unwraps an
+	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
+	# parser and reported itself.
+	raise f"NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Ident) and peek_kind(p, 1) == Walrus
+
+	cond := parse_expr(p)
+	then_e := parse_if_branch(p)
+	expect(p, Else)
+
+	# `else if` — the chain, right-nested. The else-branch IS another if-expression, and
+	# reading it as one is all the nesting takes.
+	return EIf(cond, then_e, parse_if_expr(p)) if p_at(p, If)
+	return EIf(cond, then_e, parse_if_branch(p))
+}
+
+# parse_if_branch is one `{ … }` arm of an if-expression. A branch is a BLOCK in GRAMMAR and
+# a block's value is its last statement's, so a multi-statement arm is grammatical — and this
+# compiler lowers an if-expression to a C conditional, which holds one expression and no
+# statements. The arm is named rather than reported as the token that could not continue it.
+fn parse_if_branch(mut &p: Parser) -> Expr {
+	expect(p, LBrace)
+	skip_semis(p)
+	e := parse_expr(p)
+	skip_semis(p)
+
+	t := cur(p)
+	raise "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, RBrace)
+
+	expect(p, RBrace)
+	return e
 }
 
 fn parse_match(mut &p: Parser) -> Expr {

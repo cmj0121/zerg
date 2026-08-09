@@ -5232,6 +5232,17 @@ fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
 fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], sb: Subst) -> str {
 	return c_call(em, name, args, sb) if ts.len() == 0
 
+	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
+	# opposite: "`map` is not generic" is a false statement about `map[str, int]()`, which
+	# names exactly the two type arguments `map` takes. What it has not got is a no-argument
+	# constructor — an empty map is a literal — so that is what is named instead.
+	#
+	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
+	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
+	# `set` here to write.
+	c_builtin_check(name)
+	raise f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
+
 	# A CHECKED rule, so it carries a place: this is a statement about a program the language
 	# rejects — the reader believes something is generic that is not — rather than a form
 	# this compiler has not built.

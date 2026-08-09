@@ -237,16 +237,17 @@ fn declares_main(files: list[str]) -> bool {
 # `zerg build main.zg -o app` wrote `app.o`, said nothing, and exited 0 — a program that
 # silently is not one.
 fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
+	# NO `guard` ON THE TWO STAGES BELOW. One used to wrap each of them whole, so a file that
+	# could not be read, lexed or PARSED printed nothing and exited 0: `--emit ast` on a
+	# program carrying an unbuilt form reported success and produced no tree. It is the
+	# silent success load_unit had, and worse here — these are the two stages a person
+	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		guard {
-			io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
-		}
+		io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
 		return
 	}
 	if emit == "ast" {
-		guard {
-			io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
-		}
+		io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
 		return
 	}
 	mut output := out

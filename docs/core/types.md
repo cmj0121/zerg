@@ -370,10 +370,10 @@ spec Into[T] {
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
 
-> **[not yet]** A **super-spec** still drops its arguments: `spec Ord: Eq[int]` is refused by name.
-> A bound's arguments are only ever MATCHED against an impl's, which is what this compiler now does;
-> a super's have to be **substituted** into the named spec's own parameters before its signatures can
-> be compared, and that substitution does not exist.
+A **super-spec** carries its arguments too: `spec Ord: Eq[int]` says Ord extends `Eq` **at** `int`, so
+what an `impl Ord` owes is `Eq`'s signatures with `int` where `Eq`'s own parameter stands. A bound's
+arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
+parameters, which is a different thing done in a different place.
 
 **An operator's operands must already be one type.** An untyped literal adopts the other operand — the
 _other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different

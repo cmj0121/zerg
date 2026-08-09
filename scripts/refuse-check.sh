@@ -839,21 +839,6 @@ fn main() {
 }
 EOF
 
-
-expect "$ZERG" parameterized-super-spec "NotImplemented: a parameterized \`Eq[…]\` as a super-spec" <<'EOF'
-spec Eq[T] {
-	fn eq(o: T) -> bool
-}
-
-spec Ord: Eq[int] {
-	fn lt() -> bool
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 expect "$ZERG" parameterized-bound "NotImplemented: a parameterized \`Eq[…]\` as a type parameter" <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool
@@ -2136,19 +2121,6 @@ fn take[T: Into[str]](x: T) -> str {
 
 fn main() {
 	print take(S(3))
-}
-EOF
-
-# A SUPER-SPEC still refuses its arguments, and that is a DIFFERENT missing thing: a super's
-# arguments have to be substituted into the named spec's own parameters before its signatures
-# can be compared, where a bound's are only ever matched.
-expect "$ZERG" parameterized-super-spec 'as a super-spec' <<'EOF'
-spec Ord: Eq[int] {
-	fn cmp() -> int
-}
-
-fn main() {
-	print 1
 }
 EOF
 

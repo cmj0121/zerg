@@ -1898,8 +1898,8 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # one of them is built by the SEED, which is what makes the wording matter: the form exists,
 # this compiler is the one that is behind.
 #
-# The three report sites funnel through here, so the answer does not depend on whether the
-# name was reached as a call, as a constructor or as a bare value.
+# Every report site funnels through here, so the answer does not depend on whether the name
+# was reached as a call, as a constructor, as a bare value or as a binding's annotation.
 #
 # This is one THIRD of that closed set. The conversions and the str/list bridges are decided
 # by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
@@ -1920,37 +1920,18 @@ fn c_builtin_check(n: str) {
 # keyword, `i32(x)` reported "undefined function `i32`" — the message any misspelled call gets —
 # so a reader was told the name is unknown and would go looking for their own typo. A `[not
 # yet]` is a legitimate state; an unnamed refusal is not (docs/conformance.md).
+#
+# THE TEN NAMES ARE WRITTEN OUT, because being exact about which they are is the whole rule:
+# `i7` and `u128` are not the ladder and must stay ordinary unknown names, since a message
+# about a ladder that would not contain them either is worse than none. Spelled instead as
+# the shape they have — a class letter, then a width the language names — that exactness was
+# something a reader had to derive from three tests and a substring, and the list it stood in
+# for is ten entries long.
 fn c_fixed_width_check(n: str) {
-	return if not c_is_fixed_width(n)
+	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
+	return if not c_name_in(ladder, n)
 
 	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
-}
-
-# c_is_fixed_width is the ladder's names, spelled as the shape they have rather than as a list
-# of eighteen: a class letter, then a width the language names. It is deliberately exact — `i7`
-# and `u128` are not the ladder and stay ordinary unknown names, because a message about a
-# ladder that would not contain them either is worse than none.
-fn c_is_fixed_width(n: str) -> bool {
-	b := list[byte](n)
-	return false if b.len() < 2
-
-	c := b[0]
-	w := str(c_drop_first(b))
-
-	return w == "32" or w == "64" if c == b'f'
-	return false if c != b'i' and c != b'u'
-
-	return w == "8" or w == "16" or w == "32" or w == "64"
-}
-
-fn c_drop_first(b: list[byte]) -> list[byte] {
-	mut out: list[byte] = []
-	mut i := 1
-	for i < b.len() {
-		out.append(b[i])
-		i = i + 1
-	}
-	return out
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -4254,8 +4235,11 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	#
 	# It is asked of a scalar target only, and only of an all-literal operand: a conversion of a
 	# VALUE is checked where it runs, which is what makes it a conversion rather than a constant.
+	# NOT NOTED: a written conversion shows its type on the page, which is exactly what L502
+	# reports the absence of — and `b'\n'` desugars to this very node, so noting it told the
+	# reader to "write `byte(10)`" about a line that already said `b'\n'`.
 	if chk_into_side(ty) and chk_int_lit(x) {
-		chk_const_into(em, ty, x)
+		chk_const_into_at(em, ty, x, false)
 	}
 
 	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one

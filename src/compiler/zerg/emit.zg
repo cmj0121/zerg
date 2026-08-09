@@ -517,10 +517,36 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	# checker folded with cannot disagree about a value both have already agreed fits.
 	return c_lit_checked(em, e) if c_is_float(want) and c_is_lit_tree(e)
 
+	# A LITERAL PAST i64 AT A `uint` POSITION is rendered from its own bound, and here rather
+	# than in c_int_dec because here is where the target is known. c_int_dec measures against
+	# `int` — correct for a literal with nothing to ask, and the reason the upper half of `uint`
+	# was unwritable — and it would report the value it cannot hold instead of writing it.
+	return c_uint_lit(e) if c_is_uint(want) and c_is_wide_uint_lit(e)
+
 	return c_copied(em, want, e, sb)
 }
 
 # c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
+# c_int_dec cannot render. One that fits both goes the ordinary way, so this changes nothing
+# about a literal any position could already carry.
+fn c_is_wide_uint_lit(e: Expr) -> bool {
+	return match e {
+		EInt(lex, _, _) => uint_fits(lex) and not int_fits(lex)
+		_ => false
+	}
+}
+
+# c_uint_lit writes the value with C's unsigned-long-long suffix. Without it the constant is a
+# decimal C reads as a `long long`, which cannot hold it — the compiler would hand cc a number
+# it then complains about, against generated code nobody wrote.
+fn c_uint_lit(e: Expr) -> str {
+	return match e {
+		EInt(lex, _, _) => str(uint_value(lex)) + "ULL"
+		_ => ""
+	}
+}
+
 # float, asked here rather than restated, so the emitter cannot render a tree the checker did
 # not admit — with one thing added: an OPERATOR has to stand somewhere in it. A bare literal
 # is a literal tree and needs no help, because C reads `2` into a double as `2.0`; what needs
@@ -4124,6 +4150,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# override returns above them answer through c_copied or a method call instead, so a
 	# cell rendered here first would be built and thrown away
 	xt0 := c_infer(em, x)
+
+	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one
+	# still refused: a conversion's operand is rendered before the target reaches c_conv_scalar,
+	# so the literal met c_int_dec's `int` bound and reported a value it could not hold. The
+	# target is in hand right here, which is the same reason c_into can answer for a typed
+	# position — and the conversion is a no-op besides, the value already being of the type.
+	return c_uint_lit(x) if c_is_uint(ty) and c_is_wide_uint_lit(x)
+
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true

@@ -57,8 +57,10 @@ boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
 - **Wrapping** — `+`, `-`, `*` raise on overflow; the **`%`-suffixed** `+%`, `-%`, `*%` (and unary `-%`)
   instead **wrap modulo 2^n** — for hashing, checksums, and bit-mixing where roll-over is the intent. The
   **checked** form is already `guard { a + b }` → `Result` (no `checked_*` API); **saturating** is deferred.
-- **Mixed `int`/`uint` is never implicit** — `int + uint` is a compile error (no implicit conversion,
-  which also sidesteps C's signed/unsigned comparison traps); cast one side (`int(u) + i`).
+- **`int` and `uint` are two types and never mix** — `int + uint` is a compile error, and not a special
+  case: an operator's operands must already be one type, whatever the pair (below). This pair is the one
+  worth naming because C's answer is the trap — there the signed operand converts to unsigned, so
+  `-1 < 1u` is false. Cast one side: `int(u) + i`.
 - **Division & remainder** — `/` and `%` follow the **Euclidean** definition: the remainder is **always
   non-negative** (`0 ≤ a % b < |b|`) and `a == (a / b) * b + a % b` holds for every sign, so `a % n` is a
   valid index or bucket for any `b`. This is the canonical mathematical `div`/`mod`, not C's
@@ -139,8 +141,8 @@ was supposed to be measured against.
 
 ### Numeric literals
 
-A numeric literal is **untyped** — it adopts the type its context demands, at any **typed position**
-above — checked **at compile time**.
+A numeric literal is **untyped** — it adopts the type its **position** demands, at any of the typed
+positions above — checked **at compile time**.
 Unconstrained, an integer literal defaults to `int` and a fractional/exponent literal (`1.0`, `1e3`) to
 `float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
 

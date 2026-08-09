@@ -49,8 +49,9 @@
 - **Wrapping**——`+`、`-`、`*` 溢位 raise；**`%` 後綴**的 `+%`、`-%`、`*%`（及一元 `-%`）改為 **mod 2^n 環繞**——供
   hashing、checksum、bit-mixing 這類「刻意繞回」的場景。**checked** 版已經是 `guard { a + b }` → `Result`（不需
   `checked_*`）；**saturating** 延後。
-- **`int`/`uint` 混合絕不隱式**——`int + uint` 是 compile error（無隱式轉換，也順帶避開 C 的 signed/unsigned 比較
-  地雷）；顯式 cast 一側（`int(u) + i`）。
+- **`int` 與 `uint` 是兩個型別,絕不相混**——`int + uint` 是 compile error,而且**不是特例**:運算子的兩個運算元
+  必須已經是同一個型別,不論哪一對(見下)。這一對值得單獨點名,是因為 C 的答案才是地雷——在那裡有號運算元會轉成
+  無號,所以 `-1 < 1u` 是 false。顯式 cast 一側:`int(u) + i`。
 - **除法與餘數**——`/` 與 `%` 採 **Euclidean** 定義：餘數**恆為非負**（`0 ≤ a % b < |b|`），且
   `a == (a / b) * b + a % b` 對任何正負號都成立，所以 `a % n`（n>0）對任何 `b` 都是合法的 index/bucket。這是數學上
   canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation；compiler 只在**運算元可能為負**時補小修正，**兩者
@@ -119,8 +120,8 @@ carrier 的情形也在內(`x: float? = i` 印出 `5`;`Left(300)` 放進 `Result
 
 ### 數值字面量（Numeric literals）
 
-數值字面量是 **untyped** 的——它採用 context 要求的型別,在上面**任何一個有型別的位置**,並在**編譯期**檢查。
-無 context 時,整數字面量預設為 `int`、帶小數/指數的字面量（`1.0`、`1e3`）預設為 `float`；
+數值字面量是 **untyped** 的——它採用它的 **position** 要求的型別,在上面任何一個有型別的位置,並在**編譯期**檢查。
+沒有 position 要求時,整數字面量預設為 `int`、帶小數/指數的字面量（`1.0`、`1e3`）預設為 `float`；
 非十進位 `0x…` / `0o…` / `0b…` 也是普通整數字面量。
 
 - 字面量**放不進**要求的型別 → **compile error**（`byte = 300`、`uint = -1`、超過 i64 的 `int` 字面量）——不是

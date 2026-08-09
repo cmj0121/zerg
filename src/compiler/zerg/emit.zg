@@ -3283,6 +3283,26 @@ fn c_int_dec(mut &em: Emitter, lex: str) -> str {
 	return strconv.to_string(int_value(lex), 10)
 }
 
+# c_float_dec is c_int_dec's other half: it takes the DIGIT SEPARATORS out of a float's
+# surface lexeme, so what reaches C is a C float constant.
+#
+# A literal node keeps the lexeme it was written as (ast.zg's literal-surface invariant), so
+# `zerg fmt` can put a number back exactly as the author typed it. That is the AST's job and
+# not the emitter's, and the emitter handed that surface straight to cc — an int normalised
+# through c_int_dec, a float verbatim. `1_0.5` reached clang as `1_0.5` and it reported
+# `invalid suffix '_0.5' on integer constant`: against generated source, for a separator the
+# lexer had deliberately accepted.
+fn c_float_dec(lex: str) -> str {
+	b := list[byte](lex)
+	mut out: list[byte] = []
+	for ch in b {
+		if ch != b'_' {
+			out.append(ch)
+		}
+	}
+	return str(out)
+}
+
 fn c_bool(b: bool) -> str {
 	return "true" if b
 	return "false"
@@ -3346,7 +3366,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex, _, _) => c_int_dec(em, lex)
-		EFloat(lex) => lex
+		EFloat(lex) => c_float_dec(lex)
 		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
 		ENil => "0"

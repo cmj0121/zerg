@@ -2152,6 +2152,44 @@ fn main() {
 }
 EOF
 
+# --- the fixed-width ladder is unbuilt, and says so ------------------------------------
+#
+# A `[not yet]` is a legitimate state; an UNNAMED refusal is not. Because a width is an
+# ordinary identifier rather than a keyword, `i32(x)` reported "undefined function `i32`" — the
+# message any misspelled call gets — so a reader was told the name is unknown rather than that
+# the ladder is not built, and would go looking for their own typo.
+#
+# HERE AND NOT IN reject-check, which is the file for programs that are not Zerg. These ARE
+# Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
+# compiler has not caught up to, which is exactly what this file is for.
+
+expect "$ZERG" fixed-width-conversion 'the fixed-width ladder' <<'EOF'
+fn main() {
+	print i32(5)
+}
+EOF
+
+expect "$ZERG" fixed-width-annotation 'the fixed-width ladder' <<'EOF'
+fn main() {
+	x: u8 = 5
+	print int(x)
+}
+EOF
+
+expect "$ZERG" fixed-width-float 'the fixed-width ladder' <<'EOF'
+fn main() {
+	print f32(1.5)
+}
+EOF
+
+expect "$ZERG" fixed-width-typedef 'the fixed-width ladder' <<'EOF'
+type W = u8
+
+fn main() {
+	print 1
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

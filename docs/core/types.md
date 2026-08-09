@@ -25,10 +25,11 @@ the grammar:
 ([Null-safety & Errors](../code/errors.md)); the NUL-terminated in-memory form of a `str` is the C
 boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
 
-> **[not yet]** No part of the fixed-width ladder exists: `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are
-> specified as stdlib types and no stdlib declares one. Because a width is an ordinary identifier rather than
-> a keyword, the refusal is not even a named one — `i32(x)` reports _undefined function `i32`_, the message
-> any misspelled call gets, so a reader is told the name is unknown rather than that the ladder is unbuilt.
+> **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
+> are specified as stdlib types and no stdlib declares one. It is refused **by name** — a width is an
+> ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the
+> message any misspelled call gets, and a reader was told their own name was unknown. The **seed** builds
+> and runs them, which makes this the one chapter where the seed is the broader of the two.
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
   **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never

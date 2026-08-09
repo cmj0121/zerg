@@ -5976,7 +5976,16 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
 		chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
-		return f"({s} == {c_expr(em, a.lit, sb)})"
+
+		# AND THE GUARD, which this arm alone did not add. Every other shape does — the
+		# constructor pattern above, the range beside it, the wildcard below — so
+		# `match 1 { 1 if false => 10  _ => 0 }` answered `10`: the arm matched on the literal
+		# and the `if` was read, type-checked, and then dropped on the floor. A guard that
+		# parses and does nothing is worse than one that is refused.
+		eq := c_arm_eq(em, a, s, st, sb)
+		return f"({eq} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
+
+		return eq
 	}
 
 	if a.pat == 3 {
@@ -6019,6 +6028,19 @@ fn c_is_or_pattern(e: Expr) -> bool {
 # c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
 # as TEXT and so meet no operand rule of their own — a third spelling of the same equality
 # problem, eight lines from the comment that said there were two.
+# c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
+# comparison is strcmp's — the same answer c_binexpr gives `a == b`, and for the same reason:
+# C's `==` on two `const char *` compares the POINTERS.
+#
+# `match s { "y" => 1  _ => -1 }` answered `-1` for `s = "y"`. Two string literals that are equal
+# may or may not share storage, so the arm did not merely fail — it failed unpredictably, which
+# is the one kind of wrong answer a test can pass over.
+fn c_arm_eq(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	return f"(strcmp({s}, {c_expr(em, a.lit, sb)}) == 0)" if c_is_str(st)
+
+	return f"({s} == {c_expr(em, a.lit, sb)})"
+}
+
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)

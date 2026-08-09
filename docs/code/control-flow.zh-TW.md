@@ -23,13 +23,11 @@ then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是
 以及作為被回傳的 if 運算式(`return if x := opt { use(x) } else { fallback }`)。它也載得住 non-POD 的
 `str?`——解包後的 `str` 僅綁在 then 區塊內。
 
-> **[deviation]** **每個分支必須產出相同型別**這條規則對 `if` 並沒有檢查。`x := if false { 1 } else { 2.5 }`
-> 編得過而且印出 `2`——`float` 那個分支被截斷成第一個分支選定的 `int`——而 `if false { 1 } else { true }` 印出
-> `1`。當兩個型別之間沒有 C 的轉換時，這個不一致會整個逃出 compiler、改由 `cc` 回報，而且是對著產生出來的 C
-> 報、不是對著造成它的 Zerg 報。同一條規則在 `match` 上**有**檢查
-> （`error: a match answers ONE type, and its arms give int and str`），這正是它為何是單一構造上的遺漏，而不是
-> 對「分支如何定型」的決定。
->
+**每個分支必須產出相同型別**,而兩個構造用同一句話說它——`an if expression answers ONE type, and its
+branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而它其實不算例外:它沒有型別可以不一致,所以
+`x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
+例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
+
 > **[not yet]** 值形式有兩種樣子會被指名拒絕。一是 if 運算式裡的 **`else if` 串**
 > （`x := if a { 1 } else if b { 2 } else { 3 }`）：運算式形式只收一個結尾 `else`，串接的那種仍只是 statement。
 > 二是**在運算式位置的 if-let**——`return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的
@@ -91,12 +89,10 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 `A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出，list pattern 連型別
 檢查都過。
 
-> **[deviation]** **`str` literal** 的 arm 永遠不會觸發。`match s { "y" => 1  "n" => 0  _ => -1 }` 在 `s == "y"`
-> 時回答 `-1`：`--emit c` 顯示該 arm 被降階成 subject 與 arm literal 之間的**指標**比較，而同一個檔案裡寫成
-> expression 的 `"y" == "y"` 則降階成 `strcmp(…) == 0`。`int`、`bool`、`rune` 與負數 literal 的 arm 都如規格所述
-> 以值比對；只有 `str` 是錯的，而且錯得**無聲**——沒有任何診斷、結尾的 `_` 吸收掉每一次落空，於是一個對字串做的
-> `match` 表現得就像 subject 一個 case 都沒中。
->
+**`str` literal** 的 arm 比的是**文字**,走的是 expression 的 `==` 所用的同一個 `strcmp`。它曾被降階成**指標**
+比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
+且兩個相等的 literal 不保證共用儲存。
+
 > **[not yet]** **nested pattern** 根本 parse 不了：`Left(Some(v))`，還有 `L(0)`，都會被
 > ``a pattern binding needs a name, and `(` is not one`` 擋下——payload 位置只收一個名字、別的都不收，所以每個
 > pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，因為

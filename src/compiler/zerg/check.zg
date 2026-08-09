@@ -1773,14 +1773,14 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	}
 
 	if chk_is_logical(oper) {
-		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
+		if chk_wrong_bool(ta) or chk_wrong_bool(tb) {
 			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
 	}
 
 	if chk_is_bitwise(oper) {
-		if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb) {
+		if chk_wrong_int(ta) or chk_wrong_int(tb) {
 			chk_at(em, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
@@ -1789,7 +1789,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	if chk_is_arith(oper) {
 		# `+` is the one arithmetic operator a str also answers, and only for two of them
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
-		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+		if chk_wrong_num(ta) or chk_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
@@ -1800,7 +1800,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 
 	if chk_is_order(oper) {
 		return if c_is_str(ta) and c_is_str(tb)
-		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+		if chk_wrong_num(ta) or chk_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
@@ -1852,13 +1852,13 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
-	if oper == "not" and chk_scalar_wrong_bool(t) {
+	if oper == "not" and chk_wrong_bool(t) {
 		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}
-	if oper == "-" and chk_scalar_wrong_num(t) {
+	if oper == "-" and chk_wrong_num(t) {
 		chk_at(em, f"operator `-` takes a numeric operand, and this one is {ty_name(t)}")
 	}
-	if oper == "~" and chk_scalar_wrong_int(t) {
+	if oper == "~" and chk_wrong_int(t) {
 		chk_at(em, f"operator `~` takes an int operand, and this one is {ty_name(t)}")
 	}
 }
@@ -1870,24 +1870,24 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 # answers NO for a value that is not a scalar at all, so every aggregate walked past every one
 # of them. `xs + [2]`, `xs & [2]`, `xs and [2]`, `-xs` and `~xs` were each lowered to C and
 # reported by cc against a file under .zerg-cache, which is the standing rule breached five
-# times by one word. Only ORDER escaped it, having a rule of its own about `Ord`.
+# times by one word. Only ORDER escaped it, having a rule of its own about `Ord`. The word is
+# out of the NAMES as well: a predicate called `chk_scalar_wrong_num` reads as the rule it was,
+# and the name is the part a caller checks its own line against.
 #
-# The gate is now chk_is_operand: everything but the type nothing could work out. What is
-# handled BEFORE these — an optional, a typedef — still returns first and keeps its own better
-# sentence.
-fn chk_scalar_wrong_bool(t: Ty) -> bool {
-	return chk_is_operand(t) and not c_is_bool_ty(t)
+# The gate is now every type but TUnknown, which is the one they cannot have an opinion about:
+# refusing on it would turn every gap in inference into a rejected program, which is the same
+# exemption chk_fits makes and for the same reason. What is handled BEFORE these — an optional,
+# a typedef — still returns first and keeps its own better sentence.
+fn chk_wrong_bool(t: Ty) -> bool {
+	return not c_is_unknown(t) and not c_is_bool_ty(t)
 }
 
-# chk_is_operand is every type these predicates have an opinion about. TUnknown is the one they
-# cannot: refusing on it would turn every gap in inference into a rejected program, which is the
-# same exemption chk_fits makes and for the same reason.
-fn chk_is_operand(t: Ty) -> bool {
-	return not c_is_unknown(t)
+fn chk_wrong_int(t: Ty) -> bool {
+	return not c_is_unknown(t) and not chk_is_bitwise_operand(t)
 }
 
-fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_operand(t) and not chk_is_bitwise_operand(t)
+fn chk_wrong_num(t: Ty) -> bool {
+	return not c_is_unknown(t) and not chk_is_num(t)
 }
 
 # chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
@@ -1904,10 +1904,6 @@ fn chk_is_bitwise_operand(t: Ty) -> bool {
 	return false if c_is_rune(t)
 
 	return cls == SC_SIGNED or cls == SC_UNSIGNED
-}
-
-fn chk_scalar_wrong_num(t: Ty) -> bool {
-	return chk_is_operand(t) and not chk_is_num(t)
 }
 
 fn chk_is_scalar(t: Ty) -> bool {

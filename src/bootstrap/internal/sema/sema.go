@@ -279,7 +279,7 @@ func (c *checker) collectTypes(file *ast.File) {
 // carrier, and an enum's self-recursive payload is auto-boxed: those are the ways to write a
 // recursive shape, and none of them is a size that depends on itself.
 func (c *checker) checkSizeCycles(file *ast.File) {
-	state := map[string]int{} // 0 unvisited, 1 on the walk's stack, 2 settled
+	state := map[string]sizeState{}
 	for _, d := range file.Items {
 		if n, ok := d.(*ast.StructDecl); ok {
 			c.sizeWalk(n.Name, state, n)
@@ -287,31 +287,44 @@ func (c *checker) checkSizeCycles(file *ast.File) {
 	}
 }
 
-// sizeWalk is the depth-first half. `blame` is the declaration the report hangs on — the one the
-// walk started from, since a cycle has no first member and the reader is looking at theirs.
-func (c *checker) sizeWalk(name string, state map[string]int, blame *ast.StructDecl) bool {
+// sizeState is where one declaration stands in the walk below.
+type sizeState uint8
+
+const (
+	sizeUnvisited sizeState = iota
+	sizeOnStack
+	sizeSettled
+)
+
+// sizeWalk is the depth-first half, and it reports whether `name` is on the walk's own stack —
+// which is what a cycle is. `blame` is the declaration the report hangs on: the one the walk
+// started from, since a cycle has no first member and the reader is looking at theirs.
+func (c *checker) sizeWalk(name string, state map[string]sizeState, blame *ast.StructDecl) bool {
 	switch state[name] {
-	case 1:
+	case sizeOnStack:
 		return true
-	case 2:
+	case sizeSettled:
 		return false
 	}
-	state[name] = 1
+	// settled on EVERY exit, including the one that reports: a name is walked once, so a
+	// diamond of by-value fields costs one visit rather than one per path into it.
+	state[name] = sizeOnStack
+	defer func() { state[name] = sizeSettled }()
+
 	sym := c.module.local(name)
-	if sym != nil && sym.TypeDef != nil && sym.TypeDef.Struct != nil {
-		for _, f := range sym.TypeDef.Struct.Fields {
-			nm, ok := byValueStructName(f.Type)
-			if !ok {
-				continue
-			}
-			if c.sizeWalk(nm, state, blame) {
-				state[name] = 2
-				c.errorf(blame.Span(), "%q is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload", blame.Name)
-				return false
-			}
+	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Struct == nil {
+		return false
+	}
+	for _, f := range sym.TypeDef.Struct.Fields {
+		nm, ok := byValueStructName(f.Type)
+		if !ok {
+			continue
+		}
+		if c.sizeWalk(nm, state, blame) {
+			c.errorf(blame.Span(), "%q is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload", blame.Name)
+			return false
 		}
 	}
-	state[name] = 2
 	return false
 }
 

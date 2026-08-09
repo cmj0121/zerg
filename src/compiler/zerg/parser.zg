@@ -1214,8 +1214,8 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	}
 }
 
-# parse_import_spec reads `pub? "path" (as name)?` and yields the path, or "" when what is
-# there is not a spec at all.
+# parse_import_spec reads `pub? "path" (as name)?` and yields the path. Anything that is
+# not a string literal is refused below, so the only "" it can answer is the empty literal.
 #
 # `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
 # module is part of the program — so the marker is consumed and the path read as usual.
@@ -1225,7 +1225,15 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	if p_at(p, Pub) {
 		p_advance(p)
 	}
-	return "" if not p_at(p, Str)
+
+	# A PATH IS A STRING LITERAL, and only that (GRAMMAR#import-path). This used to answer ""
+	# for anything else, and "" means "no spec here" — so `import util/text`, the older bare
+	# spelling, was read as no import at all and the leftover `util/text` fell through to the
+	# statement loop as a top-level expression, which compile mode treats as a nop. The
+	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
+	# member access on a namespace that was never bound.
+	raise f"an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Str)
+
 	t := cur(p)
 	p_advance(p) # the path
 	if p_at(p, As) {
@@ -1235,6 +1243,22 @@ fn parse_import_spec(mut &p: Parser) -> str {
 		}
 	}
 	return t.value # the decoded path, without its quotes
+}
+
+# p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
+# quote their own line back at them rather than a placeholder. It reads through the peek
+# pair, WITHOUT consuming: that raise ends the parse anyway, and a reader of this function
+# should not have to know it.
+fn p_import_path_guess(mut &p: Parser) -> str {
+	mut out := ""
+	mut n := 0
+	for true {
+		k := peek_kind(p, n)
+		break if k == Semi or k == Eof or k == RParen
+		out = out + peek_lexeme(p, n)
+		n = n + 1
+	}
+	return out
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {
@@ -2207,6 +2231,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
+
 			expect(p, RBrack)
 			e = EIndex(e, idx)
 		} else if p_at(p, Dot) {

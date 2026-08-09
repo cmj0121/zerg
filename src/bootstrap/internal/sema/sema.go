@@ -265,6 +265,68 @@ func (c *checker) collectTypes(file *ast.File) {
 			c.fillAlias(n)
 		}
 	}
+	c.checkSizeCycles(file)
+}
+
+// checkSizeCycles refuses a struct that contains itself BY VALUE, however indirectly.
+//
+// Such a type has no size: `struct P { p: P }` is P plus a P plus a P. There was no check here
+// at all, so the seed accepted it and handed cc a struct containing itself — and the shipping
+// compiler, whose declaration sweep skipped a self-dependency, died of signal 11 on the same
+// three lines, which is what sent anybody looking.
+//
+// Only a BY-VALUE field is an edge. A `list[P]` field holds a heap buffer, a `P?` holds a
+// carrier, and an enum's self-recursive payload is auto-boxed: those are the ways to write a
+// recursive shape, and none of them is a size that depends on itself.
+func (c *checker) checkSizeCycles(file *ast.File) {
+	state := map[string]int{} // 0 unvisited, 1 on the walk's stack, 2 settled
+	for _, d := range file.Items {
+		if n, ok := d.(*ast.StructDecl); ok {
+			c.sizeWalk(n.Name, state, n)
+		}
+	}
+}
+
+// sizeWalk is the depth-first half. `blame` is the declaration the report hangs on — the one the
+// walk started from, since a cycle has no first member and the reader is looking at theirs.
+func (c *checker) sizeWalk(name string, state map[string]int, blame *ast.StructDecl) bool {
+	switch state[name] {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
+	state[name] = 1
+	sym := c.module.local(name)
+	if sym != nil && sym.TypeDef != nil && sym.TypeDef.Struct != nil {
+		for _, f := range sym.TypeDef.Struct.Fields {
+			nm, ok := byValueStructName(f.Type)
+			if !ok {
+				continue
+			}
+			if c.sizeWalk(nm, state, blame) {
+				state[name] = 2
+				c.errorf(blame.Span(), "%q is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload", blame.Name)
+				return false
+			}
+		}
+	}
+	state[name] = 2
+	return false
+}
+
+// byValueStructName is the named struct a field holds DIRECTLY, if it holds one.
+//
+// A field spelled with a struct's NAME resolves to the STRUCT type, not to a *types.Named
+// wrapping it — which a first attempt at this asked for, and so matched nothing at all.
+// Anything reached through a list, a map, a carrier or a channel is behind an indirection and
+// contributes no edge.
+func byValueStructName(t types.Type) (string, bool) {
+	st, ok := t.(*types.Struct)
+	if !ok || st.Def == nil {
+		return "", false
+	}
+	return st.Def.Name, true
 }
 
 // fillAlias resolves a strong typedef's underlying representation into its TypeDef

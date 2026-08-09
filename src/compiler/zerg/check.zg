@@ -616,6 +616,37 @@ fn c_is_fieldref(e: Expr) -> bool {
 # at: a later arm answering something else was rendered into the same conditional and cc
 # reported the mismatch — as a WARNING under clang, so the program linked. Every arm has to
 # be typed with its OWN payload bound, which is why this is a walk and not a comparison.
+# chk_branch_types is chk_arm_types for the OTHER construct that answers one type from two
+# places. `x := if false { 1 } else { 2.5 }` printed `2` — the float arm truncated into the int
+# the first arm settled on — and where the two types have no C conversion between them the
+# mismatch escaped the compiler entirely and `cc` reported it, against generated C.
+#
+# `match` has had the rule since arms could answer at all, and the sentence is deliberately the
+# same shape: two constructs, one question, and a reader who has met one of these has met both.
+# That an omission in one construct went unnoticed while the other was checked is the shape this
+# compiler keeps finding — one rule, N places, written at fewer.
+#
+# THE OTHER OPERAND is not what decides here. Both branches are values with types of their own,
+# so this is chk_fits and not the adoption question: a literal branch adopts nothing from its
+# sibling, exactly as one match arm adopts nothing from the next.
+fn chk_branch_types(mut &em: Emitter, then_e: Expr, else_e: Expr) {
+	want := c_infer(em, then_e)
+	got := c_infer(em, else_e)
+
+	return if c_is_unknown(want) or c_is_unknown(got)
+	return if ty_eq(want, TVoid) or ty_eq(got, TVoid)
+
+	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the four typeless forms, so
+	# `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence
+	# on the other — two spellings of one `int?` and not two answers. Every OTHER branch does
+	# bring its type, a literal included: a branch is not a typed position for its sibling, the
+	# same way one match arm is not one for the next.
+	return if ty_eq(want, TNil) or ty_eq(got, TNil)
+	return if chk_fits(em, want, got) or chk_fits(em, got, want)
+
+	chk_at(em, f"an `if` expression answers ONE type, and its branches give {ty_name(want)} and {ty_name(got)}")
+}
+
 fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	return if arms.len() < 2
 

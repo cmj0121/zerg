@@ -9028,6 +9028,7 @@ fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 # checked before it is rendered — a match arm has nowhere to put a statement.
 fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
 	chk_condition(em, cond, "an `if` expression")
+	chk_branch_types(em, then_e, else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 }
 

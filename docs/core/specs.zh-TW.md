@@ -259,7 +259,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
   `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，所以 `+` 會
   **串接**成新字串（見 [Collection](../code/collections.zh-TW.md)）。
 - **`Into[T]`**——轉換 spec:型別宣告它能轉成什麼,泛型程式碼以它為 bound;轉換永遠**寫出來**、絕不由
-  position 套用（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。
+  position 套用。它**不出貨任何內建 impl**——數字之間的轉換是 `T(x)`,轉成文字是 `str(x)`,而後者每個型別都
+  透過 `display` 有答案（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
 型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(this)` 在最後一個持有者的 scope 退出時

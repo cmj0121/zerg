@@ -4650,6 +4650,17 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
+
+	# A LIST INDEX IS AN INT, and it was the last container slot with no rule at all. The map's
+	# KEY gained one and this did not, so the subscript accepted anything: `xs["a"]` reached cc,
+	# and `xs[1.5]` and `xs[true]` COMPILED AND RAN — the float silently truncated to 1 by a C
+	# conversion cc only warned about, the bool read as 1. A wrong answer from a subscript is
+	# the worst place to have one, since the reader's next question is about the element.
+	#
+	# `int` and nothing else: a `byte` or a `rune` index is a written `int(b)` away, and letting
+	# either through here would be a position converting a value, which is the rule this whole
+	# chapter turns on.
+	c_list_index_int(em, idx)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
 
 	ct := c_type(c_list_elem(tty))
@@ -8088,6 +8099,16 @@ fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str
 
 # c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index
 # takes its ADDRESS, and a literal or call result has none.
+# c_list_index_int is the rule above, asked of one subscript. It is a checked report rather
+# than a raise: the index is a value entering a slot, which is what every other position of that
+# shape does, and emission carries on so the rest of the program is checked too.
+fn c_list_index_int(mut &em: Emitter, idx: Expr) {
+	t := c_infer(em, idx)
+	return if c_is_unknown(t) or c_is_int(t)
+
+	chk_at(em, f"a list index is an int, and this is {ty_name(t)}")
+}
+
 fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
 	kt := c_map_key_ty(tty)
 

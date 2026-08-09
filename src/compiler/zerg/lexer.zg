@@ -336,10 +336,12 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 
 		advance(l) # }
 
-		# past U+10FFFF or a surrogate: U+FFFD, which is what the seed's WriteRune answers.
-		# It cannot be refused here without refusing what the seed accepts, and it cannot be
-		# encoded as written without handing the str bridge bytes that are not UTF-8.
-		return 65533 if cp > 1114111 or (cp >= 55296 and cp <= 57343)
+		# PAST U+10FFFF, OR A SURROGATE — NOT A CODE POINT, so not an escape. This used to
+		# answer U+FFFD, matching what the seed's WriteRune does with a bad rune, and the
+		# substitution was silent: `int('\u{110000}')` and `int('\u{D800}')` both printed
+		# 65533, so a program that named one character got another with nothing said. -1 is
+		# "not an escape", which the caller reports as E109 at the literal's own place.
+		return -1 if cp > 1114111 or (cp >= 55296 and cp <= 57343)
 		return cp
 	}
 	return -1

@@ -2771,6 +2771,64 @@ printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + 
 
 # --- report ------------------------------------------------------------------------
 
+# --- the bad paths that reached cc ------------------------------------------------------
+#
+# Each of these compiled to C and was reported by the C compiler, against a file under
+# .zerg-cache that nobody wrote — the standing rule ("lowered correctly, or refused by name",
+# docs/conformance.md) breached six times in one sweep. They are written here BEFORE the rules
+# that turn them away, so the sentence each one is owed is decided by what a reader needs and
+# not by whatever the fix happened to produce.
+
+reject add-two-lists 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs + [2]
+	print ys.len()
+}
+EOF
+
+reject subtract-two-lists 'operator `-` takes numeric operands' <<'EOF'
+fn main() {
+	xs := [1]
+	ys := xs - [2]
+	print ys.len()
+}
+EOF
+
+reject add-two-maps 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	n := {"b": 2}
+	o := m + n
+	print o.len()
+}
+EOF
+
+reject index-a-map-with-the-wrong-key 'is indexed by str, and this gives int' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m[1]
+}
+EOF
+
+reject call-a-binding-that-shadows-a-function 'holds an int, and an int is not callable' <<'EOF'
+fn f() -> int {
+	return 1
+}
+
+fn main() {
+	f := 2
+	print f()
+}
+EOF
+
+reject field-on-a-non-struct 'no field `a` on int' <<'EOF'
+fn main() {
+	n := 5
+	print n.a
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

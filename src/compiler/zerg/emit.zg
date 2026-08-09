@@ -3757,7 +3757,7 @@ fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
 	if wrap != "" and (cls == SC_SIGNED or cls == SC_UNSIGNED) {
 		em.used_rt = true
 
-		return c_arith_narrow(em, t, f"{wrap}({a}, {b})")
+		return c_narrow_wrap(em, t, f"{wrap}({a}, {b})")
 	}
 	return f"({a} {c_binop(oper)} {b})" if cls != SC_SIGNED and cls != SC_UNSIGNED
 
@@ -3829,6 +3829,31 @@ fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
 	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
 }
 
+# c_narrow_wrap is c_arith_narrow for an operator that WRAPS, and the difference is the whole
+# point of the `%` spelling. The value travels as an i64, so the wrap happens at 64 bits and
+# then has to come back — and coming back through the CHECKED conversion is the raise the
+# operator exists to opt out of. `byte(255) +% byte(1)` aborted with
+# "integer conversion out of range" instead of answering `0`: the wrapping form became an
+# alias for the operator it was written to avoid, at the one width where the difference shows.
+#
+# ONLY A NARROW UNSIGNED TARGET wraps here, and that is a decision rather than a limitation. A
+# C cast to `uint8_t` is a defined truncation, which IS the wrap; a `rune` is `int32_t`, where
+# the same cast is implementation-defined — and a rune's values are a PREDICATE and not a
+# range (docs/core/types.md), so there is no bit pattern to wrap onto in the first place. A
+# rune keeps the checked narrow, which is what refuses a surrogate.
+fn c_narrow_wrap(mut &em: Emitter, t: Ty, call: str) -> str {
+	return f"({call})" if c_scalar_bits(t) >= 64
+	return c_arith_narrow(em, t, call) if c_scalar_class(t) != SC_UNSIGNED
+
+	return f"(({c_type(t)})({call}))"
+}
+
+# c_narrow_unsigned is the one shape c_narrow_wrap does anything for, asked on its own so the
+# unary path can decide whether to pay for c_infer at all.
+fn c_narrow_unsigned(t: Ty) -> bool {
+	return c_scalar_class(t) == SC_UNSIGNED and c_scalar_bits(t) < 64
+}
+
 # c_is_int_lit reports whether an expression is an integer literal written out in the
 # source, which is what makes `-1` a constant rather than a negation.
 fn c_is_int_lit(x: Expr) -> bool {
@@ -3861,6 +3886,22 @@ fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 
 			return c_arith_narrow(em, t, c_neg_call(t, inner))
 		}
+	}
+
+	# `~` AND `-%` COMPUTE AT THE TYPE'S WIDTH, and C will do neither on its own: both operands
+	# travel as an i64, so `~b` for a `byte` answered the 64-bit complement —
+	# `18446744073709551603` where the specified answer is `243` — and `-%b` answered `-1`
+	# where it is `255`. The result was right only where it landed straight back in a `byte`
+	# slot, because the BINDING's conversion narrowed it; printed or converted, the width
+	# leaked. That is the shape this file's worst defects have: an answer that is correct in
+	# the one spelling a test naturally reaches for.
+	#
+	# The operator is asked FIRST and the type only after, because c_infer walks the operand's
+	# whole subtree — every `not` in the program would otherwise pay for a question about two
+	# operators it is not.
+	if oper == "~" or oper == "-%" {
+		t := c_infer(em, x)
+		return c_narrow_wrap(em, t, f"({c_unop(oper)}{inner})") if c_narrow_unsigned(t)
 	}
 	return f"({c_unop(oper)}{inner})"
 }

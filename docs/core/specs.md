@@ -329,8 +329,9 @@ generic bound gates on it:
   `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
   `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](../code/collections.md)).
 - **`Into[T]`** — the conversion spec: a type declares what it converts to and generic code bounds on
-  it; a conversion is always **written**, never applied by a position (see
-  [Type Conversion](types.md#into--an-ordinary-conversion-spec)).
+  it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
+  between numbers the conversion is `T(x)`, and to text it is `str(x)`, which every type answers
+  through `display` (see [Type Conversion](types.md#into--an-ordinary-conversion-spec)).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead

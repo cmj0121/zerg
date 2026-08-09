@@ -169,18 +169,12 @@ The seed is deliberately the narrower compiler, and it refuses most of what it h
 built. These are the places it does NOT — where it does not turn a program away ITSELF, so
 `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
 
-"Itself" is the whole of it. Three of the four below were counted as refusals for a year
+"Itself" is the whole of it. Three of the three below were counted as refusals for a year
 because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 `-Waddress-of-temporary` are errors there and warnings under gcc, so the same seed and the
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
 the program, which is what the assertion exists to catch.
 
-- **A numeric literal outside its target's range is accepted.** docs/core/types.md: "A
-  literal that does not fit its required type is a compile error (`byte = 300`, `uint = -1`)
-  — never a runtime overflow." The seed's fit-check covers only the fixed-width ladder, so
-  the named primitives are unchecked and `byte = 300` becomes a truncation. `zerg` reads the
-  literal's lexeme and refuses it, which is the first rule in the type chapter where the
-  SHIPPING compiler is the narrower of the two.
 - **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
   segfaults.** GRAMMAR#param makes a `mut &` valid only for the call and its argument a `mut`
   lvalue; a default has no caller variable to point at. The seed emits the default

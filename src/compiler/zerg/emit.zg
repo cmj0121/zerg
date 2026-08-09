@@ -4873,7 +4873,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method(em, target, meth, args, tty, sb)
-		MMap     => c_map_method(em, target, meth, tty, sb)
+		MMap     => c_map_method(em, target, meth, args, tty, sb)
 		MErr     => c_err_method(em, target, meth, args, sb)
 		MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
@@ -8243,12 +8243,46 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }
 
-fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -> str {
+# c_map_method lowers `m.len()` and `m.has(k)`. Both take the map's ADDRESS, which is the
+# one fact that shapes the rest.
+#
+# `has` NEVER WORKED. It rendered `zrt_map_has(&(m), &zgt_mk)` and nothing declared
+# `zgt_mk` — the function was not given the arguments, so the key had nowhere to come from
+# and cc answered "use of undeclared identifier 'zgt_mk'" for every map in every program.
+# c_map_index binds its key to exactly that name; this read as if it were inside that
+# expansion, and its key is materialised the same way for the same reason.
+#
+# And the map is BOUND when it is not a place, again as c_map_index binds one: an address
+# needs storage, and `{"a": 1}.len()` or `mk().len()` has none. The index path learned this
+# and the method path did not, which is the same rule written at one of its two slots.
+fn c_map_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
-	tgt := c_expr(em, target, sb)
 
-	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
-	return f"zrt_map_has(&({tgt}), &zgt_mk)" if meth == "has"
+	tgt := c_expr(em, target, sb)
+	place := c_is_place(em, target)
+
+	mut recv := f"&({tgt})"
+	mut bind := ""
+	if not place {
+		recv = "&zgt_mx"
+		bind = f"zrt_map zgt_mx = {tgt}; "
+	}
+
+	if meth == "len" {
+		raise f"`len` takes no argument, and this gives {strconv.to_string(args.len(), 10)}" if args.len() != 0
+
+		return f"((int64_t)zrt_map_len({recv}))" if place
+
+		return f"({{ {bind}(int64_t)zrt_map_len({recv}); }})"
+	}
+	if meth == "has" {
+		raise f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}" if args.len() != 1
+
+		kt := c_map_key_ty(tty)
+		chk_slot_fits(em, f"a key of this {ty_name(tty)}", kt, args[0])
+		k := c_expr(em, args[0], sb)
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
+	}
 
 	raise f"NotImplemented: the map method `{meth}`"
 }

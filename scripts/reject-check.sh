@@ -1620,7 +1620,7 @@ fn main() {
 }
 EOF
 
-reject store-through-a-call-result 'cannot store through a call result' seed-gap <<'EOF'
+reject store-through-a-call-result 'cannot store through a call result' <<'EOF'
 fn get() -> list[int] {
 	return [1, 2]
 }
@@ -2971,6 +2971,29 @@ EOF
 reject written-uint-conversion-negative 'is not a value a uint holds' place <<'EOF'
 fn main() {
 	print int(uint(-1))
+}
+EOF
+
+# --- bad paths, sweep six: what an assignment may be written to -------------------------
+#
+# An assignment needs a PLACE — a name, a field, an index. A call's result and a literal are
+# values with nowhere to live, and both were rendered to the left of a C `=`.
+
+reject assign-to-a-call 'is not a place' place <<'EOF'
+fn f() -> int {
+	return 1
+}
+
+fn main() {
+	f() = 2
+	print 1
+}
+EOF
+
+reject assign-to-a-literal 'is not a place' place <<'EOF'
+fn main() {
+	5 = 2
+	print 1
 }
 EOF
 

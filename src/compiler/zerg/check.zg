@@ -186,9 +186,15 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	chk_store_path(em, lhs)
 	root := chk_root_name(lhs)
 
-	# not a name at all — an index into a call's result, say. There is no binding to ask
-	# about, and emit has its own words for the shapes it cannot store through.
-	return if root == ""
+	# NOT ROOTED IN A NAME AT ALL. A store target is a PLACE — a name, or a field or an index
+	# reached from one — and `f() = 2` and `5 = 2` are values with nowhere to live. This used to
+	# return here, on the belief that "emit has its own words for the shapes it cannot store
+	# through"; emit has none, and rendered both to the left of a C `=`, so cc answered
+	# "expression is not assignable" about generated code.
+	if root == "" {
+		chk_at(em, f"`{expr_kind(lhs)}` is not a place, and an assignment needs one — a name, or a field or an index reached from one")
+		return
+	}
 
 	idx := c_live_idx(em, root)
 

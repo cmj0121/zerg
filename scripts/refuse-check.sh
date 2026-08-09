@@ -2094,6 +2094,26 @@ fn main() {
 }
 EOF
 
+# --- no built-in type implements `Into` -----------------------------------------------
+#
+# It is a REFUSAL and not a gap, which is why it has a sentence of its own rather than the
+# generic unknown-method one: between numbers the conversion is written `T(x)`, and to text it
+# is `str(x)`, which every type answers through `display`. An `.into()` beside either would
+# need the position to say which target it meant, and a demand never does that.
+
+expect "$ZERG" into-on-an-int 'no built-in type implements it' <<'EOF'
+fn main() {
+	print 1.into()
+}
+EOF
+
+expect "$ZERG" into-on-a-str 'no built-in type implements it' <<'EOF'
+fn main() {
+	s := "a"
+	print s.into()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

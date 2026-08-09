@@ -1863,14 +1863,31 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	}
 }
 
-# The three "wrong" predicates each answer the same shape of question: is this a scalar
-# the operator cannot take. A non-scalar answers false — it is not this rule's business.
+# The three "wrong" predicates each answer the same shape of question: is this a type the
+# operator cannot take.
+#
+# THEY USED TO ASK IT OF SCALARS ONLY — "is this a SCALAR the operator cannot take" — which
+# answers NO for a value that is not a scalar at all, so every aggregate walked past every one
+# of them. `xs + [2]`, `xs & [2]`, `xs and [2]`, `-xs` and `~xs` were each lowered to C and
+# reported by cc against a file under .zerg-cache, which is the standing rule breached five
+# times by one word. Only ORDER escaped it, having a rule of its own about `Ord`.
+#
+# The gate is now chk_is_operand: everything but the type nothing could work out. What is
+# handled BEFORE these — an optional, a typedef — still returns first and keeps its own better
+# sentence.
 fn chk_scalar_wrong_bool(t: Ty) -> bool {
-	return chk_is_scalar(t) and not c_is_bool_ty(t)
+	return chk_is_operand(t) and not c_is_bool_ty(t)
+}
+
+# chk_is_operand is every type these predicates have an opinion about. TUnknown is the one they
+# cannot: refusing on it would turn every gap in inference into a rejected program, which is the
+# same exemption chk_fits makes and for the same reason.
+fn chk_is_operand(t: Ty) -> bool {
+	return not c_is_unknown(t)
 }
 
 fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_scalar(t) and not chk_is_bitwise_operand(t)
+	return chk_is_operand(t) and not chk_is_bitwise_operand(t)
 }
 
 # chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
@@ -1890,7 +1907,7 @@ fn chk_is_bitwise_operand(t: Ty) -> bool {
 }
 
 fn chk_scalar_wrong_num(t: Ty) -> bool {
-	return chk_is_scalar(t) and not chk_is_num(t)
+	return chk_is_operand(t) and not chk_is_num(t)
 }
 
 fn chk_is_scalar(t: Ty) -> bool {

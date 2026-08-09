@@ -1700,7 +1700,11 @@ fn c_check_inst_budget(mut &em: Emitter, name: str) {
 fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 	mut i := 0
 	for i < sol.len() {
-		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" if c_is_unknown(sol[i])
+		# The place is THE CALL's — the emission walk's own marker (SAt) — and not the
+		# template's line: the template is fine, a second call to the same generic may well
+		# decide every parameter. The sentence says "this call", and without a place there was
+		# no way to tell which one.
+		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if c_is_unknown(sol[i])
 		i = i + 1
 	}
 }

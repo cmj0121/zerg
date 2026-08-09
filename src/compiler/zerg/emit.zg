@@ -1906,9 +1906,51 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # nothing can yet assert that every row of builtins.md is either built or named. Whoever
 # unifies the three should start from those two names.
 fn c_builtin_check(n: str) {
+	c_fixed_width_check(n)
+
 	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
 	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
 	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+}
+
+# c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
+#
+# `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are types the specification has and this compiler
+# does not (docs/core/types.md). Because a width is an ordinary IDENTIFIER rather than a
+# keyword, `i32(x)` reported "undefined function `i32`" — the message any misspelled call gets —
+# so a reader was told the name is unknown and would go looking for their own typo. A `[not
+# yet]` is a legitimate state; an unnamed refusal is not (docs/conformance.md).
+fn c_fixed_width_check(n: str) {
+	return if not c_is_fixed_width(n)
+
+	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
+}
+
+# c_is_fixed_width is the ladder's names, spelled as the shape they have rather than as a list
+# of eighteen: a class letter, then a width the language names. It is deliberately exact — `i7`
+# and `u128` are not the ladder and stay ordinary unknown names, because a message about a
+# ladder that would not contain them either is worse than none.
+fn c_is_fixed_width(n: str) -> bool {
+	b := list[byte](n)
+	return false if b.len() < 2
+
+	c := b[0]
+	w := str(c_drop_first(b))
+
+	return w == "32" or w == "64" if c == b'f'
+	return false if c != b'i' and c != b'u'
+
+	return w == "8" or w == "16" or w == "32" or w == "64"
+}
+
+fn c_drop_first(b: list[byte]) -> list[byte] {
+	mut out: list[byte] = []
+	mut i := 1
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return out
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -2394,6 +2436,8 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
 	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
+
+	c_fixed_width_check(nm)
 
 	raise f"no type named `{nm}` ({site})"
 }

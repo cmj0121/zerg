@@ -1553,6 +1553,18 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 
 # chk_binding raises when a declaration and its initializer are different types.
 fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
+	# THE ANNOTATION HAS TO NAME A TYPE, and a local's was the one that did not have to. A
+	# parameter's is checked where it is resolved, and a `type X = Y`'s underlying name too —
+	# but `x: Nope = 5` reported "cannot bind int to a Nope binding", a sentence about the VALUE
+	# that treats the unknown name as though it were a type the value failed to be. It also hid
+	# the fixed-width ladder's own sentence behind it, which is what sent anybody looking.
+	nm := c_named_of(declared)
+	if nm != "" and not c_is_type_name(em, nm) {
+		c_builtin_check(nm)
+		chk_at(em, f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
+		return
+	}
+
 	got := c_infer(em, ival)
 
 	if not chk_fits_expr(em, declared, got, ival) {

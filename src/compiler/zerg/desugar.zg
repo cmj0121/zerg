@@ -416,17 +416,22 @@ fn dsg_emit_range(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 	hv := f"zgd_hi{ln}c{col}"
 	dv := f"zgd_done{ln}c{col}"
 
-	# the upper bound, once, before anything else — `c_forrange`'s `zgt_hi`
-	out.append(Token(Ident, hv, "", ln, col))
-	out.append(Token(Walrus, ":=", "", ln, col))
-	dsg_copy(toks, op + 1, lb, ln, out)
-	out.append(Token(Semi, ";", "", ln, col))
-
-	# the induction variable, at the range's low bound
+	# BOTH BOUNDS, ONCE EACH, IN WRITTEN ORDER — `c_forrange`'s `zgt_lo` and `zgt_hi`. The
+	# induction variable is the low bound, so binding it first is what makes `a()..b()` call
+	# `a` and then `b`, the way every other pair of operands is evaluated.
+	#
+	# This wrote the upper bound first, and so did c_forrange — the same rule at two of its
+	# slots, and fixing one made the differential gate say the sugar and the core form do
+	# different things, which is exactly what it is for.
 	out.append(Token(Mut, "mut", "", ln, col))
 	out.append(Token(Ident, iv, "", ln, col))
 	out.append(Token(Walrus, ":=", "", ln, col))
 	dsg_copy(toks, inx + 1, op, ln, out)
+	out.append(Token(Semi, ";", "", ln, col))
+
+	out.append(Token(Ident, hv, "", ln, col))
+	out.append(Token(Walrus, ":=", "", ln, col))
+	dsg_copy(toks, op + 1, lb, ln, out)
 	out.append(Token(Semi, ";", "", ln, col))
 
 	if incl {

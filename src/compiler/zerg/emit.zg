@@ -8628,9 +8628,9 @@ fn c_range_incl(e: Expr) -> bool {
 }
 
 # c_forrange lowers `for v in a..b` to a counted loop. The loop variable is an int and is
-# in scope for the body, which is what makes the bound expressions ordinary ints too. The
-# upper bound is read once into a temp, so an expression bound is not re-evaluated on
-# every iteration the way a C `for` header would.
+# in scope for the body, which is what makes the bound expressions ordinary ints too. Both
+# bounds are read once into temps, so an expression bound is not re-evaluated on every
+# iteration the way a C `for` header would.
 fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
 	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
 
@@ -8643,7 +8643,12 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
 	cv := c_var_cname(em, var)
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
+
+	# LOW FIRST. Only the high bound used to be materialised and the low one stayed in the
+	# `for` initialiser, which C runs after the declaration above it — so `for i in a()..b()`
+	# called `b` and then `a`, while the same two calls written `a() + b()` in the same
+	# program ran left to right, as every other operand pair in the language does.
+	mut out := ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
 
 	# An INCLUSIVE range whose high end is the type's maximum has no value to step to after
 	# it: `v++` there overflows, which is undefined in C and in practice loops forever. The
@@ -8653,10 +8658,10 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	# Testing `!=` rather than `<` is safe because the loop variable is IMMUTABLE — the
 	# body cannot move it off the sequence, so the only way to reach `hi` is to step to it.
 	if c_range_incl(iter) {
-		head := f"for (int64_t {cv} = {lo}, zgt_more = ({cv} <= zgt_hi); zgt_more; "
+		head := f"for (int64_t {cv} = zgt_lo, zgt_more = ({cv} <= zgt_hi); zgt_more; "
 		out = out + in2 + head + "zgt_more = (" + cv + " != zgt_hi), " + cv + " += zgt_more) {\n"
 	} else {
-		out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + " < zgt_hi; " + cv + "++) {\n"
+		out = out + in2 + "for (int64_t " + cv + " = zgt_lo; " + cv + " < zgt_hi; " + cv + "++) {\n"
 	}
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"

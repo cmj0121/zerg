@@ -527,6 +527,26 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 }
 
 # c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# c_no_builtin_into is the sentence for `1.into()`, and it is a REFUSAL rather than a gap.
+#
+# `Into` is a spec a type opts into, and no built-in type opts in — deliberately, and for two
+# separate reasons. Between two numbers the conversion is written `T(x)`: that is the whole of
+# Option B, and an `.into()` beside it would need the POSITION to say which target it meant,
+# which docs/core/type-system.md forbids in the same breath ("a demand never solves a type
+# parameter"). And to text there is nothing to opt into at all: `display` is a built-in value
+# rendering rather than a spec, so `str(x)` answers for every type and needs no bound.
+#
+# It reads the RECEIVER's type rather than the name alone, because a user type that implements
+# `Into` has a real `into` and must reach it.
+fn c_no_builtin_into(mut &em: Emitter, meth: str, target: Expr) {
+	return if meth != "into"
+
+	t := c_infer(em, target)
+	return if not chk_is_scalar(t)
+
+	raise f"`into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
+}
+
 # c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
 # c_int_dec cannot render. One that fits both goes the ordinary way, so this changes nothing
 # about a literal any position could already carry.
@@ -5022,6 +5042,13 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# template reached this way has to be instantiated exactly as one reached directly.
 	# Asking the sig table first would have found nothing, a template having no signature.
 	return c_call(em, meth, args, sb) if c_is_generic(em, meth)
+
+	# `into` ON A BUILT-IN IS NOT A GAP, and the generic sentence below would call it one.
+	# `NotImplemented` says a thing the language has and this compiler does not; the language
+	# ships NO `Into` impl for any built-in type, because a conversion between them is written
+	# `T(x)` and a value's text is `str(x)`, which every type already answers. So the reader is
+	# told what to write rather than told to wait.
+	c_no_builtin_into(em, meth, target)
 
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
 

@@ -75,25 +75,11 @@ boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
   `int` value never becomes a `float` implicitly (see "Numeric literals" below). `//` does **not**
   open a comment — a Zerg comment starts with `#`.
 
-> **[deviation]** `~` on a `byte` computes the **64-bit** complement and never masks it back to eight bits, so
-> the answer is right only where it immediately lands in a `byte` slot. With `b: byte = 12`, the specified
-> result is `243` in all three of these; `c: byte = ~b` gives it, because the binding's own conversion narrows
-> the value, while `print ~b` writes `18446744073709551603` and `int(~b)` gives `-13`. The complement is
-> emitted as C's `~` on the promoted operand, and the one spelling a test naturally reaches for — storing the
-> result straight back into a `byte` — is the one spelling that hides it.
->
 > **[not yet]** The bitwise operators do not desugar to anything a user type can implement. No `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl` or `Shr` spec is declared anywhere, so naming one reports
 > _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
 > no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
 > specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
->
-> **[deviation]** The `%`-suffixed operators wrap on `int` and on `uint`, and **raise** on a `byte`:
-> `byte(255) +% byte(1)` aborts with `OverflowError: integer conversion out of range` instead of yielding `0`,
-> and `-%` and `*%` fail the same way. The wrapping is done at the promoted width and the result is then
-> narrowed back to `byte` by the ordinary **checked** conversion — which is precisely the raise the `%`
-> spelling exists to opt out of, so the operator becomes an alias for the one it was written to avoid. The
-> two wider types are the ones every hashing and checksum case is written against, so nothing measured `byte`.
 >
 > **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is

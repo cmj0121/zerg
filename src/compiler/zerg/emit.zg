@@ -5178,6 +5178,23 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
 	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+
+	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
+	# binding first, because a binding holding a function is a call — and when it holds
+	# something else the walk fell through to the FUNCTION of that name, emitting a call to
+	# `zg_f` while `f` was an int64_t in scope. cc reported "called object type 'int64_t' is
+	# not a function or function pointer" against generated code; the reader wrote `f := 2`
+	# above their `f()` and was told nothing about it.
+	#
+	# The innermost binding wins, which is the language's shadowing rule — so this is not a
+	# collision to report but a call that cannot happen, and the sentence says what `f` holds.
+	# REPORTED rather than raised, so it carries the place every checked rule does: it is a
+	# statement about a program the language rejects, not a form this compiler has not built.
+	# Emission carries on into the function of that name and the C is thrown away.
+	if not c_is_unknown(bt) {
+		chk_at(em, f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
+	}
+
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 
@@ -8012,7 +8029,16 @@ fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str
 # c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index
 # takes its ADDRESS, and a literal or call result has none.
 fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
-	kc := c_type(c_map_key_ty(tty))
+	kt := c_map_key_ty(tty)
+
+	# THE KEY IS A TYPED POSITION, and it was the one container slot with no rule: the index
+	# was rendered into a `{key-c-type} zgt_mk = …` declaration whatever it was, so `m[1]` on a
+	# `map[str, int]` reached cc as "incompatible integer to pointer conversion initializing
+	# 'const char *'" — against generated C, about a Zerg line that says `m[1]`. It is asked
+	# here rather than in c_index because here is where the key type has been read out.
+	chk_slot_fits(em, f"a key of this {ty_name(tty)}", kt, idx)
+
+	kc := c_type(kt)
 	vc := c_type(c_map_val_ty(tty))
 	tgt := c_expr(em, target, sb)
 
@@ -8325,6 +8351,15 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# could not name is left alone: guessing there would refuse a working program.
 	nm := c_named_of(tt)
 	raise f"no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
+
+	# AND A TARGET THAT HAS NO FIELDS AT ALL. The rule above answers about a struct that lacks
+	# the field; a scalar lacks the whole idea of one, and fell past it into `zg_a` on an
+	# int64_t — "member reference base type 'int64_t' is not a structure or union", from cc.
+	# Two halves of one question, and only the first had been asked.
+	if chk_is_scalar(tt) {
+		chk_at(em, f"no field `{fld}` on {ty_name(tt)}")
+	}
+
 	return f"{tgt}.zg_{fld}"
 }
 

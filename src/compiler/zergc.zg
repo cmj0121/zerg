@@ -806,13 +806,21 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	seen.append(name)
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
+
+	# NO `guard` HERE. It used to wrap this, so a file that could not be READ or could not
+	# be LEXED was silently dropped from the unit — and a unit whose only source was dropped
+	# is an empty program, which emits nothing and succeeds. `zerg build -o app prog.zg` on a
+	# file with a bad f-string exited 0, wrote no binary, and said not one word; a Makefile or
+	# a CI step reads that as a build.
+	#
+	# Both failures already carry their own sentence — io.read_file names the path, lex_check
+	# names the lexical rule and where — so letting them out is what puts the real reason in
+	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
 	for f in files {
-		guard {
-			src := str(io.read_file(f))
-			lex_check(src, f)
-			srcs.append(src)
-			paths.append(f)
-		}
+		src := str(io.read_file(f))
+		lex_check(src, f)
+		srcs.append(src)
+		paths.append(f)
 	}
 
 	# indexed, because the import scan is a full parse and so the FIRST one a source

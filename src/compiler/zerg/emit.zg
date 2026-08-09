@@ -5773,6 +5773,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		c_no_ref_param_value(em, n)
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
@@ -7487,6 +7488,18 @@ fn c_close_callee(mut &em: Emitter, ch: Expr) -> Callee {
 # again would be the double-release the list exists to rule out. Giving up the SEND end
 # early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
 fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	# `del ch` ON A CHANNEL. GRAMMAR#del-stmt gives it a second meaning there — "a Ref[T]/chan
+	# drops a refcount instead: `del ch` closes a channel if you were its last sender" — and
+	# revoking the name is not that. Revoking emits no C, so the program below built, said
+	# nothing, and DEADLOCKED: the consumer waited on an end the writer believed it closed.
+	#
+	#     ch := chan[int](4);  spawn consume(ch);  ch <- 1;  del ch
+	#
+	# The header above is why the drop cannot simply be added here: the release is registered
+	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
+	# there is no taking one entry out of the middle early.
+	raise f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
+
 	c_live_del(em, name)
 	return f"{ind}/* del {name} */\n"
 }
@@ -7666,6 +7679,13 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
 	free := c_lambda_free(em, ps, body)
 	raise f"NotImplemented: a closure capturing `{free}` — a lambda may only use its parameters" if free != ""
+
+	for pm in ps {
+		if pm.is_ref {
+			c_no_ref_param(f"the parameter `{pm.name}` of a closure")
+		}
+	}
+
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
 	name := "lambda__" + tag
@@ -7738,6 +7758,34 @@ fn c_name_in(names: list[str], name: str) -> bool {
 		return true if n == name
 	}
 	return false
+}
+
+# A `mut &` PARAMETER CANNOT SURVIVE THE TRIP THROUGH A FUNCTION VALUE. A held function is
+# one type here, `zg_fnptr`, cast back at the call from what the CALL SITE believes the
+# signature is — and what it believes comes from the parameter table, keyed by the callee's
+# NAME. A value has no name in that table, so `c_arg` found no row, skipped the borrow rules
+# and passed the argument by value into a C parameter declared `T*`. Both spellings
+# segfaulted: `f := fn(mut &a: int) { … }  f(x)` and `g := bump  g(x)`.
+#
+# It is not a lowering this compiler could quietly get right, either: `TFn` carries parameter
+# TYPES and no `mut &` flag, which is the same reason GRAMMAR's `param-type ::= ( 'mut' '&' )?
+# type` has no spelling here. So the function value is refused where it is MADE — at the
+# lambda, and at the name — rather than at a call that no longer knows what it is calling.
+fn c_no_ref_param(what: str) {
+	raise f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
+}
+
+# c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
+# its parameters in hand; a name has only the table, so this is the same question as a scan
+# of it — and it names the parameter's POSITION, which is what the table keeps.
+fn c_no_ref_param_value(mut &em: Emitter, n: str) {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == n and em.pr_ref[i] {
+			c_no_ref_param(f"parameter {strconv.to_string(em.pr_idx[i] + 1, 10)} of `{n}`")
+		}
+		i = i + 1
+	}
 }
 
 # --- defer ----------------------------------------------------------------------
@@ -9149,6 +9197,19 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		rt := c_type(em.fn_ret)
 		return ind + "{ " + rt + " zgt_rv = " + v + ";\n" + pre + ind + "return zgt_rv; }\n"
 	}
+
+	# A VALUELESS RETURN FROM A FUNCTION THAT DECLARES A RESULT. `c_ret_type` gives such a
+	# function a non-void C signature, so `return;` here emitted C that cc rejected — an
+	# escape to the C compiler, which reports against generated source and a mangled name
+	# (`non-void function 'zg_f' should return a value`) rather than against the program.
+	#
+	# It completes a rule that already existed one level up: c_fn refuses a body that FALLS
+	# OFF THE END of a declared result, and an explicit `return` with nothing after it is
+	# the same missing value written down — including `return if c`, GRAMMAR's bare early
+	# exit, which is only ever legal where a bare `return` is. What is refused is exactly
+	# what would have reached cc, because `c_is_nil_ty` is the predicate c_ret_type asks.
+	raise f"a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
+
 	return f"{pre}{ind}return;\n"
 }
 

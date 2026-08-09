@@ -186,9 +186,15 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	chk_store_path(em, lhs)
 	root := chk_root_name(lhs)
 
-	# not a name at all — an index into a call's result, say. There is no binding to ask
-	# about, and emit has its own words for the shapes it cannot store through.
-	return if root == ""
+	# NOT ROOTED IN A NAME AT ALL. A store target is a PLACE — a name, or a field or an index
+	# reached from one — and `f() = 2` and `5 = 2` are values with nowhere to live. This used to
+	# return here, on the belief that "emit has its own words for the shapes it cannot store
+	# through"; emit has none, and rendered both to the left of a C `=`, so cc answered
+	# "expression is not assignable" about generated code.
+	if root == "" {
+		chk_at(em, f"`{expr_kind(lhs)}` is not a place, and an assignment needs one — a name, or a field or an index reached from one")
+		return
+	}
 
 	idx := c_live_idx(em, root)
 
@@ -1773,14 +1779,14 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	}
 
 	if chk_is_logical(oper) {
-		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
+		if chk_wrong_bool(ta) or chk_wrong_bool(tb) {
 			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
 	}
 
 	if chk_is_bitwise(oper) {
-		if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb) {
+		if chk_wrong_int(ta) or chk_wrong_int(tb) {
 			chk_at(em, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
@@ -1789,7 +1795,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	if chk_is_arith(oper) {
 		# `+` is the one arithmetic operator a str also answers, and only for two of them
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
-		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+		if chk_wrong_num(ta) or chk_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
@@ -1800,7 +1806,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 
 	if chk_is_order(oper) {
 		return if c_is_str(ta) and c_is_str(tb)
-		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+		if chk_wrong_num(ta) or chk_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
@@ -1852,25 +1858,42 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
-	if oper == "not" and chk_scalar_wrong_bool(t) {
+	if oper == "not" and chk_wrong_bool(t) {
 		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}
-	if oper == "-" and chk_scalar_wrong_num(t) {
+	if oper == "-" and chk_wrong_num(t) {
 		chk_at(em, f"operator `-` takes a numeric operand, and this one is {ty_name(t)}")
 	}
-	if oper == "~" and chk_scalar_wrong_int(t) {
+	if oper == "~" and chk_wrong_int(t) {
 		chk_at(em, f"operator `~` takes an int operand, and this one is {ty_name(t)}")
 	}
 }
 
-# The three "wrong" predicates each answer the same shape of question: is this a scalar
-# the operator cannot take. A non-scalar answers false — it is not this rule's business.
-fn chk_scalar_wrong_bool(t: Ty) -> bool {
-	return chk_is_scalar(t) and not c_is_bool_ty(t)
+# The three "wrong" predicates each answer the same shape of question: is this a type the
+# operator cannot take.
+#
+# THEY USED TO ASK IT OF SCALARS ONLY — "is this a SCALAR the operator cannot take" — which
+# answers NO for a value that is not a scalar at all, so every aggregate walked past every one
+# of them. `xs + [2]`, `xs & [2]`, `xs and [2]`, `-xs` and `~xs` were each lowered to C and
+# reported by cc against a file under .zerg-cache, which is the standing rule breached five
+# times by one word. Only ORDER escaped it, having a rule of its own about `Ord`. The word is
+# out of the NAMES as well: a predicate called `chk_scalar_wrong_num` reads as the rule it was,
+# and the name is the part a caller checks its own line against.
+#
+# The gate is now every type but TUnknown, which is the one they cannot have an opinion about:
+# refusing on it would turn every gap in inference into a rejected program, which is the same
+# exemption chk_fits makes and for the same reason. What is handled BEFORE these — an optional,
+# a typedef — still returns first and keeps its own better sentence.
+fn chk_wrong_bool(t: Ty) -> bool {
+	return not c_is_unknown(t) and not c_is_bool_ty(t)
 }
 
-fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_scalar(t) and not chk_is_bitwise_operand(t)
+fn chk_wrong_int(t: Ty) -> bool {
+	return not c_is_unknown(t) and not chk_is_bitwise_operand(t)
+}
+
+fn chk_wrong_num(t: Ty) -> bool {
+	return not c_is_unknown(t) and not chk_is_num(t)
 }
 
 # chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
@@ -1887,10 +1910,6 @@ fn chk_is_bitwise_operand(t: Ty) -> bool {
 	return false if c_is_rune(t)
 
 	return cls == SC_SIGNED or cls == SC_UNSIGNED
-}
-
-fn chk_scalar_wrong_num(t: Ty) -> bool {
-	return chk_is_scalar(t) and not chk_is_num(t)
 }
 
 fn chk_is_scalar(t: Ty) -> bool {

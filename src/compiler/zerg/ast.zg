@@ -664,7 +664,7 @@ fn dump_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], ind: str) -> str 
 }
 
 # expr_kind names an expression's shape, with the leaf's own text where it has one.
-fn expr_kind(e: Expr) -> str {
+pub fn expr_kind(e: Expr) -> str {
 	return match e {
 		EInt(lex, _, _) => "int " + lex
 		EFloat(lex) => "float " + lex

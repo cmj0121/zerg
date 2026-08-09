@@ -821,10 +821,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	mut si := 0
 	for si < srcs.len() {
 		for im in zerg.imports_of_at(srcs[si], paths[si]) {
-			deps := module_files(im, from_dir)
-			if deps.len() > 0 {
-				load_unit(deps, im, from_dir, seen, units)
-			}
+			load_unit(module_files(im, from_dir), im, from_dir, seen, units)
 		}
 		si = si + 1
 	}
@@ -993,7 +990,17 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # then the standard library. A module is either a single `<path>.zg` file or a DIRECTORY
 # of them — the compiler's own `zerg` module is the second kind, and its files are read in
 # the sorted order the runtime guarantees so the emitted C never depends on the
-# filesystem. An unresolvable import yields an empty list; the caller reports it.
+# filesystem.
+#
+# AN IMPORT THAT RESOLVES TO NOTHING IS REFUSED HERE, and it used to yield an empty list that
+# both loaders skipped: each read the files the import resolved to, found none, and moved on.
+# `import "nope"` compiled and ran, and the first USE of the module reported "the method
+# `thing` on a ?", naming neither the module nor the import. A dependency that is not there is
+# the one thing a loader cannot work around, and the seed has said so since 1g; the two
+# compilers now agree, in the same words.
+#
+# The refusal is the RESOLVER's rather than each caller's, because both callers want the same
+# answer and a third would have to remember to ask for it.
 fn module_files(path: str, from_dir: str) -> list[str] {
 	mut roots: list[str] = []
 	roots.append(from_dir)
@@ -1017,8 +1024,8 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 			return found if found.len() > 0
 		}
 	}
-	mut none: list[str] = []
-	return none
+
+	raise f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
 }
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a

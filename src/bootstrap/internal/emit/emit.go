@@ -1570,6 +1570,13 @@ func (e *emitter) expr(x ast.Expr) string {
 				return s
 			}
 		}
+		// `~` and `-%` compute at the TYPE's width, which C will not do on its own: the
+		// operand travels as an i64, so `~b` for a byte gave the 64-bit complement and
+		// `-%b` gave a negative number. Neither goes through a checked helper, so neither
+		// was narrowed at all — see wrapArith.
+		if wrapsToWidth(n.Op) {
+			return e.wrapArith(e.cur.ExprType(e.info, n), fmt.Sprintf("%s%s", unaryOp(n.Op), x))
+		}
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), x)
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
@@ -1599,6 +1606,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
 			return s
+		}
+		// the WRAPPING three have no helper by design — the suffix is what says so — and
+		// so were the one arithmetic path that came back from 64 bits by not coming back
+		if wrapsToWidth(n.Op) {
+			return e.wrapArith(e.cur.ExprType(e.info, n), fmt.Sprintf("%s %s %s", l, binaryOp(n.Op), r))
 		}
 		return fmt.Sprintf("(%s %s %s)", l, binaryOp(n.Op), r)
 	case *ast.Call:

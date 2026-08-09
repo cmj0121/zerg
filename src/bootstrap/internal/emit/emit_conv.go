@@ -338,6 +338,42 @@ func (e *emitter) narrowArith(t sema.Type, call string) string {
 	return e.convExpr(s, sema.Scalar{Class: sema.ScalarSigned, Bits: 64}, e.ctype(t), call)
 }
 
+// wrapArith is narrowArith for an operator that WRAPS, and the difference is the whole
+// point of the `%` spelling. Both operands travel as an i64, so the wrap happens at 64
+// bits — and then nothing brought it back at all: `byte(255) +% byte(1)` answered 256,
+// which is not a byte, and `~b` for a byte answered the 64-bit complement. The result
+// was right only where it landed straight back in a `byte` slot, because the binding's
+// own conversion narrowed it.
+//
+// A CHECKED narrow is wrong here — it is the raise the `%` forms exist to opt out of —
+// so the way back is a truncating cast, which for an unsigned target is a defined wrap
+// and IS the answer being asked for. Only a narrow unsigned wraps: a `rune` is int32_t,
+// where the same cast is implementation-defined, and a rune's values are a predicate
+// rather than a range, so it keeps the checked narrow that refuses a surrogate.
+func (e *emitter) wrapArith(t sema.Type, call string) string {
+	s, ok := sema.ScalarOf(t)
+	if !ok || s.Bits >= 64 {
+		return "(" + call + ")"
+	}
+	if s.Class != sema.ScalarUnsigned {
+		return e.narrowArith(t, call)
+	}
+	return fmt.Sprintf("((%s)(%s))", e.ctype(t), call)
+}
+
+// wrapsToWidth reports whether an operator's result has to be brought back to a narrow
+// unsigned target by truncation: the three `%`-suffixed forms, the wrapping negate, and
+// the complement. Each of them either has no failure mode or has opted out of the one
+// it would have, so none goes through a checked helper — which is exactly why none of
+// them was narrowed at all until this was asked.
+func wrapsToWidth(k token.Kind) bool {
+	switch k {
+	case token.PlusMod, token.MinusMod, token.StarMod, token.Tilde:
+		return true
+	}
+	return false
+}
+
 // programUsesCheckedArith reports whether the program has an arithmetic operation
 // that can raise. It mirrors programUsesCheckedConv: the "zergrt.h" include is
 // decided before any expression is rendered, so the question has to be asked of the

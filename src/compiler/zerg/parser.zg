@@ -2232,8 +2232,25 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 
-			expect(p, RBrack)
-			e = EIndex(e, idx)
+			# A COMMA MAKES IT TYPE ARGUMENTS, and nothing else it could be. GRAMMAR says so
+			# outright — "'[X, Y]' is unambiguously type arguments (an index takes one value)"
+			# — and this branch read one expression and demanded `]`, so `pairup[str, int](…)`
+			# got "expected `]`, found `,`": the message a typo gets, for the one bracket form
+			# the grammar calls unambiguous.
+			#
+			# The SINGLE-argument case is not decided here. `f[T](x)` and `xs[i]` are the same
+			# tokens and telling them apart needs to know what the base is, so it stays where
+			# it was — recovered from the EIndex below, where a call has been seen.
+			# ASSIGNED, not returned: a call is a postfix like any other, and the chain goes on
+			# after it. Returning here ended the loop, so `pair[int, str](7, "a").len()` died
+			# on "`.` is not an expression this compiler reads" — the same shape of message
+			# this branch exists to remove, one postfix further along.
+			if p_at(p, Comma) {
+				e = p_type_arg_call(p, e, idx)
+			} else {
+				expect(p, RBrack)
+				e = EIndex(e, idx)
+			}
 		} else if p_at(p, Dot) {
 			p_advance(p)
 			fld := cur(p).lexeme
@@ -2290,6 +2307,35 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		}
 	}
 	return e
+}
+
+# p_type_arg_call finishes `base[A, B, …](args)` — the multi-argument type-args postfix,
+# entered once the comma has settled what the bracket is. The FIRST argument has already
+# been read as an EXPRESSION, since that is what the index branch does before it knows what
+# the bracket is; reading its type back off the name it parsed as is what keeps the bracket
+# to one parse. That is also why the first one has to be a bare name where the rest go
+# through parse_type — the expression already read is all there is to work back from.
+fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
+	name := ident_name(base)
+	raise f"NotImplemented: type arguments on {expr_kind(base)} — a callee is a plain name in this compiler, so the base of a `[A, B]` has to be one too" if name == ""
+
+	tn := ident_name(first)
+	raise f"a type argument has to be a type, and `{expr_kind(first)}` is not one" if tn == ""
+
+	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
+	for p_at(p, Comma) {
+		p_advance(p)
+		tyargs.append(parse_type(p))
+	}
+	expect(p, RBrack)
+
+	# GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` is grammatical
+	# on its own — a generic function named as a VALUE at a chosen instantiation. This
+	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
+	# is named rather than left to report the `(` that never came.
+	raise f"NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
+
+	return ECall(name, parse_call_args(p), tyargs)
 }
 
 fn parse_call_args(mut &p: Parser) -> list[Expr] {

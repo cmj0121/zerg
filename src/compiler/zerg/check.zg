@@ -973,11 +973,35 @@ fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
 	# target there is no range question at all, so `x: float = 1 / 0` reached the emitter and
 	# answered `inf`. chk_binary asks the same question of every other expression, but a
 	# literal tree at a typed position is rendered by c_into and never reaches it.
+	chk_const_into_at(em, want, e, true)
+}
+
+# chk_const_into_at is the same rule with the L502 note made optional, and `noted` is the one
+# question that separates an ADOPTION from a WRITTEN conversion.
+#
+# `b: byte = 5` is a literal taking a type the page does not show, which is what L502 reports.
+# `byte(5)` shows it — and so does `b'\n'`, which the parser desugars to exactly that
+# conversion over the literal `10`. Noting the written form told the compiler's own source to
+# "write `byte(10)`" about three lines that already said `b'\n'` and `b'/'`, and `make lint`
+# went red on the tree it is run against. The RANGE half is wanted at both; the note is not.
+fn chk_const_into_at(mut &em: Emitter, want: Ty, e: Expr, noted: bool) {
+	# THE DIVISOR FIRST, because a tree that cannot be computed has no value to be out of
+	# range. `x: byte = 1 / 0` said "`this` is not a value a byte holds" — true, and about the
+	# wrong thing: nothing is wrong with the range, the division cannot happen. And at a FLOAT
+	# target there is no range question at all, so `x: float = 1 / 0` reached the emitter and
+	# answered `inf`. chk_binary asks the same question of every other expression, but a
+	# literal tree at a typed position is rendered by c_into and never reaches it.
 	return if chk_const_divisors(em, e)
-	return if chk_lit_adopts(em, want, e)
+	return if chk_lit_fits_noted(em, want, e, noted)
 	return if chk_const_unfoldable(em, want, e)
 
 	chk_at(em, f"`{chk_lit_offender(em, want, e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+}
+
+fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool {
+	return chk_lit_adopts(em, want, e) if noted
+
+	return chk_lit_fits(em, want, e)
 }
 
 # chk_const_divisor refuses a division whose divisor is a constant zero.
@@ -1623,6 +1647,12 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 	# catching here rather than at the first use of it
 	nm := c_named_of(td.under)
 	if nm != "" and not c_is_type_name(em, nm) {
+		# THE FOURTH POSITION A WIDTH CAN APPEAR, and the one the ladder's own commit missed
+		# while claiming to cover them all: `type W = u8` reported "names no type — `u8` is not
+		# declared", which is the unnamed refusal the rule exists to kill, one type position
+		# over.
+		c_builtin_check(nm)
+
 		chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
 		return TUnknown
 	}

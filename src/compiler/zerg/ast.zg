@@ -73,7 +73,7 @@ enum Ty {
 
 # Expr is an expression node.
 enum Expr {
-	EInt(str)
+	EInt(str, int, int)
 	EFloat(str)
 	EStr(str)
 	EBool(bool)
@@ -358,6 +358,14 @@ pub struct Diag {
 	line: int
 	col: int
 	msg: str
+
+	# `fix` is the SOURCE THAT REPLACES what stands at the place — empty when the finding has
+	# no mechanical answer, which is nearly all of them. It exists so that an editor's quick
+	# fix and the sentence a person reads come from ONE decision: the alternative is a server
+	# that reads the replacement back out of its own message text, which is the second copy of
+	# a language fact docs/tooling/lsp.md exists to forbid. A finding carrying one owes an
+	# exact place too, since something is going to be overwritten there.
+	fix: str
 }
 
 # diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
@@ -366,7 +374,7 @@ pub struct Diag {
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
 pub fn diag_at(path: str, line: int, col: int, msg: str) -> Diag {
-	return Diag(path, line, col, msg)
+	return Diag(path, line, col, msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
@@ -452,11 +460,43 @@ struct SpecDecl {
 	name: str
 	params: list[str]
 	supers: list[str]
+
+	# super_args are the TYPE ARGUMENTS each super was written with, row for row beside
+	# `supers` — `spec Ord: Same[int]` keeps the `[int]`. They are a parallel list rather than
+	# a field on a pair type because a super is a NAME everywhere else in this file, and the
+	# arguments are read at exactly one place: the recursion that checks what the super
+	# requires, which has to substitute them into the named spec's own parameters first.
+	#
+	# Dropping them is what made a parameterized super refusable-only: the parameter stayed
+	# unsubstituted, so every correct `impl Ord` was turned away with "parameter `o` is int, and
+	# the spec declares T".
+	super_args: list[list[Ty]]
 	reqs: list[FnDecl]
 
 	path: str
 	line: int
 	col: int
+}
+
+# spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
+# where there are none. Both the parser (a type parameter's bound) and the emitter (the impl
+# registry) build it from the same function, which is what makes a bound and an impl comparable
+# without either side knowing how the other rendered its types.
+#
+# A `+` never appears in it, which is what keeps join_bounds' separator unambiguous.
+pub fn spec_key(name: str, args: list[Ty]) -> str {
+	return name if args.len() == 0
+
+	mut out := name + "["
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + ty_name(args[i])
+		i = i + 1
+	}
+	return out + "]"
 }
 
 # ImplDecl is an `impl Spec[args] for Target` head. The ARGS are kept: a parameterized
@@ -635,9 +675,9 @@ fn dump_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], ind: str) -> str 
 }
 
 # expr_kind names an expression's shape, with the leaf's own text where it has one.
-fn expr_kind(e: Expr) -> str {
+pub fn expr_kind(e: Expr) -> str {
 	return match e {
-		EInt(lex) => "int " + lex
+		EInt(lex, _, _) => "int " + lex
 		EFloat(lex) => "float " + lex
 		EStr(v) => "str"
 		EBool(v) => "bool"
@@ -687,7 +727,7 @@ fn expr_kind(e: Expr) -> str {
 # reach the same answer.
 fn expr_parts(e: Expr) -> list[Expr] {
 	return match e {
-		EInt(_) => expr_parts_none()
+		EInt(_, _, _) => expr_parts_none()
 		EFloat(_) => expr_parts_none()
 		EStr(_) => expr_parts_none()
 		EBool(_) => expr_parts_none()

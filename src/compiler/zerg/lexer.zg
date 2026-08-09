@@ -776,7 +776,7 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	mut out: list[Diag] = []
 	for t in tokenize(src) {
 		if t.kind == Illegal {
-			out.append(Diag(path, t.line, t.col, t.value))
+			out.append(Diag(path, t.line, t.col, t.value, ""))
 		}
 	}
 	return out
@@ -899,6 +899,68 @@ fn int_scan(lex: str) -> int {
 		i = i + 1
 	}
 	return val
+}
+
+# --- the uint half of an integer literal -------------------------------------------
+#
+# `int_scan` stops at i64, which is the right bound for a literal with no position to ask —
+# the default. It is the wrong bound for one whose position says `uint`: half of that type's
+# values are ordinary numbers, reachable by arithmetic, and were unwritable as literals
+# (docs/core/types.md marked it). The scan is the same walk with the other bound.
+#
+# Two functions rather than one returning an optional, because the compiler's own subset reads
+# this file and a struct is the plainer thing for it to carry.
+
+pub struct UintLit {
+	ok: bool
+	value: uint
+}
+
+pub fn uint_fits(lex: str) -> bool {
+	return uint_scan(lex).ok
+}
+
+pub fn uint_value(lex: str) -> uint {
+	return uint_scan(lex).value
+}
+
+# uint_scan reads a literal in any of the four bases against the u64 bound. Like int_scan it
+# tests BEFORE the multiply, on the largest value that can still survive it — testing after
+# would be reading a number that has already wrapped, and here it would also abort, since the
+# compiler's own arithmetic is checked.
+pub fn uint_scan(lex: str) -> UintLit {
+	b := list[byte](lex)
+	n := b.len()
+	mut base := uint(10)
+	mut start := 0
+	if n >= 2 and b[0] == b'0' {
+		c := b[1]
+		if c == b'x' or c == b'X' {
+			base = uint(16)
+			start = 2
+		} else if c == b'o' or c == b'O' {
+			base = uint(8)
+			start = 2
+		} else if c == b'b' or c == b'B' {
+			base = uint(2)
+			start = 2
+		}
+	}
+
+	hi := uint(9223372036854775807) * uint(2) + uint(1)
+	mut val := uint(0)
+	mut i := start
+	for i < n {
+		ch := b[i]
+		if ch != b'_' {
+			d := uint(ascii.hex_val(ch))
+			return UintLit(false, uint(0)) if val > (hi - d) / base
+
+			val = val * base + d
+		}
+		i = i + 1
+	}
+	return UintLit(true, val)
 }
 
 # token_category classifies a kind for rendering: 1 -> NAME(lexeme), 2 -> NAME(quoted

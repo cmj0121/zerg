@@ -274,11 +274,12 @@ struct Emitter {
 	ty_names: list[str]
 	ty_unders: list[Ty]
 
-	# into_src / into_dst are the `impl Into[T] for S` declarations, as a pair of lists: the
-	# TARGET's name and the type argument. They are what makes a user conversion findable from
-	# a typed position, where all that is in hand is the two types.
+	# into_src is the TARGET name of every `impl Into[T] for S` the program declares. It used
+	# to be a pair, with the type argument beside it, so that a typed position could find a
+	# user conversion from the two types alone — a position converts nothing now, so what is
+	# left of the registry is the one question that survives it: has this type an `into`
+	# already (c_into_user_from), which is the "one Into per type" refusal.
 	into_src: list[str]
-	into_dst: list[Ty]
 
 	# want_lints is whether anybody asked for the L5xx findings. A build does not — it passes a
 	# list it discards — and the dedupe below them is quadratic, so asking first is what keeps
@@ -492,53 +493,143 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 	return c_into(em, want, e, sb)
 }
 
-# c_into is where the compiler WRITES the `.into()` docs/core/types.md says it writes. A
-# typed position knows the target type, chk_into_builtin has already said the value's type
-# reaches it in one step, and this is the step: the same checked conversion `byte(x)` emits,
-# because `x: byte = i` and `byte(i)` are the same conversion and must fail the same way.
+# A POSITION EMITS NO CONVERSION. This is where the compiler used to write the `.into()` the
+# specification once said a position writes — `x: float = i` lowering to the same checked
+# conversion `float(i)` emits, and `s: str = c` lowering to the `impl Into[str] for C` method
+# — and Option B deleted the whole route: a position may WRAP a value (a carrier, a spec's
+# box), and it never converts one, so the only value that ever reaches a slot is one already
+# of the slot's type.
 #
-# A LITERAL is not converted, it ADOPTS. `x: byte = 5` is a byte written as a byte, and the
-# fit was decided at compile time by chk_lit_fits — emitting a runtime range check for a
-# constant the checker has already proved would be a test of something known. `x: byte = 300`
-# never arrives here at all; it is a compile error two layers up.
-# c_into_says is L501's sentence. The two kinds of conversion differ only in what the reader
-# would write instead, so that is the parameter and the rest is said once.
-fn c_into_says(want: Ty, got: Ty, write: str) -> str {
-	return f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write {write} if that is what was meant"
-}
-
-# c_into_user_expr is the `.into()` a USER conversion means, as an EXPRESSION rather than as
-# rendered C — `e` unchanged when there is no such conversion.
-#
-# It exists apart from c_into because c_let needs the substitution made BEFORE it dispatches on
-# the type: a list, a str, a chan and a map literal each go down a path of their own and only
-# the last of them reaches c_into. So `s: str = c` for an `impl Into[str] for C` type-checked
-# and then emitted the receiver where a `const char *` goes, while the same conversion written
-# as an assignment worked — one declaration, two answers.
-fn c_into_user_expr(mut &em: Emitter, want: Ty, e: Expr) -> Expr {
-	got := c_infer(em, e)
-	return e if not c_into_user(em, want, got)
-
-	chk_note(em, c_into_says(want, got, "`.into()`"))
-	return EMethod(e, "into", [])
-}
-
+# What is left is the copy, which is not a conversion: a literal ADOPTS its position (`x: byte
+# = 5` is a byte written as a byte, its fit decided at compile time by chk_lit_fits), and
+# everything else arrives already typed. Both spellings the route served are now refused by
+# chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
+# such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
-	return c_copied(em, want, e, sb) if chk_int_lit(e)
+	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
+	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
+	# `0` in a double. The literals took the position's type before the operator ran, so the
+	# operator runs on doubles — which is the whole of what "guess, then compute in the guessed
+	# type" means at this end of the compiler.
+	#
+	# An integer target needs nothing here. Every operand and every intermediate was measured
+	# against it by chk_lit_pair_in_range, so the C arithmetic and the checked arithmetic the
+	# checker folded with cannot disagree about a value both have already agreed fits.
+	return c_lit_checked(em, e) if c_is_float(want) and c_is_lit_tree(e)
 
-	got := c_infer(em, e)
-	if c_into_user(em, want, got) {
-		# LOWERED AS THE CALL THE PROGRAMMER COULD HAVE WRITTEN. `.into()` is an ordinary
-		# method, so rewriting the expression and handing it back to c_expr gets the receiver
-		# copy, the name mangling and the argument rules from the one place that already has
-		# them — spelling `zg_{Target}_into(…)` here would be a second copy of all three.
-		chk_note(em, c_into_says(want, got, "`.into()`"))
-		return c_expr(em, EMethod(e, "into", []), sb)
+	# A LITERAL PAST i64 AT A `uint` POSITION is rendered from its own bound, and here rather
+	# than in c_int_dec because here is where the target is known. c_int_dec measures against
+	# `int` — correct for a literal with nothing to ask, and the reason the upper half of `uint`
+	# was unwritable — and it would report the value it cannot hold instead of writing it.
+	return c_uint_lit(e) if c_is_uint(want) and c_is_wide_uint_lit(e)
+
+	return c_copied(em, want, e, sb)
+}
+
+# c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
+# c_no_builtin_into is the sentence for `1.into()`, and it is a REFUSAL rather than a gap.
+#
+# `Into` is a spec a type opts into, and no built-in type opts in — deliberately, and for two
+# separate reasons. Between two numbers the conversion is written `T(x)`: that is the whole of
+# Option B, and an `.into()` beside it would need the POSITION to say which target it meant,
+# which docs/core/type-system.md forbids in the same breath ("a demand never solves a type
+# parameter"). And to text there is nothing to opt into at all: `display` is a built-in value
+# rendering rather than a spec, so `str(x)` answers for every type and needs no bound.
+#
+# It reads the RECEIVER's type rather than the name alone, because a user type that implements
+# `Into` has a real `into` and must reach it.
+fn c_no_builtin_into(mut &em: Emitter, meth: str, target: Expr) {
+	return if meth != "into"
+
+	t := c_infer(em, target)
+	return if not chk_is_scalar(t)
+
+	raise f"`into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
+}
+
+# c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
+# c_int_dec cannot render. One that fits both goes the ordinary way, so this changes nothing
+# about a literal any position could already carry.
+fn c_is_wide_uint_lit(e: Expr) -> bool {
+	return match e {
+		EInt(lex, _, _) => uint_fits(lex) and not int_fits(lex)
+		_ => false
 	}
-	return c_copied(em, want, e, sb) if not chk_into_builtin(want, got)
+}
 
-	chk_note(em, c_into_says(want, got, f"`{ty_name(want)}(…)`"))
-	return c_conv_scalar(em, c_scalar_class(want), c_scalar_bits(want), got, want, c_expr(em, e, sb))
+# c_uint_lit writes the value with C's unsigned-long-long suffix. Without it the constant is a
+# decimal C reads as a `long long`, which cannot hold it — the compiler would hand cc a number
+# it then complains about, against generated code nobody wrote.
+fn c_uint_lit(e: Expr) -> str {
+	return match e {
+		EInt(lex, _, _) => str(uint_value(lex)) + "ULL"
+		_ => ""
+	}
+}
+
+# float, asked here rather than restated, so the emitter cannot render a tree the checker did
+# not admit — with one thing added: an OPERATOR has to stand somewhere in it. A bare literal
+# is a literal tree and needs no help, because C reads `2` into a double as `2.0`; what needs
+# help is an operator standing between two of them.
+fn c_is_lit_tree(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and c_is_lit_tree(x)
+		EBinary(_, _, _) => chk_lit_float_tree(e)
+		_ => false
+	}
+}
+
+# c_lit_as_float renders the tree with every leaf a double, so C's own promotion rules never
+# get a chance to make an integer of it. The leaf is written from its VALUE rather than from
+# its lexeme, because a lexeme may carry a base prefix or a digit separator that C does not
+# read the same way — `0xFF` it would, `1_000` it would not.
+#
+# IT IS THE ONLY WALK THE TREE GETS, and that is the trap in it. Every other expression is
+# rendered by c_expr, which visits each node and carries the checks with it — c_int_dec asks
+# whether the lexeme fits i64, c_binexpr asks chk_binary and with it the constant divisor. A
+# tree rendered here is never walked by c_expr at all, so both questions went unasked:
+# `x: float = 99999999999999999999 + 1` printed `1`, and `n + 1 / 0` printed `inf`. So the
+# checks come first, explicitly, and c_lit_checked is what every caller must use.
+fn c_lit_as_float(e: Expr) -> str {
+	return match e {
+		EInt(lex, _, _) => f"((double){strconv.to_string(int_value(lex), 10)})"
+		EUnary(_, x) => f"(-{c_lit_as_float(x)})"
+		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
+		_ => ""
+	}
+}
+
+# c_lit_checked is c_lit_as_float with the walk's questions asked of every node first: the
+# width of each leaf, and a constant zero divisor anywhere in the tree. Rendering carries on
+# after a finding, as every rule here does — the C is thrown away once the list is non-empty.
+fn c_lit_checked(mut &em: Emitter, e: Expr) -> str {
+	c_lit_widths(em, e)
+	c_skip_bool(chk_const_divisors(em, e))
+
+	return c_lit_as_float(e)
+}
+
+# c_lit_widths asks c_int_dec's question of every leaf without taking its answer: the rendering
+# is c_lit_as_float's, and what is wanted here is only the finding.
+fn c_lit_widths(mut &em: Emitter, e: Expr) {
+	match e {
+		EInt(lex, _, _) => chk_int_literal(em, lex)
+		EUnary(_, x) => c_lit_widths(em, x)
+		EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
+		_ => c_skip()
+	}
+}
+
+fn c_lit_widths_pair(mut &em: Emitter, a: Expr, b: Expr) {
+	c_lit_widths(em, a)
+	c_lit_widths(em, b)
+}
+
+# a match arm is an expression, so discarding a bool needs a name to discard it into
+fn c_skip_bool(b: bool) {
+	return if b
+
+	return
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -1153,25 +1244,15 @@ fn c_reset_env(mut &em: Emitter) {
 	# with them already bound
 	mut i := 0
 	for i < em.k_decls.len() {
-		em.env_names.append(em.k_decls[i].name)
-		em.env_tys.append(em.k_tys[i])
-		em.env_cnames.append("zg_" + em.k_decls[i].name)
-		em.env_dead.append(0)
-
-		# a module binding is writable exactly when it was declared `mut` — legally so
-		# inside a module-level `unsafe { … }` group, where it is the language's mutable
-		# global (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but
-		# stays writable too, so its writes do not each add a second finding about
-		# immutability on top of the one that counts
-		em.env_mut.append(em.k_decls[i].is_mut)
-
-		# scope 0 is the module: a constant is in scope in every function, and a local
-		# that shadows one is in a block of its own and so is not a redeclaration
-		em.env_scope.append(0)
-
-		# a KEYWORD `const` is shadow-proof in every function too, so the module row carries
-		# the flag into every body the way a local `const` sets it (chk_const_rebind)
-		em.env_const.append(em.k_decls[i].is_const)
+		# a module binding is writable exactly when it was declared `mut` — legally so inside
+		# a module-level `unsafe { … }` group, where it is the language's mutable global
+		# (docs/runtime/ffi.md); a safe-code `mut` is refused (chk_top_muts) but stays writable
+		# too, so its writes do not each add a second finding about immutability on top of the
+		# one that counts. Scope 0 is the module, so a constant is in scope in every function
+		# and a local that shadows one is in a block of its own; and a KEYWORD `const` is
+		# shadow-proof in every body the way a local `const` is (chk_const_rebind). All of that
+		# is c_const_bind's, which c_const_globals also calls as it registers each row.
+		c_const_bind(em, em.k_decls[i], em.k_tys[i])
 		i = i + 1
 	}
 }
@@ -1817,17 +1898,40 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # one of them is built by the SEED, which is what makes the wording matter: the form exists,
 # this compiler is the one that is behind.
 #
-# The three report sites funnel through here, so the answer does not depend on whether the
-# name was reached as a call, as a constructor or as a bare value.
+# Every report site funnels through here, so the answer does not depend on whether the name
+# was reached as a call, as a constructor, as a bare value or as a binding's annotation.
 #
 # This is one THIRD of that closed set. The conversions and the str/list bridges are decided
 # by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
 # nothing can yet assert that every row of builtins.md is either built or named. Whoever
 # unifies the three should start from those two names.
 fn c_builtin_check(n: str) {
+	c_fixed_width_check(n)
+
 	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
 	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
 	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+}
+
+# c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
+#
+# `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are types the specification has and this compiler
+# does not (docs/core/types.md). Because a width is an ordinary IDENTIFIER rather than a
+# keyword, `i32(x)` reported "undefined function `i32`" — the message any misspelled call gets —
+# so a reader was told the name is unknown and would go looking for their own typo. A `[not
+# yet]` is a legitimate state; an unnamed refusal is not (docs/conformance.md).
+#
+# THE TEN NAMES ARE WRITTEN OUT, because being exact about which they are is the whole rule:
+# `i7` and `u128` are not the ladder and must stay ordinary unknown names, since a message
+# about a ladder that would not contain them either is worse than none. Spelled instead as
+# the shape they have — a class letter, then a width the language names — that exactness was
+# something a reader had to derive from three tests and a substring, and the list it stood in
+# for is ten entries long.
+fn c_fixed_width_check(n: str) {
+	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
+	return if not c_name_in(ladder, n)
+
+	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -1901,7 +2005,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut es2: list[EnumDecl] = []
 		for ed in es {
-			if c_deps_done(c_enum_deps(ed), ed.name, done, all) {
+			if c_deps_done(c_enum_deps(ed), done, all) {
 				out = out + c_enum_typedef(ed)
 				done.append(ed.name)
 			} else {
@@ -1912,7 +2016,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 		mut ss2: list[StructDecl] = []
 		for sd in ss {
-			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
+			if c_deps_done(c_struct_deps(sd), done, all) {
 				out = out + c_struct_typedef(sd)
 
 				# the copy helper's PROTOTYPE, here rather than with its body: this sweep
@@ -1934,7 +2038,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		mut cs2: list[Ty] = []
 		for c in cs {
 			cn := c_carrier_ty_cname(c)
-			if c_deps_done(c_carrier_deps(c), cn, done, all) {
+			if c_deps_done(c_carrier_deps(c), done, all) {
 				# through the emit gate, not c_carrier_decl directly: a carrier already
 				# written inline by a tuple that spells it answers "" here instead of a
 				# second `zg_force_…` definition
@@ -1954,7 +2058,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for t in ts {
 			elems := ty_tuple_elems(t)
 			tn := c_tuple_cname(elems)
-			if c_deps_done(c_ty_list_deps(elems), tn, done, all) {
+			if c_deps_done(c_ty_list_deps(elems), done, all) {
 				out = out + c_tuple_decl(em, elems)
 				done.append(tn)
 			} else {
@@ -1963,6 +2067,11 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		}
 		ts = ts2
 
+		# IT SAYS WHICH TYPE AND NOT WHERE, and that is a gap this compiler owes once rather
+		# than here: a StructDecl and an EnumDecl carry no position at all, so there is nothing
+		# to point at — and unlike every rule about a statement, a cycle is a property of the
+		# declarations and of nothing that runs, so no marker has been set either. The NAME is
+		# what a reader searches for, which is why the sentence leads with it.
 		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
 	}
 	return out
@@ -1970,10 +2079,24 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
 # out. A name this program does not declare — a scalar, a runtime container — needs nothing
-# ahead of it, and a SELF reference is boxed rather than held.
-fn c_deps_done(deps: list[str], own: str, mut &done: list[str], mut &all: list[str]) -> bool {
+# ahead of it.
+#
+# A SELF REFERENCE IS A DEPENDENCY LIKE ANY OTHER HERE, and it used to be skipped for every
+# kind of declaration. That skip is an ENUM's — c_enum_deps makes it now, where the reason for
+# it is — and it was wrong for a STRUCT: a field of its own type has no size, and skipping the
+# self-dependency let such a struct declare itself satisfied. The sweep then never reported the
+# cycle, C was handed a struct containing itself, and before cc could say so the copy helper
+# walked the field, asked about the same struct, and recursed until the stack ran out. The
+# compiler died of signal 11 on a three-line program.
+#
+# The indirect cycles were caught all along — `A` holding `B` holding `A`, and `p: P?` through
+# the carrier — because neither dep IS the declaration's own name. One skip made the simplest
+# case the only invisible one. A field holding the type behind a `list` contributes no dep at
+# all and is unaffected: that, and the boxed enum payload, are the two ways to write a
+# recursive shape.
+fn c_deps_done(deps: list[str], mut &done: list[str], mut &all: list[str]) -> bool {
 	for dep in deps {
-		if dep != own and c_name_in(all, dep) {
+		if c_name_in(all, dep) {
 			return false if not c_name_in(done, dep)
 		}
 	}
@@ -1988,6 +2111,11 @@ fn c_struct_deps(sd: StructDecl) -> list[str] {
 	return deps
 }
 
+# c_enum_deps leaves the enum's OWN name out, and that omission IS THE DIFFERENCE BETWEEN A
+# POINTER AND A FIELD: a self-recursive payload is auto-boxed, so what the variant holds is a
+# pointer and its size is known — the compiler's own `Ty` is one. Nothing has to be emitted
+# ahead of a pointer, so it is not a dependency, and saying so here is what keeps the sweep
+# itself free of exceptions.
 fn c_enum_deps(ed: EnumDecl) -> list[str] {
 	mut deps: list[str] = []
 	for v in ed.variants {
@@ -1995,7 +2123,14 @@ fn c_enum_deps(ed: EnumDecl) -> list[str] {
 			c_ty_struct_deps(t, deps)
 		}
 	}
-	return deps
+
+	mut out: list[str] = []
+	for dep in deps {
+		if dep != ed.name {
+			out.append(dep)
+		}
+	}
+	return out
 }
 
 fn c_carrier_deps(c: Ty) -> list[str] {
@@ -2282,6 +2417,8 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
 	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
+
+	c_fixed_width_check(nm)
 
 	raise f"no type named `{nm}` ({site})"
 }
@@ -3195,7 +3332,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex) => c_int_dec(em, lex)
+		EInt(lex, _, _) => c_int_dec(em, lex)
 		EFloat(lex) => lex
 		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
@@ -3598,9 +3735,17 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		}
 	}
 
-	ca := c_expr(em, a, sb)
-	cb := c_expr(em, b, sb)
-	return c_floordiv(em, ta, c_infer(em, b), ca, cb) if oper == "//"
+	# THE OTHER OPERAND IS A POSITION, so a literal tree standing beside a float is a tree of
+	# floats — and C will not read it that way on its own. `n + 1 / 2` for a float `n` was
+	# `2`: the checker had already typed the `1 / 2` as float (chk_lit_fits, at the operand
+	# slot), and then this line rendered it with c_expr, which divides two integers. Silent,
+	# and in every mixed expression — the same shape of miss c_into's comment describes at the
+	# six slots it serves, at the seventh nobody had told.
+	tb := c_infer(em, b)
+	pair_is_float := c_is_float(ta) or c_is_float(tb)
+	ca := c_operand(em, pair_is_float, a, sb)
+	cb := c_operand(em, pair_is_float, b, sb)
+	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
@@ -3608,6 +3753,18 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_operand renders one side of a binary expression. It is c_expr, plus the one thing c_expr
+# cannot know: whether the OTHER side made this one a float.
+#
+# The pair's floatness is asked rather than the result's, because a comparison answers `bool`
+# and its operands are still two floats — `n < 1 / 2` has to divide as a float exactly as
+# `n + 1 / 2` adds as one.
+fn c_operand(mut &em: Emitter, pair_is_float: bool, e: Expr, sb: Subst) -> str {
+	return c_lit_checked(em, e) if pair_is_float and c_is_lit_tree(e)
+
+	return c_expr(em, e, sb)
 }
 
 # c_eq_legal is "does `==` mean anything on this type" — ONE predicate, asked by the operator
@@ -3692,7 +3849,7 @@ fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
 	if wrap != "" and (cls == SC_SIGNED or cls == SC_UNSIGNED) {
 		em.used_rt = true
 
-		return c_arith_narrow(em, t, f"{wrap}({a}, {b})")
+		return c_narrow_wrap(em, t, f"{wrap}({a}, {b})")
 	}
 	return f"({a} {c_binop(oper)} {b})" if cls != SC_SIGNED and cls != SC_UNSIGNED
 
@@ -3764,12 +3921,37 @@ fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
 	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
 }
 
+# c_narrow_wrap is c_arith_narrow for an operator that WRAPS, and the difference is the whole
+# point of the `%` spelling. The value travels as an i64, so the wrap happens at 64 bits and
+# then has to come back — and coming back through the CHECKED conversion is the raise the
+# operator exists to opt out of. `byte(255) +% byte(1)` aborted with
+# "integer conversion out of range" instead of answering `0`: the wrapping form became an
+# alias for the operator it was written to avoid, at the one width where the difference shows.
+#
+# ONLY A NARROW UNSIGNED TARGET wraps here, and that is a decision rather than a limitation. A
+# C cast to `uint8_t` is a defined truncation, which IS the wrap; a `rune` is `int32_t`, where
+# the same cast is implementation-defined — and a rune's values are a PREDICATE and not a
+# range (docs/core/types.md), so there is no bit pattern to wrap onto in the first place. A
+# rune keeps the checked narrow, which is what refuses a surrogate.
+fn c_narrow_wrap(mut &em: Emitter, t: Ty, call: str) -> str {
+	return f"({call})" if c_scalar_bits(t) >= 64
+	return c_arith_narrow(em, t, call) if c_scalar_class(t) != SC_UNSIGNED
+
+	return f"(({c_type(t)})({call}))"
+}
+
+# c_narrow_unsigned is the one shape c_narrow_wrap does anything for, asked on its own so the
+# unary path can decide whether to pay for c_infer at all.
+fn c_narrow_unsigned(t: Ty) -> bool {
+	return c_scalar_class(t) == SC_UNSIGNED and c_scalar_bits(t) < 64
+}
+
 # c_is_int_lit reports whether an expression is an integer literal written out in the
 # source, which is what makes `-1` a constant rather than a negation.
 fn c_is_int_lit(x: Expr) -> bool {
 	return match x {
-		EInt(_) => true
-		_       => false
+		EInt(_, _, _) => true
+		_             => false
 	}
 }
 
@@ -3796,6 +3978,22 @@ fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 
 			return c_arith_narrow(em, t, c_neg_call(t, inner))
 		}
+	}
+
+	# `~` AND `-%` COMPUTE AT THE TYPE'S WIDTH, and C will do neither on its own: both operands
+	# travel as an i64, so `~b` for a `byte` answered the 64-bit complement —
+	# `18446744073709551603` where the specified answer is `243` — and `-%b` answered `-1`
+	# where it is `255`. The result was right only where it landed straight back in a `byte`
+	# slot, because the BINDING's conversion narrowed it; printed or converted, the width
+	# leaked. That is the shape this file's worst defects have: an answer that is correct in
+	# the one spelling a test naturally reaches for.
+	#
+	# The operator is asked FIRST and the type only after, because c_infer walks the operand's
+	# whole subtree — every `not` in the program would otherwise pay for a question about two
+	# operators it is not.
+	if oper == "~" or oper == "-%" {
+		t := c_infer(em, x)
+		return c_narrow_wrap(em, t, f"({c_unop(oper)}{inner})") if c_narrow_unsigned(t)
 	}
 	return f"({c_unop(oper)}{inner})"
 }
@@ -4028,6 +4226,29 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# override returns above them answer through c_copied or a method call instead, so a
 	# cell rendered here first would be built and thrown away
 	xt0 := c_infer(em, x)
+
+	# A CONSTANT KNOWN TO FAIL IS REPORTED NOW. docs/core/types.md says so of `byte(300)` by
+	# name — "the value is known, the conversion is known to raise" — and the rule was built for
+	# the literal ADOPTING a type (`b: byte = 300`) and never wired to the WRITTEN conversion,
+	# which is the spelling the sentence uses. chk_const_into is that rule; all it needed was a
+	# caller that has a target and a literal in hand, which is exactly what this is.
+	#
+	# It is asked of a scalar target only, and only of an all-literal operand: a conversion of a
+	# VALUE is checked where it runs, which is what makes it a conversion rather than a constant.
+	# NOT NOTED: a written conversion shows its type on the page, which is exactly what L502
+	# reports the absence of — and `b'\n'` desugars to this very node, so noting it told the
+	# reader to "write `byte(10)`" about a line that already said `b'\n'`.
+	if chk_into_side(ty) and chk_int_lit(x) {
+		chk_const_into_at(em, ty, x, false)
+	}
+
+	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one
+	# still refused: a conversion's operand is rendered before the target reaches c_conv_scalar,
+	# so the literal met c_int_dec's `int` bound and reported a value it could not hold. The
+	# target is in hand right here, which is the same reason c_into can answer for a typed
+	# position — and the conversion is a no-op besides, the value already being of the type.
+	return c_uint_lit(x) if c_is_uint(ty) and c_is_wide_uint_lit(x)
+
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true
@@ -4457,6 +4678,17 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
+
+	# A LIST INDEX IS AN INT, and it was the last container slot with no rule at all. The map's
+	# KEY gained one and this did not, so the subscript accepted anything: `xs["a"]` reached cc,
+	# and `xs[1.5]` and `xs[true]` COMPILED AND RAN — the float silently truncated to 1 by a C
+	# conversion cc only warned about, the bool read as 1. A wrong answer from a subscript is
+	# the worst place to have one, since the reader's next question is about the element.
+	#
+	# `int` and nothing else: a `byte` or a `rune` index is a written `int(b)` away, and letting
+	# either through here would be a position converting a value, which is the rule this whole
+	# chapter turns on.
+	c_list_index_int(em, idx)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
 
 	ct := c_type(c_list_elem(tty))
@@ -4893,6 +5125,13 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# Asking the sig table first would have found nothing, a template having no signature.
 	return c_call(em, meth, args, sb) if c_is_generic(em, meth)
 
+	# `into` ON A BUILT-IN IS NOT A GAP, and the generic sentence below would call it one.
+	# `NotImplemented` says a thing the language has and this compiler does not; the language
+	# ships NO `Into` impl for any built-in type, because a conversion between them is written
+	# `T(x)` and a value's text is `str(x)`, which every type already answers. So the reader is
+	# told what to write rather than told to wait.
+	c_no_builtin_into(em, meth, target)
+
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
 
 	# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the one
@@ -5021,6 +5260,23 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
 	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+
+	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
+	# binding first, because a binding holding a function is a call — and when it holds
+	# something else the walk fell through to the FUNCTION of that name, emitting a call to
+	# `zg_f` while `f` was an int64_t in scope. cc reported "called object type 'int64_t' is
+	# not a function or function pointer" against generated code; the reader wrote `f := 2`
+	# above their `f()` and was told nothing about it.
+	#
+	# The innermost binding wins, which is the language's shadowing rule — so this is not a
+	# collision to report but a call that cannot happen, and the sentence says what `f` holds.
+	# REPORTED rather than raised, so it carries the place every checked rule does: it is a
+	# statement about a program the language rejects, not a form this compiler has not built.
+	# Emission carries on into the function of that name and the C is thrown away.
+	if not c_is_unknown(bt) {
+		chk_at(em, f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
+	}
+
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 
@@ -5383,6 +5639,25 @@ fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 	return c_expr(em, a, c_nosub()) if row < 0 or ty_is_chan(em.pr_ty[row])
 
 	return c_fit_copied(em, chk_slot_says(key, idx + 1), em.pr_ty[row], a, c_nosub())
+}
+
+# c_captured_ty is the type of the FIELD c_captured's value is stored in, and the pair is why it
+# exists: `spawn` and `defer` each build an environment struct, and each typed its fields from
+# `c_infer` of the ARGUMENT while c_captured rendered the value at the PARAMETER's type. The two
+# agree until a position does something to a value on its way in — and then they do not:
+#
+#     spawn work(3 / 2)      # work(v: float)
+#     zgt_se2->f0 = (((double)3) / ((double)2));   /* 1.5, into an int64_t field */
+#
+# printed `1`. It is the same disagreement `spawn work(1.5)` on a `float?` parameter turned into
+# a cc error against generated C — the carrier is built at the parameter's type and stored in a
+# field shaped like the argument. One function answers for both, beside the one that renders the
+# value, because the two answers are one decision.
+fn c_captured_ty(mut &em: Emitter, key: str, idx: int, a: Expr) -> Ty {
+	row := c_param_row(em, key, idx)
+	return c_infer(em, a) if row < 0 or ty_is_chan(em.pr_ty[row])
+
+	return em.pr_ty[row]
 }
 
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
@@ -5851,7 +6126,16 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
 		chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
-		return f"({s} == {c_expr(em, a.lit, sb)})"
+
+		# AND THE GUARD, which this arm alone did not add. Every other shape does — the
+		# constructor pattern above, the range beside it, the wildcard below — so
+		# `match 1 { 1 if false => 10  _ => 0 }` answered `10`: the arm matched on the literal
+		# and the `if` was read, type-checked, and then dropped on the floor. A guard that
+		# parses and does nothing is worse than one that is refused.
+		eq := c_arm_eq(em, a, s, st, sb)
+		return f"({eq} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
+
+		return eq
 	}
 
 	if a.pat == 3 {
@@ -5894,6 +6178,19 @@ fn c_is_or_pattern(e: Expr) -> bool {
 # c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
 # as TEXT and so meet no operand rule of their own — a third spelling of the same equality
 # problem, eight lines from the comment that said there were two.
+# c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
+# comparison is strcmp's — the same answer c_binexpr gives `a == b`, and for the same reason:
+# C's `==` on two `const char *` compares the POINTERS.
+#
+# `match s { "y" => 1  _ => -1 }` answered `-1` for `s = "y"`. Two string literals that are equal
+# may or may not share storage, so the arm did not merely fail — it failed unpredictably, which
+# is the one kind of wrong answer a test can pass over.
+fn c_arm_eq(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	return f"(strcmp({s}, {c_expr(em, a.lit, sb)}) == 0)" if c_is_str(st)
+
+	return f"({s} == {c_expr(em, a.lit, sb)})"
+}
+
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)
@@ -5971,7 +6268,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 
 fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
-		EInt(_) => TInt
+		EInt(_, _, _) => TInt
 		EFloat(_) => TFloat
 		EStr(_) => TStr
 		EBool(_) => TBool
@@ -6204,8 +6501,8 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	return TStr if oper == "+" and c_is_str(ta)
 
 	# WHAT AN EXPRESSION'S TYPE IS, IS DECIDED BY ITS OPERANDS — docs/core/types.md, and the
-	# rule is the one every typed position uses: the same type stays itself, and two different
-	# ones take the LARGEST both reach in one step.
+	# rule is the one every typed position uses: the operands are already one type, or one of
+	# them is a literal adopting the other's.
 	#
 	# What stood here instead was three rules, each written to keep a type's arithmetic inside
 	# its own storage: float wins, byte stays byte, uint stays uint. Together they answered
@@ -6221,12 +6518,10 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	return ta if chk_lit_fits(em, ta, b)
 	return tb if chk_lit_fits(em, tb, a)
 
-	mx := chk_into_max(ta, tb)
-	return mx if not c_is_unknown(mx)
-
-	# NO LARGEST TYPE — `int` beside `uint`, `byte` beside `float`. chk_binary has already
-	# said so; these three keep the old answer so that the rest of the walk has a type to
-	# carry, and so that a pair with an UNKNOWN in it answers as it always did.
+	# TWO TYPES AND NO LITERAL — `int` beside `float`, `int` beside `uint`. chk_binary has
+	# already refused it; these three keep the old answer so that the rest of the walk has a
+	# type to carry, and so that a pair with an UNKNOWN in it answers as it always did. The
+	# program does not reach C either way.
 	return TFloat if c_is_float(ta) or c_is_float(tb)
 	return TUint if c_is_uint(ta) or c_is_uint(tb)
 
@@ -6382,8 +6677,13 @@ fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 }
 
 fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
+	# THE LABEL IS THE CHECKER'S, character for character. Both walks reach the same bad
+	# element and both report at the statement's place, so an identical sentence is one
+	# finding after chk_at_place's dedupe and two if the wording drifts by a word.
+	mut i := 0
 	for e in elems {
-		out.append(c_fit_copied(em, "an element of this list literal", elem, e, c_nosub()))
+		i = i + 1
+		out.append(c_fit_copied(em, chk_elem_says(i), elem, e, c_nosub()))
 	}
 }
 
@@ -6438,7 +6738,24 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	keep_path := em.at_path
 	keep_line := em.at_line
 	keep_col := em.at_col
-	for c in f.consts {
+
+	# IN DEPENDENCY ORDER, for the same reason the assignments are — and for a second one.
+	# This walk INFERS each constant's type, and it infers it by asking c_infer, which reads
+	# the environment; so `const A := B` registered `A` as TUnknown when `B` had no row yet,
+	# and a TUnknown row is a name c_is_bound answers no about. The use then reported
+	# "undefined name `A`" — naming the constant that IS declared, about a line that reads it,
+	# while the emitted C was correct all along.
+	#
+	# `const A := B + 0` worked, which is the tell: c_infer_binary falls back to TInt when both
+	# sides are unknown, so the arithmetic accidentally supplied what the bare name could not.
+	#
+	# Scope 0 is opened here because nothing has opened it yet: c_reset_env does it before each
+	# function body, and this walk runs first. A row in env_names that no OPEN scope covers is
+	# a row c_live_idx does not see, so seeding without this changed nothing at all.
+	em.scope_cur = 0
+	em.open_scopes = [0]
+	for i in c_const_order(em, f) {
+		c := f.consts[i]
 		em.at_path = c.path
 		em.at_line = c.line
 		em.at_col = c.col
@@ -6487,6 +6804,12 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		em.k_decls.append(c)
 		em.k_tys.append(ty)
 
+		# AND INTO SCOPE 0 AS IT IS REGISTERED, so the next constant in this same walk can
+		# name it. c_reset_env seeds these rows before every function body, which is what
+		# makes a constant visible to ordinary code — but that runs later, and this walk is
+		# the one that needs the answer.
+		c_const_bind(em, c, ty)
+
 		# the global about to be rendered SPELLS `c_type(ty)`, and this walk runs in EVERY
 		# unit — including the one that defines a constant whose value only the entry unit
 		# lowers. `pub PAIR := (1, 2)` in a module reached cc as `unknown type name
@@ -6506,6 +6829,19 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	em.at_line = keep_line
 	em.at_col = keep_col
 	return out
+}
+
+# c_const_bind puts one constant's row into scope 0, which is what c_reset_env does for all of
+# them before every function body. It is spelled once and called from both, because a row
+# written two ways is two rows the day one of them gains a field.
+fn c_const_bind(mut &em: Emitter, c: ConstDecl, ty: Ty) {
+	em.env_names.append(c.name)
+	em.env_tys.append(ty)
+	em.env_cnames.append("zg_" + c.name)
+	em.env_dead.append(0)
+	em.env_mut.append(c.is_mut)
+	em.env_scope.append(0)
+	em.env_const.append(c.is_const)
 }
 
 fn c_const_in(f: File, name: str) -> bool {
@@ -6530,8 +6866,17 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 	keep_line := em.at_line
 	keep_col := em.at_col
 	mut out := ""
-	mut i := 0
-	for i < f.consts.len() {
+
+	# IN DEPENDENCY ORDER, NOT SOURCE ORDER. These are assignments that RUN, so a constant
+	# naming another has to be assigned after it — and they used to run top to bottom, so
+	# `const A := B + 1` written above `const B := 5` read `B` as the zero its global was
+	# still holding and answered `1`. Silent, and the reader has no reason to suspect the
+	# order of two declarations that do not look ordered at all.
+	#
+	# GRAMMAR puts no ordering requirement on a declaration, and the rest of this compiler
+	# does not either: a function may call one declared below it. A constant is the only
+	# top-level form whose meaning depended on where it was written.
+	for i in c_const_order(em, f) {
 		c := f.consts[i]
 		em.at_path = c.path
 		em.at_line = c.line
@@ -6542,18 +6887,106 @@ fn c_const_assigns(mut &em: Emitter, f: File) -> str {
 		# own paths: a literal adopts the annotation (c_into) and a declared `T?` wraps a
 		# bare value (c_carrier_fit). On a mismatch c_const_globals kept the INFERRED
 		# type and reported, so what is rendered here still fits the global it fills.
-		ty := em.k_tys[i]
+		# BY NAME, not by position. `k_tys` is appended by c_const_globals in DEPENDENCY order
+		# and `f.consts` is in source order, so the two indices stopped being the same one the
+		# moment this walk was ordered — `const ALIAS := BASE` took the row of whichever
+		# constant happened to be registered third and rendered an int through
+		# `zrt_str_retain`. c_k_idx is the lookup that cannot drift, and it is the same one the
+		# duplicate-name check already uses.
+		ty := em.k_tys[c_k_idx(em, c.name)]
 		mut val := c_into(em, ty, c.value, c_nosub())
 		if c.has_ty and c_is_carrier(ty) {
 			val = c_carrier_fit(em, chk_binding_says(c.name), ty, c.value, c_nosub())
 		}
 		out = out + f"    zg_{c.name} = {val};\n"
-		i = i + 1
 	}
 	em.at_path = keep_path
 	em.at_line = keep_line
 	em.at_col = keep_col
 	return out
+}
+
+# c_const_order is the constants' indices, each after every constant it names.
+#
+# It is a repeated sweep rather than a proper topological walk, which is the right trade at
+# this size: the list is a program's whole constant table, the inner test is a name lookup, and
+# the alternative needs an edge set built first. What matters is the TERMINATION — a sweep that
+# places nothing has found a cycle, and a cycle is refused by name rather than left to whatever
+# order the sweep happened to reach.
+fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
+	n := f.consts.len()
+	mut done: list[bool] = []
+	mut i := 0
+	for i < n {
+		done.append(false)
+		i = i + 1
+	}
+
+	mut out: list[int] = []
+	for out.len() < n {
+		mut placed := 0
+		mut j := 0
+		for j < n {
+			if not done[j] and c_const_ready(f, f.consts[j].value, done) {
+				done[j] = true
+				out.append(j)
+				placed = placed + 1
+			}
+			j = j + 1
+		}
+		raise c_const_cycle_says(f, done) if placed == 0
+	}
+	return out
+}
+
+# c_const_ready is whether every constant this initializer names has been assigned already. A
+# name that is not a constant is not this rule's business — a function call is ordinary code and
+# runs when the assignment does.
+fn c_const_ready(f: File, e: Expr, done: list[bool]) -> bool {
+	idx := c_const_idx(f, e)
+	return done[idx] if idx >= 0
+
+	for p in expr_parts(e) {
+		return false if not c_const_ready(f, p, done)
+	}
+	return true
+}
+
+# c_const_idx is the row this expression names, or -1 when it names no constant. Only a bare
+# identifier can: a qualified `m.K` is a field read to this parser, and a module's constants
+# flatten into one namespace before they reach here.
+fn c_const_idx(f: File, e: Expr) -> int {
+	return match e {
+		EIdent(nm) => c_const_row(f, nm)
+		_          => 0 - 1
+	}
+}
+
+fn c_const_row(f: File, nm: str) -> int {
+	mut i := 0
+	for i < f.consts.len() {
+		return i if f.consts[i].name == nm
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# c_const_cycle_says names the constants still waiting, which is the cycle plus anything that
+# depends on it. Naming the whole waiting set rather than trying to isolate the loop is the
+# honest answer: every one of them is a constant this program cannot give a value to.
+fn c_const_cycle_says(f: File, done: list[bool]) -> str {
+	mut names := ""
+	mut i := 0
+	for i < f.consts.len() {
+		if not done[i] {
+			if names != "" {
+				names = names + ", "
+			}
+			names = names + "`" + f.consts[i].name + "`"
+		}
+		i = i + 1
+	}
+	return f"these constants depend on each other and none can be given a value first: {names} — a constant's initializer may name a constant declared anywhere, but not one that names it back"
 }
 
 # c_main_entry writes the program's C entry: a WRAPPER carrying the top-level
@@ -6945,7 +7378,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut i := 0
 	for i < args.len() {
 		fi := "f" + strconv.to_string(i, 10)
-		at := c_infer(em, args[i])
+		at := c_captured_ty(em, cal.key, i, args[i])
 		fields = fields + " " + c_type(at) + " " + fi + ";"
 		if i > 0 {
 			call = call + ", "
@@ -7332,7 +7765,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	mut call := ""
 	mut i := 0
 	for i < args.len() {
-		ft := c_type(c_infer(em, args[i]))
+		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
 			vals = vals + ", "
@@ -7648,6 +8081,17 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	return out + " zgt_mm; })"
 }
 
+# c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
+# c_range_needs_hi has already had its say about.
+fn c_slice_bound(mut &em: Emitter, e: Expr) {
+	return if c_is_nil_lit(e)
+
+	t := c_infer(em, e)
+	return if c_is_unknown(t) or c_is_int(t)
+
+	chk_at(em, f"a slice bound is an int, and this is {ty_name(t)}")
+}
+
 # c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
 # needs no node of its own.
 #
@@ -7657,6 +8101,12 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 # into a temp first, so a call result is indexed once rather than per element.
 fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
 	c_range_needs_hi(idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
+
+	# A BOUND IS AN INT, and nothing said so: `xs["a"..1]` was accepted and the runtime walked
+	# from a pointer read as a length. Silent, and on the one operation whose whole job is to
+	# stay inside the buffer.
+	c_slice_bound(em, c_range_lo(idx))
+	c_slice_bound(em, c_range_hi(idx))
 
 	src := c_expr(em, target, sb)
 	lo := c_expr(em, c_range_lo(idx), sb)
@@ -7677,8 +8127,27 @@ fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str
 
 # c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index
 # takes its ADDRESS, and a literal or call result has none.
+# c_list_index_int is the rule above, asked of one subscript. It is a checked report rather
+# than a raise: the index is a value entering a slot, which is what every other position of that
+# shape does, and emission carries on so the rest of the program is checked too.
+fn c_list_index_int(mut &em: Emitter, idx: Expr) {
+	t := c_infer(em, idx)
+	return if c_is_unknown(t) or c_is_int(t)
+
+	chk_at(em, f"a list index is an int, and this is {ty_name(t)}")
+}
+
 fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
-	kc := c_type(c_map_key_ty(tty))
+	kt := c_map_key_ty(tty)
+
+	# THE KEY IS A TYPED POSITION, and it was the one container slot with no rule: the index
+	# was rendered into a `{key-c-type} zgt_mk = …` declaration whatever it was, so `m[1]` on a
+	# `map[str, int]` reached cc as "incompatible integer to pointer conversion initializing
+	# 'const char *'" — against generated C, about a Zerg line that says `m[1]`. It is asked
+	# here rather than in c_index because here is where the key type has been read out.
+	chk_slot_fits(em, f"a key of this {ty_name(tty)}", kt, idx)
+
+	kc := c_type(kt)
 	vc := c_type(c_map_val_ty(tty))
 	tgt := c_expr(em, target, sb)
 
@@ -7979,10 +8448,20 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	tgt := c_expr(em, target, sb)
-	return f"{tgt}.f{fld}" if c_all_digits(fld)
+	tt := c_infer(em, target)
+
+	if c_all_digits(fld) {
+		# `.0` IS A TUPLE'S ACCESSOR AND NOTHING ELSE'S, and it was spelled `.f0` onto whatever
+		# stood to its left: `n.0` on an int reached cc as "member reference base type
+		# 'int64_t' is not a structure or union", and `t.5` on a 2-tuple as "no member named
+		# 'f5'". A tuple is read by STATIC index precisely so the element's type is known —
+		# which means the index is checkable here, and was not checked at all.
+		c_tuple_index_ok(em, tt, fld)
+
+		return f"{tgt}.f{fld}"
+	}
 
 	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
-	tt := c_infer(em, target)
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported
@@ -7991,7 +8470,33 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# could not name is left alone: guessing there would refuse a working program.
 	nm := c_named_of(tt)
 	raise f"no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
+
+	# AND A TARGET THAT HAS NO FIELDS AT ALL. The rule above answers about a struct that lacks
+	# the field; a scalar lacks the whole idea of one, and fell past it into `zg_a` on an
+	# int64_t — "member reference base type 'int64_t' is not a structure or union", from cc.
+	# Two halves of one question, and only the first had been asked.
+	if chk_is_scalar(tt) {
+		chk_at(em, f"no field `{fld}` on {ty_name(tt)}")
+	}
+
 	return f"{tgt}.zg_{fld}"
+}
+
+# c_tuple_index_ok is the two halves of `t.N`: the target is a tuple, and N is one of its
+# elements. An unknown target is left alone, as everywhere else.
+fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
+	return if c_is_unknown(t)
+
+	if not c_is_tuple(t) {
+		chk_at(em, f"`.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
+		return
+	}
+
+	n := c_tuple_tys(t).len()
+	i := strconv.parse_int(fld, 10)
+	return if i >= 0 and i < n
+
+	chk_at(em, f"a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
 }
 
 fn c_all_digits(s: str) -> bool {
@@ -8194,7 +8699,16 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# a `list[rune]`, which every rule below already knows how to walk.
 	return c_forin(em, var, EConv(TList(TRune), iter, "list"), body, ind) if c_is_str(ct)
 
-	elem := c_list_elem(c_infer(em, iter))
+	# WHAT IS LEFT MUST BE A LIST. Everything else fell through to the list walk, which reads
+	# an element type a non-container does not have — so `for x in n` on an int bound `x` to
+	# TUnknown, and the first USE of `x` reported "undefined name `x`". The loop variable was
+	# blamed for the thing being walked: a sentence about the consequence, naming the one part
+	# of the line that is fine.
+	if not c_is_list(ct) and not c_is_unknown(ct) {
+		chk_at(em, f"`for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
+	}
+
+	elem := c_list_elem(ct)
 	et := c_type(elem)
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false, false)
@@ -8273,14 +8787,9 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
 		}
 	} else {
+		chk_needs_type(em, name, ival)
 		eff = c_infer(em, ival)
 	}
-
-	# A USER `Into` IS RESOLVED HERE, ahead of every dispatch below. Each of the four type
-	# paths that follow — a map literal, a list, a chan, a str — renders the initializer its
-	# own way and only the last, general one reaches c_into, so a conversion decided by the
-	# DECLARED type has to be substituted before the declared type is used to choose a path.
-	ival := c_into_user_expr(em, eff, ival)
 
 	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
 	# so an EMPTY `{:}` sized its value slot as int64_t: `mut m: map[str, P] = {:}` then
@@ -8760,6 +9269,7 @@ fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 # checked before it is rendered — a match arm has nowhere to put a statement.
 fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
 	chk_condition(em, cond, "an `if` expression")
+	chk_branch_types(em, then_e, else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 }
 
@@ -8821,6 +9331,20 @@ fn c_raise(mut &em: Emitter, x: Expr, has_cause: bool, cause: Expr, ind: str) ->
 # and anything else — a bare message — has one built around it.
 fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 	return c_expr(em, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
+
+	# AND OTHERWISE A MESSAGE, which the fallback below assumed rather than checked: it wraps
+	# the operand in `zrt_err_new`, whose parameter is a `const char *`, so `raise 5` reached cc
+	# as an incompatible-type argument and `raise P(1)` as a struct passed where a pointer goes.
+	# The `from` side of the same statement has had this rule all along (c_err_cause) — one
+	# statement, two operands, and only one of them was asked.
+	t := c_infer(em, x)
+	if not c_is_str(t) and not c_is_unknown(t) {
+		# REPORTED rather than raised, so it carries the place: `raise` is a statement, so a
+		# marker is set, and this is a statement about a program the language rejects rather
+		# than a form the compiler has not built. Emission carries on and the C is discarded.
+		chk_at(em, f"raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
+	}
+
 	return f"zrt_err_new({c_expr(em, x, c_nosub())})"
 }
 
@@ -9463,7 +9987,11 @@ fn c_derive_variants(ed: EnumDecl, target: str) -> str {
 # the cost the size of the program.
 fn c_build_impls(mut &em: Emitter, f: File) {
 	for ip in f.impls {
-		em.impl_on.append(ip.on)
+		# THE KEY IS THE SPEC AND ITS ARGUMENTS, which is what docs/core/specs.md says a
+		# parameterized spec's identity is. Recording the name alone made `impl Into[Meters]`
+		# and `impl Into[Feet]` the same entry, so a bound asking for one was satisfied by the
+		# other — and the bound could not ask for either, having dropped its own arguments too.
+		em.impl_on.append(spec_key(ip.on, ip.args))
 		em.impl_target.append(ip.target)
 	}
 }
@@ -9500,7 +10028,6 @@ fn c_build_intos(mut &em: Emitter, f: File) {
 			# as two methods with one name.
 			raise f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
 			em.into_src.append(ip.target)
-			em.into_dst.append(ip.args[0])
 		}
 	}
 }
@@ -9509,20 +10036,6 @@ fn c_build_intos(mut &em: Emitter, f: File) {
 fn c_into_user_from(mut &em: Emitter, src: str) -> bool {
 	for n in em.into_src {
 		return true if n == src
-	}
-	return false
-}
-
-# c_into_user is whether the program declares `impl Into[want] for got`. The source is matched
-# by NAME because that is what an `impl` head carries, and the destination by type.
-pub fn c_into_user(mut &em: Emitter, want: Ty, got: Ty) -> bool {
-	src := ty_name(got)
-	return false if src == ""
-
-	mut i := 0
-	for i < em.into_src.len() {
-		return true if em.into_src[i] == src and ty_eq(em.into_dst[i], want)
-		i = i + 1
 	}
 	return false
 }
@@ -9537,7 +10050,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [], [], [], 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], want_lints, [], [], [], [], [], [], [], [], [], 0)
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

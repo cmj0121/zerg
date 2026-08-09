@@ -1264,7 +1264,7 @@ fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 			col = depth * fmt_wrap_tab()
 			i = i + 1
 		} else {
-			if is_rbrace(t.kind) and depth > 0 and fmt_rbrace_closes_block(toks, i) {
+			if is_rbrace(t.kind) and depth > 0 and fmt_rbrace_closes_block(toks, i) and not fmt_guard_inline(toks, fmt_brace_open(toks, i)) {
 				depth = depth - 1
 			}
 			if brk[i] > 0 or i == 0 {
@@ -1275,7 +1275,7 @@ fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 				col = r.col
 				i = r.next
 			} else {
-				if is_lbrace(t.kind) and fmt_opens_block(toks, i) {
+				if is_lbrace(t.kind) and fmt_opens_block(toks, i) and not fmt_guard_inline(toks, i) {
 					depth = depth + 1
 				}
 				col = col + wid[i]
@@ -1474,7 +1474,7 @@ fn fmt_wrap_spans(mut &toks: list[Token], mut &brk: list[int], open: int, shut: 
 fn fmt_wrap_holds_block(mut &toks: list[Token], open: int, shut: int) -> bool {
 	mut i := open + 1
 	for i <= shut {
-		return true if is_lbrace(toks[i].kind) and fmt_opens_block(toks, i)
+		return true if is_lbrace(toks[i].kind) and fmt_opens_block(toks, i) and not fmt_guard_inline(toks, i)
 		i = i + 1
 	}
 	return false
@@ -1617,6 +1617,54 @@ fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
 	return 0
 }
 
+# fmt_brace_shut is fmt_brace_open walked the other way: the `}` the `{` at `at` opens.
+fn fmt_brace_shut(mut &toks: list[Token], at: int) -> int {
+	mut depth := 0
+	mut i := at
+	for i < toks.len() {
+		if is_lbrace(toks[i].kind) {
+			depth = depth + 1
+		} else if is_rbrace(toks[i].kind) {
+			depth = depth - 1
+			return i if depth == 0
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# fmt_guard_inline reports whether the `{` at `open` is a guard's block the author wrote as
+# ONE LINE — `guard { e } ?? d` — which is the one block that stays there. A guard's block
+# usually holds one expression, and `check("max + 1 raises", guard { max + 1 } ?? 7, 7)`
+# reads as the line it is; exploding it three-deep buried eighteen such checks in one
+# example alone. So the block rule is not applied to it: no newline after the `{`, no line
+# of its own for the `}`, no level in between.
+#
+# The exemption is EARNED, not assumed: every token through the closer must sit on the
+# author's one line, none may be a comment (it would eat the rest of the line), and none a
+# `;` — a second statement is a block again. A guard whose block the author broke keeps the
+# block shape, breaks and all; this rule never joins, it only declines to break.
+fn fmt_guard_inline(mut &toks: list[Token], open: int) -> bool {
+	return false if not is_lbrace(toks[open].kind)
+
+	p := fmt_prev_code(toks, open)
+	return false if p < 0 or toks[p].kind != Guard
+
+	shut := fmt_brace_shut(toks, open)
+	return false if shut == 0
+
+	mut i := open + 1
+	for i <= shut {
+		k := toks[i].kind
+
+		return false if toks[i].line != toks[open].line
+		return false if is_comment(k) or is_semi(k)
+
+		i = i + 1
+	}
+	return true
+}
+
 # fmt_pop_int drops a list's last element. The subset has no `pop`, and a stack is what the
 # brace nesting needs, so the drop is written here once rather than at each use.
 fn fmt_pop_int(xs: list[int]) -> list[int] {
@@ -1748,7 +1796,8 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
-			if is_rbrace(t.kind) and fmt_rbrace_closes_block(toks, i) {
+			# The one-line guard block never opened a level, so its `}` closes none.
+			if is_rbrace(t.kind) and fmt_rbrace_closes_block(toks, i) and not fmt_guard_inline(toks, fmt_brace_open(toks, i)) {
 				if bstack.len() > 0 {
 					bsave = bstack[bstack.len() - 1]
 					bstack = fmt_pop_int(bstack)
@@ -1816,8 +1865,9 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			}
 
 			# a `{` opens a block: whatever follows starts on its own line, one deeper. A map
-			# literal's brace is not one and stays on its line — fmt_opens_block.
-			if is_lbrace(t.kind) and fmt_opens_block(toks, i) {
+			# literal's brace is not one and stays on its line — fmt_opens_block — and a
+			# guard's one-line block declines the break — fmt_guard_inline.
+			if is_lbrace(t.kind) and fmt_opens_block(toks, i) and not fmt_guard_inline(toks, i) {
 				bstack.append(bsave)
 				bsave = psp
 				depth = depth + 1
@@ -2245,6 +2295,10 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 		# subtraction `a - b` the same way the two arrows are told apart: by whether anything
 		# to its left could be an operand. It cannot go in is_unary_prefix, which asks only
 		# what a token IS, and `-` is both.
+		#
+		# `-%` IS BOTH IN THE SAME WAY — the wrapping negate and the wrapping subtraction — so
+		# it is asked here rather than there, and `-%b` comes out tight while `lo -% byte(1)`
+		# keeps its spaces. It was in neither place, and printed `-% b`.
 		return false
 	}
 	return true
@@ -2266,8 +2320,9 @@ fn ends_operand(k: Kind) -> bool {
 
 fn is_minus(k: Kind) -> bool {
 	return match k {
-		Minus => true
-		_     => false
+		Minus    => true
+		MinusMod => true
+		_        => false
 	}
 }
 
@@ -2420,10 +2475,26 @@ fn is_colon(k: Kind) -> bool {
 # is_unary_prefix reports the tokens that attach to what follows them: `&` in `mut &p`.
 # `not` is deliberately NOT here — it is a WORD, and `not x` written as `notx` is a
 # different identifier, not a negation.
+# is_unary_prefix is every operator that is ONLY ever a prefix, and so is tight to its operand
+# without anything having to be asked about its neighbours (F203).
+#
+# `-` and `<-` are absent because they are not only-ever: each is also an infix operator, and
+# which one it is depends on what stands to the LEFT — that question is asked further down, of
+# those two by name.
+#
+# `~` is here because it IS only-ever, and it was missing: `zerg fmt` wrote `~ b`, which reads
+# as an infix operator with its left side torn off. Nothing caught it because no gated source
+# complements a value — the same shape of blind spot as the map literal this rule's neighbour
+# was wrong about, and found the same way, by a case written for something else.
+#
+# `-%` is NOT here, for the same reason `-` is not: it is the wrapping negate AND the wrapping
+# subtraction, so `-%b` is tight and `lo -% byte(1)` is not. Putting it here printed the second
+# as `lo -%byte(1)`, which is the first mistake with the sides swapped.
 fn is_unary_prefix(k: Kind) -> bool {
 	return match k {
-		Amp => true
-		_   => false
+		Amp   => true
+		Tilde => true
+		_     => false
 	}
 }
 

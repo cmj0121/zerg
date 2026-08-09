@@ -33,6 +33,7 @@ other chapter relies on. Read it first.
 
 | Chapter                                     | Covers                                                            |
 | ------------------------------------------- | ----------------------------------------------------------------- |
+| [Type System](core/type-system.md)          | what a type is, and how one is decided                            |
 | [Types](core/types.md)                      | primitives, `struct`, `enum`, tuples, strong-typedefs, conversion |
 | [Values & Memory](core/memory.md)           | scope ownership, `mut &`, `del` / `defer`, `Ref[T]`               |
 | [Specs & Generics](core/specs.md)           | `spec` as bound / conformance / type; generics; the `is` test     |
@@ -80,8 +81,8 @@ other chapter relies on. Read it first.
 
 The scalar primitives every program starts from — `bool`, `byte`, `rune`, `int`, `uint`, `float`,
 `str` — and the **product** (`struct`) and **sum** (`enum`) types, tuples, and strong-typedefs you
-build on them: how a type is declared, constructed, and converted (always by re-construction, never a
-reinterpret). See **[Types](core/types.md)**.
+build on them: how a type is declared, constructed, and converted (always written, always by
+re-construction, never a reinterpret). See **[Types](core/types.md)**.
 
 ## Specs & Generics
 

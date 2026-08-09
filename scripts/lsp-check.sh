@@ -346,6 +346,52 @@ check([f.get("id") for f in fr] == [1, 9], "a malformed frame does not end the s
 _, fr = run([{"jsonrpc": "2.0", "id": "abc-1", "method": "initialize", "params": {"capabilities": {}}}, EXIT])
 check(fr and fr[0].get("id") == "abc-1", "a string id is echoed as a string", fr and fr[0].get("id"))
 
+# --- code actions ----------------------------------------------------------------------
+#
+# The quick fix an editor applies has to be the compiler's own answer, at the compiler's own
+# place. Both halves are asserted, because either alone is a rewrite that lands in the wrong
+# column or writes the wrong text — and a code action that damages a buffer is the one bug a
+# user cannot undo their way out of if they do not notice it.
+fixsrc = "fn main() {\n\tx: float = 1 / 2\n\tprint x\n}\n"
+fixpath = os.path.join(tmp, "fix.zg")
+open(fixpath, "w").write(fixsrc)
+fixuri = "file://" + os.path.abspath(fixpath)
+FIXOPEN = {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": fixuri, "languageId": "zerg", "version": 1, "text": fixsrc}}}
+
+def actions(line, ch):
+    _, fr = run([INIT, FIXOPEN, {"jsonrpc": "2.0", "id": 7, "method": "textDocument/codeAction",
+        "params": {"textDocument": {"uri": fixuri},
+                   "range": {"start": {"line": line, "character": ch},
+                             "end": {"line": line, "character": ch}},
+                   "context": {"diagnostics": []}}}, EXIT])
+    got = [f for f in fr if f.get("id") == 7]
+    return got[0]["result"] if got else None
+
+_, fr = run([INIT, EXIT])
+caps = fr[0]["result"]["capabilities"].get("codeActionProvider")
+check(caps == {"codeActionKinds": ["quickfix"]}, "codeAction is declared as a quickfix provider", caps)
+
+# the cursor ON the `1` offers `1.0`, and the edit covers the literal and nothing else
+a = actions(1, 12)
+check(a is not None and len(a) == 1 and a[0]["title"] == "Write `1.0`" and a[0]["kind"] == "quickfix",
+      "the cursor on a literal offers its own fix", a)
+if a and len(a) == 1:
+    e = a[0]["edit"]["changes"][fixuri][0]
+    check(e["newText"] == "1.0" and e["range"] == {"start": {"line": 1, "character": 12},
+                                                   "end": {"line": 1, "character": 13}},
+          "the edit replaces the literal and nothing else", e)
+
+# THE SECOND LITERAL ON THE SAME LINE IS ITS OWN ACTION. The finding used to carry the
+# STATEMENT's place, where both would answer to one position and one of them would be
+# rewritten twice — which is the whole reason an integer literal now carries its own.
+b = actions(1, 16)
+check(b is not None and len(b) == 1 and b[0]["title"] == "Write `2.0`",
+      "a second literal on one line is a second action", b)
+
+# a place with no finding offers nothing rather than everything on the line
+check(actions(2, 2) == [], "a position with no finding offers no action", actions(2, 2))
+
 # a body larger than one read of the runtime's bounded leaf
 big = "fn main() {\n" + "".join("\tprint %d\n" % i for i in range(1200)) + "}\n"
 bigpath = os.path.join(tmp, "big.zg")
@@ -370,4 +416,4 @@ if [ "$ran" -lt "${MIN_SESSIONS:-4}" ]; then
 	echo "lsp-check: only $ran sessions ran — the list is empty, or the server is not starting"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, formatting is fmt's own answer, and 10 protocol cases hold"
+echo "lsp-check: $ran buffers agree with the compiler, formatting is fmt's own answer, and 15 protocol cases hold"

@@ -58,6 +58,19 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymVariant {
 			return c.constructVariant(n, sym)
 		}
+		// THE INNERMOST BINDING WINS, which is the language's shadowing rule and was applied
+		// here in reverse: the named function was found first, so `f := 2` beside `fn f()`
+		// let `f()` call the function while an int was the `f` in scope. The shipping
+		// compiler emitted a call to `zg_f` past an int64_t and cc reported it. A binding
+		// that HOLDS a function is still a call — that is the case below — so what this
+		// intercepts is only a binding that cannot be called at all.
+		if s := c.lookup(id.Name); s != nil {
+			if _, isFn := underlyingFn(s.typ); !isFn && !bad(s.typ) {
+				c.errorf(id.Span(), "%q holds a %s, and a %s is not callable", id.Name, s.typ, s.typ)
+				c.synthArgs(n)
+				return types.Unknown
+			}
+		}
 		if sig, ok := c.info.Funcs[id.Name]; ok {
 			return c.callFunc(n, sig)
 		}

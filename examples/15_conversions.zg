@@ -20,17 +20,24 @@ fn main() {
 	check("uint(str)", int(uint("9")), 9)
 	raise "float(str)" if float("3.5") != 3.5
 
-	# a narrowing conversion that does not fit raises, and `guard` demotes it
+	# a narrowing conversion that does not fit raises, and `guard` demotes it. The operand is a
+	# VALUE, which is what makes the failure a run-time one: the same conversion written on a
+	# CONSTANT — `byte(300)`, `uint(-5)` — is a compile error, because the compiler holds the
+	# number and knows the answer. Two rules, and the difference between them is what the
+	# compiler can see.
 	check("byte fits", int(byte(200)), 200)
-	check("uint(-5) raises", int(guard { uint(0 - 5) } ?? 7), 7)
-	check("byte(300) raises", int(guard { byte(300) } ?? 7), 7)
+
+	neg := 0 - 5
+	big := 300
+	check("uint(neg) raises", int(guard { uint(neg) } ?? uint(7)), 7)
+	check("byte(big) raises", int(guard { byte(big) } ?? byte(7)), 7)
 	check("int(1e30) raises", guard { int(1e30) } ?? 7, 7)
 
 	# float -> int truncates toward zero, and 255.7 still fits a byte
 	check("truncation", int(3.9), 3)
 	check("truncation is toward zero", int(0.0 - 3.9), -3)
 	check("byte(255.7)", int(byte(255.7)), 255)
-	check("byte(256.0) raises", int(guard { byte(256.0) } ?? 7), 7)
+	check("byte(256.0) raises", int(guard { byte(256.0) } ?? byte(7)), 7)
 
 	# a malformed string is a ValueError, not a zero
 	check("a malformed str raises", guard { int("nope") } ?? 7, 7)

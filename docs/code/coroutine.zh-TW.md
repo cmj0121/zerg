@@ -240,10 +240,11 @@ spawn producer(ch)          # ch 在 producer 的 `chan[int]<-` 參數處窄化
 （`<-ch`，給 consumer）。
 
 **narrowing 是單向的**，絕不能回到雙向——這是安全保證：send-only 端**不可能**偷收值，receive-only 端也不可能插入
-值。它是一個安全的內建 upcast，在明確方向型別的目標處觸發（參數、`return`、typed binding），且**不會**放掉你自己的
-持有——目標拿到一個窄化的視角，你仍保有自己的雙向端。窄化後的 binding 會取得**自己的**一份 reference，所以結束它
-的 scope 就會把那份 reference 還回去：要放掉你自己的貢獻，可以結束該 binding 的 scope（上面的 factory、或更窄的區
-塊）、用 `close(ch)` 在保留 handle 的同時結束 stream、或用 `del ch` 把持有與名字一起交出。
+值。方向型別的目標（參數、`return`、typed binding）把這個端**包**成窄化的視角——position 只會包值、絕不轉換值
+（[型別系統](../core/type-system.zh-TW.md)）——且**不會**放掉你自己的持有：目標拿到窄化的視角，你仍保有自己的
+雙向端。窄化後的 binding 會取得**自己的**一份 reference，所以結束它的 scope 就會把那份 reference 還回去：要放
+掉你自己的貢獻，可以結束該 binding 的 scope（上面的 factory、或更窄的區塊）、用 `close(ch)` 在保留 handle 的
+同時結束 stream、或用 `del ch` 把持有與名字一起交出。
 
 方向也正是讓 auto-close **精準**的關鍵，因為 refcount 依方向計數：send-only 計入 send-count、receive-only 計入
 receive-count、雙向**兩者都計入**。所以要看到「producer 做完」的 consumer 必須持 **receive-only** 端——雙向

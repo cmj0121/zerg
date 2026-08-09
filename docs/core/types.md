@@ -11,21 +11,25 @@ A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and 
 syntax** — a type name is just an identifier, so a width like `u32` adds a stdlib type without touching
 the grammar:
 
-| Type    | Description                                          |
-| ------- | ---------------------------------------------------- |
-| `bool`  | `true` / `false`                                     |
-| `byte`  | unsigned 8-bit — Zerg's char                         |
-| `rune`  | a single valid Unicode code point                    |
-| `int`   | signed 64-bit integer                                |
-| `uint`  | unsigned 64-bit integer                              |
-| `float` | IEEE-754 double (f64)                                |
-| `str`   | immutable, null-terminated Unicode (no embedded NUL) |
-| `nil`   | the placeholder value of `T?`                        |
+| Type    | Description                              |
+| ------- | ---------------------------------------- |
+| `bool`  | `true` / `false`                         |
+| `byte`  | unsigned 8-bit — Zerg's char             |
+| `rune`  | a single valid Unicode code point        |
+| `int`   | signed 64-bit integer                    |
+| `uint`  | unsigned 64-bit integer                  |
+| `float` | IEEE-754 double (f64)                    |
+| `str`   | immutable Unicode text (no embedded NUL) |
 
-> **[not yet]** No part of the fixed-width ladder exists: `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are
-> specified as stdlib types and no stdlib declares one. Because a width is an ordinary identifier rather than
-> a keyword, the refusal is not even a named one — `i32(x)` reports _undefined function `i32`_, the message
-> any misspelled call gets, so a reader is told the name is unknown rather than that the ladder is unbuilt.
+`nil` is not a type of its own — it is the placeholder value of a `T?`
+([Null-safety & Errors](../code/errors.md)); the NUL-terminated in-memory form of a `str` is the C
+boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
+
+> **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
+> are specified as stdlib types and no stdlib declares one. It is refused **by name** — a width is an
+> ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the
+> message any misspelled call gets, and a reader was told their own name was unknown. The **seed** builds
+> and runs them, which makes this the one chapter where the seed is the broader of the two.
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
   **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never
@@ -46,15 +50,17 @@ the grammar:
 
 - **Bitwise** — `&`, `|`, `^`, `~` (and, or, xor, complement) and the shifts `<<`, `>>`, on `int`/`uint`/`byte`.
   `>>` is **arithmetic** on signed `int` (sign-extends) and **logical** on unsigned `uint`/`byte`
-  (zero-fills) — the type's sign decides, so no separate logical-shift operator exists; a shift by **≥ the
-  type width** raises (`OverflowError`). These desugar to specs (a user type may overload them — see
-  [Built-in specs](specs.md)), and the bitwise **symbols** never collide with the logical **keywords**
-  `not`/`and`/`or`.
+  (zero-fills) — the type's sign decides, so no separate logical-shift operator exists; a shift distance
+  **outside the type width** — negative, or ≥ the width — raises (`OverflowError`). These desugar to
+  specs (a user type may overload them — see [Built-in specs](specs.md)), and the bitwise **symbols**
+  never collide with the logical **keywords** `not`/`and`/`or`.
 - **Wrapping** — `+`, `-`, `*` raise on overflow; the **`%`-suffixed** `+%`, `-%`, `*%` (and unary `-%`)
   instead **wrap modulo 2^n** — for hashing, checksums, and bit-mixing where roll-over is the intent. The
   **checked** form is already `guard { a + b }` → `Result` (no `checked_*` API); **saturating** is deferred.
-- **Mixed `int`/`uint` is never implicit** — `int + uint` is a compile error (no implicit conversion,
-  which also sidesteps C's signed/unsigned comparison traps); cast one side (`int(u) + i`).
+- **`int` and `uint` are two types and never mix** — `int + uint` is a compile error, and not a special
+  case: an operator's operands must already be one type, whatever the pair (below). This pair is the one
+  worth naming because C's answer is the trap — there the signed operand converts to unsigned, so
+  `-1 < 1u` is false. Cast one side: `int(u) + i`.
 - **Division & remainder** — `/` and `%` follow the **Euclidean** definition: the remainder is **always
   non-negative** (`0 ≤ a % b < |b|`) and `a == (a / b) * b + a % b` holds for every sign, so `a % n` is a
   valid index or bucket for any `b`. This is the canonical mathematical `div`/`mod`, not C's
@@ -66,30 +72,17 @@ the grammar:
   sees an integer whatever the operands are. On two integers it _is_ `/`: the language has **one**
   integer division, and a second rule for negative divisors would be a trap rather than a feature. On
   two `float`s it divides as a double and lands in `int` through the same range check `int(x)` is, so
-  `7.5 // 2.0` is `3` and `-7.5 // 2.0` is `-4` with no `int(...)` round trip. `/` is unchanged and
+  `7.5 // 2.0` is `3` and `-7.5 // 2.0` is `-4` with no `int(...)` round trip (`7 // 2.0` is the same —
+  the untyped `7` adopts `float` from its operand). `/` is unchanged and
   stays type-driven — `int / int` is an `int`, `float / float` is a `float` — because an already-typed
   `int` value never becomes a `float` implicitly (see "Numeric literals" below). `//` does **not**
   open a comment — a Zerg comment starts with `#`.
 
-> **[deviation]** `~` on a `byte` computes the **64-bit** complement and never masks it back to eight bits, so
-> the answer is right only where it immediately lands in a `byte` slot. With `b: byte = 12`, the specified
-> result is `243` in all three of these; `c: byte = ~b` gives it, because the binding's own conversion narrows
-> the value, while `print ~b` writes `18446744073709551603` and `int(~b)` gives `-13`. The complement is
-> emitted as C's `~` on the promoted operand, and the one spelling a test naturally reaches for — storing the
-> result straight back into a `byte` — is the one spelling that hides it.
->
 > **[not yet]** The bitwise operators do not desugar to anything a user type can implement. No `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl` or `Shr` spec is declared anywhere, so naming one reports
 > _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
 > no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
 > specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
->
-> **[deviation]** The `%`-suffixed operators wrap on `int` and on `uint`, and **raise** on a `byte`:
-> `byte(255) +% byte(1)` aborts with `OverflowError: integer conversion out of range` instead of yielding `0`,
-> and `-%` and `*%` fail the same way. The wrapping is done at the promoted width and the result is then
-> narrowed back to `byte` by the ordinary **checked** conversion — which is precisely the raise the `%`
-> spelling exists to opt out of, so the operator becomes an alias for the one it was written to avoid. The
-> two wider types are the ones every hashing and checksum case is written against, so nothing measured `byte`.
 >
 > **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is
@@ -98,7 +91,7 @@ the grammar:
 ### Typed positions
 
 Several rules below are about **a value meeting a declared type** — what fits, what a literal adopts,
-what converts. They all need the same answer to one question, so it is given once, here, and each of
+what is refused. They all need the same answer to one question, so it is given once, here, and each of
 them refers to it: **a typed position** is a place where the language already knows what type is wanted.
 
 They are these, and the list is **exhaustive**:
@@ -124,63 +117,71 @@ A position is **structural**, not syntactic: it is what the expression IS to the
 how it is written. **Grouping parentheses are not a position** — `(e)` is the same position `e` was —
 which is what keeps a rule stated over positions from being defeated by typing more brackets.
 
-**A position takes at most one conversion.** Where a rule below converts a value to reach the declared
-type, it does so in one step per position; a value that crosses two positions may be converted at each.
+**A position may wrap a value; it never converts one.** What a position builds around a value is a
+carrier (next) or a spec's box ([Specs & Generics](specs.md)) — the value inside keeps its type. One
+that does not fit its position is refused, and the fix is the **written** conversion, `T(x)`
+(Type Conversion, below).
 
 **A carrier does not end a position — it moves it one level in.** Where the declared type is a `T?`, a
 `Result[T]` or an `Either[X, Y]`, what meets a value is the **payload**, and the payload is the same
 position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Left(e)` puts it at
 the `return`'s. Every rule below reads `T` there, never the wrapper.
 
-> **[deviation]** The list is the contract; the compiler reached it incrementally, and each position it
-> had not yet been told about was a value lowered into a type it did not fit — silently. The list exists
-> because that kept happening: it was written as four examples in a parenthesis, and the four grew to
-> fourteen one miscompile at a time. A new syntactic form owes an answer to "is this a typed position",
-> and that answer belongs here rather than in whichever rule notices first.
->
-> The carrier sentence is the same story from inside: the compiler fitted the WRAPPER and then lowered
-> its payload by another route, which no rule was attached to. `x: float? = i` for an `int` value printed
-> `5`, and `Left(i)` for `i = 300` into a `Result[byte]` truncated in silence — the same two mistakes the
-> same rules already refuse one level up.
->
-> **[deviation]** **The other operand** is the one position of the fourteen that does not reject a literal too
-> large for it. An integer literal that does not fit the other operand's type silently retypes the **whole
-> expression** to `int` rather than being a compile error: `b: byte = 1` followed by `print b + 300` compiles
-> and writes `301`. A literal that does fit adopts `byte` and is then checked like any other byte arithmetic,
-> so `b: byte = 100` makes `b + 200` an `OverflowError` at run time — the rule is present and working, and only
-> the out-of-range literal escapes it, by widening the very operand it was supposed to be measured against.
+The list grew one silent miscompile at a time — each position the compiler had not yet been told about
+lowered a value into a type it did not fit, the carrier cases included (`x: float? = i` printed `5`;
+`Left(300)` into a `Result[byte]` truncated in silence). The list is the contract: a new syntactic form
+owes an answer to "is this a typed position", and the answer belongs here. Each position now refuses a
+value of another type, and names the place it refused.
+
+**A literal that does not fit is refused at every one of them, the other operand included.** `b: byte = 1`
+followed by `b + 300` is a compile error: `300` is not a value of `byte`, so it does not adopt, and what
+is left is a `byte` beside an `int` — two types, no expression. It used to retype the whole expression to
+`int` and write `301`, which made the operand slot the one position where a literal escaped the range it
+was supposed to be measured against.
 
 ### Numeric literals
 
-A numeric literal is **untyped** — it adopts the type its context demands, at any **typed position**
-above — checked **at compile time**.
+A numeric literal is **untyped** — it adopts the type its **position** demands, at any of the typed
+positions above — checked **at compile time**.
 Unconstrained, an integer literal defaults to `int` and a fractional/exponent literal (`1.0`, `1e3`) to
 `float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
 
 - A literal that **does not fit** its required type is a **compile error** (`byte = 300`, `uint = -1`, an
-  `int` literal past i64) — never a runtime overflow. This is the **constant** half of
-  [`Into`](#into--the-conversion-that-happens-on-its-own): the target's type is known, the value is
-  known, so the answer is known now.
+  `int` literal past i64) — never a runtime overflow. It is the constant twin of the
+  written conversion (`byte(300)`, [Type Conversion](#into--an-ordinary-conversion-spec)): the target's
+  type is known, the value is known, so the answer is known now.
 
-- **A typed `float` context accepts an untyped integer literal**: `x: float = 1` is legal, and so is
-  `x: float = i` for an `int` value — the first adopts, the second converts, and `int → float` is one of
-  the built-in `Into`s. They differ in **when** the answer is reached, not in whether it is allowed: the
-  literal is settled at compile time, the value at run time. A fractional or exponent literal (`1.0`,
-  `1e3`) is a `float` from the start and never an `int`.
+- **A typed `float` context accepts an untyped integer literal — and only a literal**: `x: float = 1`
+  is legal (the literal adopts), while `x: float = i` for an `int` value is a **conversion** and is
+  written — `x: float = float(i)`. A fractional or exponent literal (`1.0`, `1e3`) is a `float` from
+  the start and never an `int`.
 
 - **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes
-  a byte with no conversion at all; `b: byte = n` for an `int` value writes the conversion, which may
-  raise. So `b: byte = 300` is a **compile error** — the constant is known not to fit — while
-  `b: byte = n` with `n == 300` is an **`OverflowError`** at run time. Same rule, two moments.
+  a byte with no conversion at all, and `b: byte = 300` is a **compile error** — the constant is known
+  not to fit. `b: byte = n` for an `int` value is a **conversion**, and a conversion is
+  written: `b: byte = byte(n)`, which may raise `OverflowError` at run time. Adoption settles at
+  compile time; a written conversion runs.
 
-  Every one of the conversions is a **lint** finding (`L5xx`), because the reader of `xs: list[byte] =
-[1, 2]` should be able to see bytes on the page rather than infer them from the declaration.
+  An adoption away from the literal's default is a **lint** finding (`L502`), because the reader of
+  `xs: list[byte] = [1, 2]` should be able to see bytes on the page rather than infer them from the
+  declaration. The finding names each literal and hands over the spelling that shows it — `1.0` for a
+  `float`, `byte(1)` where the type has no literal form of its own.
 
-> **[not yet]** The **upper half of `uint`** cannot be written as a literal. Every integer literal is measured
-> against `int` before its position is consulted, so `u: uint = 18446744073709551615` is rejected with
-> _the integer literal … does not fit an `int`_ even though the value is an ordinary `uint` and is reachable
-> by arithmetic. The rule above stands — a literal adopts the type its position demands — but the range it is
-> checked against is fixed at the signed one, so the `uint` half of "what fits" is unwritable.
+- **An expression of literals is a literal.** Nothing in `100 + 100` has a type of its own, so the whole
+  of it adopts: `x: byte = 100 + 100` is byte arithmetic answering `200`. Each part is measured against
+  the target **before** the operator runs — `x: byte = 300 - 100` is refused, naming the `300`, not the
+  `200` it would come to — and the arithmetic that follows is the target's own, so `x: byte = 200 + 100`
+  is refused too. A `float` target makes the operators float operators: **`x: float = 1 / 2` is `0.5`**,
+  because both literals are floats before the `/` runs.
+
+  A division by a constant `0` is a compile error wherever it is written, reachable or not — the same
+  argument as a literal that does not fit, at the one operator that fails without any type being wrong.
+
+- **The bound is the position's.** An integer literal is measured against `int` where nothing asks for
+  anything else, and against `uint` where a `uint` position does — so `u: uint = 18446744073709551615` is
+  that value and not an error, while `x := 18446744073709551615` and `int(18446744073709551615)` are still
+  refused. A literal past **both** bounds is a compile error whatever the position: it is not a number this
+  machine holds.
 
 ## User-Defined Types
 
@@ -243,24 +244,28 @@ A **tuple** — `(int, str)`, its fields reached positionally as `.0`, `.1` — 
 `struct`**: the same product type, spelled without a name for a transient positional bundle (a multiple
 return, a `divmod -> (int, int)`). Being anonymous it is the language's **one structurally typed** form —
 `(int, str)` is the same type wherever written, while every named `struct` and `enum` stays **nominal**.
-It rides the whole product machinery — copy-by-value, and the compiler's structural `Eq` / `Ord` /
-`Hash` / … derivation (see [Specs & Generics](specs.md)) — but, with no name to attach one to, carries **no inherent
-methods and no `spec` impl of its own**: reach for a named `struct` the moment a value wants behavior, a
-nominal identity, or field names worth reading. A tuple result is **first-class** — stored, passed, or
-destructured — so multiple return needs no separate mechanism ([Pattern matching](../code/control-flow.md)).
+It rides the whole product machinery — copy-by-value, and the structural tier by one rule: **a named
+type opts in; an unnamed form inherits its parts' opt-ins.** A tuple (and an array) has `Eq` / `Ord` /
+`Hash` exactly when **every part** has it — no declaration needed, since an unnamed form has no
+declaration point and its parts already opted in (see [Specs & Generics](specs.md)). What it cannot
+carry is behavior of its **own** — no inherent methods, no hand-written `spec` impl: reach for a named
+`struct` the moment a value wants behavior, a nominal identity, or field names worth reading. A tuple
+result is **first-class** — stored, passed, or destructured — so multiple return needs no separate
+mechanism ([Pattern matching](../code/control-flow.md)).
 
-> **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple is
-> refused by name — _NotImplemented: `==` on a (int, int) — structural equality over a container is unbuilt,
-> and a container has no declaration to derive it on_ — and that message is the mechanism: the derivation is
-> driven by a `#[derive(…)]` on a declaration, and being anonymous is exactly what leaves a tuple nothing to
-> carry one. **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports
+> **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
+> is refused by name — the parts-inheritance rule above is specified and the derivation over an unnamed
+> form is unbuilt (the shipped message still blames the missing declaration).
+> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports
 > _NotImplemented: `,` is not an expression this compiler reads_ — so a tuple result is stored and passed as
 > specified, and read back only through `.0` / `.1`.
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
 is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
-is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion. A
+is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion.
+One inheritance is withheld on purpose: `X` does **not** take `Y`'s `Into` impls — what `X` is
+convertible to is `X`'s own declaration to make. A
 **monomorphic** `type X = Y` **lowers to `Y`** at runtime — the distinctness is **compile-time only**, so a
 `Celsius = int` costs nothing (no box, no wrapper) yet a `Celsius` is never an `int` without an explicit
 `int(c)` / `Celsius(x)`. A **generic** alias `type X[T] = …` is **not yet supported** this phase (parsed, but
@@ -327,8 +332,9 @@ new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool
 **never** reinterpret one type's storage as another.
 
 Conversion is **explicit by default** — an `int` isn't a `bool`; build one with a constructor-style call
-(`bool(8)`, `int(c)`). Primitive conversions are **compiler built-in**; a user type cannot add one to a
-primitive.
+(`bool(8)`, `int(c)`). `bool(x)` on a number answers `x != 0` — the question truthiness would have asked
+is spelled, so it never enters a condition unwritten. Primitive conversions are **compiler built-in**; a
+user type cannot add one to a primitive.
 
 **Narrowing a primitive** can lose the value, so it is checked like arithmetic:
 
@@ -339,18 +345,12 @@ primitive.
 - **`float` → integer** drops the fractional part (`int(3.7)` is `3` — the intent, not a bug) but raises
   when the integer part is **out of range** or the float is `NaN` / `±Inf`.
 
-### `Into` — the conversion that happens on its own
+### `Into` — an ordinary conversion spec
 
-`T(x)` is the conversion you **write**. `Into` is the one that happens **where the target type is
-already known** — at a [typed position](#typed-positions) — and it is nothing more than the compiler
-writing `.into()` for you:
-
-```text
-x: float = 1.5 + 1          # what you write
-x: float = 1.5 + 1.into()   # what it means
-```
-
-**`Into` is an ordinary spec**, so a type opts in by implementing it, and the built-in types already do:
+A conversion is **written**. `T(x)` converts between the scalars; a user type converts through a
+constructor or a named function; and nothing converts on its own — **a position wraps a value; it never
+converts one** (Typed positions, above). `Into` is not a mechanism the language runs for you: it is the
+**spec that names "convertible"**, so generic code can ask for the capability —
 
 ```text
 spec Into[T] {
@@ -358,76 +358,66 @@ spec Into[T] {
 }
 ```
 
-- **It may raise, and the caller handles it.** Narrowing loses values — `int → byte` cannot always
-  succeed — so the built-in numeric impls raise `OverflowError`, the same failure and the same name
-  `byte(300)` already raises. A user impl raises whatever fits its own reason; `ValueError` is the
-  natural one, and `OverflowError` is a kind of it.
+- **A type opts in** by implementing it. **No built-in type does**, and the two reasons are separate.
+  Between numbers the conversion is written `T(x)` — that is the whole of the rule above, and an
+  `.into()` beside it would need the position to say which target it meant, which
+  [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
+  `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
+  `str(x)` answers for every type — a generic that wants text needs no bound at all.
+- **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
+  as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
+- **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed
+  by the bound. The **arguments are part of the bound**: a type implementing `Into[Feet]` does not
+  meet `Into[Meters]`.
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
-- **One step per position.** A value crossing two positions may convert at each, which is what makes
-  `demo: Z = x + y` legal for `x: X`, `y: Y`: `x` reaches `Y` at the operand position, and the sum
-  reaches `Z` at the binding. It is two positions, not a chain.
-- **`.into()` needs a target.** `x := 1.into()` is a compile error — there is nothing there to say
-  which `Into` was meant. Written by hand, it is legal exactly where the compiler would have written
-  it.
 
-> **[not yet]** A hand-written `.into()` does not exist at all: `1.into()` reports
-> _NotImplemented: the method `into` on a int_, wherever it is written and whatever target is in view. So the
-> second line of the pair above — `x: float = 1.5 + 1.into()`, the "what it means" half — is not a program
-> this compiler builds, though the `x: float = 1.5 + 1` it explains is. The conversion the compiler writes for
-> itself is built and the built-in matrix below is real; only the spelling a reader can write out by hand is
-> missing, which is why it went unnoticed — nothing needs to say `.into()` for the feature to work.
+A **super-spec** carries its arguments too: `spec Ord: Eq[int]` says Ord extends `Eq` **at** `int`, so
+what an `impl Ord` owes is `Eq`'s signatures with `int` where `Eq`'s own parameter stands. A bound's
+arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
+parameters, which is a different thing done in a different place.
 
-**What an expression's type is, is decided by its operands alone** — never by what it is being assigned
-to. So the two operands of an operator agree first, and only then does the result meet the declared
-type:
+**An operator's operands must already be one type.** An untyped literal adopts the other operand — the
+_other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different
+types are a compile error, whatever the pair: `i + f` and `i + u` are the same mistake with the same
+fix, a written cast on one side — `float(i) + f`, `int(u) + i`. One rule for every pair; nothing is
+promoted, and no target is ever pushed down into an expression.
 
-- Operands of the **same** type stay that type; nothing is converted.
-- **Different** types take the **largest type both reach in one step** — largest meaning the one whose
-  values include the other's, which is also the direction that cannot fail. `1.5 + 1` is a `float`
-  because `int → float` exists and `float → int` does not.
-- If there is no such type, or two that neither contains, the expression's type is **undetermined** — a
-  compile error, and the conversion has to be written.
+**The conversions `T(x)` accepts** are these, and no others. They are not `Into` impls and never were
+one: `T(x)` is a built-in form, and this is the list of pairs it has an answer for.
 
-Because the target is never pushed down, `demo: Z = x + (y + z)` can be an error while
-`demo: Z = x + y + z` is not: the parentheses change which operands meet first, and each meeting is
-resolved on its own.
+| from   | to      | can raise | note                                      |
+| ------ | ------- | --------- | ----------------------------------------- |
+| `byte` | `int`   | no        | every byte is an int                      |
+| `rune` | `int`   | no        | every code point is an int                |
+| `int`  | `float` | no        | never fails; may lose precision past 2^53 |
+| `int`  | `byte`  | yes       | out of range → `OverflowError`            |
+| `int`  | `rune`  | yes       | not a code point → `OverflowError`        |
+| `int`  | `uint`  | yes       | negative → `OverflowError`                |
+| `uint` | `int`   | yes       | past the signed maximum → `OverflowError` |
 
-The built-in impls are these, and no others — a pair that is absent is one you convert with `T(x)`:
+`float → int` is absent: dropping a fraction is a decision, so it has its own spellings — `int(x)`,
+or `//` for the division that lands there. `byte → float` is absent too: that would be
+`byte → int → float`, and one step is what a conversion is — write the two.
 
-| from   | to      | can raise | note                                                |
-| ------ | ------- | --------- | --------------------------------------------------- |
-| `byte` | `int`   | no        | every byte is an int                                |
-| `rune` | `int`   | no        | every code point is an int                          |
-| `int`  | `float` | no        | never fails; may lose precision, and `L5xx` says so |
-| `int`  | `byte`  | yes       | out of range → `OverflowError`                      |
-| `int`  | `rune`  | yes       | not a code point → `OverflowError`                  |
-| `int`  | `uint`  | yes       | negative → `OverflowError`                          |
-| `uint` | `int`   | yes       | past the signed maximum → `OverflowError`           |
+**Any type to text is not in the table**, because it is not a conversion between types in this sense:
+`str(x)` renders a value through `display`, which every type has.
 
-**`int` and `uint` do not mix**, and that falls out rather than being a rule of its own: both
-directions exist, but neither type's values contain the other's, so `i + u` has no largest type and is
-undetermined. Cast one side — `int(u) + i` or `u + uint(i)`.
+**A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
+as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
+time rather than left to run. Reachability does not enter into it; `if false { b := byte(300) }` is the
+same error. It holds through a generic call once monomorphized, too: `byte(id(300))` for
+`fn id[T](x: T) -> T` is the same known constant, refused at the same compile time.
 
-There is no `float → int`: dropping a fraction is a decision, so it is written (`int(x)`, or `//` for
-the division that yields one). There is no `byte → float` either — that would be `byte → int → float`,
-which is the chain the one-step rule forbids.
-
-**A conversion the compiler can carry out is carried out.** `x: byte = 300` is well-formed — `int → byte`
-exists, so it type-checks — and then fails as a **constant**: the value is known, the conversion is known
-to raise, and it is reported at compile time rather than left to run. Reachability does not enter into
-it; `if false { b: byte = 300 }` is the same error.
-
-**Every implicit conversion is a lint finding** (`L5xx`), literals included — so `1.5 + 1` is reported
-and `1.5 + 1.0` is not. It is advisory, not a rule of the language: the point is that `1` and `1.0`
-should mean different types on the page, so a reader never has to infer a literal's type from its
-surroundings.
+**An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
+`1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different
+types on the page, so a reader never has to infer a literal's type from its surroundings.
 
 > **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
-> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name — while the
-> built-in matrix has four out of `int` alone. Reaching several needs a spec method keyed by the spec
-> and its arguments, which is also what would let a written-out `x.into()` say which one is meant.
+> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name. Reaching
+> several needs a spec method keyed by the spec **and its arguments**, which is the same thing the
+> bound above needs — and what would let a written `x.into()` say which one it means.
 
-This is also how a value, an `Err`, or `nil` flows into an `Either` at a typed position without explicit
-wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a
-reinterpret.
+A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
+conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which
+keeps its type inside — still a build, never a reinterpret.

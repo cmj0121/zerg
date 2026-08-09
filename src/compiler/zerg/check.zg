@@ -669,7 +669,7 @@ fn chk_branch_types(mut &em: Emitter, then_e: Expr, else_e: Expr) {
 	return if c_is_unknown(want) or c_is_unknown(got)
 	return if ty_eq(want, TVoid) or ty_eq(got, TVoid)
 
-	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the four typeless forms, so
+	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the five typeless forms, so
 	# `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence
 	# on the other — two spellings of one `int?` and not two answers. Every OTHER branch does
 	# bring its type, a literal included: a branch is not a typed position for its sibling, the

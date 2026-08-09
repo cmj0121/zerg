@@ -48,10 +48,12 @@ Three **rules**, then three **consequences**, each one step from a rule.
 
 Five notes carry the rules into the language:
 
-- **The four typeless forms** — a numeric literal (unconstrained it defaults, `int` or `float`,
-  `GRAMMAR#literal`), the containers `[]` and `{:}`, `nil`, and an untyped closure parameter
-  (`GRAMMAR#closure-param`). Everything else brings its type with it.
-- **A demand stops at parts.** It descends only through the four forms — never into an expression whose
+- **The five typeless forms** — a numeric literal (unconstrained it defaults, `int` or `float`,
+  `GRAMMAR#literal`), the empty `[]`, the empty `{:}`, `nil`, and an untyped closure parameter
+  (`GRAMMAR#closure-param`). Everything else brings its type with it. They are counted because the
+  count is the claim: a form not on this list has a type, and a sixth would have to be added here
+  before any rule below could be true of it.
+- **A demand stops at parts.** It descends only through those five — never into an expression whose
   parts already decided — and an operator chain meets pairwise, each meeting its own position. An
   expression whose parts are **all** typeless has decided nothing, so the demand passes through it:
   `x: byte = 100 + 100` is byte arithmetic, and `x: float = 1 / 2` is `0.5`, because the literals take

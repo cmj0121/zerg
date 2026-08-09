@@ -355,17 +355,22 @@ spec Into[T] {
 }
 ```
 
-- **A type opts in** by implementing it; the built-in scalar pairs below are the impls the language
-  ships.
-- **Generic code bounds on it** — `fn keyed[T: Into[str]](x: T)` may call `x.into()`, the target fixed
-  by the bound. Elsewhere `x.into()` is legal exactly where one target type is in view
-  (`s: str = x.into()`); with nothing to fix the target it is a compile error.
+- **A type opts in** by implementing it. **No built-in type does**, and the two reasons are separate.
+  Between numbers the conversion is written `T(x)` — that is the whole of the rule above, and an
+  `.into()` beside it would need the position to say which target it meant, which
+  [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
+  `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
+  `str(x)` answers for every type — a generic that wants text needs no bound at all.
+- **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
+  as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
+- **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed
+  by the bound.
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
 
-> **[not yet]** A written `.into()` does not exist: `1.into()` reports _NotImplemented: the method
-> `into` on a int_, wherever it is written and whatever target is in view — so today `Into` can be
-> neither called nor bounded on, and the conversions that run are the written `T(x)` built-ins.
+> **[not yet]** `Into` cannot be **bounded** on: `[T: Into[U]]` reports _NotImplemented: a
+> parameterized `Into[…]` as a type parameter's bound_, because a spec's type arguments are carried
+> only on an `impl`. A written `x.into()` on a type that implements it does run.
 
 **An operator's operands must already be one type.** An untyped literal adopts the other operand — the
 _other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different
@@ -373,8 +378,8 @@ types are a compile error, whatever the pair: `i + f` and `i + u` are the same m
 fix, a written cast on one side — `float(i) + f`, `int(u) + i`. One rule for every pair; nothing is
 promoted, and no target is ever pushed down into an expression.
 
-The built-in `Into` impls are these, and no others — the pairs a generic `[T: Into[U]]` bound can rely
-on, each also reachable as the written `T(x)`:
+**The conversions `T(x)` accepts** are these, and no others. They are not `Into` impls and never were
+one: `T(x)` is a built-in form, and this is the list of pairs it has an answer for.
 
 | from   | to      | can raise | note                                      |
 | ------ | ------- | --------- | ----------------------------------------- |
@@ -386,9 +391,12 @@ on, each also reachable as the written `T(x)`:
 | `int`  | `uint`  | yes       | negative → `OverflowError`                |
 | `uint` | `int`   | yes       | past the signed maximum → `OverflowError` |
 
-There is no `float → int` impl: dropping a fraction is a decision, so it has its own spellings —
-`int(x)`, or `//` for the division that lands there. No `byte → float` either: that would be
-`byte → int → float`, the chain the one-step rule forbids — write the two steps.
+`float → int` is absent: dropping a fraction is a decision, so it has its own spellings — `int(x)`,
+or `//` for the division that lands there. `byte → float` is absent too: that would be
+`byte → int → float`, and one step is what a conversion is — write the two.
+
+**Any type to text is not in the table**, because it is not a conversion between types in this sense:
+`str(x)` renders a value through `display`, which every type has.
 
 **A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
 as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
@@ -401,9 +409,9 @@ same error. It holds through a generic call once monomorphized, too: `byte(id(30
 types on the page, so a reader never has to infer a literal's type from its surroundings.
 
 > **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
-> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name — while the
-> built-in matrix has four out of `int` alone. Reaching several needs a spec method keyed by the spec
-> and its arguments, which is also what would let a written-out `x.into()` say which one is meant.
+> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name. Reaching
+> several needs a spec method keyed by the spec **and its arguments**, which is the same thing the
+> bound above needs — and what would let a written `x.into()` say which one it means.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

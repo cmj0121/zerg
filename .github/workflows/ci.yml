@@ -183,6 +183,15 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make reject-fuzz
 
+      # --- 7c'. every GRAMMAR chapter is read, or refused by name ---------------
+      # test-data/conformance is one file per chapter of GRAMMAR — every form it derives,
+      # written once — and no runner, no target and no test named it, so 375 lines of
+      # corpus said "this is the language" to nobody. Gated on `available` like its
+      # neighbours: the twelve files live in the private corpus.
+      - name: Every GRAMMAR chapter is read, or refused by name
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make conformance
+
       # --- 7d. formatting changes spacing, never meaning ------------------------
       # `fmt --check` and idempotence are both blind to a rule that is stably WRONG. This
       # is the property that is not: the token stream must survive being formatted.

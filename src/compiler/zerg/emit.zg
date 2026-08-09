@@ -8006,8 +8006,25 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 # a value in this language, so a slice that aliased its source would be the odd one out —
 # and the runtime has no slice primitive to alias with anyway. The source is materialised
 # into a temp first, so a call result is indexed once rather than per element.
+# c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
+# c_range_needs_hi has already had its say about.
+fn c_slice_bound(mut &em: Emitter, e: Expr) {
+	return if c_is_nil_lit(e)
+
+	t := c_infer(em, e)
+	return if c_is_unknown(t) or c_is_int(t)
+
+	chk_at(em, f"a slice bound is an int, and this is {ty_name(t)}")
+}
+
 fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
 	c_range_needs_hi(idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
+
+	# A BOUND IS AN INT, and nothing said so: `xs["a"..1]` was accepted and the runtime walked
+	# from a pointer read as a length. Silent, and on the one operation whose whole job is to
+	# stay inside the buffer.
+	c_slice_bound(em, c_range_lo(idx))
+	c_slice_bound(em, c_range_hi(idx))
 
 	src := c_expr(em, target, sb)
 	lo := c_expr(em, c_range_lo(idx), sb)
@@ -8339,7 +8356,16 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	tgt := c_expr(em, target, sb)
-	return f"{tgt}.f{fld}" if c_all_digits(fld)
+	if c_all_digits(fld) {
+		# `.0` IS A TUPLE'S ACCESSOR AND NOTHING ELSE'S, and it was spelled `.f0` onto whatever
+		# stood to its left: `n.0` on an int reached cc as "member reference base type
+		# 'int64_t' is not a structure or union", and `t.5` on a 2-tuple as "no member named
+		# 'f5'". A tuple is read by STATIC index precisely so the element's type is known —
+		# which means the index is checkable here, and was not checked at all.
+		c_tuple_index_ok(em, c_infer(em, target), fld)
+
+		return f"{tgt}.f{fld}"
+	}
 
 	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
 	tt := c_infer(em, target)
@@ -8361,6 +8387,23 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	}
 
 	return f"{tgt}.zg_{fld}"
+}
+
+# c_tuple_index_ok is the two halves of `t.N`: the target is a tuple, and N is one of its
+# elements. An unknown target is left alone, as everywhere else.
+fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
+	return if c_is_unknown(t)
+
+	if not c_is_tuple(t) {
+		chk_at(em, f"`.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
+		return
+	}
+
+	n := c_tuple_tys(t).len()
+	i := strconv.parse_int(fld, 10)
+	return if i >= 0 and i < n
+
+	chk_at(em, f"a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
 }
 
 fn c_all_digits(s: str) -> bool {
@@ -8563,7 +8606,16 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# a `list[rune]`, which every rule below already knows how to walk.
 	return c_forin(em, var, EConv(TList(TRune), iter, "list"), body, ind) if c_is_str(ct)
 
-	elem := c_list_elem(c_infer(em, iter))
+	# WHAT IS LEFT MUST BE A LIST. Everything else fell through to the list walk, which reads
+	# an element type a non-container does not have — so `for x in n` on an int bound `x` to
+	# TUnknown, and the first USE of `x` reported "undefined name `x`". The loop variable was
+	# blamed for the thing being walked: a sentence about the consequence, naming the one part
+	# of the line that is fine.
+	if not c_is_list(ct) and not c_is_unknown(ct) {
+		chk_at(em, f"`for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
+	}
+
+	elem := c_list_elem(ct)
 	et := c_type(elem)
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false, false)

@@ -2864,6 +2864,42 @@ fn main() {
 }
 EOF
 
+# --- bad paths, sweep two: tuples, slices, iteration ------------------------------------
+
+reject tuple-index-past-its-arity 'a tuple of 2 has no `.5`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	print t.5
+}
+EOF
+
+reject tuple-index-on-a-non-tuple 'is not a tuple' <<'EOF'
+fn main() {
+	n := 5
+	print n.0
+}
+EOF
+
+# SILENT: a str bound on a slice was accepted and lowered, so the range walked from a pointer
+reject slice-with-a-str-bound 'a slice bound is an int' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	ys := xs["a"..1]
+	print ys.len()
+}
+EOF
+
+# The message named the LOOP VARIABLE as undefined, which is the consequence: the loop gave it
+# no type because the thing being walked is not walkable, and `x` was blamed for it.
+reject for-over-a-non-iterable 'is not iterable' <<'EOF'
+fn main() {
+	n := 5
+	for x in n {
+		print x
+	}
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

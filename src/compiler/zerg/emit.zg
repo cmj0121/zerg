@@ -667,8 +667,30 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 fn c_ctor_side(e: Expr) -> int {
 	return match e {
 		Expr.ECall(nm, args, _) => c_ctor_side_of(nm, args.len())
+		Expr.EMethod(target, meth, args) => c_ctor_side_of(c_either_qual(target, meth), args.len())
 		_ => 0 - 1
 	}
+}
+
+# c_either_qual answers the side a QUALIFIED constructor names — `Either.Left(v)`, the form
+# GRAMMAR asks for now that a variant is reached through its type. It answers "" for every
+# other method call, so the two shapes go through one table.
+#
+# `Left` and `Right` are the two constructors this file reads by NAME rather than by
+# resolving them, because they are context-typed: they have no type of their own and take
+# the one the position wants. That is why qualifying them was not free — every other variant
+# was already resolved through its enum, and these two are matched here.
+fn c_either_qual(target: Expr, meth: str) -> str {
+	return match target {
+		Expr.EIdent(nm) => c_either_qual_of(nm, meth)
+		_ => ""
+	}
+}
+
+fn c_either_qual_of(nm: str, meth: str) -> str {
+	return meth if nm == "Either" or nm == "Result"
+
+	return ""
 }
 
 # c_check_ctor_arity refuses `Left()` / `Right(a, b)`: each side of an Either holds exactly
@@ -676,6 +698,7 @@ fn c_ctor_side(e: Expr) -> int {
 fn c_check_ctor_arity(e: Expr) {
 	match e {
 		Expr.ECall(nm, args, _) => c_check_ctor_arity_of(nm, args.len())
+		Expr.EMethod(target, meth, args) => c_check_ctor_arity_of(c_either_qual(target, meth), args.len())
 		_ => c_skip()
 	}
 }
@@ -3106,6 +3129,24 @@ fn c_last_segment(path: str) -> str {
 	return str(out)
 }
 
+# c_bare_variant is the rule that a variant is NEVER A NAME ON ITS OWN (GRAMMAR group 7's
+# CONSTRUCTION note): an enum puts its own name into the value namespace and not its
+# variants', so `Color.Red` and never `Red`. That is what keeps two enums that both declare
+# a `Red` from competing for it — and what stops an enum GAINING a variant from taking a
+# name a program was already using for something else.
+#
+# It is one function because it is one rule: the value position and the call position are
+# the same mistake, and a code answers to a rule rather than to a site.
+#
+# `Left` and `Right` are not reached here. They are the two constructors this compiler reads
+# by NAME rather than by resolving them, because they are context-typed — no type of their
+# own, taking the one the position wants — so they are not in the variant table at all. Both
+# spellings work; requiring the qualified one is a separate decision about a built-in's
+# documented surface (docs/code/errors.md).
+fn c_bare_variant(mut &em: Emitter, name: str) {
+	chk_at(em, "E383", f"`{name}` is a variant of `{c_variant_enum(em, name)}`, and a variant is named through its enum — write `{c_variant_enum(em, name)}.{name}`")
+}
+
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
 	for i < em.var_name.len() {
@@ -5372,7 +5413,10 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	}
 
 	if c_is_ctor(name) {
-		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
+		if c_is_variant(em, name) {
+			c_bare_variant(em, name)
+			return c_variant_ctor(em, name, args, sb)
+		}
 
 		# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
 		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
@@ -5844,7 +5888,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		return sb.repls[i] if sb.names[i] == n
 		i = i + 1
 	}
-	return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}" if c_is_variant(em, n)
+	if c_is_variant(em, n) {
+		c_bare_variant(em, n)
+		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+	}
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return f"(*zg_{n})"
@@ -8078,10 +8125,14 @@ fn c_call_name(e: Expr) -> str {
 	}
 }
 
+# c_call_args_of is the argument list of a call, whichever shape wrote it. `Either.Left(v)`
+# is an EMethod and `Left(v)` an ECall, and the one caller that reads this — the Either
+# injection — takes the same single argument out of both.
 fn c_call_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
 		Expr.ECall(_, a, _) => a
+		Expr.EMethod(_, _, a) => a
 		_ => none
 	}
 }

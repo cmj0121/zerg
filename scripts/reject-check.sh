@@ -1575,7 +1575,7 @@ fn area(s: Shape) -> int {
 }
 
 fn main() {
-	print(f"{area(Dot)}")
+	print(f"{area(Shape.Dot)}")
 }
 EOF
 
@@ -1586,7 +1586,7 @@ enum Shape {
 }
 
 fn main() {
-	s := Line(7)
+	s := Shape.Line(7)
 	print("built")
 }
 EOF
@@ -1605,7 +1605,7 @@ fn area(s: Shape) -> int {
 }
 
 fn main() {
-	print(f"{area(Dot)}")
+	print(f"{area(Shape.Dot)}")
 }
 EOF
 
@@ -1616,7 +1616,7 @@ enum Shape {
 }
 
 fn main() {
-	s := Line(7, 8)
+	s := Shape.Line(7, 8)
 	print("built")
 }
 EOF
@@ -1765,7 +1765,7 @@ enum E {
 }
 
 fn main() {
-	e := A(7)
+	e := E.A(7)
 	print(match e {
 		E.A(this) => this
 		_ => 0
@@ -1922,7 +1922,7 @@ enum Fruit {
 }
 
 fn main() {
-	print(f"{Red == Apple}")
+	print(f"{Color.Red == Fruit.Apple}")
 }
 EOF
 
@@ -1933,7 +1933,7 @@ enum Color {
 }
 
 fn main() {
-	c := Red
+	c := Color.Red
 	print(f"{c == 0}")
 }
 EOF
@@ -3360,6 +3360,22 @@ fn main() {
 		Red   => "r"
 		Green => "g"
 	}
+}
+EOF
+
+# THE VALUE POSITION, the other half of the same rule. A bare variant here is not a silent
+# meaning change the way a pattern is — it simply resolves, which is the problem: two enums
+# that both declare a `Red` cannot both have it, and an enum that GAINS one takes a name the
+# program was already using.
+reject a-bare-variant-value E383 seed-gap <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Red
+	print 1
 }
 EOF
 

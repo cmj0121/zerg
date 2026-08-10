@@ -776,6 +776,22 @@ fn main() {
 }
 EOF
 
+# AN AGGREGATE has no ordering either, and `#[derive(Eq)]` does not give it one: equality and
+# ordering are two questions, and `Ord` is what would answer the second. This case lived next
+# door among the not-yet-built forms, asserting a `NotImplemented` the EMITTER raised — and a
+# raise ends the run, so those words replaced this rule's on every program that hit both. The
+# rule that answers is this one, and it always was.
+reject order-a-struct-that-has-eq E346 'and these are P and P' <<'EOF'
+#[derive(Eq)]
+struct P {
+	x: int
+}
+
+fn main() {
+	print P(1) < P(2)
+}
+EOF
+
 reject compare-int-with-str E348 <<'EOF'
 fn main() {
 	s := "s"
@@ -3258,6 +3274,20 @@ EOF
 reject an-undefined-name E372 <<'EOF'
 fn main() {
 	print nosuchname
+}
+EOF
+
+# the FIFTH sentence of `c_eq_says`, and the one its own comment did not know it had: the
+# helper said "three different sentences" while answering five, and the two it had not
+# counted were the two with no code. A comment cannot count a function's branches; a gate
+# that asks which codes nothing provokes can.
+reject equality-on-a-carrier E473 <<'EOF'
+fn main() {
+	a: Either[int, str] = Left(1)
+	b: Either[int, str] = Left(2)
+	if a == b {
+		print 1
+	}
 }
 EOF
 

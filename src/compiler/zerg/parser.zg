@@ -37,7 +37,7 @@ struct Parser {
 
 fn cur(mut &p: Parser) -> Token {
 	return p.toks[p.pos] if p.pos < p.toks.len()
-	return Token(Eof, "", "", 0, 0)
+	return Token(Kind.Eof, "", "", 0, 0)
 }
 
 fn cur_kind(mut &p: Parser) -> Kind {
@@ -47,7 +47,7 @@ fn cur_kind(mut &p: Parser) -> Kind {
 fn peek_kind(mut &p: Parser, n: int) -> Kind {
 	j := p.pos + n
 	return p.toks[j].kind if j < p.toks.len()
-	return Eof
+	return Kind.Eof
 }
 
 # peek_lexeme is peek_kind's other half: the TEXT of a token ahead, read without consuming
@@ -173,15 +173,29 @@ fn p_expr_root(mut &p: Parser, e: Expr, line: int, col: int) {
 # now does.
 fn p_names_here(mut &p: Parser, at: int) -> bool {
 	k := p.toks[at].kind
-	return true if k == Ident
-	return lookup_keyword(p.toks[at].lexeme) != Ident
+	return true if k == Kind.Ident
+	return lookup_keyword(p.toks[at].lexeme) != Kind.Ident
+}
+
+# p_reserved_word reports whether a lexeme is one a DECLARATION may not take. The keyword
+# table answers most of it, and `This` is the one that is not in it: it is the SELF TYPE, a
+# name every `impl` writes and no `impl` declares (GRAMMAR#impl-decl), so it is reserved in
+# exactly the way `this` is while being an ordinary identifier to the lexer.
+#
+# It was found by a migration. `enum Kind { … This … }` declared a variant with that name,
+# and once a variant had to be written through its enum there was no way to tell `Kind.This`
+# the value from `This` the type at all — which is what a reserved word is for.
+fn p_reserved_word(lx: str) -> bool {
+	return true if lx == "This"
+
+	return lookup_keyword(lx) != Kind.Ident
 }
 
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
-	raise f"E245 `{lx}` is a reserved word and cannot name {what}" if not p_at(p, Ident) and lookup_keyword(lx) != Ident
-	raise f"{what} needs a name, and `{lx}` is not one" if not p_at(p, Ident)
+	raise f"E245 `{lx}` is a reserved word and cannot name {what}" if p_reserved_word(lx)
+	raise f"{what} needs a name, and `{lx}` is not one" if not p_at(p, Kind.Ident)
 
 	p_advance(p)
 	return lx
@@ -200,7 +214,7 @@ fn expect(mut &p: Parser, k: Kind) {
 }
 
 fn skip_semis(mut &p: Parser) {
-	for p_at(p, Semi) {
+	for p_at(p, Kind.Semi) {
 		p_advance(p)
 	}
 }
@@ -221,7 +235,7 @@ fn skip_semis(mut &p: Parser) {
 fn p_stmt_sep(mut &p: Parser, end: Kind) {
 	at := p.pos
 	skip_semis(p)
-	return if p.pos != at or p_at(p, end) or p_at(p, Eof)
+	return if p.pos != at or p_at(p, end) or p_at(p, Kind.Eof)
 
 	t := cur(p)
 	raise f"E205 expected a newline or `;` to separate statements, found `{t.lexeme}`" + p_place(p, t.line, t.col)
@@ -231,8 +245,8 @@ fn p_stmt_sep(mut &p: Parser, end: Kind) {
 # and call targets in the subset), or "" for anything else.
 fn ident_name(e: Expr) -> str {
 	return match e {
-		EIdent(n) => n
-		_         => ""
+		Expr.EIdent(n) => n
+		_ => ""
 	}
 }
 
@@ -240,7 +254,7 @@ fn ident_name(e: Expr) -> str {
 # is the shape an or-pattern over LITERALS arrives in — parse_expr swallows the `|`.
 fn is_or_expr(e: Expr) -> bool {
 	return match e {
-		EBinary(oper, x, y) => oper == "|"
+		Expr.EBinary(oper, x, y) => oper == "|"
 		_ => false
 	}
 }
@@ -273,9 +287,9 @@ fn is_or_expr(e: Expr) -> bool {
 fn parse_type(mut &p: Parser) -> Ty {
 	p_deeper(p)
 	mut t := parse_base_type(p)
-	if p_at(p, Question) {
+	if p_at(p, Kind.Question) {
 		p_advance(p)
-		t = TOpt(t)
+		t = Ty.TOpt(t)
 	}
 	p_shallower(p)
 	return t
@@ -286,20 +300,20 @@ fn parse_type(mut &p: Parser) -> Ty {
 # production with different meanings, and keeping them one loop is what keeps their
 # trailing-comma and end-of-input recovery from drifting apart.
 fn parse_paren_types(mut &p: Parser) -> list[Ty] {
-	expect(p, LParen)
+	expect(p, Kind.LParen)
 	mut out: list[Ty] = []
-	for not p_at(p, RParen) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
 
 		# the comma is REQUIRED between elements and absent before the `)`. Advancing on one
 		# only when it is there made it optional, so `(int int)` parsed as a two-element
 		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
 		# GRAMMAR#tuple-type, and both said nothing.
-		if not p_at(p, RParen) {
-			expect(p, Comma)
+		if not p_at(p, Kind.RParen) {
+			expect(p, Kind.Comma)
 		}
 	}
-	expect(p, RParen)
+	expect(p, Kind.RParen)
 	return out
 }
 
@@ -308,13 +322,13 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
 	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
 	# different tokens, neither of them the form.
-	raise "E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, LBrack)
+	raise "E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, Kind.LBrack)
 
-	if p_at(p, LArrow) {
+	if p_at(p, Kind.LArrow) {
 		p_advance(p)
 		inner := parse_type(p)
 		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
-		return TChan(ty_chan_elem(inner), 2)
+		return Ty.TChan(ty_chan_elem(inner), 2)
 	}
 
 	# `(A, B)` — a TUPLE TYPE (GRAMMAR#tuple-type), two elements or more. The value form has
@@ -322,7 +336,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# type it has: every position that wants one — a typed binding, a parameter, a return,
 	# a field, a list element — fell through to the name below and reported whatever token
 	# came next. Five positions, five different messages, none of them the form.
-	if p_at(p, LParen) {
+	if p_at(p, Kind.LParen) {
 		elems := parse_paren_types(p)
 
 		# GRAMMAR says two or more. One element in parentheses is a grouped type everywhere
@@ -330,7 +344,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# what a function with no result returns.
 		raise "E246 a tuple type has two elements or more — `()` is not a type, and `(T)` is just `T`" if elems.len() < 2
 
-		return TTuple(elems)
+		return Ty.TTuple(elems)
 	}
 
 	mut name := cur(p).lexeme
@@ -341,7 +355,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# the name. Reading it this way is what lets a program use a type another module
 	# declares — without it the qualifier parses as a type of its own and the emitter
 	# spells a name nothing declared.
-	for p_at(p, Dot) {
+	for p_at(p, Kind.Dot) {
 		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER, and dropping the qualifier made them the
 		# same thing: `I.Item` PROJECTS a type the implementer of `I` supplies (GRAMMAR#base-type,
 		# chainable as `I.Item.Sub`), so keeping only `Item` left it reading as an undeclared
@@ -359,46 +373,46 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 
 	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
 	# at parse time keeps it out of the emitter, which has no notion of a self type.
-	return TNamed(p.impl_ty) if name == "This" and p.impl_ty != ""
+	return Ty.TNamed(p.impl_ty) if name == "This" and p.impl_ty != ""
 
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
-	if name == "fn" and p_at(p, LParen) {
+	if name == "fn" and p_at(p, Kind.LParen) {
 		ptys := parse_paren_types(p)
-		mut fret := TVoid
-		if p_at(p, Arrow) {
+		mut fret := Ty.TVoid
+		if p_at(p, Kind.Arrow) {
 			p_advance(p)
 			fret = parse_type(p)
 		}
-		return TFn(ptys, fret)
+		return Ty.TFn(ptys, fret)
 	}
-	if name == "chan" and p_at(p, LBrack) {
+	if name == "chan" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
-		expect(p, RBrack)
+		expect(p, Kind.RBrack)
 
 		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
 		# element type, so nothing else that a `<-` may follow is ever eaten
-		if p_at(p, LArrow) {
+		if p_at(p, Kind.LArrow) {
 			p_advance(p)
-			return TChan(elem, 1)
+			return Ty.TChan(elem, 1)
 		}
-		return TChan(elem, 0)
+		return Ty.TChan(elem, 0)
 	}
-	if name == "map" and p_at(p, LBrack) {
+	if name == "map" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		kt := parse_type(p)
-		if p_at(p, Comma) {
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 		vt := parse_type(p)
-		expect(p, RBrack)
-		return TMap(kt, vt)
+		expect(p, Kind.RBrack)
+		return Ty.TMap(kt, vt)
 	}
-	if name == "list" and p_at(p, LBrack) {
+	if name == "list" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
-		expect(p, RBrack)
-		return TList(elem)
+		expect(p, Kind.RBrack)
+		return Ty.TList(elem)
 	}
 
 	# `bytearray` IS `list[byte]` and `runearray` IS `list[rune]` — a shorter name for the
@@ -409,48 +423,48 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# They exist because a `str` is not indexable and the bridge out of one used to be
 	# written `bytearray(s)` — a TYPE with an argument, in expression position, which is the
 	# one thing the surface still needed a symbol table to read.
-	return TList(TByte) if name == "bytearray"
-	return TList(TRune) if name == "runearray"
+	return Ty.TList(Ty.TByte) if name == "bytearray"
+	return Ty.TList(Ty.TRune) if name == "runearray"
 
 	# `Result[T]` is `Either[T, Err]` — the language says so (docs/code/errors.md), and the
 	# two spellings therefore parse to ONE type rather than to a special case beside it. The
 	# annotation used to be ERASED to its happy path, so a function declared `-> Result[int]`
 	# returned a plain int and `??`, `!` and `?` on the far side of it had nothing to read.
-	if name == "Result" and p_at(p, LBrack) {
+	if name == "Result" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		inner := parse_type(p)
-		expect(p, RBrack)
-		return TEither(inner, TErr)
+		expect(p, Kind.RBrack)
+		return Ty.TEither(inner, Ty.TErr)
 	}
-	if name == "Either" and p_at(p, LBrack) {
+	if name == "Either" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		lt := parse_type(p)
-		if p_at(p, Comma) {
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 		rt := parse_type(p)
-		expect(p, RBrack)
+		expect(p, Kind.RBrack)
 
 		# the sides must DIFFER: an injection that could reach both is not a construction
 		# anyone can read, so the type is refused rather than the ambiguity resolved
 		raise f"E206 `Either[{ty_name(lt)}, {ty_name(rt)}]` has the same type on both sides — a value could be either, and nothing could tell which" if ty_name(lt) == ty_name(rt)
-		return TEither(lt, rt)
+		return Ty.TEither(lt, rt)
 	}
 
 	# `Err` is the Right payload made nameable, which is what lets a `Right(e)` be passed
 	# to something. Without this it read as a user type named Err and the emitter spelled
 	# `zg_Err`, a type nothing declares.
-	return TErr if name == "Err"
+	return Ty.TErr if name == "Err"
 
-	return TInt if name == "int"
-	return TFloat if name == "float"
-	return TStr if name == "str"
-	return TBool if name == "bool"
-	return TByte if name == "byte"
+	return Ty.TInt if name == "int"
+	return Ty.TFloat if name == "float"
+	return Ty.TStr if name == "str"
+	return Ty.TBool if name == "bool"
+	return Ty.TByte if name == "byte"
 
-	return TUint if name == "uint"
-	return TRune if name == "rune"
-	return TNil if name == "nil"
+	return Ty.TUint if name == "uint"
+	return Ty.TRune if name == "rune"
+	return Ty.TNil if name == "nil"
 
 	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
 	# built-in generics above read their own brackets; every other name reached this line
@@ -465,7 +479,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# `Result[T]`: it erases generics, so a type's identity is its name. What matters is
 	# that the brackets are CONSUMED.
 	skip_ty_args(p)
-	return TNamed(name)
+	return Ty.TNamed(name)
 }
 
 # parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR#bound) — into the spec names
@@ -496,11 +510,11 @@ fn join_bounds(specs: list[str]) -> str {
 # different things out of the same production, and one function returning both shapes would be
 # answering two questions to serve one caller each.
 fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[Ty]]) {
-	for p_at(p, Ident) {
+	for p_at(p, Kind.Ident) {
 		names.append(cur(p).lexeme)
 		p_advance(p)
 		args.append(parse_ty_args(p))
-		return if not p_at(p, Plus)
+		return if not p_at(p, Kind.Plus)
 
 		p_advance(p) # '+'
 	}
@@ -508,7 +522,7 @@ fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[Ty]]
 
 fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 	mut out: list[str] = []
-	for p_at(p, Ident) {
+	for p_at(p, Kind.Ident) {
 		name := cur(p).lexeme
 		p_advance(p)
 
@@ -524,14 +538,14 @@ fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 		# signatures can be compared, and dropping them silently made `spec Ord: Eq[int]`
 		# refuse every correct `impl Ord` with "parameter `o` is int, and the spec declares T"
 		# — a valid program turned away for a reason about the compiler.
-		if p_at(p, LBrack) {
+		if p_at(p, Kind.LBrack) {
 			raise f"E207 NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here" if not allow_args
 
 			out.append(spec_key(name, parse_ty_args(p)))
 		} else {
 			out.append(name)
 		}
-		return out if not p_at(p, Plus)
+		return out if not p_at(p, Kind.Plus)
 
 		p_advance(p) # '+'
 	}
@@ -543,15 +557,15 @@ fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 # nothing, which is right where the arguments are erased; an `impl`'s are not.
 fn parse_ty_args(mut &p: Parser) -> list[Ty] {
 	mut out: list[Ty] = []
-	return out if not p_at(p, LBrack)
+	return out if not p_at(p, Kind.LBrack)
 	p_advance(p) # '['
-	for not p_at(p, RBrack) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-		if p_at(p, Comma) {
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 	}
-	expect(p, RBrack)
+	expect(p, Kind.RBrack)
 	return out
 }
 
@@ -559,14 +573,14 @@ fn parse_ty_args(mut &p: Parser) -> list[Ty] {
 # counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
 # token after the outer `]`.
 fn skip_ty_args(mut &p: Parser) {
-	return if not p_at(p, LBrack)
+	return if not p_at(p, Kind.LBrack)
 	p_advance(p) # '['
 	mut depth := 1
-	for depth > 0 and not p_at(p, Eof) {
-		if p_at(p, LBrack) {
+	for depth > 0 and not p_at(p, Kind.Eof) {
+		if p_at(p, Kind.LBrack) {
 			depth = depth + 1
 		}
-		if p_at(p, RBrack) {
+		if p_at(p, Kind.RBrack) {
 			depth = depth - 1
 		}
 		p_advance(p)
@@ -583,14 +597,14 @@ fn is_conv(name: str) -> bool {
 }
 
 fn conv_ty(name: str) -> Ty {
-	return TInt if name == "int"
-	return TUint if name == "uint"
-	return TRune if name == "rune"
-	return TByte if name == "byte"
-	return TFloat if name == "float"
-	return TBool if name == "bool"
+	return Ty.TInt if name == "int"
+	return Ty.TUint if name == "uint"
+	return Ty.TRune if name == "rune"
+	return Ty.TByte if name == "byte"
+	return Ty.TFloat if name == "float"
+	return Ty.TBool if name == "bool"
 
-	return TStr
+	return Ty.TStr
 }
 
 # --- declarations --------------------------------------------------------------
@@ -646,7 +660,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut unsafe_line := 0
 	mut unsafe_col := 0
 	skip_semis(p)
-	for not p_at(p, Eof) {
+	for not p_at(p, Kind.Eof) {
 		# `pub` is a VISIBILITY FLAG on the declaration that follows, not a dispatch of its
 		# own. It used to open a second, hand-copied Fn/Type/Const/… chain that had already
 		# drifted from the one below — and `pub struct` fell off its end with no `else`, so
@@ -661,18 +675,18 @@ pub fn parse_at(src: str, path: str) -> File {
 		# refused is the declaration that starts at `t`, whichever arm reaches that answer.
 		t := cur(p)
 		mut is_pub := false
-		if p_at(p, Pub) {
+		if p_at(p, Kind.Pub) {
 			is_pub = true
 			p_advance(p)
 		}
-		if p_at(p, Import) {
+		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
 			raise "E247 `pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
 			parse_import(p, imports)
-		} else if p_at(p, Fn) {
+		} else if p_at(p, Kind.Fn) {
 			fns.append(parse_fn(p, is_pub, "", false))
-		} else if p_at(p, Struct) {
+		} else if p_at(p, Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
 			# (parse_struct), it is read and dropped — type visibility is not enforced,
 			# the deviation docs/runtime/package.md owns ("enforced on functions, and on
@@ -680,43 +694,43 @@ pub fn parse_at(src: str, path: str) -> File {
 			sd := parse_struct(p)
 			p_take_derives(sd.name, pending, derive_on, derive_spec)
 			structs.append(sd)
-		} else if p_at(p, Enum) {
+		} else if p_at(p, Kind.Enum) {
 			# `pub enum` — read and dropped, the struct arm's reason
 			ed := parse_enum(p)
 			p_take_derives(ed.name, pending, derive_on, derive_spec)
 			enums.append(ed)
-		} else if p_at(p, Spec) {
+		} else if p_at(p, Kind.Spec) {
 			# `pub spec` — read and dropped, the struct arm's reason
 			specs.append(parse_spec(p))
-		} else if p_at(p, Const) {
+		} else if p_at(p, Kind.Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
 			p_advance(p)
 			consts.append(p_top_binding(p, false, true, is_pub, in_unsafe, t.line, t.col))
-		} else if p_at(p, Init) {
+		} else if p_at(p, Kind.Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
 			# there is no visibility for a marker to grant (GRAMMAR#init-decl derives none)
 			raise "E248 `pub` does not go on `init()` — the runtime calls it, so it has no visibility to grant" + p_place(p, t.line, t.col) if is_pub
 			fns.append(parse_init(p, fns.len()))
-		} else if p_at(p, Impl) {
+		} else if p_at(p, Kind.Impl) {
 			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
 			raise "E249 `pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
 			parse_impl(p, fns, impls)
-		} else if p_at(p, Type) {
+		} else if p_at(p, Kind.Type) {
 			types.append(parse_typedecl(p, is_pub))
-		} else if p_at(p, Hash) {
+		} else if p_at(p, Kind.Hash) {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise "E250 a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
 			parse_decorator(p, pending)
-		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
+		} else if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
 			raise "E251 a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver" + p_place(p, t.line, t.col)
-		} else if p_at(p, Mut) {
+		} else if p_at(p, Kind.Mut) {
 			# a top-level `mut` binding — `mut x := 0` or `pub mut x := 0`, `pub` changing
 			# nothing about mutability. Inside a module-level `unsafe { … }` group it is
 			# the language's MUTABLE GLOBAL (docs/runtime/ffi.md, GRAMMAR group 12), and
@@ -728,7 +742,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# every use site.
 			p_advance(p)
 			consts.append(p_top_binding(p, true, false, is_pub, in_unsafe, t.line, t.col))
-		} else if p_at(p, Ident) and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+		} else if p_at(p, Kind.Ident) and (peek_kind(p, 1) == Kind.Walrus or peek_kind(p, 1) == Kind.Colon) {
 			# a plain top-level binding — `COUNT := 3`, `pub COUNT := 3`, or `answer: int
 			# = compute()` — is the same module constant the `const` arm reads, without
 			# the shadow-proofing the keyword adds; docs/runtime/package.md puts it in the
@@ -736,7 +750,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# the fallback below and vanish, so the module compiled WITHOUT the member and
 			# every use answered `undefined name` about a name the module plainly declares.
 			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
-		} else if p_at(p, Unsafe) and (peek_kind(p, 1) == Fn or (peek_kind(p, 1) == Mut and peek_kind(p, 2) == Fn)) {
+		} else if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
 			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
 			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
 			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
@@ -748,7 +762,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# one message; `t` is the declaration's first token, so the refusal carries the
 			# place a declaration owes.
 			raise "E264 NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
-		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
+		} else if p_at(p, Kind.Unsafe) and peek_kind(p, 1) == Kind.LBrace {
 			# a module-level `unsafe { … }` group opens. Every item inside goes through
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
 			# grammar of its own — and the depth is what the binding arms record on each
@@ -771,7 +785,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# is not one. This is the one pass round the loop that reads no item, so it is
 			# also the one that must not ask for the separator below.
 			continue
-		} else if in_unsafe and p_at(p, RBrace) {
+		} else if in_unsafe and p_at(p, Kind.RBrace) {
 			p_advance(p)
 			in_unsafe = false
 		} else if in_unsafe {
@@ -799,9 +813,9 @@ pub fn parse_at(src: str, path: str) -> File {
 		# group (GRAMMAR#unsafe-group), whose items this same loop reads and whose end is its
 		# `}`. The group is a brace this loop opens and closes rather than a block it
 		# descends into, so it is the one place where the terminator is not fixed.
-		mut end := Eof
+		mut end := Kind.Eof
 		if in_unsafe {
-			end = RBrace
+			end = Kind.RBrace
 		}
 		p_stmt_sep(p, end)
 	}
@@ -838,7 +852,7 @@ pub fn parse_at(src: str, path: str) -> File {
 fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
 	return match s {
-		SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
+		Stmt.SLet(name, ty, has_ty, im, ic, value) => ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
@@ -883,16 +897,16 @@ pub fn imports_of_at(src: str, path: str) -> list[str] {
 fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
 	n := cur(p)
 	mut out: list[Expr] = []
-	raise "NotImplemented: a fill count that is not an integer literal" if n.kind != Int
+	raise "NotImplemented: a fill count that is not an integer literal" if n.kind != Kind.Int
 	p_advance(p)
-	expect(p, RBrack)
+	expect(p, Kind.RBrack)
 	mut i := 0
 	count := strconv.parse_int(n.lexeme, 10)
 	for i < count {
 		out.append(v)
 		i = i + 1
 	}
-	return EListLit(out)
+	return Expr.EListLit(out)
 }
 
 # parse_fn_expr reads `fn(p: T) -> R { … }` in expression position — the same shape a
@@ -900,13 +914,13 @@ fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
 # is no bracket group to read here.
 fn parse_fn_expr(mut &p: Parser) -> Expr {
 	p_advance(p) # 'fn'
-	expect(p, LParen)
+	expect(p, Kind.LParen)
 	mut params: list[Param] = []
-	for not p_at(p, RParen) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		mut is_ref := false
-		if p_at(p, Mut) {
+		if p_at(p, Kind.Mut) {
 			p_advance(p)
-			if p_at(p, Amp) {
+			if p_at(p, Kind.Amp) {
 				p_advance(p)
 				is_ref = true
 			}
@@ -917,24 +931,24 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 		# from the function type the closure is checked against. This one does not infer,
 		# and it did not say so: the `expect` below reported `expected `:`, found `)``,
 		# which reads as a typo in a form the grammar allows.
-		raise f"E209 NotImplemented: a closure parameter without a type — GRAMMAR lets `{pname}` take its type from the function type the closure is checked against, and this compiler does not infer it; write `{pname}: T`" if not p_at(p, Colon)
+		raise f"E209 NotImplemented: a closure parameter without a type — GRAMMAR lets `{pname}` take its type from the function type the closure is checked against, and this compiler does not infer it; write `{pname}: T`" if not p_at(p, Kind.Colon)
 
-		expect(p, Colon)
+		expect(p, Kind.Colon)
 		pty := parse_type(p)
-		params.append(Param(pname, pty, is_ref, false, ENil))
-		if p_at(p, Comma) {
+		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 	}
-	expect(p, RParen)
-	mut ret := TVoid
+	expect(p, Kind.RParen)
+	mut ret := Ty.TVoid
 	mut has_ret := false
-	if p_at(p, Arrow) {
+	if p_at(p, Kind.Arrow) {
 		p_advance(p)
 		ret = parse_type(p)
 		has_ret = true
 	}
-	return EFn(params, has_ret, ret, parse_block(p))
+	return Expr.EFn(params, has_ret, ret, parse_block(p))
 }
 
 # parse_select reads `select { … }` and its four arm shapes:
@@ -953,19 +967,19 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 # named `_` that a reader would confuse with the wildcard.
 fn parse_select(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'select'
-	return SSelect(parse_sel_arms(p))
+	return Stmt.SSelect(parse_sel_arms(p))
 }
 
 # parse_sel_arms reads the `{ arm+ }` both spellings share.
 fn parse_sel_arms(mut &p: Parser) -> list[SelArm] {
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 	mut arms: list[SelArm] = []
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		arms.append(parse_sel_arm(p))
 		skip_semis(p)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 
 	# GRAMMAR says `select-arm+`. An empty one has nothing to wait FOR, so it would park on
 	# no channel at all and never wake — a hang with no cause to find.
@@ -977,39 +991,39 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 	# There is no terminal arm. A select PICKS a ready arm; ENDING is the loop's job, and
 	# `for select { … }` is the loop that owns it. `close` here is refused by name rather
 	# than quietly parsed, because it was an arm until this change.
-	raise "E201 `close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has" if p_at(p, Close) and peek_kind(p, 1) == FatArrow
+	raise "E201 `close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has" if p_at(p, Kind.Close) and peek_kind(p, 1) == Kind.FatArrow
 
 	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
 	# Anything else here is refused by name: it used to become this arm silently, which turned a
 	# typo into a select that no longer blocks and no longer ends.
-	if p_names_here(p, p.pos) and peek_kind(p, 1) == FatArrow {
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Kind.FatArrow {
 		head := p_name(p, "a select arm's binding")
 		raise f"E203 `{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
 		p_advance(p) # '=>'
-		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
+		return SelArm(3, "", Expr.ENil, Expr.ENil, parse_sel_body(p))
 	}
 
 	# `v := <-ch => …` — a named receive
 	mut bind := ""
-	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Kind.Walrus {
 		bind = p_name(p, "a select arm's binding")
 		if bind == "_" {
 			bind = ""
 		}
 		p_advance(p) # ':='
 	}
-	if p_at(p, LArrow) {
+	if p_at(p, Kind.LArrow) {
 		p_advance(p)
 		ch := parse_expr(p)
-		expect(p, FatArrow)
-		return SelArm(0, bind, ch, ENil, parse_sel_body(p))
+		expect(p, Kind.FatArrow)
+		return SelArm(0, bind, ch, Expr.ENil, parse_sel_body(p))
 	}
 
 	# `ch <- v => …` — a send
 	ch := parse_expr(p)
-	expect(p, LArrow)
+	expect(p, Kind.LArrow)
 	v := parse_expr(p)
-	expect(p, FatArrow)
+	expect(p, Kind.FatArrow)
 	return SelArm(1, "", ch, v, parse_sel_body(p))
 }
 
@@ -1027,7 +1041,7 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 # and the seed reads one now, so `v := <-work => total = total + v!` is an ordinary arm and
 # no longer needs braces to say what it plainly says.
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
-	return parse_block(p) if p_at(p, LBrace)
+	return parse_block(p) if p_at(p, Kind.LBrace)
 	mut one: list[Stmt] = []
 	one.append(parse_stmt(p))
 	return one
@@ -1055,30 +1069,30 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 	# a table written the way anyone writes one. With a trailing comma it worked, because a
 	# `,` cannot end an item and no `;` was inserted; the two spellings disagreed.
 	skip_semis(p)
-	if p_at(p, Colon) {
+	if p_at(p, Kind.Colon) {
 		# the empty map, `{:}`
 		p_advance(p)
 		skip_semis(p)
-		expect(p, RBrace)
-		return EMapLit(ks, vs)
+		expect(p, Kind.RBrace)
+		return Expr.EMapLit(ks, vs)
 	}
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		ks.append(parse_expr(p))
 
 		# no colon, so by the rule above this brace was a BLOCK, and this parser has no
 		# block expression. It used to read on regardless and build a map out of whatever
 		# the block's statements happened to parse as — a match arm written
 		# `Right(e) => { report(e); stop() }` came out as a one-entry map and ran neither.
-		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Colon)
+		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Kind.Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
 		skip_semis(p)
-		break if not p_at(p, Comma)
+		break if not p_at(p, Kind.Comma)
 		p_advance(p)
 		skip_semis(p)
 	}
-	expect(p, RBrace)
-	return EMapLit(ks, vs)
+	expect(p, Kind.RBrace)
+	return Expr.EMapLit(ks, vs)
 }
 
 # parse_spec consumes a `spec S { … }` declaration whole and yields nothing.
@@ -1120,19 +1134,19 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	# collecting every bare identifier instead made `[K: Ord]` two parameters, so a correct
 	# `impl Ix[int] for A` was told the spec is "parameterized by K, Ord".
 	mut params: list[str] = []
-	if p_at(p, LBrack) {
+	if p_at(p, Kind.LBrack) {
 		p_advance(p)
-		for not p_at(p, RBrack) and not p_at(p, Eof) {
+		for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 			params.append(p_name(p, "a spec's type parameter"))
-			if p_at(p, Colon) {
+			if p_at(p, Kind.Colon) {
 				p_advance(p)
 				parse_bound(p, "a type parameter's bound", false)
 			}
-			if p_at(p, Comma) {
+			if p_at(p, Kind.Comma) {
 				p_advance(p)
 			}
 		}
-		expect(p, RBrack)
+		expect(p, Kind.RBrack)
 	}
 
 	# `spec Ord: Eq + Hash` — a SUPER-SPEC (GRAMMAR#spec-decl), a conjunction. An `impl Ord` must
@@ -1142,42 +1156,42 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	# extends a spec named `int`. It is named rather than dropped — see parse_bound.
 	mut supers: list[str] = []
 	mut super_args: list[list[Ty]] = []
-	if p_at(p, Colon) {
+	if p_at(p, Kind.Colon) {
 		p_advance(p)
 		parse_supers(p, supers, super_args)
 	}
 
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 	mut reqs: list[FnDecl] = []
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
 		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
 		# the requirement silent in both directions — a spec asking for `mut fn` was
 		# satisfied by a plain one, and a plain one by a `mut fn`.
 		mut recv_mut := false
-		if p_at(p, Mut) and peek_kind(p, 1) == Fn {
+		if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			p_advance(p)
 			recv_mut = true
 		}
-		if p_at(p, Fn) {
+		if p_at(p, Kind.Fn) {
 			# The receiver is `This` — the implementing type, which is not known here. Giving
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
 			sig := parse_fn_head(p, false, "This", recv_mut)
-			raise f"E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, LBrace)
+			raise f"E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, Kind.LBrace)
 
 			reqs.append(sig)
-		} else if p_at(p, Type) {
+		} else if p_at(p, Kind.Type) {
 			raise "E230 NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing here binds one"
-		} else if p_at(p, Ident) and peek_kind(p, 1) == Colon {
+		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon {
 			raise f"E211 NotImplemented: an associated value in a `spec` — `{cur(p).lexeme}: T` asks each impl for a compile-time constant, and nothing here binds one"
 		} else {
 			p_advance(p)
 		}
 		skip_semis(p)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 	return SpecDecl(name, params, supers, super_args, reqs, p.path, kw.line, kw.col)
 }
 
@@ -1196,10 +1210,10 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	p_advance(p)
 
 	name := cur(p).lexeme
-	expect(p, Ident)
-	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, LBrack)
+	expect(p, Kind.Ident)
+	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, Kind.LBrack)
 
-	expect(p, Assign)
+	expect(p, Kind.Assign)
 
 	return TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col)
 }
@@ -1214,11 +1228,11 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	kw := cur(p)
 	p_advance(p) # 'init'
-	expect(p, LParen)
-	expect(p, RParen)
+	expect(p, Kind.LParen)
+	expect(p, Kind.RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path, kw.line, kw.col, [], [])
+	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [])
 }
 
 pub fn init_name(at: int) -> str {
@@ -1250,7 +1264,7 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 # surface later and elsewhere as an unknown name.
 fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	p_advance(p) # 'import'
-	if not p_at(p, LParen) {
+	if not p_at(p, Kind.LParen) {
 		path := parse_import_spec(p)
 		if path != "" {
 			imports.append(path)
@@ -1259,7 +1273,7 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	}
 	p_advance(p) # '('
 	skip_semis(p)
-	for not p_at(p, RParen) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		at := p.pos
 		path := parse_import_spec(p)
 		if path != "" {
@@ -1273,7 +1287,7 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 		}
 		skip_semis(p)
 	}
-	if p_at(p, RParen) {
+	if p_at(p, Kind.RParen) {
 		p_advance(p)
 	}
 }
@@ -1286,7 +1300,7 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 # `as` renames the namespace, which is a binding this parser does not track, so the name
 # is consumed and the path is what comes back.
 fn parse_import_spec(mut &p: Parser) -> str {
-	if p_at(p, Pub) {
+	if p_at(p, Kind.Pub) {
 		p_advance(p)
 	}
 
@@ -1296,13 +1310,13 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	# statement loop as a top-level expression, which compile mode treats as a nop. The
 	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
 	# member access on a namespace that was never bound.
-	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Str)
+	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Kind.Str)
 
 	t := cur(p)
 	p_advance(p) # the path
-	if p_at(p, As) {
+	if p_at(p, Kind.As) {
 		p_advance(p) # 'as'
-		if p_at(p, Ident) {
+		if p_at(p, Kind.Ident) {
 			p_advance(p)
 		}
 	}
@@ -1318,7 +1332,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 	mut n := 0
 	for true {
 		k := peek_kind(p, n)
-		break if k == Semi or k == Eof or k == RParen
+		break if k == Kind.Semi or k == Kind.Eof or k == Kind.RParen
 		out = out + peek_lexeme(p, n)
 		n = n + 1
 	}
@@ -1332,26 +1346,26 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
 	# field types go through c_check_named_ty; a variant's did not.
-	raise f"E212 NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one" if p_at(p, LBrack)
-	expect(p, LBrace)
+	raise f"E212 NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one" if p_at(p, Kind.LBrack)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 
 	mut variants: list[VariantDef] = []
 	mut spelled: list[str] = []
 	mut next := 0
 	mut payload := false
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		vname := p_name(p, "an enum variant")
 		mut fields: list[Ty] = []
-		if p_at(p, LParen) {
+		if p_at(p, Kind.LParen) {
 			p_advance(p)
-			for not p_at(p, RParen) and not p_at(p, Eof) {
+			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 				fields.append(parse_type(p))
-				if p_at(p, Comma) {
+				if p_at(p, Kind.Comma) {
 					p_advance(p)
 				}
 			}
-			expect(p, RParen)
+			expect(p, Kind.RParen)
 			payload = true
 		}
 
@@ -1360,7 +1374,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 		# them called "=" — so an enum that spelled its own values compiled to nonsense with
 		# nothing said about it.
 		mut tag := next
-		if p_at(p, Assign) {
+		if p_at(p, Kind.Assign) {
 			p_advance(p)
 			tag = parse_discriminant(p)
 			spelled.append(vname)
@@ -1370,7 +1384,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 		variants.append(VariantDef(vname, fields, tag))
 		skip_semis(p)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 
 	# GRAMMAR#variant — a discriminant belongs to a C-style integer enum, and only to one: a
 	# payload enum's tag is opaque and match-only, so there is nothing for a value to be.
@@ -1393,12 +1407,12 @@ fn tag_taken(variants: list[VariantDef], tag: int) -> bool {
 # folds — anything else is refused here rather than read as a variant name.
 fn parse_discriminant(mut &p: Parser) -> int {
 	mut neg := false
-	if p_at(p, Minus) {
+	if p_at(p, Kind.Minus) {
 		p_advance(p)
 		neg = true
 	}
 	t := cur(p)
-	raise f"an enum discriminant is a constant integer, not `{t.lexeme}`" if t.kind != Int
+	raise f"an enum discriminant is a constant integer, not `{t.lexeme}`" if t.kind != Kind.Int
 	p_advance(p)
 	v := int_value(t.lexeme)
 	return 0 - v if neg
@@ -1422,28 +1436,28 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	# `no type named T`: a message about the consequence, from two steps away, for a form
 	# the compiler had already decided not to support. A generic ENUM has been refused by
 	# name since it was written; this is the same refusal for the other declaration.
-	raise f"E215 NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one" if p_at(p, LBrack)
-	expect(p, LBrace)
+	raise f"E215 NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one" if p_at(p, Kind.LBrack)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		# a field may be declared `pub`; visibility does not reach the emitted C, which is
 		# one flat struct either way, so the marker is read and dropped
-		if p_at(p, Pub) {
+		if p_at(p, Kind.Pub) {
 			p_advance(p)
 		}
 		fname := p_name(p, "a struct field")
-		expect(p, Colon)
+		expect(p, Kind.Colon)
 		fty := parse_type(p)
 
 		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor. It was
 		# not read here, so the `=` began the next field: the struct gained a field named `=`
 		# of type `7`, and the error named those instead of the form that was written.
-		raise f"E216 NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Assign)
+		raise f"E216 NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Kind.Assign)
 		fields.append(FieldDef(fname, fty))
 		skip_semis(p)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 	return StructDecl(name, fields)
 }
 
@@ -1458,12 +1472,12 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # name the moment it is written alone.
 fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	p_advance(p) # '#['
-	for not p_at(p, RBrack) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		parse_deco_item(p, pending)
-		break if not p_at(p, Comma)
+		break if not p_at(p, Kind.Comma)
 		p_advance(p)
 	}
-	expect(p, RBrack)
+	expect(p, Kind.RBrack)
 }
 
 # parse_deco_item reads ONE `name` or `name( args )` (GRAMMAR#deco-item). Only `derive` is
@@ -1478,18 +1492,18 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	raise f"E217 NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
 
 	p_advance(p)
-	return if not p_at(p, LParen)
+	return if not p_at(p, Kind.LParen)
 
 	# a derive ARGUMENT is a spec name; the arguments a decorator may take in general are
 	# const-exprs, and none of them opens a bracket, so the item ends at its own `)`
 	p_advance(p)
-	for not p_at(p, RParen) and not p_at(p, Eof) {
-		if p_at(p, Ident) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+		if p_at(p, Kind.Ident) {
 			pending.append(cur(p).lexeme)
 		}
 		p_advance(p)
 	}
-	expect(p, RParen)
+	expect(p, Kind.RParen)
 }
 
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
@@ -1507,7 +1521,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	mut args := parse_ty_args(p)
 	mut sp := ""
 	mut target := first
-	if p_at(p, For) {
+	if p_at(p, Kind.For) {
 		p_advance(p)
 		sp = first
 
@@ -1518,21 +1532,21 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	if sp != "" {
 		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))
 	}
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 
 	# `This` inside the block names the type the block is for; the parser resolves it here
 	# rather than leaving a name the emitter would have to spell and could not.
 	outer := p.impl_ty
 	p.impl_ty = target
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		mut is_pub := false
-		if p_at(p, Pub) {
+		if p_at(p, Kind.Pub) {
 			p_advance(p)
 			is_pub = true
 		}
 		mut recv_mut := false
-		if p_at(p, Mut) {
+		if p_at(p, Kind.Mut) {
 			# `mut fn` marks a method that mutates `this` IN PLACE — exactly the `mut &this`
 			# case (GRAMMAR#fn-decl). So the receiver becomes a `mut &` parameter and everything
 			# below the parser follows: the body writes through it, the call site is checked
@@ -1540,23 +1554,23 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 			# BY VALUE is what made this impossible before — the method ran, the copy
 			# changed, and the caller's value did not.
 			p_advance(p)
-			raise "`mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`" if not p_at(p, Fn)
+			raise "`mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`" if not p_at(p, Kind.Fn)
 			recv_mut = true
 		}
-		if p_at(p, Fn) {
+		if p_at(p, Kind.Fn) {
 			fns.append(parse_fn(p, is_pub, target, recv_mut))
-		} else if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
+		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
 			raise f"E218 NotImplemented: an associated value binding `{cur(p).lexeme} := …` in an `impl`"
-		} else if p_at(p, Type) {
+		} else if p_at(p, Kind.Type) {
 			raise "E231 NotImplemented: an associated type binding `type … = …` in an `impl`"
 		} else {
 			raise f"E219 NotImplemented: `{cur(p).lexeme}` as an `impl` item — this compiler reads methods and nothing else"
 		}
 		skip_semis(p)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 	p.impl_ty = outer
 }
 
@@ -1577,13 +1591,13 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 # narrowed to its first spec would be a program that type-checks against a promise nobody
 # made, which is what refusing the form was protecting against.
 fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) {
-	return if not p_at(p, LBrack)
+	return if not p_at(p, Kind.LBrack)
 
 	p_advance(p) # '['
-	for not p_at(p, RBrack) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		nm := p_name(p, "a type parameter")
 		mut bound := ""
-		if p_at(p, Colon) {
+		if p_at(p, Kind.Colon) {
 			p_advance(p)
 
 			# `parse_bound` is the one reader of `Spec` and `A + B + C`, shared with a spec's
@@ -1604,10 +1618,10 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		}
 		names.append(nm)
 		bounds.append(bound)
-		break if not p_at(p, Comma)
+		break if not p_at(p, Kind.Comma)
 		p_advance(p)
 	}
-	expect(p, RBrack)
+	expect(p, Kind.RBrack)
 }
 
 # parse_fn_head reads a function's SIGNATURE and stops before its body, answering a FnDecl
@@ -1628,19 +1642,19 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 	mut tparams: list[str] = []
 	mut tbounds: list[str] = []
 	p_type_params(p, tparams, tbounds)
-	expect(p, LParen)
+	expect(p, Kind.LParen)
 	mut params: list[Param] = []
 	if recv != "" {
 		# The receiver is not written in the parameter list — `this` is implicit — so it is
 		# added here. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
 		# a notion of methods at all.
-		params.append(Param("this", TNamed(recv), recv_mut, false, ENil))
+		params.append(Param("this", Ty.TNamed(recv), recv_mut, false, Expr.ENil))
 	}
-	for not p_at(p, RParen) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter
 		mut is_ref := false
-		if p_at(p, Mut) {
+		if p_at(p, Kind.Mut) {
 			p_advance(p)
 
 			# `mut x: T` is NOT a parameter form (GRAMMAR#param): a by-value parameter is the
@@ -1648,31 +1662,31 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 			# `mut` reads as a promise the language does not make. It was accepted and the
 			# keyword dropped, and a write in the body then said `cannot assign through b:
 			# it is immutable` — a true sentence about a parameter the programmer marked mut.
-			raise "E263 a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Amp)
+			raise "E263 a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Kind.Amp)
 			p_advance(p)
 			is_ref = true
 		}
 		pname := p_name(p, "a parameter")
-		expect(p, Colon)
+		expect(p, Kind.Colon)
 		pty := parse_type(p)
 
 		# `= <constant>` makes the parameter optional at the call site
 		mut has_def := false
-		mut def := ENil
-		if p_at(p, Assign) {
+		mut def := Expr.ENil
+		if p_at(p, Kind.Assign) {
 			p_advance(p)
 			def = parse_expr(p)
 			has_def = true
 		}
 		params.append(Param(pname, pty, is_ref, has_def, def))
-		if p_at(p, Comma) {
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 	}
-	expect(p, RParen)
+	expect(p, Kind.RParen)
 	mut has_ret := false
-	mut ret := TVoid
-	if p_at(p, Arrow) {
+	mut ret := Ty.TVoid
+	if p_at(p, Kind.Arrow) {
 		p_advance(p)
 		ret = parse_type(p)
 		has_ret = true
@@ -1686,18 +1700,18 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 # another recursion on the same stack the expression forms overflow.
 fn parse_block(mut &p: Parser) -> list[Stmt] {
 	p_deeper(p)
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	mut body: list[Stmt] = []
 	skip_semis(p)
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		# the marker carries where the statement STARTS, read before it is parsed, so a
 		# diagnostic about anything in it has a line and a column to name
 		t := cur(p)
-		body.append(SAt(t.line, t.col))
+		body.append(Stmt.SAt(t.line, t.col))
 		body.append(parse_stmt(p))
-		p_stmt_sep(p, RBrace)
+		p_stmt_sep(p, Kind.RBrace)
 	}
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 	p_shallower(p)
 	return body
 }
@@ -1710,23 +1724,23 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 # separator is what tells them apart.
 fn p_starts_destructure(mut &p: Parser) -> bool {
 	mut i := p.pos
-	if p.toks[i].kind == Mut or p.toks[i].kind == Const {
+	if p.toks[i].kind == Kind.Mut or p.toks[i].kind == Kind.Const {
 		i = i + 1
 	}
-	return false if i >= p.toks.len() or p.toks[i].kind != LParen
+	return false if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
 
 	mut depth := 0
 	for i < p.toks.len() {
 		k := p.toks[i].kind
-		if k == LParen {
+		if k == Kind.LParen {
 			depth = depth + 1
-		} else if k == RParen {
+		} else if k == Kind.RParen {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
-				return nxt == Walrus or nxt == Assign
+				return nxt == Kind.Walrus or nxt == Kind.Assign
 			}
-		} else if k == Semi or k == Eof {
+		} else if k == Kind.Semi or k == Kind.Eof {
 			return false
 		}
 		i = i + 1
@@ -1762,19 +1776,19 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# print, and was reported from the expression fallback — but `5 := 1` is not a reserved
 	# word and calling it one is a sentence the reader cannot act on. Both spellings are
 	# checked, since only the walrus one used to be and the two diverged.
-	if k != Ident and (peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and is_stmt_kw(k))) {
-		raise f"E257 `{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Ident
+	if k != Kind.Ident and (peek_kind(p, 1) == Kind.Walrus or (peek_kind(p, 1) == Kind.Colon and is_stmt_kw(k))) {
+		raise f"E257 `{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Kind.Ident
 		raise f"a binding needs a name, and `{cur(p).lexeme}` is not one"
 	}
 
-	raise "E220 NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
+	raise "E220 NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == Kind.LBrace
 
 	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR#bind-target). The `{` after
 	# a type name reached the expression parser, which reported a block used as an expression.
 	#
 	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
 	# EXPRESSION, so the names in it came out undefined rather than bound.
-	raise f"E221 NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
+	raise f"E221 NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Kind.Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == Kind.LBrace
 
 	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
 	# (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#assign-target). It is named HERE, where the
@@ -1784,15 +1798,15 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# evaluated, assigned to no one, and the program printed the values it started with.
 	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
 
-	if k == Nop {
+	if k == Kind.Nop {
 		p_advance(p)
-		return SNop
+		return Stmt.SNop
 	}
-	if k == Print {
+	if k == Kind.Print {
 		p_advance(p)
-		return SPrint(parse_expr(p))
+		return Stmt.SPrint(parse_expr(p))
 	}
-	if k == Raise {
+	if k == Kind.Raise {
 		p_advance(p)
 
 		e := parse_expr(p)
@@ -1801,9 +1815,9 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 		# never read here: `parse_expr` stopped at the `from`, and the rest of the line was
 		# skipped by parse_stmt's fallback — so the cause was DROPPED, silently, and the
 		# chain a `guard` reads back had a link missing.
-		mut cause := ENil
+		mut cause := Expr.ENil
 		mut has_cause := false
-		if p_at(p, From) {
+		if p_at(p, Kind.From) {
 			p_advance(p)
 			cause = parse_expr(p)
 			has_cause = true
@@ -1812,52 +1826,52 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 		# `raise e if c` — the postfix guard, on the fourth of GRAMMAR's diverges. It reads as
 		# the same sugar the other three carry and is desugared into exactly the block form it
 		# is defined as (`if c { raise e }`), so the emitter needs to know nothing about it.
-		return parse_jump_guard(p, SRaise(e, has_cause, cause))
+		return parse_jump_guard(p, Stmt.SRaise(e, has_cause, cause))
 	}
-	return parse_return(p) if k == Return
-	if k == Break {
+	return parse_return(p) if k == Kind.Return
+	if k == Kind.Break {
 		p_advance(p)
-		return parse_jump_guard(p, SBreak)
+		return parse_jump_guard(p, Stmt.SBreak)
 	}
-	if k == Continue {
+	if k == Kind.Continue {
 		p_advance(p)
-		return parse_jump_guard(p, SContinue)
+		return parse_jump_guard(p, Stmt.SContinue)
 	}
 
-	return parse_if(p) if k == If
-	return parse_for(p) if k == For
+	return parse_if(p) if k == Kind.If
+	return parse_for(p) if k == Kind.For
 
 	# The forms below parse to NOTHING today. Each was silently dropped: `spawn f()` ran
 	# f() inline, `with`/`del` vanished, a `select` block's arms were read as loose
 	# statements. Refusing by name is the least a compiler owes a program it cannot build.
-	if k == Spawn {
+	if k == Kind.Spawn {
 		p_advance(p)
-		return SSpawn(parse_expr(p))
+		return Stmt.SSpawn(parse_expr(p))
 	}
 
-	return parse_select(p) if k == Select
-	raise "E237 NotImplemented: a `with` block" if k == With
+	return parse_select(p) if k == Kind.Select
+	raise "E237 NotImplemented: a `with` block" if k == Kind.With
 
-	if k == Del {
+	if k == Kind.Del {
 		p_advance(p)
 		name := p_name(p, "a `del`")
-		return SDel(name)
+		return Stmt.SDel(name)
 	}
-	return parse_close(p, false) if k == Close
-	if k == Defer {
+	return parse_close(p, false) if k == Kind.Close
+	if k == Kind.Defer {
 		p_advance(p)
 
 		# `defer close(ch)` — the one statement `defer` takes besides a call, because
 		# `close` is a keyword and its argument is a channel rather than a callee. Every
 		# other deferred form is an expression and goes through parse_expr below.
-		return parse_close(p, true) if p_at(p, Close)
-		return SDefer(parse_expr(p))
+		return parse_close(p, true) if p_at(p, Kind.Close)
+		return Stmt.SDefer(parse_expr(p))
 	}
-	if k == Mut {
+	if k == Kind.Mut {
 		p_advance(p)
 		return parse_binding(p, true, false)
 	}
-	if k == Const {
+	if k == Kind.Const {
 		p_advance(p)
 		return parse_binding(p, false, true)
 	}
@@ -1867,22 +1881,22 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# reported from the expression fallback as `` `:=` is not an expression``: the token
 	# after the name rather than the reserved word in it. `print := 1` and `this := 1` both
 	# arrived that way. Reaching parse_binding is what puts them in front of `p_name`.
-	return parse_binding(p, false, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
-	return parse_binding(p, false, false) if k == Ident and peek_kind(p, 1) == Colon
+	return parse_binding(p, false, false) if peek_kind(p, 1) == Kind.Walrus or (peek_kind(p, 1) == Kind.Colon and k != Kind.Ident)
+	return parse_binding(p, false, false) if k == Kind.Ident and peek_kind(p, 1) == Kind.Colon
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
-	if p_at(p, LArrow) {
+	if p_at(p, Kind.LArrow) {
 		# `ch <- v` sends. It is a STATEMENT, not an expression: GRAMMAR gives it no
 		# value, which is also what tells it from the prefix receive.
 		p_advance(p)
-		return SSend(e, parse_expr(p))
+		return Stmt.SSend(e, parse_expr(p))
 	}
-	if p_at(p, Assign) {
+	if p_at(p, Kind.Assign) {
 		p_advance(p)
-		return SAssign(e, parse_expr(p))
+		return Stmt.SAssign(e, parse_expr(p))
 	}
-	return SExpr(e)
+	return Stmt.SExpr(e)
 }
 
 # parse_binding parses `name := e` (inferred) or `name: T = e` (typed). A `const` still
@@ -1894,14 +1908,14 @@ fn parse_binding(mut &p: Parser, is_mut: bool, is_const: bool) -> Stmt {
 	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
 	# not an expression`` — the token after the name rather than the reserved word in it.
 	name := p_name(p, "a binding")
-	if p_at(p, Walrus) {
+	if p_at(p, Kind.Walrus) {
 		p_advance(p)
-		return SLet(name, TUnknown, false, is_mut, is_const, parse_expr(p))
+		return Stmt.SLet(name, Ty.TUnknown, false, is_mut, is_const, parse_expr(p))
 	}
-	expect(p, Colon)
+	expect(p, Kind.Colon)
 	ty := parse_type(p)
-	expect(p, Assign)
-	return SLet(name, ty, true, is_mut, is_const, parse_expr(p))
+	expect(p, Kind.Assign)
+	return Stmt.SLet(name, ty, true, is_mut, is_const, parse_expr(p))
 }
 
 # parse_jump_guard reads the optional trailing `if cond` on a `break` or a `continue` —
@@ -1912,12 +1926,12 @@ fn parse_binding(mut &p: Parser, is_mut: bool, is_const: bool) -> Stmt {
 # Without this the `if` was left for the next statement to read, so `break if c` broke
 # unconditionally and the condition became a dangling if with no block. Silently.
 fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
-	return jump if not p_at(p, If)
+	return jump if not p_at(p, Kind.If)
 	p_advance(p)
 	mut body: list[Stmt] = []
 	body.append(jump)
 	mut none: list[Stmt] = []
-	return SIf(parse_expr(p), body, false, none)
+	return Stmt.SIf(parse_expr(p), body, false, none)
 }
 
 # p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
@@ -1938,12 +1952,12 @@ fn p_if_has_block(mut &p: Parser, at: int) -> bool {
 	mut i := at
 	for i < p.toks.len() {
 		k := p.toks[i].kind
-		return false if (k == Semi or k == Eof) and depth == 0
-		if k == LParen or k == LBrack {
+		return false if (k == Kind.Semi or k == Kind.Eof) and depth == 0
+		if k == Kind.LParen or k == Kind.LBrack {
 			depth = depth + 1
-		} else if k == RParen or k == RBrack {
+		} else if k == Kind.RParen or k == Kind.RBrack {
 			depth = depth - 1
-		} else if k == LBrace and depth == 0 {
+		} else if k == Kind.LBrace and depth == 0 {
 			return true
 		}
 		i = i + 1
@@ -1953,7 +1967,7 @@ fn p_if_has_block(mut &p: Parser, at: int) -> bool {
 
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
-	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
+	return Stmt.SReturn(false, Expr.ENil) if p_at(p, Kind.Semi) or p_at(p, Kind.RBrace) or p_at(p, Kind.Eof)
 
 	# `return if c` — a bare early exit under a guard. It is desugared here into the
 	# `if c { return }` it is defined as, because SReturnIf carries a VALUE and a bare
@@ -1961,27 +1975,27 @@ fn parse_return(mut &p: Parser) -> Stmt {
 	# nothing about it. Without this the `if` fell through to parse_expr and was read as an
 	# if-EXPRESSION with no block, which swallowed the rest of the function — silently, and
 	# only where the formatter had just produced the form.
-	if p_at(p, If) {
+	if p_at(p, Kind.If) {
 		# THE ONE AMBIGUITY, which GRAMMAR#return spells out: "a leading `if` whose condition
 		# is followed by a `{` block is instead an if-EXPRESSION being returned; the
 		# conditional-return `if` takes a bare condition and NO block." Nothing here looked
 		# past the condition, so `return if c { 1 } else { 2 }` was always the bare early exit
 		# under `c`, and the `{ 1 } else { 2 }` left over became whatever the statement loop
 		# could make of it.
-		return SReturn(true, parse_expr(p)) if p_if_has_block(p, p.pos + 1)
+		return Stmt.SReturn(true, parse_expr(p)) if p_if_has_block(p, p.pos + 1)
 
 		p_advance(p)
 		mut body: list[Stmt] = []
-		body.append(SReturn(false, ENil))
+		body.append(Stmt.SReturn(false, Expr.ENil))
 		mut none: list[Stmt] = []
-		return SIf(parse_expr(p), body, false, none)
+		return Stmt.SIf(parse_expr(p), body, false, none)
 	}
 	e := parse_expr(p)
-	if p_at(p, If) {
+	if p_at(p, Kind.If) {
 		p_advance(p)
-		return SReturnIf(e, parse_expr(p))
+		return Stmt.SReturnIf(e, parse_expr(p))
 	}
-	return SReturn(true, e)
+	return Stmt.SReturn(true, e)
 }
 
 fn parse_if(mut &p: Parser) -> Stmt {
@@ -1991,31 +2005,31 @@ fn parse_if(mut &p: Parser) -> Stmt {
 	# `:=` alone, one token of lookahead, because no condition may contain one. Without
 	# this the `:=` was read as the start of a second expression and the rest of the
 	# function came apart, silently.
-	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Kind.Walrus {
 		name := p_name(p, "an `if let` binding")
 		p_advance(p) # ':='
 		value := parse_expr(p)
 		then_body := parse_block(p)
 		mut has_else_l := false
 		mut else_body_l: list[Stmt] = []
-		if p_at(p, Else) {
+		if p_at(p, Kind.Else) {
 			p_advance(p)
 			has_else_l = true
 			else_body_l = p_else_body(p)
 		}
-		return SIfLet(name, value, then_body, has_else_l, else_body_l)
+		return Stmt.SIfLet(name, value, then_body, has_else_l, else_body_l)
 	}
 
 	cond := parse_expr(p)
 	then_body := parse_block(p)
 	mut has_else := false
 	mut else_body: list[Stmt] = []
-	if p_at(p, Else) {
+	if p_at(p, Kind.Else) {
 		p_advance(p)
 		has_else = true
 		else_body = p_else_body(p)
 	}
-	return SIf(cond, then_body, has_else, else_body)
+	return Stmt.SIf(cond, then_body, has_else, else_body)
 }
 
 # p_else_body reads what follows an `else`, for BOTH `if` forms — the plain one and
@@ -2026,7 +2040,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 # thousand `else if` in one chain killed the parser the same way a thousand parentheses
 # did, and parse_block never sees them.
 fn p_else_body(mut &p: Parser) -> list[Stmt] {
-	return parse_block(p) if not p_at(p, If)
+	return parse_block(p) if not p_at(p, Kind.If)
 
 	mut body: list[Stmt] = []
 	p_deeper(p)
@@ -2037,49 +2051,49 @@ fn p_else_body(mut &p: Parser) -> list[Stmt] {
 
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
-	return SFor(false, ENil, parse_block(p)) if p_at(p, LBrace)
+	return Stmt.SFor(false, Expr.ENil, parse_block(p)) if p_at(p, Kind.LBrace)
 
 	# `for select { … }` — one ready arm per round, until every watched channel has ended.
 	# A condition cannot begin with `select`, so one token of lookahead separates it from
 	# `for <cond> { … }` with no ambiguity at all.
-	if p_at(p, Select) {
+	if p_at(p, Kind.Select) {
 		p_advance(p) # 'select'
-		return SForSelect(parse_sel_arms(p))
+		return Stmt.SForSelect(parse_sel_arms(p))
 	}
 
 	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
 	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
 	# and was reported as whatever that made of it.
-	raise "E242 NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
+	raise "E242 NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Kind.Mut)
 
 	# for-in: `for name in iterable { ... }`
-	if p_names_here(p, p.pos) and peek_kind(p, 1) == In {
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Kind.In {
 		vname := p_name(p, "a loop binding")
 		p_advance(p) # 'in'
 		iter := parse_expr(p)
-		return SForIn(vname, iter, parse_block(p))
+		return Stmt.SForIn(vname, iter, parse_block(p))
 	}
 	cond := parse_expr(p)
 	body := parse_block(p)
-	return SFor(true, cond, body)
+	return Stmt.SFor(true, cond, body)
 }
 
 # --- expressions ---------------------------------------------------------------
 
 fn is_add_op(k: Kind) -> bool {
-	return k == Plus or k == Minus or k == Pipe or k == Caret or k == PlusMod or k == MinusMod
+	return k == Kind.Plus or k == Kind.Minus or k == Kind.Pipe or k == Kind.Caret or k == Kind.PlusMod or k == Kind.MinusMod
 }
 
 fn is_mul_op(k: Kind) -> bool {
-	return k == Star or k == Slash or k == SlashDiv or k == Percent or k == StarMod or k == Shl or k == Shr or k == Amp
+	return k == Kind.Star or k == Kind.Slash or k == Kind.SlashDiv or k == Kind.Percent or k == Kind.StarMod or k == Kind.Shl or k == Kind.Shr or k == Kind.Amp
 }
 
 fn is_cmp_op(k: Kind) -> bool {
-	return k == EqEq or k == Ne or k == Lt or k == Gt or k == Le or k == Ge
+	return k == Kind.EqEq or k == Kind.Ne or k == Kind.Lt or k == Kind.Gt or k == Kind.Le or k == Kind.Ge
 }
 
 fn is_unary_op(k: Kind) -> bool {
-	return k == Minus or k == Not or k == Tilde or k == MinusMod
+	return k == Kind.Minus or k == Kind.Not or k == Kind.Tilde or k == Kind.MinusMod
 }
 
 # parse_expr is where every nested expression re-enters the parser — a parenthesized
@@ -2116,41 +2130,41 @@ fn parse_expr(mut &p: Parser) -> Expr {
 # `b ?? 7` is a value, and `a ?? that` is a value.
 fn parse_coalesce(mut &p: Parser) -> Expr {
 	left := parse_or(p)
-	return left if not p_at(p, Coalesce)
+	return left if not p_at(p, Kind.Coalesce)
 	p_advance(p)
 	mut jump: list[Stmt] = []
 	if is_divergent(cur_kind(p)) {
 		jump.append(parse_stmt(p))
-		return ECoalesce(left, ENil, jump)
+		return Expr.ECoalesce(left, Expr.ENil, jump)
 	}
 
 	# the right-associative recursion is a nesting level of its own, so it re-enters
 	# through parse_expr — the one door that counts a level — rather than wrapping
 	# p_deeper by hand around a recursion parse_expr already spells
-	return ECoalesce(left, parse_expr(p), jump)
+	return Expr.ECoalesce(left, parse_expr(p), jump)
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its
 # right: after one of them there is no value to have produced, which is exactly why they
 # are allowed where an expression is otherwise required.
 fn is_divergent(k: Kind) -> bool {
-	return k == Break or k == Continue or k == Return or k == Raise
+	return k == Kind.Break or k == Kind.Continue or k == Kind.Return or k == Kind.Raise
 }
 
 fn parse_or(mut &p: Parser) -> Expr {
 	mut left := parse_and(p)
-	for p_at(p, Or) {
+	for p_at(p, Kind.Or) {
 		p_advance(p)
-		left = EBinary("or", left, parse_and(p))
+		left = Expr.EBinary("or", left, parse_and(p))
 	}
 	return left
 }
 
 fn parse_and(mut &p: Parser) -> Expr {
 	mut left := parse_cmp(p)
-	for p_at(p, And) {
+	for p_at(p, Kind.And) {
 		p_advance(p)
-		left = EBinary("and", left, parse_cmp(p))
+		left = Expr.EBinary("and", left, parse_cmp(p))
 	}
 	return left
 }
@@ -2162,27 +2176,27 @@ fn parse_cmp(mut &p: Parser) -> Expr {
 	if is_cmp_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		return EBinary(op, left, parse_range(p))
+		return Expr.EBinary(op, left, parse_range(p))
 	}
-	if p_at(p, Is) {
+	if p_at(p, Kind.Is) {
 		p_advance(p)
 
 		# The right side is a bare name, not an expression: reading it as one would make
 		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
 		# is what keeps a malformed test from reaching the emitter as something else.
-		raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`" if not p_at(p, Ident)
+		raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`" if not p_at(p, Kind.Ident)
 		name := cur(p).lexeme
 		p_advance(p)
-		return EIs(left, name)
+		return Expr.EIs(left, name)
 	}
 
 	# `in` takes an EXPRESSION on its right where `is` takes a name, and that is the difference
 	# between the two: `is` asks what something IS and names a type, `in` asks what something is
 	# a MEMBER of and names a set. parse_range, not parse_add, so `v in 0..10` reads as
 	# `v in (0..10)` — which is the reading the range level exists to give.
-	if p_at(p, In) {
+	if p_at(p, Kind.In) {
 		p_advance(p)
-		return EIn(left, parse_range(p))
+		return Expr.EIn(left, parse_range(p))
 	}
 	return left
 }
@@ -2193,15 +2207,15 @@ fn parse_cmp(mut &p: Parser) -> Expr {
 fn parse_range(mut &p: Parser) -> Expr {
 	lo := parse_add(p)
 	k := cur_kind(p)
-	return lo if k != DotDot and k != DotDotEq
+	return lo if k != Kind.DotDot and k != Kind.DotDotEq
 	p_advance(p)
 
 	# `500..` — GRAMMAR makes the upper bound optional after `..`, and what tells "there is no
 	# bound" from "the bound follows" is whether the next token could begin one. Without this
 	# the guard of `500.. if c =>` was read AS the bound, since an if-expression is a legal
 	# bound expression, and the arm silently tested `n < (c ? … : …)`.
-	return ERange(lo, ENil, false) if k == DotDot and no_bound_follows(cur_kind(p))
-	return ERange(lo, parse_add(p), k == DotDotEq)
+	return Expr.ERange(lo, Expr.ENil, false) if k == Kind.DotDot and no_bound_follows(cur_kind(p))
+	return Expr.ERange(lo, parse_add(p), k == Kind.DotDotEq)
 }
 
 fn parse_add(mut &p: Parser) -> Expr {
@@ -2209,7 +2223,7 @@ fn parse_add(mut &p: Parser) -> Expr {
 	for is_add_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		left = EBinary(op, left, parse_mul(p))
+		left = Expr.EBinary(op, left, parse_mul(p))
 	}
 	return left
 }
@@ -2219,7 +2233,7 @@ fn parse_mul(mut &p: Parser) -> Expr {
 	for is_mul_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		left = EBinary(op, left, parse_try(p))
+		left = Expr.EBinary(op, left, parse_try(p))
 	}
 	return left
 }
@@ -2236,17 +2250,17 @@ fn parse_mul(mut &p: Parser) -> Expr {
 # and emit a dead `0;`, which is a wrong program that compiles.
 fn parse_try(mut &p: Parser) -> Expr {
 	mut e := parse_unary(p)
-	for p_at(p, Bang) or p_at(p, Question) {
-		if p_at(p, Question) {
+	for p_at(p, Kind.Bang) or p_at(p, Kind.Question) {
+		if p_at(p, Kind.Question) {
 			# `x?` is built rather than refused here: whether it CAN be written depends on the
 			# enclosing function's result type, which the parser does not know. The emitter
 			# does, and refuses by name there.
 			p_advance(p)
-			e = parse_chain_tail(p, ETry(e))
+			e = parse_chain_tail(p, Expr.ETry(e))
 			continue
 		}
 		p_advance(p)
-		e = EForce(e)
+		e = Expr.EForce(e)
 
 		# What follows a `!` belongs to the value it produced. `(<-ch)![0]` indexes the list
 		# the receive answered with, and `(<-ch)!.field` reads a field of it — the receive-
@@ -2264,25 +2278,25 @@ fn parse_try(mut &p: Parser) -> Expr {
 # an identifier for its name, and the thing to the left of one of these is a value.
 fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 	mut e := e0
-	for p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
-		if p_at(p, OptDot) {
+	for p_at(p, Kind.Dot) or p_at(p, Kind.LBrack) or p_at(p, Kind.OptDot) {
+		if p_at(p, Kind.OptDot) {
 			p_advance(p)
 			fld := cur(p).lexeme
 			p_advance(p)
-			e = EOptChain(e, fld)
-		} else if p_at(p, LBrack) {
+			e = Expr.EOptChain(e, fld)
+		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
-			expect(p, RBrack)
-			e = EIndex(e, idx)
+			expect(p, Kind.RBrack)
+			e = Expr.EIndex(e, idx)
 		} else {
 			p_advance(p) # '.'
 			fld := cur(p).lexeme
 			p_advance(p)
-			if p_at(p, LParen) {
-				e = EMethod(e, fld, parse_call_args(p))
+			if p_at(p, Kind.LParen) {
+				e = Expr.EMethod(e, fld, parse_call_args(p))
 			} else {
-				e = EField(e, fld)
+				e = Expr.EField(e, fld)
 			}
 		}
 	}
@@ -2294,10 +2308,10 @@ fn parse_unary(mut &p: Parser) -> Expr {
 	# `<-(a.b)` and a chain of them nests, which is what recursing here gives. The
 	# recursion is a nesting level and is counted as one: a run of prefixes is written
 	# without a single bracket, so nothing else on the way down would.
-	if p_at(p, LArrow) {
+	if p_at(p, Kind.LArrow) {
 		p_advance(p)
 		p_deeper(p)
-		e := ERecv(parse_unary(p))
+		e := Expr.ERecv(parse_unary(p))
 		p_shallower(p)
 		return e
 	}
@@ -2316,7 +2330,7 @@ fn parse_unary(mut &p: Parser) -> Expr {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
 		p_deeper(p)
-		e := EUnary(op, parse_try(p))
+		e := Expr.EUnary(op, parse_try(p))
 		p_shallower(p)
 		return e
 	}
@@ -2328,15 +2342,15 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # what leaves every other indexed callee refused by name.
 fn index_base_name(e: Expr) -> str {
 	return match e {
-		EIndex(b, _) => ident_name(b)
-		_            => ""
+		Expr.EIndex(b, _) => ident_name(b)
+		_ => ""
 	}
 }
 
 fn index_type_name(e: Expr) -> str {
 	return match e {
-		EIndex(_, i) => ident_name(i)
-		_            => ""
+		Expr.EIndex(_, i) => ident_name(i)
+		_ => ""
 	}
 }
 
@@ -2346,22 +2360,22 @@ fn index_type_name(e: Expr) -> str {
 fn p_ty_of_name(nm: str) -> Ty {
 	return conv_ty(nm) if is_conv(nm)
 
-	return TNamed(nm)
+	return Ty.TNamed(nm)
 }
 
 # parse_postfix parses a primary then a chain of calls. In the subset the callee is
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
-		if p_at(p, OptDot) {
+	for p_at(p, Kind.LParen) or p_at(p, Kind.Dot) or p_at(p, Kind.LBrack) or p_at(p, Kind.OptDot) {
+		if p_at(p, Kind.OptDot) {
 			# `a?.b` — the lexer has produced this token since it existed and no parser ever
 			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
 			p_advance(p)
 			fld := cur(p).lexeme
 			p_advance(p)
-			e = EOptChain(e, fld)
-		} else if p_at(p, LBrack) {
+			e = Expr.EOptChain(e, fld)
+		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 
@@ -2378,21 +2392,21 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			# after it. Returning here ended the loop, so `pair[int, str](7, "a").len()` died
 			# on "`.` is not an expression this compiler reads" — the same shape of message
 			# this branch exists to remove, one postfix further along.
-			if p_at(p, Comma) {
+			if p_at(p, Kind.Comma) {
 				e = p_type_arg_call(p, e, idx)
 			} else {
-				expect(p, RBrack)
-				e = EIndex(e, idx)
+				expect(p, Kind.RBrack)
+				e = Expr.EIndex(e, idx)
 			}
-		} else if p_at(p, Dot) {
+		} else if p_at(p, Kind.Dot) {
 			p_advance(p)
 			fld := cur(p).lexeme
 			p_advance(p)
-			if p_at(p, LParen) {
+			if p_at(p, Kind.LParen) {
 				# method call: target.method(args)
-				e = EMethod(e, fld, parse_call_args(p))
+				e = Expr.EMethod(e, fld, parse_call_args(p))
 			} else {
-				e = EField(e, fld)
+				e = Expr.EField(e, fld)
 			}
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
@@ -2433,9 +2447,9 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				raise f"E258 `{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
 				raise f"E259 `{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-				e = EConv(conv_ty(name), args[0], name)
+				e = Expr.EConv(conv_ty(name), args[0], name)
 			} else {
-				e = ECall(name, args, tyargs)
+				e = Expr.ECall(name, args, tyargs)
 			}
 		}
 	}
@@ -2456,49 +2470,49 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 	raise f"a type argument has to be a type, and `{expr_kind(first)}` is not one" if tn == ""
 
 	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
-	for p_at(p, Comma) {
+	for p_at(p, Kind.Comma) {
 		p_advance(p)
 		tyargs.append(parse_type(p))
 	}
-	expect(p, RBrack)
+	expect(p, Kind.RBrack)
 
 	# GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` is grammatical
 	# on its own — a generic function named as a VALUE at a chosen instantiation. This
 	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
 	# is named rather than left to report the `(` that never came.
-	raise f"E268 NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
+	raise f"E268 NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, Kind.LParen)
 
-	return ECall(name, parse_call_args(p), tyargs)
+	return Expr.ECall(name, parse_call_args(p), tyargs)
 }
 
 fn parse_call_args(mut &p: Parser) -> list[Expr] {
 	p_advance(p) # '('
 	mut args: list[Expr] = []
-	for not p_at(p, RParen) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR#arg, and the sanctioned way to skip a
 		# defaulted parameter in the middle (docs/code/functions.md). This compiler is
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
 		# the seed builds. An argument list is where the form is recognizable.
-		raise f"E223 NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Ident) and peek_kind(p, 1) == Colon
+		raise f"E223 NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon
 
 		args.append(parse_expr(p))
-		if p_at(p, Comma) {
+		if p_at(p, Kind.Comma) {
 			p_advance(p)
 		}
 	}
-	expect(p, RParen)
+	expect(p, Kind.RParen)
 	return args
 }
 
 fn parse_primary(mut &p: Parser) -> Expr {
 	t := cur(p)
 	k := t.kind
-	if k == Int {
+	if k == Kind.Int {
 		p_advance(p)
-		return EInt(t.lexeme, t.line, t.col)
+		return Expr.EInt(t.lexeme, t.line, t.col)
 	}
-	if k == Byte {
+	if k == Kind.Byte {
 		# a byte literal `b'x'` is its code point AS A BYTE. It used to be a bare EInt, so it
 		# inferred as `int` — and `c: byte = b'J'` was refused as "cannot bind int to a byte
 		# binding", about the one literal in the language whose whole point is that it is a
@@ -2509,9 +2523,9 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# byte out of the str here is what made `b'\x80'` impossible to lex at all, because
 		# a str cannot hold the upper half of the range (scan_char_lit says why).
 		p_advance(p)
-		return EConv(TByte, EInt(t.value, t.line, t.col), "byte")
+		return Expr.EConv(Ty.TByte, Expr.EInt(t.value, t.line, t.col), "byte")
 	}
-	if k == Rune {
+	if k == Kind.Rune {
 		p_advance(p)
 
 		# The literal's VALUE is its code point, and it arrives as the point's decimal
@@ -2519,69 +2533,69 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# what a lexeme is worth is a fact about the LEXEME. Decoding it HERE, from a str
 		# re-read out of the token, is what made `'\0'` impossible to lex at all, because a
 		# str cannot hold a NUL (scan_char_lit says why).
-		return EConv(TRune, EInt(t.value, t.line, t.col), "rune")
+		return Expr.EConv(Ty.TRune, Expr.EInt(t.value, t.line, t.col), "rune")
 	}
-	if k == Float {
+	if k == Kind.Float {
 		p_advance(p)
-		return EFloat(t.lexeme)
+		return Expr.EFloat(t.lexeme)
 	}
-	if k == Str or k == RawStr {
+	if k == Kind.Str or k == Kind.RawStr {
 		# a raw string differs from a plain one only in what the LEXER did with the
 		# backslashes; by here both carry their text in `value`
 		p_advance(p)
-		return EStr(t.value)
+		return Expr.EStr(t.value)
 	}
-	if k == FStr {
+	if k == Kind.FStr {
 		p_advance(p)
 		return fstr_expr(p, t)
 	}
-	if k == True {
+	if k == Kind.True {
 		p_advance(p)
-		return EBool(true)
+		return Expr.EBool(true)
 	}
-	if k == False {
+	if k == Kind.False {
 		p_advance(p)
-		return EBool(false)
+		return Expr.EBool(false)
 	}
-	if k == Nil {
+	if k == Kind.Nil {
 		p_advance(p)
-		return ENil
+		return Expr.ENil
 	}
-	if k == This {
+	if k == Kind.KwThis {
 		# the receiver reads as an ordinary binding, because the parser made it one
 		p_advance(p)
-		return EIdent("this")
+		return Expr.EIdent("this")
 	}
 
 	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
 	# so the parser saw a call with a stray token after it and said `expected `)`, found
 	# ``echo {n}```. GRAMMAR#fcmd-lit makes it a form of its own — one that runs through a shell
 	# and shell-quotes each hole — and it is refused as one.
-	raise "E235 NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Ident and t.lexeme == "f" and peek_kind(p, 1) == Cmd
+	raise "E235 NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Kind.Ident and t.lexeme == "f" and peek_kind(p, 1) == Kind.Cmd
 
-	if k == Ident {
+	if k == Kind.Ident {
 		# list[T](x) — a list-type conversion (e.g. bytearray(s))
-		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
+		if t.lexeme == "list" and peek_kind(p, 1) == Kind.LBrack {
 			p_advance(p) # 'list'
 			p_advance(p) # '['
 			elem := parse_type(p)
-			expect(p, RBrack)
+			expect(p, Kind.RBrack)
 			args := parse_call_args(p)
 
 			raise "E260 `list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"E261 `list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-			return EConv(TList(elem), args[0], "list")
+			return Expr.EConv(Ty.TList(elem), args[0], "list")
 		}
 
 		# `bytearray(s)` / `runearray(s)` — the str-to-list bridges, which are the SAME node
 		# `bytearray(s)` and `runearray(s)` produce. The name is read here rather than
 		# through the conversion table beside it because the table answers a scalar type and
 		# these two answer a list.
-		if (t.lexeme == "bytearray" or t.lexeme == "runearray") and peek_kind(p, 1) == LParen {
-			mut elem := TRune
+		if (t.lexeme == "bytearray" or t.lexeme == "runearray") and peek_kind(p, 1) == Kind.LParen {
+			mut elem := Ty.TRune
 			if t.lexeme == "bytearray" {
-				elem = TByte
+				elem = Ty.TByte
 			}
 			p_advance(p)
 			args := parse_call_args(p)
@@ -2589,34 +2603,34 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			raise f"E272 `{t.lexeme}(…)` converts a VALUE and was given none — it is the str-to-list bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"E273 `{t.lexeme}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-			return EConv(TList(elem), args[0], "list")
+			return Expr.EConv(Ty.TList(elem), args[0], "list")
 		}
 		p_advance(p)
-		return EIdent(t.lexeme)
+		return Expr.EIdent(t.lexeme)
 	}
-	return parse_fn_expr(p) if k == Fn
-	if k == Chan {
+	return parse_fn_expr(p) if k == Kind.Fn
+	if k == Kind.Chan {
 		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
 		# rendezvous, which is what a bare `chan[T]()` means
 		p_advance(p)
-		expect(p, LBrack)
+		expect(p, Kind.LBrack)
 		elem := parse_type(p)
-		expect(p, RBrack)
-		expect(p, LParen)
-		mut cap: Expr = EInt("0", 0, 0)
-		if not p_at(p, RParen) {
+		expect(p, Kind.RBrack)
+		expect(p, Kind.LParen)
+		mut cap: Expr = Expr.EInt("0", 0, 0)
+		if not p_at(p, Kind.RParen) {
 			cap = parse_expr(p)
 		}
-		expect(p, RParen)
-		return EChanNew(elem, cap)
+		expect(p, Kind.RParen)
+		return Expr.EChanNew(elem, cap)
 	}
-	if k == Guard {
+	if k == Kind.Guard {
 		# `guard { … }` is an EXPRESSION (GRAMMAR#guard-expr) yielding Result[T], not a statement.
 		# It was read as one before, which is why `n := guard { f() } ?? 0` — the form the
 		# spec writes the operator with — was refused outright, and why a statement-position
 		# guard lowered to a bare block that caught nothing at all.
 		p_advance(p)
-		return EGuard(parse_block(p))
+		return Expr.EGuard(parse_block(p))
 	}
 
 	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
@@ -2624,60 +2638,60 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# never run, and naming it was only half the fix: both markers were the keyword and
 	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
 	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
-	raise "E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value" + p_place(p, t.line, t.col) if k == Unsafe
-	raise "E271 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Asm
+	raise "E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value" + p_place(p, t.line, t.col) if k == Kind.Unsafe
+	raise "E271 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Kind.Asm
 
-	if k == Cmd {
+	if k == Kind.Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
 		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
 		# leaves open. Until that is answered it refuses by name: today it parsed as
 		# nothing at all, so `c := `echo hi`` silently bound 0.
 		raise "E236 NotImplemented: a command literal — " + t.lexeme
 	}
-	if k == LParen {
+	if k == Kind.LParen {
 		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
 		# so the first element is read before deciding which this is
 		p_advance(p)
 		inner := parse_expr(p)
-		if not p_at(p, Comma) {
-			expect(p, RParen)
+		if not p_at(p, Kind.Comma) {
+			expect(p, Kind.RParen)
 			return inner
 		}
 		mut elems: list[Expr] = []
 		elems.append(inner)
-		for p_at(p, Comma) {
+		for p_at(p, Kind.Comma) {
 			p_advance(p)
-			break if p_at(p, RParen)
+			break if p_at(p, Kind.RParen)
 			elems.append(parse_expr(p))
 		}
-		expect(p, RParen)
-		return ETuple(elems)
+		expect(p, Kind.RParen)
+		return Expr.ETuple(elems)
 	}
-	return parse_map_lit(p) if k == LBrace
-	if k == LBrack {
+	return parse_map_lit(p) if k == Kind.LBrace
+	if k == Kind.LBrack {
 		# list literal: [] or [a, b, ...], or the FILL form [v; N]
 		p_advance(p)
 		mut elems: list[Expr] = []
-		for not p_at(p, RBrack) and not p_at(p, Eof) {
+		for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 			elems.append(parse_expr(p))
 
 			# `[v; N]` is N copies of v. The `;` is the lexer's statement separator
 			# elsewhere, which is exactly why it needs handling here: without it the
 			# count was read as a second ELEMENT and the list came out the wrong length.
-			if p_at(p, Semi) and elems.len() == 1 {
+			if p_at(p, Kind.Semi) and elems.len() == 1 {
 				p_advance(p)
 				return parse_fill(p, elems[0])
 			}
-			if p_at(p, Comma) {
+			if p_at(p, Kind.Comma) {
 				p_advance(p)
 			}
 		}
-		expect(p, RBrack)
-		return EListLit(elems)
+		expect(p, Kind.RBrack)
+		return Expr.EListLit(elems)
 	}
 
-	return parse_if_expr(p) if k == If
-	return parse_match(p) if k == Match
+	return parse_if_expr(p) if k == Kind.If
+	return parse_match(p) if k == Kind.Match
 
 	# A STATEMENT standing where an expression is wanted. The common way in is a match
 	# arm — GRAMMAR makes an arm's body an expression, and `Left(v) => print v` is the
@@ -2694,7 +2708,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# A bare `..` is a RANGE with nothing on its left (GRAMMAR#range-expr): `xs[..2]` is the open
 	# form of a slice. It was named as a list pattern, which is a different form the same
 	# token opens — advice about something nobody wrote.
-	raise "E239 NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have" if k == DotDot
+	raise "E239 NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have" if k == Kind.DotDot
 
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not
@@ -2709,10 +2723,10 @@ fn parse_primary(mut &p: Parser) -> Expr {
 # its moment.
 fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
 	p_advance(p) # 'close'
-	expect(p, LParen)
+	expect(p, Kind.LParen)
 	ch := parse_expr(p)
-	expect(p, RParen)
-	return SClose(ch, at_exit)
+	expect(p, Kind.RParen)
+	return Stmt.SClose(ch, at_exit)
 }
 
 # is_stmt_kw names the keywords that can only begin a STATEMENT. It is deliberately a
@@ -2720,10 +2734,10 @@ fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
 # surface elsewhere on purpose, and turning every unknown token into an error would
 # refuse programs this compiler is meant to read past.
 fn is_stmt_kw(k: Kind) -> bool {
-	return true if k == Print or k == Raise or k == Return or k == Nop
-	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
+	return true if k == Kind.Print or k == Kind.Raise or k == Kind.Return or k == Kind.Nop
+	return true if k == Kind.Break or k == Kind.Continue or k == Kind.Del or k == Kind.Defer or k == Kind.Close
 
-	return k == Spawn or k == Select or k == For or k == With
+	return k == Kind.Spawn or k == Kind.Select or k == Kind.For or k == Kind.With
 }
 
 # parse_if_expr reads `if cond { e } else { e }` — the if-EXPRESSION (GRAMMAR#if-expr),
@@ -2743,16 +2757,16 @@ fn parse_if_expr(mut &p: Parser) -> Expr {
 	# `e` is present. It is grammatical in expression position and this compiler unwraps an
 	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
 	# parser and reported itself.
-	raise f"E270 NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Ident) and peek_kind(p, 1) == Walrus
+	raise f"E270 NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)
-	expect(p, Else)
+	expect(p, Kind.Else)
 
 	# `else if` — the chain, right-nested. The else-branch IS another if-expression, and
 	# reading it as one is all the nesting takes.
-	return EIf(cond, then_e, parse_if_expr(p)) if p_at(p, If)
-	return EIf(cond, then_e, parse_if_branch(p))
+	return Expr.EIf(cond, then_e, parse_if_expr(p)) if p_at(p, Kind.If)
+	return Expr.EIf(cond, then_e, parse_if_branch(p))
 }
 
 # parse_if_branch is one `{ … }` arm of an if-expression. A branch is a BLOCK in GRAMMAR and
@@ -2760,30 +2774,30 @@ fn parse_if_expr(mut &p: Parser) -> Expr {
 # compiler lowers an if-expression to a C conditional, which holds one expression and no
 # statements. The arm is named rather than reported as the token that could not continue it.
 fn parse_if_branch(mut &p: Parser) -> Expr {
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 	e := parse_expr(p)
 	skip_semis(p)
 
 	t := cur(p)
-	raise "E269 NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, RBrace)
+	raise "E269 NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, Kind.RBrace)
 
-	expect(p, RBrace)
+	expect(p, Kind.RBrace)
 	return e
 }
 
 fn parse_match(mut &p: Parser) -> Expr {
 	p_advance(p) # 'match'
 	scrut := parse_expr(p)
-	expect(p, LBrace)
+	expect(p, Kind.LBrace)
 	skip_semis(p)
 	mut arms: list[Arm] = []
-	for not p_at(p, RBrace) and not p_at(p, Eof) {
+	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		arms.append(parse_arm(p))
 		skip_semis(p)
 	}
-	expect(p, RBrace)
-	return EMatch(scrut, arms)
+	expect(p, Kind.RBrace)
+	return Expr.EMatch(scrut, arms)
 }
 
 # parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
@@ -2793,15 +2807,15 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
 	# message named a symptom two steps from the form that was written.
-	raise "E232 NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`" if p_at(p, LParen)
-	raise "E240 NotImplemented: a list pattern in a `match` arm — this compiler destructures a list with indexing and `.slice`" if p_at(p, LBrack)
+	raise "E232 NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`" if p_at(p, Kind.LParen)
+	raise "E240 NotImplemented: a list pattern in a `match` arm — this compiler destructures a list with indexing and `.slice`" if p_at(p, Kind.LBrack)
 
 	mut pat := 0
-	mut lit := ENil
+	mut lit := Expr.ENil
 	mut bind := ""
 	mut ctor := ""
 	mut binds: list[str] = []
-	if p_at(p, Ident) {
+	if p_at(p, Kind.Ident) {
 		mut name := cur(p).lexeme
 		p_advance(p)
 
@@ -2809,32 +2823,42 @@ fn parse_arm(mut &p: Parser) -> Arm {
 		# form. The arm matches on the variant, so the enum name is dropped once it has been
 		# read; whether it is the right enum is the emitter's question, which it already asks
 		# of a bare pattern against the scrutinee's type.
-		if p_at(p, Dot) and peek_kind(p, 1) == Ident {
+		mut qualified := false
+		if p_at(p, Kind.Dot) and peek_kind(p, 1) == Kind.Ident {
 			p_advance(p)
 			name = p_name(p, "a variant pattern")
+			qualified = true
 		}
 
 		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR#struct-pat). `P{…}` after a name in arm
 		# position is that and nothing else, and it fell through to the arrow check, so the
 		# message was `expected `=>`, found `{`` — the token after the form rather than the
 		# form. The tuple and list patterns beside it are already refused by name.
-		raise f"E243 NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, LBrace)
+		raise f"E243 NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, Kind.LBrace)
 
 		if name == "_" {
 			pat = 2
 		} else if is_pascal(name) {
-			# enum constructor pattern: `Variant` or `Variant(a, b)`
+			# A VARIANT IS NAMED BY ITS ENUM, always (GRAMMAR#variant-pat). A bare name here
+			# was read as a constructor pattern because it started with a capital, which made
+			# the arm's meaning a NAMING CONVENTION: rename the binding `Value` to `value` and
+			# the same arm stops matching a variant and starts binding the subject. The other
+			# direction is worse — an enum that gains a variant silently turns an existing
+			# binding arm into a constructor one, and nothing about the program changed.
+			raise f"E274 `{name}` is a variant of some enum, and a pattern names one through its enum — write `Enum.{name}`" if not qualified
+
+			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`
 			pat = 3
 			ctor = name
-			if p_at(p, LParen) {
+			if p_at(p, Kind.LParen) {
 				p_advance(p)
-				for not p_at(p, RParen) and not p_at(p, Eof) {
+				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 					binds.append(p_name(p, "a pattern binding"))
-					if p_at(p, Comma) {
+					if p_at(p, Kind.Comma) {
 						p_advance(p)
 					}
 				}
-				expect(p, RParen)
+				expect(p, Kind.RParen)
 			}
 		} else {
 			pat = 1
@@ -2852,21 +2876,21 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	#
 	# Both shapes are one rule, so it is written once, HERE: the parser is the only place
 	# that sees the bitwise-or expression and the leftover `|` token alike.
-	raise "E241 NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Pipe) or is_or_expr(lit)
+	raise "E241 NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Kind.Pipe) or is_or_expr(lit)
 
 	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
 	# while the pattern keeps destructuring. It fell through to the arrow check, so the
 	# message named `as` rather than the form it opens.
-	raise "E234 NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts" if p_at(p, As)
+	raise "E234 NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts" if p_at(p, Kind.As)
 
 	mut has_guard := false
-	mut grd := ENil
-	if p_at(p, If) {
+	mut grd := Expr.ENil
+	if p_at(p, Kind.If) {
 		p_advance(p)
 		has_guard = true
 		grd = parse_expr(p)
 	}
-	expect(p, FatArrow)
+	expect(p, Kind.FatArrow)
 	body := parse_expr(p)
 
 	# GRAMMAR makes an arm's body an `expr`, and a block is a primary — so `X => { … }` is
@@ -2877,13 +2901,13 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# `= n + d` behind, and the arm loop then read the wreckage as further arms and emitted
 	# C that only cc could object to. A leftover `=` or `<-` after a body is exactly that
 	# situation, and it is now said in Zerg's own words.
-	raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Assign)
-	raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, LArrow)
+	raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Kind.Assign)
+	raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Kind.LArrow)
 
 	# An arm's guard goes BEFORE the `=>` (GRAMMAR#match-arm). Written after the body it was
 	# silently DROPPED — `Right(e) => 0 if e is ValueError` compiled to an unconditional arm,
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
-	raise "E262 a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, If)
+	raise "E262 a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, Kind.If)
 
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }
@@ -2907,7 +2931,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 fn fstr_expr(mut &p: Parser, t: Token) -> Expr {
 	src := bytearray(t.value)
 	n := src.len()
-	mut acc: Expr = ENil
+	mut acc: Expr = Expr.ENil
 	mut have := false
 	mut lo := 0 # start of the literal run being gathered
 	mut i := 0
@@ -2924,7 +2948,7 @@ fn fstr_expr(mut &p: Parser, t: Token) -> Expr {
 
 			# the first part is emitted even when empty, so the fold is seeded with a str
 			if txt != "" or not have {
-				acc = fstr_join(acc, have, EStr(fstr_text(txt)))
+				acc = fstr_join(acc, have, Expr.EStr(fstr_text(txt)))
 				have = true
 			}
 			end := fstr_hole_end(src, i)
@@ -2937,13 +2961,13 @@ fn fstr_expr(mut &p: Parser, t: Token) -> Expr {
 		}
 	}
 	tail := fstr_slice(src, lo, n)
-	return fstr_join(acc, have, EStr(fstr_text(tail))) if tail != "" or not have
+	return fstr_join(acc, have, Expr.EStr(fstr_text(tail))) if tail != "" or not have
 	return acc
 }
 
 fn fstr_join(acc: Expr, have: bool, part: Expr) -> Expr {
 	return part if not have
-	return EBinary("+", acc, part)
+	return Expr.EBinary("+", acc, part)
 }
 
 fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {
@@ -3017,7 +3041,7 @@ fn fstr_quote_end(src: list[byte], at: int) -> int {
 # `"…"`, rather than through a second escape table that would drift from the first.
 fn fstr_text(raw: str) -> str {
 	toks := tokenize(f"\"{fstr_unbrace(raw)}\"")
-	return toks[0].value if toks[0].kind == Str
+	return toks[0].value if toks[0].kind == Kind.Str
 	raise "f-string: malformed literal text: " + raw
 }
 
@@ -3060,8 +3084,8 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
-	raise "f-string: a hole must be a single expression: {" + hole + "}" if not p_at(hp, Eof) and not p_at(hp, Semi)
-	return EConv(TStr, e, "str")
+	raise "f-string: a hole must be a single expression: {" + hole + "}" if not p_at(hp, Kind.Eof) and not p_at(hp, Kind.Semi)
+	return Expr.EConv(Ty.TStr, e, "str")
 }
 
 # fstr_reject refuses the hole forms this compiler does not implement, naming which one.

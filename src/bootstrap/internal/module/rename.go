@@ -24,6 +24,11 @@ type renamer struct {
 	surface map[string]bool // the module's top-level value+type names
 	shadow  map[string]bool // value names shadowed in the current function
 	tparams map[string]bool // generic type-parameter names in scope
+
+	// variants maps an enum this module declares to the variant names it declares, so
+	// `E.Variant` can be renamed on BOTH sides. A member name is otherwise never a surface
+	// name — which was true until a variant became something you reach through its enum.
+	variants map[string]map[string]bool
 }
 
 // rename mangles every top-level declaration name in the module's files and
@@ -54,6 +59,31 @@ func (r *renamer) value(name string) (string, bool) {
 
 // collectSurface records every top-level declaration name of a module (the names
 // that must be mangled and whose references must be rewritten).
+// collectVariants maps each enum a module declares to its variant names, which is what
+// tells an `Enum.Variant` member from every other member.
+func collectVariants(files []*ast.File) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	var add func(items []ast.Stmt)
+	add = func(items []ast.Stmt) {
+		for _, it := range items {
+			switch n := it.(type) {
+			case *ast.EnumDecl:
+				vs := map[string]bool{}
+				for _, v := range n.Variants {
+					vs[v.Name] = true
+				}
+				out[n.Name] = vs
+			case *ast.UnsafeGroup:
+				add(n.Items)
+			}
+		}
+	}
+	for _, f := range files {
+		add(f.Items)
+	}
+	return out
+}
+
 func collectSurface(files []*ast.File) map[string]bool {
 	s := map[string]bool{}
 	var add func(items []ast.Stmt)
@@ -274,6 +304,17 @@ func (r *renamer) renameStmt(s ast.Stmt) {
 
 // --- expressions --------------------------------------------------------------
 
+// enumMember reports whether `base.member` names a variant of an enum this module
+// declares, which is the one member position that carries a surface name.
+func (r *renamer) enumMember(base ast.Expr, member string) bool {
+	id, ok := base.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	vs, ok := r.variants[id.Name]
+	return ok && vs[member]
+}
+
 func (r *renamer) renameExpr(e ast.Expr) {
 	switch n := e.(type) {
 	case nil:
@@ -293,7 +334,13 @@ func (r *renamer) renameExpr(e ast.Expr) {
 			r.renameExpr(n.Args[i].Value)
 		}
 	case *ast.Field:
-		// The base may name the surface; the '.Name' member is never a surface name.
+		// The base may name the surface, and so may the MEMBER when the pair is
+		// `Enum.Variant` — a variant is reached through its enum (GRAMMAR#variant-pat), and
+		// both halves are declarations of this module. Every other member is a field or a
+		// method, which no module renames.
+		if r.enumMember(n.X, n.Name) {
+			n.Name = r.mangle(n.Name)
+		}
 		r.renameExpr(n.X)
 	case *ast.OptChain:
 		r.renameExpr(n.X)

@@ -399,7 +399,7 @@ enum E {
 
 fn main() {
 	e := E.A(7)
-	x := match e { A(v) => v  B => 0 }
+	x := match e { E.A(v) => v  E.B => 0 }
 	print x
 }
 EOF
@@ -1569,7 +1569,7 @@ enum Shape {
 
 fn area(s: Shape) -> int {
 	return match s {
-		Line(n, m) => n
+		Shape.Line(n, m) => n
 		_          => 0
 	}
 }
@@ -1599,7 +1599,7 @@ enum Shape {
 
 fn area(s: Shape) -> int {
 	return match s {
-		Line(n) => n
+		Shape.Line(n) => n
 		_       => 0
 	}
 }
@@ -1767,9 +1767,58 @@ enum E {
 fn main() {
 	e := A(7)
 	print(match e {
-		A(this) => this
+		E.A(this) => this
 		_ => 0
 	})
+}
+EOF
+
+# `This` IS RESERVED TOO, and it is the one reserved word the lexer reads as an ordinary
+# identifier: it is the SELF TYPE, written by every `impl` and declared by none. A migration
+# is what found it — `enum Kind { … This … }` had a variant with that name, and once a
+# variant had to be written through its enum there was no telling `Kind.This` the value from
+# `This` the type.
+#
+# The seed has no reserved-name rule at all for it, which is why these four are marked: it
+# refuses `this` only because its lexer makes that a keyword token, and `This` is not one.
+reject capital-this-as-a-variant E245 'cannot name an enum variant' no-place seed-gap <<'EOF'
+enum E {
+	This
+	B
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject capital-this-as-a-type E245 'cannot name a struct' no-place seed-gap <<'EOF'
+struct This {
+	x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject capital-this-as-a-function E245 'cannot name a function' no-place seed-gap <<'EOF'
+fn This() {
+	print 1
+}
+
+fn main() {
+	This()
+}
+EOF
+
+reject capital-this-as-a-parameter E245 'cannot name a parameter' no-place seed-gap <<'EOF'
+fn f(This: int) {
+	print This
+}
+
+fn main() {
+	f(1)
 }
 EOF
 
@@ -3291,6 +3340,26 @@ reject a-bytearray-of-two-values E273 no-place <<'EOF'
 fn main() {
 	b := bytearray("a", "b")
 	print b.len()
+}
+EOF
+
+# A BARE VARIANT IN A PATTERN was read as a constructor because it started with a capital,
+# which made an arm's meaning a naming convention: rename a binding `Value` to `value` and
+# the arm stops matching a variant and starts binding the subject. The other direction is the
+# one that keeps a person up — an enum that GAINS a variant silently turns an existing
+# binding arm into a constructor one, and nothing about the program changed.
+reject a-bare-variant-pattern E274 no-place seed-gap <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.Red
+	print match c {
+		Red   => "r"
+		Green => "g"
+	}
 }
 EOF
 

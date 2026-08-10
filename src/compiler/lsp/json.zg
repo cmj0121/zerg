@@ -36,8 +36,8 @@ struct JField {
 # jget is the value at `key`, or `JNull`.
 pub fn jget(v: JVal, key: str) -> JVal {
 	return match v {
-		JObj(fs) => jfield(fs, key)
-		_        => JNull
+		JVal.JObj(fs) => jfield(fs, key)
+		_             => JVal.JNull
 	}
 }
 
@@ -45,7 +45,7 @@ fn jfield(fs: list[JField], key: str) -> JVal {
 	for f in fs {
 		return f.val if f.key == key
 	}
-	return JNull
+	return JVal.JNull
 }
 
 # jat walks a path of keys — `jat(msg, "params", "textDocument", "uri")` — which is what
@@ -60,36 +60,36 @@ pub fn jat3(v: JVal, a: str, b: str, c: str) -> JVal {
 
 pub fn jhas(v: JVal, key: str) -> bool {
 	return match jget(v, key) {
-		JNull => false
-		_     => true
+		JVal.JNull => false
+		_          => true
 	}
 }
 
 pub fn jstr(v: JVal) -> str {
 	return match v {
-		JStr(s) => s
-		_       => ""
+		JVal.JStr(s) => s
+		_            => ""
 	}
 }
 
 pub fn jint(v: JVal) -> int {
 	return match v {
-		JInt(n) => n
-		_       => 0
+		JVal.JInt(n) => n
+		_            => 0
 	}
 }
 
 pub fn jarr(v: JVal) -> list[JVal] {
 	return match v {
-		JArr(xs) => xs
-		_        => []
+		JVal.JArr(xs) => xs
+		_             => []
 	}
 }
 
 pub fn jis_null(v: JVal) -> bool {
 	return match v {
-		JNull => true
-		_     => false
+		JVal.JNull => true
+		_          => false
 	}
 }
 
@@ -102,27 +102,27 @@ pub fn jis_null(v: JVal) -> bool {
 # beside `fs.append(JField("id", JStr(x)))`.
 
 pub fn jnull() -> JVal {
-	return JNull
+	return JVal.JNull
 }
 
 pub fn jbool_of(b: bool) -> JVal {
-	return JBool(b)
+	return JVal.JBool(b)
 }
 
 pub fn jint_of(n: int) -> JVal {
-	return JInt(n)
+	return JVal.JInt(n)
 }
 
 pub fn jstr_of(s: str) -> JVal {
-	return JStr(s)
+	return JVal.JStr(s)
 }
 
 pub fn jarr_of(xs: list[JVal]) -> JVal {
-	return JArr(xs)
+	return JVal.JArr(xs)
 }
 
 pub fn jobj_of(fs: list[JField]) -> JVal {
-	return JObj(fs)
+	return JVal.JObj(fs)
 }
 
 pub fn jfields() -> list[JField] {
@@ -135,15 +135,15 @@ pub fn jput(mut &fs: list[JField], key: str, v: JVal) {
 }
 
 pub fn jput_str(mut &fs: list[JField], key: str, s: str) {
-	fs.append(JField(key, JStr(s)))
+	fs.append(JField(key, JVal.JStr(s)))
 }
 
 pub fn jput_int(mut &fs: list[JField], key: str, n: int) {
-	fs.append(JField(key, JInt(n)))
+	fs.append(JField(key, JVal.JInt(n)))
 }
 
 pub fn jput_bool(mut &fs: list[JField], key: str, b: bool) {
-	fs.append(JField(key, JBool(b)))
+	fs.append(JField(key, JVal.JBool(b)))
 }
 
 # --- writing ------------------------------------------------------------------------------
@@ -156,12 +156,12 @@ pub fn json_write(v: JVal) -> str {
 
 fn jw(v: JVal, mut &out: list[byte]) {
 	match v {
-		JNull    => jw_text(out, "null")
-		JBool(b) => jw_bool(out, b)
-		JInt(n)  => jw_text(out, strconv.to_string(n, 10))
-		JStr(s)  => jw_str(out, s)
-		JArr(xs) => jw_arr(xs, out)
-		JObj(fs) => jw_obj(fs, out)
+		JVal.JNull    => jw_text(out, "null")
+		JVal.JBool(b) => jw_bool(out, b)
+		JVal.JInt(n)  => jw_text(out, strconv.to_string(n, 10))
+		JVal.JStr(s)  => jw_str(out, s)
+		JVal.JArr(xs) => jw_arr(xs, out)
+		JVal.JObj(fs) => jw_obj(fs, out)
 	}
 }
 
@@ -275,9 +275,9 @@ fn jp_value(b: list[byte], mut &at: list[int]) -> JVal {
 	return jp_obj(b, at) if c == b'{'
 	return jp_arr(b, at) if c == b'['
 	return jp_str_val(b, at) if c == b'"'
-	return jp_lit(b, at, "true", JBool(true)) if c == b't'
-	return jp_lit(b, at, "false", JBool(false)) if c == b'f'
-	return jp_lit(b, at, "null", JNull) if c == b'n'
+	return jp_lit(b, at, "true", JVal.JBool(true)) if c == b't'
+	return jp_lit(b, at, "false", JVal.JBool(false)) if c == b'f'
+	return jp_lit(b, at, "null", JVal.JNull) if c == b'n'
 	return jp_num(b, at) if c == b'-' or jp_isdigit(c)
 
 	raise f"json: byte {int(c)} begins no value"
@@ -308,7 +308,7 @@ fn jp_obj(b: list[byte], mut &at: list[int]) -> JVal {
 	jp_space(b, at)
 	if at[0] < b.len() and b[at[0]] == b'}' {
 		at[0] = at[0] + 1
-		return JObj(fs)
+		return JVal.JObj(fs)
 	}
 	for {
 		jp_space(b, at)
@@ -328,7 +328,7 @@ fn jp_obj(b: list[byte], mut &at: list[int]) -> JVal {
 		at[0] = at[0] + 1
 		break
 	}
-	return JObj(fs)
+	return JVal.JObj(fs)
 }
 
 fn jp_arr(b: list[byte], mut &at: list[int]) -> JVal {
@@ -337,7 +337,7 @@ fn jp_arr(b: list[byte], mut &at: list[int]) -> JVal {
 	jp_space(b, at)
 	if at[0] < b.len() and b[at[0]] == b']' {
 		at[0] = at[0] + 1
-		return JArr(xs)
+		return JVal.JArr(xs)
 	}
 	for {
 		xs.append(jp_value(b, at))
@@ -351,11 +351,11 @@ fn jp_arr(b: list[byte], mut &at: list[int]) -> JVal {
 		at[0] = at[0] + 1
 		break
 	}
-	return JArr(xs)
+	return JVal.JArr(xs)
 }
 
 fn jp_str_val(b: list[byte], mut &at: list[int]) -> JVal {
-	return JStr(jp_string(b, at))
+	return JVal.JStr(jp_string(b, at))
 }
 
 fn jp_string(b: list[byte], mut &at: list[int]) -> str {
@@ -467,8 +467,8 @@ fn jp_num(b: list[byte], mut &at: list[int]) -> JVal {
 	for at[0] < b.len() and jp_num_tail(b[at[0]]) {
 		at[0] = at[0] + 1
 	}
-	return JInt(-n) if neg
-	return JInt(n)
+	return JVal.JInt(-n) if neg
+	return JVal.JInt(n)
 }
 
 fn jp_num_tail(c: byte) -> bool {

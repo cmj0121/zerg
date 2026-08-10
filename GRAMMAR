@@ -488,6 +488,11 @@ pattern-list ::= pattern ( ',' pattern )*
 # 'spec' (behavioral interface), and 'impl'. Structural derivation is a decorator on
 # the type, '#[derive(...)]' (below). A method takes no explicit receiver — 'this' is
 # implicit inside a method (see param, group 5); the self type is 'This'.
+#
+# 'This' IS RESERVED, the way 'this' is, and it is the one reserved word that is not in the
+# keyword table: the lexer reads it as an ordinary identifier and every 'impl' writes it
+# while none declares it. So no declaration may take it as a name — not a struct, an enum, a
+# variant, a function, a parameter, a field or a binding.
 
 # --- type expressions ---
 # A type-name is just an identifier, so the set of built-in NUMERIC types — 'int',

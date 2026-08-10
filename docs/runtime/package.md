@@ -27,6 +27,14 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
 > module is flattened into one namespace and no visibility is checked. See Visibility below.
+>
+> **[not yet]** Two modules that declare the **same top-level name** — a `fn`, a type, a constant — are
+> refused by name: _two modules both define `X`_. The flattened namespace is the reason, and the mechanism
+> is the C symbol: a free function is emitted as `zg_<name>` with no module in it, so the two would mangle
+> to one symbol, and a call site drops the qualifier of `mod.fn(…)` before emission and so could not pick
+> between them either. `import … as` renames the **namespace**, not its members, and does not help. What
+> this costs in practice is that a module cannot use a stdlib function whose name it also declares — the
+> compiler's own sources hand-write a `has_suffix` beside `strings.has_suffix` for exactly this reason.
 
 ### Programs & the entry point
 

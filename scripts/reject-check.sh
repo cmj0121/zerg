@@ -1773,6 +1773,55 @@ fn main() {
 }
 EOF
 
+# `This` IS RESERVED TOO, and it is the one reserved word the lexer reads as an ordinary
+# identifier: it is the SELF TYPE, written by every `impl` and declared by none. A migration
+# is what found it — `enum Kind { … This … }` had a variant with that name, and once a
+# variant had to be written through its enum there was no telling `Kind.This` the value from
+# `This` the type.
+#
+# The seed has no reserved-name rule at all for it, which is why these four are marked: it
+# refuses `this` only because its lexer makes that a keyword token, and `This` is not one.
+reject capital-this-as-a-variant E245 'cannot name an enum variant' no-place seed-gap <<'EOF'
+enum E {
+	This
+	B
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject capital-this-as-a-type E245 'cannot name a struct' no-place seed-gap <<'EOF'
+struct This {
+	x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject capital-this-as-a-function E245 'cannot name a function' no-place seed-gap <<'EOF'
+fn This() {
+	print 1
+}
+
+fn main() {
+	This()
+}
+EOF
+
+reject capital-this-as-a-parameter E245 'cannot name a parameter' no-place seed-gap <<'EOF'
+fn f(This: int) {
+	print This
+}
+
+fn main() {
+	f(1)
+}
+EOF
+
 reject this-outside-a-method E371 <<'EOF'
 fn f() -> int {
 	return this

@@ -114,7 +114,7 @@ fn p_shallower(mut &p: Parser) {
 # is the answer. Two callers reach it for two reasons — the parser's own recursion, and
 # the depth of the tree it built — and a reader who hit either needs the same instruction.
 fn p_too_deep(mut &p: Parser, line: int, col: int) {
-	raise f"this program nests more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its parser recurses once per level of nested expressions, blocks and types, and every later pass walks the tree it built the same way, so refusing here is what this compiler can still say before the native stack it runs on overflows without a word" + p_place(p, line, col)
+	raise f"E244 this program nests more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its parser recurses once per level of nested expressions, blocks and types, and every later pass walks the tree it built the same way, so refusing here is what this compiler can still say before the native stack it runs on overflows without a word" + p_place(p, line, col)
 }
 
 # p_expr_root bounds the expression TREE, once, on the outermost expression of a
@@ -180,7 +180,7 @@ fn p_names_here(mut &p: Parser, at: int) -> bool {
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
-	raise f"`{lx}` is a reserved word and cannot name {what}" if not p_at(p, Ident) and lookup_keyword(lx) != Ident
+	raise f"E245 `{lx}` is a reserved word and cannot name {what}" if not p_at(p, Ident) and lookup_keyword(lx) != Ident
 	raise f"{what} needs a name, and `{lx}` is not one" if not p_at(p, Ident)
 
 	p_advance(p)
@@ -328,7 +328,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# GRAMMAR says two or more. One element in parentheses is a grouped type everywhere
 		# else in the language, and a zero-element tuple is not a thing Zerg has — `nil` is
 		# what a function with no result returns.
-		raise "a tuple type has two elements or more — `()` is not a type, and `(T)` is just `T`" if elems.len() < 2
+		raise "E246 a tuple type has two elements or more — `()` is not a type, and `(T)` is just `T`" if elems.len() < 2
 
 		return TTuple(elems)
 	}
@@ -657,7 +657,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		if p_at(p, Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
-			raise "`pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
+			raise "E247 `pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
 			parse_import(p, imports)
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, is_pub, "", false))
@@ -685,26 +685,26 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
 			# there is no visibility for a marker to grant (GRAMMAR#init-decl derives none)
-			raise "`pub` does not go on `init()` — the runtime calls it, so it has no visibility to grant" + p_place(p, t.line, t.col) if is_pub
+			raise "E248 `pub` does not go on `init()` — the runtime calls it, so it has no visibility to grant" + p_place(p, t.line, t.col) if is_pub
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
 			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
-			raise "`pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
+			raise "E249 `pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
 			parse_impl(p, fns, impls)
 		} else if p_at(p, Type) {
 			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, Hash) {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
-			raise "a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
+			raise "E250 a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
 			parse_decorator(p, pending)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
 			# fell into the skip below, so the `mut` was swallowed and the function compiled
 			# as if it had never been written.
-			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver" + p_place(p, t.line, t.col)
+			raise "E251 a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver" + p_place(p, t.line, t.col)
 		} else if p_at(p, Mut) {
 			# a top-level `mut` binding — `mut x := 0` or `pub mut x := 0`, `pub` changing
 			# nothing about mutability. Inside a module-level `unsafe { … }` group it is
@@ -742,12 +742,12 @@ pub fn parse_at(src: str, path: str) -> File {
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
 			# grammar of its own — and the depth is what the binding arms record on each
 			# declaration (in_unsafe) and what keeps a bare statement out (below).
-			raise "`pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" + p_place(p, t.line, t.col) if is_pub
+			raise "E252 `pub` does not go on an `unsafe { … }` group — the group marks a context, and visibility belongs to each declaration inside it" + p_place(p, t.line, t.col) if is_pub
 
 			# GRAMMAR#unsafe-item — `unsafe-item ::= decorated-decl | binding`, which derives no
 			# group, so a group inside a group is not a form. It used to nest, and the
 			# inner `}` closed the outer one as far as the counter was concerned.
-			raise "a module-level `unsafe { … }` group does not nest — the group marks one context, and everything declared in it is already in that context (GRAMMAR group 12)" + p_place(p, t.line, t.col) if in_unsafe
+			raise "E253 a module-level `unsafe { … }` group does not nest — the group marks one context, and everything declared in it is already in that context (GRAMMAR group 12)" + p_place(p, t.line, t.col) if in_unsafe
 
 			p_advance(p)
 			p_advance(p)
@@ -771,7 +771,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# is a refusal that names the group, not a silent delete and not the
 			# top-level-statement nop below (the group grants an unsafe CONTEXT, and a
 			# statement nobody runs must not be blessed into it).
-			raise "a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
+			raise "E254 a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
 			# GRAMMAR#program makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
 			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
@@ -780,7 +780,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# `xs.each(fn (n: int) { … })` answered "a function needs a name" about a
 			# lambda that was never a declaration. One COMPLETE statement is consumed, and
 			# what becomes of it is decided once, here: nothing.
-			raise "`pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
+			raise "E255 `pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
 			parse_stmt(p)
 		}
 
@@ -811,7 +811,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# which turns a `mut` binding into the language's mutable global and silently disarms
 	# the refusal that keeps one out of safe code. The place is the `unsafe` that opened it,
 	# not the end of the file, because that is where the reader has to go.
-	raise "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
+	raise "E256 this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
 
 	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
 }
@@ -1752,7 +1752,7 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# word and calling it one is a sentence the reader cannot act on. Both spellings are
 	# checked, since only the walrus one used to be and the two diverged.
 	if k != Ident and (peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and is_stmt_kw(k))) {
-		raise f"`{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Ident
+		raise f"E257 `{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Ident
 		raise f"a binding needs a name, and `{cur(p).lexeme}` is not one"
 	}
 
@@ -1825,7 +1825,7 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	}
 
 	return parse_select(p) if k == Select
-	raise "E237 NotImplemented: with" if k == With
+	raise "E237 NotImplemented: a `with` block" if k == With
 
 	if k == Del {
 		p_advance(p)
@@ -2419,8 +2419,8 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				# then indexed an empty argument list, so the COMPILER aborted with its own
 				# `IndexError: index out of range` — no place, no form named, and a stack
 				# trace of the compiler rather than a diagnostic about the program.
-				raise f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
-				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+				raise f"E258 `{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
+				raise f"E259 `{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
 				e = EConv(conv_ty(name), args[0], name)
 			} else {
@@ -2557,8 +2557,8 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			expect(p, RBrack)
 			args := parse_call_args(p)
 
-			raise "`list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
-			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+			raise "E260 `list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
+			raise f"E261 `list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
 			return EConv(TList(elem), args[0], "list")
 		}

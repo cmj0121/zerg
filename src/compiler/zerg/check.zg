@@ -582,20 +582,20 @@ fn chk_sig_differs(sp: SpecDecl, ip: ImplDecl, req: FnDecl, sup: FnDecl) -> str 
 # impl's type arguments are kept rather than skipped.
 fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
 	return match t {
-		TNamed(n)     => chk_subst_named(n, sp, ip)
-		TList(e)      => TList(chk_spec_subst(e, sp, ip))
-		TOpt(e)       => TOpt(chk_spec_subst(e, sp, ip))
-		TMap(k, v)    => TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		TChan(e, d)   => TChan(chk_spec_subst(e, sp, ip), d)
-		TEither(l, r) => TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
-		TTuple(es)    => TTuple(chk_subst_all(es, sp, ip))
-		TFn(ps, r)    => TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
-		_             => t
+		Ty.TNamed(n) => chk_subst_named(n, sp, ip)
+		Ty.TList(e) => Ty.TList(chk_spec_subst(e, sp, ip))
+		Ty.TOpt(e) => Ty.TOpt(chk_spec_subst(e, sp, ip))
+		Ty.TMap(k, v) => Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
+		Ty.TChan(e, d) => Ty.TChan(chk_spec_subst(e, sp, ip), d)
+		Ty.TEither(l, r) => Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
+		Ty.TTuple(es) => Ty.TTuple(chk_subst_all(es, sp, ip))
+		Ty.TFn(ps, r) => Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
+		_ => t
 	}
 }
 
 fn chk_subst_named(n: str, sp: SpecDecl, ip: ImplDecl) -> Ty {
-	return TNamed(ip.target) if n == "This"
+	return Ty.TNamed(ip.target) if n == "This"
 
 	mut i := 0
 	for i < sp.params.len() {
@@ -606,7 +606,7 @@ fn chk_subst_named(n: str, sp: SpecDecl, ip: ImplDecl) -> Ty {
 
 		i = i + 1
 	}
-	return TNamed(n)
+	return Ty.TNamed(n)
 }
 
 fn chk_subst_all(ts: list[Ty], sp: SpecDecl, ip: ImplDecl) -> list[Ty] {
@@ -639,16 +639,16 @@ fn chk_str_not_indexable(mut &em: Emitter) {
 
 fn chk_store_target(e: Expr) -> Expr {
 	return match e {
-		EIndex(t, _) => t
-		EField(t, _) => t
-		_            => e
+		Expr.EIndex(t, _) => t
+		Expr.EField(t, _) => t
+		_ => e
 	}
 }
 
 fn c_is_fieldref(e: Expr) -> bool {
 	return match e {
-		EField(_, _) => true
-		_            => false
+		Expr.EField(_, _) => true
+		_ => false
 	}
 }
 
@@ -676,14 +676,14 @@ fn chk_branch_types(mut &em: Emitter, then_e: Expr, else_e: Expr) {
 	got := c_infer(em, else_e)
 
 	return if c_is_unknown(want) or c_is_unknown(got)
-	return if ty_eq(want, TVoid) or ty_eq(got, TVoid)
+	return if ty_eq(want, Ty.TVoid) or ty_eq(got, Ty.TVoid)
 
 	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the five typeless forms, so
 	# `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence
 	# on the other — two spellings of one `int?` and not two answers. Every OTHER branch does
 	# bring its type, a literal included: a branch is not a typed position for its sibling, the
 	# same way one match arm is not one for the next.
-	return if ty_eq(want, TNil) or ty_eq(got, TNil)
+	return if ty_eq(want, Ty.TNil) or ty_eq(got, Ty.TNil)
 	return if chk_fits(em, want, got) or chk_fits(em, got, want)
 
 	chk_at(em, "E321", f"an `if` expression answers ONE type, and its branches give {ty_name(want)} and {ty_name(got)}")
@@ -693,12 +693,12 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	return if arms.len() < 2
 
 	want := c_infer_arm_body(em, arms[0], st)
-	return if c_is_unknown(want) or ty_eq(want, TVoid)
+	return if c_is_unknown(want) or ty_eq(want, Ty.TVoid)
 
 	mut i := 1
 	for i < arms.len() {
 		got := c_infer_arm_body(em, arms[i], st)
-		if not c_is_unknown(got) and not ty_eq(got, TVoid) and not chk_fits(em, want, got) {
+		if not c_is_unknown(got) and not ty_eq(got, Ty.TVoid) and not chk_fits(em, want, got) {
 			chk_at(em, "E322", f"a `match` answers ONE type, and its arms give {ty_name(want)} and {ty_name(got)}")
 			return
 		}
@@ -1081,9 +1081,9 @@ fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 
 fn chk_lit_leaves_fit(e: Expr) -> bool {
 	return match e {
-		EInt(lex, _, _) => int_fits(lex)
-		EUnary(_, x) => chk_lit_leaves_fit(x)
-		EBinary(_, a, b) => chk_lit_leaves_fit(a) and chk_lit_leaves_fit(b)
+		Expr.EInt(lex, _, _) => int_fits(lex)
+		Expr.EUnary(_, x) => chk_lit_leaves_fit(x)
+		Expr.EBinary(_, a, b) => chk_lit_leaves_fit(a) and chk_lit_leaves_fit(b)
 		_ => false
 	}
 }
@@ -1093,8 +1093,8 @@ fn chk_lit_leaves_fit(e: Expr) -> bool {
 # the caller can stop: a tree that cannot be computed has no value to measure.
 fn chk_const_divisors(mut &em: Emitter, e: Expr) -> bool {
 	return match e {
-		EUnary(_, x) => chk_const_divisors(em, x)
-		EBinary(o, a, b) => chk_const_divisors_pair(em, o, a, b)
+		Expr.EUnary(_, x) => chk_const_divisors(em, x)
+		Expr.EBinary(o, a, b) => chk_const_divisors_pair(em, o, a, b)
 		_ => false
 	}
 }
@@ -1118,8 +1118,8 @@ fn chk_const_divisors_pair(mut &em: Emitter, o: str, a: Expr, b: Expr) -> bool {
 # named. One rule, both cases.
 fn chk_lit_offender(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
 	return match e {
-		EUnary(_, x) => chk_lit_offender(em, want, x, not neg)
-		EBinary(_, a, b) => chk_lit_offender_pair(em, want, a, b, neg, e)
+		Expr.EUnary(_, x) => chk_lit_offender(em, want, x, not neg)
+		Expr.EBinary(_, a, b) => chk_lit_offender_pair(em, want, a, b, neg, e)
 		_ => chk_lit_says(e, neg)
 	}
 }
@@ -1137,9 +1137,9 @@ fn chk_lit_offender_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr, neg: bool
 # `0x1_00` in the diagnostic, not `256`.
 fn chk_lit_says(e: Expr, neg: bool) -> str {
 	return match e {
-		EUnary(_, x) => chk_lit_says(x, not neg)
-		EInt(lex, _, _) => chk_lit_sign(lex, neg)
-		EBinary(_, _, _) => chk_lit_folded_says(e, neg)
+		Expr.EUnary(_, x) => chk_lit_says(x, not neg)
+		Expr.EInt(lex, _, _) => chk_lit_sign(lex, neg)
+		Expr.EBinary(_, _, _) => chk_lit_folded_says(e, neg)
 		_ => "this"
 	}
 }
@@ -1190,8 +1190,8 @@ fn chk_lit_note(mut &em: Emitter, want: Ty, e: Expr) {
 # would rewrite: `1` and `2` each become `1.0` and `2.0`, and the type is on the page.
 fn chk_lit_note_leaves(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
 	match e {
-		EUnary(_, x) => chk_lit_note_leaves(em, want, x, not neg)
-		EBinary(_, a, b) => chk_lit_note_pair(em, want, a, b)
+		Expr.EUnary(_, x) => chk_lit_note_leaves(em, want, x, not neg)
+		Expr.EBinary(_, a, b) => chk_lit_note_pair(em, want, a, b)
 		_ => chk_lit_note_leaf(em, want, e, neg)
 	}
 }
@@ -1217,7 +1217,7 @@ fn chk_lit_note_leaf(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
 	# finding still reports; what it withholds is the mechanical answer, which is the honest
 	# thing to withhold when the place and the thing to rewrite are not the same span.
 	match e {
-		EInt(_, line, col) => chk_note_at(em, line, col, code, msg, chk_fix_unless(neg, shown))
+		Expr.EInt(_, line, col) => chk_note_at(em, line, col, code, msg, chk_fix_unless(neg, shown))
 		_ => chk_note(em, code, msg)
 	}
 }
@@ -1304,9 +1304,9 @@ fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 # `uint` and `-1` is not.
 fn chk_lit_in_range(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> bool {
 	return match e {
-		EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
-		EBinary(o, a, b) => chk_lit_pair_in_range(em, want, o, a, b, neg)
-		EInt(lex, _, _) => chk_int_in_range(em, want, int_value(lex), neg)
+		Expr.EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
+		Expr.EBinary(o, a, b) => chk_lit_pair_in_range(em, want, o, a, b, neg)
+		Expr.EInt(lex, _, _) => chk_int_in_range(em, want, int_value(lex), neg)
 		_ => false
 	}
 }
@@ -1347,8 +1347,8 @@ fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 	return chk_int_in_range(em, want, v, neg) if v >= 0
 
 	return match guard { 0 - v } {
-		Left(m)  => chk_int_in_range(em, want, m, not neg)
-		Right(_) => false
+		Either.Left(m)  => chk_int_in_range(em, want, m, not neg)
+		Either.Right(_) => false
 	}
 }
 
@@ -1381,9 +1381,9 @@ fn chk_lit_eval(e: Expr) -> Folded {
 		# said "this divides by a constant `0`" about `n % 99999999999999999999`, naming a
 		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
 		# happen, which is what `ok` is for.
-		EInt(lex, _, _) => Folded(int_fits(lex), int_value(lex))
-		EUnary(o, x) => chk_lit_eval_pair(o, EInt("0", 0, 0), x)
-		EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
+		Expr.EInt(lex, _, _) => Folded(int_fits(lex), int_value(lex))
+		Expr.EUnary(o, x) => chk_lit_eval_pair(o, Expr.EInt("0", 0, 0), x)
+		Expr.EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
 		_ => Folded(false, 0)
 	}
 }
@@ -1399,8 +1399,8 @@ fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
 	return Folded(false, 0) if not fa.ok or not fb.ok
 
 	return match guard { chk_lit_apply(o, fa.value, fb.value) } {
-		Left(v)  => Folded(true, v)
-		Right(_) => Folded(false, 0)
+		Either.Left(v)  => Folded(true, v)
+		Either.Right(_) => Folded(false, 0)
 	}
 }
 
@@ -1484,8 +1484,8 @@ fn chk_rune_ok(v: int) -> bool {
 # added.
 fn chk_int_lit(e: Expr) -> bool {
 	return match e {
-		EUnary(o, x) => o == "-" and chk_int_lit(x)
-		EBinary(o, a, b) => chk_lit_oper(o) and chk_int_lit(a) and chk_int_lit(b)
+		Expr.EUnary(o, x) => o == "-" and chk_int_lit(x)
+		Expr.EBinary(o, a, b) => chk_lit_oper(o) and chk_int_lit(a) and chk_int_lit(b)
 		_ => c_is_int_lit(e)
 	}
 }
@@ -1519,7 +1519,7 @@ fn chk_lit_float_oper(o: str) -> bool {
 # i64 stays refused — which is honest, and narrower than pretending the fold reached there.
 fn chk_uint_lit_fits(e: Expr) -> bool {
 	return match e {
-		EInt(lex, _, _) => uint_fits(lex)
+		Expr.EInt(lex, _, _) => uint_fits(lex)
 		_ => false
 	}
 }
@@ -1536,8 +1536,8 @@ fn chk_lit_shaped(want: Ty, e: Expr) -> bool {
 # the tree the checker admits and the tree c_lit_as_float renders are one tree by construction.
 fn chk_lit_float_tree(e: Expr) -> bool {
 	return match e {
-		EUnary(o, x) => o == "-" and chk_lit_float_tree(x)
-		EBinary(o, a, b) => chk_lit_float_oper(o) and chk_lit_float_tree(a) and chk_lit_float_tree(b)
+		Expr.EUnary(o, x) => o == "-" and chk_lit_float_tree(x)
+		Expr.EBinary(o, a, b) => chk_lit_float_oper(o) and chk_lit_float_tree(a) and chk_lit_float_tree(b)
 		_ => c_is_int_lit(e)
 	}
 }
@@ -1671,9 +1671,9 @@ fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) {
 # and so is never without a type, and an untyped closure parameter is refused by name.
 fn chk_typeless_form(e: Expr) -> str {
 	return match e {
-		EListLit(elems) => chk_empty_says(elems.len(), "the empty list `[]`")
-		EMapLit(ks, vs) => chk_empty_says(ks.len(), "the empty map `{:}`")
-		ENil => "`nil`"
+		Expr.EListLit(elems) => chk_empty_says(elems.len(), "the empty list `[]`")
+		Expr.EMapLit(ks, vs) => chk_empty_says(ks.len(), "the empty map `{:}`")
+		Expr.ENil => "`nil`"
 		_ => ""
 	}
 }
@@ -1713,7 +1713,7 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 		c_builtin_check(nm)
 
 		chk_at_place(em, td.path, td.line, td.col, "E337", f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
-		return TUnknown
+		return Ty.TUnknown
 	}
 
 	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
@@ -1724,7 +1724,7 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# that says it is not built.
 	if c_scalar_class(td.under) == SC_NONE {
 		chk_at_place(em, td.path, td.line, td.col, "E304", f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
-		return TUnknown
+		return Ty.TUnknown
 	}
 	return td.under
 }
@@ -2323,9 +2323,9 @@ fn chk_render_shape(mut &em: Emitter, fd: FnDecl) {
 # name answers "".
 fn chk_root_name(e: Expr) -> str {
 	return match e {
-		EIdent(n)    => n
-		EField(t, _) => chk_root_name(t)
-		EIndex(t, _) => chk_root_name(t)
-		_            => ""
+		Expr.EIdent(n) => n
+		Expr.EField(t, _) => chk_root_name(t)
+		Expr.EIndex(t, _) => chk_root_name(t)
+		_ => ""
 	}
 }

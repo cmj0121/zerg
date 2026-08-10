@@ -67,7 +67,7 @@ fn gen_mangle(name: str, args: list[Ty]) -> str {
 fn gen_solve(tparams: list[str], decls: list[Ty], actuals: list[Ty]) -> list[Ty] {
 	mut sol: list[Ty] = []
 	for n in tparams {
-		sol.append(TUnknown)
+		sol.append(Ty.TUnknown)
 	}
 	mut i := 0
 	for i < decls.len() and i < actuals.len() {
@@ -118,14 +118,14 @@ fn gen_match_inner(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty)
 # here is a struct or an enum, whose fields are not the type's arguments.
 fn gen_parts(t: Ty) -> list[Ty] {
 	return match t {
-		TList(e)      => [e]
-		TOpt(e)       => [e]
-		TChan(e, d)   => [e]
-		TMap(k, v)    => [k, v]
-		TTuple(es)    => es
-		TEither(x, y) => [x, y]
-		TFn(ps, r)    => gen_fn_parts(ps, r)
-		_             => []
+		Ty.TList(e) => [e]
+		Ty.TOpt(e) => [e]
+		Ty.TChan(e, d) => [e]
+		Ty.TMap(k, v) => [k, v]
+		Ty.TTuple(es) => es
+		Ty.TEither(x, y) => [x, y]
+		Ty.TFn(ps, r) => gen_fn_parts(ps, r)
+		_ => []
 	}
 }
 
@@ -171,14 +171,14 @@ fn subst_ty(names: list[str], args: list[Ty], t: Ty) -> Ty {
 		return t
 	}
 	return match t {
-		TList(e)      => TList(subst_ty(names, args, e))
-		TOpt(e)       => TOpt(subst_ty(names, args, e))
-		TChan(e, d)   => TChan(subst_ty(names, args, e), d)
-		TMap(k, v)    => TMap(subst_ty(names, args, k), subst_ty(names, args, v))
-		TTuple(es)    => TTuple(subst_tys(names, args, es))
-		TEither(x, y) => TEither(subst_ty(names, args, x), subst_ty(names, args, y))
-		TFn(ps, r)    => TFn(subst_tys(names, args, ps), subst_ty(names, args, r))
-		_             => t
+		Ty.TList(e) => Ty.TList(subst_ty(names, args, e))
+		Ty.TOpt(e) => Ty.TOpt(subst_ty(names, args, e))
+		Ty.TChan(e, d) => Ty.TChan(subst_ty(names, args, e), d)
+		Ty.TMap(k, v) => Ty.TMap(subst_ty(names, args, k), subst_ty(names, args, v))
+		Ty.TTuple(es) => Ty.TTuple(subst_tys(names, args, es))
+		Ty.TEither(x, y) => Ty.TEither(subst_ty(names, args, x), subst_ty(names, args, y))
+		Ty.TFn(ps, r) => Ty.TFn(subst_tys(names, args, ps), subst_ty(names, args, r))
+		_ => t
 	}
 }
 
@@ -200,23 +200,23 @@ fn subst_block(names: list[str], args: list[Ty], b: list[Stmt]) -> list[Stmt] {
 
 fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
 	return match s {
-		SLet(nm, ty, ht, im, ic, v) => SLet(nm, subst_ty(names, args, ty), ht, im, ic, subst_expr(names, args, v))
-		SAssign(l, r) => SAssign(subst_expr(names, args, l), subst_expr(names, args, r))
-		SPrint(v) => SPrint(subst_expr(names, args, v))
-		SReturn(hv, v) => SReturn(hv, subst_expr(names, args, v))
-		SReturnIf(v, c) => SReturnIf(subst_expr(names, args, v), subst_expr(names, args, c))
-		SExpr(v) => SExpr(subst_expr(names, args, v))
-		SIf(c, tb, he, eb) => SIf(subst_expr(names, args, c), subst_block(names, args, tb), he, subst_block(names, args, eb))
-		SFor(hc, c, b) => SFor(hc, subst_expr(names, args, c), subst_block(names, args, b))
-		SForIn(nm, it, b) => SForIn(nm, subst_expr(names, args, it), subst_block(names, args, b))
-		SForSelect(arms) => SForSelect(subst_sel_arms(names, args, arms))
-		SRaise(e, hf, cause) => SRaise(subst_expr(names, args, e), hf, subst_expr(names, args, cause))
-		SDefer(v) => SDefer(subst_expr(names, args, v))
-		SSpawn(v) => SSpawn(subst_expr(names, args, v))
-		SSend(ch, v) => SSend(subst_expr(names, args, ch), subst_expr(names, args, v))
-		SSelect(arms) => SSelect(subst_sel_arms(names, args, arms))
-		SClose(ch, tw) => SClose(subst_expr(names, args, ch), tw)
-		SIfLet(nm, v, tb, he, eb) => SIfLet(nm, subst_expr(names, args, v), subst_block(names, args, tb), he, subst_block(names, args, eb))
+		Stmt.SLet(nm, ty, ht, im, ic, v) => Stmt.SLet(nm, subst_ty(names, args, ty), ht, im, ic, subst_expr(names, args, v))
+		Stmt.SAssign(l, r) => Stmt.SAssign(subst_expr(names, args, l), subst_expr(names, args, r))
+		Stmt.SPrint(v) => Stmt.SPrint(subst_expr(names, args, v))
+		Stmt.SReturn(hv, v) => Stmt.SReturn(hv, subst_expr(names, args, v))
+		Stmt.SReturnIf(v, c) => Stmt.SReturnIf(subst_expr(names, args, v), subst_expr(names, args, c))
+		Stmt.SExpr(v) => Stmt.SExpr(subst_expr(names, args, v))
+		Stmt.SIf(c, tb, he, eb) => Stmt.SIf(subst_expr(names, args, c), subst_block(names, args, tb), he, subst_block(names, args, eb))
+		Stmt.SFor(hc, c, b) => Stmt.SFor(hc, subst_expr(names, args, c), subst_block(names, args, b))
+		Stmt.SForIn(nm, it, b) => Stmt.SForIn(nm, subst_expr(names, args, it), subst_block(names, args, b))
+		Stmt.SForSelect(arms) => Stmt.SForSelect(subst_sel_arms(names, args, arms))
+		Stmt.SRaise(e, hf, cause) => Stmt.SRaise(subst_expr(names, args, e), hf, subst_expr(names, args, cause))
+		Stmt.SDefer(v) => Stmt.SDefer(subst_expr(names, args, v))
+		Stmt.SSpawn(v) => Stmt.SSpawn(subst_expr(names, args, v))
+		Stmt.SSend(ch, v) => Stmt.SSend(subst_expr(names, args, ch), subst_expr(names, args, v))
+		Stmt.SSelect(arms) => Stmt.SSelect(subst_sel_arms(names, args, arms))
+		Stmt.SClose(ch, tw) => Stmt.SClose(subst_expr(names, args, ch), tw)
+		Stmt.SIfLet(nm, v, tb, he, eb) => Stmt.SIfLet(nm, subst_expr(names, args, v), subst_block(names, args, tb), he, subst_block(names, args, eb))
 		_ => s
 	}
 }
@@ -231,29 +231,29 @@ fn subst_sel_arms(names: list[str], args: list[Ty], arms: list[SelArm]) -> list[
 
 fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
 	return match e {
-		EUnary(o, x) => EUnary(o, subst_expr(names, args, x))
-		EBinary(o, a, b) => EBinary(o, subst_expr(names, args, a), subst_expr(names, args, b))
-		ECall(nm, xs, ts) => ECall(nm, subst_exprs(names, args, xs), subst_tys(names, args, ts))
-		EField(x, f) => EField(subst_expr(names, args, x), f)
-		EOptChain(x, f) => EOptChain(subst_expr(names, args, x), f)
-		ETry(x) => ETry(subst_expr(names, args, x))
-		EIndex(x, i) => EIndex(subst_expr(names, args, x), subst_expr(names, args, i))
-		EMethod(x, m, xs) => EMethod(subst_expr(names, args, x), m, subst_exprs(names, args, xs))
-		EListLit(xs) => EListLit(subst_exprs(names, args, xs))
-		EConv(ty, x, as_) => EConv(subst_ty(names, args, ty), subst_expr(names, args, x), as_)
-		EIf(c, a, b) => EIf(subst_expr(names, args, c), subst_expr(names, args, a), subst_expr(names, args, b))
-		EMatch(x, arms) => EMatch(subst_expr(names, args, x), subst_arms(names, args, arms))
-		ERange(a, b, inc) => ERange(subst_expr(names, args, a), subst_expr(names, args, b), inc)
-		ETuple(xs) => ETuple(subst_exprs(names, args, xs))
-		EMapLit(ks, vs) => EMapLit(subst_exprs(names, args, ks), subst_exprs(names, args, vs))
-		EFn(ps, hr, r, b) => EFn(subst_params(names, args, ps), hr, subst_ty(names, args, r), subst_block(names, args, b))
-		EChanNew(ty, cap) => EChanNew(subst_ty(names, args, ty), subst_expr(names, args, cap))
-		ERecv(x) => ERecv(subst_expr(names, args, x))
-		EForce(x) => EForce(subst_expr(names, args, x))
-		ECoalesce(a, b, jump) => ECoalesce(subst_expr(names, args, a), subst_expr(names, args, b), subst_block(names, args, jump))
-		EGuard(b) => EGuard(subst_block(names, args, b))
-		EIs(x, nm) => EIs(subst_expr(names, args, x), nm)
-		EIn(x, s) => EIn(subst_expr(names, args, x), subst_expr(names, args, s))
+		Expr.EUnary(o, x) => Expr.EUnary(o, subst_expr(names, args, x))
+		Expr.EBinary(o, a, b) => Expr.EBinary(o, subst_expr(names, args, a), subst_expr(names, args, b))
+		Expr.ECall(nm, xs, ts) => Expr.ECall(nm, subst_exprs(names, args, xs), subst_tys(names, args, ts))
+		Expr.EField(x, f) => Expr.EField(subst_expr(names, args, x), f)
+		Expr.EOptChain(x, f) => Expr.EOptChain(subst_expr(names, args, x), f)
+		Expr.ETry(x) => Expr.ETry(subst_expr(names, args, x))
+		Expr.EIndex(x, i) => Expr.EIndex(subst_expr(names, args, x), subst_expr(names, args, i))
+		Expr.EMethod(x, m, xs) => Expr.EMethod(subst_expr(names, args, x), m, subst_exprs(names, args, xs))
+		Expr.EListLit(xs) => Expr.EListLit(subst_exprs(names, args, xs))
+		Expr.EConv(ty, x, as_) => Expr.EConv(subst_ty(names, args, ty), subst_expr(names, args, x), as_)
+		Expr.EIf(c, a, b) => Expr.EIf(subst_expr(names, args, c), subst_expr(names, args, a), subst_expr(names, args, b))
+		Expr.EMatch(x, arms) => Expr.EMatch(subst_expr(names, args, x), subst_arms(names, args, arms))
+		Expr.ERange(a, b, inc) => Expr.ERange(subst_expr(names, args, a), subst_expr(names, args, b), inc)
+		Expr.ETuple(xs) => Expr.ETuple(subst_exprs(names, args, xs))
+		Expr.EMapLit(ks, vs) => Expr.EMapLit(subst_exprs(names, args, ks), subst_exprs(names, args, vs))
+		Expr.EFn(ps, hr, r, b) => Expr.EFn(subst_params(names, args, ps), hr, subst_ty(names, args, r), subst_block(names, args, b))
+		Expr.EChanNew(ty, cap) => Expr.EChanNew(subst_ty(names, args, ty), subst_expr(names, args, cap))
+		Expr.ERecv(x) => Expr.ERecv(subst_expr(names, args, x))
+		Expr.EForce(x) => Expr.EForce(subst_expr(names, args, x))
+		Expr.ECoalesce(a, b, jump) => Expr.ECoalesce(subst_expr(names, args, a), subst_expr(names, args, b), subst_block(names, args, jump))
+		Expr.EGuard(b) => Expr.EGuard(subst_block(names, args, b))
+		Expr.EIs(x, nm) => Expr.EIs(subst_expr(names, args, x), nm)
+		Expr.EIn(x, s) => Expr.EIn(subst_expr(names, args, x), subst_expr(names, args, s))
 		_ => e
 	}
 }

@@ -115,6 +115,15 @@ same source to an object file, which is what a module is for.
 > levels. A conforming implementation may set another bound; ISO C itself promises only 63 nested
 > parenthesized expressions.
 
+---
+
+> **[implementation-defined]** **A format spec's width and precision are translation limits.** A `width`
+> or a `precision` past **4096** is refused rather than honoured: both are a size the text being
+> formatted asks the implementation to produce, and an unbounded one is a request for memory dressed
+> as a rendering. A **float** additionally renders at most **100** fractional digits, which is a bound
+> on digits rather than on a field and so is the float's own. The `type` letter is a closed set per rendering
+> ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
+
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed

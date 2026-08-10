@@ -95,6 +95,14 @@ module 的用途。
 > 運算式走訪在大約 310 個方法環節（530 個扁平 `+` 項）時耗盡，代換階段則在大約 400 時耗盡，而整個 repository
 > 裡最深的實際巢狀是五層。conforming implementation 可以另定上限；ISO C 自己也只承諾 63 層括號運算式。
 
+---
+
+> **[implementation-defined]** **format spec 的 width 與 precision 是翻譯上限。** `width` 超過 **4096**
+> 或 `precision` 超過 **4096** 會被拒絕而不是照做：兩者都是被格式化的文字要求實作產出的**大小**，而沒有界的
+> 那一個是披著渲染外衣的記憶體請求。**float** 另外最多渲染 **100** 位小數,那是對位數而不是對欄位的界,所以
+> 是 float 自己的。`type` 字母對每一種渲染都是封閉集合
+> ([文字與格式化](runtime/format.zh-TW.md))；落在集合外的字母以同樣的方式被拒。
+
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或

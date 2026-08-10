@@ -38,8 +38,8 @@ fn counter(inbox: <-chan[Cmd]) {
 	# drains until the last sender leaves
 	for cmd in inbox {
 		n = match cmd {
-			Add(d)   => n + d
-			Get(rep) => answer(rep, n)
+			Cmd.Add(d)   => n + d
+			Cmd.Get(rep) => answer(rep, n)
 		}
 	}
 }

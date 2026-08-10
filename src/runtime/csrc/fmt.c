@@ -9,9 +9,16 @@
  *
  * The spec grammar mirrors Python's `[[fill]align][sign][#][0][width][.prec][type]`.
  * What each field means is the type's own: numbers read sign / base / zero-pad /
- * width / precision; strings read width / align / precision (truncation). A spec the
- * MVP does not model is ignored rather than rejected — the f-string desugars at
- * compile time, so there is no runtime error channel.
+ * width / precision; strings read width / align / precision (truncation).
+ *
+ * A SPEC IS TEXT THE PROGRAM WROTE, and this file used to treat it as trusted — the
+ * float path built the pattern it handed snprintf out of the spec's own bytes. So every
+ * field is BOUNDED here and every type letter is one of a fixed set, per rendering;
+ * docs/runtime/format.md is where the set and the reasons live. What is outside either
+ * ends the run by name (ValueError), the way an index or a key does — "ignored rather
+ * than rejected" was written when this file had no error channel, and zrt_abort_kind is
+ * one. The compiler is expected to refuse a bad spec before a program ever runs; this is
+ * the floor under that, not a substitute.
  */
 #include "zergrt.h"
 
@@ -127,6 +134,41 @@ const char *zrt_display_bool(bool v) {
 
 /* --- spec parsing ----------------------------------------------------------- */
 
+/* The bounds. A width is a field a caller is asking to be allocated, and a precision is
+ * digits a caller is asking to be produced, so both are a size somebody else chose. The
+ * numbers are not sacred — they are large enough that no rendering a person writes meets
+ * them, and small enough that meeting one is a mistake rather than a memory request.
+ * ZRT_FMT_BODY is sized for the widest thing the float path can produce inside them. */
+#define ZRT_FMT_MAX_WIDTH 4096
+#define ZRT_FMT_MAX_PREC  100
+/* a DBL_MAX in `%f` is 309 integer digits, plus a sign, a point and the NUL */
+#define ZRT_FMT_BODY (312 + ZRT_FMT_MAX_PREC)
+
+/* spec_reject ends the run naming the spec that could not be rendered. A spec is written
+ * in the source, so this is deterministic for a given program: the same run always ends
+ * the same way, which is what makes it a diagnosis rather than a crash. */
+_Noreturn static void spec_reject(const char *why) {
+	zrt_abort_kind(ZRT_ERR_VALUE, why);
+}
+
+/* spec_digits reads a run of digits into a bounded value. It stops accumulating at the
+ * limit rather than wrapping, so the refusal below is reached with a number to name and
+ * the accumulation itself is never undefined. */
+static long spec_digits(const char *s, size_t *i, size_t n, long limit, const char *why) {
+	long v = 0;
+	while (*i < n && s[*i] >= '0' && s[*i] <= '9') {
+		if (v <= limit) {
+			v = v * 10 + (s[(*i)] - '0');
+		}
+		(*i)++;
+	}
+	if (v > limit) {
+		spec_reject(why);
+	}
+	return v;
+}
+
+
 typedef struct {
 	char fill;  /* pad char, default ' ' (or '0' when zero is set)            */
 	char align; /* '<' '>' '^' '=' or 0 when unset                           */
@@ -177,15 +219,12 @@ static void parse_spec(const char *s, fmt_spec *f) {
 		}
 		i++;
 	}
-	while (i < n && s[i] >= '0' && s[i] <= '9') {
-		f->width = f->width * 10 + (s[i++] - '0');
-	}
+	f->width = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
+	                       "ValueError: a format spec's width is past what this runtime pads to");
 	if (i < n && s[i] == '.') {
 		i++;
-		f->prec = 0;
-		while (i < n && s[i] >= '0' && s[i] <= '9') {
-			f->prec = f->prec * 10 + (s[i++] - '0');
-		}
+		f->prec = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
+		                      "ValueError: a format spec's precision is past what this runtime produces");
 	}
 	if (i < n) {
 		f->type = s[i];
@@ -223,9 +262,24 @@ static const char *pad_field(const char *body, char align_default, const fmt_spe
 const char *zrt_fmt_int(int64_t v, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
+	/* The integer conversions, named rather than defaulted. This path builds its digits by
+	 * hand, so an unknown letter was never a memory hazard the way the float path's was —
+	 * it was a silent one, rendering `{n:q}` as though the `q` had not been written. */
+	if (f.type != 0 && strchr("boxXcd", f.type) == NULL) {
+		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
+	}
 
+	/* `c` RENDERS A CODE POINT, and it used to render the low byte of one: `{300:c}` came
+	 * back as a comma, `{0:c}` as an empty string, and `{-1:c}` as a byte that is not UTF-8
+	 * at all. A conversion that silently answers about a different value is the shape this
+	 * project's standing rule forbids, and it is the same encoder `str(runes)` uses. */
 	if (f.type == 'c') {
-		char cb[2] = {(char)v, '\0'};
+		char cb[5];
+		int  len = zrt_utf8_encode(v, cb);
+		if (len == 0) {
+			spec_reject("ValueError: `c` renders a code point, and this is not one a str can hold");
+		}
+		cb[len] = '\0';
 		return pad_field(cb, '<', &f);
 	}
 
@@ -324,6 +378,12 @@ const char *zrt_fmt_uint(uint64_t v, const char *spec) {
 	}
 	fmt_spec f;
 	parse_spec(spec, &f);
+	/* the same closed set the signed path names — this branch renders through the display
+	 * fallback rather than the base machinery, so an unknown letter was dropped in silence
+	 * here while its twin three lines up refused it. */
+	if (f.type != 0 && strchr("boxXcd", f.type) == NULL) {
+		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
+	}
 	const char *body = zrt_display_uint(v); /* a fresh cell; pad_field copies, so free it here */
 	const char *out = pad_field(body, '>', &f);
 	zrt_str_release(body);
@@ -334,15 +394,52 @@ const char *zrt_fmt_float(double v, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
 	char type = f.type ? f.type : 'g';
-	long prec = f.prec >= 0 ? f.prec : 6;
-	char pat[16];
-	char body[64];
-	if (f.sign == '+' || f.sign == ' ') {
-		snprintf(pat, sizeof(pat), "%%%c.%ld%c", f.sign, prec, type);
-	} else {
-		snprintf(pat, sizeof(pat), "%%.%ld%c", prec, type);
+	/* THE TYPE LETTER IS A CONVERSION, so it is switched on rather than SPLICED INTO a
+	 * pattern. Both halves of that sentence matter. Bounding the letter to this set is what
+	 * stops `%s` reading the double as a pointer and `%n` writing through it; writing one
+	 * literal per case is what leaves no format string in this file built out of anything a
+	 * program supplied — the precision rides in as an argument, where a number belongs.
+	 *
+	 * The sign is not in the pattern either. `%+` and `% ` differ from the default only in
+	 * what they put before a non-negative number, and putting it there by hand keeps the
+	 * count of literals at one per conversion instead of one per conversion per sign. */
+	/* THE FLOAT'S OWN BOUND, tighter than the shared one and for a different reason: this is
+	 * fractional DIGITS, and the buffer below is sized for them. A `str`'s precision is a
+	 * truncation and an int ignores it, so neither wants this number — checking it in
+	 * parse_spec made `f"{s:.200}"`, a legal 200-character truncation, an error. */
+	if (f.prec > ZRT_FMT_MAX_PREC) {
+		spec_reject("ValueError: a float renders at most a hundred fractional digits, and a format spec asked for more");
 	}
-	snprintf(body, sizeof(body), pat, v);
+	long prec = f.prec >= 0 ? f.prec : 6;
+	char body[ZRT_FMT_BODY];
+	char digits[ZRT_FMT_BODY];
+	switch (type) {
+	case 'e':
+		snprintf(digits, sizeof(digits), "%.*e", (int)prec, v);
+		break;
+	case 'E':
+		snprintf(digits, sizeof(digits), "%.*E", (int)prec, v);
+		break;
+	case 'f':
+		snprintf(digits, sizeof(digits), "%.*f", (int)prec, v);
+		break;
+	case 'F':
+		snprintf(digits, sizeof(digits), "%.*F", (int)prec, v);
+		break;
+	case 'g':
+		snprintf(digits, sizeof(digits), "%.*g", (int)prec, v);
+		break;
+	case 'G':
+		snprintf(digits, sizeof(digits), "%.*G", (int)prec, v);
+		break;
+	default:
+		spec_reject("ValueError: a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another");
+	}
+	if ((f.sign == '+' || f.sign == ' ') && digits[0] != '-') {
+		snprintf(body, sizeof(body), "%c%s", f.sign, digits);
+	} else {
+		snprintf(body, sizeof(body), "%s", digits);
+	}
 	if ((f.align == '=' || (f.zero && f.align == 0)) && f.width > 0) {
 		/* zero-pad after an optional leading sign. */
 		size_t len = strlen(body);
@@ -368,6 +465,9 @@ const char *zrt_fmt_str(const char *s, const char *spec) {
 	}
 	fmt_spec f;
 	parse_spec(spec, &f);
+	if (f.type != 0 && f.type != 's') {
+		spec_reject("ValueError: a str renders as `s`, and a format spec asked for another");
+	}
 	size_t len = strlen(s);
 	if (f.prec >= 0 && (size_t)f.prec < len) {
 		len = (size_t)f.prec; /* precision truncates a string */

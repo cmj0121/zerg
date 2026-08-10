@@ -1480,14 +1480,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" with-statement E237 <<'EOF'
-fn main() {
-	with 5 as n {
-		print n
-	}
-}
-EOF
-
 expect "$ZERG" if-let-over-an-enum E434 <<'EOF'
 enum E {
 	A(int)

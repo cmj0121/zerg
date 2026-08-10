@@ -553,7 +553,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E234` | NotImplemented                                                                                        |
 | `E235` | NotImplemented                                                                                        |
 | `E236` | NotImplemented                                                                                        |
-| `E237` | NotImplemented                                                                                        |
 | `E238` | NotImplemented                                                                                        |
 | `E239` | NotImplemented                                                                                        |
 | `E240` | NotImplemented                                                                                        |

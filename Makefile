@@ -459,6 +459,9 @@ version-check:                  # VERSION, the generated source, both compilers 
 cache-key-check:                # the build cache names the compiler that filled it
 	./scripts/cache-key-check.sh
 
+error-codes-check:              # every error code is reported once, asserted, and listed
+	./scripts/error-codes-check.sh
+
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build
 	./bin/zerg lint $(ZERG_ENTRY)

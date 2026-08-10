@@ -232,6 +232,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   the seed's only input, the compiler's own source, nests five levels — but it is a gap:
   the seed enforces no bound at all, and a deep enough program would end as a Go
   stack-limit panic rather than a diagnostic.
+- **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
+  `impl` and declared by none, so it is reserved the way `this` is — but it is the one
+  reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a
+  name beyond its keyword table. So `struct This`, `fn This()`, a parameter and an `enum`
+  variant all build here and `zerg` refuses each by name. (Lowercase `this` the seed does
+  refuse, because that one IS a keyword token.)
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

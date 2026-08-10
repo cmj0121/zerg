@@ -67,10 +67,10 @@ pub fn fmt_balanced(src: str) -> bool {
 		# `Hash` is `#[`, ONE token that opens a bracket the matching `]` closes as an
 		# ordinary RBrack — so a decorator reads as one close too many unless it is counted
 		# here. Every `#[derive(…)]` in the tree tripped this on the first attempt.
-		if t.kind == LParen or t.kind == LBrack or t.kind == LBrace or t.kind == Hash {
+		if t.kind == Kind.LParen or t.kind == Kind.LBrack or t.kind == Kind.LBrace or t.kind == Kind.Hash {
 			depth = depth + 1
 		}
-		if t.kind == RParen or t.kind == RBrack or t.kind == RBrace {
+		if t.kind == Kind.RParen or t.kind == Kind.RBrack or t.kind == Kind.RBrace {
 			depth = depth - 1
 
 			# a close with nothing open: the rest of the file cannot be read either
@@ -158,7 +158,7 @@ fn fmt_guards(mut &toks: list[Token]) -> list[Token] {
 # fmt_guard_at answers with the `{` of a rewritable if-block starting at `at`, or 0 when
 # the shape is anything else. Every reason to decline is here, in one place.
 fn fmt_guard_at(mut &toks: list[Token], at: int, mut &out: list[Token]) -> int {
-	return 0 if toks[at].kind != If or fmt_is_else_if(out)
+	return 0 if toks[at].kind != Kind.If or fmt_is_else_if(out)
 	lb := fmt_block_start(toks, at)
 	return 0 if lb == 0
 	rb := fmt_block_end(toks, lb)
@@ -185,7 +185,7 @@ fn fmt_emit_guard(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 		}
 		i = i + 1
 	}
-	out.append(Token(If, "if", "", ln, col))
+	out.append(Token(Kind.If, "if", "", ln, col))
 
 	# the condition: everything between `if` and the `{`
 	mut j := at + 1
@@ -193,7 +193,7 @@ fn fmt_emit_guard(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 		out.append(fmt_on_line(toks[j], ln))
 		j = j + 1
 	}
-	out.append(Token(Semi, ";", "", ln, col))
+	out.append(Token(Kind.Semi, ";", "", ln, col))
 }
 
 fn fmt_on_line(t: Token, ln: int) -> Token {
@@ -251,7 +251,7 @@ fn fmt_is_lone_jump(mut &toks: list[Token], lb: int, rb: int) -> bool {
 		# source the compiler cannot parse, written by the tool that is supposed to preserve
 		# meaning. There is no single guard that says what the nesting says, so the block
 		# stays a block. (An if-EXPRESSION being returned is already declined by the `{`.)
-		return false if is_comment(k) or is_lbrace(k) or k == If
+		return false if is_comment(k) or is_lbrace(k) or k == Kind.If
 
 		if is_semi(k) and fmt_more_after(toks, i, rb) {
 			return false # a second statement
@@ -295,7 +295,7 @@ fn fmt_has_else(mut &toks: list[Token], rb: int) -> bool {
 		if is_semi(k) {
 			i = i + 1
 		} else {
-			return k == Else
+			return k == Kind.Else
 		}
 	}
 	return false
@@ -305,7 +305,7 @@ fn fmt_has_else(mut &toks: list[Token], rb: int) -> bool {
 # which is a branch of an existing chain rather than a guard of its own.
 fn fmt_is_else_if(mut &out: list[Token]) -> bool {
 	return false if out.len() == 0
-	return out[out.len() - 1].kind == Else
+	return out[out.len() - 1].kind == Kind.Else
 }
 
 # fmt_stmt_start reports whether the token at `at` begins a statement — nothing but a
@@ -345,8 +345,8 @@ fn fmt_discards(mut &toks: list[Token]) -> list[Token] {
 # head. Every reason to decline is here, in one place.
 fn fmt_is_discard_arm(mut &toks: list[Token], at: int) -> bool {
 	return false if at + 2 >= toks.len()
-	return false if toks[at].kind != Ident or toks[at].lexeme != "_"
-	return false if toks[at + 1].kind != Walrus or not is_larrow(toks[at + 2].kind)
+	return false if toks[at].kind != Kind.Ident or toks[at].lexeme != "_"
+	return false if toks[at + 1].kind != Kind.Walrus or not is_larrow(toks[at + 2].kind)
 	return false if not fmt_stmt_start(toks, at)
 
 	return fmt_arm_head_ends(toks, at + 3)
@@ -361,7 +361,7 @@ fn fmt_arm_head_ends(mut &toks: list[Token], at: int) -> bool {
 		k := toks[i].kind
 
 		return false if is_semi(k) or is_comment(k) or is_lbrace(k)
-		return true if k == FatArrow and depth == 0
+		return true if k == Kind.FatArrow and depth == 0
 
 		if is_bracket(k) {
 			depth = depth + 1
@@ -422,12 +422,12 @@ fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
 	mut n := 0
 	for i < toks.len() {
 		mut neg := false
-		if toks[i].kind == Minus {
+		if toks[i].kind == Kind.Minus {
 			neg = true
 			i = i + 1
 			return 0 if i >= toks.len()
 		}
-		return 0 if toks[i].kind != Int
+		return 0 if toks[i].kind != Kind.Int
 		mut v := int_value(toks[i].lexeme)
 		if neg {
 			v = 0 - v
@@ -439,11 +439,11 @@ fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
 		return 0 if i >= toks.len()
 
 		k := toks[i].kind
-		if k == FatArrow {
+		if k == Kind.FatArrow {
 			return i if n >= 2
 			return 0
 		}
-		return 0 if k != Pipe
+		return 0 if k != Kind.Pipe
 		i = i + 1
 		return 0 if i >= toks.len()
 	}
@@ -456,11 +456,11 @@ fn fmt_emit_range(mut &toks: list[Token], at: int, shut: int, mut &out: list[Tok
 	ln := toks[at].line
 	col := toks[at].col
 	out.append(toks[at])
-	if toks[at].kind == Minus {
+	if toks[at].kind == Kind.Minus {
 		out.append(toks[at + 1])
 	}
-	out.append(Token(DotDotEq, "..=", "", ln, col))
-	if toks[shut - 2].kind == Minus {
+	out.append(Token(Kind.DotDotEq, "..=", "", ln, col))
+	if toks[shut - 2].kind == Kind.Minus {
 		out.append(toks[shut - 2])
 	}
 	out.append(toks[shut - 1])
@@ -644,12 +644,12 @@ fn fmt_decl_min() -> int {
 # is a statement with a shape of its own and not part of any preamble.
 fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 	mut i := at
-	if toks[i].kind == Mut {
+	if toks[i].kind == Kind.Mut {
 		i = i + 1
 	}
-	return -1 if toks[i].kind != Ident
+	return -1 if toks[i].kind != Kind.Ident
 	i = i + 1
-	if toks[i].kind == Colon {
+	if toks[i].kind == Kind.Colon {
 		# `x: T = e` — step over the type to the `=` that opens the value
 		mut j := i + 1
 		mut d := 0
@@ -659,7 +659,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 				d = d + 1
 			} else if is_close(k) {
 				d = d - 1
-			} else if d == 0 and k == Assign {
+			} else if d == 0 and k == Kind.Assign {
 				break
 			} else if is_semi(k) or is_lbrace(k) or is_comment(k) {
 				return -1
@@ -668,7 +668,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 		}
 		return -1 if j >= toks.len()
 		i = j
-	} else if toks[i].kind != Walrus {
+	} else if toks[i].kind != Kind.Walrus {
 		return -1
 	}
 	mut depth := 0
@@ -744,7 +744,7 @@ fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
 			return -1
 		} else if is_comment(k) or is_eof(k) {
 			return -1
-		} else if k == If and depth == 0 {
+		} else if k == Kind.If and depth == 0 {
 			seen = true
 		}
 		i = i + 1
@@ -793,13 +793,13 @@ fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
 # another `{` — while the places an expression is expected are countable, and a new one joins
 # by being named here.
 fn fmt_wants_value(k: Kind) -> bool {
-	return true if k == Walrus or k == Assign or k == Colon or k == Comma or k == LParen or k == LBrack
+	return true if k == Kind.Walrus or k == Kind.Assign or k == Kind.Colon or k == Kind.Comma or k == Kind.LParen or k == Kind.LBrack
 
 	# `return {…}`, `x in {…}`, `ch <- {…}` — the keyword and the two operators that take a
 	# value on their right and can find a literal there. `in` and `<-` were missed when this
 	# list was first written, and the miss reproduced the very defect the list exists to fix,
 	# one token class over: `found := "a" in {"a": 1}` came back as a block.
-	return k == Return or k == In or k == LArrow
+	return k == Kind.Return or k == Kind.In or k == Kind.LArrow
 }
 
 fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
@@ -876,7 +876,7 @@ fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
 	for j < toks.len() {
 		if head[j] >= 0 {
 			r := fmt_fstr_render(toks, j, head[j])
-			out.append(Token(FStr, r.text, "", toks[j].line, toks[j].col))
+			out.append(Token(Kind.FStr, r.text, "", toks[j].line, toks[j].col))
 			j = head[j] + 1
 		} else {
 			out.append(toks[j])
@@ -892,7 +892,7 @@ fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
 fn fmt_fstr_mark(mut &toks: list[Token], mut &head: list[int]) {
 	mut i := 0
 	for i < toks.len() {
-		if toks[i].kind == Plus {
+		if toks[i].kind == Kind.Plus {
 			lo := fmt_fstr_lo(toks, i)
 			hi := fmt_fstr_hi(toks, i)
 			r := fmt_fstr_render(toks, lo, hi)
@@ -909,20 +909,20 @@ fn fmt_fstr_mark(mut &toks: list[Token], mut &head: list[int]) {
 # get wrong. Inside a bracket anything goes — the walk only tests at depth zero.
 fn fmt_fstr_atom(k: Kind) -> bool {
 	return match k {
-		Ident  => true
-		Str    => true
-		Int    => true
-		Float  => true
-		True   => true
-		False  => true
-		Nil    => true
-		This   => true
-		Dot    => true
-		LParen => true
-		RParen => true
-		LBrack => true
-		RBrack => true
-		_      => false
+		Kind.Ident  => true
+		Kind.Str    => true
+		Kind.Int    => true
+		Kind.Float  => true
+		Kind.True   => true
+		Kind.False  => true
+		Kind.Nil    => true
+		Kind.KwThis => true
+		Kind.Dot    => true
+		Kind.LParen => true
+		Kind.RParen => true
+		Kind.LBrack => true
+		Kind.RBrack => true
+		_           => false
 	}
 }
 
@@ -940,7 +940,7 @@ fn fmt_fstr_lo(mut &toks: list[Token], p: int) -> int {
 		} else if is_bracket(k) {
 			break if d == 0
 			d = d - 1
-		} else if d == 0 and not fmt_fstr_atom(k) and k != Plus {
+		} else if d == 0 and not fmt_fstr_atom(k) and k != Kind.Plus {
 			break
 		}
 		lo = i
@@ -960,7 +960,7 @@ fn fmt_fstr_hi(mut &toks: list[Token], p: int) -> int {
 		} else if is_close(k) {
 			break if d == 0
 			d = d - 1
-		} else if d == 0 and not fmt_fstr_atom(k) and k != Plus {
+		} else if d == 0 and not fmt_fstr_atom(k) and k != Kind.Plus {
 			break
 		}
 		hi = i
@@ -973,11 +973,11 @@ fn fmt_fstr_hi(mut &toks: list[Token], p: int) -> int {
 # with the chain's first operand.
 fn fmt_fstr_accum(mut &toks: list[Token], lo: int) -> bool {
 	return false if lo < 2
-	return false if toks[lo - 1].kind != Assign
+	return false if toks[lo - 1].kind != Kind.Assign
 
 	mut i := lo - 2
 	mut j := lo
-	for i >= 0 and toks[i].kind != Semi and not is_lbrace(toks[i].kind) {
+	for i >= 0 and toks[i].kind != Kind.Semi and not is_lbrace(toks[i].kind) {
 		return false if toks[j].kind != toks[i].kind or toks[j].lexeme != toks[i].lexeme
 		i = i - 1
 		j = j + 1
@@ -999,7 +999,7 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 	mut i := lo
 	for i <= hi + 1 {
 		fin := i > hi
-		mut k := Semi
+		mut k := Kind.Semi
 		if not fin {
 			k = toks[i].kind
 		}
@@ -1008,13 +1008,13 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 		} else if not fin and is_close(k) {
 			d = d - 1
 		}
-		if fin or (d == 0 and k == Plus) {
+		if fin or (d == 0 and k == Kind.Plus) {
 			return Fstr("", false) if i <= a
 			piece := fmt_fstr_part(toks, a, i - 1)
 			return Fstr("", false) if not piece.ok
 			text = text + piece.text
 			parts = parts + 1
-			if a == i - 1 and toks[a].kind == Str {
+			if a == i - 1 and toks[a].kind == Kind.Str {
 				lits = lits + 1
 			} else {
 				holes = holes + 1
@@ -1030,7 +1030,7 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 # fmt_fstr_part renders one operand: a string literal contributes its text, anything else
 # becomes a `{ … }` hole spelled the way the printer would spell it on one line.
 fn fmt_fstr_part(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
-	if lo == hi and toks[lo].kind == Str {
+	if lo == hi and toks[lo].kind == Kind.Str {
 		return Fstr("", false) if not fmt_fstr_lit_ok(toks[lo])
 		return Fstr(fmt_fstr_lit(toks[lo].lexeme), true)
 	}
@@ -1043,12 +1043,12 @@ fn fmt_fstr_part(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 # base a hole renders in anyway.
 fn fmt_fstr_is_dec(mut &toks: list[Token], lo: int, hi: int) -> bool {
 	return false if hi - lo < 7
-	return false if toks[lo].kind != Ident or toks[lo].lexeme != "strconv"
+	return false if toks[lo].kind != Kind.Ident or toks[lo].lexeme != "strconv"
 	return false if not is_dot(toks[lo + 1].kind)
-	return false if toks[lo + 2].kind != Ident or toks[lo + 2].lexeme != "to_string"
-	return false if toks[lo + 3].kind != LParen
+	return false if toks[lo + 2].kind != Kind.Ident or toks[lo + 2].lexeme != "to_string"
+	return false if toks[lo + 3].kind != Kind.LParen
 	return false if fmt_wrap_end(toks, lo + 3) != hi
-	return false if toks[hi - 1].kind != Int or toks[hi - 1].lexeme != "10"
+	return false if toks[hi - 1].kind != Kind.Int or toks[hi - 1].lexeme != "10"
 
 	return is_comma(toks[hi - 2].kind)
 }
@@ -1068,8 +1068,8 @@ fn fmt_fstr_arg_hi(mut &toks: list[Token], lo: int, hi: int) -> int {
 # the result again changes nothing.
 fn fmt_fstr_span(mut &toks: list[Token], lo: int, hi: int) -> str {
 	mut out := ""
-	mut prev2 := Semi
-	mut prev := Semi
+	mut prev2 := Kind.Semi
+	mut prev := Kind.Semi
 	mut i := lo
 	for i <= hi {
 		t := toks[i]
@@ -1230,8 +1230,8 @@ fn fmt_wrap_breaks(mut &toks: list[Token]) -> list[int] {
 # what keeps the estimate and the output from drifting apart.
 fn fmt_wrap_widths(mut &toks: list[Token]) -> list[int] {
 	mut w: list[int] = []
-	mut prev2 := Semi
-	mut prev := Semi
+	mut prev2 := Kind.Semi
+	mut prev := Kind.Semi
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
@@ -1648,7 +1648,7 @@ fn fmt_guard_inline(mut &toks: list[Token], open: int) -> bool {
 	return false if not is_lbrace(toks[open].kind)
 
 	p := fmt_prev_code(toks, open)
-	return false if p < 0 or toks[p].kind != Guard
+	return false if p < 0 or toks[p].kind != Kind.Guard
 
 	shut := fmt_brace_shut(toks, open)
 	return false if shut == 0
@@ -1682,9 +1682,9 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut arrow: list[int] = []
 	mut trail: list[int] = []
 	mut depth := 0
-	mut col := 0      # bytes written on the current line
-	mut prev2 := Semi # the one before it — `<-` needs a token of context on each side
-	mut prev := Semi  # the last token that mattered for spacing
+	mut col := 0           # bytes written on the current line
+	mut prev2 := Kind.Semi # the one before it — `<-` needs a token of context on each side
+	mut prev := Kind.Semi  # the last token that mattered for spacing
 	mut prev_line := 0
 
 	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
@@ -1844,7 +1844,7 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			}
 
 			# where a column a run shares would go, recorded before the token lands on it
-			if t.kind == FatArrow and not fmt_arm_guarded(toks, i) {
+			if t.kind == Kind.FatArrow and not fmt_arm_guarded(toks, i) {
 				arrow.append(out.len())
 			} else if is_comment(t.kind) and fmt_line_has_code(out) {
 				trail.append(out.len())
@@ -1901,7 +1901,7 @@ fn fmt_arm_guarded(mut &toks: list[Token], at: int) -> bool {
 		k := toks[i].kind
 
 		break if is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
-		return true if k == If
+		return true if k == Kind.If
 
 		i = i - 1
 	}
@@ -2314,15 +2314,15 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 # print `return <-ch` as `return <- ch`), which is the negation rule F203 states, backwards, in
 # the one position where a negative literal is most common.
 fn ends_operand(k: Kind) -> bool {
-	return false if is_jump(k) or k == Nop
+	return false if is_jump(k) or k == Kind.Nop
 	return ends_item(k)
 }
 
 fn is_minus(k: Kind) -> bool {
 	return match k {
-		Minus    => true
-		MinusMod => true
-		_        => false
+		Kind.Minus    => true
+		Kind.MinusMod => true
+		_             => false
 	}
 }
 
@@ -2336,15 +2336,15 @@ fn is_minus(k: Kind) -> bool {
 # answers the question instead of approximating it, and it cannot confuse the two — a send
 # `xs[0] <- v` closes a bracket too, but that bracket's `[` follows a NAME, not `chan`.
 fn closes_chan_type(mut &toks: list[Token], i: int) -> bool {
-	return false if i < 0 or toks[i].kind != RBrack
+	return false if i < 0 or toks[i].kind != Kind.RBrack
 	mut depth := 0
 	mut j := i
 	for j >= 0 {
 		k := toks[j].kind
-		if k == RBrack {
+		if k == Kind.RBrack {
 			depth = depth + 1
 		}
-		if k == LBrack {
+		if k == Kind.LBrack {
 			depth = depth - 1
 			return j > 0 and is_chan(toks[j - 1].kind) if depth == 0
 		}
@@ -2355,8 +2355,8 @@ fn closes_chan_type(mut &toks: list[Token], i: int) -> bool {
 
 fn is_chan(k: Kind) -> bool {
 	return match k {
-		Chan => true
-		_    => false
+		Kind.Chan => true
+		_         => false
 	}
 }
 
@@ -2366,16 +2366,16 @@ fn is_chan(k: Kind) -> bool {
 # `print v !` — an operator adrift from the thing it operates on.
 fn is_postfix(k: Kind) -> bool {
 	return match k {
-		Bang     => true
-		Question => true
-		_        => false
+		Kind.Bang     => true
+		Kind.Question => true
+		_             => false
 	}
 }
 
 fn is_larrow(k: Kind) -> bool {
 	return match k {
-		LArrow => true
-		_      => false
+		Kind.LArrow => true
+		_           => false
 	}
 }
 
@@ -2387,9 +2387,9 @@ fn is_larrow(k: Kind) -> bool {
 # space a comma owes is the one exception on the left.
 fn is_range_op(k: Kind) -> bool {
 	return match k {
-		DotDot   => true
-		DotDotEq => true
-		_        => false
+		Kind.DotDot   => true
+		Kind.DotDotEq => true
+		_             => false
 	}
 }
 
@@ -2397,37 +2397,37 @@ fn is_range_op(k: Kind) -> bool {
 # rather than a grouping — the difference between `f(x)` and `if (x)`.
 fn binds_tight(k: Kind) -> bool {
 	return match k {
-		Ident  => true
-		RParen => true
-		RBrack => true
-		Str    => true
-		Int    => true
+		Kind.Ident  => true
+		Kind.RParen => true
+		Kind.RBrack => true
+		Kind.Str    => true
+		Kind.Int    => true
 
 		# `chan[T]` and `ptr[T]` are the two type constructors spelled with a KEYWORD rather
 		# than a name, so the Ident case above does not reach them and `chan [int]` came out
 		# with a space no other type has. `close(ch)` is the third: a statement whose
 		# argument is parenthesized, written the way the call it used to be was.
-		Chan  => true
-		Ptr   => true
-		Close => true
-		_     => false
+		Kind.Chan  => true
+		Kind.Ptr   => true
+		Kind.Close => true
+		_          => false
 	}
 }
 
 fn is_open(k: Kind) -> bool {
 	return match k {
-		LParen => true
-		LBrack => true
-		Hash   => true
-		_      => false
+		Kind.LParen => true
+		Kind.LBrack => true
+		Kind.Hash   => true
+		_           => false
 	}
 }
 
 fn is_close(k: Kind) -> bool {
 	return match k {
-		RParen => true
-		RBrack => true
-		_      => false
+		Kind.RParen => true
+		Kind.RBrack => true
+		_           => false
 	}
 }
 
@@ -2435,23 +2435,23 @@ fn is_close(k: Kind) -> bool {
 # pair with, which is what a group's extent is counted from.
 fn is_bracket(k: Kind) -> bool {
 	return match k {
-		LParen => true
-		LBrack => true
-		_      => false
+		Kind.LParen => true
+		Kind.LBrack => true
+		_           => false
 	}
 }
 
 fn is_hash(k: Kind) -> bool {
 	return match k {
-		Hash => true
-		_    => false
+		Kind.Hash => true
+		_         => false
 	}
 }
 
 fn is_comma(k: Kind) -> bool {
 	return match k {
-		Comma => true
-		_     => false
+		Kind.Comma => true
+		_          => false
 	}
 }
 
@@ -2459,16 +2459,16 @@ fn is_comma(k: Kind) -> bool {
 # binds exactly as tightly. Without the second, `b?.value` came back as `b ?. value`.
 fn is_dot(k: Kind) -> bool {
 	return match k {
-		Dot    => true
-		OptDot => true
-		_      => false
+		Kind.Dot    => true
+		Kind.OptDot => true
+		_           => false
 	}
 }
 
 fn is_colon(k: Kind) -> bool {
 	return match k {
-		Colon => true
-		_     => false
+		Kind.Colon => true
+		_          => false
 	}
 }
 
@@ -2492,37 +2492,37 @@ fn is_colon(k: Kind) -> bool {
 # as `lo -%byte(1)`, which is the first mistake with the sides swapped.
 fn is_unary_prefix(k: Kind) -> bool {
 	return match k {
-		Amp   => true
-		Tilde => true
-		_     => false
+		Kind.Amp   => true
+		Kind.Tilde => true
+		_          => false
 	}
 }
 
 fn is_semi(k: Kind) -> bool {
 	return match k {
-		Semi => true
-		_    => false
+		Kind.Semi => true
+		_         => false
 	}
 }
 
 fn is_lbrace(k: Kind) -> bool {
 	return match k {
-		LBrace => true
-		_      => false
+		Kind.LBrace => true
+		_           => false
 	}
 }
 
 fn is_rbrace(k: Kind) -> bool {
 	return match k {
-		RBrace => true
-		_      => false
+		Kind.RBrace => true
+		_           => false
 	}
 }
 
 fn is_comment(k: Kind) -> bool {
 	return match k {
-		Comment => true
-		_       => false
+		Kind.Comment => true
+		_            => false
 	}
 }
 
@@ -2584,14 +2584,14 @@ fn fmt_import_group(mut &toks: list[Token]) -> list[Token] {
 # name — so nothing is re-spelled from a value that was parsed out of it.
 fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[Token]) -> int {
 	ln := toks[first].line
-	out.append(Token(Import, "import", "", ln, 0))
-	out.append(Token(LParen, "(", "", ln, 0))
+	out.append(Token(Kind.Import, "import", "", ln, 0))
+	out.append(Token(Kind.LParen, "(", "", ln, 0))
 
 	mut cur := ln
 	mut src := -1
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Import {
+		if toks[i].kind == Kind.Import {
 			cur = cur + 1
 
 			# a blank line between two imports is the group separator F402 wrote, and it
@@ -2601,7 +2601,7 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 			}
 			src = toks[i].line
 			mut j := i + 1
-			for j <= last and toks[j].kind != Import and not is_semi(toks[j].kind) {
+			for j <= last and toks[j].kind != Kind.Import and not is_semi(toks[j].kind) {
 				out.append(fmt_on_line(toks[j], cur))
 				j = j + 1
 			}
@@ -2611,8 +2611,8 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 		}
 	}
 	cur = cur + 1
-	out.append(Token(RParen, ")", "", cur, 0))
-	out.append(Token(Semi, ";", "", cur, 0))
+	out.append(Token(Kind.RParen, ")", "", cur, 0))
+	out.append(Token(Kind.Semi, ";", "", cur, 0))
 	return cur
 }
 
@@ -2623,18 +2623,18 @@ fn fmt_group_run_end(mut &toks: list[Token], first: int) -> int {
 	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
-		if k == Import {
+		if k == Kind.Import {
 			# already a group: folding a fold is what would make this rule non-idempotent
-			return -1 if toks[i + 1].kind == LParen
+			return -1 if toks[i + 1].kind == Kind.LParen
 			mut j := i + 1
-			if toks[j].kind == Pub {
+			if toks[j].kind == Kind.Pub {
 				j = j + 1
 			}
-			return -1 if toks[j].kind != Str
+			return -1 if toks[j].kind != Kind.Str
 			j = j + 1
-			if toks[j].kind == As {
+			if toks[j].kind == Kind.As {
 				j = j + 1
-				return -1 if toks[j].kind != Ident
+				return -1 if toks[j].kind != Kind.Ident
 				j = j + 1
 			}
 			last = j - 1
@@ -2659,7 +2659,7 @@ fn fmt_more_imports_after(mut &toks: list[Token], at: int) -> bool {
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return true if k == Import
+		return true if k == Kind.Import
 		return false if not is_semi(k) and not is_comment(k)
 
 		i = i + 1
@@ -2671,7 +2671,7 @@ fn fmt_run_specs(mut &toks: list[Token], first: int, last: int) -> int {
 	mut n := 0
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Import {
+		if toks[i].kind == Kind.Import {
 			n = n + 1
 		}
 		i = i + 1
@@ -2747,9 +2747,9 @@ fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int 
 					ln = ln + 1 # the blank line between the groups
 				}
 			}
-			out.append(Token(Import, "import", "", ln, 0))
-			out.append(Token(Str, f"\"{p}\"", p, ln, 0))
-			out.append(Token(Semi, ";", "", ln, 0))
+			out.append(Token(Kind.Import, "import", "", ln, 0))
+			out.append(Token(Kind.Str, f"\"{p}\"", p, ln, 0))
+			out.append(Token(Kind.Semi, ";", "", ln, 0))
 			wrote = true
 			group = true
 		}
@@ -2821,7 +2821,7 @@ fn fmt_last_segment(path: str) -> str {
 fn fmt_first_import(mut &toks: list[Token]) -> int {
 	mut i := 0
 	for i < toks.len() {
-		return i if toks[i].kind == Import
+		return i if toks[i].kind == Kind.Import
 		i = i + 1
 	}
 	return -1
@@ -2834,8 +2834,8 @@ fn fmt_import_run_end(mut &toks: list[Token], first: int) -> int {
 	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
-		if k == Import {
-			return -1 if toks[i + 1].kind != Str
+		if k == Kind.Import {
+			return -1 if toks[i + 1].kind != Kind.Str
 			last = i + 1
 			i = i + 2
 		} else if is_semi(k) {
@@ -2852,7 +2852,7 @@ fn fmt_run_paths(mut &toks: list[Token], first: int, last: int) -> list[str] {
 	mut out: list[str] = []
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Import {
+		if toks[i].kind == Kind.Import {
 			out.append(toks[i + 1].value)
 		}
 		i = i + 1
@@ -2880,5 +2880,5 @@ fn fmt_before(a: str, b: str) -> bool {
 # is_jump reports the statements that DIVERGE — leave the block they are in without
 # producing a value — which is exactly the set GRAMMAR's postfix guard is defined for.
 fn is_jump(k: Kind) -> bool {
-	return k == Return or k == Break or k == Continue or k == Raise
+	return k == Kind.Return or k == Kind.Break or k == Kind.Continue or k == Kind.Raise
 }

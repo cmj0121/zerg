@@ -65,7 +65,7 @@ enum Kind {
 	Or
 	Not
 	Is
-	This
+	KwThis
 	As
 	Pub
 	Import
@@ -153,113 +153,113 @@ struct Token {
 # `--emit tokens` output matches byte-for-byte.
 fn kind_name(k: Kind) -> str {
 	return match k {
-		Eof       => "EOF"
-		Illegal   => "ILLEGAL"
-		Semi      => ";"
-		Ident     => "IDENT"
-		Int       => "INT"
-		Float     => "FLOAT"
-		Str       => "STR"
-		RawStr    => "RAWSTR"
-		Rune      => "RUNE"
-		Byte      => "BYTE"
-		Cmd       => "CMD"
-		FStr      => "FSTR"
-		FStrBegin => "FSTR_BEGIN"
-		FStrText  => "FSTR_TEXT"
-		FStrEnd   => "FSTR_END"
-		FCmdBegin => "FCMD_BEGIN"
-		FCmdText  => "FCMD_TEXT"
-		FCmdEnd   => "FCMD_END"
-		Conv      => "CONV"
-		FmtSpec   => "FMTSPEC"
-		Hash      => "#["
-		Fn        => "fn"
-		Return    => "return"
-		If        => "if"
-		Else      => "else"
-		For       => "for"
-		In        => "in"
-		Break     => "break"
-		Continue  => "continue"
-		Nop       => "nop"
-		Mut       => "mut"
-		Const     => "const"
-		True      => "true"
-		False     => "false"
-		Nil       => "nil"
-		Print     => "print"
-		And       => "and"
-		Or        => "or"
-		Not       => "not"
-		Is        => "is"
-		This      => "this"
-		As        => "as"
-		Pub       => "pub"
-		Import    => "import"
-		From      => "from"
-		Match     => "match"
-		Spawn     => "spawn"
-		Select    => "select"
-		Struct    => "struct"
-		Enum      => "enum"
-		Spec      => "spec"
-		Chan      => "chan"
-		Type      => "type"
-		Impl      => "impl"
-		Package   => "package"
-		Init      => "init"
-		Defer     => "defer"
-		Del       => "del"
-		Close     => "close"
-		Raise     => "raise"
-		Guard     => "guard"
-		With      => "with"
-		Unsafe    => "unsafe"
-		Ptr       => "ptr"
-		Asm       => "asm"
-		Plus      => "+"
-		Minus     => "-"
-		Star      => "*"
-		Slash     => "/"
-		SlashDiv  => "//"
-		Percent   => "%"
-		PlusMod   => "+%"
-		MinusMod  => "-%"
-		StarMod   => "*%"
-		Amp       => "&"
-		Pipe      => "|"
-		Caret     => "^"
-		Tilde     => "~"
-		Shl       => "<<"
-		Shr       => ">>"
-		EqEq      => "=="
-		Ne        => "!="
-		Lt        => "<"
-		Gt        => ">"
-		Le        => "<="
-		Ge        => ">="
-		Assign    => "="
-		Walrus    => ":="
-		Colon     => ":"
-		Arrow     => "->"
-		FatArrow  => "=>"
-		LArrow    => "<-"
-		Coalesce  => "??"
-		Question  => "?"
-		Bang      => "!"
-		OptDot    => "?."
-		Dot       => "."
-		DotDot    => ".."
-		DotDotEq  => "..="
-		Comma     => ","
-		LParen    => "("
-		RParen    => ")"
-		LBrack    => "["
-		RBrack    => "]"
-		LBrace    => "{"
-		Comment   => "COMMENT"
-		_         => "}"
+		Kind.Eof => "EOF"
+		Kind.Illegal => "ILLEGAL"
+		Kind.Semi => ";"
+		Kind.Ident => "IDENT"
+		Kind.Int => "INT"
+		Kind.Float => "FLOAT"
+		Kind.Str => "STR"
+		Kind.RawStr => "RAWSTR"
+		Kind.Rune => "RUNE"
+		Kind.Byte => "BYTE"
+		Kind.Cmd => "CMD"
+		Kind.FStr => "FSTR"
+		Kind.FStrBegin => "FSTR_BEGIN"
+		Kind.FStrText => "FSTR_TEXT"
+		Kind.FStrEnd => "FSTR_END"
+		Kind.FCmdBegin => "FCMD_BEGIN"
+		Kind.FCmdText => "FCMD_TEXT"
+		Kind.FCmdEnd => "FCMD_END"
+		Kind.Conv => "CONV"
+		Kind.FmtSpec => "FMTSPEC"
+		Kind.Hash => "#["
+		Kind.Fn => "fn"
+		Kind.Return => "return"
+		Kind.If => "if"
+		Kind.Else => "else"
+		Kind.For => "for"
+		Kind.In => "in"
+		Kind.Break => "break"
+		Kind.Continue => "continue"
+		Kind.Nop => "nop"
+		Kind.Mut => "mut"
+		Kind.Const => "const"
+		Kind.True => "true"
+		Kind.False => "false"
+		Kind.Nil => "nil"
+		Kind.Print => "print"
+		Kind.And => "and"
+		Kind.Or => "or"
+		Kind.Not => "not"
+		Kind.Is => "is"
+		Kind.KwThis => "this"
+		Kind.As => "as"
+		Kind.Pub => "pub"
+		Kind.Import => "import"
+		Kind.From => "from"
+		Kind.Match => "match"
+		Kind.Spawn => "spawn"
+		Kind.Select => "select"
+		Kind.Struct => "struct"
+		Kind.Enum => "enum"
+		Kind.Spec => "spec"
+		Kind.Chan => "chan"
+		Kind.Type => "type"
+		Kind.Impl => "impl"
+		Kind.Package => "package"
+		Kind.Init => "init"
+		Kind.Defer => "defer"
+		Kind.Del => "del"
+		Kind.Close => "close"
+		Kind.Raise => "raise"
+		Kind.Guard => "guard"
+		Kind.With => "with"
+		Kind.Unsafe => "unsafe"
+		Kind.Ptr => "ptr"
+		Kind.Asm => "asm"
+		Kind.Plus => "+"
+		Kind.Minus => "-"
+		Kind.Star => "*"
+		Kind.Slash => "/"
+		Kind.SlashDiv => "//"
+		Kind.Percent => "%"
+		Kind.PlusMod => "+%"
+		Kind.MinusMod => "-%"
+		Kind.StarMod => "*%"
+		Kind.Amp => "&"
+		Kind.Pipe => "|"
+		Kind.Caret => "^"
+		Kind.Tilde => "~"
+		Kind.Shl => "<<"
+		Kind.Shr => ">>"
+		Kind.EqEq => "=="
+		Kind.Ne => "!="
+		Kind.Lt => "<"
+		Kind.Gt => ">"
+		Kind.Le => "<="
+		Kind.Ge => ">="
+		Kind.Assign => "="
+		Kind.Walrus => ":="
+		Kind.Colon => ":"
+		Kind.Arrow => "->"
+		Kind.FatArrow => "=>"
+		Kind.LArrow => "<-"
+		Kind.Coalesce => "??"
+		Kind.Question => "?"
+		Kind.Bang => "!"
+		Kind.OptDot => "?."
+		Kind.Dot => "."
+		Kind.DotDot => ".."
+		Kind.DotDotEq => "..="
+		Kind.Comma => ","
+		Kind.LParen => "("
+		Kind.RParen => ")"
+		Kind.LBrack => "["
+		Kind.RBrack => "]"
+		Kind.LBrace => "{"
+		Kind.Comment => "COMMENT"
+		_ => "}"
 	}
 }
 
@@ -267,95 +267,95 @@ fn kind_name(k: Kind) -> str {
 # word is not a keyword.
 fn lookup_keyword(w: str) -> Kind {
 	if w == "fn" {
-		return Fn
+		return Kind.Fn
 	} else if w == "return" {
-		return Return
+		return Kind.Return
 	} else if w == "if" {
-		return If
+		return Kind.If
 	} else if w == "else" {
-		return Else
+		return Kind.Else
 	} else if w == "for" {
-		return For
+		return Kind.For
 	} else if w == "in" {
-		return In
+		return Kind.In
 	} else if w == "break" {
-		return Break
+		return Kind.Break
 	} else if w == "continue" {
-		return Continue
+		return Kind.Continue
 	} else if w == "nop" {
-		return Nop
+		return Kind.Nop
 	} else if w == "mut" {
-		return Mut
+		return Kind.Mut
 	} else if w == "const" {
-		return Const
+		return Kind.Const
 	} else if w == "true" {
-		return True
+		return Kind.True
 	} else if w == "false" {
-		return False
+		return Kind.False
 	} else if w == "nil" {
-		return Nil
+		return Kind.Nil
 	} else if w == "print" {
-		return Print
+		return Kind.Print
 	} else if w == "and" {
-		return And
+		return Kind.And
 	} else if w == "or" {
-		return Or
+		return Kind.Or
 	} else if w == "not" {
-		return Not
+		return Kind.Not
 	} else if w == "is" {
-		return Is
+		return Kind.Is
 	} else if w == "this" {
-		return This
+		return Kind.KwThis
 	} else if w == "as" {
-		return As
+		return Kind.As
 	} else if w == "pub" {
-		return Pub
+		return Kind.Pub
 	} else if w == "import" {
-		return Import
+		return Kind.Import
 	} else if w == "from" {
-		return From
+		return Kind.From
 	} else if w == "match" {
-		return Match
+		return Kind.Match
 	} else if w == "spawn" {
-		return Spawn
+		return Kind.Spawn
 	} else if w == "select" {
-		return Select
+		return Kind.Select
 	} else if w == "struct" {
-		return Struct
+		return Kind.Struct
 	} else if w == "enum" {
-		return Enum
+		return Kind.Enum
 	} else if w == "spec" {
-		return Spec
+		return Kind.Spec
 	} else if w == "chan" {
-		return Chan
+		return Kind.Chan
 	} else if w == "type" {
-		return Type
+		return Kind.Type
 	} else if w == "impl" {
-		return Impl
+		return Kind.Impl
 	} else if w == "package" {
-		return Package
+		return Kind.Package
 	} else if w == "init" {
-		return Init
+		return Kind.Init
 	} else if w == "defer" {
-		return Defer
+		return Kind.Defer
 	} else if w == "del" {
-		return Del
+		return Kind.Del
 	} else if w == "close" {
-		return Close
+		return Kind.Close
 	} else if w == "raise" {
-		return Raise
+		return Kind.Raise
 	} else if w == "guard" {
-		return Guard
+		return Kind.Guard
 	} else if w == "with" {
-		return With
+		return Kind.With
 	} else if w == "unsafe" {
-		return Unsafe
+		return Kind.Unsafe
 	} else if w == "ptr" {
-		return Ptr
+		return Kind.Ptr
 	} else if w == "asm" {
-		return Asm
+		return Kind.Asm
 	}
-	return Ident
+	return Kind.Ident
 }
 
 # no_bound_follows reports that a kind cannot begin a range's upper bound, which is what tells
@@ -372,21 +372,21 @@ fn lookup_keyword(w: str) -> Kind {
 # `20..=>`, which lexes as `20`, `..=`, `>`.
 pub fn no_bound_follows(k: Kind) -> bool {
 	return match k {
-		FatArrow => true
-		If       => true
-		LBrace   => true
-		RBrace   => true
-		Semi     => true
-		Comment  => true
-		Eof      => true
+		Kind.FatArrow => true
+		Kind.If       => true
+		Kind.LBrace   => true
+		Kind.RBrace   => true
+		Kind.Semi     => true
+		Kind.Comment  => true
+		Kind.Eof      => true
 
 		# a closer: `xs[1..]` and `f(a..)` end the range where the bracket does. It used to
 		# be absent because the fallback in parse_primary answered nil for the `]` it then
 		# read as the bound — the open-ended slice arrived shaped correctly by accident, and
 		# stopped doing so the moment that fallback became a diagnostic.
-		RBrack => true
-		RParen => true
-		_      => false
+		Kind.RBrack => true
+		Kind.RParen => true
+		_           => false
 	}
 }
 
@@ -395,22 +395,22 @@ pub fn no_bound_follows(k: Kind) -> bool {
 # ASI).
 fn ends_item(k: Kind) -> bool {
 	return match k {
-		Ident    => true
-		Int      => true
-		Float    => true
-		Str      => true
-		RawStr   => true
-		Rune     => true
-		Byte     => true
-		Cmd      => true
-		FStr     => true
-		FStrEnd  => true
-		FCmdEnd  => true
-		RParen   => true
-		RBrack   => true
-		RBrace   => true
-		Question => true
-		Bang     => true
+		Kind.Ident    => true
+		Kind.Int      => true
+		Kind.Float    => true
+		Kind.Str      => true
+		Kind.RawStr   => true
+		Kind.Rune     => true
+		Kind.Byte     => true
+		Kind.Cmd      => true
+		Kind.FStr     => true
+		Kind.FStrEnd  => true
+		Kind.FCmdEnd  => true
+		Kind.RParen   => true
+		Kind.RBrack   => true
+		Kind.RBrace   => true
+		Kind.Question => true
+		Kind.Bang     => true
 
 		# `chan[T]<-` — the send-only direction marker is the one `<-` that ENDS something
 		# rather than pointing at what follows it, and a struct field or a `type` alias
@@ -423,15 +423,15 @@ fn ends_item(k: Kind) -> bool {
 		# The cost is that a SEND may no longer be split after its arrow — `ch <-` then the
 		# value on the next line is now two statements. Nothing in this tree writes that, and
 		# the formatter never produces it, so the marker wins the token.
-		LArrow   => true
-		True     => true
-		False    => true
-		Nil      => true
-		This     => true
-		Return   => true
-		Break    => true
-		Continue => true
-		Nop      => true
-		_        => false
+		Kind.LArrow   => true
+		Kind.True     => true
+		Kind.False    => true
+		Kind.Nil      => true
+		Kind.KwThis   => true
+		Kind.Return   => true
+		Kind.Break    => true
+		Kind.Continue => true
+		Kind.Nop      => true
+		_             => false
 	}
 }

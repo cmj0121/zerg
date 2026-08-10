@@ -245,20 +245,23 @@ postfix      ::= '.' identifier        # field or method access
                | '.' dec-int           # tuple element by STATIC index — 't.0', 't.1' (0-based)
                | '(' arg-list? ')'     # call (named arguments: group 5)
                | '[' expr ']'          # index — a single-value subscript
-               | type-args             # explicit type arguments 'f[K, V]' (type-args, group 7)
                | '?'                   # propagate (group 8): unwrap Left, else early-return Right
                | '!'                   # force-unwrap (group 8): unwrap Left, else raise UnwrapError
                | '?.' identifier       # optional chain (group 8): read .id when present, else nil
 arg-list     ::= arg ( ',' arg )*
 arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
 
-# NAME RESOLUTION disambiguates two surfaces that share '[ … ]'. A single '[X]' is an
-# INDEX when the base resolves to a value, and TYPE ARGUMENTS when the base resolves to
-# a generic function or a type constructor ('parse[int]', 'list[int]') — a name is
-# exactly one of these (a type and a function cannot share a name, group 7). A comma —
-# '[X, Y]' — is unambiguously type arguments (an index takes one value). This is the
-# SAME name resolution the pattern grammar uses to tell a variant from a binding
-# (group 6): the grammar is resolved with scope in hand, not purely context-free.
+# A postfix '[ … ]' is ALWAYS an INDEX. Type arguments are written only in TYPE position
+# (base-type, group 7), so the two surfaces no longer share a bracket and nothing here has
+# to be resolved to be parsed: this postfix is decided by the syntax that carries it, never
+# by what a name happens to mean in scope. The pattern grammar (group 6) is context-free
+# for the same reason and by the same kind of rule.
+#
+# A generic call INFERS its type arguments from the argument types; where inference is not
+# enough, a typed binding steers it ('xs: list[int] = empty()') instead of an argument list
+# at the call site. The str bridges that were spelled with explicit arguments — 'list[byte](s)',
+# 'list[rune](s)' — become ordinary named types; WHICH names is a library decision and not a
+# grammatical one, like every other built-in type name (group 7).
 
 # Composite literals build values in expression position. A tuple is a parenthesized
 # 2+ list — a single '( expr )' is just grouping. A list is bracketed — a comma list '[a, b]',
@@ -569,8 +572,9 @@ deco-arg     ::= type-name | const-expr        # derive(Eq, Ord), align(16), ali
 # must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
 # '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
 # size-for-speed trade; see docs) — it CANNOT erase a VALUE generic (a compile-time value
-# has no witness-table slot). Explicit call-site type arguments are written 'f[T]',
-# disambiguated from an index by name resolution (see postfix, group 4).
+# has no witness-table slot). Explicit call-site type arguments have NO expression-position
+# surface (postfix, group 4): a call infers from its arguments, or a typed binding steers it.
+# A spelling for the day inference is not enough is RESERVED, not chosen.
 #
 # VALUE (CONST) GENERICS. A generic parameter may be a compile-time VALUE, not just a type,
 # and there is NO 'const' keyword: the annotation after ':' resolves BY NAME — a SPEC makes it

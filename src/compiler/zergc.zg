@@ -375,6 +375,16 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	__zrt_exit(1)
 }
 
+# diag_code_prefix puts the rule's identity in FRONT of the sentence, and answers nothing at
+# all for a finding that has no code yet. It is a function rather than a branch at each of its
+# two call sites — `zerg build`'s renderer and `zerg lint`'s — because it is the layout
+# scripts/lib/diag.sh asserts: the code opens the line, after `error: ` where there is one.
+fn diag_code_prefix(d: zerg.Diag) -> str {
+	return "" if d.code == ""
+
+	return f"{d.code} "
+}
+
 # render_diag draws one finding the way a person reads it: what is wrong first, then where,
 # then the line itself with a caret under the thing it is about.
 #
@@ -387,16 +397,6 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 # The source line is omitted when the file cannot be found — a diagnostic is still a
 # diagnostic without it, and guessing at a line nobody read would be worse than saying
 # less.
-# diag_code_prefix puts the rule's identity in FRONT of the sentence, and answers nothing at
-# all for a finding that has no code yet. It is a function rather than an f-string branch at
-# the one call site because it is the layout scripts/lib/diag.sh asserts — the code opens the
-# line, after `error: ` where there is one — and that is a fact worth having one home.
-fn diag_code_prefix(d: zerg.Diag) -> str {
-	return "" if d.code == ""
-
-	return f"{d.code} "
-}
-
 fn render_diag(d: zerg.Diag, src: str) -> str {
 	mut out := f"error: {diag_code_prefix(d)}{d.msg}\n"
 	line_s := strconv.to_string(d.line, 10)

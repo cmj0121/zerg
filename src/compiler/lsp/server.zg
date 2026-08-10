@@ -479,10 +479,9 @@ fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> JVal {
 	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
 }
 
-# `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data: an
-# editor groups by it, filters on it and links it to a rule's page, and none of that is
-# reachable from a code spelled inside the sentence. A finding without one omits the field
-# rather than sending an empty string, which an editor would show as a rule named "".
+# `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data
+# (`Diag.code`). A finding without one omits the field rather than sending an empty string,
+# which an editor would show as a rule named "".
 fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> JVal {
 	mut fs := jfields()
 	jput(fs, "range", ls_word_range(text, line, col))

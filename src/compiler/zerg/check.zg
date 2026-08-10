@@ -48,13 +48,12 @@
 #
 # THE CODE IS A PARAMETER rather than the first word of `msg`, and that is the difference
 # between a convention and a rule: this compiler diagnoses its own arity, so a rule added
-# without a code does not compile. It also keeps the code out of the TEXT, which is what
-# lets `Diag` carry it as data — an editor filters and groups by a code it is given, and
-# reads a sentence to find one that is only spelled inside it (docs/tooling/lsp.md).
+# without one does not compile. What it buys downstream is `Diag.code`, whose comment is
+# where the argument for that lives.
 #
 # A refusal that `raise`s still spells its code into the message, because a raise has no
-# structure to put it in. That half is held by scripts/refuse-check.sh instead, which
-# asserts the code opens the line either way.
+# structure to put it in. That half is held by the gates, which assert the code opens the
+# line either way.
 fn chk_at(mut &em: Emitter, code: str, msg: str) {
 	chk_at_place(em, em.at_path, em.at_line, em.at_col, code, msg)
 }

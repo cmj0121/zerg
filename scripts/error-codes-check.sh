@@ -24,7 +24,7 @@
 # and a reader who meets `L105` are asking the same question.
 set -uo pipefail
 
-SRC=${SRC:-src/compiler/zerg}
+SRC=${SRC:-src/compiler}
 DOC=${DOC:-docs/tooling/fmt.md}
 GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
@@ -35,19 +35,19 @@ fail=0
 # explains) is not a report and is not counted, which is why the patterns anchor on the
 # quote or on the argument position rather than matching the bare word.
 codes_in_source() {
-	{
-		grep -rhoE '(raise |return )f?"E[0-9]{3} ' "$SRC" | grep -oE 'E[0-9]{3}'
-		grep -rhoE ', f?"E[0-9]{3} ' "$SRC" | grep -oE 'E[0-9]{3}'
-		grep -rhoE '"E[0-9]{3}",' "$SRC" | grep -oE 'E[0-9]{3}'
-	} | sort -u
+	grep -rhoE '((raise |return |, )f?"E[0-9]{3} |"E[0-9]{3}",)' "$SRC" | grep -oE 'E[0-9]{3}' | sort -u
 }
 
 # A code a gate asserts. Both scripts spell the assertion as a bare argument — `expect …
-# E204` in one, `reject … 'E103 …'` in the other — so the word is looked for anywhere on a
+# E204` in one, `reject … E307 …` in the other — so the word is looked for anywhere on a
 # line that is a case, and comments are dropped first.
+#
+# A case may be INDENTED, because a family of them is written as a loop over the shapes it
+# covers. Anchoring on the column rather than on the word would have hidden every code only
+# such a family asserts, and reported it as a code no gate pins.
 codes_in_gates() {
 	# shellcheck disable=SC2086
-	grep -hoE '^(expect|reject) [^#]*' $GATES | grep -oE '\bE[0-9]{3}\b' | sort -u
+	grep -hoE '^[[:space:]]*(expect|reject) [^#]*' $GATES | grep -oE '\bE[0-9]{3}\b' | sort -u
 }
 
 # A code the catalogue lists: one row per code, in a table whose first cell is the code.

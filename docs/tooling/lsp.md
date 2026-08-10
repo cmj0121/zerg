@@ -84,6 +84,12 @@ refuses over. The `L5xx` conversion findings are about **legal** programs — a 
 the page does not show — so they arrive as **information**. A server that paints a working
 program red teaches its user to ignore red.
 
+**A code travels as a code.** `Diag` carries the rule's identity — `E307`, `L502` — in a field of
+its own, so the server sends LSP's `Diagnostic.code` and an editor can filter, group and link by it.
+That is the rule this page is about, applied to itself: a code spelled only inside the sentence is
+one every reader has to parse back out, and the server reading it out would be a second copy of a
+language fact. A finding with no code omits the field rather than sending an empty one.
+
 **An abort has no position.** A parse error and a `NotImplemented` refusal are `raise`d sentences,
 and the compiler does not carry a place on either — so they land as a zero-width range at the top of
 the file with the compiler's own words. Not the word at 1:1: an underline drawn under `fn` says the
@@ -193,7 +199,7 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 | `completion`                                  | the same query surface                                           |
 | `documentSymbol`                              | `File` is `pub`; `FnDecl` and its siblings are not               |
 | `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
-| a diagnostic **code** as data                 | `F401` and `L502` are rendered into the message text             |
+| a `zerg lint` finding's **code** as data      | those rules answer `list[str]` and render their code into it     |
 | a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
 | the `lint_files` findings                     | they answer `list[str]` and carry no position to place           |
 | incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |

@@ -1781,7 +1781,14 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 		raise f"a binding needs a name, and `{cur(p).lexeme}` is not one"
 	}
 
-	raise "E220 NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == Kind.LBrace
+	# A BARE BLOCK AS A STATEMENT (GRAMMAR#compound-stmt). It opens a scope and nothing else,
+	# which is the whole point of writing one: what is bound in it ends at its `}`, and the
+	# emitter's c_block already gives every block a fresh scope id, a mark and an unwind.
+	#
+	# The refusal that stood here said this compiler gives every binding the enclosing
+	# FUNCTION's scope. That stopped being true when scope ids and the release registry
+	# landed; nothing had asked it since, because no form could produce the node.
+	return Stmt.SScope(parse_block(p)) if k == Kind.LBrace
 
 	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR#bind-target). The `{` after
 	# a type name reached the expression parser, which reported a block used as an expression.

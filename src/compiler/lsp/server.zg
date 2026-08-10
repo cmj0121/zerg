@@ -476,14 +476,21 @@ fn ls_whole_file_diag(msg: str) -> JVal {
 }
 
 fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> JVal {
-	return ls_diagnostic_at(text, d.line, d.col, d.msg, severity)
+	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
 }
 
-fn ls_diagnostic_at(text: str, line: int, col: int, msg: str, severity: int) -> JVal {
+# `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data: an
+# editor groups by it, filters on it and links it to a rule's page, and none of that is
+# reachable from a code spelled inside the sentence. A finding without one omits the field
+# rather than sending an empty string, which an editor would show as a rule named "".
+fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> JVal {
 	mut fs := jfields()
 	jput(fs, "range", ls_word_range(text, line, col))
 	jput_int(fs, "severity", severity)
 	jput_str(fs, "source", "zerg")
+	if code != "" {
+		jput_str(fs, "code", code)
+	}
 	jput_str(fs, "message", msg)
 	return jobj_of(fs)
 }
@@ -677,6 +684,9 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
 	jput(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
 	jput_int(diag, "severity", 3)
 	jput_str(diag, "source", "zerg")
+	if d.code != "" {
+		jput_str(diag, "code", d.code)
+	}
 	jput_str(diag, "message", d.msg)
 
 	mut fs := jfields()

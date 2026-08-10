@@ -95,6 +95,46 @@ fn bad(mut &l: Lex, code: str, why: str, line: int, col: int, lexeme: str) -> To
 	return emit_val(l, Illegal, line, col, lexeme, f"{code} {why}")
 }
 
+# lex_code and lex_why split what `bad` joined, and they sit here rather than beside the
+# diagnostic because the join is the LEXER's own doing: an Illegal token has one spare field
+# and a diagnostic wants two things out of it. Reading a code back out of a message anywhere
+# else would be the second copy `Diag.code` exists to prevent — between these three
+# functions it is an encoding, with one writer and one reader a few lines apart.
+fn lex_code(value: str) -> str {
+	at := lex_code_end(value)
+	return "" if at < 0
+
+	return lex_cut(value, 0, at)
+}
+
+fn lex_why(value: str) -> str {
+	at := lex_code_end(value)
+	return value if at < 0
+
+	return lex_cut(value, at + 1, list[byte](value).len())
+}
+
+fn lex_code_end(value: str) -> int {
+	b := list[byte](value)
+	mut i := 0
+	for i < b.len() {
+		return i if b[i] == b' '
+		i = i + 1
+	}
+	return -1
+}
+
+fn lex_cut(value: str, lo: int, hi: int) -> str {
+	b := list[byte](value)
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
 fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
 	l.prev = k
 	return Token(k, lexeme, value, line, col)
@@ -778,7 +818,7 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	mut out: list[Diag] = []
 	for t in tokenize(src) {
 		if t.kind == Illegal {
-			out.append(Diag(path, t.line, t.col, t.value, ""))
+			out.append(Diag(path, t.line, t.col, lex_code(t.value), lex_why(t.value), ""))
 		}
 	}
 	return out

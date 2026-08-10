@@ -1567,12 +1567,12 @@ fn c_check_gen_dup(mut &em: Emitter, f: File, tpl: FnDecl) {
 	# only one there is — which the reject gate insists on, and rightly: a rule that cannot
 	# say where is a rule the reader has to go and find.
 	if c_name_in(em.gen_names, name) {
-		chk_at_place(em, tpl.path, tpl.line, tpl.col, f"E362 `{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
+		chk_at_place(em, tpl.path, tpl.line, tpl.col, "E362", f"`{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
 		return
 	}
 	for other in f.fns {
 		if other.name == name and other.recv == "" and not c_is_template(other) {
-			chk_at_place(em, tpl.path, tpl.line, tpl.col, f"E363 `{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
+			chk_at_place(em, tpl.path, tpl.line, tpl.col, "E363", f"`{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
 			return
 		}
 	}
@@ -2421,7 +2421,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# means there was none, and saying "no type named `This`" invites the reader to go and
 	# declare one. Checked rather than refused, for the reason c_ident gives.
 	if nm == "This" {
-		chk_at(em, f"E364 `This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
+		chk_at(em, "E364", f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
 		return
 	}
 
@@ -2579,7 +2579,7 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		mut pseen: list[str] = []
 		for pm in fn_i.params {
 			if c_name_in(pseen, pm.name) {
-				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"E365 `{fn_i.name}` declares a parameter named `{pm.name}` twice")
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, "E365", f"`{fn_i.name}` declares a parameter named `{pm.name}` twice")
 			}
 			pseen.append(pm.name)
 		}
@@ -2599,12 +2599,8 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	mut i := 0
 	for i < seen.len() {
 		if seen[i] == name {
-			msg := c_dup_msg(name, kind[i], what)
-			if path != "" {
-				chk_at_place(em, path, line, col, msg)
-				return
-			}
-			raise msg
+			c_dup_report(em, name, kind[i], what, path, line, col)
+			return
 		}
 		i = i + 1
 	}
@@ -2612,18 +2608,30 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	kind.append(what)
 }
 
-# c_dup_msg is the one sentence, so a declaration that knows its place and one that does not
-# say the same thing about the same rule.
-#
-# The CODE is written here rather than at the two exits above, because those two are one
-# rule reported by whichever channel the declaration's place allows — and a code the caller
-# supplied would have to be spelled twice for the same finding. Two sentences means two
-# rules, so there are two codes: colliding with a DIFFERENT kind of declaration and
-# colliding with the same kind are separate mistakes with separate answers.
-fn c_dup_msg(name: str, prev: str, what: str) -> str {
-	return f"E381 `{name}` is declared twice — once as {prev}, once as {what}" if prev != what
+# c_dup_report is the one place a duplicate declaration is worded, so a declaration that
+# knows its place and one that does not say the same thing about the same rule. TWO
+# SENTENCES MEANS TWO RULES, so there are two codes: colliding with a DIFFERENT kind of
+# declaration and colliding with the same kind are separate mistakes with separate answers.
+fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int) {
+	if prev != what {
+		c_dup_say(em, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}", path, line, col)
+		return
+	}
 
-	return f"E382 `{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
+	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
+}
+
+# c_dup_say is the CHANNEL, chosen by whether the declaration recorded a place. A struct and
+# an enum are registered before anything carries one, so those two still raise; the rest
+# report and say where. The code travels as an argument either way, which is what keeps one
+# rule from wearing two identities when the channel differs.
+fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: int) {
+	if path != "" {
+		chk_at_place(em, path, line, col, code, msg)
+		return
+	}
+
+	raise f"{code} {msg}"
 }
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
@@ -4254,7 +4262,7 @@ fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
 fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
 	return if n == 1
 
-	chk_at(em, f"E366 `{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
+	chk_at(em, "E366", f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
 }
 
 # `display()`: the text a value shows as, which is what `print` writes and what an
@@ -4404,7 +4412,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# the language's answer and no future feature adds to it, so it belongs on the diag
 		# list with the place the conversion was written. `0` stands in for the value it
 		# would have built; the C after a finding is discarded.
-		chk_at(em, f"E367 `{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one")
+		chk_at(em, "E367", f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one")
 		return "0"
 	}
 
@@ -5277,7 +5285,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# rejects — the reader believes something is generic that is not — rather than a form
 	# this compiler has not built.
 	if not c_is_generic(em, name) {
-		chk_at(em, f"E368 `{name}` is not generic, so `{name}[…]` has no type argument to take")
+		chk_at(em, "E368", f"`{name}` is not generic, so `{name}[…]` has no type argument to take")
 		return "0"
 	}
 
@@ -5328,7 +5336,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# statement about a program the language rejects, not a form this compiler has not built.
 	# Emission carries on into the function of that name and the C is thrown away.
 	if not c_is_unknown(bt) {
-		chk_at(em, f"E369 `{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
+		chk_at(em, "E369", f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
 	}
 
 	if c_is_ctor(name) {
@@ -5481,7 +5489,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		if c_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
-			chk_at(em, f"E370 `{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
+			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
 			out = out + "0"
 		}
 		i = i + 1
@@ -5836,7 +5844,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# it is a statement about a program the language rejects, not a form this compiler has
 	# not built, and the C emitted after a finding is discarded.
 	if n == "this" and not c_is_bound(em, n) {
-		chk_at(em, "E371 `this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
+		chk_at(em, "E371", "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
 		return "0"
 	}
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
@@ -5847,7 +5855,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		# else — and of every rule here this is the one that needs a place most, because the
 		# wording locates nothing: a typo names the misspelling and a file may hold four
 		# spellings of it, so the reader is told what is wrong and left to find where.
-		chk_at(em, f"E372 undefined name `{n}`")
+		chk_at(em, "E372", f"undefined name `{n}`")
 		return "0"
 	}
 
@@ -6829,7 +6837,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# specialization, so neither ever shares the constant's symbol. Reported at the
 		# constant's declaration in `own`, so a multi-unit build says it once.
 		if c_is_free_fn(em, c.name) and c_const_in(own, c.name) {
-			chk_at_place(em, c.path, c.line, c.col, f"E373 `{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
+			chk_at_place(em, c.path, c.line, c.col, "E373", f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
 		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
@@ -6846,7 +6854,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 			if chk_fits_expr(em, c.ty, ty, c.value) {
 				ty = c.ty
 			} else {
-				chk_at_place(em, c.path, c.line, c.col, chk_bind_msg(ty, c.ty, c.name))
+				chk_bind_mismatch(em, c.path, c.line, c.col, ty, c.ty, c.name)
 			}
 		}
 
@@ -8189,7 +8197,7 @@ fn c_slice_bound(mut &em: Emitter, e: Expr) {
 	t := c_infer(em, e)
 	return if c_is_unknown(t) or c_is_int(t)
 
-	chk_at(em, f"E374 a slice bound is an int, and this is {ty_name(t)}")
+	chk_at(em, "E374", f"a slice bound is an int, and this is {ty_name(t)}")
 }
 
 # c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
@@ -8234,7 +8242,7 @@ fn c_list_index_int(mut &em: Emitter, idx: Expr) {
 	t := c_infer(em, idx)
 	return if c_is_unknown(t) or c_is_int(t)
 
-	chk_at(em, f"E375 a list index is an int, and this is {ty_name(t)}")
+	chk_at(em, "E375", f"a list index is an int, and this is {ty_name(t)}")
 }
 
 fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
@@ -8609,7 +8617,7 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# raise says WHERE as well.
 	nm := c_named_of(tt)
 	if chk_is_scalar(tt) or (c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))) {
-		chk_at(em, f"E376 no field `{fld}` on {ty_name(tt)}")
+		chk_at(em, "E376", f"no field `{fld}` on {ty_name(tt)}")
 	}
 
 	return f"{tgt}.zg_{fld}"
@@ -8621,7 +8629,7 @@ fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
 	return if c_is_unknown(t)
 
 	if not c_is_tuple(t) {
-		chk_at(em, f"E377 `.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
+		chk_at(em, "E377", f"`.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
 		return
 	}
 
@@ -8629,7 +8637,7 @@ fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
 	i := strconv.parse_int(fld, 10)
 	return if i >= 0 and i < n
 
-	chk_at(em, f"E378 a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
+	chk_at(em, "E378", f"a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
 }
 
 fn c_all_digits(s: str) -> bool {
@@ -8843,7 +8851,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# blamed for the thing being walked: a sentence about the consequence, naming the one part
 	# of the line that is fine.
 	if not c_is_list(ct) and not c_is_unknown(ct) {
-		chk_at(em, f"E379 `for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
+		chk_at(em, "E379", f"`for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
 	}
 
 	elem := c_list_elem(ct)
@@ -9493,7 +9501,7 @@ fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 		# REPORTED rather than raised, so it carries the place: `raise` is a statement, so a
 		# marker is set, and this is a statement about a program the language rejects rather
 		# than a form the compiler has not built. Emission carries on and the C is discarded.
-		chk_at(em, f"E380 raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
+		chk_at(em, "E380", f"raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
 	}
 
 	return f"zrt_err_new({c_expr(em, x, c_nosub())})"

@@ -255,11 +255,15 @@ cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** e
 at the **last holder's** exit. The dividing line is a single question — does the resource escape its
 scope? **No → `defer`; yes → `Ref[T]`.**
 
-A **`with` block** scopes such a resource to a lexical region, running its release at block exit. Today it
-is limited to **Ref-bearing** resources (a `chan` or a `Ref[T]`); `with` over a general `Scoped` value is
-**[not yet]**.
+A **`with` block** scopes such a resource to a lexical region — and it is **purely syntactic** sugar over
+the bare block that already does so: `with acquire() as y { … }` is `{ y := acquire(); … }`, and the
+nameless `with e { … }` still binds, to a name only the compiler writes, because `e; …` would end the
+value's life at that statement instead of at the `}`. It introduces **no fourth mechanism**: what runs the
+release is the axis above, unchanged, and that axis already covers every exit including an abort.
 
-> **[not yet]** `with … as` is refused outright, at the keyword: _NotImplemented: with_. So the qualification
-> above states a restriction on a construct the compiler does not read past — both halves are unbuilt, the
-> Ref-bearing case as much as the general `Scoped` one, and a resource is scoped to a region today only by
-> writing the `defer` by hand.
+A resource whose release is a **method someone must remember to call** is not a `with` case at all — it is
+a `defer`, written out, in the block `with` just opened.
+
+> **[not yet]** `with … as` is refused outright, at the keyword: _NotImplemented: with_. A resource is
+> scoped to a region today by writing the bare block and the `defer` by hand — which is exactly what the
+> expansion above says, so nothing is unreachable, only unabbreviated.

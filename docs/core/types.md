@@ -40,8 +40,7 @@ boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
   raw bytes (or binary that may contain a NUL, which a `str` never holds), or **`runearray(s)`** for its
   code points. Each names the list it builds — `bytearray` **is** `list[byte]` and `runearray` **is**
   `list[rune]`, the same type under a shorter name, interchangeable with the spelled-out form everywhere
-  and **not** a strong typedef (see [Collections](../code/collections.md)). **[not yet]** — neither name
-  exists in the compiler, which still takes the `list[byte](s)` spelling this one replaces.
+  and **not** a strong typedef (see [Collections](../code/collections.md)).
 - **A `rune`'s values are not a range**, which makes it the one scalar whose bound is a
   **predicate**: a code point is `0..=0x10FFFF` **minus** the UTF-16 surrogates `0xD800..=0xDFFF`, which
   are not characters. So `rune(0xD800)` raises `OverflowError` even though the number fits the type's

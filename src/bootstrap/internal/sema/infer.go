@@ -177,6 +177,13 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 		// A callee naming a primitive type is a CONVERSION, `T(x)` — a re-construction
 		// of x's value as a T (docs/core/types.md). Building a `str` is not this mechanism
 		// (it validates a list[byte]/list[rune]), so it is reported rather than guessed.
+		// `bytearray(s)` / `runearray(s)` are the str bridges under their own names — the
+		// same conversion `list[byte](s)` spells, and the reason that spelling can leave the
+		// surface: a type with an argument, in expression position, is the one form the
+		// parser needed a symbol table to read.
+		if a := listAliasNamed(callee.Name); a != nil && !c.shadowed(callee.Name) {
+			return c.strToList(n, a.(*types.List).Elem), true
+		}
 		if target := primitiveNamed(callee.Name); target != nil {
 			if _, ok := ScalarOf(target); ok {
 				return c.scalarConversion(n, callee.Name, target), true

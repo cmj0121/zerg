@@ -1086,7 +1086,7 @@ fn fmt_fstr_span(mut &toks: list[Token], lo: int, hi: int) -> str {
 
 # fmt_fstr_lit_ok is every reason a string literal declines to be an f-string's text.
 fn fmt_fstr_lit_ok(t: Token) -> bool {
-	b := list[byte](t.lexeme)
+	b := bytearray(t.lexeme)
 	n := b.len()
 
 	return false if n < 2 or b[0] != b'"'
@@ -1111,7 +1111,7 @@ fn fmt_fstr_lit_ok(t: Token) -> bool {
 }
 
 fn fmt_fstr_lit(lex: str) -> str {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	mut out: list[byte] = []
 	mut i := 1
 	for i < b.len() - 1 {
@@ -1126,7 +1126,7 @@ fn fmt_fstr_lit(lex: str) -> str {
 # is a hole this rule cannot spell.
 fn fmt_fstr_hole_ok(s: str) -> bool {
 	return false if s == ""
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		return false if c == b'"' or c == b'\\' or c == b'{' or c == b'}'
 	}
 	return true
@@ -1236,7 +1236,7 @@ fn fmt_wrap_widths(mut &toks: list[Token]) -> list[int] {
 	for i < toks.len() {
 		t := toks[i]
 		s: str = fmt_text(t)
-		b := list[byte](s)
+		b := bytearray(s)
 		mut n := b.len()
 		if i > 0 and fmt_space_between(toks, i, prev2, prev) {
 			n = n + 1
@@ -2070,7 +2070,7 @@ fn fmt_align_run(mut &lines: list[str], mut &mark: list[int], mut &also: list[in
 # ending in `{` is prose, not a body, and looking at the whole line let one shatter the table
 # around it.
 fn fmt_arm_flat(s: str, at: int, cut: int) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut i := b.len() - 1
 	if cut >= 0 {
 		i = cut - 1
@@ -2089,7 +2089,7 @@ fn fmt_arm_flat(s: str, at: int, cut: int) -> bool {
 # fmt_head_width is what stands to the left of the mark: the column the last byte of code
 # before it ends at, with the space the printer put in front of the mark not counted.
 fn fmt_head_width(s: str, at: int) -> int {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut i := at - 1
 	for i >= 0 {
 		return i + 1 if b[i] != b' ' and b[i] != byte(9)
@@ -2099,7 +2099,7 @@ fn fmt_head_width(s: str, at: int) -> int {
 }
 
 fn fmt_indent_of(s: str) -> int {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut n := 0
 	for n < b.len() {
 		break if b[n] != byte(9)
@@ -2116,7 +2116,7 @@ fn fmt_indent_of(s: str) -> int {
 # none — which is exactly what `20.. =>` does — and a rule that has to agree with another rule
 # to be right is one that will be wrong later.
 fn fmt_set_gap(s: str, end: int, at: int, n: int) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < end {
@@ -2178,7 +2178,7 @@ fn fmt_line_marks(mut &lens: list[int], mut &offs: list[int]) -> list[int] {
 # after the last break is dropped; the printer always ends a line, and fmt_join_lines puts every
 # break back.
 fn fmt_split_lines(text: str, mut &lens: list[int]) -> list[str] {
-	b := list[byte](text)
+	b := bytearray(text)
 	mut out: list[str] = []
 	mut cur: list[byte] = []
 	mut i := 0
@@ -2217,7 +2217,7 @@ fn fmt_text(t: Token) -> str {
 }
 
 fn fmt_write(mut &out: list[byte], s: str) {
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		out.append(c)
 	}
 }
@@ -2799,7 +2799,7 @@ fn fmt_is_stdlib(path: str) -> bool {
 }
 
 fn fmt_last_segment(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
 	for i < b.len() {
@@ -2865,8 +2865,8 @@ fn fmt_run_paths(mut &toks: list[Token], first: int, last: int) -> list[str] {
 # comparison on `str` would compare the pointers — which sorts by where the strings
 # happen to sit in memory, silently, and differently on every run.
 fn fmt_before(a: str, b: str) -> bool {
-	x := list[byte](a)
-	y := list[byte](b)
+	x := bytearray(a)
+	y := bytearray(b)
 	mut i := 0
 	for i < x.len() and i < y.len() {
 		return true if x[i] < y[i]

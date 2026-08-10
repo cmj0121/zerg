@@ -28,7 +28,7 @@
 # itself and two distinct `ty_name`s can never meet.
 fn gen_ty_key(t: Ty) -> str {
 	mut out := ""
-	for b in list[byte](ty_name(t)) {
+	for b in bytearray(ty_name(t)) {
 		out = out + gen_key_byte(b)
 	}
 	return out

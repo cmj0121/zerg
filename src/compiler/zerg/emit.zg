@@ -1498,7 +1498,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 # want `zg_id_int`. So specializations take a prefix of their own, off the flat space a
 # program shares, exactly as a method's `zg_<Type>_<name>` is off it.
 fn c_is_mangled(name: str) -> bool {
-	for b in list[byte](name) {
+	for b in bytearray(name) {
 		return true if b == b'$'
 	}
 	return false
@@ -1506,7 +1506,7 @@ fn c_is_mangled(name: str) -> bool {
 
 fn c_spec_cname(name: str) -> str {
 	mut out := "zgg_"
-	for b in list[byte](name) {
+	for b in bytearray(name) {
 		out = out + c_cname_byte(b)
 	}
 	return out
@@ -1737,7 +1737,7 @@ fn c_split_bounds(bound: str) -> list[str] {
 	return out if bound == ""
 
 	mut cur: list[byte] = []
-	for ch in list[byte](bound) {
+	for ch in bytearray(bound) {
 		if ch == b'+' {
 			out.append(str(cur))
 			cur = []
@@ -1951,7 +1951,7 @@ fn c_fixed_width_check(n: str) {
 # module qualifier or an associated-type projection by exactly this rule, and a type
 # parameter's bound names a spec or a concrete type by it as well.
 fn c_is_ctor(name: str) -> bool {
-	b := list[byte](name)
+	b := bytearray(name)
 	return false if b.len() == 0
 	return ascii.is_upper(b[0])
 }
@@ -3088,7 +3088,7 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 
 # c_last_segment is a module path's namespace: `util/text` is reached as `text`.
 fn c_last_segment(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
 	for i < b.len() {
@@ -3263,14 +3263,14 @@ fn c_str_cell(mut &em: Emitter, s: str) -> str {
 
 	# C counts DECODED bytes, so the array is sized from the value and not from the escaped
 	# spelling c_str_lit produces
-	n := list[byte](s).len() + 1
+	n := bytearray(s).len() + 1
 	return f"({{ static struct {{ zrt_ref_hdr h; char b[{n}]; }} {nm} = {{{{ZRT_RC_IMMORTAL, NULL}}, {c_str_lit(s)}}}; (const char *)zrt_ref_payload(&{nm}); }})"
 }
 
 fn c_str_lit(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		v := int(c)
 		if v == 34 {
 			out.append(byte(92))
@@ -3316,7 +3316,7 @@ fn c_int_dec(mut &em: Emitter, lex: str) -> str {
 # `invalid suffix '_0.5' on integer constant`: against generated source, for a separator the
 # lexer had deliberately accepted.
 fn c_float_dec(lex: str) -> str {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	mut out: list[byte] = []
 	for ch in b {
 		if ch != b'_' {
@@ -4263,7 +4263,7 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 	return false
 }
 
-# c_conv lowers a type conversion. list[byte](str) goes through the emitted string helper
+# c_conv lowers a type conversion. bytearray(str) goes through the emitted string helper
 # and the scalar casts are plain C casts; `str(x)` is the one that reads its SOURCE type.
 #
 # `str` is two conversions wearing one name. Over a `list[byte]` it is the bridge back to a
@@ -4344,7 +4344,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# the answer match the shape: what leaves here is owned, as from any other call.
 		return c_copied(em, xt0, x, sb) if c_is_str(xt0)
 		if c_is_list(xt0) {
-			# THE WAY BACK from the code points, and the mirror of `list[rune](s)`: these two
+			# THE WAY BACK from the code points, and the mirror of `runearray(s)`: these two
 			# round-trip, where the byte bridge round-trips only what was valid UTF-8 to
 			# begin with. It takes the list by value like the byte bridge below, and for the
 			# same reason.
@@ -4390,8 +4390,8 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
 		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
 
-		# THE TWO BRIDGES OUT OF A STR, and they answer different questions: `list[byte](s)`
-		# is the raw octets and `list[rune](s)` the code points it is UTF-8 for. A str with
+		# THE TWO BRIDGES OUT OF A STR, and they answer different questions: `bytearray(s)`
+		# is the raw octets and `runearray(s)` the code points it is UTF-8 for. A str with
 		# any non-ASCII in it has different lengths under the two, which is the whole reason
 		# the language spells both rather than picking one.
 		inner := c_expr(em, x, sb)
@@ -4467,7 +4467,7 @@ const SC_BOOL := 4
 
 # c_scalar_class answers a type's scalar class, or SC_NONE for a type that is not a
 # convertible scalar. A `str` deliberately has none: it is PARSED, which c_conv handles
-# above, and a value is built from it with `list[byte](s)` rather than cast.
+# above, and a value is built from it with `bytearray(s)` rather than cast.
 fn c_scalar_class(t: Ty) -> int {
 	return SC_SIGNED if c_is_int(t) or c_is_rune(t)
 	return SC_UNSIGNED if c_is_byte(t) or c_is_uint(t)
@@ -6509,7 +6509,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 
 # c_is_intrinsic reports whether a name is a runtime intrinsic (a __zrt_ primitive).
 fn c_is_intrinsic(name: str) -> bool {
-	b := list[byte](name)
+	b := bytearray(name)
 	return false if b.len() < 2
 	return b[0] == b'_' and b[1] == b'_'
 }
@@ -6519,7 +6519,7 @@ fn c_intrinsic(name: str) -> str {
 	return "zrt_write_str" if name == "__zrt_write"
 	return "zrt_read_fd" if name == "__zrt_read"
 
-	b := list[byte](name)
+	b := bytearray(name)
 	mut out: list[byte] = []
 	mut i := 2
 	for i < b.len() {
@@ -8493,7 +8493,7 @@ fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
 
 fn c_ident_safe(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
 			out.append(c)
 		} else if c == b'*' {
@@ -8673,7 +8673,7 @@ fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
 }
 
 fn c_all_digits(s: str) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() == 0
 	for c in b {
 		return false if not ascii.is_digit(c)
@@ -9469,7 +9469,7 @@ fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst
 # writes begins with the literal pair `({`, and no ordinary parenthesized rendering does —
 # a `(` there is always followed by a value, a cast, or another `(`.
 fn c_is_stmt_expr(s: str) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() < 2
 	return b[0] == b'(' and b[1] == b'{'
 }
@@ -9485,7 +9485,7 @@ fn c_is_stmt_expr(s: str) -> bool {
 # construction, instead of every caller asking a second question beside this one.
 fn c_is_wrapped(s: str) -> bool {
 	return false if c_is_stmt_expr(s)
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')'
 	mut depth := 0
 	mut i := 0

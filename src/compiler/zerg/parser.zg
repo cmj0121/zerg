@@ -1698,6 +1698,42 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 # parse_block counts a nesting level per block, since statements nest through blocks and
 # never through parse_expr: `if` inside `if` is parse_block → parse_stmt → parse_block,
 # another recursion on the same stack the expression forms overflow.
+# parse_with expands `with` into the block it is sugar for (GRAMMAR#with-stmt):
+#
+#     with acquire() as y { body }   →   { y := acquire(); body }
+#     with acquire() { body }        →   { <a name only the compiler writes> := acquire(); body }
+#
+# It is PURELY SYNTACTIC — no type, no sema, no emitter — because the block it becomes
+# already does the whole job: what is bound in it ends at its `}`, on every exit including
+# an abort unwind. The form says the block exists for one resource, and binds it.
+#
+# THE NAMELESS FORM STILL BINDS. Expanding it to a bare `acquire(); body` would end the
+# value's life at that statement rather than at the `}`, which is the opposite of what
+# holding a resource means — a lock released before the code it protects has run.
+#
+# The written name carries the LINE, so two `with`s in one function cannot collide and the
+# name is the same on every run — `fixpoint` compares emitted C byte for byte, so a counter
+# that restarted anywhere but at the same place would move it. A program that writes
+# `_with_12` itself collides loudly, as a redeclaration, rather than quietly.
+fn parse_with(mut &p: Parser) -> Stmt {
+	line := cur(p).line
+	p_advance(p)
+	value := parse_expr(p)
+
+	mut name := f"_with_{strconv.to_string(line, 10)}"
+	if p_at(p, Kind.As) {
+		p_advance(p)
+		name = p_name(p, "a `with` binding")
+	}
+
+	mut body: list[Stmt] = [Stmt.SLet(name, Ty.TUnknown, false, false, false, value)]
+	for st in parse_block(p) {
+		body.append(st)
+	}
+
+	return Stmt.SScope(body)
+}
+
 fn parse_block(mut &p: Parser) -> list[Stmt] {
 	p_deeper(p)
 	expect(p, Kind.LBrace)
@@ -1857,7 +1893,7 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	}
 
 	return parse_select(p) if k == Kind.Select
-	raise "E237 NotImplemented: a `with` block" if k == Kind.With
+	return parse_with(p) if k == Kind.With
 
 	if k == Kind.Del {
 		p_advance(p)

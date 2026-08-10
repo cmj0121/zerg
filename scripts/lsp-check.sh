@@ -106,9 +106,18 @@ if diags is None:
 # finding about a program that builds — which `zerg lint` reports and `zerg build` does
 # not. Comparing the total against the build was this gate's own first bug, and it read
 # as the server inventing findings.
+#
+# A finding is put back together as `code message` before it is compared, because that is
+# how the COMMANDS print one and the server is what has them apart. Comparing the sentence
+# alone would have let the server drop `Diagnostic.code` entirely without this noticing —
+# the assertion is that the two say the same thing, and the code is part of what is said.
+def said(d):
+    c = d.get("code", "")
+    return "%s %s" % (c, d["message"]) if c else d["message"]
+
 result = {
-    "errors": [d["message"] for d in diags if d["severity"] == 1],
-    "infos": [d["message"] for d in diags if d["severity"] == 3],
+    "errors": [said(d) for d in diags if d["severity"] == 1],
+    "infos": [said(d) for d in diags if d["severity"] == 3],
     "ranges": [(d["range"]["start"]["line"], d["range"]["start"]["character"]) for d in diags],
 }
 if edits is not None:

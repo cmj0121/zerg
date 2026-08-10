@@ -100,6 +100,20 @@ fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) 
 	return Token(k, lexeme, value, line, col)
 }
 
+# lex_code_end is where `bad` put the space, and it is the whole of the encoding: an Illegal
+# token has ONE spare field and a diagnostic wants two things out of it, so the code is
+# joined on the way in and cut off on the way out. Reading a code back out of a message
+# ANYWHERE ELSE would be the second copy `Diag.code` exists to prevent; here it is one
+# writer and one reader, a few lines apart.
+fn lex_code_end(b: list[byte]) -> int {
+	mut i := 0
+	for i < b.len() {
+		return i if b[i] == b' '
+		i = i + 1
+	}
+	return -1
+}
+
 # next returns the next token, inserting a ';' at a line break per the ASI rule and
 # dropping comments and blank lines along the way.
 fn next(mut &l: Lex) -> Token {
@@ -366,6 +380,15 @@ fn eat_to_quote(mut &l: Lex, q: byte) {
 # literal. The noun names the literal form, as the seed's message does.
 fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
 	eat_to_quote(l, q)
+	return bad_escape_here(l, noun, sline, scol, soff)
+}
+
+# bad_escape_here is the SENTENCE, for a caller that has already recovered by itself: a
+# triple-quoted string ends at `"""` rather than at a line break, so it walks its own way out
+# and then says the same thing. One rule reported from two places is two rules wearing one
+# code, and this was one — the gate that says so could not see it until a code moved out of a
+# message and into an argument.
+fn bad_escape_here(mut &l: Lex, noun: str, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, "E109", f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
@@ -526,7 +549,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 					}
 					advance(l)
 				}
-				return bad(l, "E109", "invalid escape in a string literal", sline, scol, lexeme_from(l, soff))
+				return bad_escape_here(l, "string", sline, scol, soff)
 			}
 			for e in utf8_encode(v) {
 				sb.append(e)
@@ -778,7 +801,9 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	mut out: list[Diag] = []
 	for t in tokenize(src) {
 		if t.kind == Illegal {
-			out.append(Diag(path, t.line, t.col, t.value, ""))
+			b := list[byte](t.value)
+			at := lex_code_end(b)
+			out.append(Diag(path, t.line, t.col, fstr_slice(b, 0, at), fstr_slice(b, at + 1, b.len()), ""))
 		}
 	}
 	return out

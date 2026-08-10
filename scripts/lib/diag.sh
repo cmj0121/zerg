@@ -31,6 +31,23 @@ has_place() {
 	printf '%s\n' "$1" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'
 }
 
+# opens_with_code <text> <code> — the diagnostic's FIRST line starts with the code. Where a
+# rule reports a place the renderer's `error:` opens the line ahead of it (`error: E307 …`),
+# and a rule that raises before there is a place to report prints the message alone — so the
+# code is what the line starts with either way, and that is the whole fact this encodes.
+#
+# It is here rather than in each script because it is the same fact as `has_place`: one
+# statement about where the compiler puts things in a line. Both gates asserted it with their
+# own copy, which is the shape of failure this file's header is about — a renderer that grew
+# an `error[E307]:` form would leave one copy fixed and the other passing while asserting
+# nothing.
+opens_with_code() {
+	case $(printf '%s\n' "$1" | head -1) in
+	"$2 "* | "error: $2 "*) return 0 ;;
+	esac
+	return 1
+}
+
 # place_is <text> <suffix-regex> — the positive half of has_place: some `-->` line's place
 # ENDS with the given regex (e.g. "case\.zg:1:1"), for a case that pins WHICH line a rule
 # points at rather than only that one exists. It lives here beside has_place because the

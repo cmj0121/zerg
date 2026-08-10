@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -1312,3 +1313,75 @@ int main(int argc, char **argv) {
     return 0;
 }
 `
+
+// TestRuntimeFormatsAreLiterals asserts that no printf-family call in the runtime takes a
+// format string built at run time. That is the CLASS the float formatter's crash belonged
+// to, rather than the crash itself: a pattern assembled from a spec's own bytes is a format
+// string the program chose, and every such call is one `%n` away from a write primitive.
+//
+// It reads the sources rather than running anything, because a call that no input reaches
+// today is still a call the next input might. The check is deliberately shape-based and
+// strict — the format argument must OPEN with a quote — so the way to satisfy it is to write
+// the literal at the call site, which is also the way to make it true.
+func TestRuntimeFormatsAreLiterals(t *testing.T) {
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	// `printf(fmt, …)` and friends: the format is the first argument, except for the four
+	// that take a stream, a buffer, or a buffer and a size first.
+	call := regexp.MustCompile(`\b(v?s?n?printf|fprintf|dprintf|syslog)\s*\(`)
+	skip := map[string]int{"printf": 0, "vprintf": 0, "snprintf": 2, "vsnprintf": 2, "sprintf": 1, "vsprintf": 1, "fprintf": 1, "vfprintf": 1, "dprintf": 1, "syslog": 1}
+	for _, c := range cfiles {
+		src, err := os.ReadFile(c)
+		if err != nil {
+			t.Fatalf("read %s: %v", c, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			m := call.FindStringSubmatchIndex(line)
+			if m == nil || strings.HasPrefix(strings.TrimSpace(line), "*") || strings.HasPrefix(strings.TrimSpace(line), "/*") {
+				continue
+			}
+			name := line[m[2]:m[3]]
+			args := splitArgs(line[m[1]:])
+			n, ok := skip[name]
+			if !ok || len(args) <= n {
+				continue // not a call we can read on one line; the shape check below is the point
+			}
+			if !strings.HasPrefix(strings.TrimSpace(args[n]), `"`) {
+				t.Errorf("%s:%d: %s takes a format that is not a literal: %s",
+					filepath.Base(c), i+1, name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// splitArgs splits an argument list at top-level commas, ignoring the ones inside nested
+// parentheses or inside a string literal. It stops at the closing paren of the call.
+func splitArgs(s string) []string {
+	var out []string
+	depth, start, inStr := 0, 0, false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case inStr:
+			if s[i] == '\\' {
+				i++
+			} else if s[i] == '"' {
+				inStr = false
+			}
+		case s[i] == '"':
+			inStr = true
+		case s[i] == '(' || s[i] == '[':
+			depth++
+		case s[i] == ')' && depth == 0:
+			return append(out, s[start:i])
+		case s[i] == ')' || s[i] == ']':
+			depth--
+		case s[i] == ',' && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}

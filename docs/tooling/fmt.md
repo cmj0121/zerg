@@ -672,6 +672,8 @@ shipping compiler rather than a part of it (the line
 | `E269` | an `if` EXPRESSION whose branch has more than one statement — **[not yet]**                 |
 | `E270` | a binding head in an `if` EXPRESSION — **[not yet]**                                        |
 | `E271` | `asm(…)` — **[not yet]**                                                                    |
+| `E272` | `…(…)` converts a VALUE and was given none                                                  |
+| `E273` | `…(…)` converts one value, and this gives …                                                 |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

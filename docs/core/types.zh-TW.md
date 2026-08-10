@@ -34,8 +34,7 @@
 - **`str` 以 `rune` 迭代、不可索引**——想要原始位元組就用 **`bytearray(s)`**（可能含 NUL 的二進位也用它，
   `str` 永遠不含 NUL），要碼位就用 **`runearray(s)`**。兩者各自命名它建出來的 list——`bytearray` **就是**
   `list[byte]`、`runearray` **就是** `list[rune]`，同一個型別的較短名字，處處可與展開寫法互換，**不是**
-  strong typedef（見 [Collection](../code/collections.zh-TW.md)）。**[not yet]**——兩個名字在編譯器裡都不存在,
-  它仍然接受這裡取代掉的 `list[byte](s)` 寫法。
+  strong typedef（見 [Collection](../code/collections.zh-TW.md)）。
 - **`rune` 的值域不是一個區間**，這讓它成為唯一以**述詞**（predicate）而非上下界界定的 scalar：一個碼位是
   `0..=0x10FFFF` **扣掉** UTF-16 的 surrogate 區間 `0xD800..=0xDFFF`，那些不是字元。所以 `rune(0xD800)` 會
   raise `OverflowError`，即使那個數字綽綽有餘地放得進這個型別的 32 bit；而 `r: rune = 0xD800` 是同一條規則

@@ -578,25 +578,104 @@ keeps sentence matching: codes are the language's contract, and the seed is the 
 builds the shipping compiler rather than a part of it (the line
 [Conformance](../conformance.md) draws when it declines to mark the seed's gaps).
 
-| Code   | Rule                                                            |
-| ------ | --------------------------------------------------------------- |
-| `E101` | a string literal is not closed before the end of the line       |
-| `E102` | a rune literal is empty — it holds exactly one character        |
-| `E103` | a rune literal holds exactly one character, and this holds more |
-| `E104` | this character is not part of any Zerg token                    |
-| `E105` | a triple-quoted string is never closed                          |
-| `E106` | a raw string has no closing quote on this line                  |
-| `E107` | a command literal has no closing backtick                       |
-| `E108` | a based number needs at least one digit after its prefix        |
-| `E109` | invalid escape in a string / rune / byte literal                |
-| `E110` | a string literal may not contain a NUL                          |
-| `E201` | `close` is a keyword and not a select arm head                  |
-| `E202` | a select with no arms — it waits on nothing and never wakes     |
-| `E203` | a select arm head that is not a send, a receive or `_`          |
-| `E401` | `break` / `continue` outside the loop it belongs to             |
-| `E402` | a `raise … from` cause that is not an `Err`                     |
-| `E403` | a jump leaving a `guard` block — **[not yet]**                  |
-| `E404` | a channel of optionals — `nil` would mean value and end alike   |
+| Code   | Rule                                                                                                  |
+| ------ | ----------------------------------------------------------------------------------------------------- |
+| `E101` | a string literal is not closed before the end of the line                                             |
+| `E102` | a rune literal is empty — it holds exactly one character                                              |
+| `E103` | a rune literal holds exactly one character, and this holds more                                       |
+| `E104` | this character is not part of any Zerg token                                                          |
+| `E105` | a triple-quoted string is never closed                                                                |
+| `E106` | a raw string has no closing quote on this line                                                        |
+| `E107` | a command literal has no closing backtick                                                             |
+| `E108` | a based number needs at least one digit after its prefix                                              |
+| `E109` | invalid escape in a string / rune / byte literal                                                      |
+| `E110` | a string literal may not contain a NUL                                                                |
+| `E201` | `close` is a keyword and not a select arm head                                                        |
+| `E202` | a select with no arms — it waits on nothing and never wakes                                           |
+| `E203` | a select arm head that is not a send, a receive or `_`                                                |
+| `E401` | `break` / `continue` outside the loop it belongs to                                                   |
+| `E402` | a `raise … from` cause that is not an `Err`                                                           |
+| `E403` | a jump leaving a `guard` block — **[not yet]**                                                        |
+| `E404` | a channel of optionals — `nil` would mean value and end alike                                         |
+| `E204` | expected `…`, found `…`                                                                               |
+| `E205` | expected a newline or `;` to separate statements, found `…`                                           |
+| `E206` | `Either[…, …]` has the same type on both sides                                                        |
+| `E207` | NotImplemented                                                                                        |
+| `E208` | `#[derive(…)]` has no declaration under it                                                            |
+| `E209` | NotImplemented                                                                                        |
+| `E210` | NotImplemented                                                                                        |
+| `E211` | NotImplemented                                                                                        |
+| `E212` | NotImplemented                                                                                        |
+| `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
+| `E214` | enum `…` carries a payload, so its tag is opaque                                                      |
+| `E215` | NotImplemented                                                                                        |
+| `E216` | NotImplemented                                                                                        |
+| `E217` | NotImplemented                                                                                        |
+| `E218` | NotImplemented                                                                                        |
+| `E219` | NotImplemented                                                                                        |
+| `E220` | NotImplemented                                                                                        |
+| `E221` | NotImplemented                                                                                        |
+| `E222` | NotImplemented                                                                                        |
+| `E223` | NotImplemented                                                                                        |
+| `E224` | NotImplemented                                                                                        |
+| `E225` | NotImplemented                                                                                        |
+| `E226` | NotImplemented                                                                                        |
+| `E227` | NotImplemented                                                                                        |
+| `E230` | NotImplemented                                                                                        |
+| `E231` | NotImplemented                                                                                        |
+| `E232` | NotImplemented                                                                                        |
+| `E233` | NotImplemented                                                                                        |
+| `E234` | NotImplemented                                                                                        |
+| `E235` | NotImplemented                                                                                        |
+| `E236` | NotImplemented                                                                                        |
+| `E237` | NotImplemented                                                                                        |
+| `E238` | NotImplemented                                                                                        |
+| `E239` | NotImplemented                                                                                        |
+| `E240` | NotImplemented                                                                                        |
+| `E304` | NotImplemented                                                                                        |
+| `E405` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
+| `E406` | `?.` reads through an optional, and … is not one                                                      |
+| `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with the same right |
+| `E409` | NotImplemented                                                                                        |
+| `E410` | `…` has been instantiated … times and is still asking for more                                        |
+| `E411` | the type parameter `…` of `…` is not decided by this call                                             |
+| `E412` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                              |
+| `E413` | NotImplemented                                                                                        |
+| `E414` | NotImplemented                                                                                        |
+| `E415` | NotImplemented                                                                                        |
+| `E416` | NotImplemented                                                                                        |
+| `E417` | `str(…)` over a list bridges bytes or code points, and this is …                                      |
+| `E418` | `…(…)` converts a value, and … may not have one                                                       |
+| `E419` | an enum converts to `int`                                                                             |
+| `E421` | `[…]` indexes a value, and … may not have one                                                         |
+| `E422` | NotImplemented                                                                                        |
+| `E424` | NotImplemented                                                                                        |
+| `E425` | undefined function `…`                                                                                |
+| `E426` | `…` has … fields and this gives …                                                                     |
+| `E427` | variant pattern `…` cannot match a subject of type …                                                  |
+| `E428` | non-exhaustive match                                                                                  |
+| `E429` | NotImplemented                                                                                        |
+| `E431` | NotImplemented                                                                                        |
+| `E432` | `…` is declared … and the value is …                                                                  |
+| `E433` | `print` needs a value, and … may not have one                                                         |
+| `E434` | NotImplemented                                                                                        |
+| `E435` | `…` is declared to answer …, and its body falls off the end                                           |
+| `E436` | NotImplemented                                                                                        |
+| `E437` | cannot derive `…`                                                                                     |
+| `E438` | NotImplemented                                                                                        |
+| `E444` | NotImplemented                                                                                        |
+| `E241` |                                                                                                       |
+| `E242` |                                                                                                       |
+| `E243` |                                                                                                       |
+| `E407` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
+| `E420` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
+| `E423` |                                                                                                       |
+| `E430` | `…` on a … needs an `Eq`                                                                              |
+| `E445` |                                                                                                       |
+| `E446` |                                                                                                       |
+| `E448` |                                                                                                       |
+| `E449` |                                                                                                       |
+| `E450` | no field `…` on …                                                                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

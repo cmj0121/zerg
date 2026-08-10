@@ -636,7 +636,6 @@ shipping compiler rather than a part of it (the line
 | `E234` | an `as` binding in a `match` arm — **[not yet]**                                            |
 | `E235` | an interpolating command literal — **[not yet]**                                            |
 | `E236` | a command literal — **[not yet]**                                                           |
-| `E237` | a `with` block — **[not yet]**                                                              |
 | `E238` | a destructuring binding `(a, b) := …` — **[not yet]**                                       |
 | `E239` | a range with no lower bound — **[not yet]**                                                 |
 | `E240` | a list pattern in a `match` arm — **[not yet]**                                             |

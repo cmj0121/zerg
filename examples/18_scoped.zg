@@ -1,0 +1,46 @@
+# Scoped resources: what frees a value, and who decides when.
+#
+# Three things share this job and they are not interchangeable. A BLOCK ends the values
+# bound in it, at its `}`, on every exit including an abort. `with` is that block with a
+# name on the resource — pure sugar, no teardown of its own. `defer` is the teardown a
+# value cannot perform for itself, scheduled at the same `}`.
+
+fn open_log(tag: str) -> list[str] {
+	mut lines: list[str] = []
+	lines.append(tag)
+	return lines
+}
+
+fn close_log(tag: str) {
+	print f"closed {tag}"
+}
+
+fn main() {
+	# THE BLOCK is what ends a value. `lines` is gone at the `}` and the name is free again.
+	{
+		lines := open_log("inner")
+		print lines.len()
+	}
+
+	# `with` says the block exists FOR the resource, and binds it. The two forms differ only
+	# in whether the resource has a name a reader needs.
+	with open_log("named") as lines {
+		print lines.len()
+	}
+
+	# The nameless form still binds: the value lives to the `}` rather than dying at the
+	# statement, which is the whole of what holding a resource means.
+	with open_log("held") {
+		print 1
+	}
+
+	# `defer` is the third, and it is NOT what `with` does. A release somebody must remember
+	# to call is written out, in the block `with` just opened — the formatter is forbidden
+	# from folding the two together for exactly this reason.
+	with open_log("logged") as lines {
+		defer close_log("logged")
+		print lines.len()
+	}
+
+	print 9
+}

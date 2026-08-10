@@ -6,12 +6,13 @@ and the built-in specs every type gets. Part of the [Language Reference](../lang
 
 Behavior comes in two tiers. A type may define **inherent methods** — its own behavior, usable only
 when you hold the concrete type. **Abstraction**, however, always goes through a **`spec`**: a named
-interface of behavior — method signatures (some carrying a **default body**, below), plus **associated
-types** and **associated values** (both below), and **never fields**. Satisfaction is **nominal**: a type
+interface of behavior — method signatures, some carrying a **default body** (below) — and **never
+fields**, **never an associated type**, and **never an associated value** (Associated types and values,
+below). Satisfaction is **nominal**: a type
 must explicitly declare it implements a `spec`, and there is **one canonical implementation per
-(type, spec)** pair — a **parameterized** spec counts its parameters into the pair, so `Indexable[int]`
-and `Indexable[Range]` are distinct, each with its own canonical impl (Resolving a parameterized spec,
-below).
+(type, spec)** pair — a **parameterized** spec counts its parameters into the pair, so
+`Indexable[int, T]` and `Indexable[Range, list[T]]` are distinct, each with its own canonical impl
+(Resolving a parameterized spec, below).
 
 A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
 on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
@@ -127,16 +128,16 @@ can still be its own spec listed alongside the others in a bound.
 ## Resolving a parameterized spec
 
 A **parameterized** spec folds its argument into an implementation's identity, so a type may implement
-several at once — a `list` implements `Indexable[int]` (element access) and `Indexable[Range]` (slicing),
-each keeping its own associated `Output`:
+several at once — a `list` implements `Indexable[int, T]` (element access) and
+`Indexable[Range, list[T]]` (slicing),
+each keeping its own output type as a second parameter:
 
 ```text
-spec Indexable[K] {
-    type Output
-    fn index(k: K) -> Output
+spec Indexable[K, V] {
+    fn index(k: K) -> V
 }
-impl[T] Indexable[int]   for list[T] { type Output = T;       fn index(i: int)   -> T       { … } }
-impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range) -> list[T] { … } }
+impl[T] Indexable[int, T]         for list[T] { fn index(i: int)   -> T       { … } }
+impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { … } }
 ```
 
 Because the parameter `K` appears in the method signature, a use `xs[k]` **resolves statically on `k`'s
@@ -161,9 +162,9 @@ than by the argument's type, use an `enum` instead.
 > `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
 > canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
 > with the first instead of being told apart by the very argument that is supposed to distinguish them. The
-> `Indexable[int]` / `Indexable[Range]` pair above therefore cannot be declared, and the three-outcome
-> resolution it feeds has nothing to resolve between. It is the same root cause as the one `Into` per type in
-> [Types](types.md#into--an-ordinary-conversion-spec).
+> `Indexable[int, T]` / `Indexable[Range, list[T]]` pair above therefore cannot be declared, and the
+> three-outcome resolution it feeds has nothing to resolve between. It is the same root cause as the one
+> `Into` per type in [Types](types.md#into--an-ordinary-conversion-spec).
 
 ## Type tests — `is`
 
@@ -186,10 +187,10 @@ A **method** is a function with a **receiver** — the instance it is called on,
 receiver's own type is **`This`**. `This` names "the implementing type" wherever the concrete type is not
 yet known — a same-type operand (`less(this, other: This) -> bool`) or the result of an **associated
 function** (`default() -> This`, a constructor — which, having no receiver, has no `this`) — and resolves
-to the concrete type in each implementation. A **parameterized** spec's parameter (`Indexable[K]`) is a
-**separate**, freely-chosen type — fixed per impl and folded into the (type, spec) identity — and an
-**associated type** (`type Item`, projected `This.Item`) is a third, implementer-chosen type; `This` alone
-is the forced self-type, never a choice.
+to the concrete type in each implementation. A **parameterized** spec's parameter (`Indexable[K, V]`) is a
+**separate**, freely-chosen type — fixed per impl and folded into the (type, spec) identity. `This` alone
+is the forced self-type, never a choice; there is no third, implementer-chosen kind (Associated types and
+values, below).
 
 A spec's methods come in two kinds:
 
@@ -226,34 +227,25 @@ defined — a concrete-bound generic **monomorphizes** to the actual impl, a spe
 through its **vtable** to the actual impl. This holds for a **direct call on a concrete value** as well
 (**[not yet]** — a provided method is refused at its declaration, above):
 `c.provided()` runs the type's **override** if it has one, else the spec's **default
-body** — with no `#[dyn]` and no boxing needed, so a provided method is not confined to the
+body** — with no boxing needed, so a provided method is not confined to the
 dynamic-dispatch path.
 
 ## Associated types and values
 
-A spec member is not only a method. A spec may declare an **associated type** — `type Item` (optionally
-bounded, `type Item: Ord`) — a type each impl fills in with `type Item = int`. It is **functionally
-determined by the implementer**: one `Item` per impl, never chosen per use. Reference it in type position
-by **projection** — `I.Item`, chainable as `I.Item.Sub`.
+A spec carries **behaviour and nothing else**. It declares no **associated type** — a type each impl fills
+in, `type Item`, projected `This.Item` — and no **associated value** — a compile-time constant each impl
+supplies, `BITS: int` required and `BITS := 32` provided. Neither is a member kind here, and neither is a
+syntax the grammar derives: both are **refused by name**. An associated type is an output the **impl**
+chooses, so checking a use of `This.Item` would need the impl in hand before the expression's type is
+known — a type flowing backwards into inference. A parameterized spec says the same thing forwards: one
+impl per argument (`Indexable[K, V]`, above) where an associated type was one output per impl.
 
-This is what makes a single-output protocol like iteration **well-defined**: `for x in it` has **one**
-element type because `Iterator.Item` is fixed per impl — not chosen per use, as a parameterized
-`Iterable[T]` would allow (that alternative is deliberately rejected). The contrast is exact — an
-**associated type** is one output per impl (`Iterator`), a **parameter** is one impl per argument type
-(`Indexable[K]`, above).
+The cost lands on a **single-output protocol**. `Iterable[T]` can be implemented at several `T` where a
+fixed `Item` could not, so what pins the element type is **coherence** — at most one such impl per type,
+which the compiler already checks for every other (type, spec) pair.
 
-A spec may also require an **associated value** — a compile-time value each impl supplies: `BITS: int`
-requires it, and the impl provides `BITS := 32` (a **`val-bind`**). It is a folded constant, reached as
-`T.BITS` in generic code — the spec-level form of a type constant (below). Unlike an associated
-**function** (`fn max() -> This`, which _runs_ to produce a value), an associated **value** is _folded_ at
-compile time; use the value form for a constant a spec guarantees, the function form for a computed one.
-
-> **[not yet]** Neither member kind exists. An **associated type** is refused at the `spec` that declares it —
-> _NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing
-> here binds one_ — and an **associated value** at the `impl` that would supply it,
-> _NotImplemented: an associated value binding `BITS := …` in an `impl`_. A `spec` here declares method
-> signatures and nothing else, which is also why the `Indexable[K]` above and `Iterator` with its fixed `Item`
-> below cannot be written down in this compiler at all: each needs a member this one does not have.
+A per-impl **constant** is written as an ordinary **type constant** (below) — a value the type gives
+itself, which no spec demands.
 
 ## Type constants
 
@@ -262,21 +254,20 @@ A **type constant** is a per-type compile-time value, declared inside the type's
 initializer is a **constant expression** — a literal, another constant, or their folded arithmetic — that
 the compiler **substitutes at compile time**, running no code and having **no side effect** (folding is
 implicit and independent of the `const` keyword, which only marks a shadow-proof binding). Because
-construction is an ordinary **call** — `Point(x: 0, y: 0)`, **never** brace syntax — a type can give
-itself its own canonical values: `ORIGIN := Point(x: 0, y: 0)`, reached as `Point.ORIGIN`. Being a
-compile-time constant, an `int`-typed one is usable **wherever a compile-time constant is** — including a
-fixed-array size (`[byte; Buffer.SIZE]`, see [Collections](../code/collections.md)). Visibility is the ordinary
-`pub` / private knob, as on a field or method.
+construction is an ordinary **call**, a type can give itself its own canonical values:
+`ORIGIN := Point(x: 0, y: 0)`, reached as `Point.ORIGIN`. Being a compile-time constant, an `int`-typed one
+is usable **wherever a compile-time constant is** — including a fixed-array size (`[byte; Buffer.SIZE]`,
+see [Collections](../code/collections.md)). Visibility is the ordinary `pub` / private knob.
 
-A type constant is the **impl side** of the associated-value machinery (above): a plain `NAME := …` is a
-`val-bind` no spec demanded, while a spec's `BITS: int` is the same `val-bind` a spec _requires_. So a
-per-type _value_ that a spec must guarantee is an **associated value** — `MAX: This` required, each impl
-supplying `MAX := …`, generic code reading `T.MAX` — **not** a receiver-less function.
+It shares a production with the **associated value** that left this chapter, and the difference is the
+whole reason it stays: nothing about a type constant points at a spec. It is a value a type gives itself,
+which no spec demanded and **none can require** — a spec that wanted one would be right back to an output
+the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
+(`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** A **type constant** is the same unbuilt `val-bind` as the associated value it is the impl side
-> of: `BITS := 32` inside an `impl` reports _NotImplemented: an associated value binding `BITS := …` in an
-> `impl`_, whether or not a spec asked for it. So `Type.NAME` names nothing, `Point.ORIGIN` cannot be
-> declared, and a fixed-array size that a type constant was to supply is written as a literal instead.
+> **[not yet]** `NAME := 32` inside an `impl` reports _NotImplemented: an associated value binding
+> `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
+> fixed-array size that a type constant was to supply is written as a module-level constant instead.
 
 ## Built-in specs
 
@@ -359,16 +350,16 @@ explicitly**, handling `float`'s two traps: a **reflexive** `equal` with **canon
 must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
 stdlib total-order/hashable `float` wrapper is deferred.
 
-**Iteration.** An **`Iterator`** has an associated **`type Item`** and `next() -> Result[Item]` —
-`Left(v)` for the next element, or `Right(StopIteration)` at the end (**`StopIteration`** is a built-in
-`Err`). An **`Iterable`** likewise has a `type Item` and `iter()`, producing a fresh `Iterator` whose
-`Item` matches. Because `Item` is an **associated type** — fixed per impl, not a parameter chosen per use
-— `for x in X` has **one** element type: it requires `X: Iterable`, binds `x: X.Item` to each `Left`,
+**Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
+`Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has
+`iter()`, producing a fresh `Iterator[T]`. The element type is pinned by **coherence** rather than by a
+member kind: a type declares **at most one** `Iterable[T]` impl, so `for x in X` still has **one**
+element type — it requires `X: Iterable[T]`, binds `x: T` to each `Left`,
 **exits cleanly on `Right(StopIteration)`**, and **raises any other `Right(err)`** — a mid-stream failure
 is never silently swallowed (drive `next()` by hand and `guard` to inspect it). Since `<-ch` already
-yields `Result[T]`, **a channel is an `Iterator`** with `Item = T`: `for v in ch` drains it, ending on a
-clean close and re-raising a producer crash. An `Iterator` is trivially `Iterable`, so **lazy adapters**
-(`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain — each returns a **concrete
-adapter type** (`map` a `Map[This, U]` whose `Item = U`, holding the source and the closure), so a chain
-stays fully **monomorphized**, no boxing. `for mut x in X` binds each element as an in-place `mut` — only
-when `X` is `mut`.
+yields `Result[T]`, **a channel is an `Iterator[T]`**: `for v in ch` drains it, ending on a
+clean close and re-raising a producer crash. An `Iterator[T]` is trivially `Iterable[T]`, so **lazy
+adapters** (`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain — each returns a
+**concrete adapter type** (`map` a `Map[This, U]` that is `Iterator[U]`, holding the source and the
+closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each element as an
+in-place `mut` — only when `X` is `mut`.

@@ -333,8 +333,8 @@ enum K {
 
 fn name(k: K) -> str {
 	return match k {
-		A => "a"
-		B => "b"
+		K.A => "a"
+		K.B => "b"
 	}
 }
 
@@ -382,8 +382,8 @@ enum K {
 
 fn f(k: K) -> str {
 	return match k {
-		A if true => "a"
-		B => "b"
+		K.A if true => "a"
+		K.B => "b"
 	}
 }
 
@@ -403,7 +403,7 @@ enum K {
 fn f(k: K) -> str {
 	return match k {
 		_ => "rest"
-		A => "a"
+		K.A => "a"
 	}
 }
 
@@ -522,7 +522,7 @@ enum K {
 fn main() {
 	k := K.of(1)
 	print match k {
-		A => "a"
+		K.A => "a"
 		_ => "other"
 	}
 }
@@ -1314,9 +1314,9 @@ enum E {
 }
 
 fn main() {
-	e := A(5)
+	e := E.A(5)
 	print match e {
-		A(n) as whole => n
+		E.A(n) as whole => n
 		_ => 0
 	}
 }
@@ -2218,7 +2218,7 @@ enum E {
 
 fn main() {
 	print match E.A {
-		A | B => 1
+		E.A | B => 1
 	}
 }
 EOF

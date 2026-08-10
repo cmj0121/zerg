@@ -54,6 +54,12 @@
 讀出數字文字，格式錯誤 raise `ValueError`、超出範圍 raise `OverflowError`。用 `guard { int(s) } ?? default`
 降級。其餘目標不解析（`bool(s)` / `byte(s)` 會被拒）。
 
+**它們各自接受的文字就是語言自己的字面量**，此外不接受任何東西。`float(s)` 讀數字、可有一個兩側都有數字的
+`.`，以及可有的指數（[`GRAMMAR#float-lit`](../../GRAMMAR)）——也讀單純一串數字，因為 `float(12)` 是合法的轉換，
+而 `float("12")` 就是同一個值從文字讀進來。它**不**讀語言從來沒有描述過的東西：十六進位 float（`0x1p3`）、
+`inf`、`nan`，或一個取決於主機 locale 的小數點。把文字交給 C 函式庫、然後照單全收它接受的東西，正是一個轉換
+如何長出一份沒有人寫下來的文法。
+
 ## str ⇄ list 橋接
 
 - `str(x: T) -> str`、`T` 為 **scalar**——渲染值的內建 `display()`（`str(42)` → `"42"`），與 `print`、f-string

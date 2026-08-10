@@ -46,9 +46,10 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
 
   > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
   > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and
-  > `width` and `precision` have implementation limits ([Conformance](../conformance.md)). A spec outside
-  > either is refused: by the compiler where it can be, and by the runtime as a `ValueError` where a
-  > program reaches one anyway. This is not a nicety. The letter used to be spliced into the C
+  > `width` and `precision` have implementation limits ([Conformance](../conformance.md)). A spec
+  > outside either is refused by name as a `ValueError`. Today that refusal is the **runtime's**: the
+  > spec form itself is `[not yet]` in this implementation, so the compiler that would check one is
+  > the one that does not build it. This is not a nicety. The letter used to be spliced into the C
   > formatter's own pattern, so `{x:.6s}` rendered a float through `%s` — a pointer read of a number —
   > and `{x:.6n}` reached `%n`, which **writes** through its argument.
   > **[implementation-defined]** Floating-point rendering — the default `%g`-style form (6 significant

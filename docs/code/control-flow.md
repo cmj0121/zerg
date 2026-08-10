@@ -49,7 +49,7 @@ re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the 
 (a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
-the bytes; walk `list[byte](s)` when you want those. **`for mut x`**, the mutable loop binding that
+the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
 writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) is **[not yet]** — the form is refused by name — as is treating a **range as a
 value** anywhere else; a range exists only as the thing a `for` walks and a `match` arm contains.
@@ -122,9 +122,9 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 
 ```text
 msg := match ev {
-    Click(p)  => render(p)
-    Scroll(d) => scroll(d)
-    _         => nil
+    Event.Click(p)  => render(p)
+    Event.Scroll(d) => scroll(d)
+    _               => nil
 }
 ```
 

@@ -4,9 +4,9 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](specs.md) 版本。
 
 行為分成**兩層**。型別可定義 **inherent method**——自有行為，只有握著具體型別時才能用。而**抽象**一律透過
-**`spec`**：一個具名的行為介面——method 簽名（其中有些帶 **default body**，見下），外加 **associated type** 與
-**associated value**（兩者見下），且**永不含 field**。滿足是 **nominal**：型別必須**明確宣告**它實作某 `spec`，且每組
-**(型別, spec) 只有一個正規 impl**——**帶參數**的 spec 會把參數算進這組，所以 `Indexable[int]` 與 `Indexable[Range]`
+**`spec`**：一個具名的行為介面——method 簽名，其中有些帶 **default body**（見下）——且**永不含 field**、
+**永不含 associated type**、**永不含 associated value**（見下節）。滿足是 **nominal**：型別必須**明確宣告**它實作某 `spec`，且每組
+**(型別, spec) 只有一個正規 impl**——**帶參數**的 spec 會把參數算進這組，所以 `Indexable[int, T]` 與 `Indexable[Range, list[T]]`
 是不同組、各有自己的正規 impl（見下方「解析帶參數的 spec」）。
 
 `spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
@@ -94,16 +94,15 @@ spec 本身。一個只是被共用、而非被相依的能力，仍可自成一
 
 ## 解析帶參數的 spec（Resolving a parameterized spec）
 
-**帶參數**的 spec 把它的參數摺進實作身分裡，所以一個型別可以同時實作多個——一個 `list` 同時實作 `Indexable[int]`
-（取元素）與 `Indexable[Range]`（切片），各自保留自己的 associated `Output`：
+**帶參數**的 spec 把它的參數摺進實作身分裡，所以一個型別可以同時實作多個——一個 `list` 同時實作 `Indexable[int, T]`
+（取元素）與 `Indexable[Range, list[T]]`（切片），各自把輸出型別放在第二個參數：
 
 ```text
-spec Indexable[K] {
-    type Output
-    fn index(k: K) -> Output
+spec Indexable[K, V] {
+    fn index(k: K) -> V
 }
-impl[T] Indexable[int]   for list[T] { type Output = T;       fn index(i: int)   -> T       { … } }
-impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range) -> list[T] { … } }
+impl[T] Indexable[int, T]         for list[T] { fn index(i: int)   -> T       { … } }
+impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { … } }
 ```
 
 因為參數 `K` 出現在 method 簽名裡，一次使用 `xs[k]` **依 `k` 的型別靜態解析**——編譯器以「為 untyped literal 定型」的
@@ -122,7 +121,7 @@ impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range)
 > `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _`C` declares `ix` twice — every method on a type
 > shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
 > **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
-> `Indexable[int]` / `Indexable[Range]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
+> `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
 > [型別](types.zh-TW.md#into--一個普通的轉換-spec) 裡「每個型別只能有一個 `Into`」是同一個根因。
 
 ## 型別測試（Type tests）——`is`
@@ -143,8 +142,8 @@ guard——不需要任何新的 pattern 形式。它的主要用途是對**被�
 一個 **method** 是帶 **receiver** 的函式——被呼叫的那個實例，名為 **`this`**；receiver 自身的型別是 **`This`**。
 `This` 在「具體型別尚未知」處指「**實作它的那個型別**」——同型別的運算元（`less(this, other: This) -> bool`）、或
 **associated function** 的結果（`default() -> This`，也就是 constructor——它沒有 receiver，所以也沒有 `this`）——並在每個實作裡
-解析成具體型別。**帶參數**的 spec 的參數（`Indexable[K]`）是**另一件事**：一個自由選的型別——每個 impl 固定一次、
-摺進 (型別, spec) 身分裡；而 **associated type**（`type Item`，投影成 `This.Item`）是第三種、由 implementer 選的型別；
+解析成具體型別。**帶參數**的 spec 的參數（`Indexable[K, V]`）是**另一件事**：一個自由選的型別——每個 impl 固定
+一次、摺進 (型別, spec) 身分裡；沒有第三種由 implementer 選的型別（見下節）；
 唯有 `This` 是被逼定的 self-type，永非選擇。
 
 spec 的 method 分兩種：
@@ -175,48 +174,37 @@ spec 的 method 分兩種：
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
 **monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
 （**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑
-spec 的 **default body**——不需要 `#[dyn]`、也不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
+spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 
-spec 的成員不只有 method。一個 spec 可以宣告 **associated type**——`type Item`（也可加 bound，`type Item: Ord`）
-——一個由每個 impl 以 `type Item = int` 填入的型別。它由 **implementer 依函數關係決定**：每個 impl 只有一個 `Item`、
-絕不逐次使用時另選。在型別位置以**投影**引用它——`I.Item`，可鏈式成 `I.Item.Sub`。
+spec 承載**行為,別的都不承載**。它不宣告 **associated type**——由每個 impl 填入的型別 `type Item`,投影成
+`This.Item`——也不宣告 **associated value**——每個 impl 供給的編譯期常數,`BITS: int` 要求、`BITS := 32` 供給。
+兩者都不是這裡的成員種類,也都不是文法 derive 得出的語法:**皆被具名拒絕**。associated type 是由 **impl** 選定的
+輸出,所以要檢查一處 `This.Item` 的使用,必須先拿到 impl 才知道那個運算式的型別——型別往回流進推導。參數化的
+spec 把同一件事往前講:associated type 是每個 impl 一個輸出,參數則是每個引數一個 impl(`Indexable[K, V]`,見上)。
 
-這正是讓「迭代」這類單一輸出協定**良好定義**的關鍵：`for x in it` 只有**一個**元素型別，因為 `Iterator.Item` 每個
-impl 固定——而非逐次使用時另選，像帶參數的 `Iterable[T]` 會允許的那樣（那個替代方案是刻意被否決的）。對比很精確
-——**associated type** 是每個 impl 一個輸出（`Iterator`），**參數**是每個引數型別一個 impl（`Indexable[K]`，見上）。
+代價落在**單一輸出的協定**上。`Iterable[T]` 可以在不同 `T` 上有多個 impl,固定的 `Item` 不行,所以釘死元素型別
+的是 **coherence**——每個型別至多一個這種 impl,而 compiler 對其他每一組 (型別, spec) 本來就在檢查它。
 
-一個 spec 也可以要求 **associated value**——每個 impl 供給的一個編譯期值：`BITS: int` 要求它，impl 以
-`BITS := 32`（一個 **`val-bind`**）供給。它是摺疊後的常數，泛型端以 `T.BITS` 取用——是型別常數（見下）在 spec 層的
-形式。與 associated **function**（`fn max() -> This`，它會*執行*以產生值）不同，associated **value** 在編譯期被*摺疊*
-；一個由 spec 保證的常數用值形式，一個需計算的則用 function 形式。
-
-> **[not yet]** 這兩種成員都不存在。**associated type** 在宣告它的那個 `spec` 上就被拒絕——
-> _NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing here
-> binds one_——而 **associated value** 則在要供給它的那個 `impl` 上被拒絕,
-> _NotImplemented: an associated value binding `BITS := …` in an `impl`_。這裡的 `spec` 只宣告 method 簽名、沒有別
-> 的,這也是為什麼上面的 `Indexable[K]` 與下面帶固定 `Item` 的 `Iterator`,在這個編譯器裡根本寫不出來:兩者各需要一
-> 種它沒有的成員。
+每個 impl 一份的**常數**寫成普通的**型別常數**（見下）——一個型別給自己的值,沒有 spec 要求它。
 
 ## 型別常數（Type constants）
 
-一個**型別常數**是每型別的編譯期值，宣告在型別的 `impl` 裡、作為一個 **`val-bind`**——`NAME := <const-expr>`
-——並以 `Type.NAME` 讀取（在型別內是 `This.NAME`）。它的初始式是一個**常數運算式**——literal、另一個常數、或它們的
-摺疊算術——compiler **在編譯期直接代入**、不執行任何程式碼、**無副作用**（摺疊是隱式的、與 `const` 關鍵字無關，後者
-只標記一個防遮蔽的 binding）。因為建構就是一次普通的**呼叫**——`Point(x: 0, y: 0)`、**絕非**大括號語法——所以型別
-能給自己 canonical 值：`ORIGIN := Point(x: 0, y: 0)`，以 `Point.ORIGIN` 取用。身為編譯期常數，`int` 型別的那種**在
-任何需要編譯期常數之處都能用**——包括定長陣列的大小（`[byte; Buffer.SIZE]`，見 [Collections](../code/collections.zh-TW.md)）。
-可見性就是一般的 `pub` / private 旋鈕，如同 field 或 method。
+**型別常數**是每個型別一份的編譯期值,宣告在該型別的 `impl` 內、寫成 **`val-bind`**——`NAME := <const-expr>`
+——以 `Type.NAME` 讀取（型別內部用 `This.NAME`）。它的初始化式是**常數運算式**——字面量、其他常數,或它們摺疊後的
+算術——由編譯器在**編譯期代換**,不執行任何程式碼、也沒有副作用（摺疊是隱含的,與 `const` 關鍵字無關,後者只標記
+shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型別可以給自己正規值:`ORIGIN := Point(x: 0, y: 0)`,
+以 `Point.ORIGIN` 取用。身為編譯期常數,`int` 型的那種**可用於任何需要編譯期常數的位置**——包含固定陣列長度
+（`[byte; Buffer.SIZE]`,見 [Collection](../code/collections.zh-TW.md)）。可見性用一般的 `pub` / private。
 
-型別常數是 associated-value 機制（見上）的 **impl 端**：一個純粹的 `NAME := …` 是沒有 spec 要求的 `val-bind`，而一個
-spec 的 `BITS: int` 是同一個、被 spec *要求*的 `val-bind`。所以一個 spec 必須保證的「每型別的*值*」是一個
-**associated value**——`MAX: This` 被要求、每個 impl 供給 `MAX := …`、泛型端讀 `T.MAX`——**而非**無 receiver 的
-function。
+它與離開本章的 **associated value** 共用一條 production,而兩者的差別正是它留下來的理由:型別常數**不指向任何
+spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
+impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** **型別常數**就是它所對應的 associated value 那個尚未建置的 `val-bind`:`impl` 裡的 `BITS := 32` 會
-> 報 _NotImplemented: an associated value binding `BITS := …` in an `impl`_,不論有沒有某個 spec 要求它。所以
-> `Type.NAME` 什麼都指不到、`Point.ORIGIN` 宣告不出來,而一個本來要由型別常數供給的定長陣列大小,只能改寫成字面量。
+> **[not yet]** `impl` 內的 `NAME := 32` 會報 _NotImplemented: an associated value binding `BITS := …` in
+> an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
+> 改寫成 module 層的常數。
 
 ## 內建 spec（Built-in specs）
 
@@ -282,13 +270,13 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
 **total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
 
-**迭代。** 一個 **`Iterator`** 有一個 associated **`type Item`** 與 `next() -> Result[Item]`——`Left(v)` 是下一個
-元素，`Right(StopIteration)` 表示結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable`** 同樣有一個
-`type Item` 與 `iter()`、產生一個全新的、`Item` 相符的 `Iterator`。因為 `Item` 是 **associated type**——每個 impl
-固定、不是逐次使用時另選的參數——`for x in X` 只有**一個**元素型別：它需 `X: Iterable`、把 `x: X.Item` 綁到每個
-`Left`，**在 `Right(StopIteration)` 乾淨結束**，而**對任何其他 `Right(err)` 則 raise**——迭代中途的失敗絕不被靜默
-吞掉（要檢視就手動 `next()` 再 `guard`）。因為 `<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator`**、`Item = T`：
-`for v in ch` 會 drain 它，在乾淨關閉時結束、並把 producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，
-所以 **lazy adapters**（`map`、`filter`、`take`、`zip`…）就是實作 `Iterator` 的普通 stdlib 迭代器、可鏈式——每個回傳
-一個**具體 adapter 型別**（`map` 回傳 `Map[This, U]`、其 `Item = U`，存著來源與 closure），所以整條鏈全程
+**迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)` 表示
+結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的 `Iterator[T]`。
+元素型別由 **coherence** 釘死、而不是由某種成員種類：一個型別至多宣告**一個** `Iterable[T]` impl，所以
+`for x in X` 仍然只有**一個**元素型別——它需 `X: Iterable[T]`、把 `x: T` 綁到每個 `Left`，
+**在 `Right(StopIteration)` 乾淨結束**，而**對任何其他 `Right(err)` 則 raise**——迭代中途的失敗絕不被靜默
+吞掉（要檢視就手動 `next()` 再 `guard`）。因為 `<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator[T]`**：
+`for v in ch` 會 drain 它，在乾淨關閉時結束、並把 producer 的崩潰重新 raise。`Iterator[T]` 也 trivially 是
+`Iterable[T]`，所以 **lazy adapters**（`map`、`filter`、`take`、`zip`…）就是普通的 stdlib 迭代器、可鏈式——每個
+回傳一個**具體 adapter 型別**（`map` 回傳身為 `Iterator[U]` 的 `Map[This, U]`，存著來源與 closure），所以整條鏈全程
 **monomorphize**、不 box。`for mut x in X` 把每個元素綁成就地的 `mut`——僅當 `X` 為 `mut`。

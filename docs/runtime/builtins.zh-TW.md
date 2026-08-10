@@ -60,7 +60,7 @@
   hole 產生的文字相同。
 - `str(bytes: list[byte]) -> str` / `str(runes: list[rune]) -> str`——組出 `str`，並**驗證**不變式（合法 UTF-8、
   無內嵌 NUL）；非法序列 raise `EncodingError`。
-- `list[byte](s: str) -> list[byte]` / `list[rune](s: str) -> list[rune]`——把 `str` 拆成 octets 或 Unicode
+- `bytearray(s: str) -> list[byte]` / `runearray(s: str) -> list[rune]`——把 `str` 拆成 octets 或 Unicode
   code points。
 
 見 [Collection](../code/collections.zh-TW.md)。

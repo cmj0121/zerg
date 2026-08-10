@@ -15,11 +15,10 @@
 > 寫在它上一行的 `f := text.make` 會報 _module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條路
 > 上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
 >
-> **[not yet]** 型別引數只能**被推論**。在使用點顯式固定一個會被拒絕——`id[int](7)` 報 _NotImplemented: calling
-> index — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a
-> function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt_——因為一次呼叫的
-> callee 被 parse 成一個裸名字，index 運算式根本到不了呼叫那條路；三個看似無關的形式共用同一則拒絕就是這個
-> 緣故。從引數型別推論是做好的，也是今天實例化一個 generic 的唯一途徑。
+> **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
+> method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
+> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）。編譯器目前仍然接受它,所以尚未建置的是
+> 那個**拒絕**,而不是那個形式。型別引數從引數型別推論,是今天實例化一個 generic 的唯一途徑。
 >
 > **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被 parser 拒絕：
 > `f: fn(mut &int) = bump` 報 _expected `,`, found `&`_，而 `GRAMMAR` 明明推導出

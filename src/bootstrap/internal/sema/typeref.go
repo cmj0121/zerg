@@ -145,6 +145,9 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if tp, ok := c.typeParams[ref.Name]; ok {
 		return tp
 	}
+	if a := listAliasNamed(ref.Name); a != nil {
+		return a
+	}
 	if p := primitiveNamed(ref.Name); p != nil {
 		if len(ref.Args) != 0 {
 			c.errorf(ref.Span(), "type %q takes no type arguments", ref.Name)
@@ -296,6 +299,9 @@ func (c *checker) resolveTypeName(name string) types.Type {
 	if tp, ok := c.typeParams[name]; ok {
 		return tp
 	}
+	if a := listAliasNamed(name); a != nil {
+		return a
+	}
 	if p := primitiveNamed(name); p != nil {
 		return p
 	}
@@ -355,6 +361,20 @@ func (c *checker) typeArgs(elems []ast.Type) []types.Type {
 
 // refArgExprs returns a TypeRef's type-argument nodes (already typed as ast.Type).
 func refArgExprs(ref *ast.TypeRef) []ast.Type { return ref.Args }
+
+// listAliasNamed returns the list a built-in alias spells, or nil. `bytearray` IS
+// `list[byte]` and `runearray` IS `list[rune]` — the same type under a shorter name, not a
+// strong typedef (docs/core/types.md), so they answer the very type the spelled-out form
+// does and nothing downstream can tell the two apart.
+func listAliasNamed(name string) types.Type {
+	switch name {
+	case "bytearray":
+		return &types.List{Elem: types.Byte}
+	case "runearray":
+		return &types.List{Elem: types.Rune}
+	}
+	return nil
+}
 
 // primitiveNamed returns the primitive or fixed-width type a name spells, or nil.
 func primitiveNamed(name string) types.Type {

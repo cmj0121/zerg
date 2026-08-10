@@ -46,7 +46,7 @@ fn check_base(base: int) {
 # raises exactly when a positive literal is the one that does not fit.
 pub fn parse_int(s: str, base: int) -> int {
 	check_base(base)
-	b := list[byte](s)
+	b := bytearray(s)
 	n := b.len()
 	raise "strconv.parse_int: empty string" if n == 0
 	mut i := 0
@@ -76,7 +76,7 @@ pub fn parse_int(s: str, base: int) -> int {
 # value that fills the top bit, e.g. a 64-bit hex mask.
 pub fn parse_uint(s: str, base: int) -> uint {
 	check_base(base)
-	b := list[byte](s)
+	b := bytearray(s)
 	n := b.len()
 	raise "strconv.parse_uint: empty string" if n == 0
 	mut i := 0

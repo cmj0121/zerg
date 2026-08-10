@@ -23,6 +23,16 @@ import (
 func (e *emitter) strBridgeEmit(n *ast.Call) (string, bool) {
 	switch callee := n.Callee.(type) {
 	case *ast.Ident:
+		if _, shadowed := e.info.Refs[callee]; !shadowed && len(n.Args) == 1 {
+			// bytearray(s) / runearray(s): the same two bridges `list[byte](s)` and
+			// `list[rune](s)` spell below, under their own names.
+			switch callee.Name {
+			case "bytearray":
+				return fmt.Sprintf("zrt_str_bytes(%s)", e.expr(n.Args[0].Value)), true
+			case "runearray":
+				return fmt.Sprintf("zrt_str_runes(%s)", e.expr(n.Args[0].Value)), true
+			}
+		}
 		// str(bytes) / str(runes): a str from a byte/rune list; str(scalar): its display.
 		if callee.Name != "str" || len(n.Args) != 1 {
 			return "", false

@@ -401,6 +401,17 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return TList(elem)
 	}
 
+	# `bytearray` IS `list[byte]` and `runearray` IS `list[rune]` — a shorter name for the
+	# same type, interchangeable with the spelled-out form everywhere, and not a strong
+	# typedef (docs/core/types.md). They parse to the same node, so nothing downstream can
+	# tell which spelling a program used, which is the whole of the claim.
+	#
+	# They exist because a `str` is not indexable and the bridge out of one used to be
+	# written `bytearray(s)` — a TYPE with an argument, in expression position, which is the
+	# one thing the surface still needed a symbol table to read.
+	return TList(TByte) if name == "bytearray"
+	return TList(TRune) if name == "runearray"
+
 	# `Result[T]` is `Either[T, Err]` — the language says so (docs/code/errors.md), and the
 	# two spellings therefore parse to ONE type rather than to a special case beside it. The
 	# annotation used to be ERASED to its happy path, so a function declared `-> Result[int]`
@@ -1219,8 +1230,8 @@ pub fn is_init_name(name: str) -> bool {
 }
 
 fn strings_has_prefix(s: str, pre: str) -> bool {
-	b := list[byte](s)
-	q := list[byte](pre)
+	b := bytearray(s)
+	q := bytearray(pre)
 	return false if b.len() < q.len()
 	mut i := 0
 	for i < q.len() {
@@ -1397,7 +1408,7 @@ fn parse_discriminant(mut &p: Parser) -> int {
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
 # a type / enum-variant name versus a lowercase binding.
 fn is_pascal(s: str) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() == 0
 	v := int(b[0])
 	return v >= 65 and v <= 90
@@ -2549,7 +2560,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	raise "E235 NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Ident and t.lexeme == "f" and peek_kind(p, 1) == Cmd
 
 	if k == Ident {
-		# list[T](x) — a list-type conversion (e.g. list[byte](s))
+		# list[T](x) — a list-type conversion (e.g. bytearray(s))
 		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
 			p_advance(p) # 'list'
 			p_advance(p) # '['
@@ -2559,6 +2570,24 @@ fn parse_primary(mut &p: Parser) -> Expr {
 
 			raise "E260 `list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"E261 `list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+
+			return EConv(TList(elem), args[0], "list")
+		}
+
+		# `bytearray(s)` / `runearray(s)` — the str-to-list bridges, which are the SAME node
+		# `bytearray(s)` and `runearray(s)` produce. The name is read here rather than
+		# through the conversion table beside it because the table answers a scalar type and
+		# these two answer a list.
+		if (t.lexeme == "bytearray" or t.lexeme == "runearray") and peek_kind(p, 1) == LParen {
+			mut elem := TRune
+			if t.lexeme == "bytearray" {
+				elem = TByte
+			}
+			p_advance(p)
+			args := parse_call_args(p)
+
+			raise f"E272 `{t.lexeme}(…)` converts a VALUE and was given none — it is the str-to-list bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
+			raise f"E273 `{t.lexeme}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
 			return EConv(TList(elem), args[0], "list")
 		}
@@ -2876,7 +2905,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 # Every hole is wrapped in `str(…)`, which is `display()` for a scalar and identity for a
 # str, so a hole renders whatever it holds.
 fn fstr_expr(mut &p: Parser, t: Token) -> Expr {
-	src := list[byte](t.value)
+	src := bytearray(t.value)
 	n := src.len()
 	mut acc: Expr = ENil
 	mut have := false
@@ -2993,7 +3022,7 @@ fn fstr_text(raw: str) -> str {
 }
 
 fn fstr_unbrace(raw: str) -> str {
-	b := list[byte](raw)
+	b := bytearray(raw)
 	n := b.len()
 	mut out: list[byte] = []
 	mut i := 0
@@ -3042,7 +3071,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 # desugars in the PARSER, where no type exists yet. Dropping a `:04d` would print the wrong
 # text and say nothing, so each is refused by name instead.
 fn fstr_reject(hole: str) {
-	b := list[byte](hole)
+	b := bytearray(hole)
 	n := b.len()
 	mut depth := 0
 	mut i := 0

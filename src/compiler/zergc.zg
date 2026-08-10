@@ -896,6 +896,7 @@ fn cc_bin() -> str {
 		return name if b[i] == b'/'
 		i = i + 1
 	}
+
 	path := list[byte](env_or("PATH", ""))
 	mut seg: list[byte] = []
 	mut j := 0

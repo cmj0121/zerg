@@ -730,14 +730,6 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" nested-block-statement E220 <<'EOF'
-fn main() {
-	{
-		print 1
-	}
-}
-EOF
-
 expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
 	x: int

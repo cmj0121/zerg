@@ -10,7 +10,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `break if c` / `continue if c`        | `if c { break }` / `if c { continue }`                           |
 | `raise e if c`                        | `if c { raise e }`——同一個後綴 guard，用在第四種 diverge         |
 | `if x := e { … }`                     | 對 `e` 的 one-arm `match`——`x` 存在時才執行區塊                  |
-| `with e as y { … }`                   | `{ y := e; defer y 的 Scoped teardown; … }`(每條離開路徑都跑)    |
+| `with e as y { … }`                   | `{ y := e; … }`(block 自己的離開路徑已涵蓋)                      |
 | `f"…{x}…"`                            | 編譯期把各段 `str` 串接,每個洞 `x.display()`                     |
 | `f"{x!r}"` / `f"{x=}"`                | `f"{x.debug()}"` / 原文 `x=` 再接值                              |
 | `f"{x:spec}"`                         | 經 `Format` protocol 呼叫 `x.format(spec)`                       |
@@ -30,9 +30,8 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 **狀態。** 上表每一列皆可用，唯 f-string 的洞裡只有純 `{x}` 形式可用。**轉換**（`!r` / `!s` / `!a`）、
 **format spec**（`{x:.2f}`）與自述的 `f"{x=}"` 各自皆為 **[not yet]**,會被指名拒絕。**複合值**的洞（一個
 `struct`、`list` 或 `map`）同樣被拒,所以結構化渲染也是 **[not yet]**——見
-`str` 實作；**複合值**洞（`struct`、`list`、`map`）仍被拒絕，故結構化渲染為 **[not yet]**——見
-[格式化與文字](../runtime/format.zh-TW.md)。內插命令字面量 `` f`…` ``（屬文法、未列於此）同樣為 **[not yet]**。上表其餘各
-desugar 一如所寫。
+[格式化與文字](../runtime/format.zh-TW.md)。內插命令字面量 `` f`…` ``（屬文法、未列於此）同樣為 **[not yet]**。
+上表其餘各 desugar 一如所寫。
 
 ## 把它還原回去
 

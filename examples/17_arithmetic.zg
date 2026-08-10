@@ -93,8 +93,8 @@ fn main() {
 		"a zero divisor",
 		kind_of(
 			match guard { 7 / zero } {
-				Left(_)  => ValueError("did not raise")
-				Right(e) => e
+				Either.Left(_)  => ValueError("did not raise")
+				Either.Right(e) => e
 			}
 		),
 		"divzero"
@@ -103,8 +103,8 @@ fn main() {
 		"an overflow",
 		kind_of(
 			match guard { max + 1 } {
-				Left(_)  => ValueError("did not raise")
-				Right(e) => e
+				Either.Left(_)  => ValueError("did not raise")
+				Either.Right(e) => e
 			}
 		),
 		"overflow"

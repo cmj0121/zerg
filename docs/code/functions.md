@@ -8,7 +8,8 @@ A function is a **first-class value**: it has a type, and can be passed as an ar
 stored in a field, and bound to a variable. This holds **across modules** too — a function named through
 another module is an ordinary value: `f := other.helper` binds it, then `f(x)` calls it, exactly as for a
 local function. A **generic** function is **not first-class until instantiated**: the un-instantiated
-generic name is not itself a value — it becomes one only once its type arguments are fixed at a use site.
+generic name is not itself a value — it becomes one only once its type arguments are **inferred** at a
+use site.
 A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
 differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`
@@ -20,11 +21,11 @@ anonymous function.
 > `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path
 > never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
-> **[not yet]** Two of the three forms that share the indexed-callee shape are still unbuilt: a call through
-> a function VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. An explicit type
-> argument — `id[int](7)` — is built: the parser recovers it where the base and the bracket are both still in
-> hand, and a written argument on a name that is not generic is a checked rule with a place rather than a
-> silently swallowed bracket.
+> **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
+> VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
+> language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
+> bracket is always an index ([Grammar](../surface/grammar.md)). The compiler still accepts it, which is the
+> refusal that is unbuilt rather than the form.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
 > **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,

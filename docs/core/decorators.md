@@ -16,8 +16,8 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-`#[derive]` is the only decorator the compiler reads. Every other one — `#[dyn]`, `#[test]`,
-`#[sealed]`, the layout directives — is **[not yet]** and refused by name.
+`#[derive]` is the only decorator the compiler reads. Every other one — `#[test]`, `#[sealed]`, the
+layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
@@ -26,9 +26,6 @@ is never silently ignored. Each decorator binds to the declaration that follows 
   refusal, _NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and
   `Decode` are specified and unbuilt_. There is **no auto-derived `Object`**. A user spec can never be
   derived (`#[derive(MySpec)]` is a compile error). See **[Derive & Default Behavior](derive.md)**.
-- **`#[dyn]`** — on a generic `fn`. Compiles the generic to **one shared witness-table body** instead of
-  monomorphizing per type argument — trading zero-cost for smaller code, and letting the compiler cap
-  instantiation bloat. See **[Grammar](../surface/grammar.md)** (group 7).
 - **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
   excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
   fails the test (see [Modules, Packages & Programs](../runtime/package.md) on where tests live).
@@ -47,7 +44,7 @@ is a "not yet supported" **compile error**, never a silent no-op:
   [Values & Memory](memory.md)). **[not yet]**
 
 > **[deviation]** The compiler does not distinguish a **recognized** decorator from an **unknown** one. Every
-> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[dyn]`, `#[test]` and
+> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[test]` and
 > the misspelled `#[frobnicate]` all get the same sentence — _NotImplemented: the decorator `#[X]` — this
 > compiler reads `#[derive(…)]` and no other_. Every one of them is refused, so nothing is silently dropped
 > and nothing miscompiles; what is lost is the distinction this section and **Reserved** below are built on.

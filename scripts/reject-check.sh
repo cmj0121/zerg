@@ -3277,6 +3277,23 @@ fn main() {
 }
 EOF
 
+# THE STR BRIDGES UNDER THEIR OWN NAMES. `bytearray` is `list[byte]` and `runearray` is
+# `list[rune]`, so each converts exactly one value — a name that IS a type is a conversion,
+# not a constructor, and `[]` is what builds an empty list.
+reject a-bytearray-of-nothing E272 no-place <<'EOF'
+fn main() {
+	b := bytearray()
+	print b.len()
+}
+EOF
+
+reject a-bytearray-of-two-values E273 no-place <<'EOF'
+fn main() {
+	b := bytearray("a", "b")
+	print b.len()
+}
+EOF
+
 # the FIFTH sentence of `c_eq_says`, and the one its own comment did not know it had: the
 # helper said "three different sentences" while answering five, and the two it had not
 # counted were the two with no code. A comment cannot count a function's branches; a gate

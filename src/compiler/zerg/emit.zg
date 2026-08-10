@@ -632,9 +632,9 @@ fn c_skip_bool(b: bool) {
 	return
 }
 
-# c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
-# explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a bare value
-# picks the side its type matches. The sides of an Either differ (parse_type refuses
+# c_either_wrap injects a value into an Either. `Either.Left(v)` and `Either.Right(e)` say
+# which side explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a
+# bare value picks the side its type matches. The sides of an Either differ (parse_type refuses
 # `Either[T, T]`), which is what makes that unambiguous.
 fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
 	lt := c_either_left(want)
@@ -646,7 +646,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	# path below reports for it
 	c_check_ctor_arity(e)
 
-	side := c_ctor_side(e)
+	side := c_ctor_side(em, e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
 		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, inner, sb) + " }" if side == 0
@@ -656,7 +656,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	et := c_infer(em, e)
 
 	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
-	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Left(…)` or `Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
+	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Either.Left(…)` or `Either.Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
 
 	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, e, sb) + " }"
 }
@@ -664,12 +664,40 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 # c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
 # for anything that is not one. They are the only calls whose meaning depends on where they
 # are written, which is why they are read here rather than in c_call.
-fn c_ctor_side(e: Expr) -> int {
+# c_either_no_context is the one complaint both spellings earn. `Left` and `Right` name a
+# SIDE and have no type of their own, so they are read where the wanted type is known;
+# written where there is none, what is wrong is the missing context and not the form.
+#
+# It is one function because it is one rule — a code answers to a rule, and the qualified
+# and unqualified spellings of it are not two.
+fn c_either_no_context(what: str) {
+	raise f"E459 `{what}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected"
+}
+
+fn c_ctor_side(mut &em: Emitter, e: Expr) -> int {
 	return match e {
-		Expr.ECall(nm, args, _) => c_ctor_side_of(nm, args.len())
+		Expr.ECall(nm, args, _) => c_ctor_side_bare(em, nm, args.len())
 		Expr.EMethod(target, meth, args) => c_ctor_side_of(c_either_qual(target, meth), args.len())
 		_ => 0 - 1
 	}
+}
+
+# c_ctor_side_bare is the UNQUALIFIED spelling, and it is refused. `Left` and `Right` are
+# variants of `Either` and the rule about a variant does not have exceptions for a built-in:
+# an enum puts its own name into the value namespace and not its variants'. They were the
+# last two names in the language that read as themselves, and the reason was mechanical —
+# this compiler matched them by name because they are context-typed — rather than a decision
+# anybody had made.
+#
+# It still answers the side, so the program gets ONE finding about the spelling rather than
+# a second one about a value whose type could not be worked out.
+fn c_ctor_side_bare(mut &em: Emitter, nm: str, n: int) -> int {
+	side := c_ctor_side_of(nm, n)
+	if side >= 0 {
+		chk_at(em, "E384", f"`{nm}` is a side of an `Either`, and a variant is named through its type — write `Either.{nm}(…)`")
+	}
+
+	return side
 }
 
 # c_either_qual answers the side a QUALIFIED constructor names — `Either.Left(v)`, the form
@@ -4980,6 +5008,15 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	en := c_ident_name(target)
 	return c_enum_of(em, en, meth, args, sb) if en != "" and c_name_in(em.enum_names, en)
 
+	# `Either.Left(v)` written where nothing says WHICH Either. The target names a built-in
+	# type rather than a value, so inference answers nothing about it and this used to come
+	# out as "the method `Left` on a ?" — the same shape the enum line above was written for.
+	# The sides of an Either are context-typed, so the honest complaint is the missing
+	# context, and it is the one the unqualified spelling has always made.
+	if c_either_qual(target, meth) != "" {
+		c_either_no_context(f"{en}.{meth}")
+	}
+
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
@@ -5422,7 +5459,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
 		# and reaching here means there was no such place. Saying that is the difference
 		# between a form used wrongly and a form that does not exist.
-		raise f"E459 `{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
+		if c_ctor_side_of(name, args.len()) >= 0 {
+			c_either_no_context(name)
+		}
 
 		# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
 		# out of an int the way every conversion in this language builds its target — by

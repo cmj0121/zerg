@@ -142,8 +142,9 @@ program. It is written down because the dialect is a claim the project makes on 
 number in a compiler flag that no chapter states is one that drifts.
 
 The dialect is **C17**. `ZERG_CSTD` names another for a build that needs one — `c99` and `c11` are the
-others the runtime is written to compile under, and the build cache keys an object by dialect so two of
-them do not hand each other's objects back.
+others the runtime is written to compile under, and the build cache keys an object by **the dialect and
+the resolved `cc`** — the two inputs to a compile that the emitted C does not already stand for — so two
+dialects, or two compilers, do not hand each other's objects back.
 
 > **[not yet]** The **fallback** is not automatic. The intent is that a `cc` which cannot do C17 is
 > retreated from to C99; no probe for that is built, so the retreat is something a build **asks** for with

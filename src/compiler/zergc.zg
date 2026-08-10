@@ -639,7 +639,7 @@ fn file_key(path: str) -> str {
 # link_objs_argv links objects only — everything was compiled beforehand.
 fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 
 	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
@@ -699,11 +699,17 @@ fn reap(pids: list[int]) {
 # key is a hash of the C it emitted — which folds in its own source, everything it can see,
 # and the compiler that produced it, since a change to any of those changes the C.
 #
-# And of the DIALECT, which changes none of that and changes the object anyway. It is the
-# one input to `cc` that is not downstream of the C, so it is the one thing the C cannot
-# stand in for: without it, building the same program under c99 after building it under c17
-# is a cache hit that hands back the c17 objects and reports success — a dialect gate that
-# never compiled anything in the dialect it names.
+# And of the two inputs to `cc` that are not downstream of the C, so are the two things the
+# C cannot stand in for. The DIALECT: without it, building the same program under c99 after
+# building it under c17 is a cache hit that hands back the c17 objects and reports success —
+# a dialect gate that never compiled anything in the dialect it names. The COMPILER itself:
+# `cc` is a name, and the file it resolves to changes when $CC changes, when $PATH changes,
+# and when a toolchain is installed beside the old one — without it, switching compilers
+# reads back the objects the other one built.
+#
+# What goes in is the RESOLVED PATH (cc_bin), not the compiler's version string: a version
+# needs the child's stdout, and this runtime spawns a child without reading one back. So an
+# upgrade IN PLACE — same path, new build — is the case this key still cannot see.
 
 # cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
 # cannot be created is not fatal: the build carries on without one.
@@ -724,7 +730,7 @@ fn cache_path(key: str) -> str {
 # makes that far less likely. A cryptographic digest is the upgrade to make when the
 # standard library has one.
 fn unit_key(code: str) -> str {
-	b := list[byte](f"{cc_std()}\n{code}")
+	b := list[byte](f"{cc_bin()}\n{cc_std()}\n{code}")
 	mut h := 2166136261
 	mut i := 0
 	for i < b.len() {
@@ -868,6 +874,44 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 fn env_or(key: str, fallback: str) -> str {
 	return __zrt_getenv(key) if __zrt_has_env(key)
 	return fallback
+}
+
+# cc_bin is the C compiler this build invokes: $CC when set, else `cc`, RESOLVED against
+# $PATH so that what comes back names a FILE rather than a word. The resolution is what the
+# cache key needs — `cc` is one name for whatever is first on a path that changes between
+# machines, between shells, and between one toolchain install and the next, and an object
+# built by one of them is not an object built by another.
+#
+# A name that already carries a '/' is a path the caller chose and is returned as it stands.
+# A name that resolves to nothing is returned as it stands too: the spawn then fails and says
+# so, which is a better report than a key that lies about having looked.
+#
+# The scan is written out rather than reaching for `strings.split`, because this compiler
+# flattens every module into one namespace and importing one more would collide.
+fn cc_bin() -> str {
+	name := env_or("CC", "cc")
+	b := list[byte](name)
+	mut i := 0
+	for i < b.len() {
+		return name if b[i] == b'/'
+		i = i + 1
+	}
+	path := list[byte](env_or("PATH", ""))
+	mut seg: list[byte] = []
+	mut j := 0
+	for j <= path.len() {
+		if j == path.len() or path[j] == b':' {
+			if seg.len() > 0 {
+				cand := join_path(str(seg), name)
+				return cand if __zrt_exists(cand)
+			}
+			seg = []
+		} else {
+			seg.append(path[j])
+		}
+		j = j + 1
+	}
+	return name
 }
 
 # cc_std is the C dialect the emitted code is compiled with. C17 is the default because
@@ -1204,7 +1248,7 @@ fn cc_dialect(mut &argv: list[str]) {
 # program, so it has no entry to link against and no runtime to pull in yet.
 fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")
@@ -1219,7 +1263,7 @@ fn cc_object_argv(cpath: str, output: str) -> list[str] {
 fn cc_argv(cpath: str, output: str) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")

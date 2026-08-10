@@ -577,10 +577,11 @@ ahead of it (`error: E109 …`); a refusal that has not learned its place yet pr
 message alone, so the code is the first thing on the line either way.
 
 **A code exists when a gate pins it, and not before.** `scripts/refuse-check.sh` and
-`scripts/reject-check.sh` assert the code rather than the sentence, so a code with no case
-would be an identity nothing verifies — and a case with no code is one still pinned to
-prose. `scripts/error-codes-check.sh` holds the three lists to each other: what the compiler
-reports, what a gate pins, and what this table lists. Asking it that question is what found
+`scripts/reject-check.sh` assert the code rather than the sentence, and a `zerg` case that
+pins prose instead is a failure by name — otherwise a list that is mostly codes with a few
+sentences left in it looks finished from the outside. `scripts/error-codes-check.sh` holds
+the three lists to each other: what the compiler reports, what a gate pins, and what this
+table lists. Asking it that question is what found
 **thirteen rules no case had ever made fire**; they are the last section of
 `reject-check.sh`.
 
@@ -661,6 +662,16 @@ shipping compiler rather than a part of it (the line
 | `E259` | `…(…)` converts one value, and this gives …                                                 |
 | `E260` | `list[T](…)` converts a VALUE and was given none                                            |
 | `E261` | `list[T](…)` converts one value, and this gives …                                           |
+| `E262` | a match arm's guard goes before the `=>`                                                    |
+| `E263` | a parameter is `mut &` or nothing                                                           |
+| `E264` | a standalone `unsafe fn` declaration — **[not yet]**                                        |
+| `E265` | an associated type projection `….…` — **[not yet]**                                         |
+| `E266` | a value generic parameter `…: …` — **[not yet]**                                            |
+| `E267` | an import path is a string                                                                  |
+| `E268` | `…[…]` with no call after it — **[not yet]**                                                |
+| `E269` | an `if` EXPRESSION whose branch has more than one statement — **[not yet]**                 |
+| `E270` | a binding head in an `if` EXPRESSION — **[not yet]**                                        |
+| `E271` | `asm(…)` — **[not yet]**                                                                    |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |
@@ -784,7 +795,6 @@ shipping compiler rather than a part of it (the line
 | `E444` | the list method `…` — **[not yet]**                                                         |
 | `E445` | structural equality over a container — **[not yet]**                                        |
 | `E446` | a refcounted box `Ref(x)` / `deref(r)` — **[not yet]**                                      |
-| `E448` | an ordering `…` on a … comes from `Ord` — **[not yet]**                                     |
 | `E449` | rendering a … as text — **[not yet]**                                                       |
 | `E451` | `…` declares `…` twice                                                                      |
 | `E452` | `…` is part of a cycle of by-value declarations                                             |
@@ -793,6 +803,22 @@ shipping compiler rather than a part of it (the line
 | `E455` | `…(…)` converts a scalar, and … is not one                                                  |
 | `E456` | `…` is not a variant of `…`                                                                 |
 | `E457` | `…` is a variant of `…`, not of `…`                                                         |
+| `E458` | this catch-all arm makes the following arms unreachable                                     |
+| `E459` | `…(…)` says which side of an `Either` a value is, so it needs a declared one to be          |
+| `E460` | a … is an identity rather than a value, and the language gives it no equality               |
+| `E461` | a second `impl Into[…] for …` — **[not yet]**                                               |
+| `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                |
+| `E463` | `in` over anything but a list, a map or an error kind — **[not yet]**                       |
+| `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                   |
+| `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                       |
+| `E466` | the built-in `set` — **[not yet]**                                                          |
+| `E467` | non-exhaustive match: missing a catch-all `_` arm                                           |
+| `E468` | a `return` with no value, in a function declared to answer …                                |
+| `E469` | … is a `mut &`, and a function VALUE cannot carry one — **[not yet]**                       |
+| `E470` | `del …` on a CHANNEL — **[not yet]**                                                        |
+| `E471` | `…[…](…)` as a constructor — **[not yet]**                                                  |
+| `E472` | `nil` as a `match` pattern — **[not yet]**                                                  |
+| `E473` | a … may hold no value, so `…` has nothing to compare                                        |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

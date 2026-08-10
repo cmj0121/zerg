@@ -117,7 +117,8 @@ taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會�
 寫下來，是因為 dialect 是本專案在首頁上作出的宣稱，而一個沒有任何章節寫明的編譯器旗標數字，就是會漂走的那種數字。
 
 dialect 是 **C17**。`ZERG_CSTD` 為需要的建置指定另一個——`c99` 與 `c11` 是 runtime 另外兩個寫得能編譯的 dialect，
-而 build cache 以 dialect 作為 object 的 key 的一部分，兩者不會把彼此的 object 交給對方。
+而 build cache 以 **dialect 與解析後的 `cc`**——一次編譯中,emitted C 沒有替它們代言的那兩個輸入——作為
+object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 object 交給對方。
 
 > **[not yet]** **fallback 不是自動的**。原意是：一個做不到 C17 的 `cc` 應被退回 C99；但沒有建置任何探測，所以這個
 > 退回是建置用 `ZERG_CSTD=c99` **主動要求**的，而不是編譯器自己發現的。兩種 dialect 都在 CI 上編譯並執行。

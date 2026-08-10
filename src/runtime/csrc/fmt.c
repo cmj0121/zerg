@@ -9,9 +9,20 @@
  *
  * The spec grammar mirrors Python's `[[fill]align][sign][#][0][width][.prec][type]`.
  * What each field means is the type's own: numbers read sign / base / zero-pad /
- * width / precision; strings read width / align / precision (truncation). A spec the
- * MVP does not model is ignored rather than rejected — the f-string desugars at
- * compile time, so there is no runtime error channel.
+ * width / precision; strings read width / align / precision (truncation).
+ *
+ * A SPEC IS TEXT THE PROGRAM WROTE, and this file used to treat it as trusted. It is
+ * not, and the float path proved it: the pattern handed to snprintf was built out of
+ * the spec's own precision digits and trailing type letter, so `{x:.6s}` read a double
+ * as a `char *` and segfaulted, and `{x:.6n}` reached %n — a write through an argument
+ * that is not a pointer. The digits were the other half: width and precision
+ * accumulated into a `long` with no bound, which twenty digits overflow.
+ *
+ * So every field is BOUNDED here and every type letter is one of a fixed set. What is
+ * outside either ends the run by name (ValueError), the way an index or a key does —
+ * "ignored rather than rejected" was written when this file had no error channel, and
+ * zrt_abort_kind is one. The compiler is expected to refuse a bad spec before a program
+ * ever runs (docs/runtime/format.md); this is the floor under that, not a substitute.
  */
 #include "zergrt.h"
 
@@ -127,6 +138,37 @@ const char *zrt_display_bool(bool v) {
 
 /* --- spec parsing ----------------------------------------------------------- */
 
+/* The bounds. A width is a field a caller is asking to be allocated, and a precision is
+ * digits a caller is asking to be produced, so both are a size somebody else chose. The
+ * numbers are not sacred — they are large enough that no rendering a person writes meets
+ * them, and small enough that meeting one is a mistake rather than a memory request.
+ * ZRT_FMT_BODY is sized for the widest thing the float path can produce inside them: a
+ * DBL_MAX in `%f` is 309 integer digits, plus a sign, a point and ZRT_FMT_MAX_PREC. */
+#define ZRT_FMT_MAX_WIDTH 4096
+#define ZRT_FMT_MAX_PREC  100
+#define ZRT_FMT_BODY      512
+
+/* spec_digits reads a run of digits into a bounded value. It stops accumulating at the
+ * limit rather than wrapping, so the refusal below is reached with a number to name and
+ * the accumulation itself is never undefined. */
+static long spec_digits(const char *s, size_t *i, size_t n, long limit) {
+	long v = 0;
+	while (*i < n && s[*i] >= '0' && s[*i] <= '9') {
+		if (v <= limit) {
+			v = v * 10 + (s[(*i)] - '0');
+		}
+		(*i)++;
+	}
+	return v;
+}
+
+/* spec_reject ends the run naming the spec that could not be rendered. A spec is written
+ * in the source, so this is deterministic for a given program: the same run always ends
+ * the same way, which is what makes it a diagnosis rather than a crash. */
+_Noreturn static void spec_reject(const char *why) {
+	zrt_abort_kind(ZRT_ERR_VALUE, why);
+}
+
 typedef struct {
 	char fill;  /* pad char, default ' ' (or '0' when zero is set)            */
 	char align; /* '<' '>' '^' '=' or 0 when unset                           */
@@ -177,14 +219,15 @@ static void parse_spec(const char *s, fmt_spec *f) {
 		}
 		i++;
 	}
-	while (i < n && s[i] >= '0' && s[i] <= '9') {
-		f->width = f->width * 10 + (s[i++] - '0');
+	f->width = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH);
+	if (f->width > ZRT_FMT_MAX_WIDTH) {
+		spec_reject("ValueError: a format spec's width is past what this runtime pads to");
 	}
 	if (i < n && s[i] == '.') {
 		i++;
-		f->prec = 0;
-		while (i < n && s[i] >= '0' && s[i] <= '9') {
-			f->prec = f->prec * 10 + (s[i++] - '0');
+		f->prec = spec_digits(s, &i, n, ZRT_FMT_MAX_PREC);
+		if (f->prec > ZRT_FMT_MAX_PREC) {
+			spec_reject("ValueError: a format spec's precision is past what this runtime renders");
 		}
 	}
 	if (i < n) {
@@ -223,6 +266,12 @@ static const char *pad_field(const char *body, char align_default, const fmt_spe
 const char *zrt_fmt_int(int64_t v, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
+	/* The integer conversions, named rather than defaulted. This path builds its digits by
+	 * hand, so an unknown letter was never a memory hazard the way the float path's was —
+	 * it was a silent one, rendering `{n:q}` as though the `q` had not been written. */
+	if (f.type != 0 && f.type != 'b' && f.type != 'o' && f.type != 'x' && f.type != 'X' && f.type != 'c' && f.type != 'd') {
+		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
+	}
 
 	if (f.type == 'c') {
 		char cb[2] = {(char)v, '\0'};
@@ -334,9 +383,16 @@ const char *zrt_fmt_float(double v, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
 	char type = f.type ? f.type : 'g';
+	/* THE TYPE LETTER IS A CONVERSION, and the pattern below is a format string. Anything
+	 * outside this set is a different conversion applied to a `double`: `%s` reads it as a
+	 * pointer, `%n` writes through it. Neither is a rendering, and neither is a crash worth
+	 * having when the letter is right there to check. */
+	if (type != 'e' && type != 'E' && type != 'f' && type != 'F' && type != 'g' && type != 'G') {
+		spec_reject("ValueError: a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another");
+	}
 	long prec = f.prec >= 0 ? f.prec : 6;
 	char pat[16];
-	char body[64];
+	char body[ZRT_FMT_BODY];
 	if (f.sign == '+' || f.sign == ' ') {
 		snprintf(pat, sizeof(pat), "%%%c.%ld%c", f.sign, prec, type);
 	} else {
@@ -368,6 +424,9 @@ const char *zrt_fmt_str(const char *s, const char *spec) {
 	}
 	fmt_spec f;
 	parse_spec(spec, &f);
+	if (f.type != 0 && f.type != 's') {
+		spec_reject("ValueError: a str renders as `s`, and a format spec asked for another");
+	}
 	size_t len = strlen(s);
 	if (f.prec >= 0 && (size_t)f.prec < len) {
 		len = (size_t)f.prec; /* precision truncates a string */

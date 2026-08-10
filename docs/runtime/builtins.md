@@ -64,7 +64,7 @@ a malformed string and `OverflowError` on an out-of-range value. Demote the fail
   (`str(42)` → `"42"`), the same text `print` and an f-string hole produce.
 - `str(bytes: list[byte]) -> str` / `str(runes: list[rune]) -> str` — build a `str`, **validating** the
   invariant (valid UTF-8, no embedded NUL); an invalid sequence raises `EncodingError`.
-- `list[byte](s: str) -> list[byte]` / `list[rune](s: str) -> list[rune]` — decode a `str` to its octets
+- `bytearray(s: str) -> list[byte]` / `runearray(s: str) -> list[rune]` — decode a `str` to its octets
   or its Unicode code points.
 
 See [Collections](../code/collections.md).

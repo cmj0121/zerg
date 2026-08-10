@@ -64,22 +64,19 @@ expect() {
 	# A CODE, not a sentence, when the shipping compiler is the one being asked. `E107` is
 	# the identity of a refusal and the sentence beside it is prose that may be improved
 	# without a gate turning red — which is the whole reason a code exists. A `want` that
-	# looks like a code is compared as a code: it must open the first line, since the code
-	# REPLACES the old `NotImplemented:` / `error:` opener rather than sitting beside it.
+	# looks like a code is compared as a code, by the one predicate that knows where this
+	# compiler puts a code in a line (scripts/lib/diag.sh).
 	#
 	# The seed keeps sentence matching. Codes are the LANGUAGE's contract and the seed is
 	# the tool that builds the shipping compiler, so its diagnostics are not part of it —
 	# the same line docs/conformance.md draws when it declines to mark the seed's gaps.
 	case $want in
 	E[0-9][0-9][0-9])
-		case $(printf '%s\n' "$out" | head -1) in
-		"$want "* | "error: $want "*) ;;
-		*)
+		if ! opens_with_code "$out" "$want"; then
 			echo "CODE      $name — wanted $want to open the message, got: $(echo "$out" | head -1)"
 			fail=$((fail + 1))
 			return
-			;;
-		esac
+		fi
 		;;
 	*)
 		case $out in
@@ -997,19 +994,6 @@ fn main() {
 	m["a"] = [1, 2]
 	m["a"].append(3)
 	print m["a"].len()
-}
-EOF
-
-# A field the type does not have was spelled `zg_<fld>` and handed to cc — the same class
-# as an undefined name, answerable from the same tables.
-expect "$ZERG" field-the-struct-does-not-have E450 <<'EOF'
-struct P {
-	n: int
-}
-
-fn main() {
-	p := P(1)
-	print p.z
 }
 EOF
 

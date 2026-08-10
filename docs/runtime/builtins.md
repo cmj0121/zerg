@@ -58,6 +58,13 @@ loses range), so a conversion is checked, not silent. See [Types](../core/types.
 a malformed string and `OverflowError` on an out-of-range value. Demote the failure with
 `guard { int(s) } ?? default`. No other target parses (`bool(s)` / `byte(s)` are rejected).
 
+**The text each accepts is the language's own literal**, and nothing else. `float(s)` reads digits, an
+optional `.` with digits on both sides, and an optional exponent ([`GRAMMAR#float-lit`](../../GRAMMAR)) —
+a bare run of digits too, since `float(12)` is a legal conversion and `float("12")` is the same value read
+from text. What it does **not** read is anything the language never describes: a hexadecimal float
+(`0x1p3`), `inf`, `nan`, or a decimal separator that depends on the host's locale. Handing the text to a C
+library and taking whatever it accepted is how a conversion comes to have a grammar nobody wrote down.
+
 ## `str` ⇄ `list` bridges
 
 - `str(x: T) -> str` where `T` is a **scalar** — render the value's built-in `display()` as text

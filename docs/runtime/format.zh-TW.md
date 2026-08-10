@@ -39,8 +39,9 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
   > **spec 是程式自己寫的文字,而它的每一個欄位都有界。** `type` 字母對每一種渲染都是**封閉集合**——float 取
   > `e E f F g G`，int 取 `b o x X c d`——其中 `c` 把 int 當作它指名的**碼位**渲染,並拒絕任何 `str` 裝不下的
   > 碼位——`str` 取 `s`，而 `width` 與 `precision` 有實作上限
-  > ([一致性](../conformance.zh-TW.md))。落在這兩者之外的 spec 會被拒絕：能在編譯期拒的由編譯器拒，程式仍然
-  > 走到的則由 runtime 以 `ValueError` 拒。這不是修飾。那個字母原本會被拼進 C 格式器自己的 pattern，所以
+  > ([一致性](../conformance.zh-TW.md))。落在這兩者之外的 spec 會被指名拒絕為 `ValueError`。今天做這件事的是
+  > **runtime**:spec 這個形式本身在這個實作裡是 `[not yet]`,所以會去檢查它的那個編譯器,正是不建置它的那
+  > 一個。這不是修飾。那個字母原本會被拼進 C 格式器自己的 pattern，所以
   > `{x:.6s}` 會把一個 float 用 `%s` 渲染——把數字當指標讀——而 `{x:.6n}` 會走到 `%n`，那是**寫**穿它的引數。
   > **[implementation-defined]** 浮點渲染——預設的 `%g` 式（6 位有效數字）以及 `NaN`、`Inf`／`-Inf`、`-0.0` 的
   > 拼法——規格不釘定；conforming 實作各自載明。切勿依賴確切的浮點拼法。

@@ -1103,3 +1103,100 @@ static void prog(void) {
 
 int main(void) { return zrt_sched_main_nil(prog); }
 `
+
+// TestRefcountIsAtomic hammers Ref headers from real pthreads and asserts the counts they
+// land on. A `spawn` hands a `Ref[T]` — and, since S2, every managed `str` — to a coroutine
+// another worker thread may run, so two threads reach the same header.
+//
+// It asserts the COUNT rather than waiting for a sanitizer to catch the use-after-free a
+// lost update eventually causes: a wrong number is deterministic where a timing window is
+// not. The shape is many SHORT races rather than one long one, which is what makes it a
+// gate — against the non-atomic count, ten cells of two thousand rounds each detects the bug
+// 40 times out of 40, while a single cell of two hundred thousand missed it 3 times in 40.
+// A probe that passes on broken code one run in thirteen is not one.
+func TestRefcountIsAtomic(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	driver := filepath.Join(dir, "rc_race.c")
+	if err := os.WriteFile(driver, []byte(refcountRaceC), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, "rc_race.bin")
+	args := append([]string{"-std=c11", "-I", dir, "-pthread", "-o", bin, driver}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(bin).Output()
+	if err != nil {
+		t.Fatalf("rc race run failed: %v\n%s", err, out)
+	}
+	const want = "retain-balance=ok\nimmortal=ok\ndrop-once=ok\n"
+	if string(out) != want {
+		t.Fatalf("refcount race = %q, want %q — a lost update means the count is not atomic", out, want)
+	}
+}
+
+// refcountRaceC races THREADS threads over CELLS cells, each thread balancing every retain
+// with a release, so a correct count returns to exactly 1 and no drop has run. It then
+// checks the two things the fast path must keep: an immortal cell is never counted or
+// freed, and the last release drops each cell exactly once.
+const refcountRaceC = `
+#include "zergrt.h"
+#include <pthread.h>
+#include <stdio.h>
+
+#define THREADS 4
+#define CELLS   10
+#define ROUNDS  2000
+
+static int g_drops;
+static void count_drop(void *payload) { (void)payload; g_drops++; }
+
+static void *hammer(void *arg) {
+    void *ref = arg;
+    for (int i = 0; i < ROUNDS; i++) {
+        zrt_retain(ref);
+        zrt_release(ref);
+    }
+    return NULL;
+}
+
+/* Shaped like the cell the BACKEND emits for a string literal — both emitters write a
+ * struct of a zrt_ref_hdr followed by the bytes, brace-initialized with the sentinel — so
+ * what is hammered here is the layout that actually exists, not a header on its own. */
+static struct { zrt_ref_hdr h; char b[8]; } g_immortal = {{ZRT_RC_IMMORTAL, NULL}, {0}};
+
+int main(void) {
+    pthread_t th[THREADS];
+
+    /* Many short races rather than one long one: each cell is a fresh window, and a lost
+     * update anywhere leaves that cell off 1. */
+    void *cells[CELLS];
+    for (int c = 0; c < CELLS; c++) { cells[c] = zrt_ref_alloc(sizeof(int), count_drop); }
+    for (int c = 0; c < CELLS; c++) {
+        for (int i = 0; i < THREADS; i++) { pthread_create(&th[i], NULL, hammer, cells[c]); }
+        for (int i = 0; i < THREADS; i++) { pthread_join(th[i], NULL); }
+    }
+
+    int balanced = (g_drops == 0);
+    for (int c = 0; c < CELLS; c++) { balanced = balanced && ((zrt_ref_hdr *)cells[c])->rc == 1; }
+    printf("retain-balance=%s\n", balanced ? "ok" : "LOST");
+
+    for (int i = 0; i < THREADS; i++) { pthread_create(&th[i], NULL, hammer, &g_immortal); }
+    for (int i = 0; i < THREADS; i++) { pthread_join(th[i], NULL); }
+    printf("immortal=%s\n", g_immortal.h.rc == ZRT_RC_IMMORTAL ? "ok" : "TOUCHED");
+
+    for (int c = 0; c < CELLS; c++) { zrt_release(cells[c]); }
+    printf("drop-once=%s\n", g_drops == CELLS ? "ok" : "WRONG");
+    return 0;
+}
+`

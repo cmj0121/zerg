@@ -126,7 +126,7 @@ that does not fit its position is refused, and the fix is the **written** conver
 
 **A carrier does not end a position — it moves it one level in.** Where the declared type is a `T?`, a
 `Result[T]` or an `Either[X, Y]`, what meets a value is the **payload**, and the payload is the same
-position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Left(e)` puts it at
+position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Either.Left(e)` puts it at
 the `return`'s. Every rule below reads `T` there, never the wrapper.
 
 The list grew one silent miscompile at a time — each position the compiler had not yet been told about

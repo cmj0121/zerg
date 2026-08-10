@@ -2682,7 +2682,7 @@ EOF
 
 reject str-into-a-result-left E338 "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> Result[int] {
-	return Left("hi")
+	return Either.Left("hi")
 }
 
 fn main() {
@@ -2692,7 +2692,7 @@ EOF
 
 reject int-into-an-either-right E338 "this function's answer is str, and this gives int" <<'EOF'
 fn f() -> Either[int, str] {
-	return Right(7)
+	return Either.Right(7)
 }
 
 fn main() {
@@ -3379,14 +3379,30 @@ fn main() {
 }
 EOF
 
+# AND THE BUILT-IN IS NOT AN EXCEPTION. `Left` and `Right` are variants of `Either`, and
+# they were the last two names in this language that read as themselves — for a mechanical
+# reason rather than a decided one: they are context-typed, so this compiler matched them by
+# name instead of resolving them through their type.
+reject a-bare-either-side E384 <<'EOF'
+fn f(n: int) -> Either[int, str] {
+	return Right("negative") if n < 0
+
+	return Either.Left(n)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # the FIFTH sentence of `c_eq_says`, and the one its own comment did not know it had: the
 # helper said "three different sentences" while answering five, and the two it had not
 # counted were the two with no code. A comment cannot count a function's branches; a gate
 # that asks which codes nothing provokes can.
 reject equality-on-a-carrier E473 <<'EOF'
 fn main() {
-	a: Either[int, str] = Left(1)
-	b: Either[int, str] = Left(2)
+	a: Either[int, str] = Either.Left(1)
+	b: Either[int, str] = Either.Left(2)
 	if a == b {
 		print 1
 	}

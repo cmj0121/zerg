@@ -399,7 +399,7 @@ enum E {
 
 fn main() {
 	e := E.A(7)
-	x := match e { A(v) => v  B => 0 }
+	x := match e { E.A(v) => v  E.B => 0 }
 	print x
 }
 EOF
@@ -1569,7 +1569,7 @@ enum Shape {
 
 fn area(s: Shape) -> int {
 	return match s {
-		Line(n, m) => n
+		Shape.Line(n, m) => n
 		_          => 0
 	}
 }
@@ -1599,7 +1599,7 @@ enum Shape {
 
 fn area(s: Shape) -> int {
 	return match s {
-		Line(n) => n
+		Shape.Line(n) => n
 		_       => 0
 	}
 }
@@ -1767,7 +1767,7 @@ enum E {
 fn main() {
 	e := A(7)
 	print(match e {
-		A(this) => this
+		E.A(this) => this
 		_ => 0
 	})
 }
@@ -3340,6 +3340,26 @@ reject a-bytearray-of-two-values E273 no-place <<'EOF'
 fn main() {
 	b := bytearray("a", "b")
 	print b.len()
+}
+EOF
+
+# A BARE VARIANT IN A PATTERN was read as a constructor because it started with a capital,
+# which made an arm's meaning a naming convention: rename a binding `Value` to `value` and
+# the arm stops matching a variant and starts binding the subject. The other direction is the
+# one that keeps a person up — an enum that GAINS a variant silently turns an existing
+# binding arm into a constructor one, and nothing about the program changed.
+reject a-bare-variant-pattern E274 no-place seed-gap <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.Red
+	print match c {
+		Red   => "r"
+		Green => "g"
+	}
 }
 EOF
 

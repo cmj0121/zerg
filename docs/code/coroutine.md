@@ -436,8 +436,8 @@ fn counter(inbox: <-chan[Cmd]) {
 
     for cmd in inbox {               # drains until the last sender leaves
         n = match cmd {              # every write to the state is this one assignment
-            Add(d)   => n + d        # the write happens inside the owner
-            Get(rep) => answer(rep, n)
+            Cmd.Add(d)   => n + d    # the write happens inside the owner
+            Cmd.Get(rep) => answer(rep, n)
         }
     }
 }

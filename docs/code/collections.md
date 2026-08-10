@@ -83,7 +83,7 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
 - **`x in xs` / `x in s` / `k in m`** → `bool`; on a `mut` collection **`xs[i] = v`** sets in place. A list
   is **scanned** and a map **hashes** — same question, different cost — and the value looked for meets the
   element type like a value entering any other [typed position](../core/types.md#typed-positions), so
-  `72 in list[byte](…)` is a byte.
+  `72 in bytearray(…)` is a byte.
 
 ```text
 first := xs[0]                 # aborts if empty
@@ -192,6 +192,13 @@ of the rules already stated for `list`:
   at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but
   can **never grow or shrink** — the size is in the type; a plain `a` is frozen.
 - **Length** — `a.len()` is `N`, itself a compile-time constant.
+- **In a signature** — a function is generic over the length through a **value generic**,
+  `fn sum[N: int](xs: [int; N])`, with `N` inferred from the argument and never written at the call site.
+
+  > **[not yet]** A value parameter is refused — _NotImplemented: a value generic parameter `N: int`_ — so a
+  > function today takes one concrete length (`[int; 4]`) and nothing else, and a routine over arbitrary
+  > lengths takes a `list[T]` instead.
+
 - **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a` is
   [not yet]** for every element type, POD included), and derives **element-wise**: an array derives `Eq` / `Ord`
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
@@ -203,8 +210,12 @@ of the rules already stated for `list`:
 ## Strings & bytes
 
 `str` is a **distinct immutable primitive**, not a collection — it iterates as `rune` and is **not
-indexable**. Bridge through **`list[byte]`** (raw bytes, may hold a NUL) or **`list[rune]`** (code points):
-build a string by collecting into a `list` and converting with **`str(...)`**, which **validates** the
+indexable**. Bridge through **`bytearray(s)`** (raw bytes, may hold a NUL) or **`runearray(s)`** (code
+points). Each names a list rather than a new type: **`bytearray` IS `list[byte]`** and **`runearray` IS
+`list[rune]`** — interchangeable with the spelled-out form in every position, and **not** a strong typedef
+(`type X = Y`, [Types](../core/types.md)). The set is **closed** at these two. Going the other way, build a
+string by collecting into a `list` and converting with
+**`str(...)`**, which **validates** the
 `str` invariant (valid UTF-8 from bytes, no embedded NUL) and **raises** on violation — for untrusted
 input, `guard { str(bytes) }` demotes that to a `Result[str]` (the checked path from the error model; no
 separate constructor). Editing text always yields a **new** `str`.

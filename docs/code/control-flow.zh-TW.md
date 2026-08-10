@@ -39,7 +39,7 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 即 **while** 形式——當 `cond`（一個 `bool`）成立時反覆執行。**沒有 `while` 關鍵字**（裸 `for cond` 就是 while 迴圈）、
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
-要走 byte 就用 `list[byte](s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
+要走 byte 就用 `bytearray(s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
 **`v in range`** 測試成員關係（`x in 0..n` → `bool`）是 **[not yet]**——這個形式會被指名拒絕——把 **range 當成值**
 用在別處也一樣；range 今天只存在於「`for` 走訪的東西」與「`match` arm 包含的東西」裡。
 
@@ -104,9 +104,9 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 
 ```text
 msg := match ev {
-    Click(p)  => render(p)
-    Scroll(d) => scroll(d)
-    _         => nil
+    Event.Click(p)  => render(p)
+    Event.Scroll(d) => scroll(d)
+    _               => nil
 }
 ```
 

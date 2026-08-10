@@ -477,26 +477,35 @@ or-pattern 都等語言層面的工作。
 剛好相反——它會插入沒有人寫過的斷行，也會拿掉併行後的清單不再需要的那個 token；而 `F406` 寫的是
 一整行沒有人寫過的東西。
 
-## E1xx–E4xx — 編譯錯誤
+## E1xx–E5xx — 編譯錯誤
 
 這些不是建議。撞上其中任何一條的程式不會建置成功，所以每一條都是**編譯錯誤**、建置會停下來。
 它們帶代碼,是因為代碼是一條規則的**穩定身分**,而句子不是:散文會被改得更好,而釘住句子的 gate
 會因此變紅。代碼依**回報它的階段**分段,那也是一次建置遇到它們的順序:
 
-| 區段   | 階段 | 回報什麼                                |
-| ------ | ---- | --------------------------------------- |
-| `E1xx` | 詞法 | 不是 Zerg token 的文字                  |
-| `E2xx` | 剖析 | 不構成 Zerg 形式的 token                |
-| `E3xx` | 檢查 | 形式成立、但意思兜不攏                  |
-| `E4xx` | 產出 | 這個編譯器不會下放的形式,含 `[not yet]` |
+| 區段   | 階段 | 回報什麼                                      |
+| ------ | ---- | --------------------------------------------- |
+| `E1xx` | 詞法 | 不是 Zerg token 的文字                        |
+| `E2xx` | 剖析 | 不構成 Zerg 形式的 token                      |
+| `E3xx` | 檢查 | 形式成立、但意思兜不攏                        |
+| `E4xx` | 產出 | 這個編譯器不會下放的形式,含 `[not yet]`       |
+| `E5xx` | 建置 | 程式作為一組檔案,那是單一檔案的文字回答不了的 |
+
+`E5xx` 是唯一不落在那個順序裡的一段。一次建置在詞法分析被 import 指到的檔案之前就先解析 import,
+並在一切都產出之後才去找 `fn main`,所以驅動器自己的發現是把另外四段夾在中間,而不是坐在其中兩段之間。
 
 代碼放在**訊息的最前面**、句子之前:`E109 invalid escape in a rune literal`。當一則診斷帶有位置時,
 renderer 的 `error:` 會開在它前面(`error: E109 …`);還沒學會位置的拒絕則單獨印訊息——兩種情況下,
 代碼都是那一行的第一個東西。
 
-**代碼在 gate 釘住它時才存在,不會更早。** `scripts/refuse-check.sh` 對每一個做得到的案例都改以代碼
-而非句子斷言,所以「有代碼卻沒有案例」會是一個沒有人驗證的身分,而「有案例卻沒有代碼」是還釘在散文上的那些。
-seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯器的工具、不是它的一部分
+**代碼在 gate 釘住它時才存在,不會更早。** `scripts/refuse-check.sh` 與 `scripts/reject-check.sh`
+都改以代碼而非句子斷言,所以「有代碼卻沒有案例」會是一個沒有人驗證的身分,而「有案例卻沒有代碼」是還釘在
+散文上的那些。`scripts/error-codes-check.sh` 把三份清單互相拉住:編譯器回報了什麼、哪個 gate 釘住它、
+以及這張表列了什麼。問它這個問題,問出了**十三條從來沒有任何案例讓它發火的規則**;它們就放在
+`reject-check.sh` 的最後一節。
+
+一個 reject 案例只有在數個案例共用同一個代碼時才另外留下**句子**,因為那時每個案例證明的是規則指名了哪些值。
+seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯器的工具、不是它的一部分
 (這條線[一致性](../conformance.zh-TW.md)在拒絕標記 seed 的缺口時就畫過)。
 
 | 代碼   | 規則                                                                                                  |
@@ -514,10 +523,6 @@ seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯�
 | `E201` | `close` 是關鍵字,不是 select arm head                                                                 |
 | `E202` | 沒有 arm 的 select——它等不到任何東西                                                                  |
 | `E203` | 不是 send、receive 或 `_` 的 select arm head                                                          |
-| `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
-| `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
-| `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |
-| `E404` | optional 的 channel——`nil` 會同時是值與結束                                                           |
 | `E204` | expected `…`, found `…`                                                                               |
 | `E205` | expected a newline or `;` to separate statements, found `…`                                           |
 | `E206` | `Either[…, …]` has the same type on both sides                                                        |
@@ -528,7 +533,7 @@ seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯�
 | `E211` | NotImplemented                                                                                        |
 | `E212` | NotImplemented                                                                                        |
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
-| `E214` | enum `…` carries a payload, so its tag is opaque                                                      |
+| `E214` | 在 variant 帶 payload 的 enum 上寫判別值 `… = …`——它的 tag 是不透明的                                 |
 | `E215` | NotImplemented                                                                                        |
 | `E216` | NotImplemented                                                                                        |
 | `E217` | NotImplemented                                                                                        |
@@ -553,9 +558,116 @@ seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯�
 | `E238` | NotImplemented                                                                                        |
 | `E239` | NotImplemented                                                                                        |
 | `E240` | NotImplemented                                                                                        |
+| `E241` |                                                                                                       |
+| `E242` |                                                                                                       |
+| `E243` |                                                                                                       |
+| `E244` | 這個程式的巢狀超過 … 層                                                                               |
+| `E245` | `…` 是保留字,不能用來命名…                                                                            |
+| `E246` | tuple 型別要有兩個以上的元素                                                                          |
+| `E247` | `pub import` 不是一個形式                                                                             |
+| `E248` | `pub` 不放在 `init()` 上                                                                              |
+| `E249` | `pub` 不放在 `impl` 區塊上                                                                            |
+| `E250` | decorator 領在宣告前面、`pub` 坐在它裡面:寫 `#[…] pub fn …`,不是 `pub #[…]`                           |
+| `E251` | 自由函式不會是 `mut fn`                                                                               |
+| `E252` | `pub` 不放在 `unsafe { … }` 群組上                                                                    |
+| `E253` | module 層的 `unsafe { … }` 群組不巢狀                                                                 |
+| `E254` | module 層的 `unsafe { … }` 群組裝的是宣告                                                             |
+| `E255` | `pub` 綁在一個宣告上,而語句沒有宣告                                                                   |
+| `E256` | 這個 module 層的 `unsafe { … }` 群組沒有被閉合                                                        |
+| `E257` | `…` 是保留字,不能用來命名一個繫結                                                                     |
+| `E258` | `…(…)` 轉換一個值,而這裡一個也沒給                                                                    |
+| `E259` | `…(…)` 轉換一個值,而這裡給了 …                                                                        |
+| `E260` | `list[T](…)` 轉換一個值,而這裡一個也沒給                                                              |
+| `E261` | `list[T](…)` 轉換一個值,而這裡給了 …                                                                  |
+| `E301` | `…` 不是 module `…` 的公開成員                                                                        |
+| `E302` | `…` 不是一個位置,而賦值需要一個                                                                       |
+| `E303` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |
 | `E304` | NotImplemented                                                                                        |
+| `E305` | 不能對 `…` 賦值:它是 module 繫結,而最上層是不可變的                                                   |
+| `E306` | 不能對 `this` 賦值:方法的接收者是一份複本,寫穿它的形式是 `mut fn`                                     |
+| `E307` | 不能對 `…` 賦值:它是不可變的                                                                          |
+| `E308` | 不能穿過 `…` 賦值:它是不可變的                                                                        |
+| `E309` | `…` 的參數 `…` 是 `mut &`,不能有預設值                                                                |
+| `E310` | `…` 的 `…` 預設值是 …,而參數是 …                                                                      |
+| `E311` | `…` 帶 …,而這裡 … …                                                                                   |
+| `E312` | `…` 的第 … 個引數是 `mut &`,不能跨過 `…`:借用不可被捕捉                                               |
+| `E313` | 不能穿過 … 儲存                                                                                       |
+| `E314` | 沒有名為 `…` 的 spec                                                                                  |
+| `E315` | `…` 由 … 參數化,而這個 `impl` 給了 … 個型別引數                                                       |
+| `E316` | `…` 擴充 `…`,而這個程式裡沒有任何宣告用這個名字宣告 spec                                              |
+| `E317` | `….…` 不符合 `…` 的要求:…                                                                             |
+| `E318` | `…` 沒有實作 `…`,而 `…` 要求它                                                                        |
+| `E319` | 整數字面量 `…` 裝不進 `int`                                                                           |
+| `E320` | `str` 不可索引                                                                                        |
+| `E321` | `if` 運算式只回答一個型別,而它的分支給了 … 與 …                                                       |
+| `E322` | `match` 只回答一個型別,而它的 arm 給了 … 與 …                                                         |
+| `E323` | … 借用 …,那是一個值而不是一個位置                                                                     |
+| `E324` | … 寫回 `this`,而外圍方法以值持有它的接收者                                                            |
+| `E325` | … 寫回 `…`,而它不是 `mut`                                                                             |
+| `E326` | `…` 在同一次呼叫裡被交給 `…` 的兩個 `mut &` 參數                                                      |
+| `E327` | `…` 接受 …,而這裡給了 …                                                                               |
+| `E328` | `…` 需要 …,而這裡給了 …                                                                               |
+| `E329` | 這個 list 字面量的第 … 個元素是 …,而這裡給了 …                                                        |
+| `E330` | `…` 不是一個 … 裝得下的值                                                                             |
+| `E331` | 這裡除以常數 `0`                                                                                      |
+| `E332` | 這個運算式的值超過 `int` 裝得下的範圍,所以無法拿去對 … 衡量                                           |
+| `E333` | 這個函式的答案是 …,而這裡給了 …                                                                       |
+| `E334` | 繫結 `…` 標註為 `…`,而這個程式裡沒有宣告這個名字的型別                                                |
+| `E335` | 不能把 … 綁到 … 的繫結:`…`                                                                            |
+| `E336` | 繫結 `…` 給的是 …,它本身沒有型別                                                                      |
+| `E337` | `type … = …` 沒有指到任何型別                                                                         |
+| `E338` | struct 欄位或 enum payload 是 …,而這裡給了 …                                                          |
+| `E339` | 不能把 … 賦給 …,它裝的是 …                                                                            |
+| `E340` | `…` 的第 … 個引數是 …,而這裡給了 …                                                                    |
+| `E341` | optional 不是 `…` 的運算元                                                                            |
+| `E342` | 運算子 `…` 在 … 與 … 上沒有意義                                                                       |
+| `E343` | 運算子 `…` 取 bool 運算元,而這兩個是 … 與 …                                                           |
+| `E344` | 運算子 `…` 取 int 運算元,而這兩個是 … 與 …                                                            |
+| `E345` | 運算子 `…` 取數值運算元,而這兩個是 … 與 …                                                             |
+| `E346` | 運算子 `…` 排序兩個數或兩個 str,而這兩個是 … 與 …                                                     |
+| `E347` | 不能拿 variant 和數字比較——variant 是它那個 enum 的值                                                 |
+| `E348` | 不能比較 … 與 …——它們是不同種類的值                                                                   |
+| `E349` | 運算子 `…` 在 … 上沒有意義                                                                            |
+| `E350` | 運算子 `not` 取一個 bool 運算元,而這個是 …                                                            |
+| `E351` | 運算子 `-` 取一個數值運算元,而這個是 …                                                                |
+| `E352` | 運算子 `~` 取一個 int 運算元,而這個是 …                                                               |
+| `E353` | 運算子 `…` 一邊是 …、另一邊是 …,而運算子的兩個運算元必須已經是同一個型別                              |
+| `E354` | … 的條件是一個 optional,而條件是 bool——用 `if v := x { … }` 把它綁起來                                |
+| `E355` | … 的條件必須是 bool,而 Zerg 沒有 truthiness                                                           |
+| `E356` | `…` 重新繫結了一個 `const`                                                                            |
+| `E357` | `const …` 遮蔽了這裡已經看得見的繫結                                                                  |
+| `E358` | 最上層繫結 `…` 不能在 module 層的群組之外標 `mut`                                                     |
+| `E359` | `….…()` 把值渲染成文字,所以除了被呼叫的那個值之外不取任何引數                                         |
+| `E360` | `….…()` 把值渲染成文字,所以它是一般的 `fn`、不是 `mut fn`                                             |
+| `E361` | `….…()` 回答這個值顯示成的 `str`                                                                      |
+| `E362` | `…` 被宣告了兩次,其中一次是 generic                                                                   |
+| `E363` | `…` 同時被宣告為 generic 與一般函式                                                                   |
+| `E364` | `This` 是自身型別,而 … 在 `impl` 之外                                                                 |
+| `E365` | `…` 宣告了兩個名為 `…` 的參數                                                                         |
+| `E366` | `…(…)` 轉換一個值                                                                                     |
+| `E367` | `…(…)` 不解析 `str`                                                                                   |
+| `E368` | `…` 不是 generic,所以 `…[…]` 沒有型別引數可收                                                         |
+| `E369` | `…` 裝的是 …,而 … 不可呼叫                                                                            |
+| `E370` | `…` 需要 … 的值(…):只有 `T?` 欄位有隱含預設值,而它是 `nil`                                            |
+| `E371` | `this` 是方法的接收者,而這個函式沒有                                                                  |
+| `E372` | 未定義的名字 `…`                                                                                      |
+| `E373` | `…` 同時被宣告為 module 常數與函式                                                                    |
+| `E374` | slice 的界是 int,而這個是 …                                                                           |
+| `E375` | list 的索引是 int,而這個是 …                                                                          |
+| `E376` | … 上沒有欄位 `…`                                                                                      |
+| `E377` | `.…` 讀一個 tuple 元素,而 … 不是 tuple                                                                |
+| `E378` | … 個元素的 tuple 沒有 `.…`                                                                            |
+| `E379` | `for … in` 走訪 list、map、str、range 或 channel,而 … 不可迭代                                        |
+| `E380` | raise 帶一個 `Err`,或一則用來建它的訊息                                                               |
+| `E381` | `…` 被宣告了兩次,一次是一種宣告、一次是另一種                                                         |
+| `E382` | `…` 被宣告了兩次、而且是同一種——每個 module 都攤平進同一個命名空間                                    |
+| `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
+| `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
+| `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |
+| `E404` | optional 的 channel——`nil` 會同時是值與結束                                                           |
 | `E405` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
 | `E406` | `?.` reads through an optional, and … is not one                                                      |
+| `E407` | `int(v)` 讀判別值,而 enum `…` 帶 payload,所以它的 tag 是不透明的                                      |
 | `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with the same right |
 | `E409` | NotImplemented                                                                                        |
 | `E410` | `…` has been instantiated … times and is still asking for more                                        |
@@ -568,14 +680,17 @@ seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯�
 | `E417` | `str(…)` over a list bridges bytes or code points, and this is …                                      |
 | `E418` | `…(…)` converts a value, and … may not have one                                                       |
 | `E419` | an enum converts to `int`                                                                             |
+| `E420` | `….of(n)` 反推判別值,而 enum `…` 帶 payload,所以它的 tag 是不透明的                                   |
 | `E421` | `[…]` indexes a value, and … may not have one                                                         |
 | `E422` | NotImplemented                                                                                        |
+| `E423` |                                                                                                       |
 | `E424` | NotImplemented                                                                                        |
 | `E425` | undefined function `…`                                                                                |
 | `E426` | `…` has … fields and this gives …                                                                     |
 | `E427` | variant pattern `…` cannot match a subject of type …                                                  |
 | `E428` | non-exhaustive match                                                                                  |
 | `E429` | NotImplemented                                                                                        |
+| `E430` | `…` 在 … 上需要一個 `Eq`——預設沒有結構相等                                                            |
 | `E431` | NotImplemented                                                                                        |
 | `E432` | `…` is declared … and the value is …                                                                  |
 | `E433` | `print` needs a value, and … may not have one                                                         |
@@ -585,18 +700,19 @@ seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯�
 | `E437` | cannot derive `…`                                                                                     |
 | `E438` | NotImplemented                                                                                        |
 | `E444` | NotImplemented                                                                                        |
-| `E241` |                                                                                                       |
-| `E242` |                                                                                                       |
-| `E243` |                                                                                                       |
-| `E407` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
-| `E420` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
-| `E423` |                                                                                                       |
-| `E430` | `…` on a … needs an `Eq`                                                                              |
-| `E445` |                                                                                                       |
+| `E445` | 容器上的結構相等 —— **[not yet]**                                                                     |
 | `E446` |                                                                                                       |
-| `E448` |                                                                                                       |
+| `E448` | `…` 在 … 上的排序來自 `Ord` —— **[not yet]**                                                          |
 | `E449` |                                                                                                       |
-| `E450` | no field `…` on …                                                                                     |
+| `E451` | `…` 宣告了兩次 `…`                                                                                    |
+| `E452` | `…` 落在一組以值宣告的循環裡                                                                          |
+| `E453` | `…` 宣告了兩個名為 `…` 的 …                                                                           |
+| `E454` | 這個運算式串接超過 … 層                                                                               |
+| `E455` | `…(…)` 轉換一個純量,而 … 不是                                                                         |
+| `E456` | `…` 不是 `…` 的 variant                                                                               |
+| `E457` | `…` 是 `…` 的 variant,不是 `…` 的                                                                     |
+| `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
+| `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

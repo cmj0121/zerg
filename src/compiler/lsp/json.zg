@@ -174,7 +174,7 @@ fn jw_bool(mut &out: list[byte], b: bool) {
 }
 
 fn jw_text(mut &out: list[byte], s: str) {
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		out.append(c)
 	}
 }
@@ -218,7 +218,7 @@ fn jw_obj(fs: list[JField], mut &out: list[byte]) {
 # legal text.
 fn jw_str(mut &out: list[byte], s: str) {
 	out.append(b'"')
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if c == b'"' or c == b'\\' {
 			out.append(b'\\')
 			out.append(c)
@@ -259,7 +259,7 @@ fn jw_hex(n: int) -> byte {
 # so the server catches the abort, logs it, and reads the next frame.
 
 pub fn json_parse(s: str) -> JVal {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut at: list[int] = []
 	at.append(0)
 	v := jp_value(b, at)
@@ -292,7 +292,7 @@ fn jp_space(b: list[byte], mut &at: list[int]) {
 }
 
 fn jp_lit(b: list[byte], mut &at: list[int], word: str, v: JVal) -> JVal {
-	w := list[byte](word)
+	w := bytearray(word)
 	mut i := 0
 	for i < w.len() {
 		raise f"json: expected `{word}`" if at[0] + i >= b.len() or b[at[0] + i] != w[i]

@@ -169,7 +169,7 @@ fn ls_content_length(buf: list[byte], hdr: int) -> int {
 # longer on the wire than it is on the page.
 fn ls_send(v: JVal) {
 	body := json_write(v)
-	n := list[byte](body).len()
+	n := bytearray(body).len()
 	io.write(f"Content-Length: {n}\r\n\r\n{body}")
 }
 
@@ -527,7 +527,7 @@ struct Span {
 
 fn ls_word_span(text: str, line: int, col: int) -> Span {
 	ln := ls_line_at(text, line - 1)
-	b := list[byte](ln)
+	b := bytearray(ln)
 	mut lo := col - 1
 	if lo < 0 {
 		lo = 0
@@ -738,7 +738,7 @@ fn ls_whole_range(text: str) -> JVal {
 	n := lines.len()
 	return ls_range_of(0, 0, 0, 0) if n == 0
 	last := lines[n - 1]
-	return ls_range_of(0, 0, n - 1, ls_utf16_col(list[byte](last), list[byte](last).len()))
+	return ls_range_of(0, 0, n - 1, ls_utf16_col(bytearray(last), bytearray(last).len()))
 }
 
 # --- URIs ---------------------------------------------------------------------------------
@@ -753,7 +753,7 @@ fn ls_uri_path(uri: str) -> str {
 }
 
 fn ls_percent_decode(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() {
@@ -785,7 +785,7 @@ fn ls_hex_of(c: byte) -> int {
 fn ls_split_lines(s: str) -> list[str] {
 	mut out: list[str] = []
 	mut cur: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if c == b'\n' {
 			out.append(str(cur))
 			cur = []
@@ -818,8 +818,8 @@ fn ls_drop_front(buf: list[byte], n: int) -> list[byte] {
 }
 
 fn ls_starts_with(s: str, p: str) -> bool {
-	a := list[byte](s)
-	b := list[byte](p)
+	a := bytearray(s)
+	b := bytearray(p)
 	return false if a.len() < b.len()
 	mut i := 0
 	for i < b.len() {
@@ -830,7 +830,7 @@ fn ls_starts_with(s: str, p: str) -> bool {
 }
 
 fn ls_drop_prefix(s: str, n: int) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := n
 	for i < b.len() {
@@ -841,7 +841,7 @@ fn ls_drop_prefix(s: str, n: int) -> str {
 }
 
 fn ls_before_colon(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	for c in b {
 		break if c == b':'
@@ -851,7 +851,7 @@ fn ls_before_colon(s: str) -> str {
 }
 
 fn ls_after_colon(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut seen := false
 	for c in b {
@@ -866,7 +866,7 @@ fn ls_after_colon(s: str) -> str {
 }
 
 fn ls_trim(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut lo := 0
 	for lo < b.len() and (b[lo] == b' ' or b[lo] == b'\t' or b[lo] == b'\r') {
 		lo = lo + 1
@@ -880,7 +880,7 @@ fn ls_trim(s: str) -> str {
 
 fn ls_lower(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if c >= b'A' and c <= b'Z' {
 			out.append(c + byte(32))
 		} else {
@@ -891,7 +891,7 @@ fn ls_lower(s: str) -> str {
 }
 
 fn ls_int_of(s: str) -> int {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut n := 0
 	mut any := false
 	for c in b {

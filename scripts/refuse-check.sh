@@ -493,7 +493,7 @@ EOF
 # Each side of an Either holds exactly one value.
 expect "$ZERG" either-side-with-two-values E405 <<'EOF'
 fn f() -> Result[int] {
-	return Left(1, 2)
+	return Either.Left(1, 2)
 }
 
 fn main() { print f() ?? 0 }
@@ -587,7 +587,7 @@ EOF
 # of the two problems it is — a form used without its context, not a form that does not exist.
 expect "$ZERG" carrier-constructor-without-a-context E459 <<'EOF'
 fn main() {
-	x := Left(1)
+	x := Either.Left(1)
 	print 1
 }
 EOF
@@ -596,7 +596,7 @@ EOF
 # nothing at the match would tell which one it took.
 expect "$ZERG" either-with-equal-sides E206 <<'EOF'
 fn f(n: int) -> Either[int, int] {
-	return Left(n)
+	return Either.Left(n)
 }
 fn main() { print 1 }
 EOF

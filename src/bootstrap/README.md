@@ -232,6 +232,11 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   the seed's only input, the compiler's own source, nests five levels — but it is a gap:
   the seed enforces no bound at all, and a deep enough program would end as a Go
   stack-limit panic rather than a diagnostic.
+- **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
+  value the compiler can work out, so `zerg` answers at the division rather than leaving the
+  program to reach it — the same reasoning that folds a literal in a typed position. The
+  seed folds nothing here and emits the division, whose runtime check then raises. Both
+  refuse the program in the end; only one of them does it before the program runs.
 
 ## Changing the seed
 

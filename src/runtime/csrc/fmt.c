@@ -383,22 +383,45 @@ const char *zrt_fmt_float(double v, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
 	char type = f.type ? f.type : 'g';
-	/* THE TYPE LETTER IS A CONVERSION, and the pattern below is a format string. Anything
-	 * outside this set is a different conversion applied to a `double`: `%s` reads it as a
-	 * pointer, `%n` writes through it. Neither is a rendering, and neither is a crash worth
-	 * having when the letter is right there to check. */
-	if (type != 'e' && type != 'E' && type != 'f' && type != 'F' && type != 'g' && type != 'G') {
+	/* THE TYPE LETTER IS A CONVERSION, so it is switched on rather than SPLICED INTO a
+	 * pattern. Both halves of that sentence matter. Bounding the letter to this set is what
+	 * stops `%s` reading the double as a pointer and `%n` writing through it; writing one
+	 * literal per case is what leaves no format string in this file built out of anything a
+	 * program supplied — the precision rides in as an argument, where a number belongs.
+	 *
+	 * The sign is not in the pattern either. `%+` and `% ` differ from the default only in
+	 * what they put before a non-negative number, and putting it there by hand keeps the
+	 * count of literals at one per conversion instead of one per conversion per sign. */
+	long prec = f.prec >= 0 ? f.prec : 6;
+	char body[ZRT_FMT_BODY];
+	char digits[ZRT_FMT_BODY];
+	switch (type) {
+	case 'e':
+		snprintf(digits, sizeof(digits), "%.*e", (int)prec, v);
+		break;
+	case 'E':
+		snprintf(digits, sizeof(digits), "%.*E", (int)prec, v);
+		break;
+	case 'f':
+		snprintf(digits, sizeof(digits), "%.*f", (int)prec, v);
+		break;
+	case 'F':
+		snprintf(digits, sizeof(digits), "%.*F", (int)prec, v);
+		break;
+	case 'g':
+		snprintf(digits, sizeof(digits), "%.*g", (int)prec, v);
+		break;
+	case 'G':
+		snprintf(digits, sizeof(digits), "%.*G", (int)prec, v);
+		break;
+	default:
 		spec_reject("ValueError: a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another");
 	}
-	long prec = f.prec >= 0 ? f.prec : 6;
-	char pat[16];
-	char body[ZRT_FMT_BODY];
-	if (f.sign == '+' || f.sign == ' ') {
-		snprintf(pat, sizeof(pat), "%%%c.%ld%c", f.sign, prec, type);
+	if ((f.sign == '+' || f.sign == ' ') && digits[0] != '-') {
+		snprintf(body, sizeof(body), "%c%s", f.sign, digits);
 	} else {
-		snprintf(pat, sizeof(pat), "%%.%ld%c", prec, type);
+		snprintf(body, sizeof(body), "%s", digits);
 	}
-	snprintf(body, sizeof(body), pat, v);
 	if ((f.align == '=' || (f.zero && f.align == 0)) && f.width > 0) {
 		/* zero-pad after an optional leading sign. */
 		size_t len = strlen(body);

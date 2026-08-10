@@ -1251,7 +1251,9 @@ func TestFormatSpecIsBounded(t *testing.T) {
 		"zero=00001.50\n" +
 		"right=    1.50\n" +
 		"int-hex=0xff\n" +
-		"str-pad=  abc\n"
+		"str-pad=  abc\n" +
+		"char-ascii=A\n" +
+		"char-wide=Ĭ\n"
 	if string(out) != want {
 		t.Fatalf("valid specs = %q, want %q — a bound that breaks formatting is not one", out, want)
 	}
@@ -1259,7 +1261,7 @@ func TestFormatSpecIsBounded(t *testing.T) {
 	// Each of these is a spec a program can write, and each must end the run the way every
 	// other runtime refusal does: a ValueError on stderr and an ordinary exit status. A
 	// SIGNAL here is the bug this test exists for.
-	for _, spec := range []string{"type-s", "type-n", "wide-prec", "huge-width", "huge-prec"} {
+	for _, spec := range []string{"type-s", "type-n", "wide-prec", "huge-width", "huge-prec", "char-past-max", "char-surrogate", "char-nul", "char-negative"} {
 		cmd := exec.Command(bin, spec)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
@@ -1303,6 +1305,8 @@ int main(int argc, char **argv) {
         say("right",   zrt_fmt_float(1.5, ">8.2f"));
         say("int-hex", zrt_fmt_int(255, "#x"));
         say("str-pad", zrt_fmt_str("abc", ">5"));
+        say("char-ascii", zrt_fmt_int(65, "c"));
+        say("char-wide", zrt_fmt_int(300, "c"));
         return 0;
     }
     if (strcmp(what, "type-s")     == 0) { say("out", zrt_fmt_float(1.5, ".6s")); }
@@ -1310,6 +1314,10 @@ int main(int argc, char **argv) {
     if (strcmp(what, "wide-prec")  == 0) { say("out", zrt_fmt_float(1.5, ".99999999f")); }
     if (strcmp(what, "huge-width") == 0) { say("out", zrt_fmt_float(1.5, "99999999999999999999f")); }
     if (strcmp(what, "huge-prec")  == 0) { say("out", zrt_fmt_float(1.5, ".99999999999999999999f")); }
+    if (strcmp(what, "char-past-max")  == 0) { say("out", zrt_fmt_int(1114112, "c")); }
+    if (strcmp(what, "char-surrogate") == 0) { say("out", zrt_fmt_int(0xD800, "c")); }
+    if (strcmp(what, "char-nul")       == 0) { say("out", zrt_fmt_int(0, "c")); }
+    if (strcmp(what, "char-negative")  == 0) { say("out", zrt_fmt_int(-1, "c")); }
     return 0;
 }
 `

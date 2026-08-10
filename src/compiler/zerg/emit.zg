@@ -3666,7 +3666,7 @@ fn c_guard_loop_jump(kw: str, in_loop: bool) {
 }
 
 fn c_guard_jump_err(kw: str) {
-	raise f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
+	raise f"E403 NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
 # c_str_concat joins two strings and gives back whichever operand it OWNS.
@@ -7196,7 +7196,7 @@ fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 # way to tell them apart. One loud rule is worth more than that ambiguity; a value that
 # might be absent travels in a struct, or as a sentinel the receiver agrees on.
 fn c_chan_elem_check(t: Ty) {
-	raise "a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel" if c_is_opt(t)
+	raise "E404 a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel" if c_is_opt(t)
 }
 
 # --- channel direction ------------------------------------------------------------
@@ -9498,7 +9498,7 @@ fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 # made of — and anything else is refused by name here rather than handed to the runtime as
 # whatever C type it happened to be.
 fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
-	raise f"a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)" if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
+	raise f"E402 a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)" if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
 	return c_expr(em, cause, c_nosub())
 }
 
@@ -9697,7 +9697,7 @@ fn c_check_loop_jump_sel(arms: list[SelArm], in_loop: bool) {
 
 fn c_loop_jump_err(kw: str, in_loop: bool) {
 	return if in_loop
-	raise f"`{kw}` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
+	raise f"E401 `{kw}` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {

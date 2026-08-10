@@ -958,7 +958,7 @@ fn parse_sel_arms(mut &p: Parser) -> list[SelArm] {
 
 	# GRAMMAR says `select-arm+`. An empty one has nothing to wait FOR, so it would park on
 	# no channel at all and never wake — a hang with no cause to find.
-	raise "a select needs at least one arm — an empty one waits on nothing and never wakes" if arms.len() == 0
+	raise "E202 a select needs at least one arm — an empty one waits on nothing and never wakes" if arms.len() == 0
 	return arms
 }
 
@@ -966,14 +966,14 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 	# There is no terminal arm. A select PICKS a ready arm; ENDING is the loop's job, and
 	# `for select { … }` is the loop that owns it. `close` here is refused by name rather
 	# than quietly parsed, because it was an arm until this change.
-	raise "`close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has" if p_at(p, Close) and peek_kind(p, 1) == FatArrow
+	raise "E201 `close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has" if p_at(p, Close) and peek_kind(p, 1) == FatArrow
 
 	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
 	# Anything else here is refused by name: it used to become this arm silently, which turned a
 	# typo into a select that no longer blocks and no longer ends.
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == FatArrow {
 		head := p_name(p, "a select arm's binding")
-		raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
+		raise f"E203 `{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
 		p_advance(p) # '=>'
 		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
 	}

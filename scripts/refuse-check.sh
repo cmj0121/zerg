@@ -61,12 +61,35 @@ expect() {
 		fail=$((fail + 1))
 		return
 	fi
-	case $out in
-	*"$want"*) ;;
+	# A CODE, not a sentence, when the shipping compiler is the one being asked. `E107` is
+	# the identity of a refusal and the sentence beside it is prose that may be improved
+	# without a gate turning red — which is the whole reason a code exists. A `want` that
+	# looks like a code is compared as a code: it must open the first line, since the code
+	# REPLACES the old `NotImplemented:` / `error:` opener rather than sitting beside it.
+	#
+	# The seed keeps sentence matching. Codes are the LANGUAGE's contract and the seed is
+	# the tool that builds the shipping compiler, so its diagnostics are not part of it —
+	# the same line docs/conformance.md draws when it declines to mark the seed's gaps.
+	case $want in
+	E[0-9][0-9][0-9])
+		case $(printf '%s\n' "$out" | head -1) in
+		"$want "* | "error: $want "*) ;;
+		*)
+			echo "CODE      $name — wanted $want to open the message, got: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+			;;
+		esac
+		;;
 	*)
-		echo "MESSAGE   $name — wanted \"$want\", got: $(echo "$out" | head -1)"
-		fail=$((fail + 1))
-		return
+		case $out in
+		*"$want"*) ;;
+		*)
+			echo "MESSAGE   $name — wanted \"$want\", got: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+			;;
+		esac
 		;;
 	esac
 	case $out in
@@ -106,14 +129,14 @@ expect() {
 
 # --- the shipped compiler ---------------------------------------------------------
 
-expect "$ZERG" break-outside-loop "outside of a loop" <<'EOF'
+expect "$ZERG" break-outside-loop E401 <<'EOF'
 fn main() {
 	print "a"
 	break
 }
 EOF
 
-expect "$ZERG" break-in-select-arm "outside of a loop" <<'EOF'
+expect "$ZERG" break-in-select-arm E401 <<'EOF'
 fn gen(out: chan[int]<-) { out <- 1 }
 fn main() {
 	a := chan[int](1)
@@ -128,7 +151,7 @@ EOF
 # The terminal arm is gone: a select PICKS a ready arm and the loop ENDS. `close` in that
 # position was an arm until this change, so it is refused by name rather than read as
 # something else — and the message names the form that replaced it.
-expect "$ZERG" terminal-arm-in-a-select "is not a select arm head" <<'EOF'
+expect "$ZERG" terminal-arm-in-a-select E201 <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	select {
@@ -155,7 +178,7 @@ EOF
 # A cause chain is made of Errs. The `from` operand used to be read as whatever C type it
 # happened to be and handed straight to the runtime, which takes a pointer — so an int cause
 # came out as a cc warning about a generated file, not a Zerg diagnostic.
-expect "$ZERG" from-cause-that-is-not-an-err "a \`from\` cause is an \`Err\`" <<'EOF'
+expect "$ZERG" from-cause-that-is-not-an-err E402 <<'EOF'
 fn f(n: int) -> int {
 	raise ValueError("x") from n
 }
@@ -166,7 +189,7 @@ fn main() {
 EOF
 
 # A jump out of a guard would leave its handler installed on a frame that has returned.
-expect "$ZERG" jump-out-of-a-guard "leaving a \`guard\` block" <<'EOF'
+expect "$ZERG" jump-out-of-a-guard E403 <<'EOF'
 fn f() -> int {
 	r := guard {
 		return 1
@@ -199,7 +222,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" empty-select "at least one arm" <<'EOF'
+expect "$ZERG" empty-select E202 <<'EOF'
 fn main() {
 	for select {
 	}
@@ -213,7 +236,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" channel-of-optionals "a channel of optionals is refused" <<'EOF'
+expect "$ZERG" channel-of-optionals E404 <<'EOF'
 fn main() {
 	ch := chan[int?](1)
 	print 1
@@ -224,7 +247,7 @@ EOF
 # accepted: ANY identifier before `=>` became the `_` arm, so a typo (or the old `done`
 # spelling) silently made the select non-blocking AND dropped its terminal arm. Both compilers
 # refuse it now, which is why it is checked twice.
-expect "$ZERG" select-arm-head-typo "is not a select arm head" <<'EOF'
+expect "$ZERG" select-arm-head-typo E203 <<'EOF'
 fn gen(out: chan[int]<-) { out <- 1 }
 fn main() {
 	a := chan[int](1)

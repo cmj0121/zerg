@@ -135,13 +135,6 @@ on **every** path, **including the abort-unwind path**, and several `defer`s in 
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
 order.
 
-> **[not yet]** A bare `{ … }` block as a **statement** is refused by name —
-> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
-> function's scope, so a block of its own would not free anything at its `}`_ — and that message is also the
-> reason: bindings are given the function's scope rather than the block's. "Block exit" is therefore always a
-> function's, a loop body's, or an arm's, never a scope a program opened for itself, and the `defer` example
-> below is written in a form the compiler does not read.
-
 ## `Ref[T]` — a resource that outlives its scope
 
 > **[not yet]** There is no `Ref[T]` in this compiler. `Ref(5)` is refused by name —

@@ -232,6 +232,11 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   the seed's only input, the compiler's own source, nests five levels — but it is a gap:
   the seed enforces no bound at all, and a deep enough program would end as a Go
   stack-limit panic rather than a diagnostic.
+- **`Either.Left(v)` is not read; the bare `Left(v)` is.** The two sides of an `Either` are
+  variants of a built-in rather than of a declared enum, so the seed's enum-namespace path
+  does not find `Either` and reports an undefined name. `zerg` requires the qualified form
+  (a variant is named through its type, with no exception for a built-in), which is why the
+  three corpus programs that use it are skipped here with that reason.
 - **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
   its own name into the value namespace and not its variants', so a variant is reached
   through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`

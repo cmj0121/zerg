@@ -109,7 +109,7 @@
 
 **carrier 不會終結一個位置——它把位置往內移一層。** 當宣告的型別是 `T?`、`Result[T]` 或 `Either[X, Y]` 時,真正跟
 值相遇的是它的 **payload**,而那個 payload 就是同一個位置:`x: int? = e` 把 `e` 放在 binding 的位置上、對著 `int`;
-`return Left(e)` 則把它放在 `return` 的位置上。底下每一條規則在那裡讀到的都是 `T`,永遠不是外面那層 wrapper。
+`return Either.Left(e)` 則把它放在 `return` 的位置上。底下每一條規則在那裡讀到的都是 `T`,永遠不是外面那層 wrapper。
 
 這份清單是一次一個靜默 miscompile 長出來的——每一個編譯器還沒被告知的位置,都是一個被靜默放進不合身型別裡的值,
 carrier 的情形也在內(`x: float? = i` 印出 `5`;`Left(300)` 放進 `Result[byte]` 靜靜被截斷)。這份清單是契約:一個

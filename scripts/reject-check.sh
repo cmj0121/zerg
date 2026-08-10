@@ -3112,6 +3112,155 @@ fn main() {
 }
 EOF
 
+# --- the rules no case had reached ------------------------------------------------------
+#
+# THE CODES FOUND THESE. Giving every rule an identity made it possible to ask a question no
+# reading of this file could answer — which rules the compiler reports and no case here
+# provokes — and `scripts/error-codes-check.sh` answered it with thirteen. Each was a rule
+# written, shipped and never once made to fire: not a gap in the language, a gap in the
+# evidence that the language does what it says.
+#
+# They are gathered here rather than filed beside their neighbours because what they have in
+# common is how they were found, and that is worth being able to see.
+
+reject a-list-conversion-of-two-values E261 no-place <<'EOF'
+fn main() {
+	b := list[byte]("a", "b")
+	print b.len()
+}
+EOF
+
+reject a-module-private-name E301 <<'EOF'
+import "std/strings"
+
+fn main() {
+	print strings.pad_count("a", 3, " ")
+}
+EOF
+
+reject assign-to-the-receiver E306 <<'EOF'
+struct P {
+	x: int
+}
+impl P {
+	fn set() {
+		this = P(1)
+	}
+}
+fn main() {
+	p := P(0)
+	p.set()
+}
+EOF
+
+reject a-spec-extending-no-spec E316 <<'EOF'
+spec A: Nope {
+	fn f()
+}
+struct P {
+	x: int
+}
+impl A for P {
+	fn f() {
+		print this.x
+	}
+}
+fn main() {
+	p := P(1)
+	p.f()
+}
+EOF
+
+reject an-if-expression-with-two-types E321 <<'EOF'
+fn main() {
+	x := if true { 1 } else { "s" }
+	print x
+}
+EOF
+
+# the borrow reaches `this` THROUGH a field, so the method mutates its receiver without
+# saying `mut fn` — the half of the rule that is not about the argument at all.
+reject a-borrow-of-a-field-of-an-immutable-receiver E324 <<'EOF'
+struct P {
+	x: int
+}
+fn bump(mut &n: int) {
+	n = n + 1
+}
+impl P {
+	fn go() {
+		bump(this.x)
+	}
+}
+fn main() {
+	p := P(1)
+	p.go()
+}
+EOF
+
+# the seed RAISES this one at run time, where `zerg` reads the constant and answers now.
+reject divide-by-a-constant-zero E331 seed-gap <<'EOF'
+fn main() {
+	x := 1 / 0
+	print x
+}
+EOF
+
+reject a-fold-past-int-measured-against-a-byte E332 <<'EOF'
+fn main() {
+	x: byte = 9223372036854775807 * 2
+	print int(x)
+}
+EOF
+
+reject a-binding-of-nil E336 <<'EOF'
+fn main() {
+	x := nil
+	print 1
+}
+EOF
+
+reject an-if-on-an-optional E354 <<'EOF'
+fn main() {
+	x: int? = 1
+	if x {
+		print 1
+	}
+}
+EOF
+
+reject a-display-that-mutates E360 <<'EOF'
+struct P {
+	x: int
+}
+impl P {
+	mut fn display() -> str {
+		return "p"
+	}
+}
+fn main() {
+	p := P(1)
+	print p.display()
+}
+EOF
+
+reject a-struct-literal-missing-a-field E370 <<'EOF'
+struct P {
+	a: int
+	b: int
+}
+fn main() {
+	p := P(1)
+	print p.a
+}
+EOF
+
+reject an-undefined-name E372 <<'EOF'
+fn main() {
+	print nosuchname
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

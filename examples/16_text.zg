@@ -24,8 +24,8 @@ fn main() {
 	check("backslash", "a\\b", "a\\b")
 
 	# a str's bytes are its UTF-8 octets, not its characters
-	raise "é is two octets" if list[byte]("é").len() != 2
-	raise "the bridge back" if str(list[byte]("aéb")) != "aéb"
+	raise "é is two octets" if bytearray("é").len() != 2
+	raise "the bridge back" if str(bytearray("aéb")) != "aéb"
 
 	# and an f-string hole sits in the middle of one
 	check("interpolation", f"héllo {1 + 1}", "héllo 2")

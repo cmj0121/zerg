@@ -1419,8 +1419,10 @@ EOF
 # The first version of this rule went under the EQUALITY branch and closed one operator
 # family of five: a carrier is not a scalar, so every other family's own test answered
 # "not my business" and `x > 0`, `x + 1`, `x & 1` and `x and true` all still reached cc.
-# And a match arm builds its comparison as TEXT, so `nil =>` and `1..=2 =>` are two more
-# spellings that meet no rule of their own unless one is hung there.
+# And a match arm builds its comparison as TEXT, so `1..=2 =>` is one more spelling that
+# meets no rule of its own unless one is hung there. `nil =>` was a second, until it earned
+# a refusal that names the PATTERN rather than the `==` nobody wrote; it lives in
+# refuse-check now.
 
 reject order-an-optional 'an optional is not an operand of `>`' <<'EOF'
 fn main() {
@@ -1440,19 +1442,6 @@ reject and-an-optional 'an optional is not an operand of `and`' <<'EOF'
 fn main() {
 	x: bool? = true
 	print(f"{x and true}")
-}
-EOF
-
-reject match-an-optional-against-nil 'an optional is not an operand of `==`' <<'EOF'
-fn f(x: int?) -> int {
-	return match x {
-		nil => 0
-		_   => 1
-	}
-}
-
-fn main() {
-	print(f"{f(nil)}")
 }
 EOF
 

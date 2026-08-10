@@ -50,6 +50,15 @@ fn peek_kind(mut &p: Parser, n: int) -> Kind {
 	return Eof
 }
 
+# peek_lexeme is peek_kind's other half: the TEXT of a token ahead, read without consuming
+# it, which is what a refusal needs to name the form the parser is standing in front of.
+# Past the end it answers "", the lexeme `cur` already gives for the Eof token.
+fn peek_lexeme(mut &p: Parser, n: int) -> str {
+	j := p.pos + n
+	return p.toks[j].lexeme if j < p.toks.len()
+	return ""
+}
+
 fn p_at(mut &p: Parser, k: Kind) -> bool {
 	return cur_kind(p) == k
 }
@@ -196,12 +205,43 @@ fn skip_semis(mut &p: Parser) {
 	}
 }
 
+# p_stmt_sep is skip_semis with the separator REQUIRED. GRAMMAR#stmt-list writes a statement
+# list as `statement ( stmt-sep+ statement )*`, so two statements in a row with nothing
+# between them is not a program — and every loop here called skip_semis, which skips a
+# separator when there is one and says nothing when there is not. So a second statement on
+# the same line was read as a statement, and quietly: `print "a" "b"` printed `a`, `x := 1 2`
+# bound 1, `print f() f()` called `f` once. Nothing was reported because nothing was wrong as
+# far as the loop could tell — it had a statement, and it asked for the next one. The seed
+# has refused this since it was written, so the two compilers disagreed about which programs
+# exist.
+#
+# `end` is the token that closes the list — `}` for a block or a module-level `unsafe { … }`
+# group, the end of file at the top level — since arriving at it is the other way a statement
+# may be followed by no separator.
+fn p_stmt_sep(mut &p: Parser, end: Kind) {
+	at := p.pos
+	skip_semis(p)
+	return if p.pos != at or p_at(p, end) or p_at(p, Eof)
+
+	t := cur(p)
+	raise f"expected a newline or `;` to separate statements, found `{t.lexeme}`" + p_place(p, t.line, t.col)
+}
+
 # ident_name extracts the identifier spelling from an EIdent expression (the assignment
 # and call targets in the subset), or "" for anything else.
 fn ident_name(e: Expr) -> str {
 	return match e {
 		EIdent(n) => n
 		_         => ""
+	}
+}
+
+# is_or_expr reports whether an expression is a bitwise-or at its top, which in a match arm
+# is the shape an or-pattern over LITERALS arrives in — parse_expr swallows the `|`.
+fn is_or_expr(e: Expr) -> bool {
+	return match e {
+		EBinary(oper, x, y) => oper == "|"
+		_ => false
 	}
 }
 
@@ -302,6 +342,16 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# declares — without it the qualifier parses as a type of its own and the emitter
 	# spells a name nothing declared.
 	for p_at(p, Dot) {
+		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER, and dropping the qualifier made them the
+		# same thing: `I.Item` PROJECTS a type the implementer of `I` supplies (GRAMMAR#base-type,
+		# chainable as `I.Item.Sub`), so keeping only `Item` left it reading as an undeclared
+		# type — the message a misspelling gets.
+		#
+		# The two are told apart by CASE, which the language already decides: a module is named
+		# by its directory and is snake_case, a spec is PascalCase. So `cli.Opt` is a qualifier
+		# and `It.Item` is a projection.
+		raise f"NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if c_is_ctor(name)
+
 		p_advance(p)
 		name = cur(p).lexeme
 		p_advance(p)
@@ -704,6 +754,12 @@ pub fn parse_at(src: str, path: str) -> File {
 			in_unsafe = true
 			unsafe_line = t.line
 			unsafe_col = t.col
+
+			# OPENING the group is not an item, so nothing separates it from the first one:
+			# ASI inserts a `;` after a token that can END an item (GRAMMAR group 2) and `{`
+			# is not one. This is the one pass round the loop that reads no item, so it is
+			# also the one that must not ask for the separator below.
+			continue
 		} else if in_unsafe and p_at(p, RBrace) {
 			p_advance(p)
 			in_unsafe = false
@@ -727,7 +783,16 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise "`pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
 			parse_stmt(p)
 		}
-		skip_semis(p)
+
+		# The top level's end is the end of FILE, except inside a module-level `unsafe { … }`
+		# group (GRAMMAR#unsafe-group), whose items this same loop reads and whose end is its
+		# `}`. The group is a brace this loop opens and closes rather than a block it
+		# descends into, so it is the one place where the terminator is not fixed.
+		mut end := Eof
+		if in_unsafe {
+			end = RBrace
+		}
+		p_stmt_sep(p, end)
 	}
 
 	# The `impl` check is NOT here. A spec may be declared in another file of the same
@@ -966,9 +1031,23 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 	p_advance(p) # '{'
 	mut ks: list[Expr] = []
 	mut vs: list[Expr] = []
+
+	# ASI FIRES INSIDE A BRACE. It is suppressed inside an unclosed `(` or `[` and nowhere
+	# else (GRAMMAR group 2), so a map literal written over several lines carries a `;` after
+	# every entry whose line does not end in the `,`:
+	#
+	#     m := {
+	#         "a": 1        <- an int can END an item, so ASI inserts a `;` here
+	#     }
+	#
+	# and this loop demanded `}` or a `,`, so that program got "expected `}`, found `;`" —
+	# a table written the way anyone writes one. With a trailing comma it worked, because a
+	# `,` cannot end an item and no `;` was inserted; the two spellings disagreed.
+	skip_semis(p)
 	if p_at(p, Colon) {
 		# the empty map, `{:}`
 		p_advance(p)
+		skip_semis(p)
 		expect(p, RBrace)
 		return EMapLit(ks, vs)
 	}
@@ -982,8 +1061,10 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
+		skip_semis(p)
 		break if not p_at(p, Comma)
 		p_advance(p)
+		skip_semis(p)
 	}
 	expect(p, RBrace)
 	return EMapLit(ks, vs)
@@ -1186,8 +1267,8 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	}
 }
 
-# parse_import_spec reads `pub? "path" (as name)?` and yields the path, or "" when what is
-# there is not a spec at all.
+# parse_import_spec reads `pub? "path" (as name)?` and yields the path. Anything that is
+# not a string literal is refused below, so the only "" it can answer is the empty literal.
 #
 # `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
 # module is part of the program — so the marker is consumed and the path read as usual.
@@ -1197,7 +1278,15 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	if p_at(p, Pub) {
 		p_advance(p)
 	}
-	return "" if not p_at(p, Str)
+
+	# A PATH IS A STRING LITERAL, and only that (GRAMMAR#import-path). This used to answer ""
+	# for anything else, and "" means "no spec here" — so `import util/text`, the older bare
+	# spelling, was read as no import at all and the leftover `util/text` fell through to the
+	# statement loop as a top-level expression, which compile mode treats as a nop. The
+	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
+	# member access on a namespace that was never bound.
+	raise f"an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Str)
+
 	t := cur(p)
 	p_advance(p) # the path
 	if p_at(p, As) {
@@ -1207,6 +1296,22 @@ fn parse_import_spec(mut &p: Parser) -> str {
 		}
 	}
 	return t.value # the decoded path, without its quotes
+}
+
+# p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
+# quote their own line back at them rather than a placeholder. It reads through the peek
+# pair, WITHOUT consuming: that raise ends the parse anyway, and a reader of this function
+# should not have to know it.
+fn p_import_path_guess(mut &p: Parser) -> str {
+	mut out := ""
+	mut n := 0
+	for true {
+		k := peek_kind(p, n)
+		break if k == Semi or k == Eof or k == RParen
+		out = out + peek_lexeme(p, n)
+		n = n + 1
+	}
+	return out
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {
@@ -1331,30 +1436,49 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-# parse_decorator reads `#[ … ]` as ONE item (GRAMMAR#decorator). It used to reach the top-level
-# fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
-# items and anything inside it that happened to parse as a declaration was read as one.
+# parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
+# which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate items and
+# anything inside it that happened to parse as a declaration was read as one.
 #
-# `derive`'s ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They
-# used to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a
-# type meant nothing, so `==` on it either was refused or — on an enum — silently compared
-# tags. Every other decorator is named, because a decorator that changes what a declaration
-# MEANS cannot be ignored without changing the program.
+# The brackets hold a COMMA LIST of items — `deco-item ( ',' deco-item )*` — which this read
+# as one item with a bag of identifiers in it. Every name inside that was not `derive` went
+# onto `pending` as though it were a derive argument, so `#[derive(Eq), sealed]` asked to
+# derive `sealed`: advice that makes no sense, about a decorator parse_deco_item refuses by
+# name the moment it is written alone.
 fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	p_advance(p) # '#['
+	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		parse_deco_item(p, pending)
+		break if not p_at(p, Comma)
+		p_advance(p)
+	}
+	expect(p, RBrack)
+}
+
+# parse_deco_item reads ONE `name` or `name( args )` (GRAMMAR#deco-item). Only `derive` is
+# built, and every other decorator is NAMED rather than skipped, because a decorator that
+# changes what a declaration MEANS cannot be ignored without changing the program.
+#
+# derive's ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They used
+# to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a type
+# meant nothing, so `==` on it either was refused or — on an enum — silently compared tags.
+fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	name := cur(p).lexeme
 	raise f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
 
-	# `#[` is ONE token (the lexer joins it), and a decorator's arguments are names and
-	# const-exprs — neither opens a bracket — so the group ends at the first `]`. An argument
-	# is an identifier, which is what tells a spec name from the punctuation around it.
-	for not p_at(p, RBrack) and not p_at(p, Eof) {
-		if p_at(p, Ident) and cur(p).lexeme != "derive" {
+	p_advance(p)
+	return if not p_at(p, LParen)
+
+	# a derive ARGUMENT is a spec name; the arguments a decorator may take in general are
+	# const-exprs, and none of them opens a bracket, so the item ends at its own `)`
+	p_advance(p)
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		if p_at(p, Ident) {
 			pending.append(cur(p).lexeme)
 		}
 		p_advance(p)
 	}
-	expect(p, RBrack)
+	expect(p, RParen)
 }
 
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
@@ -1456,6 +1580,16 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# second answer to the same production — and a narrower one, since that reader
 			# also refuses a bound carrying type arguments.
 			bound = join_bounds(parse_bound(p, "a type parameter's bound", true))
+
+			# A VALUE GENERIC PARAMETER, `fn f[N: int]` (GRAMMAR#type-param): a bound that names a
+			# CONCRETE TYPE rather than a spec makes the parameter a compile-time VALUE, not a
+			# type. Nothing here rejected it, so `N` was carried as a type parameter bounded by
+			# a spec named `int` — and the call site `f[3]()` then reported "calling index",
+			# two steps from the form and naming neither the parameter nor the argument.
+			#
+			# Spec or concrete is told by CASE, the same distinction an associated type uses:
+			# a spec is PascalCase, and every concrete type this language spells is not.
+			raise f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not c_is_ctor(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -1550,7 +1684,7 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		t := cur(p)
 		body.append(SAt(t.line, t.col))
 		body.append(parse_stmt(p))
-		skip_semis(p)
+		p_stmt_sep(p, RBrace)
 	}
 	expect(p, RBrace)
 	p_shallower(p)
@@ -1775,6 +1909,37 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 	return SIf(parse_expr(p), body, false, none)
 }
 
+# p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
+# condition — which is what makes it an if-EXPRESSION rather than a postfix `if` on a jump
+# (GRAMMAR#return's disambiguation). It reads without consuming.
+#
+# A `{` inside a `(` or a `[` belongs to something else, so the scan is depth-aware; the
+# statement's own end is where it gives up, since a conditional return has nothing after
+# its condition.
+#
+# desugar.zg's dsg_if_has_block asks this same question and stays a second function on
+# purpose. It runs BEFORE any parse, over a token stream whose statement end dsg_stmt_end
+# has already found; this one has the Parser's cursor and nothing else, so it must stop
+# itself at the separator. Folding them together would hand one of the two a bound it does
+# not have.
+fn p_if_has_block(mut &p: Parser, at: int) -> bool {
+	mut depth := 0
+	mut i := at
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		return false if (k == Semi or k == Eof) and depth == 0
+		if k == LParen or k == LBrack {
+			depth = depth + 1
+		} else if k == RParen or k == RBrack {
+			depth = depth - 1
+		} else if k == LBrace and depth == 0 {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
 	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
@@ -1786,6 +1951,14 @@ fn parse_return(mut &p: Parser) -> Stmt {
 	# if-EXPRESSION with no block, which swallowed the rest of the function — silently, and
 	# only where the formatter had just produced the form.
 	if p_at(p, If) {
+		# THE ONE AMBIGUITY, which GRAMMAR#return spells out: "a leading `if` whose condition
+		# is followed by a `{` block is instead an if-EXPRESSION being returned; the
+		# conditional-return `if` takes a bare condition and NO block." Nothing here looked
+		# past the condition, so `return if c { 1 } else { 2 }` was always the bare early exit
+		# under `c`, and the `{ 1 } else { 2 }` left over became whatever the statement loop
+		# could make of it.
+		return SReturn(true, parse_expr(p)) if p_if_has_block(p, p.pos + 1)
+
 		p_advance(p)
 		mut body: list[Stmt] = []
 		body.append(SReturn(false, ENil))
@@ -2117,11 +2290,22 @@ fn parse_unary(mut &p: Parser) -> Expr {
 		p_shallower(p)
 		return e
 	}
+
+	# A UNARY OPERATOR'S OPERAND INCLUDES THE GROUP-8 POSTFIXES: GRAMMAR is
+	# `unary-expr ::= unary-op unary-expr | postfix-expr` with `?`, `!` and `?.` among the
+	# postfixes, so `-x!` is `-(x!)`. The operand was read with parse_unary, one level short of
+	# parse_try — which sits ABOVE this level deliberately, so that `<-ch!` forces what the
+	# receive answered rather than the channel. The `!` therefore landed on the NEGATION's
+	# result, and `-x!` on an `int?` answered "operator `-` takes a numeric operand, and this
+	# one is int?", about an operand the program never wrote that way.
+	#
+	# Only THIS operand moves up to parse_try. The receive above keeps parse_unary, which is
+	# what leaves the `!` outside for parse_try to put around the ERecv.
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
 		p_deeper(p)
-		e := EUnary(op, parse_unary(p))
+		e := EUnary(op, parse_try(p))
 		p_shallower(p)
 		return e
 	}
@@ -2169,8 +2353,26 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
-			expect(p, RBrack)
-			e = EIndex(e, idx)
+
+			# A COMMA MAKES IT TYPE ARGUMENTS, and nothing else it could be. GRAMMAR says so
+			# outright — "'[X, Y]' is unambiguously type arguments (an index takes one value)"
+			# — and this branch read one expression and demanded `]`, so `pairup[str, int](…)`
+			# got "expected `]`, found `,`": the message a typo gets, for the one bracket form
+			# the grammar calls unambiguous.
+			#
+			# The SINGLE-argument case is not decided here. `f[T](x)` and `xs[i]` are the same
+			# tokens and telling them apart needs to know what the base is, so it stays where
+			# it was — recovered from the EIndex below, where a call has been seen.
+			# ASSIGNED, not returned: a call is a postfix like any other, and the chain goes on
+			# after it. Returning here ended the loop, so `pair[int, str](7, "a").len()` died
+			# on "`.` is not an expression this compiler reads" — the same shape of message
+			# this branch exists to remove, one postfix further along.
+			if p_at(p, Comma) {
+				e = p_type_arg_call(p, e, idx)
+			} else {
+				expect(p, RBrack)
+				e = EIndex(e, idx)
+			}
 		} else if p_at(p, Dot) {
 			p_advance(p)
 			fld := cur(p).lexeme
@@ -2227,6 +2429,35 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		}
 	}
 	return e
+}
+
+# p_type_arg_call finishes `base[A, B, …](args)` — the multi-argument type-args postfix,
+# entered once the comma has settled what the bracket is. The FIRST argument has already
+# been read as an EXPRESSION, since that is what the index branch does before it knows what
+# the bracket is; reading its type back off the name it parsed as is what keeps the bracket
+# to one parse. That is also why the first one has to be a bare name where the rest go
+# through parse_type — the expression already read is all there is to work back from.
+fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
+	name := ident_name(base)
+	raise f"NotImplemented: type arguments on {expr_kind(base)} — a callee is a plain name in this compiler, so the base of a `[A, B]` has to be one too" if name == ""
+
+	tn := ident_name(first)
+	raise f"a type argument has to be a type, and `{expr_kind(first)}` is not one" if tn == ""
+
+	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
+	for p_at(p, Comma) {
+		p_advance(p)
+		tyargs.append(parse_type(p))
+	}
+	expect(p, RBrack)
+
+	# GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` is grammatical
+	# on its own — a generic function named as a VALUE at a chosen instantiation. This
+	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
+	# is named rather than left to report the `(` that never came.
+	raise f"NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
+
+	return ECall(name, parse_call_args(p), tyargs)
 }
 
 fn parse_call_args(mut &p: Parser) -> list[Expr] {
@@ -2358,12 +2589,15 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EGuard(parse_block(p))
 	}
-	if k == Unsafe {
-		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and
-		# its statements never ran
-		raise "NotImplemented: unsafe"
-	}
-	raise "NotImplemented: asm" if k == Asm
+
+	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
+	# and does not build. The `unsafe` block used to be swallowed whole with its statements
+	# never run, and naming it was only half the fix: both markers were the keyword and
+	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
+	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
+	raise "NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value" + p_place(p, t.line, t.col) if k == Unsafe
+	raise "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Asm
+
 	if k == Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
 		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
@@ -2412,23 +2646,8 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RBrack)
 		return EListLit(elems)
 	}
-	if k == If {
-		# if-expression: if cond { expr } else { expr }
-		p_advance(p)
-		cond := parse_expr(p)
-		expect(p, LBrace)
-		skip_semis(p)
-		then_e := parse_expr(p)
-		skip_semis(p)
-		expect(p, RBrace)
-		expect(p, Else)
-		expect(p, LBrace)
-		skip_semis(p)
-		else_e := parse_expr(p)
-		skip_semis(p)
-		expect(p, RBrace)
-		return EIf(cond, then_e, else_e)
-	}
+
+	return parse_if_expr(p) if k == If
 	return parse_match(p) if k == Match
 
 	# A STATEMENT standing where an expression is wanted. The common way in is a match
@@ -2476,6 +2695,52 @@ fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
 
 	return k == Spawn or k == Select or k == For or k == With
+}
+
+# parse_if_expr reads `if cond { e } else { e }` — the if-EXPRESSION (GRAMMAR#if-expr),
+# whose `else` is mandatory because it yields the taken branch's value.
+#
+# The `else if` CHAIN is why this is a function and not the inline arm it used to be.
+# GRAMMAR writes the else-arm of an `if` as another `if`, and the inline version demanded a
+# `{` after `else` — so `if a { 1 } else if b { 2 } else { 3 }`, which is how anyone writes
+# three cases, got "expected `{`, found `if`". The chain is right-nested here, which is
+# exactly what it means, so the emitter's two-branch lowering takes any length of it
+# unchanged.
+fn parse_if_expr(mut &p: Parser) -> Expr {
+	p_advance(p) # 'if'
+	t := cur(p)
+
+	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head), which runs the branch only when
+	# `e` is present. It is grammatical in expression position and this compiler unwraps an
+	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
+	# parser and reported itself.
+	raise f"NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Ident) and peek_kind(p, 1) == Walrus
+
+	cond := parse_expr(p)
+	then_e := parse_if_branch(p)
+	expect(p, Else)
+
+	# `else if` — the chain, right-nested. The else-branch IS another if-expression, and
+	# reading it as one is all the nesting takes.
+	return EIf(cond, then_e, parse_if_expr(p)) if p_at(p, If)
+	return EIf(cond, then_e, parse_if_branch(p))
+}
+
+# parse_if_branch is one `{ … }` arm of an if-expression. A branch is a BLOCK in GRAMMAR and
+# a block's value is its last statement's, so a multi-statement arm is grammatical — and this
+# compiler lowers an if-expression to a C conditional, which holds one expression and no
+# statements. The arm is named rather than reported as the token that could not continue it.
+fn parse_if_branch(mut &p: Parser) -> Expr {
+	expect(p, LBrace)
+	skip_semis(p)
+	e := parse_expr(p)
+	skip_semis(p)
+
+	t := cur(p)
+	raise "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, RBrace)
+
+	expect(p, RBrace)
+	return e
 }
 
 fn parse_match(mut &p: Parser) -> Expr {
@@ -2549,6 +2814,16 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	} else {
 		lit = parse_expr(p)
 	}
+
+	# AN OR-PATTERN, `A | B =>` (GRAMMAR#pattern), which this compiler does not lower. It
+	# arrives in TWO shapes and the rule was written at one of them: a literal pattern lets
+	# parse_expr swallow the `|` as the bitwise operator, so `1 | 2` reached the emitter as a
+	# folded value and was named there; a name pattern stops before the `|`, and the parser
+	# died on "expected `=>`" — the message a typo gets, for a form GRAMMAR has.
+	#
+	# Both shapes are one rule, so it is written once, HERE: the parser is the only place
+	# that sees the bitwise-or expression and the leftover `|` token alike.
+	raise "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Pipe) or is_or_expr(lit)
 
 	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
 	# while the pattern keeps destructuring. It fell through to the arrow check, so the

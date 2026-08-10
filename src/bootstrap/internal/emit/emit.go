@@ -1227,9 +1227,16 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 		// The bound is evaluated ONCE. Emitting it in the condition ran it per
 		// iteration, so a `for i in 0..xs.len()` walked the list to measure it on every
 		// step and a bound with an effect had that effect N times.
+		// BOTH BOUNDS ARE MATERIALISED, LOW FIRST. Only the high one used to be, and the
+		// low one stayed in the `for` initialiser — which C runs after the declaration
+		// above it, so `for i in a()..b()` called `b` and then `a`. Operands go left to
+		// right everywhere else in the language, and `a() + b()` in the same program
+		// printed them the other way round.
+		lo := e.freshName("lo")
 		hi := e.freshName("hi")
 		e.line("{")
 		e.indent++
+		e.line(fmt.Sprintf("int64_t %s = %s;", lo, e.expr(rng.Lo)))
 		e.line(fmt.Sprintf("int64_t %s = %s;", hi, e.expr(rng.Hi)))
 		if rng.Inclusive {
 			// An INCLUSIVE range whose high end is the type's maximum has no value to
@@ -1241,9 +1248,9 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 			// sequence, so the only way to reach `hi` is to step to it.
 			more := e.freshName("more")
 			e.line(fmt.Sprintf("for (int64_t %s = %s, %s = (%s <= %s); %s; %s = (%s != %s), %s += %s) {",
-				cv, e.expr(rng.Lo), more, cv, hi, more, more, cv, hi, cv, more))
+				cv, lo, more, cv, hi, more, more, cv, hi, cv, more))
 		} else {
-			e.line(fmt.Sprintf("for (int64_t %s = %s; %s < %s; %s++) {", cv, e.expr(rng.Lo), cv, hi, cv))
+			e.line(fmt.Sprintf("for (int64_t %s = %s; %s < %s; %s++) {", cv, lo, cv, hi, cv))
 		}
 		e.body(n.Body, true)
 		e.line("}")

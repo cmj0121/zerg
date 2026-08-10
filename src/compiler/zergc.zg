@@ -237,16 +237,17 @@ fn declares_main(files: list[str]) -> bool {
 # `zerg build main.zg -o app` wrote `app.o`, said nothing, and exited 0 — a program that
 # silently is not one.
 fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
+	# NO `guard` ON THE TWO STAGES BELOW. One used to wrap each of them whole, so a file that
+	# could not be read, lexed or PARSED printed nothing and exited 0: `--emit ast` on a
+	# program carrying an unbuilt form reported success and produced no tree. It is the
+	# silent success load_unit had, and worse here — these are the two stages a person
+	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		guard {
-			io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
-		}
+		io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
 		return
 	}
 	if emit == "ast" {
-		guard {
-			io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
-		}
+		io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
 		return
 	}
 	mut output := out
@@ -806,13 +807,21 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	seen.append(name)
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
+
+	# NO `guard` HERE. It used to wrap this, so a file that could not be READ or could not
+	# be LEXED was silently dropped from the unit — and a unit whose only source was dropped
+	# is an empty program, which emits nothing and succeeds. `zerg build -o app prog.zg` on a
+	# file with a bad f-string exited 0, wrote no binary, and said not one word; a Makefile or
+	# a CI step reads that as a build.
+	#
+	# Both failures already carry their own sentence — io.read_file names the path, lex_check
+	# names the lexical rule and where — so letting them out is what puts the real reason in
+	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
 	for f in files {
-		guard {
-			src := str(io.read_file(f))
-			lex_check(src, f)
-			srcs.append(src)
-			paths.append(f)
-		}
+		src := str(io.read_file(f))
+		lex_check(src, f)
+		srcs.append(src)
+		paths.append(f)
 	}
 
 	# indexed, because the import scan is a full parse and so the FIRST one a source

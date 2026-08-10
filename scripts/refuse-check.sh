@@ -278,7 +278,7 @@ EOF
 # GRAMMAR derives an or-pattern; neither compiler lowers one, and `|` in pattern position is
 # read as the bitwise operator — so `1 | 2` folded to `3` and the arm matched neither side,
 # compiled and run. Refusing it is the whole difference between a gap and a wrong answer.
-expect "$ZERG" or-pattern-in-a-match-arm E228 <<'EOF'
+expect "$ZERG" or-pattern-in-a-match-arm E241 <<'EOF'
 fn f(n: int) -> str {
 	return match n {
 		1 | 2 => "lo"
@@ -386,7 +386,7 @@ EOF
 
 # A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR#variant): a payload
 # enum's tag is opaque and match-only, so neither direction of the reading is offered on it.
-expect "$ZERG" discriminant-of-a-payload-enum E440 <<'EOF'
+expect "$ZERG" discriminant-of-a-payload-enum E407 <<'EOF'
 enum E {
 	P(int)
 	Q
@@ -397,7 +397,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" reverse-of-a-payload-enum E440 <<'EOF'
+expect "$ZERG" reverse-of-a-payload-enum E420 <<'EOF'
 enum E {
 	P(int)
 	Q
@@ -503,7 +503,7 @@ EOF
 # An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
 # reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
 # back empty, both in silence.
-expect "$ZERG" open-range-in-a-for E439 <<'EOF'
+expect "$ZERG" open-range-in-a-for E423 <<'EOF'
 fn main() {
 	mut n := 0
 	for i in 20.. {
@@ -513,7 +513,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" open-range-in-a-slice E439 <<'EOF'
+expect "$ZERG" open-range-in-a-slice E423 <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	ys := xs[1..]
@@ -626,7 +626,7 @@ EOF
 # on this subject is the derive this compiler still does not write — see
 # derive-of-an-unbuilt-spec and payload-enum-equality below.
 
-expect "$ZERG" equality-with-no-eq E443 <<'EOF'
+expect "$ZERG" equality-with-no-eq E430 <<'EOF'
 struct P {
 	x: int
 }
@@ -636,7 +636,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" equality-over-a-container E442 <<'EOF'
+expect "$ZERG" equality-over-a-container E445 <<'EOF'
 fn main() {
 	print [1, 2] == [1, 2]
 }
@@ -721,7 +721,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" for-mut-binding E229 <<'EOF'
+expect "$ZERG" for-mut-binding E242 <<'EOF'
 fn main() {
 	for mut v in [1, 2] {
 		print v
@@ -779,14 +779,14 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" refcounted-box-builtin E441 <<'EOF'
+expect "$ZERG" refcounted-box-builtin E446 <<'EOF'
 fn main() {
 	r := Ref(7)
 	print deref(r)
 }
 EOF
 
-expect "$ZERG" deref-builtin E441 <<'EOF'
+expect "$ZERG" deref-builtin E446 <<'EOF'
 fn main() {
 	print deref(7)
 }
@@ -1002,7 +1002,7 @@ EOF
 
 # A field the type does not have was spelled `zg_<fld>` and handed to cc — the same class
 # as an undefined name, answerable from the same tables.
-expect "$ZERG" field-the-struct-does-not-have E442 <<'EOF'
+expect "$ZERG" field-the-struct-does-not-have E450 <<'EOF'
 struct P {
 	n: int
 }
@@ -1036,7 +1036,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" ordering-on-an-aggregate E441 <<'EOF'
+expect "$ZERG" ordering-on-an-aggregate E448 <<'EOF'
 #[derive(Eq)]
 struct P {
 	x: int
@@ -1047,7 +1047,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" rendering-a-composite E443 <<'EOF'
+expect "$ZERG" rendering-a-composite E449 <<'EOF'
 struct P {
 	x: int
 }
@@ -1289,7 +1289,7 @@ fn f(xs: [int; 3]) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" struct-pattern E229 <<'EOF'
+expect "$ZERG" struct-pattern E243 <<'EOF'
 struct P {
 	x: int
 }
@@ -1643,7 +1643,7 @@ EOF
 # composite has no rendering — the structural one is `Display`'s job and this compiler
 # generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
 # arithmetic or pointer type is required". The mutation fuzzer is what found it.
-expect "$ZERG" print-a-tuple E443 <<'EOF'
+expect "$ZERG" print-a-tuple E449 <<'EOF'
 fn main() {
 	print(1, 2)
 }
@@ -2414,6 +2414,38 @@ EOF
 expect "$ZERG" unicode-escape-on-a-surrogate 'E109' <<'EOF'
 fn main() {
 	print int('\u{D800}')
+}
+EOF
+
+# The four unclosed-literal codes. Each is a rule the lexer has reported since it was
+# written and NOTHING asserted — found by the meta-gate over the catalogue, which is the
+# failure that gate exists for: a code with no case is an identity nobody checks, and it
+# breaks nothing while it drifts.
+expect "$ZERG" empty-rune-literal 'E102' <<'EOF'
+fn main() {
+	x := ''
+	print x
+}
+EOF
+
+expect "$ZERG" triple-quoted-string-never-closed 'E105' <<'EOF'
+fn main() {
+	x := """abc
+	print x
+}
+EOF
+
+expect "$ZERG" raw-string-with-no-closing-quote 'E106' <<'EOF'
+fn main() {
+	x := r"abc
+	print x
+}
+EOF
+
+expect "$ZERG" command-literal-with-no-closing-backtick 'E107' <<'EOF'
+fn main() {
+	x := `ls
+	print x
 }
 EOF
 

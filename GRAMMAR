@@ -124,7 +124,7 @@ block      ::= '{' stmt-list '}'
 keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
-             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'
+             | 'chan'  | 'type'  | 'impl'   | 'init'
              | 'defer' | 'del'   | 'close'  | 'raise'   | 'guard' | 'is'
              | 'not'   | 'and'   | 'or'     | 'print'   | 'this'  | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
@@ -245,20 +245,23 @@ postfix      ::= '.' identifier        # field or method access
                | '.' dec-int           # tuple element by STATIC index — 't.0', 't.1' (0-based)
                | '(' arg-list? ')'     # call (named arguments: group 5)
                | '[' expr ']'          # index — a single-value subscript
-               | type-args             # explicit type arguments 'f[K, V]' (type-args, group 7)
                | '?'                   # propagate (group 8): unwrap Left, else early-return Right
                | '!'                   # force-unwrap (group 8): unwrap Left, else raise UnwrapError
                | '?.' identifier       # optional chain (group 8): read .id when present, else nil
 arg-list     ::= arg ( ',' arg )*
 arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
 
-# NAME RESOLUTION disambiguates two surfaces that share '[ … ]'. A single '[X]' is an
-# INDEX when the base resolves to a value, and TYPE ARGUMENTS when the base resolves to
-# a generic function or a type constructor ('parse[int]', 'list[int]') — a name is
-# exactly one of these (a type and a function cannot share a name, group 7). A comma —
-# '[X, Y]' — is unambiguously type arguments (an index takes one value). This is the
-# SAME name resolution the pattern grammar uses to tell a variant from a binding
-# (group 6): the grammar is resolved with scope in hand, not purely context-free.
+# A postfix '[ … ]' is ALWAYS an INDEX. Type arguments are written only in TYPE position
+# (base-type, group 7), so the two surfaces no longer share a bracket and nothing here has
+# to be resolved to be parsed: this postfix is decided by the syntax that carries it, never
+# by what a name happens to mean in scope. The pattern grammar (group 6) is context-free
+# for the same reason and by the same kind of rule.
+#
+# A generic call INFERS its type arguments from the argument types; where inference is not
+# enough, a typed binding steers it ('xs: list[int] = empty()') instead of an argument list
+# at the call site. The str bridges that were spelled with explicit arguments — 'list[byte](s)',
+# 'list[rune](s)' — become ordinary named types; WHICH names is a library decision and not a
+# grammatical one, like every other built-in type name (group 7).
 
 # Composite literals build values in expression position. A tuple is a parenthesized
 # 2+ list — a single '( expr )' is just grouping. A list is bracketed — a comma list '[a, b]',
@@ -269,8 +272,8 @@ arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value'
 # literal (build one with its constructor, 'set([ … ])'). Two parse rules follow from '{'
 # being the block opener: at a statement's start '{' is a block STATEMENT (its value
 # discarded), and ANY '{'-opening expression — a block OR a map literal — at the start of
-# an if/for/with/match head must be parenthesized. (struct and enum values are built by
-# calling a type or variant name — see the constructor note in group 7.)
+# an if/for/with/match head must be parenthesized. (A struct value is built by calling its
+# type name and an enum value by calling 'Enum.Variant' — see the constructor note, group 7.)
 #
 # A tuple is read back by STATIC index — 't.0', 't.1' (postfix, above) — not 't[i]': its
 # elements are heterogeneous, so the index must be a compile-time constant for the result
@@ -288,7 +291,7 @@ add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
 mul-op       ::= '*' | '/' | '//' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
-type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+type-name    ::= identifier            # a type, a spec, or an enum's name (groups 6, 7)
 
 # ==================================================================================
 # 5. Functions
@@ -408,12 +411,18 @@ break        ::= 'break' ( 'if' expr )?
 continue     ::= 'continue' ( 'if' expr )?
 
 # A bare block just opens a nested scope — its bindings and scope-owned values are
-# freed at its '}'. 'with' is sugar over it: it binds a scoped resource for the block
-# and guarantees the resource's teardown runs on EVERY exit (normal, return, abort).
-# The value implements the built-in 'Scoped' spec (its one method is the teardown); a
-# Ref[T]'s drop already satisfies it. So `with acquire() as y { body }` desugars to
-# `{ y := acquire(); defer <y's Scoped teardown>; body }`; 'as y' is optional when the
-# resource is used only for its scope (e.g. a held lock).
+# freed at its '}', on EVERY exit (normal, return, abort). 'with' is PURELY SYNTACTIC sugar
+# over that block: it says the block exists for one resource, and binds it.
+#
+#     with acquire() as y { body }   →   { y := acquire(); body }
+#     with acquire() { body }        →   { <a name only the compiler writes> := acquire(); body }
+#
+# 'as y' is optional when the resource is held only for its scope (a lock). The nameless
+# form still BINDS — expanding it to a bare 'acquire(); body' would end the value's life at
+# that statement rather than at the '}', which is the opposite of what holding it means.
+#
+# The form introduces no teardown of its own: what frees a value is the resource-cleanup
+# group (group 11), unchanged.
 with-stmt    ::= 'with' expr ( 'as' identifier )? block
 
 # 'match' tries a value against arms in order and yields the first fit; every arm
@@ -437,16 +446,16 @@ range-arm    ::= range-bound ( '..' range-bound? | '..=' range-bound )
 range-bound  ::= '-'? literal | identifier          # a compile-time constant bound
 
 # A pattern destructures by copy.
-# A bare name in pattern position is a 'variant-pat' when it RESOLVES to a known type or
-# enum variant in scope, and a 'binding-pat' (a fresh name) otherwise — the same name
-# resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
-# case-free, so this is decided by resolution, not by capitalization.
+# A variant is ALWAYS named BY ITS ENUM — 'Color.Red', 'Shape.Line(5)' — because that pair is
+# what a variant IS. 'Red' alone names nothing: two enums may each declare one, and which of
+# them a bare name meant was decided by whatever happened to be in scope, so declaring a
+# variant in one file could silently change what a pattern in another file matched. A BARE
+# name in pattern position is therefore ALWAYS a fresh binding, and nothing here has to be
+# resolved to be parsed — the same rule, and the same reason, as the postfix '[' of group 4.
+# (Names are case-free, so capitalization was never what decided this.)
 #
-# A variant may also be named BY ITS ENUM — 'Color.Red', 'Shape.Line(5)', and the same in
-# pattern position. It is the identical value; what it adds is that the reader is told which
-# enum without having to resolve the name, which the bare form asks of them. The
-# qualification must be TRUE: 'Color.Apple' names a variant of another enum and is an error,
-# not a fresh binding.
+# The qualification must be TRUE: 'Color.Apple' names a variant of another enum and is an
+# error — and now it can only be an error, never a fresh binding.
 pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
 # A struct pattern must list EVERY field, or end with '..' to ignore the rest ('Div{q, r}'
 # lists all; 'Div{q, ..}' ignores the rest; 'Div{..}' matches any). A list pattern may
@@ -455,12 +464,12 @@ pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same 
 # from the value-level range '..' (group 4).
 #
 # 'pattern-core as name' also binds the WHOLE matched value to 'name' while the core keeps
-# destructuring — 'Move{x, y} as m', 'Some(inner as v)'. 'as' reads the same as in
+# destructuring — 'Move{x, y} as m', 'Either.Left(inner as v)'. 'as' reads the same as in
 # 'with'/'import': '<thing> as <name>'. On an or-pattern it binds the nearest alternative
-# ('A | B as m' is 'A | (B as m)'); bind both sides with 'A as m | B as m'.
+# ('E.A | E.B as m' is 'E.A | (E.B as m)'); bind both sides with 'E.A as m | E.B as m'.
 sub-pattern  ::= pattern-core ( 'as' identifier )?
 pattern-core ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
-variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
+variant-pat  ::= type-name '.' identifier ( '(' pattern-list ')' )?   # Color.Red, Either.Left(v)
 struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 tuple-pat    ::= '(' pattern-list ')'                   # (a, b) — also a bind-target
@@ -485,8 +494,8 @@ pattern-list ::= pattern ( ',' pattern )*
 # 'uint', 'float', and any fixed-width members ('i32', 'u8', 'f64', …) — is a STDLIB
 # decision, not surface grammar: adding one adds no production.
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
-base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
-               | tuple-type | array-type | chan-type | fn-type | ptr-type   # associated type — chainable: 'I.Item.Sub'
+base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'text.Splitter' names
+               | tuple-type | array-type | chan-type | fn-type | ptr-type   # a type through its import (group 10)
 type-args    ::= '[' generic-arg ( ',' generic-arg )* ']'
 generic-arg  ::= type | const-expr   # a type, or a const-expr filling a value generic param (by name)
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
@@ -508,9 +517,8 @@ impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item*
              # constructor 'User.from_json(…)' (an associated fn, no 'this') or a private
              # method 'u.recompute()' (uses 'this'). Every method and associated fn on a
              # type shares one namespace, spec or inherent alike; a duplicate is an error.
-impl-item    ::= fn-decl | assoc-bind | val-bind   # a method/assoc fn, an assoc-type binding, or an assoc value
-assoc-bind   ::= 'type' identifier '=' type   # 'type Item = int' — satisfies a spec's assoc type
-val-bind     ::= identifier ':=' const-expr   # 'BITS := 32' — satisfies a spec's associated value
+impl-item    ::= fn-decl | val-bind   # a method or associated fn, or a TYPE CONSTANT
+val-bind     ::= identifier ':=' const-expr   # 'SIZE := 4096' — a per-type compile-time value
 
 # --- compile-time constants (implicit) ---
 # Compile-time folding is IMPLICIT and independent of the 'const' keyword (which only marks a
@@ -526,11 +534,15 @@ val-bind     ::= identifier ':=' const-expr   # 'BITS := 32' — satisfies a spe
 # runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
 const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see above)
 
-# CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
-# the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
-# fields become parameters in declaration order — positional then named, group 5) and
-# 'Circle(3.0)' builds an enum variant. The name is SHARED with functions: a type and a
-# function cannot share a name (a duplicate is an error — Zerg has no overloading).
+# CONSTRUCTION. A type name is ALSO its constructor: 'struct' puts the name into the value
+# namespace as a callable, so 'User(id: 1, name: "x")' builds one (its fields become
+# parameters in declaration order — positional then named, group 5). An 'enum' puts in ITS
+# OWN name and not its variants': a variant is built THROUGH the enum —
+# 'Shape.Circle(3.0)', 'Color.Red' — the same (enum, variant) pair a pattern writes
+# (group 6). A variant name is therefore never a name on its own, which is what keeps two
+# enums that both declare a 'Red' from competing for it. The type name is SHARED with
+# functions: a type and a function cannot share a name (a duplicate is an error — Zerg has
+# no overloading).
 #
 # FIELD VISIBILITY & DEFAULTS. A field is 'pub' for external INSTANCE ACCESS (read/write
 # of 'u.field'); a non-pub field is module-private, and MUST carry a default. A field's
@@ -557,28 +569,33 @@ deco-arg     ::= type-name | const-expr        # derive(Eq, Ord), align(16), ali
 # require 'impl Eq', and lets Ord's body use Eq's methods on This. There is NO disjunction
 # bound ('T: A | B'): a body could not know which methods T has, so it cannot monomorphize.
 # To accept SEVERAL argument types, parameterize a spec and write one impl per type — e.g.
-# 'spec Indexable[K] { type Output; fn index(k: K) -> Output }' with 'impl Indexable[int]'
-# (element) and 'impl Indexable[Range]' (slice) for a list, so 'xs[k]' resolves statically
-# on k's type and each impl keeps its own 'Output' — or use an 'enum' for a runtime choice.
+# 'spec Indexable[K, V] { fn index(k: K) -> V }' with 'impl Indexable[int, T]' (element) and
+# 'impl Indexable[Range, list[T]]' (slice) for a list, so 'xs[k]' resolves statically on k's
+# type — or use an 'enum' for a runtime choice.
 #
 # Generics MONOMORPHIZE: each distinct type argument compiles to its own specialized C
 # function. So a bound is load-bearing (it names the impl to specialize against, and in
 # generic code 'a < b' is valid only if T's bounds provide the operator's spec), and a
 # generic function is NOT a first-class value until instantiated. Soundness needs
 # COHERENCE (at most one 'impl Spec for Type' program-wide) and an ORPHAN rule (the impl
-# must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
-# '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
-# size-for-speed trade; see docs) — it CANNOT erase a VALUE generic (a compile-time value
-# has no witness-table slot). Explicit call-site type arguments are written 'f[T]',
-# disambiguated from an index by name resolution (see postfix, group 4).
+# must own the spec or the type). Generics are invariant — Zerg has no subtyping. There is
+# no erasing counterpart: a decorator asking for one shared witness-table body is refused by
+# name, because a spec is a BOUND and not a type. Explicit call-site type arguments have no
+# expression-position surface (postfix, group 4): a call infers from its arguments, or a
+# typed binding steers it.
 #
 # VALUE (CONST) GENERICS. A generic parameter may be a compile-time VALUE, not just a type,
 # and there is NO 'const' keyword: the annotation after ':' resolves BY NAME — a SPEC makes it
 # a type parameter bounded by that spec ('[T: Ord]'); a concrete (non-spec) TYPE makes it a
 # compile-time VALUE parameter of that type ('[N: int]' — a PRIMITIVE: int/uint/float/bool/rune/
-# byte/str; composite/user types deferred). A bare '[X]' is a type parameter. A FUNCTION's value
-# param is INFERRED from an argument's type ('fn sum[N: int](xs: [int; N])' fixes N from 'xs')
-# and is not passed at the call site; a TYPE's is supplied in type position ('Matrix[3, 4]').
+# byte/str; composite/user types deferred). A bare '[X]' is a type parameter.
+#
+# A FUNCTION's value param is INFERRED FROM AN ARGUMENT'S TYPE ('fn sum[N: int](xs: [int; N])'
+# fixes N from 'xs') and is not passed at the call site, so it runs the SAME direction as every
+# other inference here — up, out of what is there — and is not one of the carve-outs where a
+# declared type flows back in. A TYPE's is supplied in type position ('Matrix[3, 4]'), where it
+# is written rather than inferred. Without this, an array's length being part of its type makes
+# '[T; N]' unwritable in a signature: a function could take '[int; 4]' and nothing else.
 generics     ::= '[' type-param ( ',' type-param )* ']'
 type-param   ::= identifier ( ':' bound )?             # bound = a spec → type param; a concrete type → value param
 bound        ::= type-name ( '+' type-name )*          # a conjunction of specs (single concrete type = value param)
@@ -596,18 +613,15 @@ variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )? 
 # (backing 'int' by ONE default rule — no annotation needed; 'int(v)' reads the value,
 # 'E.of(n) -> E?' reverses). A specific width is an opt-in layout decorator ('#[repr]',
 # reserved); the serialized/wire form is the 'Encode'/'Decode' impl, never a decorator.
-# A spec member is a required method (signature), a provided method (with a body), or an
-# ASSOCIATED TYPE — a type the impl fills in ('type Item'), functionally determined by
-# the implementer (one per impl). It makes a single-output protocol like iteration well
-# defined: 'for x in it' has ONE element type because 'Iterator.Item' is fixed per impl,
-# not chosen per use as a generic 'Iterable[T]' would allow. Reference it by projection
-# in type position — 'I.Item' (group 4's base-type). A spec may also require an ASSOCIATED
-# VALUE — a compile-time value each impl supplies: 'BITS: int' requires it, the impl provides
-# 'BITS := 32' (a val-bind, group 7). An associated type is a type only; an associated value
-# carries a value.
-spec-member  ::= fn-sig | fn-decl | assoc-type | assoc-val   # method(s), assoc type, or assoc value
-assoc-type   ::= 'type' identifier ( ':' bound )?      # 'type Item' or bounded 'type Item: Ord'
-assoc-val    ::= identifier ':' type                   # 'BITS: int' — a required associated value
+# A spec member is a required method (a signature) or a provided one (with a body). That
+# is the whole of it: a spec carries BEHAVIOUR and nothing else. An ASSOCIATED TYPE and an
+# ASSOCIATED VALUE — a type or a compile-time value the impl fills in FOR THE SPEC — are not
+# members here; both are refused by name. An associated type is an output the IMPL chooses,
+# so checking a use of it would need the impl in hand before the expression's type is known.
+# A single-output protocol is written by parameterizing the spec instead ('spec Iterable[T]',
+# pinned by coherence), and a per-impl constant is an ordinary TYPE CONSTANT (a 'val-bind' in
+# the impl, group 7) — which no spec demands and none can require.
+spec-member  ::= fn-sig | fn-decl               # a required method, or a provided one
 fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================
@@ -724,8 +738,9 @@ send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from 
 # 'mut' binding inside a module-level 'unsafe { … }' group, group 12; the SAFE way to share
 # mutable global state is an immutable ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
 # entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
-# ordinary function, not reserved. 'package' is the distribution / versioning unit: a
-# directory tree selected by the build tool, with NO in-source 'package' declaration.
+# ordinary function, not reserved. A PACKAGE is the distribution / versioning unit: a
+# directory tree selected by the build tool, with no in-source declaration — and so with no
+# keyword either, since a word this grammar never derives has no business being reserved.
 #
 # An 'import' binds a NAMESPACE. The path is a STRING and its LAST segment names the binding
 # ('import "util/text"' binds 'text'), reached with '.' — 'text.split(…)'. 'as' renames it

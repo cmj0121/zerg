@@ -1699,7 +1699,7 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
 	if c_scalar_class(td.under) == SC_NONE {
-		chk_at_place(em, td.path, td.line, td.col, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		chk_at_place(em, td.path, td.line, td.col, f"E304 NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
 		return TUnknown
 	}
 	return td.under

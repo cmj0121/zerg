@@ -6722,6 +6722,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		Stmt.SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
+		Stmt.SScope(body) => c_block(em, body, ind)
 		Stmt.SDefer(x) => c_defer(em, x, ind)
 		Stmt.SSpawn(x) => c_spawn(em, x, ind)
 		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)

@@ -448,8 +448,9 @@ or-pattern 說的事，而且不管有幾個值都只說一次。
 觸發條件是**純語法**的——一個裸 block、第一個敘述是 binding。它不得讀那個 binding 的 **`defer`**:`with` 不帶
 自己的 teardown,所以一條把 `{ x := e; defer x.close(); … }` 摺進去的規則會把那個 `defer` 刪掉。
 
-> **[not yet]** 兩者皆未建置,且都等 `with` 本身——它在關鍵字上就是 **[not yet]**
-> （見[值與記憶體](../core/memory.zh-TW.md)）。
+> **[not yet]** 兩條都還沒做。它們不再等任何東西:`with` 已經實作、裸 block 也是,剩下的就是這兩條規則本身。
+> `L105` 有一個值得寫下來的皺褶——`with` 在 **parser** 就展開了,所以等到有 AST 的時候,已經沒有 `with` 可以 lint。
+> 因此兩條都是 token 規則,跟其他每一條 `F4xx` 一樣。
 
 而在這裡，短的那個形式也是**唯一編得過**的那個。pattern 位置上的 `|` 被讀成位元運算子，所以 `1 | 2`
 會被折成 `3`、那個 arm 既不中 1 也不中 2——正因如此，編譯器現在直接拒絕 or-pattern，而不是把它 emit 出去。
@@ -539,7 +540,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E217` | NotImplemented                                                                                        |
 | `E218` | NotImplemented                                                                                        |
 | `E219` | NotImplemented                                                                                        |
-| `E220` | NotImplemented                                                                                        |
 | `E221` | NotImplemented                                                                                        |
 | `E222` | NotImplemented                                                                                        |
 | `E223` | NotImplemented                                                                                        |
@@ -554,7 +554,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E234` | NotImplemented                                                                                        |
 | `E235` | NotImplemented                                                                                        |
 | `E236` | NotImplemented                                                                                        |
-| `E237` | NotImplemented                                                                                        |
 | `E238` | NotImplemented                                                                                        |
 | `E239` | NotImplemented                                                                                        |
 | `E240` | NotImplemented                                                                                        |

@@ -233,8 +233,10 @@ The trigger is **purely syntactic** — a bare block, a first statement that bin
 binding's **`defer`**: `with` carries no teardown of its own, so a rule that folded
 `{ x := e; defer x.close(); … }` into one would delete the `defer`.
 
-> **[not yet]** Both are unbuilt, and both wait on `with` itself — **[not yet]** at the keyword
-> ([Values & Memory](../core/memory.md)).
+> **[not yet]** Both are unbuilt. They no longer wait on anything: `with` is built, and a bare block
+> with it, so what is left is the two rules themselves. `L105` is the one with a wrinkle worth writing
+> down — `with` expands in the PARSER, so by the time there is an AST there is no `with` left to lint.
+> Both rules are therefore token rules, like every other `F4xx`.
 
 `GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
 for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the
@@ -622,7 +624,6 @@ shipping compiler rather than a part of it (the line
 | `E217` | the decorator `#[…]` — **[not yet]**                                                        |
 | `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
 | `E219` | `…` as an `impl` item — **[not yet]**                                                       |
-| `E220` | a nested `{ … }` block as a statement — **[not yet]**                                       |
 | `E221` | a struct pattern `…{…}` — **[not yet]**                                                     |
 | `E222` | calling … — **[not yet]**                                                                   |
 | `E223` | the named argument `…:` — **[not yet]**                                                     |
@@ -637,7 +638,6 @@ shipping compiler rather than a part of it (the line
 | `E234` | an `as` binding in a `match` arm — **[not yet]**                                            |
 | `E235` | an interpolating command literal — **[not yet]**                                            |
 | `E236` | a command literal — **[not yet]**                                                           |
-| `E237` | a `with` block — **[not yet]**                                                              |
 | `E238` | a destructuring binding `(a, b) := …` — **[not yet]**                                       |
 | `E239` | a range with no lower bound — **[not yet]**                                                 |
 | `E240` | a list pattern in a `match` arm — **[not yet]**                                             |

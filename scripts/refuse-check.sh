@@ -730,14 +730,6 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" nested-block-statement E220 <<'EOF'
-fn main() {
-	{
-		print 1
-	}
-}
-EOF
-
 expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
 	x: int
@@ -1485,14 +1477,6 @@ fn run(f: fn() -> int) -> int {
 fn main() {
 	k := 5
 	print run(fn() -> int { return k })
-}
-EOF
-
-expect "$ZERG" with-statement E237 <<'EOF'
-fn main() {
-	with 5 as n {
-		print n
-	}
 }
 EOF
 

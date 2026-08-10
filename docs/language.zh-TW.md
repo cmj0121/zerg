@@ -94,7 +94,7 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 受祝福 spec**——全部 opt-in：`Eq`、`Ord`、`Hash`、`Encode`、`Decode`（沒有一律 derive 的 `Object`）。**使用者 spec
 永遠不能被 derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
 客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。`derive`
-只是一個小固定集合中的一員——`#[dyn]`、`#[sealed]` 等——完整清單見 **[Decorator](core/decorators.zh-TW.md)**。另見
+只是一個小固定集合中的一員——`#[test]`、`#[sealed]` 等——完整清單見 **[Decorator](core/decorators.zh-TW.md)**。另見
 **[Derive 與預設行為](core/derive.zh-TW.md)**。
 
 ## 控制流與模式比對（Control Flow & Pattern Matching）
@@ -121,7 +121,7 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 - **原生型別轉換 `T(x)`**——`int` / `uint` / `float` / `bool` / `byte` / `rune`（以及固定寬度的
   `i8`…`i64` / `u8`…`u64` / `f32` / `f64`）：帶範圍檢查的**重新建構**，絕非 reinterpret；`int("…")` 另外會
   **解析**十進位字串（[型別](core/types.zh-TW.md)）。
-- **`str(bytes)` / `str(runes)`** 與 **`list[byte](s)` / `list[rune](s)`**——str ⇄ list 的橋接，驗證
+- **`str(bytes)` / `str(runes)`** 與 **`bytearray(s)` / `runearray(s)`**——str ⇄ list 的橋接，驗證
   `str` 不變式（[Collection](code/collections.zh-TW.md)）。
 - **Error 建構子**——固定的 `ValueError` / `OverflowError` / `IOError` / `EncodingError` / `IndexError` /
   `KeyError`，各自建出該 kind 的 `Err`（[Null-safety 與錯誤處理](code/errors.zh-TW.md)）。

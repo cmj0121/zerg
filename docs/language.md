@@ -103,7 +103,7 @@ specs** — all **opt-in**: `Eq`, `Ord`, `Hash`, `Encode`, `Decode` (there is no
 A **user spec can never be derived** (`#[derive(MySpec)]` is a compile error): generating from structure
 needs code that reads fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
 `impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
-cannot define new ones). `derive` is one of a small fixed set — `#[dyn]`, `#[sealed]`, and more — listed in
+cannot define new ones). `derive` is one of a small fixed set — `#[test]`, `#[sealed]`, and more — listed in
 **[Decorators](core/decorators.md)**. See also **[Derive & Default Behavior](core/derive.md)**.
 
 ## Control Flow & Pattern Matching
@@ -136,7 +136,7 @@ the language itself provides. A user cannot add to the set.
 - **Primitive conversion `T(x)`** — `int` / `uint` / `float` / `bool` / `byte` / `rune` (and the
   fixed-width `i8`…`i64` / `u8`…`u64` / `f32` / `f64`): a **re-construction** with range checks, never a
   reinterpretation; `int("…")` additionally **parses** a decimal string ([Types](core/types.md)).
-- **`str(bytes)` / `str(runes)`** and **`list[byte](s)` / `list[rune](s)`** — the str ⇄ list bridges,
+- **`str(bytes)` / `str(runes)`** and **`bytearray(s)` / `runearray(s)`** — the str ⇄ list bridges,
   validating the `str` invariant ([Collections](code/collections.md)).
 - **Error constructors** — the fixed `ValueError` / `OverflowError` / `IOError` / `EncodingError` /
   `IndexError` / `KeyError`, each building an `Err` of that kind ([Null-safety & Errors](code/errors.md)).

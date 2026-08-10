@@ -23,6 +23,13 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 >
 > **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
 > 沒有任何可見性檢查。見下方「可見性」。
+>
+> **[not yet]** 兩個 module 宣告**同一個 top-level 名字**——`fn`、型別、常數——會被具名拒絕:
+> _two modules both define `X`_。壓平的命名空間是原因,而機制在 C 符號上:自由函式被 emit 成 `zg_<name>`,
+> 裡面沒有 module,兩者因此 mangle 成同一個符號;而呼叫端在 emit 之前就把 `mod.fn(…)` 的限定詞丟掉了,
+> 所以也無從在兩者之間挑選。`import … as` 改的是**命名空間**的名字、不是成員,幫不上忙。實務上的代價是:
+> 一個 module 不能使用與自己宣告同名的 stdlib 函式——編譯器自己的原始碼就在 `strings.has_suffix` 旁邊
+> 手寫了一份 `has_suffix`,理由正是這個。
 
 ### Program 與 entry point
 

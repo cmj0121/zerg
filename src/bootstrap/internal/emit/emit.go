@@ -2305,6 +2305,15 @@ func (e *emitter) call(n *ast.Call) string {
 	if md, ok := e.cur.MethodCalls[n]; ok {
 		return e.methodCall(n, md)
 	}
+	// `Shape.Circle(3.0)` — a variant built THROUGH its enum (GRAMMAR#variant-pat and the
+	// CONSTRUCTION note beside it). Sema already owns this shape (enumNamespaceCall); the
+	// emitter reached it as an ordinary call with a Field callee and had no target, which
+	// surfaced as a SystemError about generated code rather than as anything a reader could
+	// act on. The variant is what is constructed either way, so the two spellings lower to
+	// one thing.
+	if vname, ok := e.qualifiedVariant(n.Callee); ok {
+		return e.constructVariant(n, n.Args, vname)
+	}
 	id, _ := n.Callee.(*ast.Ident)
 	if id != nil {
 		if sym, ok := e.info.Refs[id]; ok {
@@ -2607,6 +2616,30 @@ func (e *emitter) namespaceMemberValue(n *ast.Field) (string, bool) {
 		key = sema.NamespaceMemberName(sym, id.Name, n.Name)
 	}
 	return "zg_" + key, true
+}
+
+// qualifiedVariant answers the variant name an `Enum.Variant` callee spells, when the left
+// side names an enum type that declares it. It is the emitter's half of the rule that an
+// enum puts ITS OWN name into the value namespace and not its variants'.
+func (e *emitter) qualifiedVariant(callee ast.Expr) (string, bool) {
+	fld, ok := callee.(*ast.Field)
+	if !ok {
+		return "", false
+	}
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok || sym.Kind != sema.SymType || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
+		return "", false
+	}
+	for _, v := range sym.TypeDef.Enum.Variants {
+		if v.Name == fld.Name {
+			return v.Name, true
+		}
+	}
+	return "", false
 }
 
 // callTarget is the mangled C name a call resolves to: a generic call site is

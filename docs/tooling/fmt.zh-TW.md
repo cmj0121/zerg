@@ -477,23 +477,126 @@ or-pattern 都等語言層面的工作。
 剛好相反——它會插入沒有人寫過的斷行，也會拿掉併行後的清單不再需要的那個 token；而 `F406` 寫的是
 一整行沒有人寫過的東西。
 
-## E1xx — 詞法
+## E1xx–E4xx — 編譯錯誤
 
-這些不是建議。一份 lex 不過的原始碼不是程式，所以每一條都是**編譯錯誤**、建置會停下來。
-它們帶代碼，是因為它們談的是**文字**：查閱的人查的是一條規則，不是一個型別錯誤。
+這些不是建議。撞上其中任何一條的程式不會建置成功，所以每一條都是**編譯錯誤**、建置會停下來。
+它們帶代碼,是因為代碼是一條規則的**穩定身分**,而句子不是:散文會被改得更好,而釘住句子的 gate
+會因此變紅。代碼依**回報它的階段**分段,那也是一次建置遇到它們的順序:
 
-| 代碼   | 規則                                      |
-| ------ | ----------------------------------------- |
-| `E101` | 字串字面量在行尾之前沒有閉合              |
-| `E102` | rune 字面量是空的——它恰好裝一個字元       |
-| `E103` | rune 字面量恰好裝一個字元，而這個裝了更多 |
-| `E104` | 這個字元不屬於任何 Zerg token             |
-| `E105` | 三引號字串沒有被閉合                      |
-| `E106` | raw 字串在這一行沒有閉合引號              |
-| `E107` | 命令字面量沒有閉合的反引號                |
-| `E108` | 帶進位前綴的數字，前綴後至少要有一位數字  |
-| `E109` | 字串／rune／byte 字面量裡有無效的跳脫序列 |
-| `E110` | 字串字面量裡不能有 NUL                    |
+| 區段   | 階段 | 回報什麼                                |
+| ------ | ---- | --------------------------------------- |
+| `E1xx` | 詞法 | 不是 Zerg token 的文字                  |
+| `E2xx` | 剖析 | 不構成 Zerg 形式的 token                |
+| `E3xx` | 檢查 | 形式成立、但意思兜不攏                  |
+| `E4xx` | 產出 | 這個編譯器不會下放的形式,含 `[not yet]` |
+
+代碼放在**訊息的最前面**、句子之前:`E109 invalid escape in a rune literal`。當一則診斷帶有位置時,
+renderer 的 `error:` 會開在它前面(`error: E109 …`);還沒學會位置的拒絕則單獨印訊息——兩種情況下,
+代碼都是那一行的第一個東西。
+
+**代碼在 gate 釘住它時才存在,不會更早。** `scripts/refuse-check.sh` 對每一個做得到的案例都改以代碼
+而非句子斷言,所以「有代碼卻沒有案例」會是一個沒有人驗證的身分,而「有案例卻沒有代碼」是還釘在散文上的那些。
+seed 維持句子比對:代碼是語言的契約,而 seed 是建置正式編譯器的工具、不是它的一部分
+(這條線[一致性](../conformance.zh-TW.md)在拒絕標記 seed 的缺口時就畫過)。
+
+| 代碼   | 規則                                                                                                  |
+| ------ | ----------------------------------------------------------------------------------------------------- |
+| `E101` | 字串字面量在行尾之前沒有閉合                                                                          |
+| `E102` | rune 字面量是空的——它恰好裝一個字元                                                                   |
+| `E103` | rune 字面量恰好裝一個字元，而這個裝了更多                                                             |
+| `E104` | 這個字元不屬於任何 Zerg token                                                                         |
+| `E105` | 三引號字串沒有被閉合                                                                                  |
+| `E106` | raw 字串在這一行沒有閉合引號                                                                          |
+| `E107` | 命令字面量沒有閉合的反引號                                                                            |
+| `E108` | 帶進位前綴的數字，前綴後至少要有一位數字                                                              |
+| `E109` | 字串／rune／byte 字面量裡有無效的跳脫序列                                                             |
+| `E110` | 字串字面量裡不能有 NUL                                                                                |
+| `E201` | `close` 是關鍵字,不是 select arm head                                                                 |
+| `E202` | 沒有 arm 的 select——它等不到任何東西                                                                  |
+| `E203` | 不是 send、receive 或 `_` 的 select arm head                                                          |
+| `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
+| `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
+| `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |
+| `E404` | optional 的 channel——`nil` 會同時是值與結束                                                           |
+| `E204` | expected `…`, found `…`                                                                               |
+| `E205` | expected a newline or `;` to separate statements, found `…`                                           |
+| `E206` | `Either[…, …]` has the same type on both sides                                                        |
+| `E207` | NotImplemented                                                                                        |
+| `E208` | `#[derive(…)]` has no declaration under it                                                            |
+| `E209` | NotImplemented                                                                                        |
+| `E210` | NotImplemented                                                                                        |
+| `E211` | NotImplemented                                                                                        |
+| `E212` | NotImplemented                                                                                        |
+| `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
+| `E214` | enum `…` carries a payload, so its tag is opaque                                                      |
+| `E215` | NotImplemented                                                                                        |
+| `E216` | NotImplemented                                                                                        |
+| `E217` | NotImplemented                                                                                        |
+| `E218` | NotImplemented                                                                                        |
+| `E219` | NotImplemented                                                                                        |
+| `E220` | NotImplemented                                                                                        |
+| `E221` | NotImplemented                                                                                        |
+| `E222` | NotImplemented                                                                                        |
+| `E223` | NotImplemented                                                                                        |
+| `E224` | NotImplemented                                                                                        |
+| `E225` | NotImplemented                                                                                        |
+| `E226` | NotImplemented                                                                                        |
+| `E227` | NotImplemented                                                                                        |
+| `E230` | NotImplemented                                                                                        |
+| `E231` | NotImplemented                                                                                        |
+| `E232` | NotImplemented                                                                                        |
+| `E233` | NotImplemented                                                                                        |
+| `E234` | NotImplemented                                                                                        |
+| `E235` | NotImplemented                                                                                        |
+| `E236` | NotImplemented                                                                                        |
+| `E237` | NotImplemented                                                                                        |
+| `E238` | NotImplemented                                                                                        |
+| `E239` | NotImplemented                                                                                        |
+| `E240` | NotImplemented                                                                                        |
+| `E304` | NotImplemented                                                                                        |
+| `E405` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
+| `E406` | `?.` reads through an optional, and … is not one                                                      |
+| `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with the same right |
+| `E409` | NotImplemented                                                                                        |
+| `E410` | `…` has been instantiated … times and is still asking for more                                        |
+| `E411` | the type parameter `…` of `…` is not decided by this call                                             |
+| `E412` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                              |
+| `E413` | NotImplemented                                                                                        |
+| `E414` | NotImplemented                                                                                        |
+| `E415` | NotImplemented                                                                                        |
+| `E416` | NotImplemented                                                                                        |
+| `E417` | `str(…)` over a list bridges bytes or code points, and this is …                                      |
+| `E418` | `…(…)` converts a value, and … may not have one                                                       |
+| `E419` | an enum converts to `int`                                                                             |
+| `E421` | `[…]` indexes a value, and … may not have one                                                         |
+| `E422` | NotImplemented                                                                                        |
+| `E424` | NotImplemented                                                                                        |
+| `E425` | undefined function `…`                                                                                |
+| `E426` | `…` has … fields and this gives …                                                                     |
+| `E427` | variant pattern `…` cannot match a subject of type …                                                  |
+| `E428` | non-exhaustive match                                                                                  |
+| `E429` | NotImplemented                                                                                        |
+| `E431` | NotImplemented                                                                                        |
+| `E432` | `…` is declared … and the value is …                                                                  |
+| `E433` | `print` needs a value, and … may not have one                                                         |
+| `E434` | NotImplemented                                                                                        |
+| `E435` | `…` is declared to answer …, and its body falls off the end                                           |
+| `E436` | NotImplemented                                                                                        |
+| `E437` | cannot derive `…`                                                                                     |
+| `E438` | NotImplemented                                                                                        |
+| `E444` | NotImplemented                                                                                        |
+| `E241` |                                                                                                       |
+| `E242` |                                                                                                       |
+| `E243` |                                                                                                       |
+| `E407` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
+| `E420` | enum `…` carries a payload, so its tag is opaque and match-only                                       |
+| `E423` |                                                                                                       |
+| `E430` | `…` on a … needs an `Eq`                                                                              |
+| `E445` |                                                                                                       |
+| `E446` |                                                                                                       |
+| `E448` |                                                                                                       |
+| `E449` |                                                                                                       |
+| `E450` | no field `…` on …                                                                                     |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

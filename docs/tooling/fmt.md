@@ -551,11 +551,32 @@ goes; `F403` is a rewrite for the same reason in reverse — it inserts line bre
 wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
 wrote at all.
 
-## E1xx — lexical
+## E1xx–E4xx — compile errors
 
-These are not advisory. A source that does not lex is not a program, so each is a **compile
-error** the build stops on — they carry codes because they are about TEXT and a reader
-looking one up is looking up a rule, not a type error.
+These are not advisory. A program that hits one does not build, so each is a **compile
+error** the build stops on. They carry codes because a code is a **stable identity for a
+rule** where a sentence is not: prose gets better, and a gate that pins the sentence turns
+red when it does. The codes group by the **stage** that reports them, which is also the
+order a build meets them:
+
+| Range  | Stage    | What it reports                                              |
+| ------ | -------- | ------------------------------------------------------------ |
+| `E1xx` | lexical  | text that is not Zerg tokens                                 |
+| `E2xx` | parser   | tokens that are not a Zerg form                              |
+| `E3xx` | checking | a form whose meaning does not hold together                  |
+| `E4xx` | emitting | a form this compiler will not lower, including a `[not yet]` |
+
+A code sits at the **front of the message**, before the sentence: `E109 invalid escape in a
+rune literal`. Where a diagnostic carries a place, the renderer's `error:` opens the line
+ahead of it (`error: E109 …`); a refusal that has not learned its place yet prints the
+message alone, so the code is the first thing on the line either way.
+
+**A code exists when a gate pins it, and not before.** `scripts/refuse-check.sh` asserts the
+code rather than the sentence for every case it can, so a code with no case would be an
+identity nothing verifies — and a case with no code is one still pinned to prose. The seed
+keeps sentence matching: codes are the language's contract, and the seed is the tool that
+builds the shipping compiler rather than a part of it (the line
+[Conformance](../conformance.md) draws when it declines to mark the seed's gaps).
 
 | Code   | Rule                                                            |
 | ------ | --------------------------------------------------------------- |
@@ -569,6 +590,13 @@ looking one up is looking up a rule, not a type error.
 | `E108` | a based number needs at least one digit after its prefix        |
 | `E109` | invalid escape in a string / rune / byte literal                |
 | `E110` | a string literal may not contain a NUL                          |
+| `E201` | `close` is a keyword and not a select arm head                  |
+| `E202` | a select with no arms — it waits on nothing and never wakes     |
+| `E203` | a select arm head that is not a send, a receive or `_`          |
+| `E401` | `break` / `continue` outside the loop it belongs to             |
+| `E402` | a `raise … from` cause that is not an `Err`                     |
+| `E403` | a jump leaving a `guard` block — **[not yet]**                  |
+| `E404` | a channel of optionals — `nil` would mean value and end alike   |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

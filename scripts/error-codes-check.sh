@@ -74,6 +74,16 @@ report "asserted by a gate, reported by no source" "$(comm -13 <(printf '%s\n' "
 report "reported by the compiler, missing from the catalogue" "$(comm -23 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
 report "in the catalogue, reported by no source" "$(comm -13 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
 
+# EVERY RULE HAS ONE, which is the half the three sets cannot see: they compare codes that
+# already exist, so a rule reported with no code at all is absent from all three and nothing
+# fires. The reporting functions take the code as an ARGUMENT, so the compiler's own arity
+# rule already refuses a call that omits it — what is left to check is that the argument is a
+# code rather than a string that happens to be there, and the only calls exempt are the
+# forwarding ones that pass a `code` they were handed.
+uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(' "$SRC" --include='*.zg' |
+	grep -vE '"[ELF][0-9]{3}"|, code,|fn chk_(at|note)' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
+
 # A code used twice is two rules under one identity, which is the thing a code exists to
 # prevent — and it cannot be seen by comparing the three sets, because a duplicate is
 # present in all of them.

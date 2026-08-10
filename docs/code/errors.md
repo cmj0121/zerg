@@ -210,8 +210,8 @@ with **`is`** ([Type tests](../core/specs.md)):
 
 ```text
 match guard { work() } {
-    Left(v)  => use(v)
-    Right(e) => {
+    Either.Left(v)  => use(v)
+    Either.Right(e) => {
         if e is IOError { rebuild() }           # branch on the taxonomy kind
         else if e is OverflowError { alert(e) }  # a built-in abort, reified by guard
         else { report(e.message()) }            # everything else — a catch-all is required

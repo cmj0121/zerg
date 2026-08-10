@@ -377,8 +377,8 @@ fn counter(inbox: <-chan[Cmd]) {
 
     for cmd in inbox {               # drain 到最後一個 sender 離場
         n = match cmd {              # 對 state 的每一次寫入都是這一個 assignment
-            Add(d)   => n + d        # 寫入發生在 owner 內
-            Get(rep) => answer(rep, n)
+            Cmd.Add(d)   => n + d    # 寫入發生在 owner 內
+            Cmd.Get(rep) => answer(rep, n)
         }
     }
 }

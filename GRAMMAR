@@ -411,12 +411,18 @@ break        ::= 'break' ( 'if' expr )?
 continue     ::= 'continue' ( 'if' expr )?
 
 # A bare block just opens a nested scope — its bindings and scope-owned values are
-# freed at its '}'. 'with' is sugar over it: it binds a scoped resource for the block
-# and guarantees the resource's teardown runs on EVERY exit (normal, return, abort).
-# The value implements the built-in 'Scoped' spec (its one method is the teardown); a
-# Ref[T]'s drop already satisfies it. So `with acquire() as y { body }` desugars to
-# `{ y := acquire(); defer <y's Scoped teardown>; body }`; 'as y' is optional when the
-# resource is used only for its scope (e.g. a held lock).
+# freed at its '}', on EVERY exit (normal, return, abort). 'with' is PURELY SYNTACTIC sugar
+# over that block: it says the block exists for one resource, and binds it.
+#
+#     with acquire() as y { body }   →   { y := acquire(); body }
+#     with acquire() { body }        →   { <a name only the compiler writes> := acquire(); body }
+#
+# 'as y' is optional when the resource is held only for its scope (a lock). The nameless
+# form still BINDS — expanding it to a bare 'acquire(); body' would end the value's life at
+# that statement rather than at the '}', which is the opposite of what holding it means.
+#
+# The form introduces no teardown of its own: what frees a value is the resource-cleanup
+# group (group 11), unchanged.
 with-stmt    ::= 'with' expr ( 'as' identifier )? block
 
 # 'match' tries a value against arms in order and yields the first fit; every arm

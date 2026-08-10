@@ -593,7 +593,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	# driver it cost a second read of the entry off disk and a second parse of it.
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
-		nomain.append(zerg.diag_at(entry, 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		nomain.append(zerg.diag_at(entry, 1, 1, "E501 this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 		report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 
@@ -1079,7 +1079,7 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 		}
 	}
 
-	raise f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
 }
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a

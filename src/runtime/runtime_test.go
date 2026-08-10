@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1197,6 +1198,117 @@ int main(void) {
 
     for (int c = 0; c < CELLS; c++) { zrt_release(cells[c]); }
     printf("drop-once=%s\n", g_drops == CELLS ? "ok" : "WRONG");
+    return 0;
+}
+`
+
+// TestFormatSpecIsBounded drives the `:spec` formatters with SPECS A PROGRAM CAN WRITE and
+// asserts the runtime answers rather than dies. `zrt_fmt_float` builds a printf pattern out
+// of the spec's own bytes — the precision digits and the trailing type letter — and then
+// hands it a `double`, so a spec is a format string a caller controls:
+//
+//	f"{x:.6s}"   a double read as a `char *`      — a wild pointer dereference
+//	f"{x:.6n}"   %n, which WRITES through its argument — a write-what-where primitive
+//
+// Both are reachable from ordinary source; both crashed. The digits are the other half:
+// width and precision accumulate into a `long` with no bound, so twenty of them are signed
+// overflow, and a precision wide enough truncates the pattern buffer into a conversion that
+// is no longer one.
+//
+// It runs the hostile specs as SEPARATE PROCESSES because the answer to one is an abort:
+// what the gate pins is that the abort is the runtime's own, by name, and not a signal —
+// the same distinction scripts/reject-check.sh draws between a diagnostic and a crash. The
+// valid specs run together and their output is pinned exactly, because a bound that also
+// broke formatting would pass a test that only asked about the crash.
+func TestFormatSpecIsBounded(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	driver := filepath.Join(dir, "fmt_spec.c")
+	if err := os.WriteFile(driver, []byte(fmtSpecC), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, "fmt_spec.bin")
+	args := append(append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, mapSanFlags...), cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(bin, "valid").Output()
+	if err != nil {
+		t.Fatalf("valid specs run failed: %v\n%s", err, out)
+	}
+	const want = "f-2=1.50\n" +
+		"e-3=+1.500e+00\n" +
+		"zero=00001.50\n" +
+		"right=    1.50\n" +
+		"int-hex=0xff\n" +
+		"str-pad=  abc\n"
+	if string(out) != want {
+		t.Fatalf("valid specs = %q, want %q — a bound that breaks formatting is not one", out, want)
+	}
+
+	// Each of these is a spec a program can write, and each must end the run the way every
+	// other runtime refusal does: a ValueError on stderr and an ordinary exit status. A
+	// SIGNAL here is the bug this test exists for.
+	for _, spec := range []string{"type-s", "type-n", "wide-prec", "huge-width", "huge-prec"} {
+		cmd := exec.Command(bin, spec)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err == nil {
+			t.Errorf("%s: the runtime accepted a spec it cannot render", spec)
+			continue
+		}
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Errorf("%s: %v", spec, err)
+			continue
+		}
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			t.Errorf("%s: died of signal %v instead of refusing by name\n%s", spec, ws.Signal(), stderr.String())
+			continue
+		}
+		if !strings.Contains(stderr.String(), "ValueError") {
+			t.Errorf("%s: wanted a ValueError, got: %s", spec, stderr.String())
+		}
+	}
+}
+
+// fmtSpecC formats one thing per argv selector, so the four specs that must end the run can
+// each be a run of its own. The valid set is deliberately one of each shape the formatters
+// take a different path for: a fixed float, a signed exponent, the sign-aware zero pad, a
+// plain right pad, an integer with a base prefix, and a padded string.
+const fmtSpecC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <string.h>
+
+static void say(const char *k, const char *v) { printf("%s=%s\n", k, v); zrt_str_release(v); }
+
+int main(int argc, char **argv) {
+    const char *what = argc > 1 ? argv[1] : "valid";
+    if (strcmp(what, "valid") == 0) {
+        say("f-2",     zrt_fmt_float(1.5, ".2f"));
+        say("e-3",     zrt_fmt_float(1.5, "+.3e"));
+        say("zero",    zrt_fmt_float(1.5, "08.2f"));
+        say("right",   zrt_fmt_float(1.5, ">8.2f"));
+        say("int-hex", zrt_fmt_int(255, "#x"));
+        say("str-pad", zrt_fmt_str("abc", ">5"));
+        return 0;
+    }
+    if (strcmp(what, "type-s")     == 0) { say("out", zrt_fmt_float(1.5, ".6s")); }
+    if (strcmp(what, "type-n")     == 0) { say("out", zrt_fmt_float(1.5, ".6n")); }
+    if (strcmp(what, "wide-prec")  == 0) { say("out", zrt_fmt_float(1.5, ".99999999f")); }
+    if (strcmp(what, "huge-width") == 0) { say("out", zrt_fmt_float(1.5, "99999999999999999999f")); }
+    if (strcmp(what, "huge-prec")  == 0) { say("out", zrt_fmt_float(1.5, ".99999999999999999999f")); }
     return 0;
 }
 `

@@ -34,8 +34,12 @@ fail=0
 # `f"E413 …"`, `bad(l, "E109", …)`. A mention inside prose (a comment naming a code it
 # explains) is not a report and is not counted, which is why the patterns anchor on the
 # quote or on the argument position rather than matching the bare word.
+code_reports() {
+	grep -rhoE '((raise |return |, )f?"E[0-9]{3} |"E[0-9]{3}",)' "$SRC" | grep -oE 'E[0-9]{3}'
+}
+
 codes_in_source() {
-	grep -rhoE '((raise |return |, )f?"E[0-9]{3} |"E[0-9]{3}",)' "$SRC" | grep -oE 'E[0-9]{3}' | sort -u
+	code_reports | sort -u
 }
 
 # A code a gate asserts. Both scripts spell the assertion as a bare argument — `expect …
@@ -80,14 +84,20 @@ report "in the catalogue, reported by no source" "$(comm -13 <(printf '%s\n' "$s
 # rule already refuses a call that omits it — what is left to check is that the argument is a
 # code rather than a string that happens to be there, and the only calls exempt are the
 # forwarding ones that pass a `code` they were handed.
-uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(' "$SRC" --include='*.zg' |
-	grep -vE '"[ELF][0-9]{3}"|, code,|fn chk_(at|note)' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|Diag\(' "$SRC" --include='*.zg' |
+	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn (chk_(at|note)|diag_at)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
 report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
 
 # A code used twice is two rules under one identity, which is the thing a code exists to
 # prevent — and it cannot be seen by comparing the three sets, because a duplicate is
 # present in all of them.
-dup=$(grep -rhoE '(raise |return |, )f?"E[0-9]{3} ' "$SRC" | grep -oE 'E[0-9]{3}' | sort | uniq -d)
+#
+# It reads `code_reports`, the SAME extraction the source set is built from, because it once
+# had its own copy of the pattern: when the checked rules moved their code out of the message
+# and into an argument, `codes_in_source` learned the new shape and this line did not, so 93
+# of 203 codes could be given to two rules with nothing saying so. A gate that scans for a
+# thing twice is a gate that scans for two things eventually.
+dup=$(code_reports | sort | uniq -d)
 report "reported from more than one place — two rules under one identity" "$dup"
 
 if [ "$fail" -ne 0 ]; then

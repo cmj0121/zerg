@@ -107,12 +107,6 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
 **後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
 
-> **[not yet]** 一個裸的 `{ … }` block 當作**述句**會被指名拒絕——
-> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
-> function's scope, so a block of its own would not free anything at its `}`_——而那句訊息同時也是原因:binding 拿到
-> 的是函式的 scope、不是 block 的。所以「block 退出」永遠指的是一個函式、一個迴圈 body、或一個 arm 的退出,絕不是
-> 程式自己開出來的 scope,而下面那個 `defer` 的例子寫的是編譯器讀不了的形式。
-
 ## `Ref[T]`——逃出自身 scope 的資源
 
 > **[not yet]** 這個編譯器裡沒有 `Ref[T]`。`Ref(5)` 會被指名拒絕——

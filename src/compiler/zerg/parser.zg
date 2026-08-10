@@ -2039,7 +2039,7 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
 	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
 	# and was reported as whatever that made of it.
-	raise "E229 NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
+	raise "E242 NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
 
 	# for-in: `for name in iterable { ... }`
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == In {
@@ -2455,7 +2455,7 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 	# on its own — a generic function named as a VALUE at a chosen instantiation. This
 	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
 	# is named rather than left to report the `(` that never came.
-	raise f"E228 NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
+	raise f"NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
 
 	return ECall(name, parse_call_args(p), tyargs)
 }
@@ -2655,7 +2655,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# first thing anyone writes — where the statement used to be consumed as NOTHING: the
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
-	raise f"E228 NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
+	raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
 
 	# TWO TOKENS ARRIVE HERE AS THE SIGN OF A FORM, not as themselves. A `:=` means the
 	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
@@ -2672,7 +2672,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
 	# else that ever reached here. A form the compiler cannot read is named; it is never a
 	# value it did not write.
-	raise f"E228 NotImplemented: `{t.lexeme}` is not an expression this compiler reads"
+	raise f"NotImplemented: `{t.lexeme}` is not an expression this compiler reads"
 }
 
 # parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is
@@ -2789,7 +2789,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 		# position is that and nothing else, and it fell through to the arrow check, so the
 		# message was `expected `=>`, found `{`` — the token after the form rather than the
 		# form. The tuple and list patterns beside it are already refused by name.
-		raise f"E229 NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, LBrace)
+		raise f"E243 NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, LBrace)
 
 		if name == "_" {
 			pat = 2
@@ -2823,7 +2823,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	#
 	# Both shapes are one rule, so it is written once, HERE: the parser is the only place
 	# that sees the bitwise-or expression and the leftover `|` token alike.
-	raise "E228 NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Pipe) or is_or_expr(lit)
+	raise "E241 NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if p_at(p, Pipe) or is_or_expr(lit)
 
 	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
 	# while the pattern keeps destructuring. It fell through to the arrow check, so the

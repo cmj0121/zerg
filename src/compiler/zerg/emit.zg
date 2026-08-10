@@ -703,7 +703,7 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	raise f"E406 `?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there" if not c_is_opt(t)
 	inner := c_opt_elem(t)
 	ft := c_field_ty(em, c_named_of(inner), fld)
-	raise f"E407 no field `{fld}` on {ty_name(inner)} (optional chain `?.{fld}`)" if c_is_unknown(ft)
+	raise f"no field `{fld}` on {ty_name(inner)} (optional chain `?.{fld}`)" if c_is_unknown(ft)
 
 	# a field that is ALREADY optional flattens: `T??` is not a type — GRAMMAR's
 	# `type ::= base-type '?'?` allows exactly one marker — and "nil in place" means the
@@ -1912,7 +1912,7 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 fn c_builtin_check(n: str) {
 	c_fixed_width_check(n)
 
-	raise "E441 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
+	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
 	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
 	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
 
@@ -1940,7 +1940,7 @@ fn c_fixed_width_check(n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise f"E439 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
+	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -3839,12 +3839,12 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 # exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
 # it is the only one of the three that tells the reader what to type.
 fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
-	return f"E441 NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
+	return f"E448 NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
 	return f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
 	return f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
-	return f"E442 NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
+	return f"E445 NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
 
-	return f"E443 `{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
+	return f"E430 `{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
 }
 
 # c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide
@@ -4351,7 +4351,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		inner := c_expr(em, x, sb)
 
 		return f"zrt_str_runes({inner})" if c_is_rune(c_list_elem(ty))
-		raise f"E440 `list[{ty_name(c_list_elem(ty))}](…)` — a `str` bridges to its bytes as `list[byte]` or its code points as `list[rune]`" if not c_is_byte(c_list_elem(ty))
+		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — a `str` bridges to its bytes as `list[byte]` or its code points as `list[rune]`" if not c_is_byte(c_list_elem(ty))
 
 		return f"zrt_str_bytes({inner})"
 	}
@@ -4366,7 +4366,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# and has to be written.
 	raise f"E418 `{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
 	if c_name_in(em.enum_names, c_named_of(xt)) {
-		raise f"E440 enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
+		raise f"E407 enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 
 		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
 		# C cast OF THE STRUCT, which cc rejected against generated code — the report this
@@ -4678,8 +4678,8 @@ fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
 fn c_display_check(mut &em: Emitter, t: Ty) {
 	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
 	# reader can actually write is the discriminant
-	raise f"E420 NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
-	raise f"E443 NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
+	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
+	raise f"E449 NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
 }
 
 fn c_display(t: Ty, inner: str) -> str {
@@ -5011,7 +5011,7 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 		return out + " " + o + "; })"
 	}
 
-	raise f"E441 NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`"
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`"
 }
 
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
@@ -5021,7 +5021,7 @@ fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
 
 	# Raising rather than answering `TUnknown` for the same reason c_err_method_ret does:
 	# the two tables must agree about which names EXIST, and only a raise makes them.
-	raise f"E441 NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`" if meth != "ok" or not c_is_either(tty)
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`" if meth != "ok" or not c_is_either(tty)
 
 	return TOpt(c_either_left(tty))
 }
@@ -5078,7 +5078,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 	# there cannot get past this line. `len` is the only read-only method, so everything
 	# that reaches this point writes through its receiver — which is what decides whether
 	# the receiver is lowered as a place.
-	raise f"E423 NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if not c_meth_mutates(meth)
+	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if not c_meth_mutates(meth)
 
 	if meth == "append" {
 		# the element is copied INTO the list, so the list owns it and the caller's name
@@ -5111,9 +5111,9 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 	# shape, and `of` is the other thing an enum name answers.
 	return c_variant_ctor(em, meth, args, sb) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
 
-	raise f"E439 NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
+	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
 	raise f"`{en}.of(n)` takes one integer — the discriminant to reverse" if args.len() != 1
-	raise f"E440 enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
+	raise f"E420 enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
 
 	cn := c_opt_name(em, TNamed(en))
 	n := c_expr(em, args[0], sb)
@@ -5169,7 +5169,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# told what to write rather than told to wait.
 	c_no_builtin_into(em, meth, target)
 
-	raise f"E439 NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
+	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
 
 	# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the one
 	# shape where the reader has said which module they mean, and the one where reading a
@@ -5265,7 +5265,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(name)
-	raise f"E440 NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
+	raise f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	# A CHECKED rule, so it carries a place: this is a statement about a program the language
 	# rejects — the reader believes something is generic that is not — rather than a form
@@ -6210,7 +6210,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(e: Expr, what: str) {
-	raise "E439 NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise "E423 NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
@@ -7807,7 +7807,7 @@ fn c_name_in(names: list[str], name: str) -> bool {
 # type` has no spelling here. So the function value is refused where it is MADE — at the
 # lambda, and at the name — rather than at a call that no longer knows what it is calling.
 fn c_no_ref_param(what: str) {
-	raise f"E430 NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
+	raise f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
 }
 
 # c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
@@ -7966,7 +7966,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# the same absent key, so the arity and argument rules were skipped as well.
 	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
 	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
-	raise f"E439 NotImplemented: {what} of anything but a function, a method, or a namespaced function" if not c_is_method_expr(x)
+	raise f"NotImplemented: {what} of anything but a function, a method, or a namespaced function" if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)
 	m := c_meth_name_of(x)
@@ -7981,7 +7981,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 		# `mod.work()` — a module namespace flattens into the one program-wide function
 		# space, so a namespaced callee IS the free function of that name, exactly as an
 		# ordinary `mod.work()` call is lowered
-		raise f"E439 NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function" if not c_name_in(em.sig_names, m)
+		raise f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function" if not c_name_in(em.sig_names, m)
 		return Callee(c_fn_cname("", m), margs, m)
 	}
 
@@ -8597,7 +8597,7 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# undefined name, and answerable from the same tables. A target whose type inference
 	# could not name is left alone: guessing there would refuse a working program.
 	nm := c_named_of(tt)
-	raise f"E442 no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
+	raise f"E450 no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
 
 	# AND A TARGET THAT HAS NO FIELDS AT ALL. The rule above answers about a struct that lacks
 	# the field; a scalar lacks the whole idea of one, and fell past it into `zg_a` on an

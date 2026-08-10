@@ -375,6 +375,16 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	__zrt_exit(1)
 }
 
+# diag_code_prefix puts the rule's identity in FRONT of the sentence, and answers nothing at
+# all for a finding that has no code yet. It is a function rather than a branch at each of its
+# two call sites — `zerg build`'s renderer and `zerg lint`'s — because it is the layout
+# scripts/lib/diag.sh asserts: the code opens the line, after `error: ` where there is one.
+fn diag_code_prefix(d: zerg.Diag) -> str {
+	return "" if d.code == ""
+
+	return f"{d.code} "
+}
+
 # render_diag draws one finding the way a person reads it: what is wrong first, then where,
 # then the line itself with a caret under the thing it is about.
 #
@@ -388,7 +398,7 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 # diagnostic without it, and guessing at a line nobody read would be worse than saying
 # less.
 fn render_diag(d: zerg.Diag, src: str) -> str {
-	mut out := f"error: {d.msg}\n"
+	mut out := f"error: {diag_code_prefix(d)}{d.msg}\n"
 	line_s := strconv.to_string(d.line, 10)
 	if d.line > 0 {
 		out = out + zerg.place_line(d.path, d.line, d.col) + "\n"
@@ -593,7 +603,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	# driver it cost a second read of the entry off disk and a second parse of it.
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
-		nomain.append(zerg.diag_at(entry, 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		nomain.append(zerg.diag_at(entry, 1, 1, "E501", "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 		report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 
@@ -1079,7 +1089,7 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 		}
 	}
 
-	raise f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
 }
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
@@ -1392,7 +1402,7 @@ fn run_lint(files: list[str]) -> int {
 	# bare sentence.
 	convs := zerg.lint_conversions(srcs, paths)
 	for d in convs {
-		io.write(f"{d.path}:{d.line}:{d.col}: {d.msg}\n")
+		io.write(f"{d.path}:{d.line}:{d.col}: {diag_code_prefix(d)}{d.msg}\n")
 	}
 
 	return 1 if findings.len() + convs.len() > 0

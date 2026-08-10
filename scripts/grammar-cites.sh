@@ -96,8 +96,33 @@ self_test || exit 1
 fail=0
 cited=0
 
-# The scan excludes .git and bin (build output), and GRAMMAR itself: a grammar does not cite
-# itself, and the notation section names the form so a reader knows what one looks like.
+# The scan is `git grep`, which reads exactly the TRACKED tree. That is the gate's question
+# stated directly — a citation this repository MAKES, rather than one in a file that happens
+# to sit beside the checkout — and it is what a walk of the working tree could only
+# approximate: `bin/` and `.zerg-cache/` had to be excluded by name because they hold build
+# output, and a working note beside the checkout turned this red for citations that are
+# going to be deleted rather than fixed. Untracked is untracked; the moment a file is added
+# it is read like any other, and a fresh clone has nothing untracked in it at all.
+#
+# `.zerg-cache` is the reason the old form needed a list, and one this gate learned the hard
+# way: a compiled object embeds the compiler's own string literals, so the first refusal
+# message to cite a production put `GRAMMAR#import-path` inside four `.o` files, and grep
+# answered "Binary file … matches" — which the loop below then read as a file name, a line
+# number and a production name all at once. Nothing a build wrote is tracked, so the
+# question answers itself now.
+#
+# `--recurse-submodules` is not optional: the corpus is a submodule, and a walk of the
+# working tree read it while a plain `git grep` does not. GRAMMAR itself is excluded because
+# a grammar does not cite itself, and this script because the notation section names the
+# form so a reader knows what one looks like.
+
+# scan <regex> — every citation of a shape, as `file:line:text`. It is one function because
+# the two scans have to agree about what is in scope: a file the by-name check reads and the
+# by-line check does not is a file whose findings depend on which question was asked.
+scan() {
+	git grep --recurse-submodules -nEo "$1" -- ':!GRAMMAR' ':!scripts/grammar-cites.sh' 2>/dev/null
+}
+
 while IFS= read -r hit; do
 	file=${hit%%:*}
 	rest=${hit#*:}
@@ -112,17 +137,8 @@ while IFS= read -r hit; do
 		;;
 	esac
 done <<EOF
-$(grep -rEno "GRAMMAR#[A-Za-z][A-Za-z0-9-]*" \
-	--exclude-dir=.git --exclude-dir=bin --exclude-dir=.zerg-cache \
-	--exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
+$(scan "GRAMMAR#[A-Za-z][A-Za-z0-9-]*")
 EOF
-
-# `.zerg-cache` is EXCLUDED beside `bin`, for the same reason and one this gate learned the
-# hard way: a compiled object embeds the compiler's own string literals, so the first refusal
-# message to cite a production put `GRAMMAR#import-path` inside four `.o` files, and grep
-# answered "Binary file … matches" — which this loop then read as a file name, a line number
-# and a production name all at once. A citation this repo MAKES lives in a source, never in
-# something a build wrote.
 
 # The old form, wherever it survives. It is not a broken citation yet — the line may well be
 # right today — but it is the one that goes wrong without anyone touching it.
@@ -134,9 +150,7 @@ while IFS= read -r hit; do
 	echo "BY-LINE   $file:$line cites $GRAMMAR_FILE by line — cite the production (GRAMMAR#name) instead"
 	fail=$((fail + 1))
 done <<EOF
-$(grep -rEno "GRAMMAR:[0-9]+" \
-	--exclude-dir=.git --exclude-dir=bin --exclude-dir=.zerg-cache \
-	--exclude=GRAMMAR --exclude=grammar-cites.sh . 2>/dev/null)
+$(scan "GRAMMAR:[0-9]+")
 EOF
 
 if [ $fail -ne 0 ]; then

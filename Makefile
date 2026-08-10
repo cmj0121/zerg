@@ -456,6 +456,9 @@ grammar-mirror:                 # the prose companion still says what GRAMMAR sa
 version-check:                  # VERSION, the generated source, both compilers and the READMEs agree
 	./scripts/version-check.sh
 
+cache-key-check:                # the build cache names the compiler that filled it
+	./scripts/cache-key-check.sh
+
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build
 	./bin/zerg lint $(ZERG_ENTRY)

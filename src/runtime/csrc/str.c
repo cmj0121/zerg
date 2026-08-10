@@ -154,9 +154,12 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 	return out;
 }
 
-/* enc_len returns the UTF-8 byte length of a code point (1..4), or 0 when the code point
- * cannot be a str: a surrogate, past U+10FFFF, negative, or U+0000 (its byte is a NUL). */
-static int enc_len(int32_t cp) {
+/* zrt_utf8_len returns the UTF-8 byte length of a code point (1..4), or 0 when the code
+ * point cannot be a str: a surrogate, past U+10FFFF, negative, or U+0000 (its byte is a
+ * NUL). It is declared in the header for the same reason `zrt_is_rune` is — the encoder
+ * had one caller when it was written and now has two, and a second copy of "which code
+ * points a str can hold" is a second answer waiting to disagree. */
+int zrt_utf8_len(int32_t cp) {
 	/* the str invariant is zrt_is_rune's PLUS one: U+0000 is a perfectly good code
 	 * point and a perfectly impossible byte in a NUL-terminated str */
 	if (cp == 0 || !zrt_is_rune(cp)) {
@@ -172,6 +175,31 @@ static int enc_len(int32_t cp) {
 		return 3;
 	}
 	return 4;
+}
+
+/* zrt_utf8_encode writes the code point's UTF-8 bytes to `out` (which needs room for 4)
+ * and answers how many it wrote, or 0 for a code point no str can hold — leaving `out`
+ * untouched. It does NOT terminate: a caller building one character wants the NUL, and a
+ * caller building a string wants the next character where the NUL would go. */
+int zrt_utf8_encode(int32_t cp, char *out) {
+	int len = zrt_utf8_len(cp);
+	uint32_t u = (uint32_t)cp;
+	if (len == 1) {
+		out[0] = (char)u;
+	} else if (len == 2) {
+		out[0] = (char)(0xC0 | (u >> 6));
+		out[1] = (char)(0x80 | (u & 0x3F));
+	} else if (len == 3) {
+		out[0] = (char)(0xE0 | (u >> 12));
+		out[1] = (char)(0x80 | ((u >> 6) & 0x3F));
+		out[2] = (char)(0x80 | (u & 0x3F));
+	} else if (len == 4) {
+		out[0] = (char)(0xF0 | (u >> 18));
+		out[1] = (char)(0x80 | ((u >> 12) & 0x3F));
+		out[2] = (char)(0x80 | ((u >> 6) & 0x3F));
+		out[3] = (char)(0x80 | (u & 0x3F));
+	}
+	return len;
 }
 
 /* --- number parsing (str -> int) ------------------------------------------- */
@@ -270,7 +298,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 	size_t n = runes.len;
 	size_t total = 0;
 	for (size_t i = 0; i < n; i++) {
-		int len = enc_len(cps[i]);
+		int len = zrt_utf8_len(cps[i]);
 		if (len == 0) {
 			zrt_list_drop(&runes);
 			zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: rune is not a valid code point for a str");
@@ -280,22 +308,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 	char *out = str_alloc(total + 1);
 	size_t o = 0;
 	for (size_t i = 0; i < n; i++) {
-		uint32_t cp = (uint32_t)cps[i];
-		if (cp < 0x80) {
-			out[o++] = (char)cp;
-		} else if (cp < 0x800) {
-			out[o++] = (char)(0xC0 | (cp >> 6));
-			out[o++] = (char)(0x80 | (cp & 0x3F));
-		} else if (cp < 0x10000) {
-			out[o++] = (char)(0xE0 | (cp >> 12));
-			out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-			out[o++] = (char)(0x80 | (cp & 0x3F));
-		} else {
-			out[o++] = (char)(0xF0 | (cp >> 18));
-			out[o++] = (char)(0x80 | ((cp >> 12) & 0x3F));
-			out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-			out[o++] = (char)(0x80 | (cp & 0x3F));
-		}
+		o += (size_t)zrt_utf8_encode(cps[i], out + o);
 	}
 	out[o] = 0;
 	zrt_list_drop(&runes);

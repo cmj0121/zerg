@@ -693,6 +693,14 @@ static inline int zrt_is_rune(int64_t cp) {
 
 int32_t zrt_conv_rune(int64_t v);
 
+/* The UTF-8 encoder, shared for the same reason zrt_is_rune is: `str(runes)` builds a
+ * whole string out of it and `{n:c}` builds one character, and two copies of "which code
+ * points a str can hold" is two answers waiting to disagree. zrt_utf8_len answers 0 for a
+ * code point no str can hold — a surrogate, out of range, or U+0000, whose byte is a NUL —
+ * and zrt_utf8_encode then writes nothing. */
+int zrt_utf8_len(int32_t cp);
+int zrt_utf8_encode(int32_t cp, char *out);
+
 /* `a // b` is floor division whose result is always an `int` (docs/core/types.md). For
  * two integers that IS zrt_div_i64 — the language has one integer division and `//` is
  * the spelling that says so. The float form is the one that needs a helper: it divides

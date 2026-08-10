@@ -273,8 +273,17 @@ const char *zrt_fmt_int(int64_t v, const char *spec) {
 		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
 	}
 
+	/* `c` RENDERS A CODE POINT, and it used to render the low byte of one: `{300:c}` came
+	 * back as a comma, `{0:c}` as an empty string, and `{-1:c}` as a byte that is not UTF-8
+	 * at all. A conversion that silently answers about a different value is the shape this
+	 * project's standing rule forbids, and it is the same encoder `str(runes)` uses. */
 	if (f.type == 'c') {
-		char cb[2] = {(char)v, '\0'};
+		char cb[5];
+		int  len = v >= INT32_MIN && v <= INT32_MAX ? zrt_utf8_encode((int32_t)v, cb) : 0;
+		if (len == 0) {
+			spec_reject("ValueError: `c` renders a code point, and this is not one a str can hold");
+		}
+		cb[len] = '\0';
 		return pad_field(cb, '<', &f);
 	}
 

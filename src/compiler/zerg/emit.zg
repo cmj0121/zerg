@@ -1700,7 +1700,11 @@ fn c_check_inst_budget(mut &em: Emitter, name: str) {
 fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 	mut i := 0
 	for i < sol.len() {
-		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" if c_is_unknown(sol[i])
+		# The place is THE CALL's — the emission walk's own marker (SAt) — and not the
+		# template's line: the template is fine, a second call to the same generic may well
+		# decide every parameter. The sentence says "this call", and without a place there was
+		# no way to tell which one.
+		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if c_is_unknown(sol[i])
 		i = i + 1
 	}
 }
@@ -1911,6 +1915,11 @@ fn c_builtin_check(n: str) {
 	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
 	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
 	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+
+	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
+	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
+	# note: `{1}` cannot be told from a one-statement block.
+	raise "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -1937,6 +1946,10 @@ fn c_fixed_width_check(n: str) {
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
 # call — Zerg types are PascalCase and functions snake_case, so an uppercase first
 # letter is the tell.
+#
+# The tell is the language's, not the emitter's, so the parser asks it too: a `T.U` is a
+# module qualifier or an associated-type projection by exactly this rule, and a type
+# parameter's bound names a spec or a concrete type by it as well.
 fn c_is_ctor(name: str) -> bool {
 	b := list[byte](name)
 	return false if b.len() == 0
@@ -2418,7 +2431,11 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# invites them to go and declare it again.
 	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
 
-	c_fixed_width_check(nm)
+	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
+	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
+	# `ptr`" while `ptr(x)` in a CALL had been named all along — one name, two positions, and
+	# only one of them told the reader what it was looking at.
+	c_builtin_check(nm)
 
 	raise f"no type named `{nm}` ({site})"
 }
@@ -2611,7 +2628,7 @@ fn c_build_typedefs(mut &em: Emitter, f: File) {
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
 		em.ty_names.append(td.name)
-		em.ty_unders.append(chk_typedef(em, td))
+		em.ty_unders.append(chk_typedef(em, td, f))
 	}
 }
 
@@ -3270,6 +3287,26 @@ fn c_int_dec(mut &em: Emitter, lex: str) -> str {
 	return strconv.to_string(int_value(lex), 10)
 }
 
+# c_float_dec is c_int_dec's other half: it takes the DIGIT SEPARATORS out of a float's
+# surface lexeme, so what reaches C is a C float constant.
+#
+# A literal node keeps the lexeme it was written as (ast.zg's literal-surface invariant), so
+# `zerg fmt` can put a number back exactly as the author typed it. That is the AST's job and
+# not the emitter's, and the emitter handed that surface straight to cc — an int normalised
+# through c_int_dec, a float verbatim. `1_0.5` reached clang as `1_0.5` and it reported
+# `invalid suffix '_0.5' on integer constant`: against generated source, for a separator the
+# lexer had deliberately accepted.
+fn c_float_dec(lex: str) -> str {
+	b := list[byte](lex)
+	mut out: list[byte] = []
+	for ch in b {
+		if ch != b'_' {
+			out.append(ch)
+		}
+	}
+	return str(out)
+}
+
 fn c_bool(b: bool) -> str {
 	return "true" if b
 	return "false"
@@ -3333,7 +3370,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex, _, _) => c_int_dec(em, lex)
-		EFloat(lex) => lex
+		EFloat(lex) => c_float_dec(lex)
 		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
 		ENil => "0"
@@ -4860,7 +4897,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList    => c_list_method(em, target, meth, args, tty, sb)
-		MMap     => c_map_method(em, target, meth, tty, sb)
+		MMap     => c_map_method(em, target, meth, args, tty, sb)
 		MErr     => c_err_method(em, target, meth, args, sb)
 		MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
@@ -5218,6 +5255,17 @@ fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
 # let them keep thinking it.
 fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], sb: Subst) -> str {
 	return c_call(em, name, args, sb) if ts.len() == 0
+
+	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
+	# opposite: "`map` is not generic" is a false statement about `map[str, int]()`, which
+	# names exactly the two type arguments `map` takes. What it has not got is a no-argument
+	# constructor — an empty map is a literal — so that is what is named instead.
+	#
+	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
+	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
+	# `set` here to write.
+	c_builtin_check(name)
+	raise f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	# A CHECKED rule, so it carries a place: this is a statement about a program the language
 	# rejects — the reader believes something is generic that is not — rather than a form
@@ -5760,6 +5808,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		c_no_ref_param_value(em, n)
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
@@ -6112,16 +6161,22 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	if a.pat == 0 {
 		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
 
-		# `A | B =>` is an OR-PATTERN in GRAMMAR and a bitwise-or to this parser, so the arm
-		# would be compared against `A | B` folded into one value — matching neither side, and
-		# saying nothing about it. Refusing is the repo's rule for exactly this shape: a program
-		# the compiler cannot lower is turned away by name rather than emitted wrong.
-		raise "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if c_is_or_pattern(a.lit)
+		# a literal pattern is scrutinee-equals-literal, and that equality is SYNTHESISED here
+		# as text rather than built as an EBinary — so it meets no operand rule on the way
+		# through, and a pattern was a second spelling of `==` that nothing covered:
+		# `match x { nil => … }` over an optional lowered to a comparison with 0, exactly as
+		# `x == nil` used to in the file next door. One rule, two spellings.
+		#
+		# THAT ONE IS NOW REFUSED BY NAME instead. GRAMMAR#literal makes `nil` a literal and
+		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
+		# natural way to ask about absence, and answering it out of chk_binary with "an
+		# optional is not an operand of `==`" describes an operator the program never wrote.
+		# The condition alone would be easy — it is the presence test c_iflet already makes —
+		# but the arm beside it is not: a binding pattern binds the scrutinee, and over an
+		# optional that is the carrier rather than what it holds, so the arm answering `v`
+		# would answer the box. Named rather than half-built.
+		raise "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`" if c_is_nil_lit(a.lit) and c_is_carrier(st)
 
-		# literal pattern: scrutinee equals the literal. The equality is SYNTHESISED here as
-		# text rather than built as an EBinary, so it reached no operand rule — and
-		# `match x { nil => … }` over an optional lowered to a comparison with 0 exactly as
-		# `x == nil` used to, in the file next door. One rule, two spellings.
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
@@ -6158,26 +6213,6 @@ fn c_range_needs_hi(e: Expr, what: str) {
 	raise "NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
-# c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
-# the guard `_ if _ in 200..300`, so it matches by CONTAINMENT rather than by `equal` — and it
-# lowers to the same two comparisons a slice bound does, from the same three accessors.
-#
-# Reaching this at all used to be an emitter crash. `c_arm_cond` asked `c_expr` for the arm's
-# "literal", a range has no value to be, and the answer was the `c_range_unsupported` raise —
-# so a form GRAMMAR has had all along was refused with "a range used as a value".
-#
-# The scrutinee appears twice, which is what `c_match`'s temp is for: an expression scrutinee
-# is materialised before the arms are laid out, so nothing is evaluated a second time here.
-fn c_is_or_pattern(e: Expr) -> bool {
-	return match e {
-		EBinary(oper, x, y) => oper == "|"
-		_ => false
-	}
-}
-
-# c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
-# as TEXT and so meet no operand rule of their own — a third spelling of the same equality
-# problem, eight lines from the comment that said there were two.
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
 # comparison is strcmp's — the same answer c_binexpr gives `a == b`, and for the same reason:
 # C's `==` on two `const char *` compares the POINTERS.
@@ -6191,6 +6226,18 @@ fn c_arm_eq(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	return f"({s} == {c_expr(em, a.lit, sb)})"
 }
 
+# c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
+# the guard `_ if _ in 200..300`, so it matches by CONTAINMENT rather than by `equal` — and it
+# lowers to the same two comparisons a slice bound does, from the same three accessors.
+#
+# Reaching this at all used to be an emitter crash. `c_arm_cond` asked `c_expr` for the arm's
+# "literal", a range has no value to be, and the answer was the `c_range_unsupported` raise —
+# so a form GRAMMAR has had all along was refused with "a range used as a value".
+#
+# The scrutinee appears twice, which is what `c_match`'s temp is for: an expression scrutinee
+# is materialised before the arms are laid out, so nothing is evaluated a second time here.
+# Like `c_arm_eq` above, the comparisons are built as TEXT rather than as an EBinary, so no
+# operand rule is met on the way through and `chk_binary` has to be asked for it here.
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)
@@ -7476,6 +7523,18 @@ fn c_close_callee(mut &em: Emitter, ch: Expr) -> Callee {
 # again would be the double-release the list exists to rule out. Giving up the SEND end
 # early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
 fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	# `del ch` ON A CHANNEL. GRAMMAR#del-stmt gives it a second meaning there — "a Ref[T]/chan
+	# drops a refcount instead: `del ch` closes a channel if you were its last sender" — and
+	# revoking the name is not that. Revoking emits no C, so the program below built, said
+	# nothing, and DEADLOCKED: the consumer waited on an end the writer believed it closed.
+	#
+	#     ch := chan[int](4);  spawn consume(ch);  ch <- 1;  del ch
+	#
+	# The header above is why the drop cannot simply be added here: the release is registered
+	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
+	# there is no taking one entry out of the middle early.
+	raise f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
+
 	c_live_del(em, name)
 	return f"{ind}/* del {name} */\n"
 }
@@ -7655,6 +7714,13 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
 	free := c_lambda_free(em, ps, body)
 	raise f"NotImplemented: a closure capturing `{free}` — a lambda may only use its parameters" if free != ""
+
+	for pm in ps {
+		if pm.is_ref {
+			c_no_ref_param(f"the parameter `{pm.name}` of a closure")
+		}
+	}
+
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
 	name := "lambda__" + tag
@@ -7727,6 +7793,34 @@ fn c_name_in(names: list[str], name: str) -> bool {
 		return true if n == name
 	}
 	return false
+}
+
+# A `mut &` PARAMETER CANNOT SURVIVE THE TRIP THROUGH A FUNCTION VALUE. A held function is
+# one type here, `zg_fnptr`, cast back at the call from what the CALL SITE believes the
+# signature is — and what it believes comes from the parameter table, keyed by the callee's
+# NAME. A value has no name in that table, so `c_arg` found no row, skipped the borrow rules
+# and passed the argument by value into a C parameter declared `T*`. Both spellings
+# segfaulted: `f := fn(mut &a: int) { … }  f(x)` and `g := bump  g(x)`.
+#
+# It is not a lowering this compiler could quietly get right, either: `TFn` carries parameter
+# TYPES and no `mut &` flag, which is the same reason GRAMMAR's `param-type ::= ( 'mut' '&' )?
+# type` has no spelling here. So the function value is refused where it is MADE — at the
+# lambda, and at the name — rather than at a call that no longer knows what it is calling.
+fn c_no_ref_param(what: str) {
+	raise f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
+}
+
+# c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
+# its parameters in hand; a name has only the table, so this is the same question as a scan
+# of it — and it names the parameter's POSITION, which is what the table keeps.
+fn c_no_ref_param_value(mut &em: Emitter, n: str) {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == n and em.pr_ref[i] {
+			c_no_ref_param(f"parameter {strconv.to_string(em.pr_idx[i] + 1, 10)} of `{n}`")
+		}
+		i = i + 1
+	}
 }
 
 # --- defer ----------------------------------------------------------------------
@@ -8173,12 +8267,46 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }
 
-fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -> str {
+# c_map_method lowers `m.len()` and `m.has(k)`. Both take the map's ADDRESS, which is the
+# one fact that shapes the rest.
+#
+# `has` NEVER WORKED. It rendered `zrt_map_has(&(m), &zgt_mk)` and nothing declared
+# `zgt_mk` — the function was not given the arguments, so the key had nowhere to come from
+# and cc answered "use of undeclared identifier 'zgt_mk'" for every map in every program.
+# c_map_index binds its key to exactly that name; this read as if it were inside that
+# expansion, and its key is materialised the same way for the same reason.
+#
+# And the map is BOUND when it is not a place, again as c_map_index binds one: an address
+# needs storage, and `{"a": 1}.len()` or `mk().len()` has none. The index path learned this
+# and the method path did not, which is the same rule written at one of its two slots.
+fn c_map_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
-	tgt := c_expr(em, target, sb)
 
-	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
-	return f"zrt_map_has(&({tgt}), &zgt_mk)" if meth == "has"
+	tgt := c_expr(em, target, sb)
+	place := c_is_place(em, target)
+
+	mut recv := f"&({tgt})"
+	mut bind := ""
+	if not place {
+		recv = "&zgt_mx"
+		bind = f"zrt_map zgt_mx = {tgt}; "
+	}
+
+	if meth == "len" {
+		raise f"`len` takes no argument, and this gives {strconv.to_string(args.len(), 10)}" if args.len() != 0
+
+		return f"((int64_t)zrt_map_len({recv}))" if place
+
+		return f"({{ {bind}(int64_t)zrt_map_len({recv}); }})"
+	}
+	if meth == "has" {
+		raise f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}" if args.len() != 1
+
+		kt := c_map_key_ty(tty)
+		chk_slot_fits(em, f"a key of this {ty_name(tty)}", kt, args[0])
+		k := c_expr(em, args[0], sb)
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
+	}
 
 	raise f"NotImplemented: the map method `{meth}`"
 }
@@ -8558,9 +8686,9 @@ fn c_range_incl(e: Expr) -> bool {
 }
 
 # c_forrange lowers `for v in a..b` to a counted loop. The loop variable is an int and is
-# in scope for the body, which is what makes the bound expressions ordinary ints too. The
-# upper bound is read once into a temp, so an expression bound is not re-evaluated on
-# every iteration the way a C `for` header would.
+# in scope for the body, which is what makes the bound expressions ordinary ints too. Both
+# bounds are read once into temps, so an expression bound is not re-evaluated on every
+# iteration the way a C `for` header would.
 fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
 	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
 
@@ -8573,7 +8701,12 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
 	cv := c_var_cname(em, var)
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
+
+	# LOW FIRST. Only the high bound used to be materialised and the low one stayed in the
+	# `for` initialiser, which C runs after the declaration above it — so `for i in a()..b()`
+	# called `b` and then `a`, while the same two calls written `a() + b()` in the same
+	# program ran left to right, as every other operand pair in the language does.
+	mut out := ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
 
 	# An INCLUSIVE range whose high end is the type's maximum has no value to step to after
 	# it: `v++` there overflows, which is undefined in C and in practice loops forever. The
@@ -8583,10 +8716,10 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	# Testing `!=` rather than `<` is safe because the loop variable is IMMUTABLE — the
 	# body cannot move it off the sequence, so the only way to reach `hi` is to step to it.
 	if c_range_incl(iter) {
-		head := f"for (int64_t {cv} = {lo}, zgt_more = ({cv} <= zgt_hi); zgt_more; "
+		head := f"for (int64_t {cv} = zgt_lo, zgt_more = ({cv} <= zgt_hi); zgt_more; "
 		out = out + in2 + head + "zgt_more = (" + cv + " != zgt_hi), " + cv + " += zgt_more) {\n"
 	} else {
-		out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + " < zgt_hi; " + cv + "++) {\n"
+		out = out + in2 + "for (int64_t " + cv + " = zgt_lo; " + cv + " < zgt_hi; " + cv + "++) {\n"
 	}
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
@@ -9138,6 +9271,19 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		rt := c_type(em.fn_ret)
 		return ind + "{ " + rt + " zgt_rv = " + v + ";\n" + pre + ind + "return zgt_rv; }\n"
 	}
+
+	# A VALUELESS RETURN FROM A FUNCTION THAT DECLARES A RESULT. `c_ret_type` gives such a
+	# function a non-void C signature, so `return;` here emitted C that cc rejected — an
+	# escape to the C compiler, which reports against generated source and a mangled name
+	# (`non-void function 'zg_f' should return a value`) rather than against the program.
+	#
+	# It completes a rule that already existed one level up: c_fn refuses a body that FALLS
+	# OFF THE END of a declared result, and an explicit `return` with nothing after it is
+	# the same missing value written down — including `return if c`, GRAMMAR's bare early
+	# exit, which is only ever legal where a bare `return` is. What is refused is exactly
+	# what would have reached cc, because `c_is_nil_ty` is the predicate c_ret_type asks.
+	raise f"a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
+
 	return f"{pre}{ind}return;\n"
 }
 

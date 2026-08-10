@@ -90,13 +90,44 @@ fn dsg_guards(mut &toks: list[Token]) -> list[Token] {
 	return out
 }
 
+# dsg_if_has_block reports whether the `if` whose condition begins at `at` has a BLOCK
+# after it, which is what makes it an if-EXPRESSION rather than a guard on a jump. A `{`
+# inside a `(` or `[` belongs to something else, so the scan is depth-aware.
+#
+# It is parser.zg's p_if_has_block asked of a token stream, and the two stay separate on
+# purpose: this pass runs BEFORE any parse and is handed the `end` dsg_stmt_end already
+# found, where the parser has only its cursor and has to stop itself at the separator.
+fn dsg_if_has_block(mut &toks: list[Token], at: int, end: int) -> bool {
+	mut depth := 0
+	mut i := at
+	for i < end {
+		k := toks[i].kind
+		if is_open(k) {
+			depth = depth + 1
+		} else if is_close(k) {
+			depth = depth - 1
+		} else if depth == 0 and is_lbrace(k) {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
 # dsg_guard_at answers with the index of the guard's `if`, or 0 when the statement at `at`
 # is not a guarded jump. The `if` is the first one at bracket depth zero: a `return match n
 # { 1 if c => … }` carries one inside braces, and a `return f(if_ok)` carries none at all.
 #
-# There is no ambiguity to resolve at depth zero. `return if …` is ALWAYS the bare guard —
-# GRAMMAR gives the conditional EXPRESSION no place here, since an if-expression needs its
-# `else` and the parser reads `return if` as the guard before it ever looks for one.
+# THERE IS ONE AMBIGUITY at depth zero, and this note used to say there was none — on the
+# grounds that the parser read `return if` as the guard before it ever looked for a block.
+# It did, and that was the parser's defect rather than a fact about the language.
+# GRAMMAR#return states the rule in prose: "a leading `if` whose condition is followed by a
+# `{` block is instead an if-EXPRESSION being returned; the conditional-return `if` takes a
+# bare condition and NO block."
+#
+# Left alone, this rule turned `return if c { 1 } else { 2 }` into `if <the whole
+# if-expression> { return }`, which does not parse — the differential gate's job, and how
+# this slot was found.
 fn dsg_guard_at(mut &toks: list[Token], at: int) -> int {
 	return 0 if not is_jump(toks[at].kind) or not fmt_stmt_start(toks, at)
 	end := dsg_stmt_end(toks, at)
@@ -117,6 +148,8 @@ fn dsg_guard_at(mut &toks: list[Token], at: int) -> int {
 		} else if is_close(k) or is_rbrace(k) {
 			depth = depth - 1
 		} else if depth == 0 and k == If {
+			# an if-EXPRESSION being returned, not a guard on the jump
+			return 0 if dsg_if_has_block(toks, i + 1, end)
 			return i
 		}
 		i = i + 1
@@ -416,17 +449,22 @@ fn dsg_emit_range(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 	hv := f"zgd_hi{ln}c{col}"
 	dv := f"zgd_done{ln}c{col}"
 
-	# the upper bound, once, before anything else — `c_forrange`'s `zgt_hi`
-	out.append(Token(Ident, hv, "", ln, col))
-	out.append(Token(Walrus, ":=", "", ln, col))
-	dsg_copy(toks, op + 1, lb, ln, out)
-	out.append(Token(Semi, ";", "", ln, col))
-
-	# the induction variable, at the range's low bound
+	# BOTH BOUNDS, ONCE EACH, IN WRITTEN ORDER — `c_forrange`'s `zgt_lo` and `zgt_hi`. The
+	# induction variable is the low bound, so binding it first is what makes `a()..b()` call
+	# `a` and then `b`, the way every other pair of operands is evaluated.
+	#
+	# This wrote the upper bound first, and so did c_forrange — the same rule at two of its
+	# slots, and fixing one made the differential gate say the sugar and the core form do
+	# different things, which is exactly what it is for.
 	out.append(Token(Mut, "mut", "", ln, col))
 	out.append(Token(Ident, iv, "", ln, col))
 	out.append(Token(Walrus, ":=", "", ln, col))
 	dsg_copy(toks, inx + 1, op, ln, out)
+	out.append(Token(Semi, ";", "", ln, col))
+
+	out.append(Token(Ident, hv, "", ln, col))
+	out.append(Token(Walrus, ":=", "", ln, col))
+	dsg_copy(toks, op + 1, lb, ln, out)
 	out.append(Token(Semi, ";", "", ln, col))
 
 	if incl {

@@ -498,14 +498,18 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" undeclared-type-in-result "no type named \`Ref\`" <<'EOF'
+# `Ref[T]` in the two TYPE positions. Both used to answer "no type named `Ref`" — the
+# misspelling message — because a type position asked only about the fixed-width ladder
+# while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
+# namer, so a name is answered the same way wherever it is written.
+expect "$ZERG" ref-type-in-result 'a refcounted box' <<'EOF'
 fn mk(v: int) -> Ref[int] {
 	return Ref(v)
 }
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" undeclared-type-in-param "no type named \`Ref\`" <<'EOF'
+expect "$ZERG" ref-type-in-param 'a refcounted box' <<'EOF'
 fn load(a: Ref[int]) -> int {
 	return 0
 }
@@ -553,7 +557,12 @@ EOF
 # the number zero, in silence. These are the forms that landed there, plus the ones that
 # reached cc or the linker instead. None of them may do either now.
 
-expect "$ZERG" unread-token-in-an-expression "is not an expression this compiler reads" <<'EOF'
+# `print 1 as 2` is TWO statements with nothing between them: `as` joins an import spec and a
+# pattern and is not an operator, so it can neither continue the expression nor start a
+# statement. It used to be read as a second statement and reported as "`as` is not an
+# expression this compiler reads" — true, and one step past the reason. The separator is what
+# the seed answers, and now both compilers do.
+expect "$ZERG" unread-token-in-an-expression "to separate statements" place <<'EOF'
 fn main() {
 	print 1 as 2
 }
@@ -1523,7 +1532,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-type "no type named \`ptr\`" <<'EOF'
+expect "$ZERG" raw-pointer-type 'the raw-pointer' <<'EOF'
 fn f(p: ptr) -> int {
 	return 1
 }
@@ -2156,6 +2165,323 @@ EOF
 
 expect "$ZERG" fixed-width-typedef 'the fixed-width ladder' <<'EOF'
 type W = u8
+
+fn main() {
+	print 1
+}
+EOF
+
+# --- five grammar forms that read as a typo ---------------------------------------------
+#
+# Each is a form GRAMMAR has and this compiler does not, and each was refused with the message
+# a MISSPELLING gets — "no type named `ptr`", "undefined function `set`" — so a reader was told
+# their own name was unknown and would go looking for a typo that is not there. The same class
+# as the fixed-width ladder above, and found the same way: by writing the happy path and
+# reading the answer.
+
+# the NAME shape of the or-pattern, and the reason the rule lives in the parser. Its sibling
+# `or-pattern-in-a-match-arm` above is the LITERAL shape, where parse_expr swallows the `|`
+# into a bitwise-or; a name pattern stops before the `|` instead, so the arm never reached
+# the emitter at all and died on "expected `=>`". One rule, and only the parser sees both.
+expect "$ZERG" or-pattern-of-variant-names 'an or-pattern' <<'EOF'
+enum E {
+	A
+	B
+}
+
+fn main() {
+	print match E.A {
+		A | B => 1
+	}
+}
+EOF
+
+# `ptr` INSIDE an `unsafe` group, which is the one place the language says it belongs — so
+# this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
+# is refused, this one shows the refusal is about the type not being built rather than about
+# where it was written.
+expect "$ZERG" ptr-type-in-an-unsafe-group 'the raw-pointer' <<'EOF'
+unsafe {
+	fn f(p: ptr) -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" associated-type-projection 'an associated type' <<'EOF'
+spec It {
+	fn next() -> int
+}
+
+fn f(x: It.Item) -> int {
+	return 1
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" value-generic-parameter 'a value generic' <<'EOF'
+fn f[N: int]() -> int {
+	return N
+}
+
+fn main() {
+	print f[3]()
+}
+EOF
+
+expect "$ZERG" set-constructor 'the built-in `set`' <<'EOF'
+fn main() {
+	s := set([1, 2])
+	print s.len()
+}
+EOF
+
+# --- forms whose failure used to escape this compiler ----------------------------------
+#
+# They are here rather than beside their chapter because what they have in common is not
+# the form. Most built, crashed, or exited 0 with nothing to show for it: the compiler had
+# no opinion, and something further down the line — cc, the loader, a deadlocked runtime —
+# was left to have one. The last two had an answer already, and it was not true of the
+# program it was about.
+
+# A function declared `-> T` whose `return` carries nothing emitted `return;` into a
+# non-void C function. cc reported it, against generated source and a mangled name. The
+# rule one level up — a body that FALLS OFF THE END — already existed; this was its
+# other slot. `return if c` is the same statement with GRAMMAR's postfix `if`.
+expect "$ZERG" bare-return-in-a-non-void-fn 'a `return` with no value' place <<'EOF'
+fn f() -> int {
+	return
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+expect "$ZERG" bare-conditional-return-in-a-non-void-fn 'a `return` with no value' place <<'EOF'
+fn f(n: int) -> int {
+	return if n < 0
+	return 5
+}
+
+fn main() {
+	print f(3)
+}
+EOF
+
+# A `mut &` parameter cannot survive being turned into a bare function pointer: the call
+# site reads a signature from the callee's NAME, and a value has not got one. Both
+# spellings SEGFAULTED — the argument went in by value where a `T*` was declared.
+expect "$ZERG" mut-ref-param-on-a-closure 'a function VALUE cannot carry one' <<'EOF'
+fn main() {
+	f := fn(mut &a: int) {
+		a = a + 1
+	}
+	mut x := 1
+	f(x)
+	print x
+}
+EOF
+
+expect "$ZERG" mut-ref-fn-taken-as-a-value 'a function VALUE cannot carry one' <<'EOF'
+fn bump(mut &a: int) {
+	a = a + 1
+}
+
+fn main() {
+	g := bump
+	mut x := 1
+	g(x)
+	print x
+}
+EOF
+
+# GRAMMAR#del-stmt gives `del` a second meaning on a channel — drop a sender reference,
+# close the stream if it was the last. This compiler releases a channel where its
+# binding's scope ends, so `del ch` revoked the name and emitted nothing: the program
+# built, said nothing, and DEADLOCKED waiting on an end the writer thought it had closed.
+expect "$ZERG" del-on-a-channel 'on a CHANNEL' <<'EOF'
+fn consume(rx: <-chan[int], done: chan[int]<-) {
+	mut n := 0
+	for v in rx {
+		n = n + v
+	}
+	done <- n
+}
+
+fn main() {
+	ch := chan[int](4)
+	done := chan[int](1)
+	spawn consume(ch, done)
+	ch <- 1
+	del ch
+	print <-done!
+}
+EOF
+
+# GRAMMAR#import-path is a str-lit and nothing else. The bare spelling answered "no spec
+# here", so the import was not made and `util/text` fell through to the statement loop as
+# a top-level expression — which compile mode treats as a nop. Built, printed, exited 0,
+# and had imported nothing.
+expect "$ZERG" bare-import-path 'an import path is a string' place <<'EOF'
+import util/text
+
+fn main() {
+	print 1
+}
+EOF
+
+# A built-in container's type arguments are not a genericity it lacks: `map` takes exactly
+# two. What it has not got is a no-argument constructor, and saying "`map` is not generic"
+# was a false statement about the program.
+expect "$ZERG" map-as-a-constructor 'as a constructor' <<'EOF'
+fn main() {
+	m := map[str, int]()
+	print 1
+}
+EOF
+
+# GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
+# grammatical. This compiler instantiates a generic at the call and has nothing for a bare
+# one to be.
+expect "$ZERG" type-arguments-with-no-call 'with no call after it' <<'EOF'
+fn id[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	g := id[int, int]
+	print 1
+}
+EOF
+
+# GRAMMAR#stmt-list separates statements with `stmt-sep+`, and the parser asked for one only
+# if it was there. So a second statement on the same line was read, quietly: `print "a" "b"`
+# printed `a` and `x := 1 2` bound 1. The seed has refused this since it was written, so the
+# two compilers disagreed about which programs exist.
+expect "$ZERG" two-statements-on-one-line 'to separate statements' place <<'EOF'
+fn main() {
+	print "a" "b"
+}
+EOF
+
+expect "$ZERG" two-bindings-on-one-line 'to separate statements' place <<'EOF'
+fn main() {
+	x := 1 2
+	print x
+}
+EOF
+
+# `\u{…}` past U+10FFFF, or inside the surrogate block, is not a code point — so not an
+# escape. BOTH compilers used to substitute U+FFFD and say nothing, so a program that named
+# one character got another: these two printed 65533.
+expect "$ZERG" unicode-escape-past-the-code-space 'E109' <<'EOF'
+fn main() {
+	print int('\u{110000}')
+}
+EOF
+
+expect "$ZERG" unicode-escape-on-a-surrogate 'E109' <<'EOF'
+fn main() {
+	print int('\u{D800}')
+}
+EOF
+
+# The two if-EXPRESSION shapes that need more than a parse. Both used to be reported as the
+# token that could not continue the condition — "expected `}`, found `:=`" and "expected
+# `{`, found `:=`" — for forms GRAMMAR#if-expr and GRAMMAR#if-head derive. The `else if`
+# chain, which is the third, now parses (codegen/if_expr_forms).
+expect "$ZERG" if-expression-with-a-multi-statement-branch 'more than one statement' place <<'EOF'
+fn main() {
+	c := true
+	x := if c {
+		a := 2
+		a * 3
+	} else {
+		0
+	}
+	print x
+}
+EOF
+
+expect "$ZERG" if-expression-with-a-binding-head 'a binding head in an `if` EXPRESSION' place <<'EOF'
+fn get() -> int? {
+	return 3
+}
+
+fn main() {
+	x := if v := get() { v } else { -1 }
+	print x
+}
+EOF
+
+# `NotImplemented: unsafe` and `NotImplemented: asm` — the keyword and nothing else. A
+# marker that names no form, gives no place, and does not say that the module-level
+# `unsafe { … }` GROUP spelled the same way does work.
+expect "$ZERG" unsafe-as-an-expression 'as an EXPRESSION' place <<'EOF'
+fn main() {
+	x := unsafe { 3 + 4 }
+	print x
+}
+EOF
+
+expect "$ZERG" inline-assembly '`asm(…)`' place <<'EOF'
+fn main() {
+	asm("nop")
+	print 1
+}
+EOF
+
+# `nil` AS A PATTERN. GRAMMAR#literal makes `nil` a literal and GRAMMAR#literal-pat makes a
+# literal a pattern, so this is a well-formed program and belongs here rather than in
+# reject-check, where it sat: it was asserting "an optional is not an operand of `==`" —
+# the synthesised comparison the arm lowers to, and an operator the program never wrote.
+expect "$ZERG" nil-as-a-match-pattern 'as a `match` pattern' <<'EOF'
+fn f(x: int?) -> int {
+	return match x {
+		nil => 0
+		_ => 1
+	}
+}
+
+fn main() {
+	print f(nil)
+}
+EOF
+
+# GRAMMAR#decorator is a COMMA LIST of items, and this read the brackets as one item with a
+# bag of identifiers in it: every name that was not `derive` went on as a derive argument,
+# so `#[derive(Eq), sealed]` asked to derive `sealed`. Each item now gets its own answer,
+# and `#[sealed]` alone has had one all along.
+expect "$ZERG" second-decorator-in-a-comma-list 'the decorator `#[sealed]`' <<'EOF'
+#[derive(Eq), sealed]
+struct P {
+	pub v: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# `type Alias = P` three lines under `struct P` was told "`P` is not declared in this
+# program". c_build_typedefs runs before the struct and enum registries exist, so the
+# lookup answered no for every type the program declares — a diagnostic stating something
+# false about the reader's own source, which sends them looking for a declaration that is
+# already there. The rule under it is the true one, and the one this case pins.
+expect "$ZERG" typedef-over-a-user-struct 'over a non-scalar' place <<'EOF'
+struct P {
+	pub v: int
+}
+
+type Alias = P
 
 fn main() {
 	print 1

@@ -177,10 +177,24 @@ fn p_names_here(mut &p: Parser, at: int) -> bool {
 	return lookup_keyword(p.toks[at].lexeme) != Kind.Ident
 }
 
+# p_reserved_word reports whether a lexeme is one a DECLARATION may not take. The keyword
+# table answers most of it, and `This` is the one that is not in it: it is the SELF TYPE, a
+# name every `impl` writes and no `impl` declares (GRAMMAR#impl-decl), so it is reserved in
+# exactly the way `this` is while being an ordinary identifier to the lexer.
+#
+# It was found by a migration. `enum Kind { … This … }` declared a variant with that name,
+# and once a variant had to be written through its enum there was no way to tell `Kind.This`
+# the value from `This` the type at all — which is what a reserved word is for.
+fn p_reserved_word(lx: str) -> bool {
+	return true if lx == "This"
+
+	return lookup_keyword(lx) != Kind.Ident
+}
+
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
-	raise f"E245 `{lx}` is a reserved word and cannot name {what}" if not p_at(p, Kind.Ident) and lookup_keyword(lx) != Kind.Ident
+	raise f"E245 `{lx}` is a reserved word and cannot name {what}" if p_reserved_word(lx)
 	raise f"{what} needs a name, and `{lx}` is not one" if not p_at(p, Kind.Ident)
 
 	p_advance(p)

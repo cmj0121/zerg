@@ -761,7 +761,7 @@ fn walk_match(scrut: Expr, arms: list[Arm], mut &ids: list[str], mut &calls: lis
 
 # last_segment is the namespace an import is reached through: `import "a/b"` binds `b`.
 fn last_segment(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut seen := false
 	mut i := 0

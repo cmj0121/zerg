@@ -553,7 +553,7 @@ fn scan_long(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan
 # scan_short handles `-o value` and bundled boolean flags like `-abc`. A value-taking
 # option ends the bundle, so `-o out` works and `-ao out` does too.
 fn scan_short(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan) -> int {
-	letters := list[byte](drop_prefix(a, 1))
+	letters := bytearray(drop_prefix(a, 1))
 	mut j := 0
 	mut at := i
 	for j < letters.len() {
@@ -896,7 +896,7 @@ fn has_section(opts: list[Argument], title: str) -> bool {
 # pad returns the spaces that bring s up to width, or one space when it is already past.
 fn pad(s: str, width: int) -> str {
 	# bound first: the self-hosted emitter cannot take the length of a conversion in place
-	b := list[byte](s)
+	b := bytearray(s)
 	n := width - b.len()
 	return " " if n < 1
 	mut out: list[byte] = []
@@ -985,17 +985,17 @@ fn tail(xs: list[str], at: int) -> list[str] {
 
 # is_long reports `--name`; is_short reports `-x` but not a bare `-`.
 fn is_long(a: str) -> bool {
-	b := list[byte](a)
+	b := bytearray(a)
 	return b.len() > 2 and b[0] == b'-' and b[1] == b'-'
 }
 
 fn is_short(a: str) -> bool {
-	b := list[byte](a)
+	b := bytearray(a)
 	return b.len() > 1 and b[0] == b'-' and b[1] != b'-'
 }
 
 fn drop_prefix(s: str, n: int) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := n
 	for i < b.len() {
@@ -1006,14 +1006,14 @@ fn drop_prefix(s: str, n: int) -> str {
 }
 
 fn has_eq(s: str) -> bool {
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		return true if c == b'='
 	}
 	return false
 }
 
 fn before_eq(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() {
@@ -1025,7 +1025,7 @@ fn before_eq(s: str) -> str {
 }
 
 fn after_eq(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut seen := false
 	mut i := 0

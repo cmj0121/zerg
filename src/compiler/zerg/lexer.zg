@@ -801,7 +801,7 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	mut out: list[Diag] = []
 	for t in tokenize(src) {
 		if t.kind == Illegal {
-			b := list[byte](t.value)
+			b := bytearray(t.value)
 			at := lex_code_end(b)
 			out.append(Diag(path, t.line, t.col, fstr_slice(b, 0, at), fstr_slice(b, at + 1, b.len()), ""))
 		}
@@ -814,7 +814,7 @@ pub fn tokenize_trivia(src: str) -> list[Token] {
 }
 
 fn lex_with(src: str, keep: bool) -> list[Token] {
-	b := list[byte](src)
+	b := bytearray(src)
 	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Semi, keep)
 	mut out: list[Token] = []
 	for true {
@@ -864,7 +864,7 @@ fn rune_len(b0: byte) -> int {
 	return 1
 }
 
-# rune_value is the code point a rune literal holds. It DELEGATES: `list[rune](s)` is the
+# rune_value is the code point a rune literal holds. It DELEGATES: `runearray(s)` is the
 # runtime's decoder (zrt_str_runes), which is the one the emitted programs use and the one
 # that rejects overlongs and surrogates. A hand-rolled continuation-byte fold here would be
 # a third UTF-8 decoder, one call away from the audited one, silently accepting what it
@@ -873,7 +873,7 @@ fn rune_len(b0: byte) -> int {
 # A rune literal is exactly one code point by construction, the scanner having already
 # refused a literal holding more.
 pub fn rune_value(text: str) -> int {
-	rs := list[rune](text)
+	rs := runearray(text)
 	return 0 if rs.len() == 0
 
 	return int(rs[0])
@@ -892,7 +892,7 @@ pub fn int_fits(lex: str) -> bool {
 # token — so -1 is not a value this can otherwise return, and one scan answers both
 # questions above.
 fn int_scan(lex: str) -> int {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	n := b.len()
 	mut base := 10
 	mut start := 0
@@ -956,7 +956,7 @@ pub fn uint_value(lex: str) -> uint {
 # would be reading a number that has already wrapped, and here it would also abort, since the
 # compiler's own arithmetic is checked.
 pub fn uint_scan(lex: str) -> UintLit {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	n := b.len()
 	mut base := uint(10)
 	mut start := 0
@@ -1023,7 +1023,7 @@ fn token_category(k: Kind) -> int {
 fn quote(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		v := int(c)
 		if v == 34 {
 			out.append(byte(92))
@@ -1080,7 +1080,7 @@ pub fn dump_tokens(src: str) -> str {
 		line := strconv.to_string(t.line, 10)
 		col := strconv.to_string(t.col, 10)
 		s := f"{line}:{col}\t{render_token(t)}\n"
-		for c in list[byte](s) {
+		for c in bytearray(s) {
 			out.append(c)
 		}
 		i = i + 1

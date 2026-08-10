@@ -407,7 +407,7 @@ fn render_diag(d: zerg.Diag, src: str) -> str {
 	text := source_line(src, d.line)
 	return out if text == "" or d.line == 0
 
-	gutter := blanks(list[byte](line_s).len())
+	gutter := blanks(bytearray(line_s).len())
 	out = out + f" {gutter} |\n"
 	out = out + f" {line_s} | {text}\n"
 
@@ -424,7 +424,7 @@ fn render_diag(d: zerg.Diag, src: str) -> str {
 # tabs renders one tab as many columns, so a caret padded with spaces lands short of the
 # thing it points at by however much the terminal decided a tab was worth.
 fn caret_pad(text: str, col: int) -> str {
-	b := list[byte](text)
+	b := bytearray(text)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < col - 1 {
@@ -450,7 +450,7 @@ fn caret_col(text: str, d: zerg.Diag) -> int {
 # first_quoted is the first `…` run in a message, which is how every rule in this compiler
 # names the thing it is talking about.
 fn first_quoted(msg: str) -> str {
-	b := list[byte](msg)
+	b := bytearray(msg)
 	mut i := 0
 	for i < b.len() {
 		if b[i] == b'`' {
@@ -474,8 +474,8 @@ fn first_quoted(msg: str) -> str {
 
 # index_from is where `needle` first occurs in `hay` at or after `from`, or -1.
 fn index_from(hay: str, needle: str, start: int) -> int {
-	h := list[byte](hay)
-	n := list[byte](needle)
+	h := bytearray(hay)
+	n := bytearray(needle)
 	return -1 if n.len() == 0 or n.len() > h.len()
 	mut i := start
 	if i < 0 {
@@ -496,7 +496,7 @@ fn index_from(hay: str, needle: str, start: int) -> int {
 fn source_line(src: str, n: int) -> str {
 	return "" if n < 1
 
-	b := list[byte](src)
+	b := bytearray(src)
 	mut at := 1
 	mut start := 0
 	mut i := 0
@@ -577,7 +577,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 		if not __zrt_exists(obj) {
 			cpath := obj + ".c"
 			guard {
-				io.write_file(cpath, list[byte](code))
+				io.write_file(cpath, bytearray(code))
 			}
 			todo_c.append(cpath)
 			todo_o.append(obj)
@@ -740,7 +740,7 @@ fn cache_path(key: str) -> str {
 # makes that far less likely. A cryptographic digest is the upgrade to make when the
 # standard library has one.
 fn unit_key(code: str) -> str {
-	b := list[byte](f"{cc_bin()}\n{cc_std()}\n{code}")
+	b := bytearray(f"{cc_bin()}\n{cc_std()}\n{code}")
 	mut h := 2166136261
 	mut i := 0
 	for i < b.len() {
@@ -756,7 +756,7 @@ fn unit_key(code: str) -> str {
 fn compile_to(code: str, output: str, object_only: bool) {
 	cpath := output + ".c"
 	guard {
-		io.write_file(cpath, list[byte](code))
+		io.write_file(cpath, bytearray(code))
 	}
 	mut argv: list[str] = []
 	if object_only {
@@ -774,7 +774,7 @@ fn compile_to(code: str, output: str, object_only: bool) {
 fn drop_ext(path: str) -> str {
 	return path if not has_suffix(path, ".zg")
 
-	b := list[byte](path)
+	b := bytearray(path)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() - 3 {
@@ -900,14 +900,14 @@ fn env_or(key: str, fallback: str) -> str {
 # flattens every module into one namespace and importing one more would collide.
 fn cc_bin() -> str {
 	name := env_or("CC", "cc")
-	b := list[byte](name)
+	b := bytearray(name)
 	mut i := 0
 	for i < b.len() {
 		return name if b[i] == b'/'
 		i = i + 1
 	}
 
-	path := list[byte](env_or("PATH", ""))
+	path := bytearray(env_or("PATH", ""))
 	mut seg: list[byte] = []
 	mut j := 0
 	for j <= path.len() {
@@ -1013,7 +1013,7 @@ fn join_path(dir: str, name: str) -> str {
 
 # dir_of returns the directory part of a path, or "." when it names a bare file.
 fn dir_of(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut seen := false
 	mut i := 0
@@ -1036,8 +1036,8 @@ fn dir_of(path: str) -> str {
 
 # has_suffix reports whether s ends with suffix.
 fn has_suffix(s: str, suffix: str) -> bool {
-	b := list[byte](s)
-	x := list[byte](suffix)
+	b := bytearray(s)
+	x := bytearray(suffix)
 	return false if x.len() > b.len()
 	mut i := 0
 	for i < x.len() {
@@ -1118,7 +1118,7 @@ fn module_at(root: str, path: str) -> list[str] {
 # path_tail is the last '/'-separated segment of an import path, which is the module's
 # name.
 fn path_tail(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
 	for i < b.len() {
@@ -1311,7 +1311,7 @@ fn run_fmt(files: list[str], off: list[str]) {
 		out := zerg.fmt_src_off(src, off)
 		if out != src {
 			guard {
-				io.write_file(f, list[byte](out))
+				io.write_file(f, bytearray(out))
 			}
 			io.write(f + "\n")
 		}
@@ -1356,7 +1356,7 @@ fn run_desugar(files: list[str], off: list[str]) {
 		out := zerg.desugar_src_off(src, off)
 		if out != src {
 			guard {
-				io.write_file(f, list[byte](out))
+				io.write_file(f, bytearray(out))
 			}
 			io.write(f + "\n")
 		}

@@ -97,7 +97,7 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, code: str, msg
 # is not compiled into the build at all, so nothing in it can be referenced and there is
 # nothing for this rule to say about it.
 fn c_mod_of(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := -1
 	mut i := 0
 	for i < b.len() {
@@ -634,7 +634,7 @@ fn chk_int_literal(mut &em: Emitter, lex: str) {
 }
 
 fn chk_str_not_indexable(mut &em: Emitter) {
-	chk_at(em, "E320", "a `str` is not indexable — it is UTF-8, so a subscript would name a byte and not a character; convert it first with `list[byte](s)`")
+	chk_at(em, "E320", "a `str` is not indexable — it is UTF-8, so a subscript would name a byte and not a character; convert it first with `bytearray(s)`")
 }
 
 fn chk_store_target(e: Expr) -> Expr {
@@ -835,7 +835,7 @@ fn chk_args(n: int) -> str {
 # both halves are worth printing, but the separator is an implementation detail nobody
 # should have to meet in a diagnostic.
 fn chk_call_name(key: str) -> str {
-	bs := list[byte](key)
+	bs := bytearray(key)
 	mut out: list[byte] = []
 	for b in bs {
 		# a SPECIALIZATION's key carries its type arguments after a `$`, and the reader wrote
@@ -1569,7 +1569,7 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 
 		# A `list[byte]` IS NOT A `list[int]`, whatever the elements would do one at a time.
 		# The buffer's stride is its ELEMENT's size, so reading one as the other walks 8
-		# bytes per 1-byte slot: `ys: list[int] = list[byte]("Hi")` printed 26952, and a
+		# bytes per 1-byte slot: `ys: list[int] = bytearray("Hi")` printed 26952, and a
 		# longer string read past the end.
 		#
 		# Both orderings now fall out of the recursion below as well, since a byte no longer

@@ -757,6 +757,7 @@ shipping compiler rather than a part of it (the line
 | `E380` | raise carries an `Err`, or a message to build one from                                      |
 | `E381` | `…` is declared twice, once as one kind of declaration and once as another                  |
 | `E382` | `…` is declared twice as the same kind — every module flattens into one namespace           |
+| `E383` | a variant is named through its enum, and this one is bare                                   |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

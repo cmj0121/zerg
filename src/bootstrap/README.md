@@ -232,6 +232,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   the seed's only input, the compiler's own source, nests five levels — but it is a gap:
   the seed enforces no bound at all, and a deep enough program would end as a Go
   stack-limit panic rather than a diagnostic.
+- **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
+  its own name into the value namespace and not its variants', so a variant is reached
+  through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`
+  alone still resolves here; `zerg` refuses both halves by name. The seed's own sources need
+  no migration for the same reason its gaps are its own contract: it is the oracle on
+  programs that follow the rule, not the enforcer of it.
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a

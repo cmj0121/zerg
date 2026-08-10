@@ -1253,7 +1253,8 @@ func TestFormatSpecIsBounded(t *testing.T) {
 		"int-hex=0xff\n" +
 		"str-pad=  abc\n" +
 		"char-ascii=A\n" +
-		"char-wide=Ĭ\n"
+		"char-wide=Ĭ\n" +
+		"str-trunc=abcde\n"
 	if string(out) != want {
 		t.Fatalf("valid specs = %q, want %q — a bound that breaks formatting is not one", out, want)
 	}
@@ -1261,7 +1262,7 @@ func TestFormatSpecIsBounded(t *testing.T) {
 	// Each of these is a spec a program can write, and each must end the run the way every
 	// other runtime refusal does: a ValueError on stderr and an ordinary exit status. A
 	// SIGNAL here is the bug this test exists for.
-	for _, spec := range []string{"type-s", "type-n", "wide-prec", "huge-width", "huge-prec", "char-past-max", "char-surrogate", "char-nul", "char-negative"} {
+	for _, spec := range []string{"type-s", "type-n", "wide-prec", "huge-width", "huge-prec", "char-past-max", "char-surrogate", "char-nul", "char-negative", "float-prec"} {
 		cmd := exec.Command(bin, spec)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
@@ -1307,6 +1308,7 @@ int main(int argc, char **argv) {
         say("str-pad", zrt_fmt_str("abc", ">5"));
         say("char-ascii", zrt_fmt_int(65, "c"));
         say("char-wide", zrt_fmt_int(300, "c"));
+        say("str-trunc", zrt_fmt_str("abcdefghij", ".5"));
         return 0;
     }
     if (strcmp(what, "type-s")     == 0) { say("out", zrt_fmt_float(1.5, ".6s")); }
@@ -1318,6 +1320,7 @@ int main(int argc, char **argv) {
     if (strcmp(what, "char-surrogate") == 0) { say("out", zrt_fmt_int(0xD800, "c")); }
     if (strcmp(what, "char-nul")       == 0) { say("out", zrt_fmt_int(0, "c")); }
     if (strcmp(what, "char-negative")  == 0) { say("out", zrt_fmt_int(-1, "c")); }
+    if (strcmp(what, "float-prec")     == 0) { say("out", zrt_fmt_float(1.5, ".200f")); }
     return 0;
 }
 `
@@ -1337,10 +1340,16 @@ func TestRuntimeFormatsAreLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	// `printf(fmt, …)` and friends: the format is the first argument, except for the four
-	// that take a stream, a buffer, or a buffer and a size first.
-	call := regexp.MustCompile(`\b(v?s?n?printf|fprintf|dprintf|syslog)\s*\(`)
-	skip := map[string]int{"printf": 0, "vprintf": 0, "snprintf": 2, "vsnprintf": 2, "sprintf": 1, "vsprintf": 1, "fprintf": 1, "vfprintf": 1, "dprintf": 1, "syslog": 1}
+	// The map is the whole statement: which functions take a format, and which argument it
+	// is. The regex finds candidates loosely — anything ending in `printf`, plus syslog —
+	// and a name the map does not know is skipped, so adding one is one line in one place
+	// rather than two lists to keep in step.
+	call := regexp.MustCompile(`\b(\w*printf|syslog)\s*\(`)
+	skip := map[string]int{
+		"printf": 0, "vprintf": 0, "asprintf": 1, "vasprintf": 1,
+		"snprintf": 2, "vsnprintf": 2, "sprintf": 1, "vsprintf": 1,
+		"fprintf": 1, "vfprintf": 1, "dprintf": 1, "syslog": 1,
+	}
 	for _, c := range cfiles {
 		src, err := os.ReadFile(c)
 		if err != nil {
@@ -1354,8 +1363,16 @@ func TestRuntimeFormatsAreLiterals(t *testing.T) {
 			name := line[m[2]:m[3]]
 			args := splitArgs(line[m[1]:])
 			n, ok := skip[name]
-			if !ok || len(args) <= n {
-				continue // not a call we can read on one line; the shape check below is the point
+			if !ok {
+				continue // not a call that takes a format
+			}
+			if len(args) <= n {
+				// A CALL THIS CANNOT READ IS A FINDING, not a pass. Skipping one silently is
+				// how a gate comes to depend on how the sources happen to be wrapped: the
+				// day a call spans two lines it stops being checked and nothing says so.
+				t.Errorf("%s:%d: %s spans lines, so its format cannot be read here: %s",
+					filepath.Base(c), i+1, name, strings.TrimSpace(line))
+				continue
 			}
 			if !strings.HasPrefix(strings.TrimSpace(args[n]), `"`) {
 				t.Errorf("%s:%d: %s takes a format that is not a literal: %s",

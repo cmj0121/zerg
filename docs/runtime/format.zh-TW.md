@@ -37,7 +37,8 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
   format spec 為 **[not yet]**——洞裡的 spec 會被指名拒絕。
 
   > **spec 是程式自己寫的文字,而它的每一個欄位都有界。** `type` 字母對每一種渲染都是**封閉集合**——float 取
-  > `e E f F g G`，int 取 `b o x X c d`，`str` 取 `s`——而 `width` 與 `precision` 有實作上限
+  > `e E f F g G`，int 取 `b o x X c d`——其中 `c` 把 int 當作它指名的**碼位**渲染,並拒絕任何 `str` 裝不下的
+  > 碼位——`str` 取 `s`，而 `width` 與 `precision` 有實作上限
   > ([一致性](../conformance.zh-TW.md))。落在這兩者之外的 spec 會被拒絕：能在編譯期拒的由編譯器拒，程式仍然
   > 走到的則由 runtime 以 `ValueError` 拒。這不是修飾。那個字母原本會被拼進 C 格式器自己的 pattern，所以
   > `{x:.6s}` 會把一個 float 用 `%s` 渲染——把數字當指標讀——而 `{x:.6n}` 會走到 `%n`，那是**寫**穿它的引數。

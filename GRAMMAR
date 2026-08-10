@@ -124,7 +124,7 @@ block      ::= '{' stmt-list '}'
 keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
-             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'
+             | 'chan'  | 'type'  | 'impl'   | 'init'
              | 'defer' | 'del'   | 'close'  | 'raise'   | 'guard' | 'is'
              | 'not'   | 'and'   | 'or'     | 'print'   | 'this'  | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
@@ -732,8 +732,9 @@ send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from 
 # 'mut' binding inside a module-level 'unsafe { … }' group, group 12; the SAFE way to share
 # mutable global state is an immutable ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
 # entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
-# ordinary function, not reserved. 'package' is the distribution / versioning unit: a
-# directory tree selected by the build tool, with NO in-source 'package' declaration.
+# ordinary function, not reserved. A PACKAGE is the distribution / versioning unit: a
+# directory tree selected by the build tool, with no in-source declaration — and so with no
+# keyword either, since a word this grammar never derives has no business being reserved.
 #
 # An 'import' binds a NAMESPACE. The path is a STRING and its LAST segment names the binding
 # ('import "util/text"' binds 'text'), reached with '.' — 'text.split(…)'. 'as' renames it

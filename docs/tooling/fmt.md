@@ -674,6 +674,7 @@ shipping compiler rather than a part of it (the line
 | `E271` | `asm(…)` — **[not yet]**                                                                    |
 | `E272` | `…(…)` converts a VALUE and was given none                                                  |
 | `E273` | `…(…)` converts one value, and this gives …                                                 |
+| `E274` | a pattern names a variant through its enum, and this one is bare                            |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

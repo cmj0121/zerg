@@ -622,7 +622,6 @@ shipping compiler rather than a part of it (the line
 | `E217` | the decorator `#[…]` — **[not yet]**                                                        |
 | `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
 | `E219` | `…` as an `impl` item — **[not yet]**                                                       |
-| `E220` | a nested `{ … }` block as a statement — **[not yet]**                                       |
 | `E221` | a struct pattern `…{…}` — **[not yet]**                                                     |
 | `E222` | calling … — **[not yet]**                                                                   |
 | `E223` | the named argument `…:` — **[not yet]**                                                     |

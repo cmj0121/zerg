@@ -272,8 +272,8 @@ arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value'
 # literal (build one with its constructor, 'set([ … ])'). Two parse rules follow from '{'
 # being the block opener: at a statement's start '{' is a block STATEMENT (its value
 # discarded), and ANY '{'-opening expression — a block OR a map literal — at the start of
-# an if/for/with/match head must be parenthesized. (struct and enum values are built by
-# calling a type or variant name — see the constructor note in group 7.)
+# an if/for/with/match head must be parenthesized. (A struct value is built by calling its
+# type name and an enum value by calling 'Enum.Variant' — see the constructor note, group 7.)
 #
 # A tuple is read back by STATIC index — 't.0', 't.1' (postfix, above) — not 't[i]': its
 # elements are heterogeneous, so the index must be a compile-time constant for the result
@@ -291,7 +291,7 @@ add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
 mul-op       ::= '*' | '/' | '//' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
-type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+type-name    ::= identifier            # a type, a spec, or an enum's name (groups 6, 7)
 
 # ==================================================================================
 # 5. Functions
@@ -440,16 +440,16 @@ range-arm    ::= range-bound ( '..' range-bound? | '..=' range-bound )
 range-bound  ::= '-'? literal | identifier          # a compile-time constant bound
 
 # A pattern destructures by copy.
-# A bare name in pattern position is a 'variant-pat' when it RESOLVES to a known type or
-# enum variant in scope, and a 'binding-pat' (a fresh name) otherwise — the same name
-# resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
-# case-free, so this is decided by resolution, not by capitalization.
+# A variant is ALWAYS named BY ITS ENUM — 'Color.Red', 'Shape.Line(5)' — because that pair is
+# what a variant IS. 'Red' alone names nothing: two enums may each declare one, and which of
+# them a bare name meant was decided by whatever happened to be in scope, so declaring a
+# variant in one file could silently change what a pattern in another file matched. A BARE
+# name in pattern position is therefore ALWAYS a fresh binding, and nothing here has to be
+# resolved to be parsed — the same rule, and the same reason, as the postfix '[' of group 4.
+# (Names are case-free, so capitalization was never what decided this.)
 #
-# A variant may also be named BY ITS ENUM — 'Color.Red', 'Shape.Line(5)', and the same in
-# pattern position. It is the identical value; what it adds is that the reader is told which
-# enum without having to resolve the name, which the bare form asks of them. The
-# qualification must be TRUE: 'Color.Apple' names a variant of another enum and is an error,
-# not a fresh binding.
+# The qualification must be TRUE: 'Color.Apple' names a variant of another enum and is an
+# error — and now it can only be an error, never a fresh binding.
 pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
 # A struct pattern must list EVERY field, or end with '..' to ignore the rest ('Div{q, r}'
 # lists all; 'Div{q, ..}' ignores the rest; 'Div{..}' matches any). A list pattern may
@@ -458,12 +458,12 @@ pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same 
 # from the value-level range '..' (group 4).
 #
 # 'pattern-core as name' also binds the WHOLE matched value to 'name' while the core keeps
-# destructuring — 'Move{x, y} as m', 'Some(inner as v)'. 'as' reads the same as in
+# destructuring — 'Move{x, y} as m', 'Either.Left(inner as v)'. 'as' reads the same as in
 # 'with'/'import': '<thing> as <name>'. On an or-pattern it binds the nearest alternative
-# ('A | B as m' is 'A | (B as m)'); bind both sides with 'A as m | B as m'.
+# ('E.A | E.B as m' is 'E.A | (E.B as m)'); bind both sides with 'E.A as m | E.B as m'.
 sub-pattern  ::= pattern-core ( 'as' identifier )?
 pattern-core ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
-variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
+variant-pat  ::= type-name '.' identifier ( '(' pattern-list ')' )?   # Color.Red, Either.Left(v)
 struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 tuple-pat    ::= '(' pattern-list ')'                   # (a, b) — also a bind-target
@@ -529,11 +529,15 @@ val-bind     ::= identifier ':=' const-expr   # 'BITS := 32' — satisfies a spe
 # runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
 const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see above)
 
-# CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
-# the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
-# fields become parameters in declaration order — positional then named, group 5) and
-# 'Circle(3.0)' builds an enum variant. The name is SHARED with functions: a type and a
-# function cannot share a name (a duplicate is an error — Zerg has no overloading).
+# CONSTRUCTION. A type name is ALSO its constructor: 'struct' puts the name into the value
+# namespace as a callable, so 'User(id: 1, name: "x")' builds one (its fields become
+# parameters in declaration order — positional then named, group 5). An 'enum' puts in ITS
+# OWN name and not its variants': a variant is built THROUGH the enum —
+# 'Shape.Circle(3.0)', 'Color.Red' — the same (enum, variant) pair a pattern writes
+# (group 6). A variant name is therefore never a name on its own, which is what keeps two
+# enums that both declare a 'Red' from competing for it. The type name is SHARED with
+# functions: a type and a function cannot share a name (a duplicate is an error — Zerg has
+# no overloading).
 #
 # FIELD VISIBILITY & DEFAULTS. A field is 'pub' for external INSTANCE ACCESS (read/write
 # of 'u.field'); a non-pub field is module-private, and MUST carry a default. A field's

@@ -98,9 +98,9 @@ together.
 its arms out as rows:
 
 ```zerg
-Eof       => "EOF"
-Illegal   => "ILLEGAL"
-FStrBegin => "FSTR_BEGIN"
+Tok.Eof       => "EOF"
+Tok.Illegal   => "ILLEGAL"
+Tok.FStrBegin => "FSTR_BEGIN"
 ```
 
 rather than as a ragged left edge with the answers scattered along it. `F107` is the same
@@ -217,6 +217,24 @@ with no way to tell them apart by looking.
 | `F406` | a blank line where one is load-bearing: guard runs, declaration runs, comments | on      |
 | `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
 | `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
+| `F409` | a bare block that opens with a binding becomes the `with` it is sugar for      | on      |
+
+**`F409`** is the same move on the other sugar `GRAMMAR` defines by expansion: `with e as x { … }` **is**
+`{ x := e; … }`, so a bare block whose first statement binds is written as the `with` it already is.
+
+```text
+{                        →   with acquire() as h {
+    h := acquire()               use(h)
+    use(h)                   }
+}
+```
+
+The trigger is **purely syntactic** — a bare block, a first statement that binds. It must not read the
+binding's **`defer`**: `with` carries no teardown of its own, so a rule that folded
+`{ x := e; defer x.close(); … }` into one would delete the `defer`.
+
+> **[not yet]** Both are unbuilt, and both wait on `with` itself — **[not yet]** at the keyword
+> ([Values & Memory](../core/memory.md)).
 
 `GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
 for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the
@@ -578,6 +596,7 @@ exit makes `zerg lint` usable as a gate rather than as decoration.
 | `L102` | private function never called | a public one is a module's interface; a private one with no caller is dead |
 | `L103` | binding never read            | the value was computed for nobody                                          |
 | `L104` | `_ := expr`                   | the expression is already a statement; the binder is what nothing reaches  |
+| `L105` | `with … as x`, `x` never read | the block already scopes the resource; the name is what nobody said        |
 
 ```text
 L101 unused import "strconv"
@@ -656,14 +675,14 @@ than every shape that could.
 
 | Code   | Rule                                        |
 | ------ | ------------------------------------------- |
-| `L401` | a variant name **two** enums declare        |
 | `L402` | a `mut fn` that never writes through `this` |
 
-A bare name is a variant when it resolves to one, and resolution takes the **first**
-declaration — silently. Two enums that both have a `Red` make `c := Red` a coin toss
-decided by declaration order, and moving an `enum` in the file changes what the program
-means with nothing said. The program is well formed and the answer is defined; what it is
-not is readable. `Color.Red` says which.
+`L401` stood here and has **retired**. It reported a variant name two enums declare: a bare
+name was a variant when it resolved to one, resolution took the **first** declaration, and
+`c := Red` was a coin toss decided by declaration order. A variant is now always named by
+its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing and the two
+declarations never compete — the lint's whole subject is a form the grammar no longer
+derives. The number is not reused.
 
 `mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
 the instance in a `mut` binding. A method that only reads charges its callers that and gives

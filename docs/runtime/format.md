@@ -43,6 +43,14 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
   and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A format
   spec is **[not yet]** — one in a hole is refused by name.
+
+  > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
+  > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and
+  > `width` and `precision` have implementation limits ([Conformance](../conformance.md)). A spec outside
+  > either is refused: by the compiler where it can be, and by the runtime as a `ValueError` where a
+  > program reaches one anyway. This is not a nicety. The letter used to be spliced into the C
+  > formatter's own pattern, so `{x:.6s}` rendered a float through `%s` — a pointer read of a number —
+  > and `{x:.6n}` reached `%n`, which **writes** through its argument.
   > **[implementation-defined]** Floating-point rendering — the default `%g`-style form (6 significant
   > figures) and the spelling of `NaN`, `Inf`/`-Inf`, and `-0.0` — is not pinned by the spec; a conforming
   > implementation documents its own. Do not depend on an exact float spelling.

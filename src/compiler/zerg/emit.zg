@@ -3787,7 +3787,9 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		# wrong there is the pair, not a missing impl. Raising here as well replaced a
 		# diagnostic about the program with one about a spec the program never mentioned.
 		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
-			raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+			if ty_name(ta) == ty_name(c_infer(em, b)) {
+				c_eq_refuse(em, oper, ta)
+			}
 		}
 	}
 
@@ -3850,24 +3852,45 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	return c_expr(em, EMethod(a, "ne", [b]), sb)
 }
 
-# c_eq_says names what is missing, and there are FIVE different sentences under one gap —
+# c_eq_refuse names what is missing, and there are four different sentences under one gap —
 # the comment here said three while the function answered five, and two of the five had no
 # code, which is how a rule stays unpinnable: nothing in the file counts its own branches.
+# The fifth turned out to be a rule the checker already owned, and is gone.
 #
-# An ORDERING is `Ord`'s and this compiler generates none. A CHANNEL or a FUNCTION is an
-# identity rather than a value, and a CARRIER may hold nothing to compare — both permanent
-# answers of the language rather than gaps. Equality on a CONTAINER is
+# A CHANNEL or a FUNCTION is an identity rather than a value, and a CARRIER may hold nothing
+# to compare — both permanent answers of the language rather than gaps. Equality on a
+# CONTAINER is
 # docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
 # nothing to decorate and no impl a program could write for it. Equality on a NAMED type
 # exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
-# it is the only one of the five that tells the reader what to type.
-fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
-	return f"E448 NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
-	return f"E460 a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
-	return f"E473 a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
-	return f"E445 NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
+# it is the only one of the four that tells the reader what to type.
+# It REPORTS rather than answering a sentence, and that is what buys the place: it used to
+# be `raise c_eq_says(…)`, so five rules about an expression the emitter is standing on said
+# nothing about where it was. The channel is the same one every checked rule uses, and the
+# C built after a finding is thrown away — the same reasoning that put `no field` on it.
+fn c_eq_refuse(mut &em: Emitter, oper: str, t: Ty) {
+	# AN ORDERING IS ALREADY ANSWERED, by the checker's rule about `<` on two things that are
+	# neither numbers nor strs — which has a place and the better sentence. This branch used
+	# to raise its own `NotImplemented: an ordering comes from Ord`, and a raise ENDS THE RUN,
+	# so those words replaced that rule's on every program that reached both. Nothing here
+	# could see it: the case asserted the sentence that won. It reports nothing now, and the
+	# code it used to carry is retired — one mistake earns one finding, and this is not it.
+	return if oper != "==" and oper != "!="
 
-	return f"E430 `{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
+	if ty_is_chan(t) or c_is_fn(t) {
+		chk_at(em, "E460", f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries")
+		return
+	}
+	if c_is_carrier(t) {
+		chk_at(em, "E473", f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`")
+		return
+	}
+	if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t) {
+		chk_at(em, "E445", f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare")
+		return
+	}
+
+	chk_at(em, "E430", f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`")
 }
 
 # c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide

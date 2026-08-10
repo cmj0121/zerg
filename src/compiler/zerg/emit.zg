@@ -544,7 +544,7 @@ fn c_no_builtin_into(mut &em: Emitter, meth: str, target: Expr) {
 	t := c_infer(em, target)
 	return if not chk_is_scalar(t)
 
-	raise f"`into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
+	raise f"E464 `into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
 }
 
 # c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
@@ -1919,7 +1919,7 @@ fn c_builtin_check(n: str) {
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
+	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -1940,7 +1940,7 @@ fn c_fixed_width_check(n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
+	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -2621,10 +2621,15 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
 }
 
-# c_dup_say is the CHANNEL, chosen by whether the declaration recorded a place. A struct and
-# an enum are registered before anything carries one, so those two still raise; the rest
-# report and say where. The code travels as an argument either way, which is what keeps one
-# rule from wearing two identities when the channel differs.
+# c_dup_say is the CHANNEL, chosen by whether the declaration recorded a place: a struct and
+# an enum are registered before anything carries one, so those two still raise and the rest
+# say where. The code travels as an argument, which is what keeps one rule from wearing two
+# identities when the channel differs.
+#
+# The split is not tidiness. Folding it back — picking `code` into a variable and choosing
+# the channel once — puts the code somewhere scripts/error-codes-check.sh cannot see it, and
+# the gate said so the moment it was tried. A code has to be a LITERAL where it is reported,
+# or nothing can hold the source, the gates and the catalogue to each other.
 fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: int) {
 	if path != "" {
 		chk_at_place(em, path, line, col, code, msg)
@@ -3845,17 +3850,21 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	return c_expr(em, EMethod(a, "ne", [b]), sb)
 }
 
-# c_eq_says names what is missing, and there are three different sentences under one gap.
+# c_eq_says names what is missing, and there are FIVE different sentences under one gap —
+# the comment here said three while the function answered five, and two of the five had no
+# code, which is how a rule stays unpinnable: nothing in the file counts its own branches.
 #
-# An ORDERING is `Ord`'s and this compiler generates none. Equality on a CONTAINER is
+# An ORDERING is `Ord`'s and this compiler generates none. A CHANNEL or a FUNCTION is an
+# identity rather than a value, and a CARRIER may hold nothing to compare — both permanent
+# answers of the language rather than gaps. Equality on a CONTAINER is
 # docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
 # nothing to decorate and no impl a program could write for it. Equality on a NAMED type
 # exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
-# it is the only one of the three that tells the reader what to type.
+# it is the only one of the five that tells the reader what to type.
 fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
 	return f"E448 NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
-	return f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
-	return f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
+	return f"E460 a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
+	return f"E473 a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
 	return f"E445 NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
 
 	return f"E430 `{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
@@ -4107,7 +4116,7 @@ fn c_in_container(mut &em: Emitter, x: Expr, set: Expr, st: Ty, sb: Subst) -> st
 
 	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
 	# reason: a structural comparison is what a derived impl would supply and none is generated
-	raise f"NotImplemented: `in` over {ty_name(st)} — its elements are compared with `==`, and {ty_name(elem)} has none" if c_is_aggregate(em, elem)
+	raise f"E462 NotImplemented: `in` over {ty_name(st)} — its elements are compared with `==`, and {ty_name(elem)} has none" if c_is_aggregate(em, elem)
 
 	n := c_tmp(em, "zgt_in")
 	sv := n + "s"
@@ -4190,7 +4199,7 @@ fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		raise f"NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
+		raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
 	}
 
 	t := c_infer(em, x)
@@ -5279,7 +5288,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(name)
-	raise f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
+	raise f"E471 NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	# A CHECKED rule, so it carries a place: this is a statement about a program the language
 	# rejects — the reader believes something is generic that is not — rather than a form
@@ -5346,7 +5355,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
 		# and reaching here means there was no such place. Saying that is the difference
 		# between a form used wrongly and a form that does not exist.
-		raise f"`{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
+		raise f"E459 `{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
 
 		# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
 		# out of an int the way every conversion in this language builds its target — by
@@ -6021,7 +6030,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	if ca >= 0 {
 		# every arm after it is dead code AND breaks the lowering, which would hand the
 		# trailing arm the `else` the catch-all was written to take
-		raise "this catch-all arm makes the following arms unreachable" if ca < arms.len() - 1
+		raise "E458 this catch-all arm makes the following arms unreachable" if ca < arms.len() - 1
 		return
 	}
 
@@ -6054,7 +6063,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 
 	# anything else — an int, a str, a type inference could not name — has a domain no arm
 	# list can cover, so it takes a catch-all
-	raise "non-exhaustive match: missing a catch-all `_` arm"
+	raise "E467 non-exhaustive match: missing a catch-all `_` arm"
 }
 
 # c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
@@ -6189,7 +6198,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# but the arm beside it is not: a binding pattern binds the scrutinee, and over an
 		# optional that is the carrier rather than what it holds, so the arm answering `v`
 		# would answer the box. Named rather than half-built.
-		raise "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`" if c_is_nil_lit(a.lit) and c_is_carrier(st)
+		raise "E472 NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`" if c_is_nil_lit(a.lit) and c_is_carrier(st)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -7547,7 +7556,7 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# The header above is why the drop cannot simply be added here: the release is registered
 	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
 	# there is no taking one entry out of the middle early.
-	raise f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
+	raise f"E470 NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
 
 	c_live_del(em, name)
 	return f"{ind}/* del {name} */\n"
@@ -7821,7 +7830,7 @@ fn c_name_in(names: list[str], name: str) -> bool {
 # type` has no spelling here. So the function value is refused where it is MADE — at the
 # lambda, and at the name — rather than at a call that no longer knows what it is calling.
 fn c_no_ref_param(what: str) {
-	raise f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
+	raise f"E469 NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
 }
 
 # c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
@@ -9295,7 +9304,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the same missing value written down — including `return if c`, GRAMMAR's bare early
 	# exit, which is only ever legal where a bare `return` is. What is refused is exactly
 	# what would have reached cc, because `c_is_nil_ty` is the predicate c_ret_type asks.
-	raise f"a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
+	raise f"E468 a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
 
 	return f"{pre}{ind}return;\n"
 }
@@ -10185,7 +10194,7 @@ fn c_build_intos(mut &em: Emitter, f: File) {
 			# than by name, which is also what would let `x.into()` written by hand say which
 			# one is meant. Named here, where the pair is in hand, rather than reported later
 			# as two methods with one name.
-			raise f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
+			raise f"E461 NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
 			em.into_src.append(ip.target)
 		}
 	}

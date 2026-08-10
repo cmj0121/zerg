@@ -350,7 +350,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# The two are told apart by CASE, which the language already decides: a module is named
 		# by its directory and is snake_case, a spec is PascalCase. So `cli.Opt` is a qualifier
 		# and `It.Item` is a projection.
-		raise f"NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if c_is_ctor(name)
+		raise f"E265 NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if c_is_ctor(name)
 
 		p_advance(p)
 		name = cur(p).lexeme
@@ -736,7 +736,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
 			# one message; `t` is the declaration's first token, so the refusal carries the
 			# place a declaration owes.
-			raise "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
+			raise "E264 NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`" + p_place(p, t.line, t.col)
 		} else if p_at(p, Unsafe) and peek_kind(p, 1) == LBrace {
 			# a module-level `unsafe { … }` group opens. Every item inside goes through
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
@@ -1285,7 +1285,7 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	# statement loop as a top-level expression, which compile mode treats as a nop. The
 	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
 	# member access on a namespace that was never bound.
-	raise f"an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Str)
+	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Str)
 
 	t := cur(p)
 	p_advance(p) # the path
@@ -1589,7 +1589,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			#
 			# Spec or concrete is told by CASE, the same distinction an associated type uses:
 			# a spec is PascalCase, and every concrete type this language spells is not.
-			raise f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not c_is_ctor(bound)
+			raise f"E266 NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not c_is_ctor(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -1637,7 +1637,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 			# `mut` reads as a promise the language does not make. It was accepted and the
 			# keyword dropped, and a write in the body then said `cannot assign through b:
 			# it is immutable` — a true sentence about a parameter the programmer marked mut.
-			raise "a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Amp)
+			raise "E263 a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Amp)
 			p_advance(p)
 			is_ref = true
 		}
@@ -2455,7 +2455,7 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 	# on its own — a generic function named as a VALUE at a chosen instantiation. This
 	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
 	# is named rather than left to report the `(` that never came.
-	raise f"NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
+	raise f"E268 NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, LParen)
 
 	return ECall(name, parse_call_args(p), tyargs)
 }
@@ -2596,7 +2596,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
 	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
 	raise "E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value" + p_place(p, t.line, t.col) if k == Unsafe
-	raise "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Asm
+	raise "E271 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own" + p_place(p, t.line, t.col) if k == Asm
 
 	if k == Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
@@ -2714,7 +2714,7 @@ fn parse_if_expr(mut &p: Parser) -> Expr {
 	# `e` is present. It is grammatical in expression position and this compiler unwraps an
 	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
 	# parser and reported itself.
-	raise f"NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Ident) and peek_kind(p, 1) == Walrus
+	raise f"E270 NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`" + p_place(p, t.line, t.col) if p_at(p, Ident) and peek_kind(p, 1) == Walrus
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)
@@ -2737,7 +2737,7 @@ fn parse_if_branch(mut &p: Parser) -> Expr {
 	skip_semis(p)
 
 	t := cur(p)
-	raise "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, RBrace)
+	raise "E269 NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch" + p_place(p, t.line, t.col) if not p_at(p, RBrace)
 
 	expect(p, RBrace)
 	return e
@@ -2854,7 +2854,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# An arm's guard goes BEFORE the `=>` (GRAMMAR#match-arm). Written after the body it was
 	# silently DROPPED — `Right(e) => 0 if e is ValueError` compiled to an unconditional arm,
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
-	raise "a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, If)
+	raise "E262 a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, If)
 
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }

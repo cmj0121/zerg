@@ -69,6 +69,11 @@ module 擁有協定;driver 擁有檔案系統。
 findings 是關於**合法**程式的——一個取了紙面上看不出來之型別的字面值——所以它們以 **information** 抵達。把一個能動的
 程式塗成紅色的 server,是在教它的使用者忽略紅色。
 
+**代碼是以代碼的身分傳遞的。** `Diag` 用一個自己的欄位帶著規則的身分——`E307`、`L502`——所以 server 送出 LSP 的
+`Diagnostic.code`,編輯器可以據此過濾、分組與連結。那正是這一頁講的規則套用在它自己身上:只拼在句子裡的代碼,是每個
+讀者都得再解析一次出來的東西,而 server 去解析它就會是一份語言事實的第二份拷貝。沒有代碼的 finding 會省略這個欄位,
+而不是送一個空的。
+
 **abort 沒有位置。** parse error 與 `NotImplemented` refusal 都是被 `raise` 的句子,而編譯器兩者都沒有帶地點——所以它
 們以檔案頂端一個零寬度的 range 落地,帶著編譯器自己的話。不是 1:1 上那個字:畫在 `fn` 底下的線是在說 `fn` 錯了,而關
 於這類 finding 唯一確定的事就是沒人知道它在哪。
@@ -161,7 +166,7 @@ diff 把兩邊綁在一起。**
 | `completion`                                  | 同一套 query surface                                |
 | `documentSymbol`                              | `File` 是 `pub`,`FnDecl` 與它的兄弟們不是           |
 | `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| 診斷的 **code** 作為資料                      | `F401` 與 `L502` 是被渲染進訊息文字裡的             |
+| `zerg lint` 發現的 **code** 作為資料          | 那些規則回答 `list[str]`,把代碼渲染進字串裡         |
 | 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
 | `lint_files` 的 findings                      | 它們回答 `list[str]`,沒有位置可以放                 |
 | 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式             |

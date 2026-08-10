@@ -4283,9 +4283,9 @@ fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
 	# or one it does not build over — renders as a plain cast. The DECLARATION has already
 	# said what is wrong; converting into it would raise about the use instead, which buries
 	# the cause under a consequence at every call site.
-	return f"(({c_type(TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
+	return f"(({c_type(Ty.TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
 
-	return f"(({c_type(TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
+	return f"(({c_type(Ty.TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
 }
 
 # chk_call_arity_exact is the one-argument rule a conversion has. A conversion takes the

@@ -92,6 +92,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	if not fmt_is_off(off, "F408") {
 		toks = fmt_ranges(toks)
 	}
+	if not fmt_is_off(off, "F409") {
+		toks = fmt_withs(toks)
+	}
 	if not fmt_is_off(off, "F402") {
 		toks = fmt_imports(toks)
 	}
@@ -314,6 +317,86 @@ fn fmt_stmt_start(mut &toks: list[Token], at: int) -> bool {
 	return true if at == 0
 	k := toks[at - 1].kind
 	return is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
+}
+
+# --- rule F409: a bare block that opens with a binding is a `with` ------------------------
+#
+# GRAMMAR defines `with` BY EXPANSION — `with e as x { … }` is `{ x := e; … }` — so a bare
+# block whose first statement binds is already a `with`, written the long way. The rewrite
+# says so, and it is the same move F401 makes on the other sugar the grammar defines that
+# way.
+#
+# It fires on a bare block only, which `fmt_stmt_start` is what decides: a struct literal's
+# `{` follows a type name and a function body's follows a `)`, so neither is at the start of
+# a statement. And it takes only the plain `x := e` form — a `mut` binding or an annotated
+# one says something `with` does not, so folding either would be a rewrite that changed the
+# program rather than its spelling.
+#
+# WHAT IT MUST NOT DO is fold the binding's teardown in with it. `with` carries no teardown
+# of its own, so a rule keyed on `{ x := e; defer x.close(); … }` would have to drop the
+# `defer` to produce one — which deletes a line somebody wrote. Nothing here is keyed on a
+# `defer`: whatever follows the binding stays inside the block, in order.
+fn fmt_withs(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		end := fmt_with_bind_end(toks, i)
+		if end < 0 {
+			out.append(toks[i])
+			i = i + 1
+		} else {
+			ln := toks[i].line
+			col := toks[i].col
+			out.append(Token(Kind.With, "with", "", ln, col))
+
+			# the head is ONE line, so every token it is built from is re-lined onto the `{`'s.
+			# The expression came from the line below and would otherwise be printed there,
+			# which is where the block used to open.
+			mut j := i + 3
+			for j < end {
+				out.append(fmt_on_line(toks[j], ln))
+				j = j + 1
+			}
+			out.append(Token(Kind.As, "as", "", ln, col))
+			out.append(fmt_on_line(toks[i + 1], ln))
+			out.append(toks[i])
+
+			# the binding's `;` is KEPT, and it is what stops a blank line appearing where the
+			# binding was. A `;` prints nothing and still moves the printer's `prev_line`, which
+			# is the same mechanism that lets F401 collapse a four-line if-block onto one line
+			# (see fmt_blank's note); consuming it here left the gap open.
+			i = end
+		}
+	}
+	return out
+}
+
+# fmt_with_bind_end answers the index of the `;` that ends the binding a bare block opens
+# with, or -1 when this is not that shape. Every reason to decline is here, in one place.
+fn fmt_with_bind_end(mut &toks: list[Token], at: int) -> int {
+	return 0 - 1 if at + 3 >= toks.len()
+	return 0 - 1 if not is_lbrace(toks[at].kind) or not fmt_stmt_start(toks, at)
+	return 0 - 1 if toks[at + 1].kind != Kind.Ident or toks[at + 1].lexeme == "_"
+	return 0 - 1 if toks[at + 2].kind != Kind.Walrus
+
+	mut depth := 0
+	mut i := at + 3
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) or k == Kind.LParen or k == Kind.LBrack {
+			depth = depth + 1
+		} else if is_rbrace(k) or k == Kind.RParen or k == Kind.RBrack {
+			return 0 - 1 if depth == 0
+
+			depth = depth - 1
+		} else if is_semi(k) and depth == 0 {
+			return 0 - 1 if i == at + 3
+
+			return i
+		}
+		i = i + 1
+	}
+	return 0 - 1
 }
 
 # --- rule F407: a discarded receive binder drops ----------------------------------------------

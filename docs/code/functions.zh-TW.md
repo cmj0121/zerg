@@ -17,8 +17,8 @@
 >
 > **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
 > method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
-> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）。編譯器目前仍然接受它,所以尚未建置的是
-> 那個**拒絕**,而不是那個形式。型別引數從引數型別推論,是今天實例化一個 generic 的唯一途徑。
+> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕。型別引數從引數型別
+> 推論,是今天實例化一個 generic 的唯一途徑。
 >
 > **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被 parser 拒絕：
 > `f: fn(mut &int) = bump` 報 _expected `,`, found `&`_，而 `GRAMMAR` 明明推導出

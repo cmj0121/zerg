@@ -24,8 +24,7 @@ anonymous function.
 > **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
 > VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
 > language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
-> bracket is always an index ([Grammar](../surface/grammar.md)). The compiler still accepts it, which is the
-> refusal that is unbuilt rather than the form.
+> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
 > **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,

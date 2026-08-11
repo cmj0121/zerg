@@ -237,6 +237,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   does not find `Either` and reports an undefined name. `zerg` requires the qualified form
   (a variant is named through its type, with no exception for a built-in), which is why the
   three corpus programs that use it are skipped here with that reason.
+- **A call that WRITES its type arguments is accepted in its multi-argument shape.**
+  `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
+  `[ … ]` always an index and a generic takes its type from its arguments. The
+  one-argument shape (`id[int](7)`) the seed does turn away, for a reason of its own.
 - **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
   its own name into the value namespace and not its variants', so a variant is reached
   through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`

@@ -264,6 +264,7 @@ release is the axis above, unchanged, and that axis already covers every exit in
 A resource whose release is a **method someone must remember to call** is not a `with` case at all — it is
 a `defer`, written out, in the block `with` just opened.
 
-> **[not yet]** `with … as` is refused outright, at the keyword: _NotImplemented: with_. A resource is
-> scoped to a region today by writing the bare block and the `defer` by hand — which is exactly what the
-> expansion above says, so nothing is unreachable, only unabbreviated.
+`with` is **built**, and it is exactly the expansion above and nothing else: the block, the binding, and
+whatever `defer` the body writes for itself. It carries no teardown of its own — a `with` that frees
+something frees it because a `defer` in the body says so, or because the value is scope-owned like any
+other. `examples/18_scoped.zg` is the shipped demonstration.

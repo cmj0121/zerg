@@ -6,10 +6,10 @@ small core it already gives you. Part of the [Language Reference](../language.md
 
 ## Closures & higher-order functions
 
-Zerg's anonymous function `fn(…) -> R { … }` **is** the closure — first-class, capturing only immutable
-values and channels, by copy (see [Functions & Closures](functions.md)). Capturing an **immutable** value —
-a scalar, or a non-POD `str` / `list` / `map` / `Ref` — is **[not yet]**, and so is capturing a **`mut`**
-binding: a closure today may use only its own parameters. There is deliberately **no terser
+Zerg's anonymous function `fn(…) -> R { … }` **is** the closure — first-class, capturing by copy (see
+[Functions & Closures](functions.md)). Capturing is built: an **immutable** value — a scalar, or a non-POD
+`str` / `list` / `map` — and a **`mut`** binding alike, the latter taking the value it held at the point the
+closure was written. There is deliberately **no terser
 `|x|` lambda**: a little verbosity nudges you toward Zerg's procedural-first style rather than deep
 functional chains. Three ways to keep closures readable, in order of preference:
 
@@ -17,14 +17,10 @@ functional chains. Three ways to keep closures readable, in order of preference:
    clutter-free at the call site.
 2. **Write a `for` loop** — often the clearest, and the most procedural-first.
 3. **Inline `fn` that fits its slot** — for a one-off, an untyped parameter takes its type from the
-   function type the closure is checked against; the result type is still written — an absent `-> type`
-   means nil, never an inference ([Type System](../core/type-system.md)).
-
-   > **[not yet]** An inline `fn` whose parameters carry no type is refused: `xs.map(fn(x) { return x *% 2 })`
-   > reports _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the
-   > function type the closure is checked against, and this compiler does not infer it; write `x: T`_. The
-   > expected type is known at the call site, but nothing carries it back into the closure's own parameter
-   > list, so every inline `fn` must write its parameter types out even where they are already determined.
+   function type the closure is checked against, and so does an omitted result type
+   ([Type System](../core/type-system.md)). Where there is no such position — `f := fn (x) { … }` — there is
+   nowhere to take either from: the parameter is a named error, and an absent `-> type` means nil, never an
+   inference.
 
 ## Chained pipelines
 
@@ -61,9 +57,9 @@ When an inline function is genuinely one-off, the parameter type its position su
 ys := xs.map(fn(x) -> int { return x *% 2 })   # x: int taken from xs; -> int written
 ```
 
-> **[not yet]** This one line is refused twice over — for the untyped `x` and for `map`, both marked above.
-> It stays here because it is the shape the language specifies a one-off to take, and the shape to expect
-> once the closure parameter takes its type from the function type it is checked against.
+> **[not yet]** What is left unbuilt in this line is `map`, marked above. The untyped parameter is not:
+> `x` takes its type from the function type the closure is checked against, so the line could be written
+> `xs.map(fn(x) { return x *% 2 })` the day the adapter exists.
 
 ## Builders
 

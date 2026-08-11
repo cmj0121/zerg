@@ -101,14 +101,14 @@ linker against generated code nobody wrote. A feature the specification marks **
 `NotImplemented` and stops.
 
 **Where the compiler falls short of that, the specification says so** — a **[deviation]** in the
-chapter the feature belongs to. Three are **silent**, and are the ones to know before writing
-anything:
+chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
+ones, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                                  | Chapter                                   |
-| ----------------------------------------------------------------- | ----------------------------------------- |
-| a `str` literal `match` arm never fires                           | [control flow](docs/code/control-flow.md) |
-| an if-expression does not check that its branches agree on a type | [control flow](docs/code/control-flow.md) |
-| `~` on a `byte` yields the unmasked 64-bit complement             | [types](docs/core/types.md)               |
+| Silent deviation                                                       | Chapter                                 |
+| ---------------------------------------------------------------------- | --------------------------------------- |
+| a `list` is not frozen while iterated — appending during a `for` works | [collections](docs/code/collections.md) |
+| a refcounted value entering a carrier is never released — it leaks     | [values & memory](docs/core/memory.md)  |
+| a `list` fill form `[v; N]` re-evaluates `v` once per element          | [collections](docs/code/collections.md) |
 
 Two more are structural, and a running program feels them: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks

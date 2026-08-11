@@ -612,7 +612,6 @@ shipping compiler rather than a part of it (the line
 | `E206` | `Either[…, …]` has the same type on both sides                                              |
 | `E207` | a parameterized `…[…]` as … — **[not yet]**                                                 |
 | `E208` | `#[derive(…)]` has no declaration under it                                                  |
-| `E209` | a closure parameter without a type — **[not yet]**                                          |
 | `E210` | a `spec` member with a BODY — **[not yet]**                                                 |
 | `E211` | an associated value is not a `spec` member                                                  |
 | `E212` | a generic enum `…[…]` — **[not yet]**                                                       |
@@ -766,6 +765,8 @@ shipping compiler rather than a part of it (the line
 | `E382` | `…` is declared twice as the same kind — every module flattens into one namespace           |
 | `E383` | a variant is named through its enum, and this one is bare                                   |
 | `E384` | a side of an `Either` is named through its type, and this one is bare                       |
+| `E385` | a closure parameter has no type, and its position gives it none                             |
+| `E386` | a call through a function value gives the wrong number of arguments                         |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

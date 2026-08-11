@@ -16,6 +16,20 @@ differ in calling convention — mutable-reference vs copy). Visibility is **not
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
 anonymous function.
 
+An **anonymous function may omit its parameter types, and its return type with them** — they come from the
+function type it is checked against, which is [carve-out (c)](../core/types.md). Every typed position
+supplies one: a declared binding, an argument, a `return`, a struct field, a parameter's default.
+
+```zerg
+    apply(fn (x) { return x + 1 }, 41)          # x is int, the answer is int
+    g: fn (int) -> int = fn (x) { return x * 2 }
+```
+
+A written type **wins** — `fn (x: str)` at a `fn (int) -> …` position is a type error naming both, not an
+annotation quietly overruled. And a closure that meets **no** such position has nowhere to take them from,
+which is an error rather than a guess: `f := fn (x) { … }` reports _the closure parameter `x` has no type,
+and this position gives it none_.
+
 > **[not yet]** The value stops at the module boundary. A function named through another module is a **call
 > target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _module `text` has no
 > `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path

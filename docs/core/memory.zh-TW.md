@@ -85,6 +85,12 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
+> **[deviation]** 進入 **carrier** 的 reference-counted 值——channel 接收回傳的 `T?`、`Result[T]`——
+> **永遠不會被釋放**。drop 是有的、只是沒有人呼叫它:carrier 沒有 copy helper,所以登記那個 drop 會讓
+> 「同一個值的兩個名字」各還一次。凡是 refcount 過的東西跨越 `chan[T]` 都會漏掉一個 reference——`chan[int]`
+> 看不出來,`chan[str]` 是真的——由 `test-data/codegen/chan_str_shared.zg`(這棵樹裡第一支送 `str` 的程式)
+> 在 LeakSanitizer 下量到。
+
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
 遞迴** binding 的自動裝箱 cell：

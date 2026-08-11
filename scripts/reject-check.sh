@@ -663,6 +663,46 @@ fn main() {
 }
 EOF
 
+# A SPEC CARRIES BEHAVIOUR AND NOTHING ELSE (GRAMMAR#spec-member). These three were
+# `NotImplemented` — a form this compiler had not built — and they are not: the grammar
+# derives no member but a signature and a provided method, so an associated type, an
+# associated value and anything else that is not one are what the language does not have.
+#
+# The third is the one that was not refused at all. `spec Buf { SIZE := 4096 }` was accepted
+# in silence and the member vanished: no impl had to supply it, and nothing said so.
+reject associated-type-in-a-spec E230 no-place seed-gap <<'EOF'
+spec It {
+	type Item
+
+	fn get() -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject associated-value-in-a-spec E211 no-place seed-gap <<'EOF'
+spec Bits {
+	BITS: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-spec-member-that-is-not-one E276 no-place <<'EOF'
+spec Buf {
+	SIZE := 4096
+	fn f()
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- redeclaration ----------------------------------------------------------------
 #
 # Two cases stood here pinning "a name is bound once per block", and their retirement is

@@ -25,6 +25,7 @@ import (
 	"cli"
 	"io"
 	"lsp"
+	"sha256"
 	"strconv"
 
 	"zerg"
@@ -733,22 +734,17 @@ fn cache_path(key: str) -> str {
 	return join_path(cache_dir(), key + ".o")
 }
 
-# unit_key hashes a unit's emitted C with FNV-1a (32-bit — the 64-bit basis does not fit
-# an integer literal yet), and puts the LENGTH in the name beside it. The length is there
-# because a hash this size is a cheap guard rather than a proof: two different units
-# colliding would link the wrong object, and requiring the byte counts to match as well
-# makes that far less likely. A cryptographic digest is the upgrade to make when the
-# standard library has one.
+# unit_key names a unit's cached object by the SHA-256 of everything that decides what
+# that object is: the C, and the compiler and dialect it will be compiled by.
+#
+# It was FNV-1a over the same bytes, with the LENGTH glued on beside it — a 32-bit hash is
+# a cheap guard and not a proof, and the length was there to make the guard less bad. Two
+# units colliding link the WRONG OBJECT, which is a build that succeeds and a program that
+# is not the program: the failure a cache key exists to make impossible, answered with
+# "far less likely". A digest is the answer, and the standard library has one now
+# (`sha256`, pure Zerg, checked against FIPS 180-4's vectors and against the system tool).
 fn unit_key(code: str) -> str {
-	b := bytearray(f"{cc_bin()}\n{cc_std()}\n{code}")
-	mut h := 2166136261
-	mut i := 0
-	for i < b.len() {
-		h = h ^ int(b[i])
-		h = (h * 16777619) % 4294967296
-		i = i + 1
-	}
-	return f"{strconv.to_string(h, 16)}-{strconv.to_string(b.len(), 16)}"
+	return sha256.hex(bytearray(f"{cc_bin()}\n{cc_std()}\n{code}"))
 }
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only

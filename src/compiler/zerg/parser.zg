@@ -1183,11 +1183,16 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 
 			reqs.append(sig)
 		} else if p_at(p, Kind.Type) {
-			raise "E230 NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing here binds one"
+			raise "E230 an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `type Item` names a type nothing here binds. Take the type as a parameter of the spec instead"
 		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon {
-			raise f"E211 NotImplemented: an associated value in a `spec` — `{cur(p).lexeme}: T` asks each impl for a compile-time constant, and nothing here binds one"
+			raise f"E211 an associated value is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `{cur(p).lexeme}: T` asks each impl for a constant nothing here binds. A per-type constant is an `impl` item"
 		} else {
-			p_advance(p)
+			# ANYTHING ELSE IS NOT A MEMBER, and this used to advance one token and carry on.
+			# `spec Buf { SIZE := 4096 }` was therefore accepted in silence and the member
+			# vanished: no impl had to supply it, and nothing said so. A spec's members are
+			# what GRAMMAR#spec-member derives, and a token that starts none of them is the
+			# program saying something this language has no room for.
+			raise f"E276 `{cur(p).lexeme}` does not start a `spec` member — a spec carries BEHAVIOUR (GRAMMAR#spec-member): a required signature, or a provided method"
 		}
 		skip_semis(p)
 	}
@@ -1392,7 +1397,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
-	return EnumDecl(name, variants)
+	return EnumDecl(name, variants, p.path)
 }
 
 fn tag_taken(variants: list[VariantDef], tag: int) -> bool {
@@ -1458,7 +1463,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)
-	return StructDecl(name, fields)
+	return StructDecl(name, fields, p.path)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,

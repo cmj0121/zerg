@@ -108,8 +108,26 @@ reject() {
 	# reading one `$3` silently dropped the second — the gate then failed on an exception
 	# that was declared right beside the one it honoured.
 	local flags=" $* "
-	local src="$tmp/$name.zg"
-	cat >"$src"
+
+	# A CASE MAY BE MORE THAN ONE FILE. A line `--- <relative path>` starts a new one, so a
+	# rule about MODULES can be written here at all — a module is a directory, and every case
+	# until now was a single file in one. The entry lives in the case's own directory so that
+	# a module beside it resolves the way it would in a real tree.
+	local dir="$tmp/$name.d"
+	rm -rf "$dir"
+	mkdir -p "$dir"
+	local src="$dir/$name.zg"
+	awk -v dir="$dir" -v entry="$src" '
+		/^--- / {
+			out = dir "/" $2
+			d = out
+			sub(/\/[^\/]*$/, "", d)
+			system("mkdir -p \"" d "\"")
+			next
+		}
+		{ print > (out ? out : entry) }
+	' >/dev/null
+	touch "$src"
 
 	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
 	# whole claim is that the finding sits at the declaration, not at a use site.
@@ -660,6 +678,74 @@ fn pairup[A, B](a: A, b: B) -> A {
 
 fn main() {
 	print pairup[str, int]("k", 9)
+}
+EOF
+
+# A SPEC CARRIES BEHAVIOUR AND NOTHING ELSE (GRAMMAR#spec-member). These three were
+# `NotImplemented` — a form this compiler had not built — and they are not: the grammar
+# derives no member but a signature and a provided method, so an associated type, an
+# associated value and anything else that is not one are what the language does not have.
+#
+# The third is the one that was not refused at all. `spec Buf { SIZE := 4096 }` was accepted
+# in silence and the member vanished: no impl had to supply it, and nothing said so.
+reject associated-type-in-a-spec E230 no-place seed-gap <<'EOF'
+spec It {
+	type Item
+
+	fn get() -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject associated-value-in-a-spec E211 no-place seed-gap <<'EOF'
+spec Bits {
+	BITS: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-spec-member-that-is-not-one E276 no-place <<'EOF'
+spec Buf {
+	SIZE := 4096
+	fn f()
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# THE ORPHAN RULE, at the only scope this compiler has one. docs/core/specs.md specifies
+# coherence with the orphan rule enforced across PACKAGES; there is no package layer, so it
+# lands one scope in — across modules. A spec and a type belong to whoever declared them,
+# and an impl belongs with one of the two.
+#
+# It is the first case here that needs TWO FILES, which is why `reject` learned to split one.
+reject an-orphan-impl E277 <<'EOF'
+import "far"
+
+impl Show for P {
+	fn show() -> str {
+		return "p"
+	}
+}
+
+fn main() {
+	print 1
+}
+--- far/far.zg
+pub spec Show {
+	fn show() -> str
+}
+
+pub struct P {
+	pub x: int
 }
 EOF
 

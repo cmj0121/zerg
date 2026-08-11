@@ -17,7 +17,10 @@ fn close_log(tag: str) {
 
 fn main() {
 	# THE BLOCK is what ends a value. `lines` is gone at the `}` and the name is free again.
+	# It does not OPEN with the binding, which is deliberate: a bare block that does is
+	# written `with` instead, and the formatter says so (F409).
 	{
+		print 0
 		lines := open_log("inner")
 		print lines.len()
 	}

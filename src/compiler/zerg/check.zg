@@ -74,10 +74,21 @@ fn chk_at(mut &em: Emitter, code: str, msg: str) {
 # ONE statement, and a single statement-level place is the SAt marker's already-documented
 # grain (see the header above).
 fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, code: str, msg: str) {
-	for d in em.diags {
-		return if d.line == line and d.col == col and d.path == path and d.msg == msg
-	}
+	return if chk_seen(em.diags, path, line, col, msg)
+
 	em.diags.append(Diag(path, line, col, code, msg, ""))
+}
+
+# chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
+# decision. It was written out at both reporting channels — the diagnostics above and the
+# lints below — and only the first carried the paragraph explaining it, so changing what
+# makes two findings the same (folding in the code, say) was two edits with the second
+# silent: nothing gates a duplicate lint.
+fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
+	for d in ds {
+		return true if d.line == line and d.col == col and d.path == path and d.msg == msg
+	}
+	return false
 }
 
 # --- visibility -------------------------------------------------------------------
@@ -173,9 +184,8 @@ fn chk_note(mut &em: Emitter, code: str, msg: str) {
 fn chk_note_at(mut &em: Emitter, line: int, col: int, code: str, msg: str, fix: str) {
 	return if not em.want_lints
 
-	for d in em.lints {
-		return if d.line == line and d.col == col and d.path == em.at_path and d.msg == msg
-	}
+	return if chk_seen(em.lints, em.at_path, line, col, msg)
+
 	em.lints.append(Diag(em.at_path, line, col, code, msg, fix))
 }
 

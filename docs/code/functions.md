@@ -91,13 +91,20 @@ already taken for formatting; `print` stays a built-in construct, not a user-def
 
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
 an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
-boxed value) — is **[not yet]**, along with the rest of closures; capturing a **`mut`** binding is
-**[not yet]** too — snapshot it into an
+boxed value) — is built: the captures become a per-site environment the closure carries, and the values are
+copied in where they are written. Capturing a **`mut`** binding is **[not yet]** — snapshot it into an
 immutable binding first (`snap := n`). Capture is **by copy** in meaning — a captured channel is
 refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
-carries its own captures and can never dangle. Because every capture is immutable, retaining versus cloning
-is unobservable. Equivalently:
+carries its own captures and can never dangle.
+
+> **[not yet]** The environment is **never freed**. Every other value this implementation allocates is
+> released at the scope that made it; a closure's cannot be, because the closure may outlive that scope —
+> which is what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
+> functions of its own, which is a change to the type rather than to the lambda. A program that makes
+> closures in a loop grows.
+
+Because every capture is immutable, retaining versus cloning is unobservable. Equivalently:
 
 > A closure is a scope-owned struct whose fields are its captures.
 

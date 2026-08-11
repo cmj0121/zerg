@@ -1447,17 +1447,6 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" closure-capture E429 <<'EOF'
-fn run(f: fn() -> int) -> int {
-	return f()
-}
-
-fn main() {
-	k := 5
-	print run(fn() -> int { return k })
-}
-EOF
-
 expect "$ZERG" if-let-over-an-enum E434 <<'EOF'
 enum E {
 	A(int)

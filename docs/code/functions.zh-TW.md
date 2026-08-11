@@ -73,12 +73,17 @@ _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名�
 variadic。
 
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
-單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——是 **[not yet]**,
-連同 closure 的其餘部分；
+單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——**已經實作**:
+捕獲的名字會變成閉包隨身帶著的一個 per-site 環境,而值在**寫下閉包的地方**被複製進去。
 捕獲一個 **`mut`** binding 是 **[not yet]**——先把它快照成 immutable binding（`snap := n`）。捕獲在語意上是
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
-而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。因為每個捕獲都是
-immutable,retain 或 clone 都不可觀察。等價地說:
+而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
+
+> **[not yet]** 那個環境**永遠不會被釋放**。這個實作配置的其他每一個值都在造出它的 scope 被釋放,而閉包的不能——
+> 因為閉包可能活得比那個 scope 久,那正是「把值關進去」的意義。要正確釋放,fn value 必須自己帶 copy 與 drop
+> 函式,那是**型別**的改動而不是 lambda 的。在迴圈裡不斷造閉包的程式會長大。
+
+因為每個捕獲都是 immutable,retain 或 clone 都不可觀察。等價地說:
 
 > 一個閉包就是一個 scope-owned struct，它的欄位就是它的捕獲。
 

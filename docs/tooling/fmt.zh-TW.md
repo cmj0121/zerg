@@ -593,6 +593,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E275` | 呼叫寫明型別引數,而 postfix `[ … ]` 是索引                                                            |
 | `E276` | `spec` 成員既不是簽章也不是 provided method                                                           |
 | `E277` | `impl` 既不在 spec 的 module、也不在型別的                                                            |
+| `E278` | enum 上的 `#[derive(S)]`,而某個方法收 `This`                                                          |
+| `E279` | enum 上的 `#[derive(S)]`,而某個 variant 不帶值                                                        |
 | `E301` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E302` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E303` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |

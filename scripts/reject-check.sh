@@ -641,13 +641,25 @@ EOF
 # a form arrives is not nothing: it is the PROGRAM's own mistake, which is permanent and
 # belongs here.
 
-reject explicit-type-args-on-a-plain-fn E368 <<'EOF'
+reject explicit-type-args-on-a-plain-fn E275 no-place <<'EOF'
 fn id(x: int) -> int {
 	return x
 }
 
 fn main() {
 	print id[int](7)
+}
+EOF
+
+# THE MULTI-ARGUMENT SHAPE, which never looked like an index at all — a comma is what
+# settles the bracket. It is the same rule and it is refused in the same place.
+reject explicit-type-args-multi E275 no-place seed-gap <<'EOF'
+fn pairup[A, B](a: A, b: B) -> A {
+	return a
+}
+
+fn main() {
+	print pairup[str, int]("k", 9)
 }
 EOF
 

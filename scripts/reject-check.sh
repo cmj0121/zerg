@@ -749,6 +749,83 @@ pub struct P {
 }
 EOF
 
+# `#[derive(S)]` ON AN ENUM is DELEGATION, and the two shapes it refuses are refused because
+# THE REWRITE DOES NOT EXIST — which is the whole test a decorator has to pass here. A method
+# taking `This` would have to match the other argument too, and nothing says the two arms
+# agree; a variant with no payload has nothing to delegate to.
+reject derive-delegation-with-a-self-parameter E278 no-place <<'EOF'
+spec Show {
+	fn show() -> str
+	fn same(o: This) -> bool
+}
+
+struct C {
+	r: int
+}
+
+impl Show for C {
+	fn show() -> str {
+		return "c"
+	}
+
+	fn same(o: C) -> bool {
+		return true
+	}
+}
+
+#[derive(Show)]
+enum Shape {
+	Circle(C)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject derive-delegation-over-a-bare-variant E279 no-place <<'EOF'
+spec Show {
+	fn show() -> str
+}
+
+struct C {
+	r: int
+}
+
+impl Show for C {
+	fn show() -> str {
+		return "c"
+	}
+}
+
+#[derive(Show)]
+enum Shape {
+	Circle(C)
+	None
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# and the OTHER half of derive is unchanged: on a struct the generated code is read out of
+# the type's STRUCTURE, which only compiler-owned code may do.
+reject derive-a-user-spec-on-a-struct E437 no-place <<'EOF'
+spec Show {
+	fn show() -> str
+}
+
+#[derive(Show)]
+struct P {
+	x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- redeclaration ----------------------------------------------------------------
 #
 # Two cases stood here pinning "a name is bound once per block", and their retirement is

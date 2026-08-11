@@ -58,16 +58,22 @@ awk '/^fn lookup_keyword/,/^}/' "$TOKEN" | grep -oE '"[a-z]+"' | tr -d '"' | sor
 	grep -vxE 'contained|containedin|nextgroup|skipwhite|skipnl|skipempty|transparent|display|conceal|fold|extend|keepend|oneline' |
 	sort -u >"$tmp/syntax.all"
 
+# THESE PATTERNS READ SOURCE, so they go stale when the source is rewritten and they go
+# stale QUIETLY: an extraction that matches nothing makes the exclusion list empty, and every
+# type name the syntax file colours is then reported as invented. That is what happened when
+# variants became qualified — `return TInt if …` became `return Ty.TInt if …` — and it is
+# why the `EMPTY` check below exists for the other side of this gate.
+#
 # The TYPE names are named by the syntax file and are not reserved words — `int` is an
 # ordinary identifier the parser resolves, so a program may shadow it and the lexer has
 # never heard of it. They are held to their own list, in the parser, for the same reason.
 {
 	# the scalars, which the parser resolves by name
-	grep -oE 'return T[A-Za-z]+ if name == "[a-z]+"' src/compiler/zerg/parser.zg |
+	grep -oE 'return Ty\.T[A-Za-z]+ if name == "[a-z]+"' src/compiler/zerg/parser.zg |
 		sed -E 's/.*"([a-z]+)"/\1/'
 
 	# and the containers, which it resolves by name AND a following `[`
-	grep -oE 'if name == "[a-z]+" and p_at\(p, LBrack\)' src/compiler/zerg/parser.zg |
+	grep -oE 'if name == "[a-z]+" and p_at\(p, Kind\.LBrack\)' src/compiler/zerg/parser.zg |
 		sed -E 's/.*"([a-z]+)".*/\1/'
 
 	# `set[T]` is named by the syntax file and is not built: the specification has it and
@@ -100,6 +106,17 @@ fi
 n=$(wc -l <"$tmp/lexer" | tr -d ' ')
 if [ "$n" -lt "${MIN_KEYWORDS:-30}" ]; then
 	echo "EMPTY       only $n keywords were read from $TOKEN — this gate is measuring nothing"
+	fail=$((fail + 1))
+fi
+
+# AND THE OTHER SIDE, for the same reason and a defect this gate actually had: the type
+# names are read out of the parser by pattern, and when variants became qualified the
+# patterns stopped matching. An empty exclusion list does not fail quietly — it reports every
+# type name the syntax file colours as invented — but it reports the wrong thing, which is
+# worse than reporting nothing.
+t=$(wc -l <"$tmp/types.all" | tr -d ' ')
+if [ "$t" -lt "${MIN_TYPES:-10}" ]; then
+	echo "EMPTY       only $t type names were read from the parser — the extraction has gone stale"
 	fail=$((fail + 1))
 fi
 

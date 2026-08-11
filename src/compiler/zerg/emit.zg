@@ -85,15 +85,18 @@ struct Emitter {
 	sig_nreq: list[int]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
-	struct_names: list[str]
+
+	# tk_names / tk_kinds / tk_unders is THE type registry: one row per declared type
+	# name, its kind (TK_STRUCT / TK_ENUM / TK_SPEC / TK_TYPEDEF), and — for a typedef —
+	# what it was declared over. It is one table because "what kind of type is this name"
+	# is one question: it was four tables and five spellings, and `c_is_type_name` was the
+	# four-term disjunction that had to be edited in step with all of them.
+	tk_names: list[str]
+	tk_kinds: list[int]
+	tk_unders: list[Ty]
 	fld_struct: list[str]
 	fld_name: list[str]
 	fld_ty: list[Ty]
-	enum_names: list[str]
-
-	# spec_names is every `spec` the program declares, so a name that fails to resolve as a
-	# TYPE can say which of the two it is: a spec used where a type goes, or a typo.
-	spec_names: list[str]
 	var_name: list[str]
 	var_enum: list[str]
 	var_tag: list[int]
@@ -271,8 +274,6 @@ struct Emitter {
 	# is not constructed like one — `Celsius(20)` is a conversion, not a struct literal — and
 	# they are not a substitution table either, because the whole point is that `Celsius` and
 	# `int` stay different types everywhere the program can see.
-	ty_names: list[str]
-	ty_unders: list[Ty]
 
 	# into_src is the TARGET name of every `impl Into[T] for S` the program declares. It used
 	# to be a pair, with the type argument beside it, so that a typed position could find a
@@ -2634,7 +2635,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# gives it, beside the bound and the interface — and this compiler has not built that
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
-	raise f"E416 NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
+	raise f"E416 NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -2649,12 +2650,22 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 # is not one. It is the ONE place the representation is looked through: everywhere else the
 # two are different types, which is what a strong typedef means.
 fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
-	mut i := 0
-	for i < em.ty_names.len() {
-		return em.ty_unders[i] if em.ty_names[i] == nm
-		i = i + 1
-	}
-	return Ty.TUnknown
+	r := c_ty_row(em, nm)
+	return Ty.TUnknown if not c_row_is_typedef(em, r)
+
+	return em.tk_unders[r]
+}
+
+# c_row_is_typedef is asked by the two readers of `tk_unders`, and it is asked BECAUSE the
+# table is now one: a struct, an enum and a spec have rows too, and their underlying type is
+# the TUnknown a row needs to exist, not a representation anybody may read. Without this
+# `c_repr_of(TNamed("SomeStruct"))` would answer TUnknown instead of the struct — which no
+# emitted byte happened to depend on, and would have been a silent wrong answer waiting for
+# the first caller that did.
+fn c_row_is_typedef(mut &em: Emitter, r: int) -> bool {
+	return false if r < 0
+
+	return em.tk_kinds[r] == TK_TYPEDEF
 }
 
 # c_is_typedef asks the NAME list, not what the name is underneath: a typedef whose
@@ -2663,17 +2674,62 @@ fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
 # c_ty_row is THE typedef lookup, for the same reason c_var_row is the variant one: two
 # readers, one table. `c_repr_of` used to say so in a comment — "one scan answers both `is it
 # one` and `what is it`" — while being the only one that did.
+# What a declared type NAME denotes. Four kinds and no match over them — every reader
+# compares — so they are constants rather than an enum, the same call c_scalar_class makes
+# below for the same reason.
+const TK_NONE := 0
+const TK_STRUCT := 1
+const TK_ENUM := 2
+const TK_SPEC := 3
+const TK_TYPEDEF := 4
+
+# c_ty_register is the ONLY writer, and the FIRST writer of a name wins. A duplicate across
+# kinds is already reported by c_check_type_dup; what is left is which of the two the rest
+# of the compiler then believes, and one table has to answer that once. It answers "the
+# first declared", in the order the builders run — typedefs, structs, enums, then specs —
+# which is why the spec pass is last: `struct A` beside `spec A` is a struct with a
+# duplicate reported against it, and not a spec that no longer constructs.
+fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: Ty) {
+	return if c_ty_row(em, nm) >= 0
+
+	em.tk_names.append(nm)
+	em.tk_kinds.append(kind)
+	em.tk_unders.append(under)
+}
+
 fn c_ty_row(mut &em: Emitter, nm: str) -> int {
 	mut i := 0
-	for i < em.ty_names.len() {
-		return i if em.ty_names[i] == nm
+	for i < em.tk_names.len() {
+		return i if em.tk_names[i] == nm
 		i = i + 1
 	}
 	return -1
 }
 
+# c_ty_kind is what a name DENOTES — one lookup, one answer. Every predicate below is this
+# and a comparison, which is the point: a name cannot be a struct to one reader and not a
+# type to another, and adding a fifth kind is a row rather than an edit in five places.
+fn c_ty_kind(mut &em: Emitter, nm: str) -> int {
+	r := c_ty_row(em, nm)
+	return TK_NONE if r < 0
+
+	return em.tk_kinds[r]
+}
+
 fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
-	return c_ty_row(em, nm) >= 0
+	return c_ty_kind(em, nm) == TK_TYPEDEF
+}
+
+fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) == TK_SPEC
+}
+
+# c_is_enum_name and c_is_enum_ty are the same question of a name and of a type. Both are
+# here because the second was written as `c_name_in(em.enum_names, …)` at seven call sites
+# and as a function at five more — one question, two spellings, and the table exposed to
+# both.
+fn c_is_enum_name(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) == TK_ENUM
 }
 
 # c_repr_of is a type as its REPRESENTATION — itself, unless it is a typedef, in which case
@@ -2683,10 +2739,12 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 	r := c_ty_row(em, c_named_of(t))
 
 	# a typedef whose underlying type nothing declares answers UNKNOWN rather than itself:
-	# that is what keeps its uses quiet while the declaration carries the diagnostic.
-	return t if r < 0
+	# that is what keeps its uses quiet while the declaration carries the diagnostic. A name
+	# that is a type of any OTHER kind answers itself, which is what "unless it is a typedef"
+	# has always meant.
+	return t if not c_row_is_typedef(em, r)
 
-	return em.ty_unders[r]
+	return em.tk_unders[r]
 }
 
 # c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
@@ -2694,16 +2752,12 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 # and c_check_type_name — so a fifth kind of type name would have been three edits with two
 # of them silent if missed.
 fn c_is_type_name(mut &em: Emitter, nm: str) -> bool {
-	return c_is_struct_name(em, nm) or c_is_enum_ty(em, Ty.TNamed(nm)) or c_is_typedef(em, nm)
+	k := c_ty_kind(em, nm)
+	return k == TK_STRUCT or k == TK_ENUM or k == TK_TYPEDEF
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
-	mut i := 0
-	for i < em.struct_names.len() {
-		return true if em.struct_names[i] == nm
-		i = i + 1
-	}
-	return false
+	return c_ty_kind(em, nm) == TK_STRUCT
 }
 
 # c_scan_fnptr decides up front whether the program spells a function type anywhere in a
@@ -2758,10 +2812,6 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		# struct, an enum, a field and a variant carry no place, so those still raise —
 		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
 		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
-
-		# the spec table, filled by the walk that is already here rather than by a second
-		# pass over the same list
-		em.spec_names.append(sp.name)
 	}
 
 	# and one level down, where the same question has the same answer and three more ways
@@ -2850,13 +2900,25 @@ fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: i
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
 # struct field declared `Celsius` finds the name already known.
+# c_build_specs registers every `spec` as a type name, so a name that fails to resolve as a
+# TYPE can say which of the two it is: a spec used where a type goes, or a typo.
+#
+# It runs LAST of the four registrars. A name declared as both a spec and something else is
+# reported by c_build_type_names and then belongs to the other one — which is the answer the
+# separate tables used to give by accident, each saying yes to its own question, and the
+# answer the constructor path needs: `struct A` beside `spec A` still constructs.
+fn c_build_specs(mut &em: Emitter, f: File) {
+	for sp in f.specs {
+		c_ty_register(em, sp.name, TK_SPEC, Ty.TUnknown)
+	}
+}
+
 fn c_build_typedefs(mut &em: Emitter, f: File) {
 	for td in f.types {
 		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
-		em.ty_names.append(td.name)
-		em.ty_unders.append(chk_typedef(em, td, f))
+		c_ty_register(em, td.name, TK_TYPEDEF, chk_typedef(em, td, f))
 	}
 }
 
@@ -2864,7 +2926,7 @@ fn c_build_structs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.structs.len() {
 		sd := f.structs[i]
-		em.struct_names.append(sd.name)
+		c_ty_register(em, sd.name, TK_STRUCT, Ty.TUnknown)
 		mut j := 0
 		for j < sd.fields.len() {
 			fd := sd.fields[j]
@@ -3187,7 +3249,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.enums.len() {
 		ed := f.enums[i]
-		em.enum_names.append(ed.name)
+		c_ty_register(em, ed.name, TK_ENUM, Ty.TUnknown)
 		mut j := 0
 		for j < ed.variants.len() {
 			v := ed.variants[j]
@@ -3218,7 +3280,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 # holds exactly the variants that HAVE a payload field, so an enum is flat when none of its
 # variants is in it.
 fn c_is_flat_enum(mut &em: Emitter, en: str) -> bool {
-	return false if not c_name_in(em.enum_names, en)
+	return false if not c_is_enum_name(em, en)
 
 	mut i := 0
 	for i < em.vf_variant.len() {
@@ -3289,7 +3351,7 @@ fn c_needs_runtime(mut &em: Emitter) -> bool {
 fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 	en := c_ident_name(target)
 
-	return "" if en == "" or not c_name_in(em.enum_names, en)
+	return "" if en == "" or not c_is_enum_name(em, en)
 	return "" if not c_is_variant(em, fld) or c_variant_enum(em, fld) != en
 
 	return en
@@ -4487,14 +4549,7 @@ fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
 fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
-	nm := c_named_of(t)
-	return false if nm == ""
-	mut i := 0
-	for i < em.enum_names.len() {
-		return true if em.enum_names[i] == nm
-		i = i + 1
-	}
-	return false
+	return c_is_enum_name(em, c_named_of(t))
 }
 
 # c_conv lowers a type conversion. bytearray(str) goes through the emitted string helper
@@ -4645,7 +4700,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# carrier struct, which cc rejected against generated code. The unwrap is the language's
 	# and has to be written.
 	raise f"E418 `{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
-	if c_name_in(em.enum_names, c_named_of(xt)) {
+	if c_is_enum_ty(em, xt) {
 		raise f"E407 enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 
 		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
@@ -5171,7 +5226,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	# inference is asked anything, because an enum name is not a binding and infers to
 	# nothing — which is why this used to come out as "the method `of` on a ?".
 	en := c_ident_name(target)
-	return c_enum_of(em, en, meth, args, sb) if en != "" and c_name_in(em.enum_names, en)
+	return c_enum_of(em, en, meth, args, sb) if en != "" and c_is_enum_name(em, en)
 
 	# `Either.Left(v)` written where nothing says WHICH Either. The target names a built-in
 	# type rather than a value, so inference answers nothing about it and this used to come
@@ -6342,7 +6397,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 
 	# an enum is exhaustive when every variant is named
 	en := c_named_of(st)
-	if en != "" and c_name_in(em.enum_names, en) {
+	if en != "" and c_is_enum_name(em, en) {
 		mut i := 0
 		for i < em.var_name.len() {
 			raise f"E428 non-exhaustive match: missing variant {en}.{em.var_name[i]}" if em.var_enum[i] == en and not c_arm_covers(arms, em.var_name[i])
@@ -6684,7 +6739,7 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr]) -> Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
-	if en != "" and c_name_in(em.enum_names, en) {
+	if en != "" and c_is_enum_name(em, en) {
 		return Ty.TOpt(Ty.TNamed(en)) if meth == "of"
 
 		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
@@ -9030,7 +9085,7 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# the enum is named and the field is not one of ITS variants. Falling through said
 	# `undefined name `Color`` — about the one name in the expression that IS defined.
 	tn := c_ident_name(target)
-	if tn != "" and c_name_in(em.enum_names, tn) {
+	if tn != "" and c_is_enum_name(em, tn) {
 		raise f"E456 `{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
 		raise f"E457 `{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
 	}
@@ -10876,7 +10931,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -10895,6 +10950,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
+	c_build_specs(em, f)
 
 	# THE DECLARATION SITES, once. Three passes below ask the same question of them — what
 	# types a declaration spells — and the list answers all three (c_decl_sites says why it

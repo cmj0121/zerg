@@ -82,8 +82,20 @@ for src in "$CORPUS"/*.zg; do
 	name="$(basename "$src" .zg)"
 
 	# only programs this compiler already accepts: a case it cannot build says nothing
-	# about what it does with a broken one
-	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || { unbuildable=$((unbuildable + 1)); continue; }
+	# about what it does with a broken one.
+	#
+	# Measured on a COPY, where the mutations are compiled, and not on the source in
+	# place — because a case may be well-formed where it lives and unbuildable anywhere
+	# else. A multi-file case importing a module directory beside it is exactly that: the
+	# copy cannot resolve the import, so every mutation of it was refused for a reason the
+	# mutation did not cause, and the refusal — the driver's, which carries no place —
+	# counted against a ceiling that watches the checker's rules. One such case moved
+	# `write-immutable` from 2 to 3 and read as a regression.
+	cp "$src" "$tmp/$name.orig.zg"
+	"$ZERG" build --emit c "$tmp/$name.orig.zg" >/dev/null 2>&1 || {
+		unbuildable=$((unbuildable + 1))
+		continue
+	}
 
 	for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed-operands; do
 		out_zg="$tmp/$name.$kind.zg"

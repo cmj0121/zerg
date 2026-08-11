@@ -11,6 +11,19 @@
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
 
+匿名函式**可以省略參數型別,連帶省略回傳型別**——它們來自這個匿名函式被檢查時所對照的函式型別,也就是
+[carve-out (c)](../core/types.zh-TW.md)。每一個有型別的位置都供得出一個:宣告過型別的 binding、引數、
+`return`、struct 欄位、參數的預設值。
+
+```zerg
+    apply(fn (x) { return x + 1 }, 41)          # x 是 int,答案是 int
+    g: fn (int) -> int = fn (x) { return x * 2 }
+```
+
+寫出來的型別**贏**——`fn (x: str)` 放在 `fn (int) -> …` 的位置是一個指名兩個型別的型別錯誤,而不是被悄悄
+覆蓋掉的註記。而一個**遇不到**這種位置的 closure 無處可取,那是錯誤、不是猜測:`f := fn (x) { … }` 會報
+_the closure parameter `x` has no type, and this position gives it none_。
+
 > **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
 > 寫在它上一行的 `f := text.make` 會報 _module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條路
 > 上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。

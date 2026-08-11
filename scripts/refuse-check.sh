@@ -1299,16 +1299,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" closure-parameter-without-a-type E209 <<'EOF'
-fn apply(f: fn(int) -> int, v: int) -> int {
-	return f(v)
-}
-
-fn main() {
-	print apply(fn(x) { return x + 1 }, 5)
-}
-EOF
-
 # Every module flattens into ONE namespace, so two that declare the same constant mangle to
 # one symbol. The FUNCTION case has been refused since the tables were written; this one
 # LINKED — two definitions of `zg_N`, tolerated by a linker that still allows a common

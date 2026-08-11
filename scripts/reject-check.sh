@@ -3607,6 +3607,42 @@ EOF
 # they were the last two names in this language that read as themselves — for a mechanical
 # reason rather than a decided one: they are context-typed, so this compiler matched them by
 # name instead of resolving them through their type.
+# A CALL THROUGH A FUNCTION VALUE COUNTS ITS ARGUMENTS. chk_call_arity's table is keyed by
+# NAME, and a value has none — its comment said so and handed the case to emit, which never
+# took it, so both spellings of the wrong count were rendered into the cast and reported by
+# cc. `reject-fuzz` found it the first time the corpus held a program that calls one.
+reject too-many-arguments-through-a-fn-value E386 <<'EOF'
+fn apply(f: fn (int) -> int, v: int) -> int {
+	return f(v, 1)
+}
+
+fn main() {
+	print apply(fn (x: int) -> int { return x }, 1)
+}
+EOF
+
+reject too-few-arguments-through-a-fn-value E386 <<'EOF'
+fn apply(f: fn (int) -> int) -> int {
+	return f()
+}
+
+fn main() {
+	print apply(fn (x: int) -> int { return x })
+}
+EOF
+
+# CARVE-OUT (c)'s second sentence. A closure's omitted parameter types come from the
+# function type it is checked against, so a closure that meets no such position has nowhere
+# to take them from — and the specification says that is an error rather than a guess. It
+# was a parser NotImplemented (E209) while the carve-out was unbuilt; now the form is read,
+# and this is what is left of it: a rule, with a place, at the closure.
+reject a-closure-with-no-position-to-type-it E385 <<'EOF'
+fn main() {
+	f := fn (x) { return x + 1 }
+	print f(1)
+}
+EOF
+
 reject a-bare-either-side E384 <<'EOF'
 fn f(n: int) -> Either[int, str] {
 	return Right("negative") if n < 0

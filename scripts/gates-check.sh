@@ -63,6 +63,14 @@ done
 
 # 2. everything on the board is run by CI. The workflow spells a gate as its own step,
 #    `run: make <target>`, so that a failure names the gate rather than the board.
+#
+#    WHAT THIS CANNOT SEE: it asserts the step is PRESENT, and the property wanted is that
+#    the step RUNS. Six board gates sit behind `if: steps.corpus_fetch.outputs.available ==
+#    'true'` because they need the private submodule, and a skipped step is green — which is
+#    the exact failure the header above recounts, one level up. Closing it means the board
+#    being single-sourced (CI running `make ci`, or its steps generated from a matrix) rather
+#    than a third copy of the list this script compares against; until then the conditional
+#    six are trusted, and that is the declared limit of clause 2.
 for t in $board; do
 	grep -qE "run: make (-j[0-9]+ )?$t\$" "$WORKFLOW" ||
 		note "\`make $t\` is on the board and the workflow never runs it"

@@ -24,10 +24,17 @@
 #   `NotImplemented: …`  a form this compiler does not build yet. It disappears when the
 #                        feature lands. Those live in emit.zg beside the form.
 #   a plain sentence     an ill-formed PROGRAM. It is permanent and it is the language's
-#                        answer, not this compiler's. Those live here.
+#                        answer, not this compiler's. Those are the rules named here.
 #
-# scripts/reject-check.sh is the gate, and it holds every rule here to both halves: the
-# compiler must refuse the program, and the refusal must not come from cc.
+# WHERE THEY ARE WRITTEN is the looser half of that: 64 report from this file and 26 from
+# emit.zg, at the point in the lowering that already holds the answer — a closure with a
+# parameter no position could type, an argument count only the fn-value path knows. What
+# makes them one set is not the file, it is the CHANNEL: every one goes through chk_at /
+# chk_at_place below, so every one carries a code, a place and the all-at-once behaviour,
+# and error-codes-check sees all ninety wherever they live.
+#
+# scripts/reject-check.sh is the gate, and it holds every rule to both halves: the compiler
+# must refuse the program, and the refusal must not come from cc.
 
 # --- where a diagnostic happened --------------------------------------------------
 #
@@ -74,10 +81,21 @@ fn chk_at(mut &em: Emitter, code: str, msg: str) {
 # ONE statement, and a single statement-level place is the SAt marker's already-documented
 # grain (see the header above).
 fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, code: str, msg: str) {
-	for d in em.diags {
-		return if d.line == line and d.col == col and d.path == path and d.msg == msg
-	}
+	return if chk_seen(em.diags, path, line, col, msg)
+
 	em.diags.append(Diag(path, line, col, code, msg, ""))
+}
+
+# chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
+# decision. It was written out at both reporting channels — the diagnostics above and the
+# lints below — and only the first carried the paragraph explaining it, so changing what
+# makes two findings the same (folding in the code, say) was two edits with the second
+# silent: nothing gates a duplicate lint.
+fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
+	for d in ds {
+		return true if d.line == line and d.col == col and d.path == path and d.msg == msg
+	}
+	return false
 }
 
 # --- visibility -------------------------------------------------------------------
@@ -173,9 +191,8 @@ fn chk_note(mut &em: Emitter, code: str, msg: str) {
 fn chk_note_at(mut &em: Emitter, line: int, col: int, code: str, msg: str, fix: str) {
 	return if not em.want_lints
 
-	for d in em.lints {
-		return if d.line == line and d.col == col and d.path == em.at_path and d.msg == msg
-	}
+	return if chk_seen(em.lints, em.at_path, line, col, msg)
+
 	em.lints.append(Diag(em.at_path, line, col, code, msg, fix))
 }
 

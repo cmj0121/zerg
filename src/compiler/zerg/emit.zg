@@ -521,10 +521,16 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 fn c_into(mut &em: Emitter, want: Ty, e0: Expr, sb: Subst) -> str {
 	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
 	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
-	# and not about the closure. It is filled here because here is the one place every
-	# declared type meets its value: c_fit_copied's eighteen slots come through, and so does
-	# a declared binding, which lowers through c_into directly and would otherwise have been
-	# the one position where a closure could not adopt.
+	# and not about the closure. It is filled here because c_fit_copied's eighteen slots come
+	# through here, and so does a declared binding, which lowers through c_into directly and
+	# would otherwise have been the one position where a closure could not adopt.
+	#
+	# NOT because this is "the one place every declared type meets its value" — it is not,
+	# and the difference matters to whoever adds the next carve-out. Carve-out (b), the
+	# composite literal with nothing to speak for it, is answered ABOVE this in c_fit_copied
+	# and again on the assignment and `list`-binding paths. Two carve-outs at two depths is
+	# the "one rule, N slots" shape this file has had to undo three times; folding (b) down
+	# to here would make the sentence true, and is its own cut.
 	#
 	# It happens at EMIT and the check has already passed, because chk_fits_expr asks the
 	# same question of the same rewrite — the closure is filled, then compared as an
@@ -1215,11 +1221,6 @@ fn c_fn_ret(t: Ty) -> Ty {
 	}
 }
 
-# c_fn_params is c_fn_ret's other half — a function TYPE's parameter list, or an empty one
-# from anything else. It lives here rather than beside its caller so the two halves of one
-# destructuring are read together.
-# c_args_after renders a call's arguments AFTER the environment, so each carries the leading
-# comma the env's presence makes unconditional.
 # c_args_after renders the arguments of a call through a function VALUE, after the leading
 # environment. It takes the function TYPE rather than its parameter list, because the type
 # is what the arity rule needs and destructuring it at each caller is how that rule came to
@@ -1234,6 +1235,9 @@ fn c_args_after(mut &em: Emitter, fty: Ty, args: list[Expr], sb: Subst) -> str {
 	return ", " + rendered
 }
 
+# c_fn_params is c_fn_ret's other half — a function TYPE's parameter list, or an empty one
+# from anything else. It lives here rather than beside its caller so the two halves of one
+# destructuring are read together.
 fn c_fn_params(t: Ty) -> list[Ty] {
 	return match t {
 		Ty.TFn(ps, _) => ps

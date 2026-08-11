@@ -75,6 +75,40 @@ So a user-defined structural derive is impossible **by construction**, not by om
 set is **fixed and compiler-owned**; a user spec is never in it (`#[derive(UserSpec)]` is a compile
 error). The extensible tier is the behavioral default above; the structural tier is closed.
 
+## Delegating derive — on an `enum`, for any spec
+
+`#[derive(S)]` on an **enum** is a different rule from the one above, and the difference is where the
+generated code comes from. On a struct it is read out of the type's **structure**, which is why that
+half is a closed set of compiler-owned specs. On an enum it is **delegation** — each arm hands the call
+to the payload, which already implements `S` — and that rewrite is mechanical for **any** spec at all,
+including one you wrote.
+
+```zerg
+#[derive(Show)]
+enum Shape {
+    Circle(C)
+    Square(S)
+}
+
+# is the impl you would otherwise write, and extend by hand on every new variant:
+impl Show for Shape {
+    fn show() -> str {
+        return match this {
+            Shape.Circle(v) => v.show()
+            Shape.Square(v) => v.show()
+        }
+    }
+}
+```
+
+Adding a variant regenerates the delegation, which is the point of deriving it.
+
+Two shapes are **refused**, and both for the same reason — the rewrite does not exist:
+
+- a method taking a **`This`** (`fn same(o: This) -> bool`) would have to match the _other_ argument
+  too, and nothing says the two arms agree;
+- a variant that carries **no value** has nothing to delegate to.
+
 ## The derivable specs
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**

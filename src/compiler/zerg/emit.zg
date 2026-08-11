@@ -10337,9 +10337,95 @@ pub fn c_with_derived(prog: File) -> File {
 # nothing user-authored may.
 fn c_derive_src(prog: File, target: str, nm: str) -> str {
 	raise f"E436 NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
-	raise f"E437 cannot derive `{nm}`: the derivable specs are compiler-owned, and a `spec` you write is never one of them — write `impl {nm} for {target}` instead" if nm != "Eq"
+	return c_derive_eq(prog, target) if nm == "Eq"
 
-	return c_derive_eq(prog, target)
+	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
+	# and the difference is where the generated code comes from: on a struct it is read out
+	# of the type's STRUCTURE, which only compiler-owned code may do, so that half stays a
+	# closed set. On an enum it is DELEGATION — each arm hands the call to the payload,
+	# which already implements the spec — and that rewrite is mechanical for any spec at all.
+	#
+	# It is also the rewrite a person would otherwise write by hand and have to extend every
+	# time a variant is added. Deriving it means a new variant regenerates the delegation.
+	return c_derive_delegate(prog, target, nm) if c_derive_enum_at(prog, target) >= 0 and c_derive_spec_at(prog, nm) >= 0
+
+	raise f"E437 cannot derive `{nm}`: on a struct the derivable specs are compiler-owned, and a `spec` you write is never one of them; on an enum a spec is derived by DELEGATION, and either `{target}` is not an enum or `{nm}` is not a spec this program declares — write `impl {nm} for {target}` instead"
+}
+
+fn c_derive_enum_at(prog: File, target: str) -> int {
+	mut i := 0
+	for i < prog.enums.len() {
+		return i if prog.enums[i].name == target
+		i = i + 1
+	}
+	return -1
+}
+
+fn c_derive_spec_at(prog: File, nm: str) -> int {
+	mut i := 0
+	for i < prog.specs.len() {
+		return i if prog.specs[i].name == nm
+		i = i + 1
+	}
+	return -1
+}
+
+# c_derive_delegate writes `impl S for E`, one method per required signature, each a `match`
+# that hands the call to the variant's payload.
+#
+#     impl Show for Shape {
+#         fn show() -> str {
+#             return match this {
+#                 Shape.Circle(v) => v.show()
+#                 Shape.Square(v) => v.show()
+#             }
+#         }
+#     }
+#
+# Two shapes are refused rather than guessed at, and both for the same reason — the rewrite
+# does not exist. A method taking `This` would need the OTHER argument matched too, and
+# nothing says the two arms agree; a variant with no payload has nothing to delegate to.
+fn c_derive_delegate(prog: File, target: str, nm: str) -> str {
+	ed := prog.enums[c_derive_enum_at(prog, target)]
+	sp := prog.specs[c_derive_spec_at(prog, nm)]
+
+	mut out := f"impl {nm} for {target} {{\n"
+	for req in sp.reqs {
+		out = out + c_derive_method(ed, target, nm, req)
+	}
+	return out + "}\n"
+}
+
+fn c_derive_method(ed: EnumDecl, target: str, nm: str, req: FnDecl) -> str {
+	mut ps := ""
+	mut args := ""
+	for pm in req.params {
+		# the RECEIVER rides as parameter zero (the parser adds it), and it is the one `This`
+		# that is not a problem: it is what the match is over.
+		continue if pm.name == "this"
+
+		raise f"E278 cannot derive `{nm}` for `{target}`: `{req.name}` takes a `This`, and delegating it would have to match the other argument too — nothing says the two are the same variant. Write the impl" if ty_name(pm.ty) == target or ty_name(pm.ty) == "This"
+
+		if ps != "" {
+			ps = ps + ", "
+			args = args + ", "
+		}
+		ps = ps + f"{pm.name}: {ty_name(pm.ty)}"
+		args = args + pm.name
+	}
+
+	mut arms := ""
+	for v in ed.variants {
+		raise f"E279 cannot derive `{nm}` for `{target}`: the variant `{v.name}` carries no value, so there is nothing for `{req.name}` to delegate to. Write the impl" if v.fields.len() != 1
+
+		arms = arms + f"\t\t\t{target}.{v.name}(v) => v.{req.name}({args})\n"
+	}
+
+	mut ret := ""
+	if req.has_ret {
+		ret = f" -> {ty_name(req.ret)}"
+	}
+	return f"\tfn {req.name}({ps}){ret} {{\n\t\treturn match this {{\n{arms}\t\t}}\n\t}}\n"
 }
 
 # c_derive_eq is Eq's structural rule: a product compares FIELD BY FIELD, a sum by its

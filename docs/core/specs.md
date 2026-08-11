@@ -69,6 +69,11 @@ offers precisely what dispatches through `this` alone — re-boxing a `This`-ret
 > parameter bounded by it instead. A `spec` fills two of its three roles here and not the third; the same
 > claim in the [Language Reference](../language.md) overview is unbuilt for the same reason, and the
 > dynamic-dispatch half of the codegen paragraph below has nothing to dispatch on.
+>
+> What a program CAN reach is [`#[obj]`](#obj--a-specs-methods-held-as-values) below: the same
+> existential, encoded as a struct of function values over a captured implementer instead of as a boxed
+> pointer with a vtable. It offers what this section says a box offers and refuses the members this
+> section says a box cannot serve — so the facility is here, and the **type** is what is not.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses

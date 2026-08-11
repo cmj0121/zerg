@@ -15,7 +15,7 @@ BEGIN { done = 0; in_enum = 0 }
     isbind = match(line, /^[ \t]+(mut )?[a-z_][a-z_0-9]* := [0-9]+$/)
     if (KIND == "wrong-type" && isbind) {
       sub(/ := /, ": str = ", line); done = 1
-    } else if (KIND == "write-immutable" && match(line, /^[ \t]+[a-z_][a-z_0-9]* := /)) {
+    } else if (KIND == "write-immutable" && match(line, /^[ \t]+[a-z_][a-z_0-9]* := /) && ends_stmt(line)) {
       ind = line; sub(/[^ \t].*/, "", ind)
       nm = line; sub(/^[ \t]+/, "", nm); sub(/ :=.*/, "", nm)
       print line; line = ind nm " = 1"; done = 1
@@ -34,6 +34,22 @@ BEGIN { done = 0; in_enum = 0 }
     }
   }
   print line
+}
+
+# ends_stmt tells a binding that FINISHES on its line from one whose value runs on. The
+# mutations are line-based, and this one writes its statement on the NEXT line — so a
+# binding whose call the formatter wrapped (`box := Box(` … `)`) had the write inserted
+# into the middle of the expression, and the parser refused `=` as an expression instead of
+# refusing the write. That is a refusal about the mutator, and it counted against a ceiling
+# that watches the checker's rules.
+function ends_stmt(s,   i, c, depth) {
+  depth = 0
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "(" || c == "[" || c == "{") depth++
+    else if (c == ")" || c == "]" || c == "}") depth--
+  }
+  return depth == 0
 }
 
 # iscall tells a CALL from the two declarations that look like one. `fn gcd(a: int, b: int)`

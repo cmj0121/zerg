@@ -528,7 +528,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E206` | `Either[…, …]` has the same type on both sides                                                        |
 | `E207` | NotImplemented                                                                                        |
 | `E208` | `#[derive(…)]` has no declaration under it                                                            |
-| `E209` | NotImplemented                                                                                        |
 | `E210` | NotImplemented                                                                                        |
 | `E211` | associated value 不是 `spec` 的成員                                                                   |
 | `E212` | NotImplemented                                                                                        |
@@ -682,6 +681,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E382` | `…` 被宣告了兩次、而且是同一種——每個 module 都攤平進同一個命名空間                                    |
 | `E383` | variant 透過 enum 指名,而這個是裸的                                                                   |
 | `E384` | `Either` 的一邊透過型別指名,而這個是裸的                                                              |
+| `E385` | closure 參數沒有型別,而它的位置也沒給它一個                                                           |
+| `E386` | 透過 function value 的呼叫給錯了引數個數                                                              |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |

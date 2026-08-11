@@ -861,6 +861,24 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	}
 }
 
+# chk_fnval_arity is the same rule for a call through a function VALUE — a binding, a
+# parameter, a struct field. chk_call_arity cannot ask it: its table is keyed by NAME and a
+# value has none, which its own comment says out loud ("emit names those itself") — and
+# emit did not, so both `f(v, 1)` and `f()` on a `fn (int) -> int` were rendered into a
+# two-argument cast and reported by cc, which is the one thing the standing contract never
+# allows.
+#
+# ONE code, where the named rule needs two: a function TYPE carries no defaults, so there
+# is exactly one right count rather than a range between the required and the total.
+fn chk_fnval_arity(mut &em: Emitter, fty: Ty, argc: int) {
+	return if not c_is_fn(fty)
+
+	ps := c_fn_params(fty)
+	return if argc == ps.len()
+
+	chk_at(em, "E386", f"this call goes through a {ty_name(fty)}, which takes {chk_args(ps.len())} and this gives {strconv.to_string(argc, 10)}")
+}
+
 # chk_args counts arguments in words a reader does not trip over. "takes 1 arguments" is
 # the kind of thing that makes a tool feel unfinished, and a message printed for someone
 # else's mistake is the worst place to look unfinished.
@@ -958,6 +976,17 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# of the same thing was allowed. One rule, six slots — the same shape this file has now
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
+
+	# A CLOSURE ADOPTS what the position declares — carve-out (c). A closure that omitted a
+	# parameter's type has `fn(?) -> void` for a type, which is not `fn(int) -> int` and
+	# never becomes one by comparison: asking chk_fits directly refuses the form GRAMMAR
+	# allows, and names two types the reader did not write.
+	#
+	# So it is FILLED FIRST and then asked the ordinary question. A closure that wrote
+	# everything is filled with nothing and this is exactly the comparison below, which is
+	# why a wrong written type still reports as one; a closure that wrote nothing is
+	# compared as the position's own type, and only arity can still disagree.
+	return chk_fits(em, want, c_infer(em, c_fn_typed(want, e))) if c_is_fn(want) and c_is_fnlit(e)
 
 	return chk_fits(em, want, got)
 }

@@ -1219,8 +1219,15 @@ fn c_fn_ret(t: Ty) -> Ty {
 # destructuring are read together.
 # c_args_after renders a call's arguments AFTER the environment, so each carries the leading
 # comma the env's presence makes unconditional.
-fn c_args_after(mut &em: Emitter, ps: list[Ty], args: list[Expr], sb: Subst) -> str {
-	rendered := c_args_typed(em, ps, args, sb)
+# c_args_after renders the arguments of a call through a function VALUE, after the leading
+# environment. It takes the function TYPE rather than its parameter list, because the type
+# is what the arity rule needs and destructuring it at each caller is how that rule came to
+# be asked at neither: `f(v, 1)` on a `fn (int) -> int` rendered a third argument into a
+# two-argument cast and cc reported it.
+fn c_args_after(mut &em: Emitter, fty: Ty, args: list[Expr], sb: Subst) -> str {
+	chk_fnval_arity(em, fty, args.len())
+
+	rendered := c_args_typed(em, c_fn_params(fty), args, sb)
 	return "" if rendered == ""
 
 	return ", " + rendered
@@ -5580,7 +5587,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_ident_val(em, name, sb)}.env{c_args_after(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_ident_val(em, name, sb)}.env{c_args_after(em, bt, args, sb)})" if c_is_fn(bt)
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -6237,7 +6244,7 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: list[Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
 	tv := c_expr(em, target, sb)
-	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, c_fn_params(fty), args, sb)})"
+	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {

@@ -364,7 +364,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# The two are told apart by CASE, which the language already decides: a module is named
 		# by its directory and is snake_case, a spec is PascalCase. So `cli.Opt` is a qualifier
 		# and `It.Item` is a projection.
-		raise f"E265 NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if c_is_ctor(name)
+		raise f"E265 NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if name_is_type(name)
 
 		p_advance(p)
 		name = cur(p).lexeme
@@ -1631,7 +1631,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			#
 			# Spec or concrete is told by CASE, the same distinction an associated type uses:
 			# a spec is PascalCase, and every concrete type this language spells is not.
-			raise f"E266 NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not c_is_ctor(bound)
+			raise f"E266 NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only" if not name_is_type(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)

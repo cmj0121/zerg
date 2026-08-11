@@ -255,8 +255,10 @@ fmt-self:                       # the compiler and the stdlib are canonical too
 		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
 	@echo "fmt-self: $$(ls $(SELF_SRCS) | wc -l | tr -d ' ') sources are fmt's fixpoint"
 
-# A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
-# gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
+# A target of its own, and it stays one now that CI runs both: they ask different questions
+# of the same cases. `fmt-corpus` asks whether a case is already canonical — a rule that is
+# stably wrong passes it — and this asks the property that rule cannot fake, that the token
+# stream survives being formatted. It is the gate written to catch `fn main( {` -> `fn main({`.
 fmt-tokens:                     # formatting changes spacing, never the token stream
 	$(MAKE) build
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }

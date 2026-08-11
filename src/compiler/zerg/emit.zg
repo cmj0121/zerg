@@ -10512,6 +10512,14 @@ pub fn c_with_derived(prog: File) -> File {
 		for fnd in gen.fns {
 			out.fns.append(fnd)
 		}
+
+		# AND THE TYPES IT DECLARES. A derived impl declares none, so this list was the two
+		# above for as long as `derive` was the only decorator — and `#[obj]`'s expansion is
+		# a STRUCT and a function, so the struct went missing and its own wrap function came
+		# back with a return type nothing declared.
+		for sd in gen.structs {
+			out.structs.append(sd)
+		}
 		i = i + 1
 	}
 	return out
@@ -10522,6 +10530,8 @@ pub fn c_with_derived(prog: File) -> File {
 # error, because generating an impl from structure needs code that reads structure, and
 # nothing user-authored may.
 fn c_derive_src(prog: File, target: str, nm: str) -> str {
+	return c_obj_src(prog, target) if nm == "#obj"
+
 	raise f"E436 NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
 
@@ -10536,6 +10546,101 @@ fn c_derive_src(prog: File, target: str, nm: str) -> str {
 	return c_derive_delegate(prog, target, nm) if c_derive_enum_at(prog, target) >= 0 and c_derive_spec_at(prog, nm) >= 0
 
 	raise f"E437 cannot derive `{nm}`: on a struct the derivable specs are compiler-owned, and a `spec` you write is never one of them; on an enum a spec is derived by DELEGATION, and either `{target}` is not an enum or `{nm}` is not a spec this program declares — write `impl {nm} for {target}` instead"
+}
+
+# c_obj_src writes what `#[obj]` on a spec stands for: a companion STRUCT OF FUNCTION
+# VALUES, one field per method, and a generic function that wraps any implementer into one.
+#
+#     #[obj]
+#     spec Draw { fn draw() -> str }
+#
+#     struct DrawObj { draw: fn () -> str }
+#     fn draw_obj[T: Draw](v: T) -> DrawObj {
+#         return DrawObj(fn () -> str { return v.draw() })
+#     }
+#
+# THE OPENNESS COMES FROM THE WRAP POINT, not from anything at run time: `draw_obj` is
+# monomorphized per implementer, and what comes back has one type. A `list[DrawObj]` is
+# therefore a heterogeneous collection with no vtable, no header on any value and no
+# downcast — which is the trade the whole design is: you may call what the spec declares,
+# and you may not ask what is inside.
+#
+# It could not be written before closures captured, because every field is a closure over
+# the wrapped value. That is also why the refusals below are what they are.
+fn c_obj_src(prog: File, target: str) -> str {
+	at := c_derive_spec_at(prog, target)
+	raise f"E280 `#[obj]` goes on a `spec`, and `{target}` is not one — an object is a spec's methods held as values, so there has to be a spec saying which" if at < 0
+
+	sp := prog.specs[at]
+	obj := f"{target}Obj"
+
+	mut fields := ""
+	mut inits := ""
+	for req in sp.reqs {
+		# a `mut fn` is the receiver taken by reference, which the parser records as the
+		# `this` parameter's own marker
+		raise f"E281 cannot make an object of `{target}`: `{req.name}` is a `mut fn`, and a wrapped value is a COPY — writing through it would change something nobody can reach. An object is immutable here" if c_obj_recv_mut(req)
+
+		mut ps := ""
+		mut args := ""
+		mut tys := ""
+		for pm in req.params {
+			continue if pm.name == "this"
+
+			raise f"E282 cannot make an object of `{target}`: `{req.name}` takes a `This`, and an object has forgotten which type it holds — that shape is what `#[derive({target})]` on an enum is for" if ty_name(pm.ty) == "This"
+
+			if ps != "" {
+				ps = ps + ", "
+				args = args + ", "
+				tys = tys + ", "
+			}
+			ps = ps + f"{pm.name}: {ty_name(pm.ty)}"
+			args = args + pm.name
+			tys = tys + ty_name(pm.ty)
+		}
+
+		mut ret := ""
+		if req.has_ret {
+			ret = f" -> {ty_name(req.ret)}"
+		}
+		fields = fields + f"\t{req.name}: fn ({tys}){ret}\n"
+		if inits != "" {
+			inits = inits + ", "
+		}
+		inits = inits + f"fn ({ps}){ret} {{\n\t\treturn v.{req.name}({args})\n\t}}"
+	}
+
+	wrap := c_obj_wrap_name(target)
+	return f"struct {obj} {{\n{fields}}}\n\nfn {wrap}[T: {target}](v: T) -> {obj} {{\n\treturn {obj}({inits})\n}}\n"
+}
+
+fn c_obj_recv_mut(req: FnDecl) -> bool {
+	for pm in req.params {
+		return pm.is_ref if pm.name == "this"
+	}
+	return false
+}
+
+# c_obj_wrap_name is the spec's name in the case a FUNCTION is written in — `Draw` makes
+# `draw_obj`. A type is PascalCase here and a function snake_case, and a generated name that
+# ignored that would be the one name in a program a reader has to be told about.
+fn c_obj_wrap_name(target: str) -> str {
+	b := list[byte](target)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		c := b[i]
+		if c >= b'A' and c <= b'Z' {
+			if i > 0 {
+				out.append(b'_')
+			}
+			out.append(c + byte(32))
+		} else {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out) + "_obj"
 }
 
 fn c_derive_enum_at(prog: File, target: str) -> int {
@@ -10630,7 +10735,7 @@ fn c_derive_eq_body(prog: File, target: str) -> str {
 		return c_derive_variants(ed, target) if ed.name == target
 	}
 
-	raise f"cannot derive `Eq` for `{target}` — a derive reads a type's structure, and no struct or enum by that name is declared here"
+	raise f"E283 cannot derive `Eq` for `{target}` — a derive reads a type's STRUCTURE, and no struct or enum by that name is declared here (a `spec` has no structure to read: `#[obj]` is what goes on one)"
 }
 
 # c_derive_fields is the conjunction of the fields' own equalities, recursing into each

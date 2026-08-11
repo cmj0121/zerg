@@ -861,6 +861,24 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	}
 }
 
+# chk_fnval_arity is the same rule for a call through a function VALUE — a binding, a
+# parameter, a struct field. chk_call_arity cannot ask it: its table is keyed by NAME and a
+# value has none, which its own comment says out loud ("emit names those itself") — and
+# emit did not, so both `f(v, 1)` and `f()` on a `fn (int) -> int` were rendered into a
+# two-argument cast and reported by cc, which is the one thing the standing contract never
+# allows.
+#
+# ONE code, where the named rule needs two: a function TYPE carries no defaults, so there
+# is exactly one right count rather than a range between the required and the total.
+fn chk_fnval_arity(mut &em: Emitter, fty: Ty, argc: int) {
+	return if not c_is_fn(fty)
+
+	ps := c_fn_params(fty)
+	return if argc == ps.len()
+
+	chk_at(em, "E386", f"this call goes through a {ty_name(fty)}, which takes {chk_args(ps.len())} and this gives {strconv.to_string(argc, 10)}")
+}
+
 # chk_args counts arguments in words a reader does not trip over. "takes 1 arguments" is
 # the kind of thing that makes a tool feel unfinished, and a message printed for someone
 # else's mistake is the worst place to look unfinished.

@@ -1142,18 +1142,26 @@ fn c_carrier_prelude() -> str {
 	return out
 }
 
-# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer — and
-# cast back to its real signature at the call. C guarantees exactly this round trip
-# between function pointer types and no more, which is why the storage type is a function
-# pointer rather than `void*`: converting a function pointer to an object pointer is not
-# something the standard promises.
+# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer PLUS an
+# environment slot — and the pointer is cast back to its real signature at the call. C
+# guarantees exactly that round trip between function pointer types and no more, which is
+# why the code half is a function pointer rather than `void*`: converting a function pointer
+# to an object pointer is not something the standard promises. The environment is an object
+# pointer and is kept in a field of its own for the same reason — the two cannot share one
+# slot under any cast C blesses.
+#
+# THE ENVIRONMENT IS ALWAYS NULL TODAY. A lambda that captures nothing needs none, and a
+# lambda that captures is still refused (E429) — but the shape a capture needs is a value's
+# shape, so it belongs to the type rather than to the feature. Adding it first is what makes
+# the feature a change to the lambda emitter alone rather than to every call site in this
+# file.
 #
 # A single storage type is also what keeps the declarator problem away. A C function
 # pointer spells its name INSIDE the type — `int64_t (*f)(const char*)` — and every type
 # in this emitter is a string that gets a name appended to it. A typedef sidesteps that
 # for every function type at once, with no table of them to build and keep.
 fn c_fnptr_typedef() -> str {
-	return "typedef void (*zg_fnptr)(void);\n"
+	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
 }
 
 # c_fnptr_cast is the cast back to a real signature, `(R (*)(P, ...))`.
@@ -5562,7 +5570,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -6073,7 +6081,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
 		c_no_ref_param_value(em, n)
 		em.used_fnptr = true
-		return f"((zg_fnptr)zg_{n})"
+		return f"((zg_fnptr){{(void (*)(void))zg_{n}, NULL}})"
 	}
 
 	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
@@ -6186,7 +6194,7 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 # is a function and not an arm of the match that calls it.
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: list[Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
-	return f"({c_fnptr_cast(fty)}{c_expr(em, target, sb)}.zg_{meth})({c_args_typed(em, c_fn_params(fty), args, sb)})"
+	return f"({c_fnptr_cast(fty)}({c_expr(em, target, sb)}.zg_{meth}).fn)({c_args_typed(em, c_fn_params(fty), args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -8018,7 +8026,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.rel_fns = saved_rel_fns
 	em.ref_names = saved_refs
 	em.used_fnptr = true
-	return f"((zg_fnptr)zg_{name})"
+	return f"((zg_fnptr){{(void (*)(void))zg_{name}, NULL}})"
 }
 
 fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {

@@ -98,14 +98,24 @@ reaches_into() {
 
 # fields_of <file> <struct> — the field names of a struct declaration, in either
 # language: `name: ty` in Zerg, `name ty` in Go.
+#
+# The indent is a LITERAL tab built by printf, never `\t` inside the pattern, for the
+# reason editor-align.sh carries in full: BSD grep reads `\t` as a tab and GNU grep reads
+# it as an undefined escape, i.e. the letter `t`. The pattern therefore matched a field on
+# macOS and nothing at all on Linux — so both extractions came back empty in CI, and every
+# claim below them is NEGATIVE ("reaches nothing in that layer"), which an empty set
+# satisfies. The floors are what stood between that and a gate reporting success on two
+# structs it never read.
+TAB=$(printf '\t')
+
 zg_fields() {
 	awk -v s="$2" '$0 ~ "^struct " s " \\{" {on=1; next} on && /^}/ {exit} on' "$1" |
-		grep -oE '^\t[a-z_][A-Za-z0-9_]*:' | tr -d '\t:' | sort -u
+		grep -oE "^$TAB[a-z_][A-Za-z0-9_]*:" | tr -d "$TAB:" | sort -u
 }
 
 go_fields() {
 	awk -v s="$2" '$0 ~ "^type " s " struct \\{" {on=1; next} on && /^}/ {exit} on' "$1" |
-		grep -oE '^\t[a-zA-Z_][A-Za-z0-9_]*[ \t]' | tr -d '\t ' | sort -u
+		grep -oE "^$TAB[a-zA-Z_][A-Za-z0-9_]*[ $TAB]" | tr -d "$TAB " | sort -u
 }
 
 # extra <declared> <actual> — what the actual set has that the declared one does not.

@@ -1151,10 +1151,10 @@ fn c_carrier_prelude() -> str {
 # slot under any cast C blesses.
 #
 # THE ENVIRONMENT IS ALWAYS NULL TODAY. A lambda that captures nothing needs none, and a
-# lambda that captures is still refused (E429) — but the shape a capture needs is a value's
-# shape, so it belongs to the type rather than to the feature. Adding it first is what makes
-# the feature a change to the lambda emitter alone rather than to every call site in this
-# file.
+# lambda that captures fills it with a per-site struct of the values it closed over. Every
+# fn value reaches its code through ONE C signature — the environment first, then the
+# declared parameters — so a call site never has to know which of the two it is holding;
+# c_fnval_thunk is what gives a plain function that shape.
 #
 # A single storage type is also what keeps the declarator problem away. A C function
 # pointer spells its name INSIDE the type — `int64_t (*f)(const char*)` — and every type
@@ -1164,12 +1164,26 @@ fn c_fnptr_typedef() -> str {
 	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
 }
 
-# c_fnptr_cast is the cast back to a real signature, `(R (*)(P, ...))`.
+# c_fnptr_cast is the cast back to a real signature, `(R (*)(const void *, P, ...))`.
+#
+# THE ENVIRONMENT IS ALWAYS THE FIRST PARAMETER, whether or not there is one to pass. A
+# closure has an env and a plain function has none, and a call site cannot know which it is
+# holding — so every fn value is reached through one shape, and what differs is what the
+# thing behind it does with the pointer. c_fnval_thunk is what gives a plain function that
+# shape.
 fn c_fnptr_cast(t: Ty) -> str {
 	return match t {
-		Ty.TFn(ps, r) => f"({c_type(r)} (*)({c_ptypes(ps)}))"
+		Ty.TFn(ps, r) => f"({c_type(r)} (*)(const void *{c_ptypes_after(ps)}))"
 		_             => ""
 	}
+}
+
+fn c_ptypes_after(ps: list[Ty]) -> str {
+	mut out := ""
+	for pt in ps {
+		out = out + ", " + c_type(pt)
+	}
+	return out
 }
 
 fn c_ptypes(ps: list[Ty]) -> str {
@@ -1203,6 +1217,15 @@ fn c_fn_ret(t: Ty) -> Ty {
 # c_fn_params is c_fn_ret's other half — a function TYPE's parameter list, or an empty one
 # from anything else. It lives here rather than beside its caller so the two halves of one
 # destructuring are read together.
+# c_args_after renders a call's arguments AFTER the environment, so each carries the leading
+# comma the env's presence makes unconditional.
+fn c_args_after(mut &em: Emitter, ps: list[Ty], args: list[Expr], sb: Subst) -> str {
+	rendered := c_args_typed(em, ps, args, sb)
+	return "" if rendered == ""
+
+	return ", " + rendered
+}
+
 fn c_fn_params(t: Ty) -> list[Ty] {
 	return match t {
 		Ty.TFn(ps, _) => ps
@@ -5570,7 +5593,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_ident_val(em, name, sb)}.env{c_args_after(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -6081,7 +6104,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
 		c_no_ref_param_value(em, n)
 		em.used_fnptr = true
-		return f"((zg_fnptr){{(void (*)(void))zg_{n}, NULL}})"
+		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
 
 	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
@@ -6144,6 +6167,38 @@ fn c_is_bound(mut &em: Emitter, n: str) -> bool {
 
 # c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the
 # parameter types back out of the table c_build_sigs filled.
+# c_fnval_thunk gives a plain function the shape every fn VALUE has: an environment first,
+# then the declared parameters. It answers the thunk's name.
+#
+# A closure needs the environment and a named function has none, and a call site cannot know
+# which of the two it is holding — so rather than two shapes and a discriminator, there is
+# one shape and a thunk that ignores the pointer. It costs a static function per name taken
+# as a value, which is a handful in any program that does it at all.
+fn c_fnval_thunk(mut &em: Emitter, target: str, t: Ty) -> str {
+	name := f"fnval__{strconv.to_string(em.lam_n, 10)}"
+	em.lam_n = em.lam_n + 1
+
+	ps := c_fn_params(t)
+	mut sig := ""
+	mut call := ""
+	mut i := 0
+	for i < ps.len() {
+		sig = sig + f", {c_type(ps[i])} a{strconv.to_string(i, 10)}"
+		if i > 0 {
+			call = call + ", "
+		}
+		call = call + f"a{strconv.to_string(i, 10)}"
+		i = i + 1
+	}
+
+	mut ret := "return "
+	if ty_name(c_fn_ret(t)) == "void" {
+		ret = ""
+	}
+	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}zg_{target}({call}); }}\n")
+	return name
+}
+
 fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 	# one pass: c_build_sigs appends a function's parameters contiguously and in index
 	# order, so collecting the rows that name it collects them already in order
@@ -6194,7 +6249,8 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 # is a function and not an arm of the match that calls it.
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: list[Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
-	return f"({c_fnptr_cast(fty)}({c_expr(em, target, sb)}.zg_{meth}).fn)({c_args_typed(em, c_fn_params(fty), args, sb)})"
+	tv := c_expr(em, target, sb)
+	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, c_fn_params(fty), args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -7984,8 +8040,38 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 # or another function would need an environment to carry it, and an environment is a
 # different value shape than a bare pointer. That is refused by name rather than half-done.
 fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
-	free := c_lambda_free(em, ps, body)
-	raise f"E429 NotImplemented: a closure capturing `{free}` — a lambda may only use its parameters" if free != ""
+	# WHAT IT CAPTURES, and their types read from the enclosing function's environment —
+	# which is still the current one, since a lambda is emitted in the middle of one of its
+	# expressions. The captures become ordinary LEADING PARAMETERS of the lifted function, so
+	# every rule about a by-value parameter already applies to them: the copy in, the drop
+	# out, the shadowing. Nothing in the body has to know it is reading a capture.
+	caps := c_lambda_free_all(em, ps, body)
+	mut cps: list[Param] = []
+	for cn in caps {
+		ct := c_lookup_var(em, cn)
+
+		# A capture whose type is unknown cannot be given a field. It carries no CODE because
+		# no program reaches it: a binding with no type of its own is refused at the binding
+		# (E336), long before a lambda can close over it. This is the guard that says so if
+		# that ever stops being true, and a code exists when a gate pins it and not before.
+		raise f"a closure captures `{cn}`, and this compiler cannot work out what it holds" if c_is_unknown(ct)
+
+		cps.append(Param(cn, ct, false, false, Expr.ENil))
+	}
+
+	# THE VALUES ARE READ HERE, while the ENCLOSING environment is still the current one. A
+	# few lines down it is swapped for the lambda's own, and by then these names mean nothing
+	# — which is the whole reason a capture is a copy taken at the point the lambda is
+	# written rather than a reference to a binding that may already be gone.
+	mut cvals: list[str] = []
+	for cp in cps {
+		cvals.append(c_copied(em, cp.ty, Expr.EIdent(cp.name), c_nosub()))
+	}
+
+	mut allps := cps
+	for pm in ps {
+		allps.append(pm)
+	}
 
 	for pm in ps {
 		if pm.is_ref {
@@ -8012,7 +8098,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -8026,7 +8112,77 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.rel_fns = saved_rel_fns
 	em.ref_names = saved_refs
 	em.used_fnptr = true
-	return f"((zg_fnptr){{(void (*)(void))zg_{name}, NULL}})"
+
+	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
+	# one, and it reaches the fn-value shape the same way a named function does — through a
+	# thunk that takes the environment and ignores it.
+	return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, name, c_lambda_ty(ps, has_ret, ret))}, NULL}})" if caps.len() == 0
+
+	return c_closure(em, name, cps, ps, has_ret, ret, cvals)
+}
+
+# c_closure builds the environment a capturing lambda carries, and the thunk that unpacks it.
+#
+# The shape is `spawn`'s, one construct over: a per-site struct of the captured values, a
+# static function that reads them back out, and a heap block holding one. What differs is
+# only WHEN it runs — a coroutine's env is consumed once, a closure's every time it is
+# called — which is why this one is not freed by its thunk.
+#
+# THE ENVIRONMENT IS NOT FREED. Every other value this emitter allocates is registered for
+# release at the scope that made it; a closure's cannot be, because the closure may outlive
+# that scope — that is what closing over a value is for. Freeing it correctly needs the fn
+# value to carry copy and drop functions, which is a change to the type rather than to this
+# function, and it is written down rather than half-done (docs/core/memory.md).
+fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has_ret: bool, ret: Ty, vals: list[str]) -> str {
+	tag := strconv.to_string(em.lam_n, 10)
+	em.lam_n = em.lam_n + 1
+
+	envty := f"zg_lamenv_{tag}"
+
+	mut fields := ""
+	mut unpack := ""
+	mut i := 0
+	for i < cps.len() {
+		fi := f"f{strconv.to_string(i, 10)}"
+		fields = fields + f" {c_type(cps[i].ty)} {fi};"
+		if i > 0 {
+			unpack = unpack + ", "
+		}
+		unpack = unpack + f"e->{fi}"
+		i = i + 1
+	}
+	em.lam_defs.append(f"typedef struct {{{fields} }} {envty};\n")
+
+	mut sig := ""
+	mut call := unpack
+	mut j := 0
+	for j < ps.len() {
+		aj := f"a{strconv.to_string(j, 10)}"
+		sig = sig + f", {c_type(ps[j].ty)} {aj}"
+		call = call + ", " + aj
+		j = j + 1
+	}
+
+	mut retkw := "return "
+	if not has_ret {
+		retkw = ""
+	}
+	thunk := f"lamcall_{tag}"
+	em.lam_defs.append(f"static {c_ret_of(has_ret, ret)} zg_{thunk}(const void *zg_envp{sig}) {{ const {envty} *e = (const {envty} *)zg_envp; {retkw}zg_{name}({call}); }}\n")
+
+	mut fill := ""
+	mut k := 0
+	for k < vals.len() {
+		fill = fill + f" zgt_ce{tag}->f{strconv.to_string(k, 10)} = {vals[k]};"
+		k = k + 1
+	}
+	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_alloc(sizeof({envty}));{fill} (zg_fnptr){{(void (*)(void))zg_{thunk}, zgt_ce{tag}}}; }})"
+}
+
+fn c_ret_of(has_ret: bool, ret: Ty) -> str {
+	return "void" if not has_ret
+
+	return c_type(ret)
 }
 
 fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
@@ -8044,6 +8200,28 @@ fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
 # c_lambda_free is the first name a lambda's body uses that it did not declare — "" when
 # there is none. A parameter, a module constant, and a function are all fine; anything
 # else would have to be carried in an environment.
+# c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
+# A parameter, a name bound inside, a module constant and a function are all answered
+# elsewhere, so what is left is the enclosing function's bindings.
+fn c_lambda_free_all(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> list[str] {
+	mut ids: list[str] = []
+	mut calls: list[str] = []
+	mut ns: list[str] = []
+	walk_body(body, ids, calls, ns)
+	mut bound: list[str] = []
+	for pm in ps {
+		bound.append(pm.name)
+	}
+	collect_binds(body, bound)
+	mut out: list[str] = []
+	for id in ids {
+		if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id) and not c_name_in(out, id) {
+			out.append(id)
+		}
+	}
+	return out
+}
+
 fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
 	mut ids: list[str] = []
 	mut calls: list[str] = []

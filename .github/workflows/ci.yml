@@ -209,6 +209,12 @@ jobs:
       - name: Unit suites, seed and runtime
         run: make test
 
+      # The digest that names every cached object, held to FIPS 180-4's vectors and to the
+      # system tool. It needs a built compiler, which is why it is here and not in the
+      # text-only job.
+      - name: The pure-Zerg digest is the digest everyone else computes
+        run: make sha256
+
       - name: Fetch test-data submodule
         id: corpus_fetch
         env:

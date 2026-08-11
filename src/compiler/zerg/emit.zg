@@ -1186,20 +1186,6 @@ fn c_ptypes_after(ps: list[Ty]) -> str {
 	return out
 }
 
-fn c_ptypes(ps: list[Ty]) -> str {
-	return "void" if ps.len() == 0
-	mut out := ""
-	mut i := 0
-	for i < ps.len() {
-		if i > 0 {
-			out = out + ", "
-		}
-		out = out + c_type(ps[i])
-		i = i + 1
-	}
-	return out
-}
-
 fn c_is_fn(t: Ty) -> bool {
 	return match t {
 		Ty.TFn(_, _) => true
@@ -8197,9 +8183,6 @@ fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
 	return Ty.TFn(tys, r)
 }
 
-# c_lambda_free is the first name a lambda's body uses that it did not declare — "" when
-# there is none. A parameter, a module constant, and a function are all fine; anything
-# else would have to be carried in an environment.
 # c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
 # A parameter, a name bound inside, a module constant and a function are all answered
 # elsewhere, so what is left is the enclosing function's bindings.
@@ -8220,22 +8203,6 @@ fn c_lambda_free_all(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> lis
 		}
 	}
 	return out
-}
-
-fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
-	mut ids: list[str] = []
-	mut calls: list[str] = []
-	mut ns: list[str] = []
-	walk_body(body, ids, calls, ns)
-	mut bound: list[str] = []
-	for pm in ps {
-		bound.append(pm.name)
-	}
-	collect_binds(body, bound)
-	for id in ids {
-		return id if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id)
-	}
-	return ""
 }
 
 fn c_name_in(names: list[str], name: str) -> bool {

@@ -237,6 +237,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   does not find `Either` and reports an undefined name. `zerg` requires the qualified form
   (a variant is named through its type, with no exception for a built-in), which is why the
   three corpus programs that use it are skipped here with that reason.
+- **An associated type or value in a `spec` is accepted.** GRAMMAR#spec-member derives a
+  required signature and a provided method, and nothing else — a spec carries behaviour. The
+  seed reads `type Item` and `BITS: int` inside one and carries on; `zerg` refuses both by
+  name. (A member that is neither, like `SIZE := 4096`, the seed does turn away.)
 - **A call that WRITES its type arguments is accepted in its multi-argument shape.**
   `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
   `[ … ]` always an index and a generic takes its type from its arguments. The

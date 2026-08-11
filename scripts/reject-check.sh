@@ -826,6 +826,55 @@ fn main() {
 }
 EOF
 
+# `#[obj]` REFUSES BY THE SAME TEST the delegating derive does: does the rewrite exist? A
+# `mut fn` would write through a COPY, so the write reaches nothing anybody can read; a
+# method taking `This` needs the type an object has forgotten, which is what the enum
+# delegation is for; and a `spec` is the only thing with methods to hold as values.
+reject obj-on-a-mut-method E281 no-place <<'EOF'
+#[obj]
+spec Draw {
+	mut fn bump()
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject obj-with-a-self-parameter E282 no-place <<'EOF'
+#[obj]
+spec Draw {
+	fn same(o: This) -> bool
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject obj-on-something-that-is-not-a-spec E280 no-place <<'EOF'
+#[obj]
+struct P {
+	x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# and its mirror: a `spec` has no structure for a derive to read.
+reject derive-on-a-spec E283 no-place seed-gap <<'EOF'
+#[derive(Eq)]
+spec Draw {
+	fn draw() -> str
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- redeclaration ----------------------------------------------------------------
 #
 # Two cases stood here pinning "a name is bound once per block", and their retirement is

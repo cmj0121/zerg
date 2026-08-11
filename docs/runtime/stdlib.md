@@ -23,6 +23,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`time`](#time)       | `import "time"`    | clocks, and timers as channels                   |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
+| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity  |
 | [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                |
 | [`testing`](#testing) | `import "testing"` | assertion helpers for `#[test]` functions        |
@@ -135,6 +136,21 @@ separately diagnosed this phase (parse bounded text).
 | `parse_uint(s: str, base: int) -> uint` | unsigned integer in `base` (fills the top bit) |
 | `to_string(n: int, base: int) -> str`   | render `n` in `base`, lowercase, INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`, else `ValueError`        |
+
+## `sha256`
+
+SHA-256 as specified by **FIPS 180-4**, in pure Zerg over `uint` and the bitwise operators — no libcrypto,
+no runtime leaf. `zerg build` names every cached object with it.
+
+| Function                       | Summary                                    |
+| ------------------------------ | ------------------------------------------ |
+| `sum(data: list[byte])`        | the 32-byte digest                         |
+| `hex(data: list[byte]) -> str` | the same digest as 64 lowercase hex digits |
+
+It is **not constant-time** and makes no claim to be. Use it to name a thing by its content, to notice that
+a file changed, or to key a cache; do not use it to check a password. `make sha256` holds it to the
+standard's known-answer vectors and to the system tool over random inputs — the oracle cannot check it,
+since both compilers would be running this same source.
 
 ## `time`
 

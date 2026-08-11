@@ -24,6 +24,25 @@ rejects every ill-formed program per the stated rules, and reproduces the specif
 implementation-defined. A conforming implementation need not emit C, nor match the reference compiler's
 generated code, mangling, or memory layout.
 
+## Two profiles
+
+The language is one, and what an implementation must answer for is two.
+
+The **core profile** is everything whose meaning is the language's own: literals, expressions, functions,
+control flow, types, patterns, concurrency, modules and cleanup. An implementation targeting anything at
+all can answer for it, and a conforming implementation **must**.
+
+The **system profile** is inline assembly, raw pointers, and the `unsafe` groups that hold them — forms
+whose meaning belongs to a machine rather than to the language. An implementation with no machine to speak
+of, one targeting a VM or a checker that never emits, **may decline the profile**. Declining is not
+silence: every form in it must still be **refused by name**, which is the standing rule everywhere else.
+What the profile changes is whether that refusal is a defect.
+
+An implementation **states which profiles it claims**. This one claims the core and declines the system
+profile. Claiming a profile is not the same as having finished it: where `zerg` falls short of a core form
+the chapter says so with a `[not yet]`, and the form is refused by name — that is a debt inside a claimed
+profile. A declined profile carries no such debt, which is the whole difference.
+
 ## The language versus this compiler
 
 Zerg is specified as a whole; the compiler that ships implements a subset. Rather than
@@ -115,6 +134,15 @@ same source to an object file, which is what a module is for.
 > levels. A conforming implementation may set another bound; ISO C itself promises only 63 nested
 > parenthesized expressions.
 
+---
+
+> **[implementation-defined]** **A format spec's width and precision are translation limits.** A `width`
+> or a `precision` past **4096** is refused rather than honoured: both are a size the text being
+> formatted asks the implementation to produce, and an unbounded one is a request for memory dressed
+> as a rendering. A **float** additionally renders at most **100** fractional digits, which is a bound
+> on digits rather than on a field and so is the float's own. The `type` letter is a closed set per rendering
+> ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
+
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed
@@ -142,8 +170,9 @@ program. It is written down because the dialect is a claim the project makes on 
 number in a compiler flag that no chapter states is one that drifts.
 
 The dialect is **C17**. `ZERG_CSTD` names another for a build that needs one — `c99` and `c11` are the
-others the runtime is written to compile under, and the build cache keys an object by dialect so two of
-them do not hand each other's objects back.
+others the runtime is written to compile under, and the build cache keys an object by **the dialect and
+the resolved `cc`** — the two inputs to a compile that the emitted C does not already stand for — so two
+dialects, or two compilers, do not hand each other's objects back.
 
 > **[not yet]** The **fallback** is not automatic. The intent is that a `cc` which cannot do C17 is
 > retreated from to C99; no probe for that is built, so the retreat is something a build **asks** for with

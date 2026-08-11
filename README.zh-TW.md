@@ -77,6 +77,9 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 **[`docs/README.zh-TW.md`](docs/README.zh-TW.md)** 是入口：先讀哪一章、每個目錄裝什麼、規格該怎麼讀。
 語法的權威在 [`GRAMMAR`](GRAMMAR)，語意的權威在 [`docs/`](docs) 底下的各章。
 
+**[`FUTURE.zh-TW.md`](FUTURE.zh-TW.md)** 是另外一半：語言決定**不要**的東西，以及每個案子要重新打開的門檻。
+裡面沒有一項屬於規格。
+
 ## 狀態
 
 出貨的編譯器是 **`zerg`**——以 Zerg 寫成、由自己編譯；**`zerg0`** 是 Go 主導的種子，唯一的工作是建置它。
@@ -88,21 +91,22 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 編譯器或 linker 對著沒人寫過的產生碼報錯。規格標為 **[not yet]** 的特性，使用它會 raise `NotImplemented`
 然後停下。
 
-**編譯器沒做到的地方，規格會說**——在該特性所屬的章節裡標上 **[deviation]**。其中三項是**靜默的**，動筆前最該
-先知道：
+**編譯器沒做到的地方，規格會說**——在該特性所屬的章節裡標上 **[deviation]**。動筆前最該先知道的是**靜默的**那些:
+程式拿到一個答案,而沒有任何診斷。
 
-| 靜默偏差                                 | 章節                                      |
-| ---------------------------------------- | ----------------------------------------- |
-| `str` 字面值的 `match` arm 永遠不成立    | [控制流](docs/code/control-flow.zh-TW.md) |
-| if-expression 不檢查各分支型別是否一致   | [控制流](docs/code/control-flow.zh-TW.md) |
-| `byte` 上的 `~` 給出未遮罩的 64-bit 補數 | [型別](docs/core/types.zh-TW.md)          |
+| 靜默偏差                                            | 章節                                    |
+| --------------------------------------------------- | --------------------------------------- |
+| `list` 在被迭代時並沒有被凍結——`for` 中 append 有效 | [集合](docs/code/collections.zh-TW.md)  |
+| 進入 carrier 的 refcount 值永遠不會被釋放——會漏     | [值與記憶體](docs/core/memory.zh-TW.md) |
+| `list` 的 fill 形式 `[v; N]` 每個元素各求值一次 `v` | [集合](docs/code/collections.zh-TW.md)  |
 
 另有兩項是結構性的，執行中的程式感受得到：排程器是**協作式、非搶佔式**，一條 CPU-bound 的 coroutine 在自己
 park 之前會一直佔住一個 worker（[coroutine](docs/code/coroutine.zh-TW.md)）；模組可見性只對函式與模組常數
 強制，型別與欄位尚未（[模組](docs/runtime/package.zh-TW.md)）。
 
 其餘的一切——什麼已建置、什麼被指名拒絕、還有哪些偏差——都標在規格對應的位置。讓這些標記保持誠實的關卡，
-就是 `make help` 列出的那些 target。
+就是 `make help` 列出的那些 target；**`make ci`** 跑整塊板，而 `make gates` 是用來擋下「只是掛在板上、
+其實沒人跑」的關卡。
 
 ## 授權（License）
 

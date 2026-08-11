@@ -27,6 +27,16 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
 > module is flattened into one namespace and no visibility is checked. See Visibility below.
+>
+> **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
+> **private** one is not: nothing outside a module can reach its private names, so a bare call always means
+> the caller's own, and the two only have to be told apart in C — where each gets a module tag, its
+> position in a sorted list of the program's modules. Sorted rather than first-seen because that name has
+> to be the same on every run.
+>
+> The public case has nowhere to be unique. This page declines a global registry on purpose (below), so a
+> public collision is a compile error plus a **link-name override**, which is what [FFI](ffi.md) already
+> specifies and which needs the package layer to exist first.
 
 ### Programs & the entry point
 
@@ -73,11 +83,9 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 **source order** within a module. This whole ordering — topological, with the module-name-then-source
 tie-break — holds.
 
-> **[deviation]** Top-level constants are initialized in **source order**, not dependency order, and a
-> cycle is not diagnosed. A constant whose initializer reads one declared **after** it reads that
-> constant's zero value and the program runs: `const A: int = B + 1` above `const B: int = 10` yields
-> `A == 1`. A cycle (`A` reads `B`, `B` reads `A`) compiles with no finding at all. Both are silent wrong
-> answers rather than the compile error specified here.
+Both halves of that are built. A constant whose initializer reads one declared **after** it gets the
+value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields `A == 11` — and a cycle is a
+named refusal: _these constants depend on each other and none can be given a value first_.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent

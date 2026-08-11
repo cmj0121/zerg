@@ -25,6 +25,7 @@ import (
 	"cli"
 	"io"
 	"lsp"
+	"sha256"
 	"strconv"
 
 	"zerg"
@@ -375,6 +376,16 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	__zrt_exit(1)
 }
 
+# diag_code_prefix puts the rule's identity in FRONT of the sentence, and answers nothing at
+# all for a finding that has no code yet. It is a function rather than a branch at each of its
+# two call sites — `zerg build`'s renderer and `zerg lint`'s — because it is the layout
+# scripts/lib/diag.sh asserts: the code opens the line, after `error: ` where there is one.
+fn diag_code_prefix(d: zerg.Diag) -> str {
+	return "" if d.code == ""
+
+	return f"{d.code} "
+}
+
 # render_diag draws one finding the way a person reads it: what is wrong first, then where,
 # then the line itself with a caret under the thing it is about.
 #
@@ -388,7 +399,7 @@ fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 # diagnostic without it, and guessing at a line nobody read would be worse than saying
 # less.
 fn render_diag(d: zerg.Diag, src: str) -> str {
-	mut out := f"error: {d.msg}\n"
+	mut out := f"error: {diag_code_prefix(d)}{d.msg}\n"
 	line_s := strconv.to_string(d.line, 10)
 	if d.line > 0 {
 		out = out + zerg.place_line(d.path, d.line, d.col) + "\n"
@@ -397,7 +408,7 @@ fn render_diag(d: zerg.Diag, src: str) -> str {
 	text := source_line(src, d.line)
 	return out if text == "" or d.line == 0
 
-	gutter := blanks(list[byte](line_s).len())
+	gutter := blanks(bytearray(line_s).len())
 	out = out + f" {gutter} |\n"
 	out = out + f" {line_s} | {text}\n"
 
@@ -414,7 +425,7 @@ fn render_diag(d: zerg.Diag, src: str) -> str {
 # tabs renders one tab as many columns, so a caret padded with spaces lands short of the
 # thing it points at by however much the terminal decided a tab was worth.
 fn caret_pad(text: str, col: int) -> str {
-	b := list[byte](text)
+	b := bytearray(text)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < col - 1 {
@@ -440,7 +451,7 @@ fn caret_col(text: str, d: zerg.Diag) -> int {
 # first_quoted is the first `…` run in a message, which is how every rule in this compiler
 # names the thing it is talking about.
 fn first_quoted(msg: str) -> str {
-	b := list[byte](msg)
+	b := bytearray(msg)
 	mut i := 0
 	for i < b.len() {
 		if b[i] == b'`' {
@@ -464,8 +475,8 @@ fn first_quoted(msg: str) -> str {
 
 # index_from is where `needle` first occurs in `hay` at or after `from`, or -1.
 fn index_from(hay: str, needle: str, start: int) -> int {
-	h := list[byte](hay)
-	n := list[byte](needle)
+	h := bytearray(hay)
+	n := bytearray(needle)
 	return -1 if n.len() == 0 or n.len() > h.len()
 	mut i := start
 	if i < 0 {
@@ -486,7 +497,7 @@ fn index_from(hay: str, needle: str, start: int) -> int {
 fn source_line(src: str, n: int) -> str {
 	return "" if n < 1
 
-	b := list[byte](src)
+	b := bytearray(src)
 	mut at := 1
 	mut start := 0
 	mut i := 0
@@ -567,7 +578,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 		if not __zrt_exists(obj) {
 			cpath := obj + ".c"
 			guard {
-				io.write_file(cpath, list[byte](code))
+				io.write_file(cpath, bytearray(code))
 			}
 			todo_c.append(cpath)
 			todo_o.append(obj)
@@ -593,7 +604,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	# driver it cost a second read of the entry off disk and a second parse of it.
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
-		nomain.append(zerg.diag_at(entry, 1, 1, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		nomain.append(zerg.diag_at(entry, 1, 1, "E501", "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 		report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 
@@ -639,7 +650,7 @@ fn file_key(path: str) -> str {
 # link_objs_argv links objects only — everything was compiled beforehand.
 fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 
 	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
@@ -699,11 +710,17 @@ fn reap(pids: list[int]) {
 # key is a hash of the C it emitted — which folds in its own source, everything it can see,
 # and the compiler that produced it, since a change to any of those changes the C.
 #
-# And of the DIALECT, which changes none of that and changes the object anyway. It is the
-# one input to `cc` that is not downstream of the C, so it is the one thing the C cannot
-# stand in for: without it, building the same program under c99 after building it under c17
-# is a cache hit that hands back the c17 objects and reports success — a dialect gate that
-# never compiled anything in the dialect it names.
+# And of the two inputs to `cc` that are not downstream of the C, so are the two things the
+# C cannot stand in for. The DIALECT: without it, building the same program under c99 after
+# building it under c17 is a cache hit that hands back the c17 objects and reports success —
+# a dialect gate that never compiled anything in the dialect it names. The COMPILER itself:
+# `cc` is a name, and the file it resolves to changes when $CC changes, when $PATH changes,
+# and when a toolchain is installed beside the old one — without it, switching compilers
+# reads back the objects the other one built.
+#
+# What goes in is the RESOLVED PATH (cc_bin), not the compiler's version string: a version
+# needs the child's stdout, and this runtime spawns a child without reading one back. So an
+# upgrade IN PLACE — same path, new build — is the case this key still cannot see.
 
 # cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
 # cannot be created is not fatal: the build carries on without one.
@@ -717,22 +734,17 @@ fn cache_path(key: str) -> str {
 	return join_path(cache_dir(), key + ".o")
 }
 
-# unit_key hashes a unit's emitted C with FNV-1a (32-bit — the 64-bit basis does not fit
-# an integer literal yet), and puts the LENGTH in the name beside it. The length is there
-# because a hash this size is a cheap guard rather than a proof: two different units
-# colliding would link the wrong object, and requiring the byte counts to match as well
-# makes that far less likely. A cryptographic digest is the upgrade to make when the
-# standard library has one.
+# unit_key names a unit's cached object by the SHA-256 of everything that decides what
+# that object is: the C, and the compiler and dialect it will be compiled by.
+#
+# It was FNV-1a over the same bytes, with the LENGTH glued on beside it — a 32-bit hash is
+# a cheap guard and not a proof, and the length was there to make the guard less bad. Two
+# units colliding link the WRONG OBJECT, which is a build that succeeds and a program that
+# is not the program: the failure a cache key exists to make impossible, answered with
+# "far less likely". A digest is the answer, and the standard library has one now
+# (`sha256`, pure Zerg, checked against FIPS 180-4's vectors and against the system tool).
 fn unit_key(code: str) -> str {
-	b := list[byte](f"{cc_std()}\n{code}")
-	mut h := 2166136261
-	mut i := 0
-	for i < b.len() {
-		h = h ^ int(b[i])
-		h = (h * 16777619) % 4294967296
-		i = i + 1
-	}
-	return f"{strconv.to_string(h, 16)}-{strconv.to_string(b.len(), 16)}"
+	return sha256.hex(bytearray(f"{cc_bin()}\n{cc_std()}\n{code}"))
 }
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only
@@ -740,7 +752,7 @@ fn unit_key(code: str) -> str {
 fn compile_to(code: str, output: str, object_only: bool) {
 	cpath := output + ".c"
 	guard {
-		io.write_file(cpath, list[byte](code))
+		io.write_file(cpath, bytearray(code))
 	}
 	mut argv: list[str] = []
 	if object_only {
@@ -758,7 +770,7 @@ fn compile_to(code: str, output: str, object_only: bool) {
 fn drop_ext(path: str) -> str {
 	return path if not has_suffix(path, ".zg")
 
-	b := list[byte](path)
+	b := bytearray(path)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() - 3 {
@@ -870,6 +882,45 @@ fn env_or(key: str, fallback: str) -> str {
 	return fallback
 }
 
+# cc_bin is the C compiler this build invokes: $CC when set, else `cc`, RESOLVED against
+# $PATH so that what comes back names a FILE rather than a word. The resolution is what the
+# cache key needs — `cc` is one name for whatever is first on a path that changes between
+# machines, between shells, and between one toolchain install and the next, and an object
+# built by one of them is not an object built by another.
+#
+# A name that already carries a '/' is a path the caller chose and is returned as it stands.
+# A name that resolves to nothing is returned as it stands too: the spawn then fails and says
+# so, which is a better report than a key that lies about having looked.
+#
+# The scan is written out rather than reaching for `strings.split`, because this compiler
+# flattens every module into one namespace and importing one more would collide.
+fn cc_bin() -> str {
+	name := env_or("CC", "cc")
+	b := bytearray(name)
+	mut i := 0
+	for i < b.len() {
+		return name if b[i] == b'/'
+		i = i + 1
+	}
+
+	path := bytearray(env_or("PATH", ""))
+	mut seg: list[byte] = []
+	mut j := 0
+	for j <= path.len() {
+		if j == path.len() or path[j] == b':' {
+			if seg.len() > 0 {
+				cand := join_path(str(seg), name)
+				return cand if __zrt_exists(cand)
+			}
+			seg = []
+		} else {
+			seg.append(path[j])
+		}
+		j = j + 1
+	}
+	return name
+}
+
 # cc_std is the C dialect the emitted code is compiled with. C17 is the default because
 # that is the dialect the specification names, and the number in a flag nobody reads is
 # exactly the kind of claim that drifts: this said `c11` while the front page said C17,
@@ -958,7 +1009,7 @@ fn join_path(dir: str, name: str) -> str {
 
 # dir_of returns the directory part of a path, or "." when it names a bare file.
 fn dir_of(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut seen := false
 	mut i := 0
@@ -981,8 +1032,8 @@ fn dir_of(path: str) -> str {
 
 # has_suffix reports whether s ends with suffix.
 fn has_suffix(s: str, suffix: str) -> bool {
-	b := list[byte](s)
-	x := list[byte](suffix)
+	b := bytearray(s)
+	x := bytearray(suffix)
 	return false if x.len() > b.len()
 	mut i := 0
 	for i < x.len() {
@@ -1034,7 +1085,7 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 		}
 	}
 
-	raise f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
 }
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
@@ -1063,7 +1114,7 @@ fn module_at(root: str, path: str) -> list[str] {
 # path_tail is the last '/'-separated segment of an import path, which is the module's
 # name.
 fn path_tail(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
 	for i < b.len() {
@@ -1204,7 +1255,7 @@ fn cc_dialect(mut &argv: list[str]) {
 # program, so it has no entry to link against and no runtime to pull in yet.
 fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")
@@ -1219,7 +1270,7 @@ fn cc_object_argv(cpath: str, output: str) -> list[str] {
 fn cc_argv(cpath: str, output: str) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
-	argv.append("cc")
+	argv.append(cc_bin())
 	argv.append(cc_std())
 	cc_dialect(argv)
 	argv.append("-I")
@@ -1256,7 +1307,7 @@ fn run_fmt(files: list[str], off: list[str]) {
 		out := zerg.fmt_src_off(src, off)
 		if out != src {
 			guard {
-				io.write_file(f, list[byte](out))
+				io.write_file(f, bytearray(out))
 			}
 			io.write(f + "\n")
 		}
@@ -1301,7 +1352,7 @@ fn run_desugar(files: list[str], off: list[str]) {
 		out := zerg.desugar_src_off(src, off)
 		if out != src {
 			guard {
-				io.write_file(f, list[byte](out))
+				io.write_file(f, bytearray(out))
 			}
 			io.write(f + "\n")
 		}
@@ -1347,7 +1398,7 @@ fn run_lint(files: list[str]) -> int {
 	# bare sentence.
 	convs := zerg.lint_conversions(srcs, paths)
 	for d in convs {
-		io.write(f"{d.path}:{d.line}:{d.col}: {d.msg}\n")
+		io.write(f"{d.path}:{d.line}:{d.col}: {diag_code_prefix(d)}{d.msg}\n")
 	}
 
 	return 1 if findings.len() + convs.len() > 0

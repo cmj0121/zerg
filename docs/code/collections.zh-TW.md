@@ -74,7 +74,7 @@ collection 也能拿來當 key。
 - **`xs.get(i)` / `m.get(k)`**——檢查路徑 → **`T?`** / **`V?`**，給那種你本來就預期可能不存在的情況用。
 - **`x in xs` / `x in s` / `k in m`** → `bool`；在 `mut` collection 上 **`xs[i] = v`** 就地設定。list 是**掃描**、
   map 是**雜湊**——同一個問題、不同的代價——而被找的那個值會像進入任何其他
-  [有型別的位置](../core/types.zh-TW.md#typed-positions)一樣去符合元素型別，所以 `72 in list[byte](…)` 是一個 byte。
+  [有型別的位置](../core/types.zh-TW.md#typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
 
 ```text
 first := xs[0]                 # 空的話 abort
@@ -168,6 +168,11 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   抓出；`a.get(i) -> T?` 是 checked 路徑。`mut a` 可原地改元素（`a[i] = v`），但**永遠不能 grow/shrink**——大小在
   型別裡；plain `a` 則凍結。
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
+- **寫進簽章**——函式透過**值泛型**對長度泛化,`fn sum[N: int](xs: [int; N])`,`N` 由引數推出、呼叫端從不寫它。
+
+  > **[not yet]** 值參數會被拒絕——_NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
+  > 一個具體長度（`[int; 4]`）,要處理任意長度就改收 `list[T]`。
+
 - **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 是 [not yet]**，對每一
   種元素型別皆然、包含 POD），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的
   `Hash`／`Encode`）——兩個同型別陣列於是逐元素比較（與雜湊）。**沒有**任何一律 auto-derive 的 `Object`；相等性只來自
@@ -176,8 +181,12 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
 
 ## 字串與位元組
 
-`str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過 **`list[byte]`**
-（原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串的方式是先收集進 `list`，再用 **`str(...)`** 轉，
+`str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過
+**`bytearray(s)`**（原始位元組、可含 NUL）或 **`runearray(s)`**（code point）橋接。兩者指的是 list 而不是新型別:
+**`bytearray` 就是 `list[byte]`**、**`runearray` 就是 `list[rune]`**——處處可與展開寫法互換,**不是** strong
+typedef（`type X = Y`,見[型別](../core/types.zh-TW.md)）。這個集合**封閉**於這兩個。反方向:建字串的方式是先
+收集進 `list`，再用
+**`str(...)`** 轉，
 它會**驗證** `str` 的 invariant（從 bytes 來的要是 valid UTF-8、無 embedded NUL）、違反就 **raise**——不信任的輸入就用
 `guard { str(bytes) }` 降級成 `Result[str]`（沿用錯誤模型的 checked 路徑，不另設 constructor）。編輯文字永遠會產生
 一個**新的** `str`。

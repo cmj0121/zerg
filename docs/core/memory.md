@@ -110,6 +110,13 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
   visible via every holder** of that tail.
 
+> **[deviation]** A reference-counted value that **enters a carrier** — the `T?` a channel receive
+> answers, a `Result[T]` — is **never released**. The drop exists and nothing calls it: a carrier has no
+> copy helper, so registering the drop would let two names for one value each give it back. Everything
+> refcounted crossing a `chan[T]` leaks one reference per value, which is invisible for a `chan[int]` and
+> real for a `chan[str]` — measured under LeakSanitizer with `test-data/codegen/chan_str_shared.zg`, the
+> first case in this tree to send one.
+
 Copying a composite applies the rule field by field — its value-type parts are copied and any
 reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
 `Ref[T]`'s referent is fixed at construction, the only place a shared mutation is observable is the
@@ -134,13 +141,6 @@ mirrors setup. The order is pinned **inside an aggregate** too: a `struct`'s fie
 on **every** path, **including the abort-unwind path**, and several `defer`s in a block run
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
 order.
-
-> **[not yet]** A bare `{ … }` block as a **statement** is refused by name —
-> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
-> function's scope, so a block of its own would not free anything at its `}`_ — and that message is also the
-> reason: bindings are given the function's scope rather than the block's. "Block exit" is therefore always a
-> function's, a loop body's, or an arm's, never a scope a program opened for itself, and the `defer` example
-> below is written in a form the compiler does not read.
 
 ## `Ref[T]` — a resource that outlives its scope
 
@@ -255,11 +255,16 @@ cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** e
 at the **last holder's** exit. The dividing line is a single question — does the resource escape its
 scope? **No → `defer`; yes → `Ref[T]`.**
 
-A **`with` block** scopes such a resource to a lexical region, running its release at block exit. Today it
-is limited to **Ref-bearing** resources (a `chan` or a `Ref[T]`); `with` over a general `Scoped` value is
-**[not yet]**.
+A **`with` block** scopes such a resource to a lexical region — and it is **purely syntactic** sugar over
+the bare block that already does so: `with acquire() as y { … }` is `{ y := acquire(); … }`, and the
+nameless `with e { … }` still binds, to a name only the compiler writes, because `e; …` would end the
+value's life at that statement instead of at the `}`. It introduces **no fourth mechanism**: what runs the
+release is the axis above, unchanged, and that axis already covers every exit including an abort.
 
-> **[not yet]** `with … as` is refused outright, at the keyword: _NotImplemented: with_. So the qualification
-> above states a restriction on a construct the compiler does not read past — both halves are unbuilt, the
-> Ref-bearing case as much as the general `Scoped` one, and a resource is scoped to a region today only by
-> writing the `defer` by hand.
+A resource whose release is a **method someone must remember to call** is not a `with` case at all — it is
+a `defer`, written out, in the block `with` just opened.
+
+`with` is **built**, and it is exactly the expansion above and nothing else: the block, the binding, and
+whatever `defer` the body writes for itself. It carries no teardown of its own — a `with` that frees
+something frees it because a `defer` in the body says so, or because the value is scope-owned like any
+other. `examples/18_scoped.zg` is the shipped demonstration.

@@ -124,7 +124,7 @@ keyword** is never an identifier; the full reserved set is:
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-chan  type   impl    package  init
+chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
@@ -241,11 +241,16 @@ group 8 remains the single loosest binary, looser than `or`.)
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` sits at the loosest level.
 
-A postfix `[…]` is an **index** or **explicit type arguments** (`parse[int]("42")`, `collect[K, V](…)`),
-told apart by **name resolution**: a value base subscripts, a generic function or type constructor base takes
-type arguments — a name is exactly one of these (a type and a function cannot share a name, group 7), so no
-turbofish is needed. A comma (`[X, Y]`) is unambiguously type arguments. This is the same name resolution
-that tells a pattern **variant** from a **binding** (group 6); the grammar is resolved with scope in hand.
+A postfix `[…]` is **always an index**. Type arguments are written only in **type position** (group 7), so
+the two surfaces no longer share a bracket and nothing here has to be resolved to be parsed — no turbofish,
+and no symbol table. A generic call **infers** its type arguments from the argument types; where inference is
+not enough, a **typed binding** steers it (`xs: list[int] = empty()`) instead of a call-site list. The pattern
+grammar (group 6) is context-free for the same reason and by the same kind of rule.
+
+**No symbol table** is a claim about the compiler, so it is checked as one: `make layering` reads both
+parsers and asserts that neither reaches past its tokens — the seed by its package imports and its parser
+state, `zerg` by which of its sibling files it calls into. It is why `zerg fmt` and `zerg lsp` can read a
+file that does not compile.
 
 ### Composite literals
 
@@ -399,12 +404,11 @@ list-pat-elem ::= pattern | '..' identifier?
   freed at the `}`. A block is also an **expression** (`primary`, group 4): its **value is its last
   statement's value** — an expr-statement yields its expr; any other statement, or an empty block, yields
   `nil`. The ASI `;` only **separates** statements, it does not discard a value, so `guard { … }` and a
-  multi-statement `match` arm (`P => { …; v }`) both yield. **`with expr as y { … }`** is sugar over a bare
-  block: it binds a scoped resource `y` and guarantees the resource's **teardown runs on every exit**
-  (normal, `return`, or an abort). The value implements the built-in **`Scoped`** spec (its one method is the
-  teardown); a `Ref[T]`'s drop already satisfies it. So `with open(p) as f { f.read() }` ≈
-  `{ f := open(p); defer f.<teardown>; … }`. `as y` is optional when the resource is used only for its scope
-  (a held lock).
+  multi-statement `match` arm (`P => { …; v }`) both yield. **`with expr as y { … }`** is **purely syntactic**
+  sugar over that bare block — `with acquire() as y { … }` → `{ y := acquire(); … }`. `as y` is optional
+  when the resource is held only for its scope (a lock), and the nameless form **still binds**: `e; …`
+  would end the value's life at that statement rather than at the `}`. The form introduces **no teardown
+  of its own** — what frees a value is the resource-cleanup group, unchanged.
 - **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
   block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual. An `if`
   with a **mandatory `else`** is also an **expression** (`x := if c { a } else { b }`) — it yields the taken
@@ -440,13 +444,14 @@ list-pat-elem ::= pattern | '..' identifier?
   `[..init, last]`, `[]` — with **at most one `..`**; `..name` binds the skipped run as a list, a bare `..`
   drops it (a struct's `..` only ignores, never binds). In pattern position `..` is **rest**, distinct from
   the value-level range `..`.
-- **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
-  known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
-  resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).
-- **Qualified variant.** A variant may also be named **by its enum** — `Color.Red`, `Shape.Line(5)`, and the
-  same in pattern position. It is the identical value; what it adds is that the reader is told **which** enum
-  without resolving the name, which the bare form asks of them. The qualification must be **true**:
-  `Color.Apple` names a variant of another enum and is an error, not a fresh binding.
+- **Variant vs binding** is decided by the **syntax**, never by scope: a variant is **always named by its
+  enum** — `Color.Red`, `Shape.Line(5)` — because that pair is what a variant **is**. A **bare** name in
+  pattern position is **always a fresh binding**. `Red` alone names nothing: two enums may each declare one,
+  and which of them a bare name meant was decided by whatever happened to be in scope, so declaring a variant
+  in one file could silently change what a pattern in another file matched. Names are **case-free**, and
+  capitalization was never what decided this. The pattern grammar therefore parses without a symbol table.
+- **The qualification must be true.** `Color.Apple` names a variant of another enum and is an error — and now
+  it can only be an error, never a fresh binding.
 - **`as` binding.** `pattern as name` also binds the **whole** matched value to `name` while the pattern keeps
   destructuring — `Move{x, y} as m`, `[first, ..] as all`, nested `Some(inner as v)`. It reads like `with` /
   `import`: `<thing> as <name>`. On an or-pattern `as` binds the nearest alternative (`A | B as m` is
@@ -458,7 +463,7 @@ The type expressions used since group 5, and the declarations that introduce typ
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' projects; chainable 'I.Item.Sub'
+base-type   ::= type-name type-args? ( '.' identifier )*   # 'text.Splitter' names a type through its import
               | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type: group 12 (unsafe)
 type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
 generic-arg ::= type | const-expr             # a type, or a const-expr filling a value generic param
@@ -470,12 +475,9 @@ const-expr  ::= expr                          # compile-time-foldable expr (no '
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind | val-bind   # method/assoc fn, assoc-type binding, or assoc value
-assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' fills a spec's assoc type
-val-bind    ::= identifier ':=' const-expr    # 'BITS := 32' fills a spec's associated value
-spec-member ::= fn-sig | fn-decl | assoc-type | assoc-val
-assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item' (optionally bounded)
-assoc-val   ::= identifier ':' type           # 'BITS: int' — a required associated value
+impl-item   ::= fn-decl | val-bind            # a method / associated fn, or a type constant
+val-bind    ::= identifier ':=' const-expr    # 'SIZE := 4096' — a per-type compile-time value
+spec-member ::= fn-sig | fn-decl              # a required method, or a provided one
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # bound: a spec → type param; a concrete type → value param
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
@@ -508,9 +510,12 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   for a `T?` field (its natural absent state). So `struct Config { host: str; port: int? = 8080; tags: str? }`
   → `Config(host: "x")` gives `port = 8080`, `tags = nil`, and omitting `host` is an error.
 - **Construction.** A type name is also its **constructor** — `User(id: 1, name: "x")` builds a struct (its
-  fields become parameters in declaration order, positional then named) and `Circle(3.0)` an enum variant.
-  The name **shares the value namespace** with functions, so a type and a function cannot share a name (Zerg
-  has no overloading). The field-wise `T(...)` is **public and primitive**; a custom constructor is a named
+  fields become parameters in declaration order, positional then named). An **`enum` puts in its own name and
+  not its variants'**: a variant is built **through** the enum, `Shape.Circle(3.0)`, the same (enum, variant)
+  pair a pattern writes — so a variant name is never a name on its own, and two enums that both declare a
+  `Red` never compete for it. The type name **shares the value namespace** with functions, so a type and a
+  function cannot share a name (Zerg has no overloading). The field-wise `T(...)` is **public and
+  primitive**; a custom constructor is a named
   associated function (an inherent `impl`) that builds via `T(...)`. **`#[sealed]`** is _intended_ to demote
   `T(...)` to module-private (external code must then use a public custom constructor, the module still
   building with `T(...)` internally), but is **recognized-and-rejected, not yet implemented** this phase (see
@@ -525,7 +530,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   Using such a name where its initializer is **not** const-foldable is a compile error at the use site. A
   `const-expr` is an `expr` the compiler folds with **no evaluation engine** — literals, other const-foldable
   names, discriminants, and operators; **no function calls** (so `sizeof`/`len` are not const-exprs). A spec
-  may require an **associated value** — `BITS: int` — each impl supplies with `BITS := 32` (a `val-bind`).
+  names, discriminants, and operators are what a const-expr is made of.
 - **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
   conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an
   `impl Ord` then also needs `impl Eq`, and `Ord`'s body may call `Eq` on `This`). An `impl`'s own type
@@ -534,33 +539,38 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   load-bearing (it names the impl to specialize, and `a < b` in generic code needs the bound that provides
   `<`) and a generic function is not a first-class value until instantiated. Soundness relies on
   **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
-  generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
-  compiler can flag instantiation bloat. Explicit call-site type arguments are `f[T]` (disambiguated from an
-  index by name resolution — group 4). **Value generics** let a parameter be a compile-time value with **no
-  `const` keyword**: in `[X: Y]`, a spec `Y` makes `X` a type param, a concrete type `Y` makes `X` a value
-  param (`[N: int]`, a primitive; composite deferred). A function's value param is **inferred** from an
-  argument's type (`fn sum[N: int](xs: [int; N])`) while a type's is written in type position
-  (`Matrix[3, 4]`). There is **no disjunction bound**
+  generics are **invariant**. There is **no erasing counterpart**: a decorator asking for one shared
+  witness-table body is refused by name, because a spec is a **bound** and not a type. Explicit call-site type
+  arguments have **no expression-position surface** (group 4) — a call infers from its arguments, or a typed
+  binding steers it. **Value generics** let a parameter be a compile-time value with **no `const` keyword**:
+  in `[X: Y]`, a spec `Y` makes `X` a type param, a concrete type `Y` a value param (`[N: int]`, a primitive).
+  A function's value param is **inferred from an argument's type** (`fn sum[N: int](xs: [int; N])`) and is
+  never written at the call site, so it runs the **same direction** as every other inference here and is not
+  one of the carve-outs; a type's is written in type position (`Matrix[3, 4]`). Without it an array's length
+  being part of its type would make `[T; N]` unwritable in a signature (**[not yet]** — a value parameter is
+  refused, _NotImplemented: a value generic parameter `N: int`_, so this compiler has type parameters only).
+  There is **no disjunction bound**
   (`T: A | B`) — a body could not know which methods `T` has, so it cannot monomorphize. To accept several
-  types, **parameterize a spec** and write one impl per type: `spec Indexable[K]` with `impl Indexable[int]`
-  (element) and `impl Indexable[Range]` (slice) is how `xs[k]` dispatches statically on `k`'s type, each impl
-  keeping its own associated `Output` — or use an `enum` for a runtime choice.
-- **`spec`.** A behavioral interface: members are **required** (a signature with no body), **provided** (a
-  full method), or an **associated type** (`type Item` — a type the `impl` fills in, functionally determined,
-  one per impl). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
-  the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
-  type is **`This`**. `impl … for …` supplies a spec's methods (and its `type Item = …` bindings) for a type
-  by hand.
+  types, **parameterize a spec** and write one impl per type: `spec Indexable[K, V]` with
+  `impl Indexable[int, T]` (element) and `impl Indexable[Range, list[T]]` (slice) is how `xs[k]` dispatches
+  statically on `k`'s type — or use an `enum` for a runtime choice.
+- **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
+  full method). That is the whole of it — a spec carries **behaviour and nothing else**. An **associated
+  type** and an **associated value** are not members here; both are refused by name. A single-output protocol
+  is written by parameterizing the spec (`spec Iterable[T]`), and a per-impl constant is an associated fn. A
+  method takes **no explicit receiver** — `this` is implicit inside a method, reached through the instance it
+  is called on; a `fn` that uses `this` with no instance bound is a compile error. The self type is
+  **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
 - **Inherent `impl`.** A `for`-less `impl User { … }` adds methods **not tied to any spec** — a named
   constructor `User.from_json(…)` (an associated fn, no `this`, called `Type.f(…)`) or a private method
   `u.recompute()` (uses `this`, called `x.f(…)`). Every method and associated fn on a type shares one
   namespace, inherent or from a spec alike; a duplicate is an error.
-- **Associated types.** An associated type makes a **single-output** protocol well defined: `for x in it`
-  has one element type because `Iterator`'s `Item` is fixed per impl, not chosen per use as a generic
-  `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`
-  (`fn collect[I: Iterator](it: I) -> list[I.Item]`), **chainable** when the projected type has its own
-  associated type — `I.Item.Sub`. An `impl` supplies it with `type Item = int`. A spec's associated
-  **value** is the value counterpart — `BITS: int` required, supplied by the impl as `BITS := 32`.
+- **No associated types or values.** A spec declares neither a type the `impl` fills in (`type Item`,
+  projected `I.Item`) nor a compile-time value it supplies (`BITS: int`, bound as `BITS := 32`); both are
+  refused by name. A single-output protocol is written by parameterizing the spec — `Iterable[T]` with at
+  most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
+  associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
+  which is the other thing it was carrying.
 - **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
   leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to
@@ -568,7 +578,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   [Derive & Default Behavior](../core/derive.md)); a logging decorator would sit on a `fn`. Decorators are a
   **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
   misspelled decorator is a compile error**, never silently dropped. `#[derive]` is the one the compiler
-  reads; `#[dyn]`, `#[test]`, `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
+  reads; `#[test]`, `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
   `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a
   comment — the lexer
   peeks one
@@ -683,8 +693,9 @@ init-decl   ::= 'init' '(' ')' block
   (group 12); the safe way to share mutable
   global state is an immutable `:=` holding a stdlib **`Atomic[T]`**.
 - A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;
-  `main` is an ordinary function (not reserved). **`package`** is the distribution/versioning unit — a
-  directory tree selected by the build tool, with **no in-source `package` declaration**.
+  `main` is an ordinary function (not reserved). A **package** is the distribution/versioning unit — a
+  directory tree selected by the build tool, with no in-source declaration — and so with **no keyword**
+  either, since a word the grammar never derives has no business being reserved.
 
 ## Group 11 — Resource cleanup (`defer` & `del`)
 
@@ -762,23 +773,23 @@ name**, and no program that uses one compiles into something else. This list is 
 `scripts/refuse-check.sh` holds a case for each, so a form that quietly starts working, or
 quietly starts failing differently, fails the gate.
 
-| Group | Form                                                                                   |
-| ----- | -------------------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                        |
-| 3     | destructuring binding `(a, b) := …`                                                    |
-| 4     | a callee that is not a name — `f[T](…)`, `fs[0](…)`, `p?.m(…)`                         |
-| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                 |
-| 5     | a named argument `f(b: 1)` — arguments bind by position                                |
-| 6     | generic `struct` / `enum`; a generic METHOD; a bound naming two specs (`T: Eq + Ord`)  |
-| 6     | a closure that captures; an untyped closure parameter                                  |
-| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`       |
-| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body       |
-| 8     | associated function `Type.f(…)`; an associated type or value, in a `spec` or an `impl` |
-| 8     | an `impl` on a built-in type (`impl Tag for int`)                                      |
-| 8     | every decorator but `#[derive(…)]`                                                     |
-| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                         |
-| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                             |
-| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                |
+| Group | Form                                                                                  |
+| ----- | ------------------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                       |
+| 3     | destructuring binding `(a, b) := …`                                                   |
+| 4     | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                   |
+| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                |
+| 5     | a named argument `f(b: 1)` — arguments bind by position                               |
+| 6     | generic `struct` / `enum`; a generic METHOD; a bound naming two specs (`T: Eq + Ord`) |
+| 6     | a closure that captures; an untyped closure parameter                                 |
+| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`      |
+| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body      |
+| 8     | associated function `Type.f(…)`                                                       |
+| 8     | an `impl` on a built-in type (`impl Tag for int`)                                     |
+| 8     | every decorator but `#[derive(…)]`                                                    |
+| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                        |
+| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                            |
+| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                               |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
 dispatches on the spec — that much a declared interface means. What is enforced is the

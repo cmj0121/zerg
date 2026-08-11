@@ -85,15 +85,18 @@ struct Emitter {
 	sig_nreq: list[int]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
-	struct_names: list[str]
+
+	# tk_names / tk_kinds / tk_unders is THE type registry: one row per declared type
+	# name, its kind (TK_STRUCT / TK_ENUM / TK_SPEC / TK_TYPEDEF), and — for a typedef —
+	# what it was declared over. It is one table because "what kind of type is this name"
+	# is one question: it was four tables and five spellings, and `c_is_type_name` was the
+	# four-term disjunction that had to be edited in step with all of them.
+	tk_names: list[str]
+	tk_kinds: list[int]
+	tk_unders: list[Ty]
 	fld_struct: list[str]
 	fld_name: list[str]
 	fld_ty: list[Ty]
-	enum_names: list[str]
-
-	# spec_names is every `spec` the program declares, so a name that fails to resolve as a
-	# TYPE can say which of the two it is: a spec used where a type goes, or a typo.
-	spec_names: list[str]
 	var_name: list[str]
 	var_enum: list[str]
 	var_tag: list[int]
@@ -271,8 +274,6 @@ struct Emitter {
 	# is not constructed like one — `Celsius(20)` is a conversion, not a struct literal — and
 	# they are not a substitution table either, because the whole point is that `Celsius` and
 	# `int` stay different types everywhere the program can see.
-	ty_names: list[str]
-	ty_unders: list[Ty]
 
 	# into_src is the TARGET name of every `impl Into[T] for S` the program declares. It used
 	# to be a pair, with the type argument beside it, so that a typed position could find a
@@ -329,6 +330,18 @@ struct Emitter {
 	# recurses once per link and died of SIGSEGV at about 310 links. c_deeper is the
 	# counted refusal that fires first.
 	depth: int
+
+	# mod_tagged is every PRIVATE free-function name two or more modules declare. Such a name
+	# is answerable — nothing outside a module can reach its private names, so a bare call
+	# means the caller's own — but the two need different C symbols, and this is the list of
+	# names that get one.
+	mod_tagged: list[str]
+
+	# mod_order is the program's module names, SORTED, and a name's tag is its position here.
+	# Sorted rather than first-seen because `fixpoint` compares emitted C byte for byte: a
+	# tag that depended on the order files were read would move the output without the
+	# program changing.
+	mod_order: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -357,24 +370,24 @@ fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
 # c_type maps a value type to its C spelling.
 fn c_type(t: Ty) -> str {
 	return match t {
-		TInt          => "int64_t"
-		TFloat        => "double"
-		TStr          => "const char*"
-		TBool         => "bool"
-		TVoid         => "void"
-		TByte         => "uint8_t"
-		TUint         => "uint64_t"
-		TRune         => "int32_t"
-		TNamed(nm)    => "zg_" + nm
-		TList(_)      => "zrt_list"
-		TFn(_, _)     => "zg_fnptr"
-		TTuple(ts)    => c_tuple_cname(ts)
-		TMap(_, _)    => "zrt_map"
-		TChan(_, _)   => "zrt_chan*"
-		TEither(l, r) => c_carrier_cname(l, r)
-		TOpt(el)      => c_opt_cname(el)
-		TErr          => "zrt_err"
-		_             => "int64_t"
+		Ty.TInt => "int64_t"
+		Ty.TFloat => "double"
+		Ty.TStr => "const char*"
+		Ty.TBool => "bool"
+		Ty.TVoid => "void"
+		Ty.TByte => "uint8_t"
+		Ty.TUint => "uint64_t"
+		Ty.TRune => "int32_t"
+		Ty.TNamed(nm) => "zg_" + nm
+		Ty.TList(_) => "zrt_list"
+		Ty.TFn(_, _) => "zg_fnptr"
+		Ty.TTuple(ts) => c_tuple_cname(ts)
+		Ty.TMap(_, _) => "zrt_map"
+		Ty.TChan(_, _) => "zrt_chan*"
+		Ty.TEither(l, r) => c_carrier_cname(l, r)
+		Ty.TOpt(el) => c_opt_cname(el)
+		Ty.TErr => "zrt_err"
+		_ => "int64_t"
 	}
 }
 
@@ -411,7 +424,7 @@ fn c_opt_cname(elem: Ty) -> str {
 # c_opt_name registers the carrier for `T?` and answers its C name — the optional's half of
 # what c_carrier_name does for an Either.
 fn c_opt_name(mut &em: Emitter, elem: Ty) -> str {
-	c_spelled_register(em, TOpt(elem))
+	c_spelled_register(em, Ty.TOpt(elem))
 	return c_opt_cname(elem)
 }
 
@@ -427,8 +440,8 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: Ty, e: Expr, sb: Subst) -> str
 
 fn c_is_nil_lit(e: Expr) -> bool {
 	return match e {
-		ENil => true
-		_    => false
+		Expr.ENil => true
+		_         => false
 	}
 }
 
@@ -505,7 +518,27 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 # everything else arrives already typed. Both spellings the route served are now refused by
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
-fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+fn c_into(mut &em: Emitter, want: Ty, e0: Expr, sb: Subst) -> str {
+	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
+	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
+	# and not about the closure. It is filled here because c_fit_copied's eighteen slots come
+	# through here, and so does a declared binding, which lowers through c_into directly and
+	# would otherwise have been the one position where a closure could not adopt.
+	#
+	# NOT because this is "the one place every declared type meets its value" — it is not,
+	# and the difference matters to whoever adds the next carve-out. Carve-out (b), the
+	# composite literal with nothing to speak for it, is answered ABOVE this in c_fit_copied
+	# and again on the assignment and `list`-binding paths. Two carve-outs at two depths is
+	# the "one rule, N slots" shape this file has had to undo three times; folding (b) down
+	# to here would make the sentence true, and is its own cut.
+	#
+	# It happens at EMIT and the check has already passed, because chk_fits_expr asks the
+	# same question of the same rewrite — the closure is filled, then compared as an
+	# ordinary function type. Nothing downstream ever sees an unknown parameter, which is
+	# what keeps inference bottom-up: by the time anything asks this closure's type, it has
+	# one of its own.
+	e := c_fn_typed(want, e0)
+
 	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
 	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
 	# `0` in a double. The literals took the position's type before the operator ran, so the
@@ -544,7 +577,7 @@ fn c_no_builtin_into(mut &em: Emitter, meth: str, target: Expr) {
 	t := c_infer(em, target)
 	return if not chk_is_scalar(t)
 
-	raise f"`into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
+	raise f"E464 `into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers"
 }
 
 # c_is_wide_uint_lit is an integer literal that fits a u64 and NOT an i64 — the half of `uint`
@@ -552,7 +585,7 @@ fn c_no_builtin_into(mut &em: Emitter, meth: str, target: Expr) {
 # about a literal any position could already carry.
 fn c_is_wide_uint_lit(e: Expr) -> bool {
 	return match e {
-		EInt(lex, _, _) => uint_fits(lex) and not int_fits(lex)
+		Expr.EInt(lex, _, _) => uint_fits(lex) and not int_fits(lex)
 		_ => false
 	}
 }
@@ -562,7 +595,7 @@ fn c_is_wide_uint_lit(e: Expr) -> bool {
 # it then complains about, against generated code nobody wrote.
 fn c_uint_lit(e: Expr) -> str {
 	return match e {
-		EInt(lex, _, _) => str(uint_value(lex)) + "ULL"
+		Expr.EInt(lex, _, _) => str(uint_value(lex)) + "ULL"
 		_ => ""
 	}
 }
@@ -573,8 +606,8 @@ fn c_uint_lit(e: Expr) -> str {
 # help is an operator standing between two of them.
 fn c_is_lit_tree(e: Expr) -> bool {
 	return match e {
-		EUnary(o, x) => o == "-" and c_is_lit_tree(x)
-		EBinary(_, _, _) => chk_lit_float_tree(e)
+		Expr.EUnary(o, x) => o == "-" and c_is_lit_tree(x)
+		Expr.EBinary(_, _, _) => chk_lit_float_tree(e)
 		_ => false
 	}
 }
@@ -592,9 +625,9 @@ fn c_is_lit_tree(e: Expr) -> bool {
 # checks come first, explicitly, and c_lit_checked is what every caller must use.
 fn c_lit_as_float(e: Expr) -> str {
 	return match e {
-		EInt(lex, _, _) => f"((double){strconv.to_string(int_value(lex), 10)})"
-		EUnary(_, x) => f"(-{c_lit_as_float(x)})"
-		EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
+		Expr.EInt(lex, _, _) => f"((double){strconv.to_string(int_value(lex), 10)})"
+		Expr.EUnary(_, x) => f"(-{c_lit_as_float(x)})"
+		Expr.EBinary(o, a, b) => f"({c_lit_as_float(a)} {o} {c_lit_as_float(b)})"
 		_ => ""
 	}
 }
@@ -613,9 +646,9 @@ fn c_lit_checked(mut &em: Emitter, e: Expr) -> str {
 # is c_lit_as_float's, and what is wanted here is only the finding.
 fn c_lit_widths(mut &em: Emitter, e: Expr) {
 	match e {
-		EInt(lex, _, _) => chk_int_literal(em, lex)
-		EUnary(_, x) => c_lit_widths(em, x)
-		EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
+		Expr.EInt(lex, _, _) => chk_int_literal(em, lex)
+		Expr.EUnary(_, x) => c_lit_widths(em, x)
+		Expr.EBinary(_, a, b) => c_lit_widths_pair(em, a, b)
 		_ => c_skip()
 	}
 }
@@ -632,9 +665,9 @@ fn c_skip_bool(b: bool) {
 	return
 }
 
-# c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
-# explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a bare value
-# picks the side its type matches. The sides of an Either differ (parse_type refuses
+# c_either_wrap injects a value into an Either. `Either.Left(v)` and `Either.Right(e)` say
+# which side explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a
+# bare value picks the side its type matches. The sides of an Either differ (parse_type refuses
 # `Either[T, T]`), which is what makes that unambiguous.
 fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
 	lt := c_either_left(want)
@@ -646,7 +679,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	# path below reports for it
 	c_check_ctor_arity(e)
 
-	side := c_ctor_side(e)
+	side := c_ctor_side(em, e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
 		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, inner, sb) + " }" if side == 0
@@ -656,7 +689,7 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	et := c_infer(em, e)
 
 	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
-	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Left(…)` or `Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
+	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Either.Left(…)` or `Either.Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
 
 	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, e, sb) + " }"
 }
@@ -664,24 +697,75 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 # c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
 # for anything that is not one. They are the only calls whose meaning depends on where they
 # are written, which is why they are read here rather than in c_call.
-fn c_ctor_side(e: Expr) -> int {
+# c_either_no_context is the one complaint both spellings earn. `Left` and `Right` name a
+# SIDE and have no type of their own, so they are read where the wanted type is known;
+# written where there is none, what is wrong is the missing context and not the form.
+#
+# It is one function because it is one rule — a code answers to a rule, and the qualified
+# and unqualified spellings of it are not two.
+fn c_either_no_context(what: str) {
+	raise f"E459 `{what}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected"
+}
+
+fn c_ctor_side(mut &em: Emitter, e: Expr) -> int {
 	return match e {
-		ECall(nm, args, _) => c_ctor_side_of(nm, args.len())
+		Expr.ECall(nm, args, _) => c_ctor_side_bare(em, nm, args.len())
+		Expr.EMethod(target, meth, args) => c_ctor_side_of(c_either_qual(target, meth), args.len())
 		_ => 0 - 1
 	}
+}
+
+# c_ctor_side_bare is the UNQUALIFIED spelling, and it is refused. `Left` and `Right` are
+# variants of `Either` and the rule about a variant does not have exceptions for a built-in:
+# an enum puts its own name into the value namespace and not its variants'. They were the
+# last two names in the language that read as themselves, and the reason was mechanical —
+# this compiler matched them by name because they are context-typed — rather than a decision
+# anybody had made.
+#
+# It still answers the side, so the program gets ONE finding about the spelling rather than
+# a second one about a value whose type could not be worked out.
+fn c_ctor_side_bare(mut &em: Emitter, nm: str, n: int) -> int {
+	side := c_ctor_side_of(nm, n)
+	if side >= 0 {
+		chk_at(em, "E384", f"`{nm}` is a side of an `Either`, and a variant is named through its type — write `Either.{nm}(…)`")
+	}
+
+	return side
+}
+
+# c_either_qual answers the side a QUALIFIED constructor names — `Either.Left(v)`, the form
+# GRAMMAR asks for now that a variant is reached through its type. It answers "" for every
+# other method call, so the two shapes go through one table.
+#
+# `Left` and `Right` are the two constructors this file reads by NAME rather than by
+# resolving them, because they are context-typed: they have no type of their own and take
+# the one the position wants. That is why qualifying them was not free — every other variant
+# was already resolved through its enum, and these two are matched here.
+fn c_either_qual(target: Expr, meth: str) -> str {
+	return match target {
+		Expr.EIdent(nm) => c_either_qual_of(nm, meth)
+		_ => ""
+	}
+}
+
+fn c_either_qual_of(nm: str, meth: str) -> str {
+	return meth if nm == "Either" or nm == "Result"
+
+	return ""
 }
 
 # c_check_ctor_arity refuses `Left()` / `Right(a, b)`: each side of an Either holds exactly
 # one value.
 fn c_check_ctor_arity(e: Expr) {
 	match e {
-		ECall(nm, args, _) => c_check_ctor_arity_of(nm, args.len())
+		Expr.ECall(nm, args, _) => c_check_ctor_arity_of(nm, args.len())
+		Expr.EMethod(target, meth, args) => c_check_ctor_arity_of(c_either_qual(target, meth), args.len())
 		_ => c_skip()
 	}
 }
 
 fn c_check_ctor_arity_of(nm: str, n: int) {
-	raise f"`{nm}(…)` names one side of an `Either`, which holds exactly one value — this has {strconv.to_string(n, 10)}" if (nm == "Left" or nm == "Right") and n != 1
+	raise f"E405 `{nm}(…)` names one side of an `Either`, which holds exactly one value — this has {strconv.to_string(n, 10)}" if (nm == "Left" or nm == "Right") and n != 1
 }
 
 fn c_ctor_side_of(nm: str, n: int) -> int {
@@ -700,7 +784,7 @@ fn c_ctor_side_of(nm: str, n: int) -> int {
 # sides fill different fields of the answer.
 fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	t := c_infer(em, target)
-	raise f"`?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there" if not c_is_opt(t)
+	raise f"E406 `?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there" if not c_is_opt(t)
 	inner := c_opt_elem(t)
 	ft := c_field_ty(em, c_named_of(inner), fld)
 	raise f"no field `{fld}` on {ty_name(inner)} (optional chain `?.{fld}`)" if c_is_unknown(ft)
@@ -746,7 +830,7 @@ fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 
 	raise f"NotImplemented: `?` on a {ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`" if not c_is_carrier(t)
-	raise f"`?` early-returns the RIGHT of {ty_name(t)}, so the enclosing function must answer a carrier with the same right — this one answers {ty_name(em.fn_ret)}" if not c_is_carrier(em.fn_ret)
+	raise f"E408 `?` early-returns the RIGHT of {ty_name(t)}, so the enclosing function must answer a carrier with the same right — this one answers {ty_name(em.fn_ret)}" if not c_is_carrier(em.fn_ret)
 
 	# the two rights must MATCH: `?` hands the operand's right side straight out of the
 	# function, so a `Result[T]` cannot propagate out of one answering `int?` — there would
@@ -785,26 +869,26 @@ fn c_right_matches(a: Ty, b: Ty) -> bool {
 
 fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	t := c_infer(em, target)
-	return TUnknown if not c_is_opt(t)
+	return Ty.TUnknown if not c_is_opt(t)
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
 
-	return TUnknown if c_is_unknown(ft)
+	return Ty.TUnknown if c_is_unknown(ft)
 	return ft if c_is_opt(ft)
 
-	return TOpt(ft)
+	return Ty.TOpt(ft)
 }
 
 fn c_is_opt(t: Ty) -> bool {
 	return match t {
-		TOpt(_) => true
-		_       => false
+		Ty.TOpt(_) => true
+		_          => false
 	}
 }
 
 fn c_opt_elem(t: Ty) -> Ty {
 	return match t {
-		TOpt(e) => e
-		_       => TUnknown
+		Ty.TOpt(e) => e
+		_          => Ty.TUnknown
 	}
 }
 
@@ -834,8 +918,8 @@ fn c_is_result(t: Ty) -> bool {
 
 fn c_is_either(t: Ty) -> bool {
 	return match t {
-		TEither(_, _) => true
-		_             => false
+		Ty.TEither(_, _) => true
+		_ => false
 	}
 }
 
@@ -845,22 +929,22 @@ fn c_result_elem(t: Ty) -> Ty {
 
 fn c_either_left(t: Ty) -> Ty {
 	return match t {
-		TEither(l, _) => l
-		_             => TUnknown
+		Ty.TEither(l, _) => l
+		_ => Ty.TUnknown
 	}
 }
 
 fn c_either_right(t: Ty) -> Ty {
 	return match t {
-		TEither(_, r) => r
-		_             => TUnknown
+		Ty.TEither(_, r) => r
+		_ => Ty.TUnknown
 	}
 }
 
 fn c_is_err_ty(t: Ty) -> bool {
 	return match t {
-		TErr => true
-		_    => false
+		Ty.TErr => true
+		_       => false
 	}
 }
 
@@ -943,7 +1027,7 @@ fn c_res_mark_right(r: str) -> str {
 # operator that reads one back goes through the accessors above rather than writing `.ok` /
 # `.err` itself, which is what lets an optional and an either share the whole set.
 fn c_carrier_name(mut &em: Emitter, left: Ty, right: Ty) -> str {
-	c_spelled_register(em, TEither(left, right))
+	c_spelled_register(em, Ty.TEither(left, right))
 	return c_carrier_cname(left, right)
 }
 
@@ -1079,54 +1163,76 @@ fn c_carrier_prelude() -> str {
 	return out
 }
 
-# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer — and
-# cast back to its real signature at the call. C guarantees exactly this round trip
-# between function pointer types and no more, which is why the storage type is a function
-# pointer rather than `void*`: converting a function pointer to an object pointer is not
-# something the standard promises.
+# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer PLUS an
+# environment slot — and the pointer is cast back to its real signature at the call. C
+# guarantees exactly that round trip between function pointer types and no more, which is
+# why the code half is a function pointer rather than `void*`: converting a function pointer
+# to an object pointer is not something the standard promises. The environment is an object
+# pointer and is kept in a field of its own for the same reason — the two cannot share one
+# slot under any cast C blesses.
+#
+# THE ENVIRONMENT IS ALWAYS NULL TODAY. A lambda that captures nothing needs none, and a
+# lambda that captures fills it with a per-site struct of the values it closed over. Every
+# fn value reaches its code through ONE C signature — the environment first, then the
+# declared parameters — so a call site never has to know which of the two it is holding;
+# c_fnval_thunk is what gives a plain function that shape.
 #
 # A single storage type is also what keeps the declarator problem away. A C function
 # pointer spells its name INSIDE the type — `int64_t (*f)(const char*)` — and every type
 # in this emitter is a string that gets a name appended to it. A typedef sidesteps that
 # for every function type at once, with no table of them to build and keep.
 fn c_fnptr_typedef() -> str {
-	return "typedef void (*zg_fnptr)(void);\n"
+	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
 }
 
-# c_fnptr_cast is the cast back to a real signature, `(R (*)(P, ...))`.
+# c_fnptr_cast is the cast back to a real signature, `(R (*)(const void *, P, ...))`.
+#
+# THE ENVIRONMENT IS ALWAYS THE FIRST PARAMETER, whether or not there is one to pass. A
+# closure has an env and a plain function has none, and a call site cannot know which it is
+# holding — so every fn value is reached through one shape, and what differs is what the
+# thing behind it does with the pointer. c_fnval_thunk is what gives a plain function that
+# shape.
 fn c_fnptr_cast(t: Ty) -> str {
 	return match t {
-		TFn(ps, r) => f"({c_type(r)} (*)({c_ptypes(ps)}))"
-		_          => ""
+		Ty.TFn(ps, r) => f"({c_type(r)} (*)(const void *{c_ptypes_after(ps)}))"
+		_             => ""
 	}
 }
 
-fn c_ptypes(ps: list[Ty]) -> str {
-	return "void" if ps.len() == 0
+fn c_ptypes_after(ps: list[Ty]) -> str {
 	mut out := ""
-	mut i := 0
-	for i < ps.len() {
-		if i > 0 {
-			out = out + ", "
-		}
-		out = out + c_type(ps[i])
-		i = i + 1
+	for pt in ps {
+		out = out + ", " + c_type(pt)
 	}
 	return out
 }
 
 fn c_is_fn(t: Ty) -> bool {
 	return match t {
-		TFn(_, _) => true
-		_         => false
+		Ty.TFn(_, _) => true
+		_            => false
 	}
 }
 
 fn c_fn_ret(t: Ty) -> Ty {
 	return match t {
-		TFn(_, r) => r
-		_         => TUnknown
+		Ty.TFn(_, r) => r
+		_            => Ty.TUnknown
 	}
+}
+
+# c_args_after renders the arguments of a call through a function VALUE, after the leading
+# environment. It takes the function TYPE rather than its parameter list, because the type
+# is what the arity rule needs and destructuring it at each caller is how that rule came to
+# be asked at neither: `f(v, 1)` on a `fn (int) -> int` rendered a third argument into a
+# two-argument cast and cc reported it.
+fn c_args_after(mut &em: Emitter, fty: Ty, args: list[Expr], sb: Subst) -> str {
+	chk_fnval_arity(em, fty, args.len())
+
+	rendered := c_args_typed(em, c_fn_params(fty), args, sb)
+	return "" if rendered == ""
+
+	return ", " + rendered
 }
 
 # c_fn_params is c_fn_ret's other half — a function TYPE's parameter list, or an empty one
@@ -1134,22 +1240,22 @@ fn c_fn_ret(t: Ty) -> Ty {
 # destructuring are read together.
 fn c_fn_params(t: Ty) -> list[Ty] {
 	return match t {
-		TFn(ps, _) => ps
-		_          => []
+		Ty.TFn(ps, _) => ps
+		_             => []
 	}
 }
 
 fn c_is_unknown(t: Ty) -> bool {
 	return match t {
-		TUnknown => true
-		_        => false
+		Ty.TUnknown => true
+		_           => false
 	}
 }
 
 fn c_is_byte(t: Ty) -> bool {
 	return match t {
-		TByte => true
-		_     => false
+		Ty.TByte => true
+		_        => false
 	}
 }
 
@@ -1159,8 +1265,8 @@ fn c_is_byte(t: Ty) -> bool {
 # side door.
 fn c_is_uint(t: Ty) -> bool {
 	return match t {
-		TUint => true
-		_     => false
+		Ty.TUint => true
+		_        => false
 	}
 }
 
@@ -1168,44 +1274,44 @@ fn c_is_uint(t: Ty) -> bool {
 # what holds every one of them with room to say "not a character" at -1.
 fn c_is_rune(t: Ty) -> bool {
 	return match t {
-		TRune => true
-		_     => false
+		Ty.TRune => true
+		_        => false
 	}
 }
 
 fn c_is_str(t: Ty) -> bool {
 	return match t {
-		TStr => true
-		_    => false
+		Ty.TStr => true
+		_       => false
 	}
 }
 
 # c_list_elem returns the element type of a list type, or TUnknown otherwise.
 fn c_list_elem(t: Ty) -> Ty {
 	return match t {
-		TList(e) => e
-		_        => TUnknown
+		Ty.TList(e) => e
+		_           => Ty.TUnknown
 	}
 }
 
 fn c_is_list(t: Ty) -> bool {
 	return match t {
-		TList(_) => true
-		_        => false
+		Ty.TList(_) => true
+		_           => false
 	}
 }
 
 fn c_is_float(t: Ty) -> bool {
 	return match t {
-		TFloat => true
-		_      => false
+		Ty.TFloat => true
+		_         => false
 	}
 }
 
 fn c_is_int(t: Ty) -> bool {
 	return match t {
-		TInt => true
-		_    => false
+		Ty.TInt => true
+		_       => false
 	}
 }
 
@@ -1358,7 +1464,7 @@ fn c_new_mark(mut &em: Emitter) -> str {
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	idx := c_live_idx(em, name)
 	return em.env_tys[idx] if idx >= 0
-	return TUnknown
+	return Ty.TUnknown
 }
 
 # --- `del` liveness ----------------------------------------------------------------
@@ -1481,6 +1587,65 @@ fn c_sig_key(recv: str, name: str) -> str {
 # `zg_<name>` space with every module of the program; a method is `zg_<Type>_<name>`, off
 # that space and unable to collide with it, since a type name is PascalCase and so cannot
 # be confused with the snake_case free functions it sits beside.
+# c_fn_cname_in is a free function's C name AS SEEN FROM a module. It differs from
+# c_fn_cname for one case: a private name two modules both declare, which needs two symbols.
+# Everything else keeps `zg_<name>`, so the change costs nothing anywhere it is not needed.
+#
+# The tag is the module's position in a SORTED list of the program's modules. Sorted rather
+# than first-seen because `fixpoint` compares emitted C byte for byte, and a tag that
+# depended on the order files were read would move the output without the program changing.
+fn c_fn_cname_in(mut &em: Emitter, mod: str, recv: str, name: str) -> str {
+	return c_fn_cname(recv, name) if recv != "" or mod == "" or not c_name_in(em.mod_tagged, name)
+
+	return f"zg_m{strconv.to_string(c_mod_tag(em, mod), 10)}_{name}"
+}
+
+# c_mod_tag answers a module's position among the program's modules, in sorted order. The
+# list is built once, from what the signature pass recorded.
+fn c_mod_tag(mut &em: Emitter, mod: str) -> int {
+	if em.mod_order.len() == 0 {
+		mut names: list[str] = []
+		for m in em.sig_mod {
+			if m != "" and not c_name_in(names, m) {
+				names.append(m)
+			}
+		}
+		em.mod_order = c_sorted_names(names)
+	}
+	mut i := 0
+	for i < em.mod_order.len() {
+		return i if em.mod_order[i] == mod
+		i = i + 1
+	}
+	return 0
+}
+
+# c_sorted_names is an insertion sort over module names — a handful of them, once, and the
+# ORDER is what has to be reproducible rather than the sort fast.
+fn c_sorted_names(names: list[str]) -> list[str] {
+	mut out: list[str] = []
+	for n in names {
+		mut at := 0
+		for at < out.len() and out[at] < n {
+			at = at + 1
+		}
+		mut next: list[str] = []
+		mut i := 0
+		for i < out.len() {
+			if i == at {
+				next.append(n)
+			}
+			next.append(out[i])
+			i = i + 1
+		}
+		if at >= out.len() {
+			next.append(n)
+		}
+		out = next
+	}
+	return out
+}
+
 fn c_fn_cname(recv: str, name: str) -> str {
 	return c_spec_cname(name) if c_is_mangled(name)
 	return "zg_" + name if recv == ""
@@ -1498,7 +1663,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 # want `zg_id_int`. So specializations take a prefix of their own, off the flat space a
 # program shares, exactly as a method's `zg_<Type>_<name>` is off it.
 fn c_is_mangled(name: str) -> bool {
-	for b in list[byte](name) {
+	for b in bytearray(name) {
 		return true if b == b'$'
 	}
 	return false
@@ -1506,7 +1671,7 @@ fn c_is_mangled(name: str) -> bool {
 
 fn c_spec_cname(name: str) -> str {
 	mut out := "zgg_"
-	for b in list[byte](name) {
+	for b in bytearray(name) {
 		out = out + c_cname_byte(b)
 	}
 	return out
@@ -1540,7 +1705,7 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 fn c_build_generics(mut &em: Emitter, f: File) {
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
-			raise f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace" if fn_i.recv != ""
+			raise f"E409 NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace" if fn_i.recv != ""
 			c_check_gen_dup(em, f, fn_i)
 			em.gen_names.append(fn_i.name)
 			em.gen_tpls.append(fn_i)
@@ -1567,12 +1732,12 @@ fn c_check_gen_dup(mut &em: Emitter, f: File, tpl: FnDecl) {
 	# only one there is — which the reject gate insists on, and rightly: a rule that cannot
 	# say where is a rule the reader has to go and find.
 	if c_name_in(em.gen_names, name) {
-		chk_at_place(em, tpl.path, tpl.line, tpl.col, f"`{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
+		chk_at_place(em, tpl.path, tpl.line, tpl.col, "E362", f"`{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
 		return
 	}
 	for other in f.fns {
 		if other.name == name and other.recv == "" and not c_is_template(other) {
-			chk_at_place(em, tpl.path, tpl.line, tpl.col, f"`{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
+			chk_at_place(em, tpl.path, tpl.line, tpl.col, "E363", f"`{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
 			return
 		}
 	}
@@ -1691,7 +1856,7 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
 const ZG_MAX_INSTANTIATIONS := 512
 
 fn c_check_inst_budget(mut &em: Emitter, name: str) {
-	raise f"`{name}` has been instantiated {strconv.to_string(ZG_MAX_INSTANTIATIONS, 10)} times and is still asking for more — a generic that calls itself at a LARGER type (`f([x])` inside `f[T]`) has no finite set of specializations, and monomorphization cannot end. Give the recursion a concrete type" if em.inst_names.len() >= ZG_MAX_INSTANTIATIONS
+	raise f"E410 `{name}` has been instantiated {strconv.to_string(ZG_MAX_INSTANTIATIONS, 10)} times and is still asking for more — a generic that calls itself at a LARGER type (`f([x])` inside `f[T]`) has no finite set of specializations, and monomorphization cannot end. Give the recursion a concrete type" if em.inst_names.len() >= ZG_MAX_INSTANTIATIONS
 }
 
 # c_check_solved refuses a call that leaves a type parameter unanswered. Guessing one would
@@ -1704,7 +1869,7 @@ fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 		# template's line: the template is fine, a second call to the same generic may well
 		# decide every parameter. The sentence says "this call", and without a place there was
 		# no way to tell which one.
-		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if c_is_unknown(sol[i])
+		raise f"E411 the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if c_is_unknown(sol[i])
 		i = i + 1
 	}
 }
@@ -1724,7 +1889,7 @@ fn c_check_bounds(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 		# the walk carry on into a body whose type does not meet the promise it was written
 		# against — which reports the consequence first and buries the cause.
 		for b in c_split_bounds(tpl.tbounds[i]) {
-			raise f"`{ty_name(sol[i])}` does not implement `{b}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if not c_satisfies(em, sol[i], b)
+			raise f"E412 `{ty_name(sol[i])}` does not implement `{b}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if not c_satisfies(em, sol[i], b)
 		}
 		i = i + 1
 	}
@@ -1737,7 +1902,7 @@ fn c_split_bounds(bound: str) -> list[str] {
 	return out if bound == ""
 
 	mut cur: list[byte] = []
-	for ch in list[byte](bound) {
+	for ch in bytearray(bound) {
 		if ch == b'+' {
 			out.append(str(cur))
 			cur = []
@@ -1775,12 +1940,57 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		# be reported by the LINKER — `duplicate symbol '_zg_name'`, no file, no line — one
 		# reporter further away than cc.
 		if c_sig_seen(em, key) {
-			raise f"`{fn_i.recv}` declares `{fn_i.name}` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec" if fn_i.recv != ""
+			raise f"E451 `{fn_i.recv}` declares `{fn_i.name}` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec" if fn_i.recv != ""
 
-			raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart"
+			# TWO MODULES, ONE NAME. A PRIVATE one is answerable: nothing outside its module
+			# can reach it (chk_visible), so a bare call always means the one in the caller's
+			# own module, and the two only have to be told apart in C. That is what
+			# c_mod_tag does, by the module's position in a SORTED list — a counter would
+			# depend on the order files were read, and `fixpoint` compares emitted C byte for
+			# byte.
+			#
+			# A PUBLIC collision is not answerable here and is still refused. The export
+			# surface has no package to be unique within (docs/runtime/package.md declines a
+			# global registry on purpose), so the answer is a compile error plus a link-name
+			# override — which is what docs/runtime/ffi.md already specifies, and which needs the
+			# package layer to exist first.
+			c_mod_collide(em, fn_i)
 		}
 		c_add_sig(em, fn_i)
 	}
+}
+
+# c_mod_collide answers a name two modules both declare. A private pair is recorded so both
+# get a module tag in C; a public one has nowhere to be unique and is refused.
+fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl) {
+	mod := c_mod_of(fn_i.path)
+	prev := c_sig_mod_of(em, c_sig_key(fn_i.recv, fn_i.name))
+
+	raise f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies" if fn_i.is_pub or c_sig_pub_of(em, c_sig_key(fn_i.recv, fn_i.name))
+	raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if mod == prev
+
+	if not c_name_in(em.mod_tagged, fn_i.name) {
+		em.mod_tagged.append(fn_i.name)
+	}
+}
+
+# c_sig_mod_of / c_sig_pub_of read back what c_add_sig recorded for a key.
+fn c_sig_mod_of(mut &em: Emitter, key: str) -> str {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return em.sig_mod[i] if em.sig_names[i] == key
+		i = i + 1
+	}
+	return ""
+}
+
+fn c_sig_pub_of(mut &em: Emitter, key: str) -> bool {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return em.sig_pub[i] if em.sig_names[i] == key
+		i = i + 1
+	}
+	return false
 }
 
 # c_add_sig records one function's signature and its parameter rows. It is a function of its
@@ -1831,6 +2041,19 @@ fn c_required_params(fn_d: FnDecl) -> int {
 
 # c_sig_row is a signature's index in the sig_* columns, or -1 when nothing registered it.
 fn c_sig_row(mut &em: Emitter, key: str) -> int {
+	# THE READER'S OWN MODULE FIRST, where two of them declare the name. A private name two
+	# modules both have is two rows, and the first is whichever file was read first — so
+	# every rule that reads a row by name alone would answer about the other module's
+	# function: its visibility, its arity, its parameter types.
+	here := c_mod_of(em.at_path)
+	if here != "" {
+		mut j := 0
+		for j < em.sig_names.len() {
+			return j if em.sig_names[j] == key and em.sig_mod[j] == here
+			j = j + 1
+		}
+	}
+
 	mut i := 0
 	for i < em.sig_names.len() {
 		return i if em.sig_names[i] == key
@@ -1869,11 +2092,11 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 	for i < em.sig_names.len() {
 		if em.sig_names[i] == name {
 			return em.sig_rets[i] if em.sig_hasret[i]
-			return TVoid
+			return Ty.TVoid
 		}
 		i = i + 1
 	}
-	return TUnknown
+	return Ty.TUnknown
 }
 
 # c_has_method reports whether type `recv` declares a method `meth`, and c_is_free_fn
@@ -1912,14 +2135,14 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 fn c_builtin_check(n: str) {
 	c_fixed_width_check(n)
 
-	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
-	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
-	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
+	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
+	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
+	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -1940,20 +2163,7 @@ fn c_fixed_width_check(n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
-}
-
-# c_is_ctor reports whether a name denotes a type constructor rather than a function
-# call — Zerg types are PascalCase and functions snake_case, so an uppercase first
-# letter is the tell.
-#
-# The tell is the language's, not the emitter's, so the parser asks it too: a `T.U` is a
-# module qualifier or an associated-type projection by exactly this rule, and a type
-# parameter's bound names a spec or a concrete type by it as well.
-fn c_is_ctor(name: str) -> bool {
-	b := list[byte](name)
-	return false if b.len() == 0
-	return ascii.is_upper(b[0])
+	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
@@ -2037,7 +2247,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 				# helper — which copies the value it unwraps — can be emitted before the
 				# struct's helper is. A prototype needs only the typedef just written, and
 				# it is what keeps that order from deciding whether the C compiles.
-				if c_needs_copy(em, TNamed(sd.name)) {
+				if c_needs_copy(em, Ty.TNamed(sd.name)) {
 					out = out + f"static zg_{sd.name} zg_copy_{sd.name}(zg_{sd.name} v);\n"
 					out = out + f"static void zg_drop_{sd.name}(zg_{sd.name} *v);\n"
 				}
@@ -2085,7 +2295,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		# to point at — and unlike every rule about a statement, a cycle is a property of the
 		# declarations and of nothing that runs, so no marker has been set either. The NAME is
 		# what a reader searches for, which is why the sentence leads with it.
-		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
+		raise f"E452 `{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
 	}
 	return out
 }
@@ -2163,11 +2373,11 @@ fn c_carrier_deps(c: Ty) -> list[str] {
 # A `list[Y]` needs nothing: the runtime container holds its elements behind a pointer.
 fn c_ty_struct_deps(t: Ty, mut &out: list[str]) {
 	match t {
-		TNamed(nm)    => out.append(nm)
-		TOpt(el)      => out.append(c_carrier_ty_cname(TOpt(el)))
-		TEither(l, r) => out.append(c_carrier_ty_cname(TEither(l, r)))
-		TTuple(ts)    => out.append(c_tuple_cname(ts))
-		_             => c_skip()
+		Ty.TNamed(nm) => out.append(nm)
+		Ty.TOpt(el) => out.append(c_carrier_ty_cname(Ty.TOpt(el)))
+		Ty.TEither(l, r) => out.append(c_carrier_ty_cname(Ty.TEither(l, r)))
+		Ty.TTuple(ts) => out.append(c_tuple_cname(ts))
+		_ => c_skip()
 	}
 }
 
@@ -2297,13 +2507,13 @@ fn c_decl_types(sites: list[Site], mut &tups: list[Ty], mut &cars: list[Ty]) {
 # a name the reader wrote and is owed an answer about.
 fn c_decl_collect(t: Ty, mut &tups: list[Ty], mut &cars: list[Ty]) {
 	match t {
-		TTuple(ts)    => c_decl_collect_tuple(ts, tups, cars)
-		TOpt(el)      => c_decl_collect_carrier(TOpt(el), tups, cars)
-		TEither(l, r) => c_decl_collect_carrier(TEither(l, r), tups, cars)
-		TList(el)     => c_decl_collect(el, tups, cars)
-		TChan(el, _)  => c_decl_collect(el, tups, cars)
-		TMap(k, v)    => c_decl_collect_two(k, v, tups, cars)
-		_             => c_skip()
+		Ty.TTuple(ts) => c_decl_collect_tuple(ts, tups, cars)
+		Ty.TOpt(el) => c_decl_collect_carrier(Ty.TOpt(el), tups, cars)
+		Ty.TEither(l, r) => c_decl_collect_carrier(Ty.TEither(l, r), tups, cars)
+		Ty.TList(el) => c_decl_collect(el, tups, cars)
+		Ty.TChan(el, _) => c_decl_collect(el, tups, cars)
+		Ty.TMap(k, v) => c_decl_collect_two(k, v, tups, cars)
+		_ => c_skip()
 	}
 }
 
@@ -2320,7 +2530,7 @@ fn c_decl_collect_tuple(ts: list[Ty], mut &tups: list[Ty], mut &cars: list[Ty]) 
 	for t in tups {
 		return if c_tuple_cname(ty_tuple_elems(t)) == name
 	}
-	tups.append(TTuple(ts))
+	tups.append(Ty.TTuple(ts))
 }
 
 # c_decl_collect_carrier adds a carrier once per SHAPE, then descends into its payloads — a
@@ -2359,7 +2569,7 @@ fn c_check_named_types(mut &em: Emitter, f: File, sites: list[Site]) {
 	# it was given — `… `int` (parameter `this` of `tag`)`. It is a question about the
 	# DECLARATION rather than about a type it spells, which is why it is not a site.
 	for fn_i in f.fns {
-		raise f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
+		raise f"E415 NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
 	}
 
 	for s in sites {
@@ -2380,15 +2590,15 @@ fn c_check_named_types(mut &em: Emitter, f: File, sites: list[Site]) {
 # name that fails to resolve is just as unspellable inside a `list[…]` or a `chan[…]`.
 fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str, bound: list[str]) {
 	match t {
-		TNamed(nm)    => c_check_type_name(em, nm, site, bound)
-		TList(el)     => c_check_named_ty(em, el, site, bound)
-		TChan(el, _)  => c_check_named_ty(em, el, site, bound)
-		TMap(k, v)    => c_check_named_ty_two(em, k, v, site, bound)
-		TEither(l, r) => c_check_named_ty_two(em, l, r, site, bound)
-		TOpt(el)      => c_check_named_ty(em, el, site, bound)
-		TTuple(ts)    => c_check_named_ty_list(em, ts, site, bound)
-		TFn(ps, r)    => c_check_named_fn(em, ps, r, site, bound)
-		_             => c_skip()
+		Ty.TNamed(nm) => c_check_type_name(em, nm, site, bound)
+		Ty.TList(el) => c_check_named_ty(em, el, site, bound)
+		Ty.TChan(el, _) => c_check_named_ty(em, el, site, bound)
+		Ty.TMap(k, v) => c_check_named_ty_two(em, k, v, site, bound)
+		Ty.TEither(l, r) => c_check_named_ty_two(em, l, r, site, bound)
+		Ty.TOpt(el) => c_check_named_ty(em, el, site, bound)
+		Ty.TTuple(ts) => c_check_named_ty_list(em, ts, site, bound)
+		Ty.TFn(ps, r) => c_check_named_fn(em, ps, r, site, bound)
+		_ => c_skip()
 	}
 }
 
@@ -2421,7 +2631,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# means there was none, and saying "no type named `This`" invites the reader to go and
 	# declare one. Checked rather than refused, for the reason c_ident gives.
 	if nm == "This" {
-		chk_at(em, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
+		chk_at(em, "E364", f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
 		return
 	}
 
@@ -2429,7 +2639,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# gives it, beside the bound and the interface — and this compiler has not built that
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
-	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
+	raise f"E416 NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -2444,40 +2654,101 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 # is not one. It is the ONE place the representation is looked through: everywhere else the
 # two are different types, which is what a strong typedef means.
 fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
-	mut i := 0
-	for i < em.ty_names.len() {
-		return em.ty_unders[i] if em.ty_names[i] == nm
-		i = i + 1
-	}
-	return TUnknown
+	r := c_ty_row(em, nm)
+	return Ty.TUnknown if not c_row_is_typedef(em, r)
+
+	return em.tk_unders[r]
+}
+
+# c_row_is_typedef is asked by the two readers of `tk_unders`, and it is asked BECAUSE the
+# table is now one: a struct, an enum and a spec have rows too, and their underlying type is
+# the TUnknown a row needs to exist, not a representation anybody may read. Without this
+# `c_repr_of(TNamed("SomeStruct"))` would answer TUnknown instead of the struct — which no
+# emitted byte happened to depend on, and would have been a silent wrong answer waiting for
+# the first caller that did.
+fn c_row_is_typedef(mut &em: Emitter, r: int) -> bool {
+	return false if r < 0
+
+	return em.tk_kinds[r] == TK_TYPEDEF
 }
 
 # c_is_typedef asks the NAME list, not what the name is underneath: a typedef whose
 # underlying type nothing declares is registered as unknown so its uses stay quiet, and it is
 # still a declared type name — the mistake is in the declaration, which has already said so.
-fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
+# c_ty_row is THE typedef lookup, for the same reason c_var_row is the variant one: two
+# readers, one table. `c_repr_of` used to say so in a comment — "one scan answers both `is it
+# one` and `what is it`" — while being the only one that did.
+# What a declared type NAME denotes. Four kinds and no match over them — every reader
+# compares — so they are constants rather than an enum, the same call c_scalar_class makes
+# below for the same reason.
+const TK_NONE := 0
+const TK_STRUCT := 1
+const TK_ENUM := 2
+const TK_SPEC := 3
+const TK_TYPEDEF := 4
+
+# c_ty_register is the ONLY writer, and the FIRST writer of a name wins. A duplicate across
+# kinds is already reported by c_check_type_dup; what is left is which of the two the rest
+# of the compiler then believes, and one table has to answer that once. It answers "the
+# first declared", in the order the builders run — typedefs, structs, enums, then specs —
+# which is why the spec pass is last: `struct A` beside `spec A` is a struct with a
+# duplicate reported against it, and not a spec that no longer constructs.
+fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: Ty) {
+	return if c_ty_row(em, nm) >= 0
+
+	em.tk_names.append(nm)
+	em.tk_kinds.append(kind)
+	em.tk_unders.append(under)
+}
+
+fn c_ty_row(mut &em: Emitter, nm: str) -> int {
 	mut i := 0
-	for i < em.ty_names.len() {
-		return true if em.ty_names[i] == nm
+	for i < em.tk_names.len() {
+		return i if em.tk_names[i] == nm
 		i = i + 1
 	}
-	return false
+	return -1
+}
+
+# c_ty_kind is what a name DENOTES — one lookup, one answer. Every predicate below is this
+# and a comparison, which is the point: a name cannot be a struct to one reader and not a
+# type to another, and adding a fifth kind is a row rather than an edit in five places.
+fn c_ty_kind(mut &em: Emitter, nm: str) -> int {
+	r := c_ty_row(em, nm)
+	return TK_NONE if r < 0
+
+	return em.tk_kinds[r]
+}
+
+fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) == TK_TYPEDEF
+}
+
+fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) == TK_SPEC
+}
+
+# c_is_enum_name and c_is_enum_ty are the same question of a name and of a type. Both are
+# here because the second was written as `c_name_in(em.enum_names, …)` at seven call sites
+# and as a function at five more — one question, two spellings, and the table exposed to
+# both.
+fn c_is_enum_name(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) == TK_ENUM
 }
 
 # c_repr_of is a type as its REPRESENTATION — itself, unless it is a typedef, in which case
 # what it was declared over. Only the emitter asks this, and only where C needs a type: the
 # checker must never, because the distinctness is the feature.
 fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
-	nm := c_named_of(t)
-	mut i := 0
-	for i < em.ty_names.len() {
-		# a typedef whose underlying type nothing declares answers UNKNOWN rather than
-		# itself: that is what keeps its uses quiet while the declaration carries the
-		# diagnostic. One scan answers both "is it one" and "what is it".
-		return em.ty_unders[i] if em.ty_names[i] == nm
-		i = i + 1
-	}
-	return t
+	r := c_ty_row(em, c_named_of(t))
+
+	# a typedef whose underlying type nothing declares answers UNKNOWN rather than itself:
+	# that is what keeps its uses quiet while the declaration carries the diagnostic. A name
+	# that is a type of any OTHER kind answers itself, which is what "unless it is a typedef"
+	# has always meant.
+	return t if not c_row_is_typedef(em, r)
+
+	return em.tk_unders[r]
 }
 
 # c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
@@ -2485,16 +2756,12 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 # and c_check_type_name — so a fifth kind of type name would have been three edits with two
 # of them silent if missed.
 fn c_is_type_name(mut &em: Emitter, nm: str) -> bool {
-	return c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
+	k := c_ty_kind(em, nm)
+	return k == TK_STRUCT or k == TK_ENUM or k == TK_TYPEDEF
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
-	mut i := 0
-	for i < em.struct_names.len() {
-		return true if em.struct_names[i] == nm
-		i = i + 1
-	}
-	return false
+	return c_ty_kind(em, nm) == TK_STRUCT
 }
 
 # c_scan_fnptr decides up front whether the program spells a function type anywhere in a
@@ -2549,10 +2816,6 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		# struct, an enum, a field and a variant carry no place, so those still raise —
 		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
 		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
-
-		# the spec table, filled by the walk that is already here rather than by a second
-		# pass over the same list
-		em.spec_names.append(sp.name)
 	}
 
 	# and one level down, where the same question has the same answer and three more ways
@@ -2579,7 +2842,7 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		mut pseen: list[str] = []
 		for pm in fn_i.params {
 			if c_name_in(pseen, pm.name) {
-				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.name}` declares a parameter named `{pm.name}` twice")
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, "E365", f"`{fn_i.name}` declares a parameter named `{pm.name}` twice")
 			}
 			pseen.append(pm.name)
 		}
@@ -2589,7 +2852,7 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 fn c_check_names_distinct(names: list[str], what: str, whose: str) {
 	mut seen: list[str] = []
 	for n in names {
-		raise f"`{whose}` declares {what} named `{n}` twice" if c_name_in(seen, n)
+		raise f"E453 `{whose}` declares {what} named `{n}` twice" if c_name_in(seen, n)
 
 		seen.append(n)
 	}
@@ -2599,12 +2862,8 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	mut i := 0
 	for i < seen.len() {
 		if seen[i] == name {
-			msg := c_dup_msg(name, kind[i], what)
-			if path != "" {
-				chk_at_place(em, path, line, col, msg)
-				return
-			}
-			raise msg
+			c_dup_report(em, name, kind[i], what, path, line, col)
+			return
 		}
 		i = i + 1
 	}
@@ -2612,23 +2871,58 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	kind.append(what)
 }
 
-# c_dup_msg is the one sentence, so a declaration that knows its place and one that does not
-# say the same thing about the same rule.
-fn c_dup_msg(name: str, prev: str, what: str) -> str {
-	return f"`{name}` is declared twice — once as {prev}, once as {what}" if prev != what
+# c_dup_report is the one place a duplicate declaration is worded, so a declaration that
+# knows its place and one that does not say the same thing about the same rule. TWO
+# SENTENCES MEANS TWO RULES, so there are two codes: colliding with a DIFFERENT kind of
+# declaration and colliding with the same kind are separate mistakes with separate answers.
+fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int) {
+	if prev != what {
+		c_dup_say(em, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}", path, line, col)
+		return
+	}
 
-	return f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
+	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
+}
+
+# c_dup_say is the CHANNEL, chosen by whether the declaration recorded a place: a struct and
+# an enum are registered before anything carries one, so those two still raise and the rest
+# say where. The code travels as an argument, which is what keeps one rule from wearing two
+# identities when the channel differs.
+#
+# The split is not tidiness. Folding it back — picking `code` into a variable and choosing
+# the channel once — puts the code somewhere scripts/error-codes-check.sh cannot see it, and
+# the gate said so the moment it was tried. A code has to be a LITERAL where it is reported,
+# or nothing can hold the source, the gates and the catalogue to each other.
+fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: int) {
+	if path != "" {
+		chk_at_place(em, path, line, col, code, msg)
+		return
+	}
+
+	raise f"{code} {msg}"
 }
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
 # struct field declared `Celsius` finds the name already known.
+# c_build_specs registers every `spec` as a type name, so a name that fails to resolve as a
+# TYPE can say which of the two it is: a spec used where a type goes, or a typo.
+#
+# It runs LAST of the four registrars. A name declared as both a spec and something else is
+# reported by c_build_type_names and then belongs to the other one — which is the answer the
+# separate tables used to give by accident, each saying yes to its own question, and the
+# answer the constructor path needs: `struct A` beside `spec A` still constructs.
+fn c_build_specs(mut &em: Emitter, f: File) {
+	for sp in f.specs {
+		c_ty_register(em, sp.name, TK_SPEC, Ty.TUnknown)
+	}
+}
+
 fn c_build_typedefs(mut &em: Emitter, f: File) {
 	for td in f.types {
 		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
-		em.ty_names.append(td.name)
-		em.ty_unders.append(chk_typedef(em, td, f))
+		c_ty_register(em, td.name, TK_TYPEDEF, chk_typedef(em, td, f))
 	}
 }
 
@@ -2636,7 +2930,7 @@ fn c_build_structs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.structs.len() {
 		sd := f.structs[i]
-		em.struct_names.append(sd.name)
+		c_ty_register(em, sd.name, TK_STRUCT, Ty.TUnknown)
 		mut j := 0
 		for j < sd.fields.len() {
 			fd := sd.fields[j]
@@ -2655,7 +2949,7 @@ fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
 		return em.fld_ty[i] if em.fld_struct[i] == sname and em.fld_name[i] == fname
 		i = i + 1
 	}
-	return TUnknown
+	return Ty.TUnknown
 }
 
 # c_struct_field_ty_at returns the type of a struct's idx-th field (declaration order).
@@ -2669,7 +2963,7 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 		}
 		i = i + 1
 	}
-	return TUnknown
+	return Ty.TUnknown
 }
 
 # c_field_init emits a constructor argument, initialising an EMPTY list `[]` to a properly
@@ -2793,7 +3087,7 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
-		if c_needs_copy(em, TNamed(sd.name)) {
+		if c_needs_copy(em, Ty.TNamed(sd.name)) {
 			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, sd.name)
 		}
 	}
@@ -2862,7 +3156,7 @@ fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 # none of them, so the copying was itself what leaked.
 fn c_elem_vt_helper(mut &em: Emitter, nm: str) -> str {
 	ct := "zg_" + nm
-	cp := c_copy_of(em, TNamed(nm), f"*(const {ct}*)src")
+	cp := c_copy_of(em, Ty.TNamed(nm), f"*(const {ct}*)src")
 	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
 	out = out + "static void zg_elemdrop_" + nm + "(void *elem) { zg_drop_" + nm + "((" + ct + "*)elem); }\n"
@@ -2950,8 +3244,8 @@ fn c_struct_typedef(sd: StructDecl) -> str {
 # c_named_of returns the struct name of a TNamed type, or "" otherwise.
 fn c_named_of(t: Ty) -> str {
 	return match t {
-		TNamed(nm) => nm
-		_          => ""
+		Ty.TNamed(nm) => nm
+		_             => ""
 	}
 }
 
@@ -2959,7 +3253,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.enums.len() {
 		ed := f.enums[i]
-		em.enum_names.append(ed.name)
+		c_ty_register(em, ed.name, TK_ENUM, Ty.TUnknown)
 		mut j := 0
 		for j < ed.variants.len() {
 			v := ed.variants[j]
@@ -2990,7 +3284,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 # holds exactly the variants that HAVE a payload field, so an enum is flat when none of its
 # variants is in it.
 fn c_is_flat_enum(mut &em: Emitter, en: str) -> bool {
-	return false if not c_name_in(em.enum_names, en)
+	return false if not c_is_enum_name(em, en)
 
 	mut i := 0
 	for i < em.vf_variant.len() {
@@ -3017,7 +3311,7 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 		return em.vf_ty[i] if em.vf_variant[i] == variant and em.vf_index[i] == idx
 		i = i + 1
 	}
-	return TUnknown
+	return Ty.TUnknown
 }
 
 # c_bind_env registers an enum constructor arm's payload names in the variable
@@ -3061,7 +3355,7 @@ fn c_needs_runtime(mut &em: Emitter) -> bool {
 fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 	en := c_ident_name(target)
 
-	return "" if en == "" or not c_name_in(em.enum_names, en)
+	return "" if en == "" or not c_is_enum_name(em, en)
 	return "" if not c_is_variant(em, fld) or c_variant_enum(em, fld) != en
 
 	return en
@@ -3069,7 +3363,7 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 
 # c_last_segment is a module path's namespace: `util/text` is reached as `text`.
 fn c_last_segment(path: str) -> str {
-	b := list[byte](path)
+	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
 	for i < b.len() {
@@ -3087,31 +3381,56 @@ fn c_last_segment(path: str) -> str {
 	return str(out)
 }
 
-fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+# c_bare_variant is the rule that a variant is NEVER A NAME ON ITS OWN (GRAMMAR group 7's
+# CONSTRUCTION note): an enum puts its own name into the value namespace and not its
+# variants', so `Color.Red` and never `Red`. That is what keeps two enums that both declare
+# a `Red` from competing for it — and what stops an enum GAINING a variant from taking a
+# name a program was already using for something else.
+#
+# It is one function because it is one rule: the value position and the call position are
+# the same mistake, and a code answers to a rule rather than to a site.
+#
+# `Left` and `Right` are not reached here. They are the two constructors this compiler reads
+# by NAME rather than by resolving them, because they are context-typed — no type of their
+# own, taking the one the position wants — so they are not in the variant table at all. Both
+# spellings work; requiring the qualified one is a separate decision about a built-in's
+# documented surface (docs/code/errors.md).
+fn c_bare_variant(mut &em: Emitter, name: str) {
+	chk_at(em, "E383", f"`{name}` is a variant of `{c_variant_enum(em, name)}`, and a variant is named through its enum — write `{c_variant_enum(em, name)}.{name}`")
+}
+
+# c_var_row is THE variant lookup. `var_name` / `var_enum` / `var_tag` are one table in
+# three columns, and each of the three readers below used to walk it itself — the shape this
+# file already criticises at the signature table, where a column-per-reader pair walked the
+# rows twice per call site.
+#
+# It matters more than the walk it saves: three scans are three chances for the answers to
+# disagree about which row they meant. They cannot now, because there is one row.
+fn c_var_row(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.var_name.len() {
-		return true if em.var_name[i] == name
+		return i if em.var_name[i] == name
 		i = i + 1
 	}
-	return false
+	return -1
+}
+
+fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+	return c_var_row(em, name) >= 0
 }
 
 fn c_variant_enum(mut &em: Emitter, name: str) -> str {
-	mut i := 0
-	for i < em.var_name.len() {
-		return em.var_enum[i] if em.var_name[i] == name
-		i = i + 1
-	}
-	return ""
+	r := c_var_row(em, name)
+	return "" if r < 0
+
+	return em.var_enum[r]
 }
 
 fn c_variant_tag(mut &em: Emitter, name: str) -> int {
-	mut i := 0
-	for i < em.var_name.len() {
-		return em.var_tag[i] if em.var_name[i] == name
-		i = i + 1
-	}
-	return 0
+	r := c_var_row(em, name)
+	return 0 if r < 0
+
+	return em.var_tag[r]
 }
 
 # c_enum_typedef emits an enum as a C tagged union: an int32 tag plus a union of the
@@ -3244,14 +3563,14 @@ fn c_str_cell(mut &em: Emitter, s: str) -> str {
 
 	# C counts DECODED bytes, so the array is sized from the value and not from the escaped
 	# spelling c_str_lit produces
-	n := list[byte](s).len() + 1
+	n := bytearray(s).len() + 1
 	return f"({{ static struct {{ zrt_ref_hdr h; char b[{n}]; }} {nm} = {{{{ZRT_RC_IMMORTAL, NULL}}, {c_str_lit(s)}}}; (const char *)zrt_ref_payload(&{nm}); }})"
 }
 
 fn c_str_lit(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		v := int(c)
 		if v == 34 {
 			out.append(byte(92))
@@ -3297,7 +3616,7 @@ fn c_int_dec(mut &em: Emitter, lex: str) -> str {
 # `invalid suffix '_0.5' on integer constant`: against generated source, for a separator the
 # lexer had deliberately accepted.
 fn c_float_dec(lex: str) -> str {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	mut out: list[byte] = []
 	for ch in b {
 		if ch != b'_' {
@@ -3346,7 +3665,7 @@ fn c_deeper(mut &em: Emitter) {
 	return if em.depth <= ZG_MAX_NESTING
 
 	place := "\n" + place_line(em.at_path, em.at_line, em.at_col)
-	raise f"this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
+	raise f"E454 this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
 }
 
 # c_shallower gives back the level c_deeper took.
@@ -3369,40 +3688,40 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex, _, _) => c_int_dec(em, lex)
-		EFloat(lex) => c_float_dec(lex)
-		EStr(v) => c_str_cell(em, v)
-		EBool(b) => c_bool(b)
-		ENil => "0"
-		EIdent(n) => c_ident_val(em, n, sb)
-		EUnary(oper, x) => c_unexpr(em, oper, x, sb)
-		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
-		ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
-		EField(target, fld) => c_fieldref(em, target, fld, sb)
-		EOptChain(target, fld) => c_optchain(em, target, fld, sb)
-		ETry(x) => c_try(em, x, sb)
-		EIndex(target, idx) => c_index(em, target, idx, sb)
-		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
-		EListLit(elems) => c_list_lit(em, elems, sb)
-		EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
-		EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
-		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
+		Expr.EInt(lex, _, _) => c_int_dec(em, lex)
+		Expr.EFloat(lex) => c_float_dec(lex)
+		Expr.EStr(v) => c_str_cell(em, v)
+		Expr.EBool(b) => c_bool(b)
+		Expr.ENil => "0"
+		Expr.EIdent(n) => c_ident_val(em, n, sb)
+		Expr.EUnary(oper, x) => c_unexpr(em, oper, x, sb)
+		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
+		Expr.ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
+		Expr.EField(target, fld) => c_fieldref(em, target, fld, sb)
+		Expr.EOptChain(target, fld) => c_optchain(em, target, fld, sb)
+		Expr.ETry(x) => c_try(em, x, sb)
+		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
+		Expr.EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
+		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
+		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
+		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
+		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
 		# A range reaching HERE is one used as a value — a slice bound or a match arm —
 		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
 		# forms have no lowering yet, and saying so is better than emitting something that
 		# reads as an int.
-		ERange(lo, hi, inclusive) => c_range_unsupported()
-		ETuple(elems) => c_tuple_lit(em, elems, sb)
-		EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
-		EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
-		EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
-		ERecv(ch) => c_recv(em, ch, sb)
-		EForce(x) => c_force(em, x, sb)
-		ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
-		EGuard(body) => c_guard(em, body, sb)
-		EIs(x, name) => c_is_test(em, x, name, sb)
-		EIn(x, set) => c_in_test(em, x, set, sb)
+		Expr.ERange(lo, hi, inclusive) => c_range_unsupported()
+		Expr.ETuple(elems) => c_tuple_lit(em, elems, sb)
+		Expr.EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
+		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
+		Expr.EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
+		Expr.ERecv(ch) => c_recv(em, ch, sb)
+		Expr.EForce(x) => c_force(em, x, sb)
+		Expr.ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
+		Expr.EGuard(body) => c_guard(em, body, sb)
+		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
+		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
 	}
 }
 
@@ -3514,7 +3833,7 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 	c_guard_no_jump(body, false)
 
 	vt := c_guard_val_ty(em, body)
-	cn := c_carrier_name(em, c_guard_elem(vt), TErr)
+	cn := c_carrier_name(em, c_guard_elem(vt), Ty.TErr)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 
@@ -3592,13 +3911,13 @@ fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, s
 fn c_guard_val_ty(mut &em: Emitter, body: list[Stmt]) -> Ty {
 	n := body.len()
 
-	return TNil if n == 0
-	return TNil if not c_is_expr_stmt(body[n - 1])
+	return Ty.TNil if n == 0
+	return Ty.TNil if not c_is_expr_stmt(body[n - 1])
 
 	t := c_infer(em, c_expr_stmt_of(body[n - 1]))
 
 	raise "NotImplemented: a `guard` whose block ends in a name bound inside it — give the block a call or a literal as its value" if c_is_unknown(t)
-	return TNil if c_is_nil_ty(t)
+	return Ty.TNil if c_is_nil_ty(t)
 
 	return t
 }
@@ -3612,15 +3931,15 @@ fn c_guard_elem(vt: Ty) -> Ty {
 
 fn c_is_expr_stmt(s: Stmt) -> bool {
 	return match s {
-		SExpr(_) => true
-		_        => false
+		Stmt.SExpr(_) => true
+		_             => false
 	}
 }
 
 fn c_expr_stmt_of(s: Stmt) -> Expr {
 	return match s {
-		SExpr(x) => x
-		_        => ENil
+		Stmt.SExpr(x) => x
+		_             => Expr.ENil
 	}
 }
 
@@ -3635,15 +3954,15 @@ fn c_expr_stmt_of(s: Stmt) -> Expr {
 fn c_guard_no_jump(body: list[Stmt], in_loop: bool) {
 	for s in body {
 		match s {
-			SReturn(has_val, e) => c_guard_jump_err("return")
-			SReturnIf(v, cond) => c_guard_jump_err("return")
-			SBreak => c_guard_loop_jump("break", in_loop)
-			SContinue => c_guard_loop_jump("continue", in_loop)
-			SIf(cond, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
-			SIfLet(nm, v, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
-			SFor(is_cond, cond, body_b) => c_guard_no_jump(body_b, true)
-			SForIn(nm, it, body_b) => c_guard_no_jump(body_b, true)
-			SSelect(arms) => c_guard_no_jump_sel(arms, in_loop)
+			Stmt.SReturn(has_val, e) => c_guard_jump_err("return")
+			Stmt.SReturnIf(v, cond) => c_guard_jump_err("return")
+			Stmt.SBreak => c_guard_loop_jump("break", in_loop)
+			Stmt.SContinue => c_guard_loop_jump("continue", in_loop)
+			Stmt.SIf(cond, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			Stmt.SIfLet(nm, v, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			Stmt.SFor(is_cond, cond, body_b) => c_guard_no_jump(body_b, true)
+			Stmt.SForIn(nm, it, body_b) => c_guard_no_jump(body_b, true)
+			Stmt.SSelect(arms) => c_guard_no_jump_sel(arms, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -3666,7 +3985,7 @@ fn c_guard_loop_jump(kw: str, in_loop: bool) {
 }
 
 fn c_guard_jump_err(kw: str) {
-	raise f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
+	raise f"E403 NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
 # c_str_concat joins two strings and gives back whichever operand it OWNS.
@@ -3723,8 +4042,8 @@ fn c_owns_value(e: Expr) -> bool {
 
 fn c_is_strlit(e: Expr) -> bool {
 	return match e {
-		EStr(_) => true
-		_       => false
+		Expr.EStr(_) => true
+		_            => false
 	}
 }
 
@@ -3768,7 +4087,9 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		# wrong there is the pair, not a missing impl. Raising here as well replaced a
 		# diagnostic about the program with one about a spec the program never mentioned.
 		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
-			raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+			if ty_name(ta) == ty_name(c_infer(em, b)) {
+				c_eq_refuse(em, oper, ta)
+			}
 		}
 	}
 
@@ -3826,25 +4147,50 @@ fn c_eq_legal(mut &em: Emitter, t: Ty) -> bool {
 # handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
 # from the one place that already has them — the same move `Into` makes for `.into()`.
 fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
-	return c_expr(em, EMethod(a, "eq", [b]), sb) if oper == "=="
+	return c_expr(em, Expr.EMethod(a, "eq", [b]), sb) if oper == "=="
 
-	return c_expr(em, EMethod(a, "ne", [b]), sb)
+	return c_expr(em, Expr.EMethod(a, "ne", [b]), sb)
 }
 
-# c_eq_says names what is missing, and there are three different sentences under one gap.
+# c_eq_refuse names what is missing, and there are four different sentences under one gap —
+# the comment here said three while the function answered five, and two of the five had no
+# code, which is how a rule stays unpinnable: nothing in the file counts its own branches.
+# The fifth turned out to be a rule the checker already owned, and is gone.
 #
-# An ORDERING is `Ord`'s and this compiler generates none. Equality on a CONTAINER is
+# A CHANNEL or a FUNCTION is an identity rather than a value, and a CARRIER may hold nothing
+# to compare — both permanent answers of the language rather than gaps. Equality on a
+# CONTAINER is
 # docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
 # nothing to decorate and no impl a program could write for it. Equality on a NAMED type
 # exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
-# it is the only one of the three that tells the reader what to type.
-fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
-	return f"NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
-	return f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
-	return f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
-	return f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
+# it is the only one of the four that tells the reader what to type.
+# It REPORTS rather than answering a sentence, and that is what buys the place: it used to
+# be `raise c_eq_says(…)`, so five rules about an expression the emitter is standing on said
+# nothing about where it was. The channel is the same one every checked rule uses, and the
+# C built after a finding is thrown away — the same reasoning that put `no field` on it.
+fn c_eq_refuse(mut &em: Emitter, oper: str, t: Ty) {
+	# AN ORDERING IS ALREADY ANSWERED, by the checker's rule about `<` on two things that are
+	# neither numbers nor strs — which has a place and the better sentence. This branch used
+	# to raise its own `NotImplemented: an ordering comes from Ord`, and a raise ENDS THE RUN,
+	# so those words replaced that rule's on every program that reached both. Nothing here
+	# could see it: the case asserted the sentence that won. It reports nothing now, and the
+	# code it used to carry is retired — one mistake earns one finding, and this is not it.
+	return if oper != "==" and oper != "!="
 
-	return f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
+	if ty_is_chan(t) or c_is_fn(t) {
+		chk_at(em, "E460", f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries")
+		return
+	}
+	if c_is_carrier(t) {
+		chk_at(em, "E473", f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`")
+		return
+	}
+	if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t) {
+		chk_at(em, "E445", f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare")
+		return
+	}
+
+	chk_at(em, "E430", f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`")
 }
 
 # c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide
@@ -3955,7 +4301,7 @@ fn c_arith_stem(oper: str) -> str {
 fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
 	return f"({call})" if c_scalar_bits(t) >= 64
 
-	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
+	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), Ty.TInt, t, call)
 }
 
 # c_narrow_wrap is c_arith_narrow for an operator that WRAPS, and the difference is the whole
@@ -3987,8 +4333,8 @@ fn c_narrow_unsigned(t: Ty) -> bool {
 # source, which is what makes `-1` a constant rather than a negation.
 fn c_is_int_lit(x: Expr) -> bool {
 	return match x {
-		EInt(_, _, _) => true
-		_             => false
+		Expr.EInt(_, _, _) => true
+		_ => false
 	}
 }
 
@@ -4093,13 +4439,13 @@ fn c_in_container(mut &em: Emitter, x: Expr, set: Expr, st: Ty, sb: Subst) -> st
 
 	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
 	# reason: a structural comparison is what a derived impl would supply and none is generated
-	raise f"NotImplemented: `in` over {ty_name(st)} — its elements are compared with `==`, and {ty_name(elem)} has none" if c_is_aggregate(em, elem)
+	raise f"E462 NotImplemented: `in` over {ty_name(st)} — its elements are compared with `==`, and {ty_name(elem)} has none" if c_is_aggregate(em, elem)
 
 	n := c_tmp(em, "zgt_in")
 	sv := n + "s"
 	kv := n + "k"
 	rv := n + "r"
-	bt := c_type(TBool)
+	bt := c_type(Ty.TBool)
 	et := c_type(elem)
 
 	give := c_in_give(em, set, st, sv)
@@ -4149,7 +4495,7 @@ fn c_in_eq(at: str, kv: str, elem: Ty) -> str {
 # refusal named nothing a reader had written.
 fn c_set_says(mut &em: Emitter, set: Expr) -> str {
 	return match set {
-		ERange(_, _, _) => "a range"
+		Expr.ERange(_, _, _) => "a range"
 		_ => ty_name(c_infer(em, set))
 	}
 }
@@ -4176,7 +4522,7 @@ fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		raise f"NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
+		raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
 	}
 
 	t := c_infer(em, x)
@@ -4207,17 +4553,10 @@ fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
 fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
-	nm := c_named_of(t)
-	return false if nm == ""
-	mut i := 0
-	for i < em.enum_names.len() {
-		return true if em.enum_names[i] == nm
-		i = i + 1
-	}
-	return false
+	return c_is_enum_name(em, c_named_of(t))
 }
 
-# c_conv lowers a type conversion. list[byte](str) goes through the emitted string helper
+# c_conv lowers a type conversion. bytearray(str) goes through the emitted string helper
 # and the scalar casts are plain C casts; `str(x)` is the one that reads its SOURCE type.
 #
 # `str` is two conversions wearing one name. Over a `list[byte]` it is the bridge back to a
@@ -4237,9 +4576,9 @@ fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
 	# or one it does not build over — renders as a plain cast. The DECLARATION has already
 	# said what is wrong; converting into it would raise about the use instead, which buries
 	# the cause under a consequence at every call site.
-	return f"(({c_type(TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
+	return f"(({c_type(Ty.TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
 
-	return f"(({c_type(TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
+	return f"(({c_type(Ty.TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
 }
 
 # chk_call_arity_exact is the one-argument rule a conversion has. A conversion takes the
@@ -4248,7 +4587,7 @@ fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
 fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
 	return if n == 1
 
-	chk_at(em, f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
+	chk_at(em, "E366", f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
 }
 
 # `display()`: the text a value shows as, which is what `print` writes and what an
@@ -4298,7 +4637,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# the answer match the shape: what leaves here is owned, as from any other call.
 		return c_copied(em, xt0, x, sb) if c_is_str(xt0)
 		if c_is_list(xt0) {
-			# THE WAY BACK from the code points, and the mirror of `list[rune](s)`: these two
+			# THE WAY BACK from the code points, and the mirror of `runearray(s)`: these two
 			# round-trip, where the byte bridge round-trips only what was valid UTF-8 to
 			# begin with. It takes the list by value like the byte bridge below, and for the
 			# same reason.
@@ -4308,7 +4647,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 			# so `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
-			raise f"`str(…)` over a list bridges bytes or code points, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
+			raise f"E417 `str(…)` over a list bridges bytes or code points, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
 
 			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
 			# the raise, so a caller passing a temporary owes no post-call drop that an
@@ -4328,7 +4667,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# override (the "" state) already earned its finding at the declaration; an inert
 		# placeholder lets that finding print instead of a raise about a missing rendering.
 		if meth := c_render_override(em, xt0) {
-			return c_expr(em, EMethod(x, meth, []), sb) if meth != ""
+			return c_expr(em, Expr.EMethod(x, meth, []), sb) if meth != ""
 			return "\"\""
 		}
 
@@ -4344,8 +4683,8 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
 		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
 
-		# THE TWO BRIDGES OUT OF A STR, and they answer different questions: `list[byte](s)`
-		# is the raw octets and `list[rune](s)` the code points it is UTF-8 for. A str with
+		# THE TWO BRIDGES OUT OF A STR, and they answer different questions: `bytearray(s)`
+		# is the raw octets and `runearray(s)` the code points it is UTF-8 for. A str with
 		# any non-ASCII in it has different lengths under the two, which is the whole reason
 		# the language spells both rather than picking one.
 		inner := c_expr(em, x, sb)
@@ -4364,14 +4703,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# a CARRIER is not a value to convert: `int(k)` where k is a `K?` used to cast the
 	# carrier struct, which cc rejected against generated code. The unwrap is the language's
 	# and has to be written.
-	raise f"`{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
-	if c_name_in(em.enum_names, c_named_of(xt)) {
-		raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
+	raise f"E418 `{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
+	if c_is_enum_ty(em, xt) {
+		raise f"E407 enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 
 		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
 		# C cast OF THE STRUCT, which cc rejected against generated code — the report this
 		# compiler exists to get in front of.
-		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{nm}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
+		raise f"E419 an enum converts to `int` — its discriminant — and to nothing else, so `{nm}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
 
 		return f"((int64_t)({c_expr(em, x, sb)}).tag)"
 	}
@@ -4398,7 +4737,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# the language's answer and no future feature adds to it, so it belongs on the diag
 		# list with the place the conversion was written. `0` stands in for the value it
 		# would have built; the C after a finding is discarded.
-		chk_at(em, f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one")
+		chk_at(em, "E367", f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one")
 		return "0"
 	}
 
@@ -4421,7 +4760,7 @@ const SC_BOOL := 4
 
 # c_scalar_class answers a type's scalar class, or SC_NONE for a type that is not a
 # convertible scalar. A `str` deliberately has none: it is PARSED, which c_conv handles
-# above, and a value is built from it with `list[byte](s)` rather than cast.
+# above, and a value is built from it with `bytearray(s)` rather than cast.
 fn c_scalar_class(t: Ty) -> int {
 	return SC_SIGNED if c_is_int(t) or c_is_rune(t)
 	return SC_UNSIGNED if c_is_byte(t) or c_is_uint(t)
@@ -4565,7 +4904,7 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str)
 	# unresolved `TNamed` falling through to the cast below — the same class this whole
 	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
 	# inference could not work out is not evidence the program is wrong.
-	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xr)
+	raise f"E455 `{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xr)
 
 	return f"(({c_type(ty)})({inner}))" if sc == SC_NONE or c_lossless(sc, c_scalar_bits(xt), dc, db)
 
@@ -4679,16 +5018,16 @@ fn c_display_check(mut &em: Emitter, t: Ty) {
 	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
 	# reader can actually write is the discriminant
 	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
-	raise f"NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
+	raise f"E449 NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
 }
 
 fn c_display(t: Ty, inner: str) -> str {
 	return match t {
-		TBool  => f"zrt_display_bool({inner})"
-		TFloat => f"zrt_display_float((double)({inner}))"
-		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
-		TUint  => f"zrt_display_uint({inner})"
-		_      => f"zrt_display_int((int64_t)({inner}))"
+		Ty.TBool  => f"zrt_display_bool({inner})"
+		Ty.TFloat => f"zrt_display_float((double)({inner}))"
+		Ty.TByte  => f"zrt_display_uint((uint64_t)({inner}))"
+		Ty.TUint  => f"zrt_display_uint({inner})"
+		_         => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
 
@@ -4701,7 +5040,7 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	# a CARRIER is not a thing to index: `a[0]` on a `list[int]?` handed the runtime the
 	# carrier struct where a list header goes, which cc reported as a WARNING — so the
 	# program linked and segfaulted. The unwrap is the language's and has to be written.
-	raise f"`[…]` indexes a value, and {ty_name(tty)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(tty)
+	raise f"E421 `[…]` indexes a value, and {ty_name(tty)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(tty)
 
 	# A `str` was whitelisted by the guard below and rejected by the statement after it —
 	# one rule about one type, held in two places that said opposite things. It is asked
@@ -4829,11 +5168,11 @@ fn c_meth_mutates(meth: str) -> bool {
 
 fn c_is_lvalue(e: Expr) -> bool {
 	return match e {
-		EIdent(_) => true
-		EField(_, _) => true
-		EOptChain(_, _) => false
-		ETry(_) => false
-		EIndex(t, i) => not c_is_range(i)
+		Expr.EIdent(_) => true
+		Expr.EField(_, _) => true
+		Expr.EOptChain(_, _) => false
+		Expr.ETry(_) => false
+		Expr.EIndex(t, i) => not c_is_range(i)
 		_ => false
 	}
 }
@@ -4868,22 +5207,22 @@ enum MethKind {
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
-	return MList if c_is_list(tty)
-	return MMap if c_is_map(tty)
+	return MethKind.MList if c_is_list(tty)
+	return MethKind.MMap if c_is_map(tty)
 
 	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
 	# to carry a method, so anything else would fall to the namespaced-call arm and be
 	# emitted as a free function nobody declared — which is the shape this table's own
 	# comment says must not happen. c_err_method names what it does not have.
-	return MErr if c_is_err_ty(tty)
+	return MethKind.MErr if c_is_err_ty(tty)
 
 	# and every method on a CARRIER, for the same reason: `T?` and `Either[L, R]` are types
 	# the compiler builds rather than a program declares, so neither has anywhere to hang one.
-	return MCarrier if c_is_opt(tty) or c_is_either(tty)
-	return MRecv if c_has_method(em, c_named_of(tty), meth)
-	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
+	return MethKind.MCarrier if c_is_opt(tty) or c_is_either(tty)
+	return MethKind.MRecv if c_has_method(em, c_named_of(tty), meth)
+	return MethKind.MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
-	return MFree
+	return MethKind.MFree
 }
 
 fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
@@ -4891,18 +5230,27 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	# inference is asked anything, because an enum name is not a binding and infers to
 	# nothing — which is why this used to come out as "the method `of` on a ?".
 	en := c_ident_name(target)
-	return c_enum_of(em, en, meth, args, sb) if en != "" and c_name_in(em.enum_names, en)
+	return c_enum_of(em, en, meth, args, sb) if en != "" and c_is_enum_name(em, en)
+
+	# `Either.Left(v)` written where nothing says WHICH Either. The target names a built-in
+	# type rather than a value, so inference answers nothing about it and this used to come
+	# out as "the method `Left` on a ?" — the same shape the enum line above was written for.
+	# The sides of an Either are context-typed, so the honest complaint is the missing
+	# context, and it is the one the unqualified spelling has always made.
+	if c_either_qual(target, meth) != "" {
+		c_either_no_context(f"{en}.{meth}")
+	}
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
-		MList    => c_list_method(em, target, meth, args, tty, sb)
-		MMap     => c_map_method(em, target, meth, args, tty, sb)
-		MErr     => c_err_method(em, target, meth, args, sb)
-		MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
-		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
-		MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
-		_        => c_free_method(em, target, meth, args, sb)
+		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
+		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
+		MethKind.MErr => c_err_method(em, target, meth, args, sb)
+		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
+		MethKind.MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
+		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
+		_ => c_free_method(em, target, meth, args, sb)
 	}
 }
 
@@ -4937,12 +5285,12 @@ fn c_err_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb:
 	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
 
 	if meth == "unwrap" {
-		cn := c_opt_name(em, TErr)
+		cn := c_opt_name(em, Ty.TErr)
 		t := c_tmp(em, "zgt_ec")
 		head := "({ zrt_err *" + t + " = (" + c_expr(em, target, sb) + ").cause; "
 		return head + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = *" + t + " } : (" + cn + "){ .tag = 1 }; })"
 	}
-	return "(" + c_opt_name(em, TByte) + "){ .tag = 1 }" if meth == "code"
+	return "(" + c_opt_name(em, Ty.TByte) + "){ .tag = 1 }" if meth == "code"
 
 	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`"
 }
@@ -4981,7 +5329,7 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 
 		elem := c_opt_elem(tty)
 		on := c_opt_name(em, elem)
-		rn := c_carrier_name(em, elem, TErr)
+		rn := c_carrier_name(em, elem, Ty.TErr)
 		t := c_tmp(em, "zgt_ko")
 		r := c_tmp(em, "zgt_kr")
 
@@ -4991,7 +5339,7 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 		# it only when the optional happened to be absent — a conditional side effect the
 		# language does not have anywhere else, and one nothing marked.
 		e := c_tmp(em, "zgt_ke")
-		mut out := "({ " + c_type(TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
+		mut out := "({ " + c_type(Ty.TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
 		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
 		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_res_taken(em, t, elem) + "; }"
 		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
@@ -5017,21 +5365,21 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
 # is a `Result[T]` whatever the optional held; `ok` keeps the Left and drops the Right.
 fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
-	return TEither(c_opt_elem(tty), TErr) if meth == "ok_or" and c_is_opt(tty)
+	return Ty.TEither(c_opt_elem(tty), Ty.TErr) if meth == "ok_or" and c_is_opt(tty)
 
 	# Raising rather than answering `TUnknown` for the same reason c_err_method_ret does:
 	# the two tables must agree about which names EXIST, and only a raise makes them.
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`" if meth != "ok" or not c_is_either(tty)
 
-	return TOpt(c_either_left(tty))
+	return Ty.TOpt(c_either_left(tty))
 }
 
 # c_err_method_ret is the same three answers, for the pass that types the call rather than
 # emits it. The two tables are read by one `c_meth_kind`, so they cannot disagree about
 # WHICH method this is; this is where they must agree about what it gives back.
 fn c_err_method_ret(meth: str) -> Ty {
-	return TStr if meth == "message"
-	return TOpt(TErr) if meth == "unwrap"
+	return Ty.TStr if meth == "message"
+	return Ty.TOpt(Ty.TErr) if meth == "unwrap"
 
 	# It RAISES on a name it does not know, exactly as c_list_method_ret does and unlike
 	# c_map_method_ret, which answers quietly. The two tables are read by one `c_meth_kind`,
@@ -5040,7 +5388,7 @@ fn c_err_method_ret(meth: str) -> Ty {
 	# `TUnknown` and be reported somewhere far from here.
 	raise f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`" if meth != "code"
 
-	return TOpt(TByte)
+	return Ty.TOpt(Ty.TByte)
 }
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
@@ -5054,7 +5402,7 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 	# append silently did nothing. A read-only method on a copy is the same answer as on
 	# the original; a mutating one is not, and is refused rather than dropped.
 	if not c_is_place(em, target) {
-		raise f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first" if c_meth_mutates(meth)
+		raise f"E422 NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first" if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
@@ -5093,8 +5441,8 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 # c_ident_name is the name a bare identifier expression spells, or "" for anything else.
 fn c_ident_name(e: Expr) -> str {
 	return match e {
-		EIdent(n) => n
-		_         => ""
+		Expr.EIdent(n) => n
+		_ => ""
 	}
 }
 
@@ -5113,9 +5461,9 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 
 	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
 	raise f"`{en}.of(n)` takes one integer — the discriminant to reverse" if args.len() != 1
-	raise f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
+	raise f"E420 enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
 
-	cn := c_opt_name(em, TNamed(en))
+	cn := c_opt_name(em, Ty.TNamed(en))
 	n := c_expr(em, args[0], sb)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
@@ -5154,7 +5502,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# such function to call yet — which is a thing to say, not a `?`.
 	tn := c_ident_name(target)
 
-	raise f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type" if tn != "" and c_is_struct_name(em, tn)
+	raise f"E424 NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type" if tn != "" and c_is_struct_name(em, tn)
 
 	# A NAMESPACED GENERIC — `testing.assert_eq(1, 1)`. A module's names flatten into the
 	# one program-wide function space, so this IS the free function of that name, and a
@@ -5176,7 +5524,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# module-private name is unambiguous rather than accidental.
 	c_chk_visible_fn(em, meth)
 
-	return f"{c_fn_cname("", meth)}({c_call_args(em, meth, args, sb)})"
+	return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", meth)}({c_call_args(em, meth, args, sb)})"
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -5245,14 +5593,13 @@ fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
 	return out + " zgt_ll; })"
 }
 
-# c_call_written is a call that WROTE its type arguments — `id[int](7)`. The specialization
-# is named from what the program said rather than from what its arguments imply, and the call
-# then goes on as an ordinary one. Where nothing was written this is exactly c_call, which is
-# the common path and pays nothing for the other's existence.
+# c_call_written is what is left of a call that WROTE its type arguments. The form is gone —
+# GRAMMAR makes a postfix `[ … ]` always an index, and the parser refuses `id[int](7)` — so
+# the only brackets that still reach here are a BUILT-IN TYPE's own, from `map[K, V](…)`,
+# which names a type rather than instantiating a generic.
 #
-# A written argument on a name that is not a template is a mistake worth naming: it means the
-# reader thinks something is generic that is not, and silently ignoring the brackets would
-# let them keep thinking it.
+# The branch that reported a written argument on a non-template went with the form: with the
+# parser refusing it, no call can arrive here naming something that is not generic.
 fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], sb: Subst) -> str {
 	return c_call(em, name, args, sb) if ts.len() == 0
 
@@ -5265,15 +5612,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(name)
-	raise f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
-
-	# A CHECKED rule, so it carries a place: this is a statement about a program the language
-	# rejects — the reader believes something is generic that is not — rather than a form
-	# this compiler has not built.
-	if not c_is_generic(em, name) {
-		chk_at(em, f"`{name}` is not generic, so `{name}[…]` has no type argument to take")
-		return "0"
-	}
+	raise f"E471 NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
 }
@@ -5307,7 +5646,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_ident_val(em, name, sb)}.env{c_args_after(em, bt, args, sb)})" if c_is_fn(bt)
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -5322,17 +5661,22 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# statement about a program the language rejects, not a form this compiler has not built.
 	# Emission carries on into the function of that name and the C is thrown away.
 	if not c_is_unknown(bt) {
-		chk_at(em, f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
+		chk_at(em, "E369", f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
 	}
 
-	if c_is_ctor(name) {
-		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
+	if name_is_type(name) {
+		if c_is_variant(em, name) {
+			c_bare_variant(em, name)
+			return c_variant_ctor(em, name, args, sb)
+		}
 
 		# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
 		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
 		# and reaching here means there was no such place. Saying that is the difference
 		# between a form used wrongly and a form that does not exist.
-		raise f"`{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
+		if c_ctor_side_of(name, args.len()) >= 0 {
+			c_either_no_context(name)
+		}
 
 		# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
 		# out of an int the way every conversion in this language builds its target — by
@@ -5370,7 +5714,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if not c_is_free_fn(em, name) {
 		c_builtin_check(name)
 
-		raise f"undefined function `{name}`"
+		raise f"E425 undefined function `{name}`"
 	}
 
 	# The callee is a real free function, so the last question is whether this module is
@@ -5380,9 +5724,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	c_chk_visible_fn(em, name)
 
 	rels := c_owned_args(em, name, 0, args)
-	return c_call_releasing(em, c_fn_cname("", name), name, args, rels, sb) if c_any_owned(rels)
+	return c_call_releasing(em, c_fn_cname_in(em, c_mod_of(em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
 
-	return f"{c_fn_cname("", name)}({c_call_args(em, name, args, sb)})"
+	return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", name)}({c_call_args(em, name, args, sb)})"
 }
 
 # c_chk_visible_fn is the visibility rule for a free function. It goes through `c_sig_row`,
@@ -5432,7 +5776,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 	# initializer" WARNING, so it compiled and the extra values were dropped. Too few has
 	# been named since c_struct_rest existed; this is the same question from the other side.
 	n := c_struct_field_n(em, sname)
-	raise f"`{sname}` has {strconv.to_string(n, 10)} fields and this gives {strconv.to_string(args.len(), 10)}" if args.len() > n
+	raise f"E426 `{sname}` has {strconv.to_string(n, 10)} fields and this gives {strconv.to_string(args.len(), 10)}" if args.len() > n
 
 	mut out := ""
 	mut i := 0
@@ -5475,7 +5819,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		if c_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
-			chk_at(em, f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
+			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
 			out = out + "0"
 		}
 		i = i + 1
@@ -5622,7 +5966,7 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[Expr], rels
 	call = call + c_default_args(em, key, args.len(), args.len() > 0) + ")"
 
 	ret := c_lookup_sig_ret(em, key)
-	return f"({{ {decls}{call}; {frees}}})" if ty_eq(ret, TVoid)
+	return f"({{ {decls}{call}; {frees}}})" if ty_eq(ret, Ty.TVoid)
 
 	rn := c_tmp(em, "zgt_t")
 	return f"({{ {decls}{c_type(ret)} {rn} = {call}; {frees}{rn}; }})"
@@ -5710,7 +6054,7 @@ fn c_captured_ty(mut &em: Emitter, key: str, idx: int, a: Expr) -> Ty {
 
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
 	row := c_param_row(em, fname, idx)
-	return TUnknown if row < 0
+	return Ty.TUnknown if row < 0
 	return em.pr_ty[row]
 }
 
@@ -5798,7 +6142,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		return sb.repls[i] if sb.names[i] == n
 		i = i + 1
 	}
-	return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}" if c_is_variant(em, n)
+	if c_is_variant(em, n) {
+		c_bare_variant(em, n)
+		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+	}
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return f"(*zg_{n})"
@@ -5810,7 +6157,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
 		c_no_ref_param_value(em, n)
 		em.used_fnptr = true
-		return f"((zg_fnptr)zg_{n})"
+		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
 
 	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
@@ -5830,7 +6177,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# it is a statement about a program the language rejects, not a form this compiler has
 	# not built, and the C emitted after a finding is discarded.
 	if n == "this" and not c_is_bound(em, n) {
-		chk_at(em, "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
+		chk_at(em, "E371", "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
 		return "0"
 	}
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
@@ -5841,7 +6188,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		# else — and of every rule here this is the one that needs a place most, because the
 		# wording locates nothing: a typo names the misspelling and a file may hold four
 		# spellings of it, so the reader is told what is wrong and left to find where.
-		chk_at(em, f"undefined name `{n}`")
+		chk_at(em, "E372", f"undefined name `{n}`")
 		return "0"
 	}
 
@@ -5873,6 +6220,38 @@ fn c_is_bound(mut &em: Emitter, n: str) -> bool {
 
 # c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the
 # parameter types back out of the table c_build_sigs filled.
+# c_fnval_thunk gives a plain function the shape every fn VALUE has: an environment first,
+# then the declared parameters. It answers the thunk's name.
+#
+# A closure needs the environment and a named function has none, and a call site cannot know
+# which of the two it is holding — so rather than two shapes and a discriminator, there is
+# one shape and a thunk that ignores the pointer. It costs a static function per name taken
+# as a value, which is a handful in any program that does it at all.
+fn c_fnval_thunk(mut &em: Emitter, target: str, t: Ty) -> str {
+	name := f"fnval__{strconv.to_string(em.lam_n, 10)}"
+	em.lam_n = em.lam_n + 1
+
+	ps := c_fn_params(t)
+	mut sig := ""
+	mut call := ""
+	mut i := 0
+	for i < ps.len() {
+		sig = sig + f", {c_type(ps[i])} a{strconv.to_string(i, 10)}"
+		if i > 0 {
+			call = call + ", "
+		}
+		call = call + f"a{strconv.to_string(i, 10)}"
+		i = i + 1
+	}
+
+	mut ret := "return "
+	if ty_name(c_fn_ret(t)) == "void" {
+		ret = ""
+	}
+	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}zg_{target}({call}); }}\n")
+	return name
+}
+
 fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 	# one pass: c_build_sigs appends a function's parameters contiguously and in index
 	# order, so collecting the rows that name it collects them already in order
@@ -5884,7 +6263,7 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 		}
 		i = i + 1
 	}
-	return TFn(ptys, c_lookup_sig_ret(em, n))
+	return Ty.TFn(ptys, c_lookup_sig_ret(em, n))
 }
 
 # c_args renders the arguments of a call this emitter has no PARAMETER TABLE for: a call
@@ -5923,7 +6302,8 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 # is a function and not an arm of the match that calls it.
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: list[Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
-	return f"({c_fnptr_cast(fty)}{c_expr(em, target, sb)}.zg_{meth})({c_args_typed(em, c_fn_params(fty), args, sb)})"
+	tv := c_expr(em, target, sb)
+	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -5979,7 +6359,7 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 			en := c_variant_enum(em, a.ctor)
 
 			raise f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum" if en == ""
-			raise f"variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}" if c_named_of(st) != en
+			raise f"E427 variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}" if c_named_of(st) != en
 
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
@@ -6007,7 +6387,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	if ca >= 0 {
 		# every arm after it is dead code AND breaks the lowering, which would hand the
 		# trailing arm the `else` the catch-all was written to take
-		raise "this catch-all arm makes the following arms unreachable" if ca < arms.len() - 1
+		raise "E458 this catch-all arm makes the following arms unreachable" if ca < arms.len() - 1
 		return
 	}
 
@@ -6021,10 +6401,10 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 
 	# an enum is exhaustive when every variant is named
 	en := c_named_of(st)
-	if en != "" and c_name_in(em.enum_names, en) {
+	if en != "" and c_is_enum_name(em, en) {
 		mut i := 0
 		for i < em.var_name.len() {
-			raise f"non-exhaustive match: missing variant {en}.{em.var_name[i]}" if em.var_enum[i] == en and not c_arm_covers(arms, em.var_name[i])
+			raise f"E428 non-exhaustive match: missing variant {en}.{em.var_name[i]}" if em.var_enum[i] == en and not c_arm_covers(arms, em.var_name[i])
 			i = i + 1
 		}
 		return
@@ -6040,7 +6420,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 
 	# anything else — an int, a str, a type inference could not name — has a domain no arm
 	# list can cover, so it takes a catch-all
-	raise "non-exhaustive match: missing a catch-all `_` arm"
+	raise "E467 non-exhaustive match: missing a catch-all `_` arm"
 }
 
 # c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
@@ -6067,8 +6447,8 @@ fn c_arm_covers(arms: list[Arm], ctor: str) -> bool {
 
 fn c_is_bool_ty(t: Ty) -> bool {
 	return match t {
-		TBool => true
-		_     => false
+		Ty.TBool => true
+		_        => false
 	}
 }
 
@@ -6085,8 +6465,8 @@ fn c_arm_covers_bool(arms: list[Arm], v: bool) -> bool {
 
 fn c_is_bool_lit(e: Expr, v: bool) -> bool {
 	return match e {
-		EBool(b) => b == v
-		_        => false
+		Expr.EBool(b) => b == v
+		_             => false
 	}
 }
 
@@ -6175,7 +6555,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# but the arm beside it is not: a binding pattern binds the scrutinee, and over an
 		# optional that is the carrier rather than what it holds, so the arm answering `v`
 		# would answer the box. Named rather than half-built.
-		raise "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`" if c_is_nil_lit(a.lit) and c_is_carrier(st)
+		raise "E472 NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`" if c_is_nil_lit(a.lit) and c_is_carrier(st)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -6210,7 +6590,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(e: Expr, what: str) {
-	raise "NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise "E423 NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
@@ -6289,7 +6669,7 @@ fn c_arm_body(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 #
 # The bindings are popped again: inference must not leave anything behind.
 fn c_infer_match(mut &em: Emitter, scrut: Expr, arms: list[Arm]) -> Ty {
-	return TUnknown if arms.len() == 0
+	return Ty.TUnknown if arms.len() == 0
 
 	return c_infer_arm_body(em, arms[0], c_infer(em, scrut))
 }
@@ -6315,35 +6695,35 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 
 fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
-		EInt(_, _, _) => TInt
-		EFloat(_) => TFloat
-		EStr(_) => TStr
-		EBool(_) => TBool
-		ENil => TNil
-		EIdent(n) => c_infer_ident(em, n)
-		EUnary(oper, x) => c_infer_unary(em, oper, x)
-		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
-		ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
-		EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
-		EField(target, fld) => c_field_ty_of(em, target, fld)
-		EOptChain(target, fld) => c_optchain_ty(em, target, fld)
-		ETry(x) => c_carrier_elem(c_infer(em, x))
-		EIndex(target, idx) => c_elem_ty(em, target, idx)
-		EListLit(elems) => c_infer_listlit(em, elems)
-		EConv(ty, x, nm) => ty
-		EIf(cond, then_e, else_e) => c_infer(em, then_e)
-		EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
-		ERange(lo, hi, inclusive) => TUnknown
-		ETuple(elems) => c_tuple_ty(em, elems)
-		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
-		EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
-		EChanNew(t, cap) => TChan(t, 0)
-		ERecv(ch) => TOpt(ty_chan_elem(c_infer(em, ch)))
-		EForce(x) => c_carrier_elem(c_infer(em, x))
-		ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
-		EGuard(body) => TEither(c_guard_elem(c_guard_val_ty(em, body)), TErr)
-		EIs(x, name) => TBool
-		EIn(x, set) => TBool
+		Expr.EInt(_, _, _) => Ty.TInt
+		Expr.EFloat(_) => Ty.TFloat
+		Expr.EStr(_) => Ty.TStr
+		Expr.EBool(_) => Ty.TBool
+		Expr.ENil => Ty.TNil
+		Expr.EIdent(n) => c_infer_ident(em, n)
+		Expr.EUnary(oper, x) => c_infer_unary(em, oper, x)
+		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
+		Expr.ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
+		Expr.EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
+		Expr.EField(target, fld) => c_field_ty_of(em, target, fld)
+		Expr.EOptChain(target, fld) => c_optchain_ty(em, target, fld)
+		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
+		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
+		Expr.EListLit(elems) => c_infer_listlit(em, elems)
+		Expr.EConv(ty, x, nm) => ty
+		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
+		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
+		Expr.ERange(lo, hi, inclusive) => Ty.TUnknown
+		Expr.ETuple(elems) => c_tuple_ty(em, elems)
+		Expr.EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
+		Expr.EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
+		Expr.EChanNew(t, cap) => Ty.TChan(t, 0)
+		Expr.ERecv(ch) => Ty.TOpt(ty_chan_elem(c_infer(em, ch)))
+		Expr.EForce(x) => c_carrier_elem(c_infer(em, x))
+		Expr.ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
+		Expr.EGuard(body) => Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), Ty.TErr)
+		Expr.EIs(x, name) => Ty.TBool
+		Expr.EIn(x, set) => Ty.TBool
 	}
 }
 
@@ -6363,23 +6743,23 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr]) -> Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
-	if en != "" and c_name_in(em.enum_names, en) {
-		return TOpt(TNamed(en)) if meth == "of"
+	if en != "" and c_is_enum_name(em, en) {
+		return Ty.TOpt(Ty.TNamed(en)) if meth == "of"
 
 		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
 		# variant is named rather than looked up, so there is nothing to fail.
-		return TNamed(en) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+		return Ty.TNamed(en) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
 	}
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
-		MList    => c_list_method_ret(meth)
-		MMap     => c_map_method_ret(meth)
-		MErr     => c_err_method_ret(meth)
-		MCarrier => c_carrier_method_ret(em, tty, meth)
-		MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
-		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
+		MethKind.MList    => c_list_method_ret(meth)
+		MethKind.MMap     => c_map_method_ret(meth)
+		MethKind.MErr     => c_err_method_ret(meth)
+		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
+		MethKind.MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
+		MethKind.MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 
 		# the `_` arm is the NAMESPACED call — a module's names are the one free-function
 		# space — so it answers what a free call of that name answers, generics included
@@ -6417,17 +6797,17 @@ fn c_list_method_rv(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 }
 
 fn c_map_method_ret(meth: str) -> Ty {
-	return TInt if meth == "len"
-	return TBool if meth == "has"
+	return Ty.TInt if meth == "len"
+	return Ty.TBool if meth == "has"
 
-	return TNil
+	return Ty.TNil
 }
 
 fn c_list_method_ret(meth: str) -> Ty {
-	return TInt if meth == "len"
-	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
+	return Ty.TInt if meth == "len"
+	raise f"E444 NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
 
-	return TNil
+	return Ty.TNil
 }
 
 fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
@@ -6439,7 +6819,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 	return c_lookup_sig_ret(em, c_instantiate(em, name, args)) if c_is_generic(em, name)
 
 	return c_intrinsic_ret(name) if c_is_intrinsic(name)
-	return TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
+	return Ty.TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
 
 	# a BUILT-IN ERROR constructor answers an `Err`, not a type of its own name. It reads as
 	# a constructor and it is PascalCase, so the ctor rule below would have typed
@@ -6447,8 +6827,8 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 	# against generated code the programmer cannot open. The whole taxonomy is one runtime
 	# type with a kind tag, which is what makes `e is ValueError` a comparison rather than a
 	# cast, and what lets a bound Err be re-raised or handed to `from`.
-	return TErr if c_err_kind(name) > 0
-	return TNamed(name) if c_is_ctor(name)
+	return Ty.TErr if c_err_kind(name) > 0
+	return Ty.TNamed(name) if name_is_type(name)
 
 	# A BINDING HOLDING A FUNCTION answers the function type's result. `g := double; n :=
 	# g(21)` typed the call from the SIGNATURE table, which has no `g` in it, so the answer
@@ -6463,7 +6843,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 
 # c_is_intrinsic reports whether a name is a runtime intrinsic (a __zrt_ primitive).
 fn c_is_intrinsic(name: str) -> bool {
-	b := list[byte](name)
+	b := bytearray(name)
 	return false if b.len() < 2
 	return b[0] == b'_' and b[1] == b'_'
 }
@@ -6473,7 +6853,7 @@ fn c_intrinsic(name: str) -> str {
 	return "zrt_write_str" if name == "__zrt_write"
 	return "zrt_read_fd" if name == "__zrt_read"
 
-	b := list[byte](name)
+	b := bytearray(name)
 	mut out: list[byte] = []
 	mut i := 2
 	for i < b.len() {
@@ -6496,27 +6876,27 @@ fn c_intrinsic(name: str) -> str {
 # reads it as such; a leaf that answers something and is missing is a bug in this table,
 # which is now a bug that a binding will report.
 fn c_intrinsic_ret(name: str) -> Ty {
-	return TList(TByte) if name == "__zrt_read"
-	return TList(TStr) if name == "__zrt_listdir"
-	return TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
-	return TInt if name == "__zrt_open_write"
-	return TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
-	return TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
-	return TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
-	return TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"
+	return Ty.TList(Ty.TByte) if name == "__zrt_read"
+	return Ty.TList(Ty.TStr) if name == "__zrt_listdir"
+	return Ty.TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
+	return Ty.TInt if name == "__zrt_open_write"
+	return Ty.TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return Ty.TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
+	return Ty.TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
+	return Ty.TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"
 
-	return TNil
+	return Ty.TNil
 }
 
 # c_infer_listlit types a list literal from its FIRST element. An empty one names no
 # element type at all, so it stays unknown and takes the type of whatever it initializes.
 fn c_infer_listlit(mut &em: Emitter, elems: list[Expr]) -> Ty {
-	return TUnknown if elems.len() == 0
-	return TList(c_infer(em, elems[0]))
+	return Ty.TUnknown if elems.len() == 0
+	return Ty.TList(c_infer(em, elems[0]))
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
-	return TNamed(c_variant_enum(em, n)) if c_is_variant(em, n)
+	return Ty.TNamed(c_variant_enum(em, n)) if c_is_variant(em, n)
 	t := c_lookup_var(em, n)
 
 	# nothing bound the name, but a function answers to it: the name IS that function
@@ -6525,17 +6905,17 @@ fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
 }
 
 fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
-	return TBool if oper == "not"
+	return Ty.TBool if oper == "not"
 	return c_infer(em, x)
 }
 
 fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
-	return TBool if c_is_bool_op(oper)
+	return Ty.TBool if c_is_bool_op(oper)
 
 	# `//` is the language's ONE integer division, spelled so the reader sees an integer
 	# whatever the operands are (docs/core/types.md) — so it answers `int` before the
 	# float and byte rules below get a say. That IS the operator.
-	return TInt if oper == "//"
+	return Ty.TInt if oper == "//"
 
 	# BOTH OPERANDS ARE INFERRED ONCE, here, and every rule below reads the answer. c_infer
 	# has no memo and its leaves scan the environment, so asking it again per rule made the
@@ -6545,7 +6925,7 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	ta := c_infer(em, a)
 	tb := c_infer(em, b)
 
-	return TStr if oper == "+" and c_is_str(ta)
+	return Ty.TStr if oper == "+" and c_is_str(ta)
 
 	# WHAT AN EXPRESSION'S TYPE IS, IS DECIDED BY ITS OPERANDS — docs/core/types.md, and the
 	# rule is the one every typed position uses: the operands are already one type, or one of
@@ -6569,40 +6949,41 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	# already refused it; these three keep the old answer so that the rest of the walk has a
 	# type to carry, and so that a pair with an UNKNOWN in it answers as it always did. The
 	# program does not reach C either way.
-	return TFloat if c_is_float(ta) or c_is_float(tb)
-	return TUint if c_is_uint(ta) or c_is_uint(tb)
+	return Ty.TFloat if c_is_float(ta) or c_is_float(tb)
+	return Ty.TUint if c_is_uint(ta) or c_is_uint(tb)
 
-	return TInt
+	return Ty.TInt
 }
 
 # --- statement emission --------------------------------------------------------
 
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_type, is_mut, is_const, ival) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
-		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
-		SPrint(e) => c_print(em, e, ind)
-		SReturn(has_val, e) => c_return(em, has_val, e, ind)
-		SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
-		SExpr(e) => c_expr_stmt(em, e, ind)
-		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
-		SIfLet(name, value, then_body, has_else, else_body) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
-		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
-		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
-		SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
-		SDefer(x) => c_defer(em, x, ind)
-		SSpawn(x) => c_spawn(em, x, ind)
-		SSend(ch, v) => c_send(em, ch, v, ind)
-		SSelect(arms) => c_select(em, arms, ind, false)
-		SForSelect(arms) => c_for_select(em, arms, ind)
-		SDel(n) => c_del(em, n, ind)
-		SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
-		SBreak => c_jump(em, "break", ind)
-		SContinue => c_jump(em, "continue", ind)
-		SNop => ""
+		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
+		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
+		Stmt.SPrint(e) => c_print(em, e, ind)
+		Stmt.SReturn(has_val, e) => c_return(em, has_val, e, ind)
+		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
+		Stmt.SExpr(e) => c_expr_stmt(em, e, ind)
+		Stmt.SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
+		Stmt.SIfLet(name, value, then_body, has_else, else_body) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
+		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
+		Stmt.SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
+		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
+		Stmt.SScope(body) => c_block(em, body, ind)
+		Stmt.SDefer(x) => c_defer(em, x, ind)
+		Stmt.SSpawn(x) => c_spawn(em, x, ind)
+		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)
+		Stmt.SSelect(arms) => c_select(em, arms, ind, false)
+		Stmt.SForSelect(arms) => c_for_select(em, arms, ind)
+		Stmt.SDel(n) => c_del(em, n, ind)
+		Stmt.SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
+		Stmt.SBreak => c_jump(em, "break", ind)
+		Stmt.SContinue => c_jump(em, "continue", ind)
+		Stmt.SNop => ""
 
 		# a marker, not a statement: it records where the next one starts and emits nothing
-		SAt(l, c) => c_at(em, l, c)
+		Stmt.SAt(l, c) => c_at(em, l, c)
 	}
 }
 
@@ -6645,15 +7026,15 @@ fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 
 fn c_is_guard(e: Expr) -> bool {
 	return match e {
-		EGuard(_) => true
-		_         => false
+		Expr.EGuard(_) => true
+		_ => false
 	}
 }
 
 fn c_is_listlit(e: Expr) -> bool {
 	return match e {
-		EListLit(_) => true
-		_           => false
+		Expr.EListLit(_) => true
+		_ => false
 	}
 }
 
@@ -6666,7 +7047,7 @@ fn c_is_listlit(e: Expr) -> bool {
 # will not find.
 fn c_listlit_elems(e: Expr) -> list[Expr] {
 	return match e {
-		EListLit(elems) => elems
+		Expr.EListLit(elems) => elems
 		_ => []
 	}
 }
@@ -6823,7 +7204,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# specialization, so neither ever shares the constant's symbol. Reported at the
 		# constant's declaration in `own`, so a multi-unit build says it once.
 		if c_is_free_fn(em, c.name) and c_const_in(own, c.name) {
-			chk_at_place(em, c.path, c.line, c.col, f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
+			chk_at_place(em, c.path, c.line, c.col, "E373", f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
 		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
@@ -6840,7 +7221,7 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 			if chk_fits_expr(em, c.ty, ty, c.value) {
 				ty = c.ty
 			} else {
-				chk_at_place(em, c.path, c.line, c.col, f"cannot bind {ty_name(ty)} to a {ty_name(c.ty)} binding: `{c.name}`")
+				chk_bind_mismatch(em, c.path, c.line, c.col, ty, c.ty, c.name)
 			}
 		}
 
@@ -7004,8 +7385,8 @@ fn c_const_ready(f: File, e: Expr, done: list[bool]) -> bool {
 # flatten into one namespace before they reach here.
 fn c_const_idx(f: File, e: Expr) -> int {
 	return match e {
-		EIdent(nm) => c_const_row(f, nm)
-		_          => 0 - 1
+		Expr.EIdent(nm) => c_const_row(f, nm)
+		_ => 0 - 1
 	}
 }
 
@@ -7196,7 +7577,7 @@ fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 # way to tell them apart. One loud rule is worth more than that ambiguity; a value that
 # might be absent travels in a struct, or as a sentinel the receiver agrees on.
 fn c_chan_elem_check(t: Ty) {
-	raise "a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel" if c_is_opt(t)
+	raise "E404 a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel" if c_is_opt(t)
 }
 
 # --- channel direction ------------------------------------------------------------
@@ -7211,8 +7592,8 @@ fn c_chan_elem_check(t: Ty) {
 # ask without testing first.
 fn c_chan_dir(t: Ty) -> int {
 	return match t {
-		TChan(_, d) => d
-		_           => 0
+		Ty.TChan(_, d) => d
+		_ => 0
 	}
 }
 
@@ -7533,7 +7914,7 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# The header above is why the drop cannot simply be added here: the release is registered
 	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
 	# there is no taking one entry out of the middle early.
-	raise f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
+	raise f"E470 NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
 
 	c_live_del(em, name)
 	return f"{ind}/* del {name} */\n"
@@ -7712,8 +8093,49 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 # or another function would need an environment to carry it, and an environment is a
 # different value shape than a bare pointer. That is refused by name rather than half-done.
 fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
-	free := c_lambda_free(em, ps, body)
-	raise f"NotImplemented: a closure capturing `{free}` — a lambda may only use its parameters" if free != ""
+	# WHAT IT CAPTURES, and their types read from the enclosing function's environment —
+	# which is still the current one, since a lambda is emitted in the middle of one of its
+	# expressions. The captures become ordinary LEADING PARAMETERS of the lifted function, so
+	# every rule about a by-value parameter already applies to them: the copy in, the drop
+	# out, the shadowing. Nothing in the body has to know it is reading a capture.
+	# A PARAMETER NOTHING COULD TYPE. Every typed position fills these in (c_fn_typed), so
+	# reaching here with one still unknown means the closure met no position that could —
+	# `f := fn (x) { … }`, or an argument slot with fewer parameters than the closure wrote.
+	# That is the second half of carve-out (c) and the specification states it as an error,
+	# so it is one here rather than a `TUnknown` carried into a C declaration.
+	for pm in ps {
+		if c_is_unknown(pm.ty) {
+			chk_at(em, "E385", f"the closure parameter `{pm.name}` has no type, and this position gives it none — a closure takes its parameter types from the function type it is checked against, so write `{pm.name}: T` or put the closure where one is declared")
+		}
+	}
+
+	caps := c_lambda_free_all(em, ps, body)
+	mut cps: list[Param] = []
+	for cn in caps {
+		ct := c_lookup_var(em, cn)
+
+		# A capture whose type is unknown cannot be given a field. It carries no CODE because
+		# no program reaches it: a binding with no type of its own is refused at the binding
+		# (E336), long before a lambda can close over it. This is the guard that says so if
+		# that ever stops being true, and a code exists when a gate pins it and not before.
+		raise f"a closure captures `{cn}`, and this compiler cannot work out what it holds" if c_is_unknown(ct)
+
+		cps.append(Param(cn, ct, false, false, Expr.ENil))
+	}
+
+	# THE VALUES ARE READ HERE, while the ENCLOSING environment is still the current one. A
+	# few lines down it is swapped for the lambda's own, and by then these names mean nothing
+	# — which is the whole reason a capture is a copy taken at the point the lambda is
+	# written rather than a reference to a binding that may already be gone.
+	mut cvals: list[str] = []
+	for cp in cps {
+		cvals.append(c_copied(em, cp.ty, Expr.EIdent(cp.name), c_nosub()))
+	}
+
+	mut allps := cps
+	for pm in ps {
+		allps.append(pm)
+	}
 
 	for pm in ps {
 		if pm.is_ref {
@@ -7740,7 +8162,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -7754,7 +8176,127 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.rel_fns = saved_rel_fns
 	em.ref_names = saved_refs
 	em.used_fnptr = true
-	return f"((zg_fnptr)zg_{name})"
+
+	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
+	# one, and it reaches the fn-value shape the same way a named function does — through a
+	# thunk that takes the environment and ignores it.
+	return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, name, c_lambda_ty(ps, has_ret, ret))}, NULL}})" if caps.len() == 0
+
+	return c_closure(em, name, cps, ps, has_ret, ret, cvals)
+}
+
+# c_closure builds the environment a capturing lambda carries, and the thunk that unpacks it.
+#
+# The shape is `spawn`'s, one construct over: a per-site struct of the captured values, a
+# static function that reads them back out, and a heap block holding one. What differs is
+# only WHEN it runs — a coroutine's env is consumed once, a closure's every time it is
+# called — which is why this one is not freed by its thunk.
+#
+# THE ENVIRONMENT IS NOT FREED. Every other value this emitter allocates is registered for
+# release at the scope that made it; a closure's cannot be, because the closure may outlive
+# that scope — that is what closing over a value is for. Freeing it correctly needs the fn
+# value to carry copy and drop functions, which is a change to the type rather than to this
+# function, and it is written down rather than half-done (docs/core/memory.md).
+fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has_ret: bool, ret: Ty, vals: list[str]) -> str {
+	tag := strconv.to_string(em.lam_n, 10)
+	em.lam_n = em.lam_n + 1
+
+	envty := f"zg_lamenv_{tag}"
+
+	mut fields := ""
+	mut unpack := ""
+	mut i := 0
+	for i < cps.len() {
+		fi := f"f{strconv.to_string(i, 10)}"
+		fields = fields + f" {c_type(cps[i].ty)} {fi};"
+		if i > 0 {
+			unpack = unpack + ", "
+		}
+		unpack = unpack + f"e->{fi}"
+		i = i + 1
+	}
+	em.lam_defs.append(f"typedef struct {{{fields} }} {envty};\n")
+
+	mut sig := ""
+	mut call := unpack
+	mut j := 0
+	for j < ps.len() {
+		aj := f"a{strconv.to_string(j, 10)}"
+		sig = sig + f", {c_type(ps[j].ty)} {aj}"
+		call = call + ", " + aj
+		j = j + 1
+	}
+
+	mut retkw := "return "
+	if not has_ret {
+		retkw = ""
+	}
+	thunk := f"lamcall_{tag}"
+	em.lam_defs.append(f"static {c_ret_of(has_ret, ret)} zg_{thunk}(const void *zg_envp{sig}) {{ const {envty} *e = (const {envty} *)zg_envp; {retkw}zg_{name}({call}); }}\n")
+
+	mut fill := ""
+	mut k := 0
+	for k < vals.len() {
+		fill = fill + f" zgt_ce{tag}->f{strconv.to_string(k, 10)} = {vals[k]};"
+		k = k + 1
+	}
+	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_alloc(sizeof({envty}));{fill} (zg_fnptr){{(void (*)(void))zg_{thunk}, zgt_ce{tag}}}; }})"
+}
+
+fn c_ret_of(has_ret: bool, ret: Ty) -> str {
+	return "void" if not has_ret
+
+	return c_type(ret)
+}
+
+# c_fn_typed fills a closure from the function type it is being checked against — the
+# parameter types it omitted, and its return type if it omitted that too (GRAMMAR#fn-expr
+# makes `ret-type?` optional for exactly this reason). Anything else passes through
+# untouched, so every caller can hand it whatever it has.
+#
+# A written type WINS: `fn (x: str)` at a `fn (int) -> …` position keeps its `str` and is
+# refused by the check that follows, naming the two types. Adopting the position's type
+# instead would make the annotation a comment.
+#
+# Arity is not repaired. A closure with more parameters than the position has types leaves
+# the extra ones TUnknown, and c_lambda refuses them by name — the position could not have
+# supplied a type for a parameter it does not have.
+fn c_is_fnlit(e: Expr) -> bool {
+	return match e {
+		Expr.EFn(_, _, _, _) => true
+		_ => false
+	}
+}
+
+fn c_fn_typed(want: Ty, e: Expr) -> Expr {
+	return match e {
+		Expr.EFn(ps, has_ret, ret, body) => c_fn_typed_at(want, ps, has_ret, ret, body)
+		_ => e
+	}
+}
+
+fn c_fn_typed_at(want: Ty, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> Expr {
+	return Expr.EFn(ps, has_ret, ret, body) if not c_is_fn(want)
+
+	wps := c_fn_params(want)
+	mut out: list[Param] = []
+	mut i := 0
+	for i < ps.len() {
+		pm := ps[i]
+		if c_is_unknown(pm.ty) and i < wps.len() {
+			out.append(Param(pm.name, wps[i], pm.is_ref, pm.has_def, pm.def))
+		} else {
+			out.append(pm)
+		}
+		i = i + 1
+	}
+
+	# The RETURN comes with the parameters, from the same type — GRAMMAR#fn-expr makes
+	# `ret-type?` optional so that `fn (x) { … }` is a whole closure and not half of one.
+	wret := c_fn_ret(want)
+	return Expr.EFn(out, true, wret, body) if not has_ret and not c_is_nil_ty(wret)
+
+	return Expr.EFn(out, has_ret, ret, body)
 }
 
 fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
@@ -7762,17 +8304,17 @@ fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
 	for pm in ps {
 		tys.append(pm.ty)
 	}
-	mut r := TVoid
+	mut r := Ty.TVoid
 	if has_ret {
 		r = ret
 	}
-	return TFn(tys, r)
+	return Ty.TFn(tys, r)
 }
 
-# c_lambda_free is the first name a lambda's body uses that it did not declare — "" when
-# there is none. A parameter, a module constant, and a function are all fine; anything
-# else would have to be carried in an environment.
-fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
+# c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
+# A parameter, a name bound inside, a module constant and a function are all answered
+# elsewhere, so what is left is the enclosing function's bindings.
+fn c_lambda_free_all(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> list[str] {
 	mut ids: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
@@ -7782,10 +8324,13 @@ fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
 		bound.append(pm.name)
 	}
 	collect_binds(body, bound)
+	mut out: list[str] = []
 	for id in ids {
-		return id if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id)
+		if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id) and not c_name_in(out, id) {
+			out.append(id)
+		}
 	}
-	return ""
+	return out
 }
 
 fn c_name_in(names: list[str], name: str) -> bool {
@@ -7807,7 +8352,7 @@ fn c_name_in(names: list[str], name: str) -> bool {
 # type` has no spelling here. So the function value is refused where it is MADE — at the
 # lambda, and at the name — rather than at a call that no longer knows what it is calling.
 fn c_no_ref_param(what: str) {
-	raise f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
+	raise f"E469 NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with"
 }
 
 # c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
@@ -7946,7 +8491,7 @@ fn c_with_defaults(mut &em: Emitter, key: str, args: list[Expr]) -> list[Expr] {
 # (through c_fn_cname) and the signature key the argument rules read, which is what makes a
 # deferred generic call checked exactly as a direct one is.
 fn c_callee_gen(mut &em: Emitter, key: str, x: Expr) -> Callee {
-	return Callee(c_fn_cname("", key), c_callee_args_of(x), key)
+	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", key), c_callee_args_of(x), key)
 }
 
 # c_callee_args_of is the argument list of either call form, since c_callee_raw reaches this
@@ -7965,7 +8510,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# it has no symbol, having been taken out of the program. `chk_callsite` was looking up
 	# the same absent key, so the arity and argument rules were skipped as well.
 	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
-	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
+	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", n), c_call_args_of(x), n) if n != ""
 	raise f"NotImplemented: {what} of anything but a function, a method, or a namespaced function" if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)
@@ -7982,7 +8527,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 		# space, so a namespaced callee IS the free function of that name, exactly as an
 		# ordinary `mod.work()` call is lowered
 		raise f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function" if not c_name_in(em.sig_names, m)
-		return Callee(c_fn_cname("", m), margs, m)
+		return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", m), margs, m)
 	}
 
 	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
@@ -7998,21 +8543,21 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 
 fn c_is_method_expr(e: Expr) -> bool {
 	return match e {
-		EMethod(_, _, _) => true
+		Expr.EMethod(_, _, _) => true
 		_ => false
 	}
 }
 
 fn c_meth_target_of(e: Expr) -> Expr {
 	return match e {
-		EMethod(t, _, _) => t
-		_ => ENil
+		Expr.EMethod(t, _, _) => t
+		_ => Expr.ENil
 	}
 }
 
 fn c_meth_name_of(e: Expr) -> str {
 	return match e {
-		EMethod(_, m, _) => m
+		Expr.EMethod(_, m, _) => m
 		_ => ""
 	}
 }
@@ -8020,22 +8565,26 @@ fn c_meth_name_of(e: Expr) -> str {
 fn c_meth_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
-		EMethod(_, _, a) => a
+		Expr.EMethod(_, _, a) => a
 		_ => none
 	}
 }
 
 fn c_call_name(e: Expr) -> str {
 	return match e {
-		ECall(n, _, _) => n
+		Expr.ECall(n, _, _) => n
 		_ => ""
 	}
 }
 
+# c_call_args_of is the argument list of a call, whichever shape wrote it. `Either.Left(v)`
+# is an EMethod and `Left(v)` an ECall, and the one caller that reads this — the Either
+# injection — takes the same single argument out of both.
 fn c_call_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
-		ECall(_, a, _) => a
+		Expr.ECall(_, a, _) => a
+		Expr.EMethod(_, _, a) => a
 		_ => none
 	}
 }
@@ -8052,8 +8601,8 @@ fn c_has_defer(body: list[Stmt]) -> bool {
 # Answering only for SDefer left the close on the cleanup stack with no unwind to run it.
 fn c_is_defer(s: Stmt) -> bool {
 	return match s {
-		SDefer(_) => true
-		SClose(ch, at_exit) => at_exit
+		Stmt.SDefer(_) => true
+		Stmt.SClose(ch, at_exit) => at_exit
 		_ => false
 	}
 }
@@ -8101,7 +8650,7 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 	# this all along; `zerg` reached it by inference the day a byte literal carried its type.
 	# a key whose type inference could not name is left alone, as every other rule here
 	# does: guessing turns a typing gap into a refusal of a working program
-	raise f"NotImplemented: a map key of type {ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`" if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+	raise f"E431 NotImplemented: a map key of type {ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`" if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
 
 	mut hash := "zrt_hash_int"
 	mut eq := "zrt_eq_int"
@@ -8124,14 +8673,14 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 }
 
 fn c_map_lit_ty(mut &em: Emitter, ks: list[Expr], vs: list[Expr]) -> Ty {
-	return TMap(TUnknown, TUnknown) if ks.len() == 0
-	return TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
+	return Ty.TMap(Ty.TUnknown, Ty.TUnknown) if ks.len() == 0
+	return Ty.TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
 }
 
 fn c_is_maplit(e: Expr) -> bool {
 	return match e {
-		EMapLit(_, _) => true
-		_             => false
+		Expr.EMapLit(_, _) => true
+		_ => false
 	}
 }
 
@@ -8139,7 +8688,7 @@ fn c_is_maplit(e: Expr) -> bool {
 # the declaration says it is.
 fn c_map_lit_as(mut &em: Emitter, want: Ty, lit: Expr, sb: Subst) -> str {
 	return match lit {
-		EMapLit(ks, vs) => c_map_lit_at(em, c_map_key_ty(want), c_map_val_ty(want), ks, vs, sb)
+		Expr.EMapLit(ks, vs) => c_map_lit_at(em, c_map_key_ty(want), c_map_val_ty(want), ks, vs, sb)
 		_ => ""
 	}
 }
@@ -8183,7 +8732,7 @@ fn c_slice_bound(mut &em: Emitter, e: Expr) {
 	t := c_infer(em, e)
 	return if c_is_unknown(t) or c_is_int(t)
 
-	chk_at(em, f"a slice bound is an int, and this is {ty_name(t)}")
+	chk_at(em, "E374", f"a slice bound is an int, and this is {ty_name(t)}")
 }
 
 # c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
@@ -8228,7 +8777,7 @@ fn c_list_index_int(mut &em: Emitter, idx: Expr) {
 	t := c_infer(em, idx)
 	return if c_is_unknown(t) or c_is_int(t)
 
-	chk_at(em, f"a list index is an int, and this is {ty_name(t)}")
+	chk_at(em, "E375", f"a list index is an int, and this is {ty_name(t)}")
 }
 
 fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
@@ -8313,43 +8862,43 @@ fn c_map_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty
 
 fn c_index_target(e: Expr) -> Expr {
 	return match e {
-		EIndex(t, _) => t
-		_            => ENil
+		Expr.EIndex(t, _) => t
+		_ => Expr.ENil
 	}
 }
 
 fn c_index_key(e: Expr) -> Expr {
 	return match e {
-		EIndex(_, i) => i
-		_            => ENil
+		Expr.EIndex(_, i) => i
+		_ => Expr.ENil
 	}
 }
 
 fn c_is_index(e: Expr) -> bool {
 	return match e {
-		EIndex(_, _) => true
-		_            => false
+		Expr.EIndex(_, _) => true
+		_ => false
 	}
 }
 
 fn c_is_map(t: Ty) -> bool {
 	return match t {
-		TMap(_, _) => true
-		_          => false
+		Ty.TMap(_, _) => true
+		_             => false
 	}
 }
 
 fn c_map_key_ty(t: Ty) -> Ty {
 	return match t {
-		TMap(k, _) => k
-		_          => TUnknown
+		Ty.TMap(k, _) => k
+		_             => Ty.TUnknown
 	}
 }
 
 fn c_map_val_ty(t: Ty) -> Ty {
 	return match t {
-		TMap(_, v) => v
-		_          => TUnknown
+		Ty.TMap(_, v) => v
+		_             => Ty.TUnknown
 	}
 }
 
@@ -8363,7 +8912,7 @@ fn c_tuple_ty(mut &em: Emitter, elems: list[Expr]) -> Ty {
 	for e in elems {
 		tys.append(c_infer(em, e))
 	}
-	return TTuple(tys)
+	return Ty.TTuple(tys)
 }
 
 # c_tuple_cname is the carrier's C name. It is a PURE function of the shape because c_type
@@ -8424,7 +8973,7 @@ fn c_tuple_decl(mut &em: Emitter, tys: list[Ty]) -> str {
 	}
 	em.tup_names.append(name)
 	out = out + decl + f" }} {name};\n"
-	if c_needs_copy(em, TTuple(tys)) {
+	if c_needs_copy(em, Ty.TTuple(tys)) {
 		out = out + c_tuple_copy_helper(em, name, tys)
 	}
 	return out
@@ -8441,13 +8990,13 @@ fn c_tuple_decl(mut &em: Emitter, tys: list[Ty]) -> str {
 # `zg_opt_int64_t` into the earlier section, and cc reported it. One stream in met-order
 # cannot be wrong, because each declaration inlines what it spells (c_spelled_pre).
 fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
-	c_spelled_register(em, TTuple(tys))
+	c_spelled_register(em, Ty.TTuple(tys))
 	return c_tuple_cname(tys)
 }
 
 fn c_ident_safe(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
 			out.append(c)
 		} else if c == b'*' {
@@ -8488,7 +9037,7 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	# c_fieldref answers it: an enum name infers to nothing, so asking about the target
 	# first would lose the shape.
 	en := c_qualified_variant(em, target, fld)
-	return TNamed(en) if en != ""
+	return Ty.TNamed(en) if en != ""
 
 	# `lib.LIMIT` — a module-qualified name is the name it ends with, and its TYPE is the
 	# module row's (k_tys), not the environment's: a local shadowing the constant must not
@@ -8506,15 +9055,15 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 		# `int(s)` is a CAST here, not a parse — the index has to come from strconv
 		i := strconv.parse_int(fld, 10)
 		return ts[i] if i >= 0 and i < ts.len()
-		return TUnknown
+		return Ty.TUnknown
 	}
 
 	# An Err is a RUNTIME struct, not a declared one, so its two readable fields are
 	# answered here. They are deliberately the whole set: a message to report and a kind
 	# to compare, which is what `Right(e)` needs to be worth binding.
 	if c_is_err_ty(t) {
-		return TStr if fld == "msg"
-		return TInt if fld == "kind"
+		return Ty.TStr if fld == "msg"
+		return Ty.TInt if fld == "kind"
 
 		raise f"NotImplemented: the field `{fld}` on an Err — it has `msg` and `kind`"
 	}
@@ -8540,9 +9089,9 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# the enum is named and the field is not one of ITS variants. Falling through said
 	# `undefined name `Color`` — about the one name in the expression that IS defined.
 	tn := c_ident_name(target)
-	if tn != "" and c_name_in(em.enum_names, tn) {
-		raise f"`{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
-		raise f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
+	if tn != "" and c_is_enum_name(em, tn) {
+		raise f"E456 `{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
+		raise f"E457 `{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
 	}
 
 	ns := c_ident_name(target)
@@ -8596,15 +9145,14 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# "no member named 'zgt_z' in 'zg_P'" against generated code — the same class as an
 	# undefined name, and answerable from the same tables. A target whose type inference
 	# could not name is left alone: guessing there would refuse a working program.
+	#
+	# A STRUCT THAT LACKS THE FIELD and A TARGET WITH NO FIELDS AT ALL are one rule — this
+	# said so in prose while reporting them as two, one raised without a place and one
+	# collected with one — so they report through one channel, and the half that used to
+	# raise says WHERE as well.
 	nm := c_named_of(tt)
-	raise f"no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
-
-	# AND A TARGET THAT HAS NO FIELDS AT ALL. The rule above answers about a struct that lacks
-	# the field; a scalar lacks the whole idea of one, and fell past it into `zg_a` on an
-	# int64_t — "member reference base type 'int64_t' is not a structure or union", from cc.
-	# Two halves of one question, and only the first had been asked.
-	if chk_is_scalar(tt) {
-		chk_at(em, f"no field `{fld}` on {ty_name(tt)}")
+	if chk_is_scalar(tt) or (c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))) {
+		chk_at(em, "E376", f"no field `{fld}` on {ty_name(tt)}")
 	}
 
 	return f"{tgt}.zg_{fld}"
@@ -8616,7 +9164,7 @@ fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
 	return if c_is_unknown(t)
 
 	if not c_is_tuple(t) {
-		chk_at(em, f"`.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
+		chk_at(em, "E377", f"`.{fld}` reads a tuple element, and {ty_name(t)} is not a tuple")
 		return
 	}
 
@@ -8624,11 +9172,11 @@ fn c_tuple_index_ok(mut &em: Emitter, t: Ty, fld: str) {
 	i := strconv.parse_int(fld, 10)
 	return if i >= 0 and i < n
 
-	chk_at(em, f"a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
+	chk_at(em, "E378", f"a tuple of {strconv.to_string(n, 10)} has no `.{fld}` — its elements are `.0` through `.{strconv.to_string(n - 1, 10)}`")
 }
 
 fn c_all_digits(s: str) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() == 0
 	for c in b {
 		return false if not ascii.is_digit(c)
@@ -8638,16 +9186,16 @@ fn c_all_digits(s: str) -> bool {
 
 fn c_is_tuple(t: Ty) -> bool {
 	return match t {
-		TTuple(_) => true
-		_         => false
+		Ty.TTuple(_) => true
+		_            => false
 	}
 }
 
 fn c_tuple_tys(t: Ty) -> list[Ty] {
 	mut none: list[Ty] = []
 	return match t {
-		TTuple(ts) => ts
-		_          => none
+		Ty.TTuple(ts) => ts
+		_             => none
 	}
 }
 
@@ -8657,7 +9205,7 @@ fn c_range_unsupported() -> str {
 
 fn c_is_range(e: Expr) -> bool {
 	return match e {
-		ERange(_, _, _) => true
+		Expr.ERange(_, _, _) => true
 		_ => false
 	}
 }
@@ -8666,21 +9214,21 @@ fn c_is_range(e: Expr) -> bool {
 # node is taken apart one field at a time rather than in a block-bodied arm.
 fn c_range_lo(e: Expr) -> Expr {
 	return match e {
-		ERange(a, _, _) => a
-		_ => ENil
+		Expr.ERange(a, _, _) => a
+		_ => Expr.ENil
 	}
 }
 
 fn c_range_hi(e: Expr) -> Expr {
 	return match e {
-		ERange(_, b, _) => b
-		_ => ENil
+		Expr.ERange(_, b, _) => b
+		_ => Expr.ENil
 	}
 }
 
 fn c_range_incl(e: Expr) -> bool {
 	return match e {
-		ERange(_, _, incl) => incl
+		Expr.ERange(_, _, incl) => incl
 		_ => false
 	}
 }
@@ -8695,7 +9243,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
 	outer_scope := c_scope_open(em)
-	c_add_var(em, var, TInt, false, false)
+	c_add_var(em, var, Ty.TInt, false, false)
 
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
@@ -8830,7 +9378,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# is written as that rewrite rather than as a loop of its own because the two ARE the
 	# same loop — the only question a str raises is what its elements are, and the answer is
 	# a `list[rune]`, which every rule below already knows how to walk.
-	return c_forin(em, var, EConv(TList(TRune), iter, "list"), body, ind) if c_is_str(ct)
+	return c_forin(em, var, Expr.EConv(Ty.TList(Ty.TRune), iter, "list"), body, ind) if c_is_str(ct)
 
 	# WHAT IS LEFT MUST BE A LIST. Everything else fell through to the list walk, which reads
 	# an element type a non-container does not have — so `for x in n` on an int bound `x` to
@@ -8838,7 +9386,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# blamed for the thing being walked: a sentence about the consequence, naming the one part
 	# of the line that is fine.
 	if not c_is_list(ct) and not c_is_unknown(ct) {
-		chk_at(em, f"`for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
+		chk_at(em, "E379", f"`for … in` walks a list, a map, a str, a range or a channel, and {ty_name(ct)} is not iterable")
 	}
 
 	elem := c_list_elem(ct)
@@ -8864,7 +9412,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	mark := c_new_mark(em)
 	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
 	out = out + in2 + "zrt_list zgt_it = " + c_copied(em, c_infer(em, iter), iter, c_nosub()) + ";\n"
-	out = out + c_pend_drop(em, TList(elem), "zgt_it", in2)
+	out = out + c_pend_drop(em, Ty.TList(elem), "zgt_it", in2)
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_list_len(&zgt_it); zgt_i++) {\n"
 	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at_ref(&zgt_it, zgt_i));\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
@@ -8943,7 +9491,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
-	raise f"`{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival))
+	raise f"E432 `{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival))
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one; the
 	# value is rendered BEFORE the binding enters scope, so an initializer naming `name`
@@ -9149,7 +9697,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# to show for the absent side is the program's decision. `print x ?? "…"` or `print x!`
 	# says which one was meant; printing the carrier itself used to reach cc as an integer
 	# cast of a struct.
-	raise f"`print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if c_is_opt(ty)
+	raise f"E433 `print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if c_is_opt(ty)
 
 	# A USER OVERRIDE WINS: a type that declares `display()` (or `debug`, its default —
 	# docs/runtime/format.md) prints through it. The call answers a fresh owned cell, so
@@ -9161,7 +9709,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 		return f"{ind}/* mis-shaped render override */\n" if meth == ""
 
 		em.used_rt = true
-		call := c_expr(em, EMethod(e, meth, []), c_nosub())
+		call := c_expr(em, Expr.EMethod(e, meth, []), c_nosub())
 		return f"{ind}{{ const char* zgt_ps = {call}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
 
@@ -9182,13 +9730,13 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 		return f"{ind}{{ const char* zgt_ps = {ex}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
 	return match ty {
-		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
+		Ty.TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
 
 		# an Err shows as what went wrong; the kind is there to be compared, not read out
-		TErr   => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
-		TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
-		TBool  => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
-		_      => f"{ind}{c_print_number(ty, ex)}\n"
+		Ty.TErr   => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
+		Ty.TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
+		Ty.TBool  => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
+		_         => f"{ind}{c_print_number(ty, ex)}\n"
 	}
 }
 
@@ -9282,7 +9830,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the same missing value written down — including `return if c`, GRAMMAR's bare early
 	# exit, which is only ever legal where a bare `return` is. What is refused is exactly
 	# what would have reached cc, because `c_is_nil_ty` is the predicate c_ret_type asks.
-	raise f"a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
+	raise f"E468 a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
 
 	return f"{pre}{ind}return;\n"
 }
@@ -9312,7 +9860,7 @@ fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, els
 # an outer `v` may already be in scope and C has no shadowing inside a function.
 fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
 	t := c_infer(em, value)
-	raise f"NotImplemented: `if {name} := …` over a {ty_name(t)} — it binds the Left of a Result[T] or a T?" if not c_is_carrier(t)
+	raise f"E434 NotImplemented: `if {name} := …` over a {ty_name(t)} — it binds the Left of a Result[T] or a T?" if not c_is_carrier(t)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
@@ -9424,7 +9972,7 @@ fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst
 # writes begins with the literal pair `({`, and no ordinary parenthesized rendering does —
 # a `(` there is always followed by a value, a cast, or another `(`.
 fn c_is_stmt_expr(s: str) -> bool {
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() < 2
 	return b[0] == b'(' and b[1] == b'{'
 }
@@ -9440,7 +9988,7 @@ fn c_is_stmt_expr(s: str) -> bool {
 # construction, instead of every caller asking a second question beside this one.
 fn c_is_wrapped(s: str) -> bool {
 	return false if c_is_stmt_expr(s)
-	b := list[byte](s)
+	b := bytearray(s)
 	return false if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')'
 	mut depth := 0
 	mut i := 0
@@ -9488,7 +10036,7 @@ fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 		# REPORTED rather than raised, so it carries the place: `raise` is a statement, so a
 		# marker is set, and this is a statement about a program the language rejects rather
 		# than a form the compiler has not built. Emission carries on and the C is discarded.
-		chk_at(em, f"raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
+		chk_at(em, "E380", f"raise carries an `Err`, or a message to build one from — {ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
 	}
 
 	return f"zrt_err_new({c_expr(em, x, c_nosub())})"
@@ -9498,13 +10046,13 @@ fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 # made of — and anything else is refused by name here rather than handed to the runtime as
 # whatever C type it happened to be.
 fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
-	raise f"a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)" if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
+	raise f"E402 a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)" if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
 	return c_expr(em, cause, c_nosub())
 }
 
 fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 	return match x {
-		ECall(nm, _, _) => c_err_kind(nm) > 0
+		Expr.ECall(nm, _, _) => c_err_kind(nm) > 0
 		_ => false
 	}
 }
@@ -9632,9 +10180,9 @@ fn c_ret_type(fn_d: FnDecl) -> str {
 
 fn c_is_nil_ty(t: Ty) -> bool {
 	return match t {
-		TNil  => true
-		TVoid => true
-		_     => false
+		Ty.TNil  => true
+		Ty.TVoid => true
+		_        => false
 	}
 }
 
@@ -9657,8 +10205,8 @@ fn c_param_types(fn_d: FnDecl) -> str {
 	return out
 }
 
-fn c_proto(fn_d: FnDecl) -> str {
-	return f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
+fn c_proto(mut &em: Emitter, fn_d: FnDecl) -> str {
+	return f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(fn_d.path), fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
 }
 
 # c_check_loop_jump refuses a `break` or a `continue` that belongs to no loop. Without it
@@ -9672,13 +10220,13 @@ fn c_proto(fn_d: FnDecl) -> str {
 fn c_check_loop_jump(body: list[Stmt], in_loop: bool) {
 	for s in body {
 		match s {
-			SBreak => c_loop_jump_err("break", in_loop)
-			SContinue => c_loop_jump_err("continue", in_loop)
-			SIf(cond, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
-			SIfLet(nm, v, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
-			SFor(is_cond, cond, body_b) => c_check_loop_jump(body_b, true)
-			SForIn(nm, it, body_b) => c_check_loop_jump(body_b, true)
-			SSelect(arms) => c_check_loop_jump_sel(arms, in_loop)
+			Stmt.SBreak => c_loop_jump_err("break", in_loop)
+			Stmt.SContinue => c_loop_jump_err("continue", in_loop)
+			Stmt.SIf(cond, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
+			Stmt.SIfLet(nm, v, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
+			Stmt.SFor(is_cond, cond, body_b) => c_check_loop_jump(body_b, true)
+			Stmt.SForIn(nm, it, body_b) => c_check_loop_jump(body_b, true)
+			Stmt.SSelect(arms) => c_check_loop_jump_sel(arms, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -9697,7 +10245,7 @@ fn c_check_loop_jump_sel(arms: list[SelArm], in_loop: bool) {
 
 fn c_loop_jump_err(kw: str, in_loop: bool) {
 	return if in_loop
-	raise f"`{kw}` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
+	raise f"E401 `{kw}` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
@@ -9734,7 +10282,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	em.fn_mark_used = false
 	mut pdefer := ""
 
-	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
+	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(fn_d.path), fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -9781,9 +10329,9 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	if fn_d.has_ret {
 		last := body.len() - 1
 		if body.len() == 0 or not c_stmt_diverges(body[last]) {
-			raise f"`{fn_d.name}` is declared to answer {ty_name(fn_d.ret)}, and its body falls off the end — a block's value is its last statement's, so end it with a `return` or with the expression it answers" if body.len() == 0 or not c_is_expr_stmt(body[last])
+			raise f"E435 `{fn_d.name}` is declared to answer {ty_name(fn_d.ret)}, and its body falls off the end — a block's value is its last statement's, so end it with a `return` or with the expression it answers" if body.len() == 0 or not c_is_expr_stmt(body[last])
 
-			body[last] = SReturn(true, c_expr_stmt_of(body[last]))
+			body[last] = Stmt.SReturn(true, c_expr_stmt_of(body[last]))
 		}
 	}
 
@@ -9819,9 +10367,9 @@ fn c_body_diverges(body: list[Stmt]) -> bool {
 
 fn c_stmt_diverges(s: Stmt) -> bool {
 	return match s {
-		SReturn(_, _) => true
-		SRaise(_, _, _) => true
-		SIf(_, t, has_else, e) => has_else and c_body_diverges(t) and c_body_diverges(e)
+		Stmt.SReturn(_, _) => true
+		Stmt.SRaise(_, _, _) => true
+		Stmt.SIf(_, t, has_else, e) => has_else and c_body_diverges(t) and c_body_diverges(e)
 		_ => false
 	}
 }
@@ -9851,11 +10399,11 @@ fn c_main_ret(f: File) -> Ty {
 		fn_i := f.fns[i]
 		if fn_i.name == "main" and fn_i.recv == "" {
 			return fn_i.ret if fn_i.has_ret
-			return TNil
+			return Ty.TNil
 		}
 		i = i + 1
 	}
-	return TNil
+	return Ty.TNil
 }
 
 # c_is_result_nil is the `Result[nil]` entry shape — a Result whose element is nil, which
@@ -10059,6 +10607,14 @@ pub fn c_with_derived(prog: File) -> File {
 		for fnd in gen.fns {
 			out.fns.append(fnd)
 		}
+
+		# AND THE TYPES IT DECLARES. A derived impl declares none, so this list was the two
+		# above for as long as `derive` was the only decorator — and `#[obj]`'s expansion is
+		# a STRUCT and a function, so the struct went missing and its own wrap function came
+		# back with a return type nothing declared.
+		for sd in gen.structs {
+			out.structs.append(sd)
+		}
 		i = i + 1
 	}
 	return out
@@ -10069,10 +10625,193 @@ pub fn c_with_derived(prog: File) -> File {
 # error, because generating an impl from structure needs code that reads structure, and
 # nothing user-authored may.
 fn c_derive_src(prog: File, target: str, nm: str) -> str {
-	raise f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
-	raise f"cannot derive `{nm}`: the derivable specs are compiler-owned, and a `spec` you write is never one of them — write `impl {nm} for {target}` instead" if nm != "Eq"
+	return c_obj_src(prog, target) if nm == "#obj"
 
-	return c_derive_eq(prog, target)
+	raise f"E436 NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	return c_derive_eq(prog, target) if nm == "Eq"
+
+	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
+	# and the difference is where the generated code comes from: on a struct it is read out
+	# of the type's STRUCTURE, which only compiler-owned code may do, so that half stays a
+	# closed set. On an enum it is DELEGATION — each arm hands the call to the payload,
+	# which already implements the spec — and that rewrite is mechanical for any spec at all.
+	#
+	# It is also the rewrite a person would otherwise write by hand and have to extend every
+	# time a variant is added. Deriving it means a new variant regenerates the delegation.
+	return c_derive_delegate(prog, target, nm) if c_derive_enum_at(prog, target) >= 0 and c_derive_spec_at(prog, nm) >= 0
+
+	raise f"E437 cannot derive `{nm}`: on a struct the derivable specs are compiler-owned, and a `spec` you write is never one of them; on an enum a spec is derived by DELEGATION, and either `{target}` is not an enum or `{nm}` is not a spec this program declares — write `impl {nm} for {target}` instead"
+}
+
+# c_obj_src writes what `#[obj]` on a spec stands for: a companion STRUCT OF FUNCTION
+# VALUES, one field per method, and a generic function that wraps any implementer into one.
+#
+#     #[obj]
+#     spec Draw { fn draw() -> str }
+#
+#     struct DrawObj { draw: fn () -> str }
+#     fn draw_obj[T: Draw](v: T) -> DrawObj {
+#         return DrawObj(fn () -> str { return v.draw() })
+#     }
+#
+# THE OPENNESS COMES FROM THE WRAP POINT, not from anything at run time: `draw_obj` is
+# monomorphized per implementer, and what comes back has one type. A `list[DrawObj]` is
+# therefore a heterogeneous collection with no vtable, no header on any value and no
+# downcast — which is the trade the whole design is: you may call what the spec declares,
+# and you may not ask what is inside.
+#
+# It could not be written before closures captured, because every field is a closure over
+# the wrapped value. That is also why the refusals below are what they are.
+fn c_obj_src(prog: File, target: str) -> str {
+	at := c_derive_spec_at(prog, target)
+	raise f"E280 `#[obj]` goes on a `spec`, and `{target}` is not one — an object is a spec's methods held as values, so there has to be a spec saying which" if at < 0
+
+	sp := prog.specs[at]
+	obj := f"{target}Obj"
+
+	mut fields := ""
+	mut inits := ""
+	for req in sp.reqs {
+		# a `mut fn` is the receiver taken by reference, which the parser records as the
+		# `this` parameter's own marker
+		raise f"E281 cannot make an object of `{target}`: `{req.name}` is a `mut fn`, and a wrapped value is a COPY — writing through it would change something nobody can reach. An object is immutable here" if c_obj_recv_mut(req)
+
+		mut ps := ""
+		mut args := ""
+		mut tys := ""
+		for pm in req.params {
+			continue if pm.name == "this"
+
+			raise f"E282 cannot make an object of `{target}`: `{req.name}` takes a `This`, and an object has forgotten which type it holds — that shape is what `#[derive({target})]` on an enum is for" if ty_name(pm.ty) == "This"
+
+			if ps != "" {
+				ps = ps + ", "
+				args = args + ", "
+				tys = tys + ", "
+			}
+			ps = ps + f"{pm.name}: {ty_name(pm.ty)}"
+			args = args + pm.name
+			tys = tys + ty_name(pm.ty)
+		}
+
+		mut ret := ""
+		if req.has_ret {
+			ret = f" -> {ty_name(req.ret)}"
+		}
+		fields = fields + f"\t{req.name}: fn ({tys}){ret}\n"
+		if inits != "" {
+			inits = inits + ", "
+		}
+		inits = inits + f"fn ({ps}){ret} {{\n\t\treturn v.{req.name}({args})\n\t}}"
+	}
+
+	wrap := c_obj_wrap_name(target)
+	return f"struct {obj} {{\n{fields}}}\n\nfn {wrap}[T: {target}](v: T) -> {obj} {{\n\treturn {obj}({inits})\n}}\n"
+}
+
+fn c_obj_recv_mut(req: FnDecl) -> bool {
+	for pm in req.params {
+		return pm.is_ref if pm.name == "this"
+	}
+	return false
+}
+
+# c_obj_wrap_name is the spec's name in the case a FUNCTION is written in — `Draw` makes
+# `draw_obj`. A type is PascalCase here and a function snake_case, and a generated name that
+# ignored that would be the one name in a program a reader has to be told about.
+fn c_obj_wrap_name(target: str) -> str {
+	b := list[byte](target)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		c := b[i]
+		if c >= b'A' and c <= b'Z' {
+			if i > 0 {
+				out.append(b'_')
+			}
+			out.append(c + byte(32))
+		} else {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out) + "_obj"
+}
+
+fn c_derive_enum_at(prog: File, target: str) -> int {
+	mut i := 0
+	for i < prog.enums.len() {
+		return i if prog.enums[i].name == target
+		i = i + 1
+	}
+	return -1
+}
+
+fn c_derive_spec_at(prog: File, nm: str) -> int {
+	mut i := 0
+	for i < prog.specs.len() {
+		return i if prog.specs[i].name == nm
+		i = i + 1
+	}
+	return -1
+}
+
+# c_derive_delegate writes `impl S for E`, one method per required signature, each a `match`
+# that hands the call to the variant's payload.
+#
+#     impl Show for Shape {
+#         fn show() -> str {
+#             return match this {
+#                 Shape.Circle(v) => v.show()
+#                 Shape.Square(v) => v.show()
+#             }
+#         }
+#     }
+#
+# Two shapes are refused rather than guessed at, and both for the same reason — the rewrite
+# does not exist. A method taking `This` would need the OTHER argument matched too, and
+# nothing says the two arms agree; a variant with no payload has nothing to delegate to.
+fn c_derive_delegate(prog: File, target: str, nm: str) -> str {
+	ed := prog.enums[c_derive_enum_at(prog, target)]
+	sp := prog.specs[c_derive_spec_at(prog, nm)]
+
+	mut out := f"impl {nm} for {target} {{\n"
+	for req in sp.reqs {
+		out = out + c_derive_method(ed, target, nm, req)
+	}
+	return out + "}\n"
+}
+
+fn c_derive_method(ed: EnumDecl, target: str, nm: str, req: FnDecl) -> str {
+	mut ps := ""
+	mut args := ""
+	for pm in req.params {
+		# the RECEIVER rides as parameter zero (the parser adds it), and it is the one `This`
+		# that is not a problem: it is what the match is over.
+		continue if pm.name == "this"
+
+		raise f"E278 cannot derive `{nm}` for `{target}`: `{req.name}` takes a `This`, and delegating it would have to match the other argument too — nothing says the two are the same variant. Write the impl" if ty_name(pm.ty) == target or ty_name(pm.ty) == "This"
+
+		if ps != "" {
+			ps = ps + ", "
+			args = args + ", "
+		}
+		ps = ps + f"{pm.name}: {ty_name(pm.ty)}"
+		args = args + pm.name
+	}
+
+	mut arms := ""
+	for v in ed.variants {
+		raise f"E279 cannot derive `{nm}` for `{target}`: the variant `{v.name}` carries no value, so there is nothing for `{req.name}` to delegate to. Write the impl" if v.fields.len() != 1
+
+		arms = arms + f"\t\t\t{target}.{v.name}(v) => v.{req.name}({args})\n"
+	}
+
+	mut ret := ""
+	if req.has_ret {
+		ret = f" -> {ty_name(req.ret)}"
+	}
+	return f"\tfn {req.name}({ps}){ret} {{\n\t\treturn match this {{\n{arms}\t\t}}\n\t}}\n"
 }
 
 # c_derive_eq is Eq's structural rule: a product compares FIELD BY FIELD, a sum by its
@@ -10091,7 +10830,7 @@ fn c_derive_eq_body(prog: File, target: str) -> str {
 		return c_derive_variants(ed, target) if ed.name == target
 	}
 
-	raise f"cannot derive `Eq` for `{target}` — a derive reads a type's structure, and no struct or enum by that name is declared here"
+	raise f"E283 cannot derive `Eq` for `{target}` — a derive reads a type's STRUCTURE, and no struct or enum by that name is declared here (a `spec` has no structure to read: `#[obj]` is what goes on one)"
 }
 
 # c_derive_fields is the conjunction of the fields' own equalities, recursing into each
@@ -10118,7 +10857,7 @@ fn c_derive_fields(fields: list[FieldDef]) -> str {
 # replace, and half of it is worse than none.
 fn c_derive_variants(ed: EnumDecl, target: str) -> str {
 	for v in ed.variants {
-		raise f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`" if v.fields.len() > 0
+		raise f"E438 NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`" if v.fields.len() > 0
 	}
 	return "int(this) == int(o)"
 }
@@ -10172,7 +10911,7 @@ fn c_build_intos(mut &em: Emitter, f: File) {
 			# than by name, which is also what would let `x.into()` written by hand say which
 			# one is meant. Named here, where the pair is in hand, rather than reported later
 			# as two methods with one name.
-			raise f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
+			raise f"E461 NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
 			em.into_src.append(ip.target)
 		}
 	}
@@ -10196,7 +10935,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], want_lints, [], [], [], [], [], [], [], [], [], 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -10215,6 +10954,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
+	c_build_specs(em, f)
 
 	# THE DECLARATION SITES, once. Three passes below ask the same question of them — what
 	# types a declaration spells — and the list answers all three (c_decl_sites says why it
@@ -10280,7 +11020,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
-		protos = protos + c_proto(f.fns[i])
+		protos = protos + c_proto(em, f.fns[i])
 		i = i + 1
 	}
 	mut defs := ""
@@ -10310,7 +11050,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# The cost is a copy per unit, which is what a C header carrying an inline function
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
-		protos = protos + "static " + c_proto(inst)
+		protos = protos + "static " + c_proto(em, inst)
 		defs = defs + "static " + c_fn(em, inst)
 		done = done + 1
 	}

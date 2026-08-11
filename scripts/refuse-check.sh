@@ -36,6 +36,19 @@ fail=0
 expect() {
 	local cc=$1 name=$2 want=$3
 	shift 3
+
+	# A SENTENCE MAY FOLLOW THE CODE, and it is there for one job: telling two cases of the
+	# same rule apart. The code says which rule fired, so a case that is the only one of its
+	# code needs nothing further — pinning its prose would only mean this turns red the next
+	# time the prose gets better. It is told from a marker by shape, the way reject-check
+	# does it: a marker is one word, and every sentence here has a space in it.
+	local says=""
+	case ${1:-} in *" "*)
+		says=$1
+		shift
+		;;
+	esac
+
 	local flags=" $* "
 	local src="$tmp/$name.zg"
 	cat >"$src"
@@ -61,14 +74,52 @@ expect() {
 		fail=$((fail + 1))
 		return
 	fi
-	case $out in
-	*"$want"*) ;;
+	# A CODE, not a sentence, when the shipping compiler is the one being asked. `E107` is
+	# the identity of a refusal and the sentence beside it is prose that may be improved
+	# without a gate turning red — which is the whole reason a code exists. A `want` that
+	# looks like a code is compared as a code, by the one predicate that knows where this
+	# compiler puts a code in a line (scripts/lib/diag.sh).
+	#
+	# The seed keeps sentence matching. Codes are the LANGUAGE's contract and the seed is
+	# the tool that builds the shipping compiler, so its diagnostics are not part of it —
+	# the same line docs/conformance.md draws when it declines to mark the seed's gaps.
+	case $want in
+	E[0-9][0-9][0-9])
+		if ! opens_with_code "$out" "$want"; then
+			echo "CODE      $name — wanted $want to open the message, got: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+		fi
+		;;
 	*)
-		echo "MESSAGE   $name — wanted \"$want\", got: $(echo "$out" | head -1)"
-		fail=$((fail + 1))
-		return
+		# THE SHIPPING COMPILER'S CASES PIN A CODE, and this is what keeps that true as cases
+		# are added: prose is what every case here used to assert, and a list that is mostly
+		# codes with a few sentences left in it looks finished from the outside.
+		if [ "$cc" = "$ZERG" ]; then
+			echo "PROSE     $name — a \`zerg\` case asserts the rule's code, not its wording"
+			fail=$((fail + 1))
+			return
+		fi
+		case $out in
+		*"$want"*) ;;
+		*)
+			echo "MESSAGE   $name — wanted \"$want\", got: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+			;;
+		esac
 		;;
 	esac
+	if [ -n "$says" ]; then
+		case $out in
+		*"$says"*) ;;
+		*)
+			echo "MESSAGE   $name — wanted \"$says\", got: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+			;;
+		esac
+	fi
 	case $out in
 	*.zerg-cache*)
 		echo "VIA CC    $name — cc reported it against generated C, not the compiler against the source"
@@ -106,14 +157,14 @@ expect() {
 
 # --- the shipped compiler ---------------------------------------------------------
 
-expect "$ZERG" break-outside-loop "outside of a loop" <<'EOF'
+expect "$ZERG" break-outside-loop E401 <<'EOF'
 fn main() {
 	print "a"
 	break
 }
 EOF
 
-expect "$ZERG" break-in-select-arm "outside of a loop" <<'EOF'
+expect "$ZERG" break-in-select-arm E401 <<'EOF'
 fn gen(out: chan[int]<-) { out <- 1 }
 fn main() {
 	a := chan[int](1)
@@ -128,7 +179,7 @@ EOF
 # The terminal arm is gone: a select PICKS a ready arm and the loop ENDS. `close` in that
 # position was an arm until this change, so it is refused by name rather than read as
 # something else — and the message names the form that replaced it.
-expect "$ZERG" terminal-arm-in-a-select "is not a select arm head" <<'EOF'
+expect "$ZERG" terminal-arm-in-a-select E201 <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	select {
@@ -155,7 +206,7 @@ EOF
 # A cause chain is made of Errs. The `from` operand used to be read as whatever C type it
 # happened to be and handed straight to the runtime, which takes a pointer — so an int cause
 # came out as a cc warning about a generated file, not a Zerg diagnostic.
-expect "$ZERG" from-cause-that-is-not-an-err "a \`from\` cause is an \`Err\`" <<'EOF'
+expect "$ZERG" from-cause-that-is-not-an-err E402 <<'EOF'
 fn f(n: int) -> int {
 	raise ValueError("x") from n
 }
@@ -166,7 +217,7 @@ fn main() {
 EOF
 
 # A jump out of a guard would leave its handler installed on a frame that has returned.
-expect "$ZERG" jump-out-of-a-guard "leaving a \`guard\` block" <<'EOF'
+expect "$ZERG" jump-out-of-a-guard E403 <<'EOF'
 fn f() -> int {
 	r := guard {
 		return 1
@@ -199,7 +250,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" empty-select "at least one arm" <<'EOF'
+expect "$ZERG" empty-select E202 <<'EOF'
 fn main() {
 	for select {
 	}
@@ -213,7 +264,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" channel-of-optionals "a channel of optionals is refused" <<'EOF'
+expect "$ZERG" channel-of-optionals E404 <<'EOF'
 fn main() {
 	ch := chan[int?](1)
 	print 1
@@ -224,7 +275,7 @@ EOF
 # accepted: ANY identifier before `=>` became the `_` arm, so a typo (or the old `done`
 # spelling) silently made the select non-blocking AND dropped its terminal arm. Both compilers
 # refuse it now, which is why it is checked twice.
-expect "$ZERG" select-arm-head-typo "is not a select arm head" <<'EOF'
+expect "$ZERG" select-arm-head-typo E203 <<'EOF'
 fn gen(out: chan[int]<-) { out <- 1 }
 fn main() {
 	a := chan[int](1)
@@ -255,7 +306,7 @@ EOF
 # GRAMMAR derives an or-pattern; neither compiler lowers one, and `|` in pattern position is
 # read as the bitwise operator — so `1 | 2` folded to `3` and the arm matched neither side,
 # compiled and run. Refusing it is the whole difference between a gap and a wrong answer.
-expect "$ZERG" or-pattern-in-a-match-arm "an or-pattern" <<'EOF'
+expect "$ZERG" or-pattern-in-a-match-arm E241 <<'EOF'
 fn f(n: int) -> str {
 	return match n {
 		1 | 2 => "lo"
@@ -273,7 +324,7 @@ EOF
 # else matched: `C` came back "b" below, and `f(3)` came back "b" in the int case. A wrong
 # answer with no diagnostic is the outcome this repo does not tolerate, and the seed has
 # refused both since it had enums.
-expect "$ZERG" non-exhaustive-enum-match "missing variant K.C" <<'EOF'
+expect "$ZERG" non-exhaustive-enum-match E428 <<'EOF'
 enum K {
 	A
 	B
@@ -282,8 +333,8 @@ enum K {
 
 fn name(k: K) -> str {
 	return match k {
-		A => "a"
-		B => "b"
+		K.A => "a"
+		K.B => "b"
 	}
 }
 
@@ -292,7 +343,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" non-exhaustive-int-match "missing a catch-all" <<'EOF'
+expect "$ZERG" non-exhaustive-int-match E467 <<'EOF'
 fn f(n: int) -> str {
 	return match n {
 		1 => "a"
@@ -308,7 +359,7 @@ EOF
 # An arm's guard goes BEFORE the `=>` (GRAMMAR#match-arm). Written after the body it was silently
 # DROPPED, so the arm compiled unconditional AND counted toward exhaustiveness as if it had
 # no guard — the two halves of the guard rule, both wrong, from one easy typo.
-expect "$ZERG" arm-guard-after-the-body "goes before the \`=>\`" <<'EOF'
+expect "$ZERG" arm-guard-after-the-body E262 "goes before the \`=>\`" <<'EOF'
 fn f(n: int) -> str {
 	return match n {
 		1 => "one" if n > 0
@@ -323,7 +374,7 @@ EOF
 
 # A guard makes an arm conditional, so it covers nothing: the compiler cannot prove the guard
 # holds (GRAMMAR#match-arm), and `A` below is uncovered even though it is named.
-expect "$ZERG" guarded-arm-covers-nothing "missing variant K.A" <<'EOF'
+expect "$ZERG" guarded-arm-covers-nothing E428 <<'EOF'
 enum K {
 	A
 	B
@@ -331,8 +382,8 @@ enum K {
 
 fn f(k: K) -> str {
 	return match k {
-		A if true => "a"
-		B => "b"
+		K.A if true => "a"
+		K.B => "b"
 	}
 }
 
@@ -343,7 +394,7 @@ EOF
 
 # An arm after an unguarded catch-all is dead, and worse: the lowering hands the LAST arm the
 # `else`, so the arm that can never match is the one that runs by default.
-expect "$ZERG" arm-after-the-catch-all "makes the following arms unreachable" <<'EOF'
+expect "$ZERG" arm-after-the-catch-all E458 <<'EOF'
 enum K {
 	A
 	B
@@ -352,7 +403,7 @@ enum K {
 fn f(k: K) -> str {
 	return match k {
 		_ => "rest"
-		A => "a"
+		K.A => "a"
 	}
 }
 
@@ -363,7 +414,7 @@ EOF
 
 # A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR#variant): a payload
 # enum's tag is opaque and match-only, so neither direction of the reading is offered on it.
-expect "$ZERG" discriminant-of-a-payload-enum "tag is opaque" <<'EOF'
+expect "$ZERG" discriminant-of-a-payload-enum E407 <<'EOF'
 enum E {
 	P(int)
 	Q
@@ -374,7 +425,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" reverse-of-a-payload-enum "tag is opaque" <<'EOF'
+expect "$ZERG" reverse-of-a-payload-enum E420 <<'EOF'
 enum E {
 	P(int)
 	Q
@@ -388,7 +439,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" discriminant-on-a-payload-declaration "a discriminant" <<'EOF'
+expect "$ZERG" discriminant-on-a-payload-declaration E214 <<'EOF'
 enum E {
 	P(int) = 3
 	Q
@@ -401,7 +452,7 @@ EOF
 
 # ...including one whose declared value HAPPENS to equal its position, which is otherwise
 # indistinguishable from declaring nothing — so it was read and then quietly dropped.
-expect "$ZERG" discriminant-that-looks-like-its-position "a discriminant" <<'EOF'
+expect "$ZERG" discriminant-that-looks-like-its-position E214 <<'EOF'
 enum E {
 	P(int) = 0
 	Q = 1
@@ -414,7 +465,7 @@ EOF
 
 # A carrier is not a value to convert: `int(k)` over a `K?` cast the carrier STRUCT, which
 # cc rejected against generated code. The unwrap belongs to the programmer.
-expect "$ZERG" conversion-of-a-carrier "may not have one" <<'EOF'
+expect "$ZERG" conversion-of-a-carrier E418 <<'EOF'
 enum K {
 	A
 	B
@@ -428,7 +479,7 @@ EOF
 
 # An enum's ONE conversion is `int`, its discriminant. Every other one fell through to a
 # plain C cast of the tagged-union STRUCT.
-expect "$ZERG" non-int-conversion-of-an-enum "converts to \`int\`" <<'EOF'
+expect "$ZERG" non-int-conversion-of-an-enum E419 <<'EOF'
 enum K {
 	A
 	B
@@ -440,15 +491,15 @@ fn main() {
 EOF
 
 # Each side of an Either holds exactly one value.
-expect "$ZERG" either-side-with-two-values "holds exactly one value" <<'EOF'
+expect "$ZERG" either-side-with-two-values E405 <<'EOF'
 fn f() -> Result[int] {
-	return Left(1, 2)
+	return Either.Left(1, 2)
 }
 
 fn main() { print f() ?? 0 }
 EOF
 
-expect "$ZERG" repeated-discriminant "repeats one already given" <<'EOF'
+expect "$ZERG" repeated-discriminant E213 <<'EOF'
 enum K {
 	A = 1
 	B = 1
@@ -462,7 +513,7 @@ EOF
 # Every carrier in this backend has a `tag`, so a variant pattern applied to the wrong type
 # COMPILED and compared unrelated numbers. Over a `K?` the optional's present-tag is 0 and
 # the first variant's tag is 0, so this took the `A` arm for every present value.
-expect "$ZERG" variant-pattern-on-an-optional "cannot match a subject of type" <<'EOF'
+expect "$ZERG" variant-pattern-on-an-optional E427 <<'EOF'
 enum K {
 	A
 	B
@@ -471,7 +522,7 @@ enum K {
 fn main() {
 	k := K.of(1)
 	print match k {
-		A => "a"
+		K.A => "a"
 		_ => "other"
 	}
 }
@@ -480,7 +531,7 @@ EOF
 # An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
 # reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
 # back empty, both in silence.
-expect "$ZERG" open-range-in-a-for "needs an upper bound" <<'EOF'
+expect "$ZERG" open-range-in-a-for E423 <<'EOF'
 fn main() {
 	mut n := 0
 	for i in 20.. {
@@ -490,7 +541,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" open-range-in-a-slice "needs an upper bound" <<'EOF'
+expect "$ZERG" open-range-in-a-slice E423 <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	ys := xs[1..]
@@ -502,14 +553,14 @@ EOF
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
 # namer, so a name is answered the same way wherever it is written.
-expect "$ZERG" ref-type-in-result 'a refcounted box' <<'EOF'
+expect "$ZERG" ref-type-in-result E446 <<'EOF'
 fn mk(v: int) -> Ref[int] {
 	return Ref(v)
 }
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" ref-type-in-param 'a refcounted box' <<'EOF'
+expect "$ZERG" ref-type-in-param E446 <<'EOF'
 fn load(a: Ref[int]) -> int {
 	return 0
 }
@@ -519,7 +570,7 @@ EOF
 # A generic ENUM has been refused by name since it was written; a generic STRUCT was read
 # and dropped, so a field of type `T` reported `no type named T` — a message about the
 # consequence, two steps from the form the compiler had already decided not to support.
-expect "$ZERG" generic-struct "a generic struct" <<'EOF'
+expect "$ZERG" generic-struct E215 <<'EOF'
 struct B[T] {
 	n: T
 }
@@ -534,18 +585,18 @@ EOF
 # Left and Right name the two SIDES of an Either and have no type of their own, so they are
 # read where the wanted type is known. Written where there is none, the compiler says which
 # of the two problems it is — a form used without its context, not a form that does not exist.
-expect "$ZERG" carrier-constructor-without-a-context "needs a declared one to be" <<'EOF'
+expect "$ZERG" carrier-constructor-without-a-context E459 <<'EOF'
 fn main() {
-	x := Left(1)
+	x := Either.Left(1)
 	print 1
 }
 EOF
 
 # The two sides of an Either must DIFFER: an injection could otherwise reach both, and
 # nothing at the match would tell which one it took.
-expect "$ZERG" either-with-equal-sides "has the same type on both sides" <<'EOF'
+expect "$ZERG" either-with-equal-sides E206 <<'EOF'
 fn f(n: int) -> Either[int, int] {
-	return Left(n)
+	return Either.Left(n)
 }
 fn main() { print 1 }
 EOF
@@ -562,13 +613,13 @@ EOF
 # statement. It used to be read as a second statement and reported as "`as` is not an
 # expression this compiler reads" — true, and one step past the reason. The separator is what
 # the seed answers, and now both compilers do.
-expect "$ZERG" unread-token-in-an-expression "to separate statements" place <<'EOF'
+expect "$ZERG" unread-token-in-an-expression E205 place <<'EOF'
 fn main() {
 	print 1 as 2
 }
 EOF
 
-expect "$ZERG" generic-enum "a generic enum" <<'EOF'
+expect "$ZERG" generic-enum E212 <<'EOF'
 enum E[T] {
 	A(T)
 	B
@@ -577,7 +628,7 @@ enum E[T] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" associated-value-binding "an associated value binding" <<'EOF'
+expect "$ZERG" associated-value-binding E218 <<'EOF'
 struct B {
 	n: int
 }
@@ -589,7 +640,7 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unknown-decorator "the decorator" <<'EOF'
+expect "$ZERG" unknown-decorator E217 <<'EOF'
 #[dyn]
 struct P {
 	x: int
@@ -603,7 +654,7 @@ EOF
 # on this subject is the derive this compiler still does not write — see
 # derive-of-an-unbuilt-spec and payload-enum-equality below.
 
-expect "$ZERG" equality-with-no-eq "needs an \`Eq\`" <<'EOF'
+expect "$ZERG" equality-with-no-eq E430 <<'EOF'
 struct P {
 	x: int
 }
@@ -613,7 +664,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" equality-over-a-container "over a container is unbuilt" <<'EOF'
+expect "$ZERG" equality-over-a-container E445 <<'EOF'
 fn main() {
 	print [1, 2] == [1, 2]
 }
@@ -623,7 +674,7 @@ EOF
 # a `chan` fell to the numeric path and compared two POINTERS. They are here beside the
 # container because one predicate answers all three, and it is the same one `T: Eq` asks.
 
-expect "$ZERG" equality-on-a-channel "is an identity rather than a value" <<'EOF'
+expect "$ZERG" equality-on-a-channel E460 <<'EOF'
 fn main() {
 	c := chan[int](1)
 	d := chan[int](1)
@@ -631,7 +682,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" generic-bound-on-a-carrier "does not implement" <<'EOF'
+expect "$ZERG" generic-bound-on-a-carrier E412 <<'EOF'
 fn same[T: Eq](a: T, b: T) -> bool {
 	return a == b
 }
@@ -642,7 +693,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" payload-enum-equality "it carries a payload" <<'EOF'
+expect "$ZERG" payload-enum-equality E438 <<'EOF'
 #[derive(Eq)]
 enum Shape {
 	Circle(int)
@@ -653,7 +704,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" derive-of-a-user-spec "the derivable specs are compiler-owned" <<'EOF'
+expect "$ZERG" derive-of-a-user-spec E437 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -666,12 +717,12 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" derive-with-no-declaration "has no declaration under it" <<'EOF'
+expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
 #[derive(Eq)]
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" field-default "a default on field" <<'EOF'
+expect "$ZERG" field-default E216 <<'EOF'
 struct P {
 	x: int = 7
 }
@@ -679,15 +730,7 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" nested-block-statement "block as a statement" <<'EOF'
-fn main() {
-	{
-		print 1
-	}
-}
-EOF
-
-expect "$ZERG" struct-pattern-binding "a struct pattern" <<'EOF'
+expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
 	x: int
 }
@@ -698,7 +741,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" for-mut-binding "the mutable loop binding" <<'EOF'
+expect "$ZERG" for-mut-binding E242 <<'EOF'
 fn main() {
 	for mut v in [1, 2] {
 		print v
@@ -708,7 +751,7 @@ EOF
 
 # A body that declares a result and falls off the end used to emit a C function with no
 # return: the call answered whatever was in the return register.
-expect "$ZERG" body-falls-off-the-end "falls off the end" <<'EOF'
+expect "$ZERG" body-falls-off-the-end E435 <<'EOF'
 fn f(n: int) -> int {
 	if n > 0 {
 		return 1
@@ -718,7 +761,7 @@ fn f(n: int) -> int {
 fn main() { print f(1) }
 EOF
 
-expect "$ZERG" struct-cycle-by-value "part of a cycle of by-value declarations" <<'EOF'
+expect "$ZERG" struct-cycle-by-value E452 <<'EOF'
 struct A {
 	b: B
 }
@@ -733,13 +776,13 @@ EOF
 # A NAME NOTHING BINDS is the commonest mistake anyone makes, and it used to be spelled
 # `zg_<n>` and handed to cc. So did a call to a function nothing declares — which is also
 # how the specified-but-unbuilt raw-pointer builtins arrived.
-expect "$ZERG" undefined-name "undefined name" <<'EOF'
+expect "$ZERG" undefined-name E372 <<'EOF'
 fn main() {
 	print nope
 }
 EOF
 
-expect "$ZERG" undefined-function "undefined function" <<'EOF'
+expect "$ZERG" undefined-function E425 <<'EOF'
 fn main() {
 	print nope(1)
 }
@@ -749,33 +792,33 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-expect "$ZERG" raw-pointer-builtin "NotImplemented: the raw-pointer built-in \`addr\`" <<'EOF'
+expect "$ZERG" raw-pointer-builtin E413 <<'EOF'
 fn main() {
 	mut n := 1
 	print addr(n)
 }
 EOF
 
-expect "$ZERG" refcounted-box-builtin "NotImplemented: a refcounted box" <<'EOF'
+expect "$ZERG" refcounted-box-builtin E446 <<'EOF'
 fn main() {
 	r := Ref(7)
 	print deref(r)
 }
 EOF
 
-expect "$ZERG" deref-builtin "NotImplemented: a refcounted box" <<'EOF'
+expect "$ZERG" deref-builtin E446 <<'EOF'
 fn main() {
 	print deref(7)
 }
 EOF
 
-expect "$ZERG" sizeof-builtin "NotImplemented: the compile-time built-in \`sizeof[T]\`" <<'EOF'
+expect "$ZERG" sizeof-builtin E414 <<'EOF'
 fn main() {
 	print sizeof[int]
 }
 EOF
 
-expect "$ZERG" alignof-builtin "NotImplemented: the compile-time built-in \`alignof[T]\`" <<'EOF'
+expect "$ZERG" alignof-builtin E414 <<'EOF'
 fn main() {
 	print alignof[int]
 }
@@ -786,7 +829,7 @@ EOF
 # saying "no type named `Tag`" about a spec declared three lines above invited the reader to
 # go and declare it again. An `impl` on a primitive is the same shape of answer.
 
-expect "$ZERG" spec-used-as-a-type "NotImplemented: the \`spec\` \`Tag\` used as a TYPE" <<'EOF'
+expect "$ZERG" spec-used-as-a-type E416 <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -810,7 +853,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" impl-on-a-primitive "NotImplemented: an \`impl\` on the built-in type \`int\`" <<'EOF'
+expect "$ZERG" impl-on-a-primitive E415 <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -826,29 +869,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" associated-type-in-a-spec "NotImplemented: an associated type in a \`spec\`" <<'EOF'
-spec It {
-	type Item
-
-	fn get() -> int
-}
-
-fn main() {
-	print 1
-}
-EOF
-
-expect "$ZERG" associated-value-in-a-spec "NotImplemented: an associated value in a \`spec\`" <<'EOF'
-spec Bits {
-	BITS: int
-}
-
-fn main() {
-	print 1
-}
-EOF
-
-expect "$ZERG" parameterized-bound "NotImplemented: a parameterized \`Eq[…]\` as a type parameter" <<'EOF'
+expect "$ZERG" parameterized-bound E207 <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool
 }
@@ -866,7 +887,7 @@ EOF
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They are one root cause and three separate unbuilt features.
 
-expect "$ZERG" call-a-fn-value-from-a-list "NotImplemented: calling index" <<'EOF'
+expect "$ZERG" call-a-fn-value-from-a-list E222 <<'EOF'
 fn dbl(x: int) -> int {
 	return x * 2
 }
@@ -882,7 +903,7 @@ EOF
 # reach parse_primary, which answered "`:` is not an expression this compiler reads" — a
 # token, about a form the language specifies and the seed builds.
 
-expect "$ZERG" named-argument-in-a-call "NotImplemented: the named argument \`b:\`" <<'EOF'
+expect "$ZERG" named-argument-in-a-call E223 <<'EOF'
 fn f(a: int, b: int) -> int {
 	return a - b
 }
@@ -892,7 +913,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" named-field-in-a-construction "NotImplemented: the named argument \`y:\`" <<'EOF'
+expect "$ZERG" named-field-in-a-construction E223 <<'EOF'
 struct P {
 	x: int
 	y: int
@@ -904,7 +925,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" optional-method-call "NotImplemented: calling optional chain ?.get" <<'EOF'
+expect "$ZERG" optional-method-call E222 <<'EOF'
 struct P {
 	x: int
 }
@@ -923,26 +944,26 @@ EOF
 
 # `expect` used to advance on a match and say NOTHING otherwise, so every truncated form
 # derailed quietly and whatever the parser built from the wreckage reached the emitter.
-expect "$ZERG" truncated-guard "expected \`{\`" <<'EOF'
+expect "$ZERG" truncated-guard E204 <<'EOF'
 fn main() {
 	print guard
 }
 EOF
 
-expect "$ZERG" truncated-fn "expected \`(\`" <<'EOF'
+expect "$ZERG" truncated-fn E204 <<'EOF'
 fn main() {
 	print fn
 }
 EOF
 
-expect "$ZERG" truncated-chan-type "found \`print\`" <<'EOF'
+expect "$ZERG" truncated-chan-type E204 <<'EOF'
 fn main() {
 	chan
 	print 1
 }
 EOF
 
-expect "$ZERG" associated-type-binding "an associated type binding" <<'EOF'
+expect "$ZERG" associated-type-binding E231 <<'EOF'
 struct B {
 	n: int
 }
@@ -954,7 +975,7 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" impl-item-that-is-not-a-method "as an \`impl\` item" <<'EOF'
+expect "$ZERG" impl-item-that-is-not-a-method E219 <<'EOF'
 struct B {
 	n: int
 }
@@ -968,7 +989,7 @@ EOF
 
 # A method that MUTATES its receiver cannot be served from a materialised temp: the edit
 # lands on the copy and is lost. `m["a"].append(3)` compiled and silently did nothing.
-expect "$ZERG" mutating-method-on-a-map-index "MUTATES its list" <<'EOF'
+expect "$ZERG" mutating-method-on-a-map-index E422 <<'EOF'
 fn main() {
 	mut m: map[str, list[int]] = {:}
 	m["a"] = [1, 2]
@@ -977,22 +998,9 @@ fn main() {
 }
 EOF
 
-# A field the type does not have was spelled `zg_<fld>` and handed to cc — the same class
-# as an undefined name, answerable from the same tables.
-expect "$ZERG" field-the-struct-does-not-have "no field" <<'EOF'
-struct P {
-	n: int
-}
-
-fn main() {
-	p := P(1)
-	print p.z
-}
-EOF
-
 # Too FEW constructor arguments has been named for a while; too many reached cc as an
 # "excess elements" WARNING, so it compiled and the extra values were dropped.
-expect "$ZERG" too-many-constructor-arguments "fields and this gives" <<'EOF'
+expect "$ZERG" too-many-constructor-arguments E426 <<'EOF'
 struct P {
 	n: int
 }
@@ -1002,7 +1010,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" derive-of-an-unbuilt-spec "specified and unbuilt" <<'EOF'
+expect "$ZERG" derive-of-an-unbuilt-spec E436 <<'EOF'
 #[derive(Ord)]
 struct P {
 	x: int
@@ -1013,18 +1021,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" ordering-on-an-aggregate "an ordering comes from" <<'EOF'
-#[derive(Eq)]
-struct P {
-	x: int
-}
-
-fn main() {
-	print P(1) < P(2)
-}
-EOF
-
-expect "$ZERG" rendering-a-composite "as text" <<'EOF'
+expect "$ZERG" rendering-a-composite E449 <<'EOF'
 struct P {
 	x: int
 }
@@ -1034,14 +1031,14 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" unknown-list-method "the list method" <<'EOF'
+expect "$ZERG" unknown-list-method E444 <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	print xs.slice(0, 2).len()
 }
 EOF
 
-expect "$ZERG" tuple-pattern-in-an-arm "a tuple pattern in a" <<'EOF'
+expect "$ZERG" tuple-pattern-in-an-arm E232 <<'EOF'
 fn main() {
 	t := (1, 2)
 	print match t {
@@ -1102,7 +1099,7 @@ EOF
 
 # --- null safety: an optional says what it is at every edge ------------------------
 
-expect "$ZERG" optional-into-a-value "unwrap it with" <<'EOF'
+expect "$ZERG" optional-into-a-value E432 <<'EOF'
 fn main() {
 	x: int? = 5
 	y: int = x
@@ -1110,14 +1107,14 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" print-of-an-optional "may not have one" <<'EOF'
+expect "$ZERG" print-of-an-optional E433 <<'EOF'
 fn main() {
 	x: int? = nil
 	print x
 }
 EOF
 
-expect "$ZERG" chain-through-a-value "is not one" <<'EOF'
+expect "$ZERG" chain-through-a-value E406 <<'EOF'
 struct P {
 	n: int
 }
@@ -1127,7 +1124,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" missing-required-field "needs a value for field" <<'EOF'
+expect "$ZERG" missing-required-field E370 <<'EOF'
 struct P {
 	n: int
 	m: int
@@ -1138,7 +1135,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" try-without-a-carrier-result "must answer a carrier with the same right" <<'EOF'
+expect "$ZERG" try-without-a-carrier-result E408 <<'EOF'
 fn head(x: int?) -> int {
 	return x?
 }
@@ -1212,7 +1209,7 @@ EOF
 # GRAMMAR#param — "There is NO plain `mut x` parameter". It was accepted and the keyword
 # dropped, so a write in the body said `cannot assign through b: it is immutable` about a
 # parameter the programmer had marked `mut`.
-expect "$ZERG" a-plain-mut-parameter "a parameter is \`mut &\` or nothing" <<'EOF'
+expect "$ZERG" a-plain-mut-parameter E263 "a parameter is \`mut &\` or nothing" <<'EOF'
 struct Bag {
 	n: int
 }
@@ -1230,7 +1227,7 @@ EOF
 # (`User.from_json(…)`). The parser gives every `fn` in an `impl` a receiver, so there is
 # no such function to call; the answer used to be "the method `make` on a ?", which points
 # at inference having nothing to say rather than at the form.
-expect "$ZERG" associated-function "is an associated function" <<'EOF'
+expect "$ZERG" associated-function E424 <<'EOF'
 struct P {
 	x: int
 }
@@ -1251,14 +1248,14 @@ EOF
 # is not built" from "you made a typo", which is the whole of the implemented-or-named
 # contract — every one of these is in GRAMMAR and none of them was being turned away by
 # the name GRAMMAR gives it.
-expect "$ZERG" array-type "an array type" <<'EOF'
+expect "$ZERG" array-type E233 <<'EOF'
 fn main() {
 	xs: [int; 3] = [1, 2, 3]
 	print xs[0]
 }
 EOF
 
-expect "$ZERG" array-type-parameter "an array type" <<'EOF'
+expect "$ZERG" array-type-parameter E233 <<'EOF'
 fn f(xs: [int; 3]) -> int {
 	return xs[0]
 }
@@ -1266,7 +1263,7 @@ fn f(xs: [int; 3]) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" struct-pattern "a struct pattern" <<'EOF'
+expect "$ZERG" struct-pattern E243 <<'EOF'
 struct P {
 	x: int
 }
@@ -1280,35 +1277,25 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" as-binding-in-an-arm "an \`as\` binding" <<'EOF'
+expect "$ZERG" as-binding-in-an-arm E234 <<'EOF'
 enum E {
 	A(int)
 	B
 }
 
 fn main() {
-	e := A(5)
+	e := E.A(5)
 	print match e {
-		A(n) as whole => n
+		E.A(n) as whole => n
 		_ => 0
 	}
 }
 EOF
 
-expect "$ZERG" interpolating-command-literal "an interpolating command literal" <<'EOF'
+expect "$ZERG" interpolating-command-literal E235 <<'EOF'
 fn main() {
 	n := "hi"
 	print f`echo {n}`
-}
-EOF
-
-expect "$ZERG" closure-parameter-without-a-type "a closure parameter without a type" <<'EOF'
-fn apply(f: fn(int) -> int, v: int) -> int {
-	return f(v)
-}
-
-fn main() {
-	print apply(fn(x) { return x + 1 }, 5)
 }
 EOF
 
@@ -1324,7 +1311,7 @@ EOF
 # A KEY NEEDS `Hash`, and this compiler has one for `int` and one for `str`. A `byte` key
 # took the INT hash and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built
 # and the lookup that followed raised `KeyError` for a key that was right there.
-expect "$ZERG" map-key-without-a-hash "a key needs \`Hash\`" <<'EOF'
+expect "$ZERG" map-key-without-a-hash E431 <<'EOF'
 fn main() {
 	m := {b'a': 1}
 	print m.len()
@@ -1334,28 +1321,28 @@ EOF
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.
-expect "$ZERG" command-literal "a command literal" <<'EOF'
+expect "$ZERG" command-literal E236 <<'EOF'
 fn main() {
 	c := `echo hi`
 	print c
 }
 EOF
 
-expect "$ZERG" fstring-conversion "conversion" <<'EOF'
+expect "$ZERG" fstring-conversion E226 <<'EOF'
 fn main() {
 	n := 42
 	print f"{n!r}"
 }
 EOF
 
-expect "$ZERG" fstring-self-documenting "self-documenting" <<'EOF'
+expect "$ZERG" fstring-self-documenting E227 <<'EOF'
 fn main() {
 	n := 42
 	print f"{n=}"
 }
 EOF
 
-expect "$ZERG" fstring-format-spec "format spec" <<'EOF'
+expect "$ZERG" fstring-format-spec E225 <<'EOF'
 fn main() {
 	pi := 3.5
 	print f"{pi:.2f}"
@@ -1368,7 +1355,7 @@ EOF
 # for the rest: a generic TYPE, a generic METHOD, a bound this compiler cannot carry, a call
 # that decides nothing, and a bound the argument does not meet.
 
-expect "$ZERG" generic-struct "a generic struct" <<'EOF'
+expect "$ZERG" generic-struct E215 <<'EOF'
 struct Box[T] {
 	v: T
 }
@@ -1376,7 +1363,7 @@ struct Box[T] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" generic-enum "a generic enum" <<'EOF'
+expect "$ZERG" generic-enum E212 <<'EOF'
 enum Opt2[T] {
 	Some(T)
 	None
@@ -1385,7 +1372,7 @@ enum Opt2[T] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" generic-method "a generic METHOD" <<'EOF'
+expect "$ZERG" generic-method E409 <<'EOF'
 struct P {
 	x: int
 }
@@ -1402,7 +1389,7 @@ EOF
 # A bound is a CONJUNCTION — `T: Eq + Show` asks for both — and the one that is not met is
 # the one named. The form itself is built; what is refused here is the type that does not
 # keep the promise.
-expect "$ZERG" generic-bound-unmet-in-a-conjunction 'does not implement `Show`' <<'EOF'
+expect "$ZERG" generic-bound-unmet-in-a-conjunction E412 'does not implement `Show`' <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1416,7 +1403,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" generic-undecidable "is not decided by this call" <<'EOF'
+expect "$ZERG" generic-undecidable E411 <<'EOF'
 fn f[T](n: int) -> int {
 	return n
 }
@@ -1424,7 +1411,7 @@ fn f[T](n: int) -> int {
 fn main() { print f(1) }
 EOF
 
-expect "$ZERG" generic-bound-unmet "does not implement" <<'EOF'
+expect "$ZERG" generic-bound-unmet E412 <<'EOF'
 struct P {
 	x: int
 }
@@ -1440,7 +1427,7 @@ EOF
 # `int`, `list[int]`, `list[list[int]]`, … without end, and whether the program stops depends
 # on `n`, a runtime value. No monomorphizing compiler can answer that by looking, so each
 # stops at a depth; this one used to spin until it was killed, saying nothing at all.
-expect "$ZERG" generic-polymorphic-recursion "has no finite set of specializations" <<'EOF'
+expect "$ZERG" generic-polymorphic-recursion E410 <<'EOF'
 fn deep[T](x: T, n: int) {
 	if n > 0 {
 		deep([x], n - 1)
@@ -1450,26 +1437,7 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" closure-capture "a closure capturing" <<'EOF'
-fn run(f: fn() -> int) -> int {
-	return f()
-}
-
-fn main() {
-	k := 5
-	print run(fn() -> int { return k })
-}
-EOF
-
-expect "$ZERG" with-statement "with" <<'EOF'
-fn main() {
-	with 5 as n {
-		print n
-	}
-}
-EOF
-
-expect "$ZERG" if-let-over-an-enum "it binds the Left" <<'EOF'
+expect "$ZERG" if-let-over-an-enum E434 <<'EOF'
 enum E {
 	A(int)
 	B
@@ -1484,7 +1452,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" spec-member-with-a-body "a \`spec\` member with a BODY" <<'EOF'
+expect "$ZERG" spec-member-with-a-body E210 <<'EOF'
 spec Show {
 	fn show() -> int {
 		return 1
@@ -1494,7 +1462,7 @@ spec Show {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unsafe-block "unsafe" <<'EOF'
+expect "$ZERG" unsafe-block E224 <<'EOF'
 fn main() {
 	n := unsafe {
 		5
@@ -1508,7 +1476,7 @@ EOF
 # fallback and answer "NotImplemented: unsafe", the block-expression's sentence about a
 # form that is not a block; and reading the `fn` as safe instead would erase the one thing
 # the keyword says while the trust boundary stays unenforced (docs/runtime/ffi.md).
-expect "$ZERG" unsafe-fn-declaration 'a standalone `unsafe fn` declaration' place <<'EOF'
+expect "$ZERG" unsafe-fn-declaration E264 place <<'EOF'
 unsafe fn g() -> int {
 	return 2
 }
@@ -1522,7 +1490,7 @@ EOF
 # same sentence. It used to be told "`pub` binds to a declaration, and a statement takes
 # none" — which is false twice over: it IS a declaration, and the statement fallback was
 # never the right reader for it.
-expect "$ZERG" pub-unsafe-fn-declaration 'a standalone `unsafe fn` declaration' place <<'EOF'
+expect "$ZERG" pub-unsafe-fn-declaration E264 place <<'EOF'
 pub unsafe fn g() -> int {
 	return 2
 }
@@ -1532,7 +1500,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-type 'the raw-pointer' <<'EOF'
+expect "$ZERG" raw-pointer-type E413 <<'EOF'
 fn f(p: ptr) -> int {
 	return 1
 }
@@ -1540,14 +1508,14 @@ fn f(p: ptr) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" destructuring-binding "a destructuring binding" <<'EOF'
+expect "$ZERG" destructuring-binding E238 <<'EOF'
 fn main() {
 	(a, b) := (1, 2)
 	print a + b
 }
 EOF
 
-expect "$ZERG" destructuring-binding-mut "a destructuring binding" <<'EOF'
+expect "$ZERG" destructuring-binding-mut E238 <<'EOF'
 fn main() {
 	mut (a, b) := (1, 2)
 	print a + b
@@ -1556,7 +1524,7 @@ EOF
 
 # the third spelling BUILT and did nothing: the tuple was evaluated, assigned to no one,
 # and the program printed the values it started with
-expect "$ZERG" destructuring-assignment "a destructuring binding" <<'EOF'
+expect "$ZERG" destructuring-assignment E238 <<'EOF'
 fn main() {
 	mut a := 1
 	mut b := 2
@@ -1565,14 +1533,14 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" open-range-with-no-lower-bound "a range with no lower bound" <<'EOF'
+expect "$ZERG" open-range-with-no-lower-bound E239 <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2, 3]
 	print xs[..2].len()
 }
 EOF
 
-expect "$ZERG" list-pattern "a list pattern" <<'EOF'
+expect "$ZERG" list-pattern E240 <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2, 3]
 	print match xs {
@@ -1585,7 +1553,7 @@ EOF
 # An INDEX needs a list or a map. `a[0]` on a `list[int]?` handed the runtime the carrier
 # struct where a header goes, which cc reported as a WARNING — so the program linked and
 # segfaulted. A warning is not a gate.
-expect "$ZERG" index-an-optional "may not have one" <<'EOF'
+expect "$ZERG" index-an-optional E421 <<'EOF'
 fn main() {
 	a: list[int]? = [1, 2, 3]
 	print(a[0])
@@ -1596,7 +1564,7 @@ EOF
 # deviation and the seed refuses too. It is named rather than emitted because it LOOKED like
 # it worked: a str is a refcounted cell and the typedef name is not a str to c_is_str, so
 # nothing retained it, nothing released it, and `str(l)` printed the pointer as a number.
-expect "$ZERG" typedef-over-a-str "over a non-scalar" <<'EOF'
+expect "$ZERG" typedef-over-a-str E304 <<'EOF'
 type Label = str
 
 fn main() {
@@ -1609,7 +1577,7 @@ EOF
 # buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
 # and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
 # composite; this let the same value out through an f-string hole.
-expect "$ZERG" render-a-list-of-ints "bridges bytes or code points" <<'EOF'
+expect "$ZERG" render-a-list-of-ints E417 <<'EOF'
 fn main() {
 	xs: list[int] = [65, 66, 67]
 	print(f"{xs}")
@@ -1620,7 +1588,7 @@ EOF
 # composite has no rendering — the structural one is `Display`'s job and this compiler
 # generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
 # arithmetic or pointer type is required". The mutation fuzzer is what found it.
-expect "$ZERG" print-a-tuple "rendering a (int, int) as text" <<'EOF'
+expect "$ZERG" print-a-tuple E449 <<'EOF'
 fn main() {
 	print(1, 2)
 }
@@ -1744,7 +1712,7 @@ EOF
 # wrong thing. Named here until a spec method is keyed by (spec, arguments), which is also
 # what would let a written-out `x.into()` say which one is meant.
 
-expect "$ZERG" a-second-into-on-one-type 'a second `impl Into[' <<'EOF'
+expect "$ZERG" a-second-into-on-one-type E461 <<'EOF'
 struct Celsius {
 	deg: int
 }
@@ -1782,7 +1750,7 @@ EOF
 
 # an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
 # makes `in` refuse a str looked for among ints rather than compare a pointer to a number
-expect "$ZERG" in-over-a-list-of-the-wrong-element 'the value looked for by `in` is int' <<'EOF'
+expect "$ZERG" in-over-a-list-of-the-wrong-element E338 'the value looked for by `in` is int' <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print str("a" in xs)
@@ -1790,7 +1758,7 @@ fn main() {
 EOF
 
 # and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
-expect "$ZERG" in-over-a-list-of-structs 'compared with `==`' <<'EOF'
+expect "$ZERG" in-over-a-list-of-structs E462 <<'EOF'
 struct P {
 	x: int
 }
@@ -1801,7 +1769,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" in-over-a-range '`in` over a range' <<'EOF'
+expect "$ZERG" in-over-a-range E463 <<'EOF'
 fn main() {
 	print str(3 in 0..10)
 }
@@ -1819,7 +1787,7 @@ EOF
 # The seed refuses all of them too, and has all along; `place` is asked of every one because
 # a refusal a reader cannot locate is half a diagnostic.
 
-expect "$ZERG" position-binding-int-to-float 'cannot bind int to a float binding' place <<'EOF'
+expect "$ZERG" position-binding-int-to-float E335 'cannot bind int to a float binding' place <<'EOF'
 fn main() {
 	i := 5
 	x: float = i
@@ -1827,7 +1795,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-binding-int-to-byte 'cannot bind int to a byte binding' place <<'EOF'
+expect "$ZERG" position-binding-int-to-byte E335 'cannot bind int to a byte binding' place <<'EOF'
 fn main() {
 	n := 5
 	b: byte = n
@@ -1835,7 +1803,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-argument 'argument 1 of `f` is float' place <<'EOF'
+expect "$ZERG" position-argument E340 place <<'EOF'
 fn f(x: float) -> float {
 	return x
 }
@@ -1846,7 +1814,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-return "this function's answer is float" place <<'EOF'
+expect "$ZERG" position-return E333 place <<'EOF'
 fn f() -> float {
 	i := 5
 	return i
@@ -1857,7 +1825,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-assignment 'cannot assign int to `acc`' place <<'EOF'
+expect "$ZERG" position-assignment E339 place <<'EOF'
 fn main() {
 	mut acc: float = 0.0
 	i := 5
@@ -1866,7 +1834,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-struct-field 'is float, and this gives int' place <<'EOF'
+expect "$ZERG" position-struct-field E338 'is float, and this gives int' place <<'EOF'
 struct R {
 	deg: float
 }
@@ -1877,7 +1845,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" position-list-element 'element 1 of this list literal is float' place <<'EOF'
+expect "$ZERG" position-list-element E329 place <<'EOF'
 fn main() {
 	i := 5
 	xs: list[float] = [i]
@@ -1888,7 +1856,7 @@ EOF
 # A CARRIER WRAPS, and the value inside it is at the position one level in — so the payload
 # is checked exactly as the bare binding above is. This is the case the old route reached
 # LAST: `x: float? = i` printed 5 for a year after the bare form had a rule.
-expect "$ZERG" position-carrier-payload 'is float, and this gives int' place <<'EOF'
+expect "$ZERG" position-carrier-payload E338 'is float, and this gives int' place <<'EOF'
 fn main() {
 	i := 5
 	x: float? = i
@@ -1899,7 +1867,7 @@ EOF
 # A CALL SOLVES ITS OWN PARAMETERS and the demand neither solves them nor converts the
 # answer, so `T` is `int` here and the `int` is refused at the binding. It used to raise
 # `OverflowError` at RUN TIME, one monomorphization later.
-expect "$ZERG" position-generic-answer 'cannot bind int to a byte binding' place <<'EOF'
+expect "$ZERG" position-generic-answer E335 'cannot bind int to a byte binding' place <<'EOF'
 fn id[T](x: T) -> T {
 	return x
 }
@@ -1912,7 +1880,7 @@ EOF
 
 # A USER `Into` IS A SPEC, not a position's licence. The method exists and `c.into()` runs
 # (test-data/codegen/into_user.zg); what is refused is the position performing it.
-expect "$ZERG" position-user-into 'cannot bind C to a int binding' place <<'EOF'
+expect "$ZERG" position-user-into E335 'cannot bind C to a int binding' place <<'EOF'
 struct C {
 	deg: int
 }
@@ -1935,7 +1903,7 @@ EOF
 # `i + u` was refused and `i + f` was promoted, and the difference between them was a
 # containment table nothing in the source mentions. One rule, one sentence, one fix.
 
-expect "$ZERG" operands-int-and-float 'must already be one type' place <<'EOF'
+expect "$ZERG" operands-int-and-float E353 place <<'EOF'
 fn main() {
 	i := 5
 	f := 1.5
@@ -1943,7 +1911,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" operands-int-and-uint 'must already be one type' place <<'EOF'
+expect "$ZERG" operands-int-and-uint E353 place <<'EOF'
 fn main() {
 	i := 5
 	u := uint(2)
@@ -1951,7 +1919,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" operands-byte-and-int 'must already be one type' place <<'EOF'
+expect "$ZERG" operands-byte-and-int E353 place <<'EOF'
 fn main() {
 	b := b'A'
 	n := 200
@@ -1961,7 +1929,7 @@ EOF
 
 # ORDER ASKS THE SAME QUESTION, which is where the C trap lives: in C the signed operand
 # converts to unsigned, so `-1 < 1u` is false.
-expect "$ZERG" operands-compared 'must already be one type' place <<'EOF'
+expect "$ZERG" operands-compared E353 place <<'EOF'
 fn main() {
 	i := 0 - 1
 	u := uint(1)
@@ -1975,21 +1943,21 @@ EOF
 # back on. All three were quiet: `[]` reached cc against generated C in a cache file nobody
 # wrote, and the other two compiled in silence.
 
-expect "$ZERG" typeless-empty-list 'the empty list `[]`' place <<'EOF'
+expect "$ZERG" typeless-empty-list E336 'the empty list `[]`' place <<'EOF'
 fn main() {
 	x := []
 	print 1
 }
 EOF
 
-expect "$ZERG" typeless-empty-map 'the empty map `{:}`' place <<'EOF'
+expect "$ZERG" typeless-empty-map E336 'the empty map `{:}`' place <<'EOF'
 fn main() {
 	x := {:}
 	print 2
 }
 EOF
 
-expect "$ZERG" typeless-nil '`nil`' place <<'EOF'
+expect "$ZERG" typeless-nil E336 '`nil`' place <<'EOF'
 fn main() {
 	x := nil
 	print 3
@@ -2004,21 +1972,21 @@ EOF
 # the one the expression folds to: `300 - 100` folds to `200`, a perfectly good byte, and what
 # is wrong with the line is the `300`.
 
-expect "$ZERG" folded-result-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+expect "$ZERG" folded-result-out-of-range E330 '`300` is not a value a byte holds' place <<'EOF'
 fn main() {
 	x: byte = 200 + 100
 	print int(x)
 }
 EOF
 
-expect "$ZERG" folded-operand-out-of-range '`300` is not a value a byte holds' place <<'EOF'
+expect "$ZERG" folded-operand-out-of-range E330 '`300` is not a value a byte holds' place <<'EOF'
 fn main() {
 	x: byte = 300 - 100
 	print int(x)
 }
 EOF
 
-expect "$ZERG" folded-negative-into-uint '`-1` is not a value a uint holds' place <<'EOF'
+expect "$ZERG" folded-negative-into-uint E330 '`-1` is not a value a uint holds' place <<'EOF'
 fn main() {
 	x: uint = 0 - 1
 	print int(x)
@@ -2028,7 +1996,7 @@ EOF
 # A SHAPE THE TARGET CANNOT CARRY is not a value out of range, and gets the ordinary sentence
 # rather than a false one about `1` not being a float: no double carries `%`, so the tree does
 # not adopt at all.
-expect "$ZERG" folded-shape-a-float-cannot-carry 'cannot bind int to a float binding' place <<'EOF'
+expect "$ZERG" folded-shape-a-float-cannot-carry E335 'cannot bind int to a float binding' place <<'EOF'
 fn main() {
 	x: float = 1 % 2
 	print x
@@ -2038,14 +2006,14 @@ EOF
 # A LITERAL TREE IS RENDERED WHOLE, so it is the one expression c_expr never walks — and both
 # questions that walk asks had to be carried to it by hand. Neither is hypothetical: the first
 # printed `inf`, the second printed `1`.
-expect "$ZERG" folded-divisor-at-the-other-operand 'divides by a constant `0`' place <<'EOF'
+expect "$ZERG" folded-divisor-at-the-other-operand E331 place <<'EOF'
 fn main() {
 	n: float = 4.0
 	print n + 1 / 0
 }
 EOF
 
-expect "$ZERG" folded-leaf-past-int 'does not fit an `int`' place <<'EOF'
+expect "$ZERG" folded-leaf-past-int E319 place <<'EOF'
 fn main() {
 	x: float = 99999999999999999999 + 1
 	print x
@@ -2054,7 +2022,7 @@ EOF
 
 # THE FOLD LEAVES i64 while every leaf fits it, which is not a value out of range and does not
 # get that sentence: 2^63 is a perfectly good `uint`, and the compiler never worked it out.
-expect "$ZERG" folded-past-what-an-int-holds "past what an \`int\` holds" place <<'EOF'
+expect "$ZERG" folded-past-what-an-int-holds E332 "past what an \`int\` holds" place <<'EOF'
 fn main() {
 	x: uint = 9223372036854775807 + 1
 	print int(x)
@@ -2067,21 +2035,21 @@ EOF
 # `x := if false { 1 } else { 2.5 }` printed `2` — the float arm truncated into the int the
 # first branch settled on — and a pair with no C conversion between them escaped to cc.
 
-expect "$ZERG" if-branches-int-and-float 'an `if` expression answers ONE type' place <<'EOF'
+expect "$ZERG" if-branches-int-and-float E321 place <<'EOF'
 fn main() {
 	x := if false { 1 } else { 2.5 }
 	print x
 }
 EOF
 
-expect "$ZERG" if-branches-int-and-bool 'an `if` expression answers ONE type' place <<'EOF'
+expect "$ZERG" if-branches-int-and-bool E321 place <<'EOF'
 fn main() {
 	x := if false { 1 } else { true }
 	print x
 }
 EOF
 
-expect "$ZERG" if-branches-int-and-str 'an `if` expression answers ONE type' place <<'EOF'
+expect "$ZERG" if-branches-int-and-str E321 place <<'EOF'
 fn main() {
 	x := if false { 1 } else { "s" }
 	print x
@@ -2095,13 +2063,13 @@ EOF
 # is `str(x)`, which every type answers through `display`. An `.into()` beside either would
 # need the position to say which target it meant, and a demand never does that.
 
-expect "$ZERG" into-on-an-int 'no built-in type implements it' <<'EOF'
+expect "$ZERG" into-on-an-int E464 <<'EOF'
 fn main() {
 	print 1.into()
 }
 EOF
 
-expect "$ZERG" into-on-a-str 'no built-in type implements it' <<'EOF'
+expect "$ZERG" into-on-a-str E464 <<'EOF'
 fn main() {
 	s := "a"
 	print s.into()
@@ -2113,7 +2081,7 @@ EOF
 # The arguments are what the bound MEANS, so a type meeting `Into[int]` does not meet
 # `Into[str]` — and the registry keys on them too, or the two impls would be one entry.
 
-expect "$ZERG" bound-with-the-wrong-argument 'does not implement `Into[str]`' <<'EOF'
+expect "$ZERG" bound-with-the-wrong-argument E412 'does not implement `Into[str]`' <<'EOF'
 struct S {
 	v: int
 }
@@ -2144,26 +2112,26 @@ EOF
 # Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
 # compiler has not caught up to, which is exactly what this file is for.
 
-expect "$ZERG" fixed-width-conversion 'the fixed-width ladder' <<'EOF'
+expect "$ZERG" fixed-width-conversion E465 <<'EOF'
 fn main() {
 	print i32(5)
 }
 EOF
 
-expect "$ZERG" fixed-width-annotation 'the fixed-width ladder' <<'EOF'
+expect "$ZERG" fixed-width-annotation E465 <<'EOF'
 fn main() {
 	x: u8 = 5
 	print int(x)
 }
 EOF
 
-expect "$ZERG" fixed-width-float 'the fixed-width ladder' <<'EOF'
+expect "$ZERG" fixed-width-float E465 <<'EOF'
 fn main() {
 	print f32(1.5)
 }
 EOF
 
-expect "$ZERG" fixed-width-typedef 'the fixed-width ladder' <<'EOF'
+expect "$ZERG" fixed-width-typedef E465 <<'EOF'
 type W = u8
 
 fn main() {
@@ -2183,7 +2151,7 @@ EOF
 # `or-pattern-in-a-match-arm` above is the LITERAL shape, where parse_expr swallows the `|`
 # into a bitwise-or; a name pattern stops before the `|` instead, so the arm never reached
 # the emitter at all and died on "expected `=>`". One rule, and only the parser sees both.
-expect "$ZERG" or-pattern-of-variant-names 'an or-pattern' <<'EOF'
+expect "$ZERG" or-pattern-of-variant-names E241 <<'EOF'
 enum E {
 	A
 	B
@@ -2191,7 +2159,7 @@ enum E {
 
 fn main() {
 	print match E.A {
-		A | B => 1
+		E.A | B => 1
 	}
 }
 EOF
@@ -2200,7 +2168,7 @@ EOF
 # this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
 # is refused, this one shows the refusal is about the type not being built rather than about
 # where it was written.
-expect "$ZERG" ptr-type-in-an-unsafe-group 'the raw-pointer' <<'EOF'
+expect "$ZERG" ptr-type-in-an-unsafe-group E413 <<'EOF'
 unsafe {
 	fn f(p: ptr) -> int {
 		return 1
@@ -2212,7 +2180,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" associated-type-projection 'an associated type' <<'EOF'
+expect "$ZERG" associated-type-projection E265 <<'EOF'
 spec It {
 	fn next() -> int
 }
@@ -2226,7 +2194,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" value-generic-parameter 'a value generic' <<'EOF'
+expect "$ZERG" value-generic-parameter E266 <<'EOF'
 fn f[N: int]() -> int {
 	return N
 }
@@ -2236,7 +2204,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" set-constructor 'the built-in `set`' <<'EOF'
+expect "$ZERG" set-constructor E466 <<'EOF'
 fn main() {
 	s := set([1, 2])
 	print s.len()
@@ -2255,7 +2223,7 @@ EOF
 # non-void C function. cc reported it, against generated source and a mangled name. The
 # rule one level up — a body that FALLS OFF THE END — already existed; this was its
 # other slot. `return if c` is the same statement with GRAMMAR's postfix `if`.
-expect "$ZERG" bare-return-in-a-non-void-fn 'a `return` with no value' place <<'EOF'
+expect "$ZERG" bare-return-in-a-non-void-fn E468 place <<'EOF'
 fn f() -> int {
 	return
 }
@@ -2265,7 +2233,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" bare-conditional-return-in-a-non-void-fn 'a `return` with no value' place <<'EOF'
+expect "$ZERG" bare-conditional-return-in-a-non-void-fn E468 place <<'EOF'
 fn f(n: int) -> int {
 	return if n < 0
 	return 5
@@ -2279,7 +2247,7 @@ EOF
 # A `mut &` parameter cannot survive being turned into a bare function pointer: the call
 # site reads a signature from the callee's NAME, and a value has not got one. Both
 # spellings SEGFAULTED — the argument went in by value where a `T*` was declared.
-expect "$ZERG" mut-ref-param-on-a-closure 'a function VALUE cannot carry one' <<'EOF'
+expect "$ZERG" mut-ref-param-on-a-closure E469 <<'EOF'
 fn main() {
 	f := fn(mut &a: int) {
 		a = a + 1
@@ -2290,7 +2258,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" mut-ref-fn-taken-as-a-value 'a function VALUE cannot carry one' <<'EOF'
+expect "$ZERG" mut-ref-fn-taken-as-a-value E469 <<'EOF'
 fn bump(mut &a: int) {
 	a = a + 1
 }
@@ -2307,7 +2275,7 @@ EOF
 # close the stream if it was the last. This compiler releases a channel where its
 # binding's scope ends, so `del ch` revoked the name and emitted nothing: the program
 # built, said nothing, and DEADLOCKED waiting on an end the writer thought it had closed.
-expect "$ZERG" del-on-a-channel 'on a CHANNEL' <<'EOF'
+expect "$ZERG" del-on-a-channel E470 <<'EOF'
 fn consume(rx: <-chan[int], done: chan[int]<-) {
 	mut n := 0
 	for v in rx {
@@ -2330,7 +2298,7 @@ EOF
 # here", so the import was not made and `util/text` fell through to the statement loop as
 # a top-level expression — which compile mode treats as a nop. Built, printed, exited 0,
 # and had imported nothing.
-expect "$ZERG" bare-import-path 'an import path is a string' place <<'EOF'
+expect "$ZERG" bare-import-path E267 place <<'EOF'
 import util/text
 
 fn main() {
@@ -2341,7 +2309,7 @@ EOF
 # A built-in container's type arguments are not a genericity it lacks: `map` takes exactly
 # two. What it has not got is a no-argument constructor, and saying "`map` is not generic"
 # was a false statement about the program.
-expect "$ZERG" map-as-a-constructor 'as a constructor' <<'EOF'
+expect "$ZERG" map-as-a-constructor E471 <<'EOF'
 fn main() {
 	m := map[str, int]()
 	print 1
@@ -2351,13 +2319,9 @@ EOF
 # GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.
-expect "$ZERG" type-arguments-with-no-call 'with no call after it' <<'EOF'
-fn id[T](x: T) -> T {
-	return x
-}
-
+expect "$ZERG" type-arguments-with-no-call E268 <<'EOF'
 fn main() {
-	g := id[int, int]
+	m := map[str, int]
 	print 1
 }
 EOF
@@ -2366,13 +2330,13 @@ EOF
 # if it was there. So a second statement on the same line was read, quietly: `print "a" "b"`
 # printed `a` and `x := 1 2` bound 1. The seed has refused this since it was written, so the
 # two compilers disagreed about which programs exist.
-expect "$ZERG" two-statements-on-one-line 'to separate statements' place <<'EOF'
+expect "$ZERG" two-statements-on-one-line E205 place <<'EOF'
 fn main() {
 	print "a" "b"
 }
 EOF
 
-expect "$ZERG" two-bindings-on-one-line 'to separate statements' place <<'EOF'
+expect "$ZERG" two-bindings-on-one-line E205 place <<'EOF'
 fn main() {
 	x := 1 2
 	print x
@@ -2382,15 +2346,47 @@ EOF
 # `\u{…}` past U+10FFFF, or inside the surrogate block, is not a code point — so not an
 # escape. BOTH compilers used to substitute U+FFFD and say nothing, so a program that named
 # one character got another: these two printed 65533.
-expect "$ZERG" unicode-escape-past-the-code-space 'E109' <<'EOF'
+expect "$ZERG" unicode-escape-past-the-code-space E109 <<'EOF'
 fn main() {
 	print int('\u{110000}')
 }
 EOF
 
-expect "$ZERG" unicode-escape-on-a-surrogate 'E109' <<'EOF'
+expect "$ZERG" unicode-escape-on-a-surrogate E109 <<'EOF'
 fn main() {
 	print int('\u{D800}')
+}
+EOF
+
+# The four unclosed-literal codes. Each is a rule the lexer has reported since it was
+# written and NOTHING asserted — found by the meta-gate over the catalogue, which is the
+# failure that gate exists for: a code with no case is an identity nobody checks, and it
+# breaks nothing while it drifts.
+expect "$ZERG" empty-rune-literal E102 <<'EOF'
+fn main() {
+	x := ''
+	print x
+}
+EOF
+
+expect "$ZERG" triple-quoted-string-never-closed E105 <<'EOF'
+fn main() {
+	x := """abc
+	print x
+}
+EOF
+
+expect "$ZERG" raw-string-with-no-closing-quote E106 <<'EOF'
+fn main() {
+	x := r"abc
+	print x
+}
+EOF
+
+expect "$ZERG" command-literal-with-no-closing-backtick E107 <<'EOF'
+fn main() {
+	x := `ls
+	print x
 }
 EOF
 
@@ -2398,7 +2394,7 @@ EOF
 # token that could not continue the condition — "expected `}`, found `:=`" and "expected
 # `{`, found `:=`" — for forms GRAMMAR#if-expr and GRAMMAR#if-head derive. The `else if`
 # chain, which is the third, now parses (codegen/if_expr_forms).
-expect "$ZERG" if-expression-with-a-multi-statement-branch 'more than one statement' place <<'EOF'
+expect "$ZERG" if-expression-with-a-multi-statement-branch E269 place <<'EOF'
 fn main() {
 	c := true
 	x := if c {
@@ -2411,7 +2407,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" if-expression-with-a-binding-head 'a binding head in an `if` EXPRESSION' place <<'EOF'
+expect "$ZERG" if-expression-with-a-binding-head E270 place <<'EOF'
 fn get() -> int? {
 	return 3
 }
@@ -2425,14 +2421,14 @@ EOF
 # `NotImplemented: unsafe` and `NotImplemented: asm` — the keyword and nothing else. A
 # marker that names no form, gives no place, and does not say that the module-level
 # `unsafe { … }` GROUP spelled the same way does work.
-expect "$ZERG" unsafe-as-an-expression 'as an EXPRESSION' place <<'EOF'
+expect "$ZERG" unsafe-as-an-expression E224 place <<'EOF'
 fn main() {
 	x := unsafe { 3 + 4 }
 	print x
 }
 EOF
 
-expect "$ZERG" inline-assembly '`asm(…)`' place <<'EOF'
+expect "$ZERG" inline-assembly E271 place <<'EOF'
 fn main() {
 	asm("nop")
 	print 1
@@ -2443,7 +2439,7 @@ EOF
 # literal a pattern, so this is a well-formed program and belongs here rather than in
 # reject-check, where it sat: it was asserting "an optional is not an operand of `==`" —
 # the synthesised comparison the arm lowers to, and an operator the program never wrote.
-expect "$ZERG" nil-as-a-match-pattern 'as a `match` pattern' <<'EOF'
+expect "$ZERG" nil-as-a-match-pattern E472 <<'EOF'
 fn f(x: int?) -> int {
 	return match x {
 		nil => 0
@@ -2460,7 +2456,7 @@ EOF
 # bag of identifiers in it: every name that was not `derive` went on as a derive argument,
 # so `#[derive(Eq), sealed]` asked to derive `sealed`. Each item now gets its own answer,
 # and `#[sealed]` alone has had one all along.
-expect "$ZERG" second-decorator-in-a-comma-list 'the decorator `#[sealed]`' <<'EOF'
+expect "$ZERG" second-decorator-in-a-comma-list E217 <<'EOF'
 #[derive(Eq), sealed]
 struct P {
 	pub v: int
@@ -2476,7 +2472,7 @@ EOF
 # lookup answered no for every type the program declares — a diagnostic stating something
 # false about the reader's own source, which sends them looking for a declaration that is
 # already there. The rule under it is the true one, and the one this case pins.
-expect "$ZERG" typedef-over-a-user-struct 'over a non-scalar' place <<'EOF'
+expect "$ZERG" typedef-over-a-user-struct E304 place <<'EOF'
 struct P {
 	pub v: int
 }

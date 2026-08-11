@@ -232,6 +232,48 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   the seed's only input, the compiler's own source, nests five levels — but it is a gap:
   the seed enforces no bound at all, and a deep enough program would end as a Go
   stack-limit panic rather than a diagnostic.
+- **`Either.Left(v)` is not read; the bare `Left(v)` is.** The two sides of an `Either` are
+  variants of a built-in rather than of a declared enum, so the seed's enum-namespace path
+  does not find `Either` and reports an undefined name. `zerg` requires the qualified form
+  (a variant is named through its type, with no exception for a built-in), which is why the
+  three corpus programs that use it are skipped here with that reason.
+- **`#[obj]` is an unknown decorator.** `zerg` expands it into a companion struct of
+  function values and a generic wrap; the seed reads `#[derive(…)]` and no other. Its
+  expansion needs closure capture, which the seed also has not got, so the hand-written half
+  of that pair is refused here too.
+- **A closure that CAPTURES is refused.** `zerg` lifts a lambda's captures into a per-site
+  environment struct and hands it to the call through the fn value's own env slot; the seed
+  turns a capturing lambda away — "a closure used as a value is not yet supported" — and is
+  the narrower compiler here.
+- **`#[derive(S)]` on an ENUM is refused for a spec you wrote.** The delegating half of
+  `derive` — each arm handing the call to its payload — is a rewrite that exists for any
+  spec, so `zerg` derives it. The seed keeps one blessed set for both halves and turns the
+  program away; it is the narrower compiler here rather than the wrong one.
+- **An associated type or value in a `spec` is accepted.** GRAMMAR#spec-member derives a
+  required signature and a provided method, and nothing else — a spec carries behaviour. The
+  seed reads `type Item` and `BITS: int` inside one and carries on; `zerg` refuses both by
+  name. (A member that is neither, like `SIZE := 4096`, the seed does turn away.)
+- **A call that WRITES its type arguments is accepted in its multi-argument shape.**
+  `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
+  `[ … ]` always an index and a generic takes its type from its arguments. The
+  one-argument shape (`id[int](7)`) the seed does turn away, for a reason of its own.
+- **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
+  its own name into the value namespace and not its variants', so a variant is reached
+  through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`
+  alone still resolves here; `zerg` refuses both halves by name. The seed's own sources need
+  no migration for the same reason its gaps are its own contract: it is the oracle on
+  programs that follow the rule, not the enforcer of it.
+- **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
+  `impl` and declared by none, so it is reserved the way `this` is — but it is the one
+  reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a
+  name beyond its keyword table. So `struct This`, `fn This()`, a parameter and an `enum`
+  variant all build here and `zerg` refuses each by name. (Lowercase `this` the seed does
+  refuse, because that one IS a keyword token.)
+- **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
+  value the compiler can work out, so `zerg` answers at the division rather than leaving the
+  program to reach it — the same reasoning that folds a literal in a typed position. The
+  seed folds nothing here and emits the division, whose runtime check then raises. Both
+  refuse the program in the end; only one of them does it before the program runs.
 
 ## Changing the seed
 

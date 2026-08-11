@@ -192,7 +192,7 @@ func (l *Loader) flatten(entry *ast.File, reg map[string]*loadedModule) {
 	sort.Strings(names)
 	for _, name := range names {
 		m := reg[name]
-		r := &renamer{tag: m.tag, surface: collectSurface(m.files)}
+		r := &renamer{tag: m.tag, surface: collectSurface(m.files), variants: collectVariants(m.files)}
 		entry.Items = append(entry.Items, r.rename(m.files)...)
 	}
 }

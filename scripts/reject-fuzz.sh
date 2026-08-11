@@ -59,14 +59,21 @@ unbuildable=0
 # Four of the five are at ZERO, and they got there the only way a ceiling may be satisfied:
 # the rules that were answering with a bare sentence — an unknown name, a construction short
 # of a required field, a `str` handed to a conversion that does not parse one — became
-# checked rules that carry a place. The last two belong to `write-immutable` and are the
+# checked rules that carry a place. The last one belongs to `write-immutable` and is the
 # PARSER's, which has no diag channel at all: it raises, so `x = 1` where the surrounding
 # form wanted something else is reported as `expected X, found Y` with nowhere attached.
-# That is one gap owed once, and these two are what is left of it here.
+# That is one gap owed once, and this is what is left of it here — a `select` arm, where a
+# write is not a statement the head can hold.
+#
+# It was TWO. The other was the mutator's: this kind writes its statement on the line after
+# the binding, so a binding whose value the formatter WRAPPED had the write inserted into
+# the middle of an expression, and what got measured was the parser's opinion of `=` in a
+# place no program puts one. `ends_stmt` skips those now, and the ceiling came down with
+# them — which is the only direction it may move.
 
 NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-0}
 NOPLACE_MAX_wrong_type=${NOPLACE_MAX_wrong_type:-0}
-NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-2}
+NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-1}
 NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-0}
 NOPLACE_MAX_mixed_operands=${NOPLACE_MAX_mixed_operands:-0}
 
@@ -82,8 +89,20 @@ for src in "$CORPUS"/*.zg; do
 	name="$(basename "$src" .zg)"
 
 	# only programs this compiler already accepts: a case it cannot build says nothing
-	# about what it does with a broken one
-	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || { unbuildable=$((unbuildable + 1)); continue; }
+	# about what it does with a broken one.
+	#
+	# Measured on a COPY, where the mutations are compiled, and not on the source in
+	# place — because a case may be well-formed where it lives and unbuildable anywhere
+	# else. A multi-file case importing a module directory beside it is exactly that: the
+	# copy cannot resolve the import, so every mutation of it was refused for a reason the
+	# mutation did not cause, and the refusal — the driver's, which carries no place —
+	# counted against a ceiling that watches the checker's rules. One such case moved
+	# `write-immutable` from 2 to 3 and read as a regression.
+	cp "$src" "$tmp/$name.orig.zg"
+	"$ZERG" build --emit c "$tmp/$name.orig.zg" >/dev/null 2>&1 || {
+		unbuildable=$((unbuildable + 1))
+		continue
+	}
 
 	for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed-operands; do
 		out_zg="$tmp/$name.$kind.zg"

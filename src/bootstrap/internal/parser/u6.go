@@ -346,24 +346,35 @@ func (p *parser) parsePatternCore() ast.Pattern {
 // parseNamedPattern parses an identifier-led pattern: '_' is the wildcard, a name
 // followed by '(' is a variant, a name followed by '{' is a struct pattern, and a
 // bare name is the provisional NamePattern (DESIGN §3b).
+//
+// A VARIANT IS NAMED THROUGH ITS ENUM — 'Color.Red', 'Either.Left(v)' (GRAMMAR#variant-pat).
+// The qualifier is consumed here and the VARIANT is what every later pass resolves, which
+// is all the seed needs to read the same source the shipping compiler does: whether the
+// qualifier names the right enum is a rule 'zerg' enforces, and the seed's job is to be the
+// oracle on the programs that are well-formed, not a second dialect that cannot read them.
 func (p *parser) parseNamedPattern() ast.Pattern {
 	name := p.advance()
 	if name.Lexeme == "_" {
 		return spanned(&ast.WildPattern{}, name.Span)
 	}
+	start := name.Span.Start
+	if p.at(token.Dot) {
+		p.advance()
+		name = p.expect(token.Ident)
+	}
 	switch p.cur().Kind {
 	case token.LParen:
-		return p.parseVariantPattern(name)
+		return p.parseVariantPattern(start, name)
 	case token.LBrace:
 		return p.parseStructPattern(name)
 	default:
-		return spanned(&ast.NamePattern{Name: name.Lexeme}, name.Span)
+		return spanned(&ast.NamePattern{Name: name.Lexeme}, span(start, name.Span.End))
 	}
 }
 
 // parseVariantPattern parses 'type-name ( pattern-list )' — the name and its '('
 // are already the current position's lexeme and next token.
-func (p *parser) parseVariantPattern(name token.Token) ast.Pattern {
+func (p *parser) parseVariantPattern(start token.Pos, name token.Token) ast.Pattern {
 	p.expect(token.LParen)
 	var elems []ast.Pattern
 	for !p.at(token.RParen) {
@@ -374,7 +385,7 @@ func (p *parser) parseVariantPattern(name token.Token) ast.Pattern {
 	}
 	rp := p.expect(token.RParen)
 	return spanned(&ast.VariantPattern{Name: name.Lexeme, Elems: elems},
-		span(name.Span.Start, rp.Span.End))
+		span(start, rp.Span.End))
 }
 
 // parseStructPattern parses 'type-name { struct-fields }': field patterns with a

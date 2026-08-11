@@ -175,8 +175,8 @@ fn read_config(s: str) -> Result[Config] {
 
 ```text
 match guard { work() } {
-    Left(v)  => use(v)
-    Right(e) => {
+    Either.Left(v)  => use(v)
+    Either.Right(e) => {
         if e is IOError { rebuild() }           # 就分類種類分支
         else if e is OverflowError { alert(e) }  # 內建 abort，被 guard 具現化
         else { report(e.message()) }            # 其餘——catch-all 必備

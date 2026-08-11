@@ -169,7 +169,7 @@ fn ls_content_length(buf: list[byte], hdr: int) -> int {
 # longer on the wire than it is on the page.
 fn ls_send(v: JVal) {
 	body := json_write(v)
-	n := list[byte](body).len()
+	n := bytearray(body).len()
 	io.write(f"Content-Length: {n}\r\n\r\n{body}")
 }
 
@@ -185,8 +185,8 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 	msg := match guard {
 		json_parse(body)
 	} {
-		Left(v)  => v
-		Right(e) => jnull()
+		Either.Left(v)  => v
+		Either.Right(e) => jnull()
 	}
 	if jis_null(msg) {
 		ls_log("lsp: a frame that is not JSON was dropped")
@@ -407,16 +407,16 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] 
 		load(path, text)
 	}
 	lerr := match res {
-		Left(_)  => ""
-		Right(e) => e.message()
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
 	}
 	if lerr != "" {
 		out.append(ls_whole_file_diag(lerr))
 		return out
 	}
 	prog := match res {
-		Left(p)  => p
-		Right(_) => program([], [])
+		Either.Left(p)  => p
+		Either.Right(_) => program([], [])
 	}
 	return out if prog.srcs.len() == 0
 
@@ -427,8 +427,8 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] 
 	err := match guard {
 		zerg.emit_files_diag(prog.srcs, prog.paths, ds)
 	} {
-		Left(_)  => ""
-		Right(e) => e.message()
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
 	}
 
 	# An ABORT is a refusal or a parse error, and neither carries a place: the compiler
@@ -452,8 +452,8 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] 
 	lints := match guard {
 		zerg.lint_conversions(prog.srcs, prog.paths)
 	} {
-		Left(ls) => ls
-		Right(_) => []
+		Either.Left(ls) => ls
+		Either.Right(_) => []
 	}
 	for d in lints {
 		if d.path == path {
@@ -476,14 +476,20 @@ fn ls_whole_file_diag(msg: str) -> JVal {
 }
 
 fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> JVal {
-	return ls_diagnostic_at(text, d.line, d.col, d.msg, severity)
+	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
 }
 
-fn ls_diagnostic_at(text: str, line: int, col: int, msg: str, severity: int) -> JVal {
+# `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data
+# (`Diag.code`). A finding without one omits the field rather than sending an empty string,
+# which an editor would show as a rule named "".
+fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> JVal {
 	mut fs := jfields()
 	jput(fs, "range", ls_word_range(text, line, col))
 	jput_int(fs, "severity", severity)
 	jput_str(fs, "source", "zerg")
+	if code != "" {
+		jput_str(fs, "code", code)
+	}
 	jput_str(fs, "message", msg)
 	return jobj_of(fs)
 }
@@ -521,7 +527,7 @@ struct Span {
 
 fn ls_word_span(text: str, line: int, col: int) -> Span {
 	ln := ls_line_at(text, line - 1)
-	b := list[byte](ln)
+	b := bytearray(ln)
 	mut lo := col - 1
 	if lo < 0 {
 		lo = 0
@@ -641,16 +647,16 @@ fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg
 		load(path, text)
 	}
 	prog := match res {
-		Left(p)  => p
-		Right(_) => program([], [])
+		Either.Left(p)  => p
+		Either.Right(_) => program([], [])
 	}
 	return out if prog.srcs.len() == 0
 
 	lints := match guard {
 		zerg.lint_conversions(prog.srcs, prog.paths)
 	} {
-		Left(ls) => ls
-		Right(_) => []
+		Either.Left(ls) => ls
+		Either.Right(_) => []
 	}
 	for d in lints {
 		if d.path == path and d.fix != "" {
@@ -677,6 +683,9 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
 	jput(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
 	jput_int(diag, "severity", 3)
 	jput_str(diag, "source", "zerg")
+	if d.code != "" {
+		jput_str(diag, "code", d.code)
+	}
 	jput_str(diag, "message", d.msg)
 
 	mut fs := jfields()
@@ -709,8 +718,8 @@ fn ls_formatting_result(s: Server, uri: str) -> JVal {
 	out := match guard {
 		zerg.fmt_src_off(text, [])
 	} {
-		Left(t)  => t
-		Right(_) => text
+		Either.Left(t)  => t
+		Either.Right(_) => text
 	}
 	return jarr_of(edits) if out == text
 
@@ -729,7 +738,7 @@ fn ls_whole_range(text: str) -> JVal {
 	n := lines.len()
 	return ls_range_of(0, 0, 0, 0) if n == 0
 	last := lines[n - 1]
-	return ls_range_of(0, 0, n - 1, ls_utf16_col(list[byte](last), list[byte](last).len()))
+	return ls_range_of(0, 0, n - 1, ls_utf16_col(bytearray(last), bytearray(last).len()))
 }
 
 # --- URIs ---------------------------------------------------------------------------------
@@ -744,7 +753,7 @@ fn ls_uri_path(uri: str) -> str {
 }
 
 fn ls_percent_decode(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() {
@@ -776,7 +785,7 @@ fn ls_hex_of(c: byte) -> int {
 fn ls_split_lines(s: str) -> list[str] {
 	mut out: list[str] = []
 	mut cur: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if c == b'\n' {
 			out.append(str(cur))
 			cur = []
@@ -809,8 +818,8 @@ fn ls_drop_front(buf: list[byte], n: int) -> list[byte] {
 }
 
 fn ls_starts_with(s: str, p: str) -> bool {
-	a := list[byte](s)
-	b := list[byte](p)
+	a := bytearray(s)
+	b := bytearray(p)
 	return false if a.len() < b.len()
 	mut i := 0
 	for i < b.len() {
@@ -821,7 +830,7 @@ fn ls_starts_with(s: str, p: str) -> bool {
 }
 
 fn ls_drop_prefix(s: str, n: int) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := n
 	for i < b.len() {
@@ -832,7 +841,7 @@ fn ls_drop_prefix(s: str, n: int) -> str {
 }
 
 fn ls_before_colon(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	for c in b {
 		break if c == b':'
@@ -842,7 +851,7 @@ fn ls_before_colon(s: str) -> str {
 }
 
 fn ls_after_colon(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut seen := false
 	for c in b {
@@ -857,7 +866,7 @@ fn ls_after_colon(s: str) -> str {
 }
 
 fn ls_trim(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut lo := 0
 	for lo < b.len() and (b[lo] == b' ' or b[lo] == b'\t' or b[lo] == b'\r') {
 		lo = lo + 1
@@ -871,7 +880,7 @@ fn ls_trim(s: str) -> str {
 
 fn ls_lower(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		if c >= b'A' and c <= b'Z' {
 			out.append(c + byte(32))
 		} else {
@@ -882,7 +891,7 @@ fn ls_lower(s: str) -> str {
 }
 
 fn ls_int_of(s: str) -> int {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut n := 0
 	mut any := false
 	for c in b {

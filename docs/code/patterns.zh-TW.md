@@ -5,22 +5,17 @@
 
 ## Closure 與高階函式
 
-Zerg 的匿名函式 `fn(…) -> R { … }` **就是** closure——first-class,只以 copy capture immutable 值與 channel
-（見 [函式與閉包](functions.zh-TW.md)）。捕獲一個 **immutable** 值——一個 scalar,或一個 non-POD 的
-`str` / `list` / `map` / `Ref`——是 **[not yet]**,捕獲一個 **`mut`** binding 也是:今天的 closure 只能用
-自己的參數。刻意**沒有更短的 `|x|` lambda**:一點點冗長會把你**推向** Zerg 的 procedural-first
+Zerg 的匿名函式 `fn(…) -> R { … }` **就是** closure——first-class,以 copy 捕獲
+（見 [函式與閉包](functions.zh-TW.md)）。捕獲已經實作:**immutable** 值——一個 scalar,或一個 non-POD 的
+`str` / `list` / `map`——與 **`mut`** binding 都可以,後者拿到的是**寫下閉包那一刻**它持有的值。
+刻意**沒有更短的 `|x|` lambda**:一點點冗長會把你**推向** Zerg 的 procedural-first
 風格,而非深層 functional 鏈。讓 closure 好讀的三招,依偏好排序:
 
 1. **把函式命名**——first-class 函式可具名傳遞,具名的 `fn` 可重用、可測試,呼叫端也乾淨。
 2. **寫 `for` 迴圈**——往往最清楚,也最 procedural-first。
-3. **貼合槽位的 inline `fn`**——一次性用途時,沒寫型別的參數從 closure 被檢查的函式型別取得型別;回傳型別
-   仍要寫出——沒寫 `-> type` 就是 nil,不是推論（[型別系統](../core/type-system.zh-TW.md)）。
-
-   > **[not yet]** 參數不帶型別的 inline `fn` 會被拒絕：`xs.map(fn(x) { return x *% 2 })` 報
-   > _NotImplemented: a closure parameter without a type — GRAMMAR lets `x` take its type from the function
-   > type the closure is checked against, and this compiler does not infer it; write `x: T`_。use-site 知道
-   > 期望的型別，卻沒有任何東西把它帶回 closure 自己的參數列，所以每個 inline `fn` 即使型別早已確定，也得把
-   > 參數型別寫出來。
+3. **貼合槽位的 inline `fn`**——一次性用途時,沒寫型別的參數從 closure 被檢查的函式型別取得型別,省略的
+   回傳型別也是（[型別系統](../core/type-system.zh-TW.md)）。若根本沒有那樣一個位置——`f := fn (x) { … }`
+   ——就無處可取:參數會是一個具名的錯誤,而沒寫 `-> type` 就是 nil,不是推論。
 
 ## 鏈式 pipeline
 
@@ -56,8 +51,8 @@ for x in xs {
 ys := xs.map(fn(x) -> int { return x *% 2 })   # x: int 取自 xs;-> int 寫出來
 ```
 
-> **[not yet]** 這一行被拒絕兩次——為了沒有型別的 `x`，也為了 `map`，兩者都標在上面。它留在這裡，是因為這就是
-> 語言規定「一次性用途」該有的樣子，也是 closure 參數能從被檢查的函式型別取得型別之後，該預期的樣子。
+> **[not yet]** 這一行還沒建的是 `map`,標在上面。沒有型別的參數**不是**:`x` 會從 closure 被檢查的函式型別
+> 取得型別,所以等 adapter 存在的那天,這一行可以直接寫成 `xs.map(fn(x) { return x *% 2 })`。
 
 ## Builder
 

@@ -14,8 +14,8 @@
 
 ## 集合
 
-`#[derive]` 是編譯器唯一會讀的 decorator。其餘每一個——`#[test]`、`#[sealed]`、版面指示——
-皆為 **[not yet]**,會被指名拒絕:
+`#[derive]` 與 `#[obj]` 是這個編譯器會讀的 decorator。其他每一個——`#[test]`、`#[sealed]`、
+layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`（掛在**帶 payload**

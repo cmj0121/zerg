@@ -959,6 +959,17 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
 
+	# A CLOSURE ADOPTS what the position declares — carve-out (c). A closure that omitted a
+	# parameter's type has `fn(?) -> void` for a type, which is not `fn(int) -> int` and
+	# never becomes one by comparison: asking chk_fits directly refuses the form GRAMMAR
+	# allows, and names two types the reader did not write.
+	#
+	# So it is FILLED FIRST and then asked the ordinary question. A closure that wrote
+	# everything is filled with nothing and this is exactly the comparison below, which is
+	# why a wrong written type still reports as one; a closure that wrote nothing is
+	# compared as the position's own type, and only arity can still disagree.
+	return chk_fits(em, want, c_infer(em, c_fn_typed(want, e))) if c_is_fn(want) and c_is_fnlit(e)
+
 	return chk_fits(em, want, got)
 }
 

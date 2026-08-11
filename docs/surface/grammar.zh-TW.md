@@ -229,6 +229,10 @@ postfix 的 `[…]` **一律是索引**。型別引數只寫在**型別位置**�
 以**帶型別的 binding** 引導（`xs: list[int] = empty()`）,而不是在呼叫端給一份引數清單。pattern 文法（group 6）
 context-free 的理由與規則形狀完全相同。
 
+**不需要符號表**是一個關於編譯器的主張,所以它當成主張被檢查:`make layering` 讀兩側的 parser,斷言兩者都
+不越過自己的 token——seed 用它的 package import 與 parser 狀態,`zerg` 用它呼叫了哪些同模組檔案。這也正是
+`zerg fmt` 與 `zerg lsp` 能讀一個編不過的檔案的原因。
+
 ### 複合字面量（Composite literals）
 
 值在運算式位置**建構**——正是 group 6 那些拆解它們的 pattern 的鏡像:

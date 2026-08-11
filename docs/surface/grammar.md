@@ -247,6 +247,11 @@ and no symbol table. A generic call **infers** its type arguments from the argum
 not enough, a **typed binding** steers it (`xs: list[int] = empty()`) instead of a call-site list. The pattern
 grammar (group 6) is context-free for the same reason and by the same kind of rule.
 
+**No symbol table** is a claim about the compiler, so it is checked as one: `make layering` reads both
+parsers and asserts that neither reaches past its tokens — the seed by its package imports and its parser
+state, `zerg` by which of its sibling files it calls into. It is why `zerg fmt` and `zerg lsp` can read a
+file that does not compile.
+
 ### Composite literals
 
 Values are **built** in expression position — the mirror of the patterns (group 6) that take them apart:

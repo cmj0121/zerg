@@ -233,10 +233,9 @@ The trigger is **purely syntactic** — a bare block, a first statement that bin
 binding's **`defer`**: `with` carries no teardown of its own, so a rule that folded
 `{ x := e; defer x.close(); … }` into one would delete the `defer`.
 
-> **[not yet]** Both are unbuilt. They no longer wait on anything: `with` is built, and a bare block
-> with it, so what is left is the two rules themselves. `L105` is the one with a wrinkle worth writing
-> down — `with` expands in the PARSER, so by the time there is an AST there is no `with` left to lint.
-> Both rules are therefore token rules, like every other `F4xx`.
+Both are **token rules**, and `L105` is the reason to say so: `with` expands in the PARSER, so by the
+time there is an AST there is no `with` left to lint. Every rule about this form reads tokens for that
+reason, the linter's included.
 
 `GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
 for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the

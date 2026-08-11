@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-mirror conformance lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror conformance lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -402,7 +402,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-mirror conformance sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror conformance sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -446,6 +446,9 @@ conformance:                    # every GRAMMAR chapter is read, or refused by n
 # The productions on docs/surface/grammar.md are a SECOND COPY of GRAMMAR's, and its zh-TW
 # twin a third. This is what holds the copies to the original; the page may abbreviate with
 # `…`, and may not say something else. Three had already drifted when it was written.
+grammar-keywords:        # every reserved word is reached by the grammar that reserves it
+	./scripts/grammar-keywords.sh
+
 grammar-mirror:                 # the prose companion still says what GRAMMAR says
 	./scripts/grammar-mirror.sh
 

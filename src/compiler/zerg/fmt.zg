@@ -2370,27 +2370,17 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	if is_larrow(k) and closes_chan_type(toks, i - 1) {
 		return false # `chan[int]<-` — the arrow ends a send-only type
 	}
-	if is_larrow(prev) and not ends_operand(prev2) {
-		return false # `<-ch`, `<-chan[int]` — the arrow leads what follows it
-	}
-	if is_amp(prev) and not ends_operand(prev2) {
-		# `mut &p` — the REFERENCE marker leads what follows it, and is told from the bitwise
-		# `a & b` by exactly the question the two below ask. `&` was in is_unary_prefix, whose
-		# own comment says what belongs there — an operator that is ONLY ever a prefix — and
-		# `&` is not one. Nothing caught it because no gated source performed a bitwise AND:
-		# `x & M` printed as `x &M`, the same mistake `-%` made with the sides swapped, and
-		# `sha256` was the first module in this tree to write one.
-		return false
-	}
-	if is_minus(prev) and not ends_operand(prev2) {
-		# `-1`, `3 + -1`, `x ?? -1` — a NEGATION leads what follows it, and is told from the
-		# subtraction `a - b` the same way the two arrows are told apart: by whether anything
-		# to its left could be an operand. It cannot go in is_unary_prefix, which asks only
-		# what a token IS, and `-` is both.
+	if is_dual_fix(prev) and not ends_operand(prev2) {
+		# A TOKEN THAT IS BOTH — `-1` and `a - b`, `<-ch` and `ch <- v`, `mut &p` and `a & m`.
+		# Which one it is depends on what stands to the LEFT, and this is the one place that
+		# question is asked, of every token that has two roles.
 		#
-		# `-%` IS BOTH IN THE SAME WAY — the wrapping negate and the wrapping subtraction — so
-		# it is asked here rather than there, and `-%b` comes out tight while `lo -% byte(1)`
-		# keeps its spaces. It was in neither place, and printed `-% b`.
+		# It was three copies of this line, one per token, and each was written the day its
+		# token was found wrong: `-%` printed as `-% b`, `~` as `~ b`, and `&` as `x &M`. Each
+		# was found by a corpus case written for something else, because `fmt-corpus` is blind
+		# to a form no case contains — so a fourth two-role token would have been the fourth
+		# copy and the fourth accident. Now it is a list, and a `Kind` missing from it is a
+		# visible omission rather than a missing `if`.
 		return false
 	}
 	return true
@@ -2408,14 +2398,6 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 fn ends_operand(k: Kind) -> bool {
 	return false if is_jump(k) or k == Kind.Nop
 	return ends_item(k)
-}
-
-fn is_minus(k: Kind) -> bool {
-	return match k {
-		Kind.Minus    => true
-		Kind.MinusMod => true
-		_             => false
-	}
 }
 
 # closes_chan_type reports whether the token at `i` is the `]` closing a `chan[…]` — which
@@ -2592,10 +2574,21 @@ fn is_unary_prefix(k: Kind) -> bool {
 	}
 }
 
-fn is_amp(k: Kind) -> bool {
+# is_dual_fix is every operator that is a PREFIX or an INFIX depending on what stands to its
+# left — the complement of is_unary_prefix above, and the reason that one may stay a plain
+# question about the token alone.
+#
+# `-` and `-%` are the negate and the subtraction. `<-` leads a receive and separates a send.
+# `&` marks a reference in `mut &p` and ands two operands in `a & m`; it was in
+# is_unary_prefix, whose own comment says only-ever-a-prefix belongs there, so `x & M`
+# printed as `x &M` until `sha256` became the first module here to write one.
+fn is_dual_fix(k: Kind) -> bool {
 	return match k {
-		Kind.Amp => true
-		_        => false
+		Kind.Amp      => true
+		Kind.LArrow   => true
+		Kind.Minus    => true
+		Kind.MinusMod => true
+		_             => false
 	}
 }
 

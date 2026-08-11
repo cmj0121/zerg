@@ -49,7 +49,7 @@ syntax match zergStatement "\<for\>"
 syntax match zergKeyword "\%(\<impl\>.\+\)\@80<=\<for\>"
 
 " Declaration keywords.
-syntax keyword zergKeyword mut const pub package init
+syntax keyword zergKeyword mut const pub init
 
 " --- group 12: the danger surface (unsafe / asm) -------------------------------
 

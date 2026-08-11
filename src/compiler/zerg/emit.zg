@@ -517,7 +517,21 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 # everything else arrives already typed. Both spellings the route served are now refused by
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
-fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+fn c_into(mut &em: Emitter, want: Ty, e0: Expr, sb: Subst) -> str {
+	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
+	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
+	# and not about the closure. It is filled here because here is the one place every
+	# declared type meets its value: c_fit_copied's eighteen slots come through, and so does
+	# a declared binding, which lowers through c_into directly and would otherwise have been
+	# the one position where a closure could not adopt.
+	#
+	# It happens at EMIT and the check has already passed, because chk_fits_expr asks the
+	# same question of the same rewrite — the closure is filled, then compared as an
+	# ordinary function type. Nothing downstream ever sees an unknown parameter, which is
+	# what keeps inference bottom-up: by the time anything asks this closure's type, it has
+	# one of its own.
+	e := c_fn_typed(want, e0)
+
 	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
 	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
 	# `0` in a double. The literals took the position's type before the operator ran, so the
@@ -8018,6 +8032,17 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	# expressions. The captures become ordinary LEADING PARAMETERS of the lifted function, so
 	# every rule about a by-value parameter already applies to them: the copy in, the drop
 	# out, the shadowing. Nothing in the body has to know it is reading a capture.
+	# A PARAMETER NOTHING COULD TYPE. Every typed position fills these in (c_fn_typed), so
+	# reaching here with one still unknown means the closure met no position that could —
+	# `f := fn (x) { … }`, or an argument slot with fewer parameters than the closure wrote.
+	# That is the second half of carve-out (c) and the specification states it as an error,
+	# so it is one here rather than a `TUnknown` carried into a C declaration.
+	for pm in ps {
+		if c_is_unknown(pm.ty) {
+			chk_at(em, "E385", f"the closure parameter `{pm.name}` has no type, and this position gives it none — a closure takes its parameter types from the function type it is checked against, so write `{pm.name}: T` or put the closure where one is declared")
+		}
+	}
+
 	caps := c_lambda_free_all(em, ps, body)
 	mut cps: list[Param] = []
 	for cn in caps {
@@ -8156,6 +8181,56 @@ fn c_ret_of(has_ret: bool, ret: Ty) -> str {
 	return "void" if not has_ret
 
 	return c_type(ret)
+}
+
+# c_fn_typed fills a closure from the function type it is being checked against — the
+# parameter types it omitted, and its return type if it omitted that too (GRAMMAR#fn-expr
+# makes `ret-type?` optional for exactly this reason). Anything else passes through
+# untouched, so every caller can hand it whatever it has.
+#
+# A written type WINS: `fn (x: str)` at a `fn (int) -> …` position keeps its `str` and is
+# refused by the check that follows, naming the two types. Adopting the position's type
+# instead would make the annotation a comment.
+#
+# Arity is not repaired. A closure with more parameters than the position has types leaves
+# the extra ones TUnknown, and c_lambda refuses them by name — the position could not have
+# supplied a type for a parameter it does not have.
+fn c_is_fnlit(e: Expr) -> bool {
+	return match e {
+		Expr.EFn(_, _, _, _) => true
+		_ => false
+	}
+}
+
+fn c_fn_typed(want: Ty, e: Expr) -> Expr {
+	return match e {
+		Expr.EFn(ps, has_ret, ret, body) => c_fn_typed_at(want, ps, has_ret, ret, body)
+		_ => e
+	}
+}
+
+fn c_fn_typed_at(want: Ty, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> Expr {
+	return Expr.EFn(ps, has_ret, ret, body) if not c_is_fn(want)
+
+	wps := c_fn_params(want)
+	mut out: list[Param] = []
+	mut i := 0
+	for i < ps.len() {
+		pm := ps[i]
+		if c_is_unknown(pm.ty) and i < wps.len() {
+			out.append(Param(pm.name, wps[i], pm.is_ref, pm.has_def, pm.def))
+		} else {
+			out.append(pm)
+		}
+		i = i + 1
+	}
+
+	# The RETURN comes with the parameters, from the same type — GRAMMAR#fn-expr makes
+	# `ret-type?` optional so that `fn (x) { … }` is a whole closure and not half of one.
+	wret := c_fn_ret(want)
+	return Expr.EFn(out, true, wret, body) if not has_ret and not c_is_nil_ty(wret)
+
+	return Expr.EFn(out, has_ret, ret, body)
 }
 
 fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {

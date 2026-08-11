@@ -929,14 +929,17 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 		}
 		pname := p_name(p, "a parameter")
 
-		# A CLOSURE parameter may omit its `: type` (GRAMMAR#closure-param) — the compiler infers it
-		# from the function type the closure is checked against. This one does not infer,
-		# and it did not say so: the `expect` below reported `expected `:`, found `)``,
-		# which reads as a typo in a form the grammar allows.
-		raise f"E209 NotImplemented: a closure parameter without a type — GRAMMAR lets `{pname}` take its type from the function type the closure is checked against, and this compiler does not infer it; write `{pname}: T`" if not p_at(p, Kind.Colon)
-
-		expect(p, Kind.Colon)
-		pty := parse_type(p)
+		# A CLOSURE parameter MAY OMIT its `: type` (GRAMMAR#closure-param), and one that
+		# does is `TUnknown` here. The parser cannot do better than that and must not try:
+		# the type comes from the function type the closure is checked against, which is a
+		# fact about the POSITION the closure lands in and not about the closure — so it is
+		# filled where that position is known (c_fn_typed), and a closure that never meets
+		# one is refused there.
+		mut pty := Ty.TUnknown
+		if p_at(p, Kind.Colon) {
+			p_advance(p)
+			pty = parse_type(p)
+		}
 		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
 		if p_at(p, Kind.Comma) {
 			p_advance(p)

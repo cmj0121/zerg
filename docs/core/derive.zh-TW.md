@@ -187,3 +187,35 @@ impl Encode for User {                            # 取代 derive 出的那份
 `Decode` 回傳 `Result[This]`，所以格式錯誤只是一般的 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
 傳播——絕非 abort。（`Result[T]` 非 FFI-safe，但這裡無妨：`Encode`/`Decode` 是純 Zerg spec，永遠不跨
 C 邊界——見 [FFI](../runtime/ffi.zh-TW.md) 參考。）
+
+## 委派式 derive——在 `enum` 上,對任何 spec
+
+`#[derive(S)]` 在 **enum** 上是另一條規則,而差別在於**生成的程式碼從哪裡來**。在 struct 上它讀的是型別的
+**結構**,所以那一半是編譯器擁有的封閉集合;在 enum 上它是**委派**——每個 arm 把呼叫交給 payload,而 payload
+已經實作了 `S`——而那個改寫對**任何** spec 都是機械可得的,包括你自己寫的。
+
+```zerg
+#[derive(Show)]
+enum Shape {
+    Circle(C)
+    Square(S)
+}
+
+# 就是你原本要自己寫、而且每加一個 variant 就要自己補的那個 impl:
+impl Show for Shape {
+    fn show() -> str {
+        return match this {
+            Shape.Circle(v) => v.show()
+            Shape.Square(v) => v.show()
+        }
+    }
+}
+```
+
+加一個 variant,委派自動重生——這正是把它 derive 出來的理由。
+
+有兩種形狀會被**拒絕**,而且理由是同一個:**那個改寫不存在**。
+
+- 收 **`This`** 的方法(`fn same(o: This) -> bool`)必須連**另一個**引數也一起 match,而沒有任何東西保證
+  兩個 arm 是同一個 variant;
+- **不帶值**的 variant 沒有東西可以委派。

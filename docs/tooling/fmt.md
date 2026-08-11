@@ -677,6 +677,8 @@ shipping compiler rather than a part of it (the line
 | `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                         |
 | `E276` | a `spec` member that is neither a signature nor a provided method                           |
 | `E277` | an `impl` in neither the spec's module nor the type's                                       |
+| `E278` | `#[derive(S)]` on an enum, and a method takes a `This`                                      |
+| `E279` | `#[derive(S)]` on an enum, and a variant carries no value                                   |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

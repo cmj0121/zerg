@@ -237,6 +237,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   does not find `Either` and reports an undefined name. `zerg` requires the qualified form
   (a variant is named through its type, with no exception for a built-in), which is why the
   three corpus programs that use it are skipped here with that reason.
+- **`#[derive(S)]` on an ENUM is refused for a spec you wrote.** The delegating half of
+  `derive` — each arm handing the call to its payload — is a rewrite that exists for any
+  spec, so `zerg` derives it. The seed keeps one blessed set for both halves and turns the
+  program away; it is the narrower compiler here rather than the wrong one.
 - **An associated type or value in a `spec` is accepted.** GRAMMAR#spec-member derives a
   required signature and a provided method, and nothing else — a spec carries behaviour. The
   seed reads `type Item` and `BITS: int` inside one and carries on; `zerg` refuses both by

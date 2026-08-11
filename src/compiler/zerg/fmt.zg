@@ -2373,6 +2373,15 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	if is_larrow(prev) and not ends_operand(prev2) {
 		return false # `<-ch`, `<-chan[int]` — the arrow leads what follows it
 	}
+	if is_amp(prev) and not ends_operand(prev2) {
+		# `mut &p` — the REFERENCE marker leads what follows it, and is told from the bitwise
+		# `a & b` by exactly the question the two below ask. `&` was in is_unary_prefix, whose
+		# own comment says what belongs there — an operator that is ONLY ever a prefix — and
+		# `&` is not one. Nothing caught it because no gated source performed a bitwise AND:
+		# `x & M` printed as `x &M`, the same mistake `-%` made with the sides swapped, and
+		# `sha256` was the first module in this tree to write one.
+		return false
+	}
 	if is_minus(prev) and not ends_operand(prev2) {
 		# `-1`, `3 + -1`, `x ?? -1` — a NEGATION leads what follows it, and is told from the
 		# subtraction `a - b` the same way the two arrows are told apart: by whether anything
@@ -2573,11 +2582,20 @@ fn is_colon(k: Kind) -> bool {
 # `-%` is NOT here, for the same reason `-` is not: it is the wrapping negate AND the wrapping
 # subtraction, so `-%b` is tight and `lo -% byte(1)` is not. Putting it here printed the second
 # as `lo -%byte(1)`, which is the first mistake with the sides swapped.
+#
+# `&` WAS here and is not, for the same reason again: it is the reference marker in `mut &p`
+# AND the bitwise AND. It is asked further down, of what stands to its left.
 fn is_unary_prefix(k: Kind) -> bool {
 	return match k {
-		Kind.Amp   => true
 		Kind.Tilde => true
 		_          => false
+	}
+}
+
+fn is_amp(k: Kind) -> bool {
+	return match k {
+		Kind.Amp => true
+		_        => false
 	}
 }
 

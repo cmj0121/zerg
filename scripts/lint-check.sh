@@ -99,6 +99,22 @@ fn main() {
 }
 EOF
 
+# `with e as x` where nothing reads `x`. The block already scopes the resource — that is
+# what `with` IS — so the name buys nothing. It is a TOKEN rule: `with` expands in the
+# parser, so by the time there is an AST there is no `with` left to lint.
+lint L105 'nothing in the block reads the name' <<'EOF'
+fn acquire() -> list[int] {
+	return [1]
+}
+
+fn main() {
+	with acquire() as unused {
+		print 1
+	}
+	print acquire().len()
+}
+EOF
+
 # --- L2xx — null safety -----------------------------------------------------------
 
 lint L201 '`?? nil`' <<'EOF'

@@ -471,12 +471,15 @@ conformance:                    # every GRAMMAR chapter is read, or refused by n
 	$(MAKE) build
 	./scripts/conformance-check.sh
 
+# A reserved word no production uses is a word nobody can write and every lexer refuses as a
+# name — which is what `package` was for years. It is grammar-cites reversed: not "does every
+# citation resolve" but "does every keyword get reached".
+grammar-keywords:               # every reserved word is reached by the grammar that reserves it
+	./scripts/grammar-keywords.sh
+
 # The productions on docs/surface/grammar.md are a SECOND COPY of GRAMMAR's, and its zh-TW
 # twin a third. This is what holds the copies to the original; the page may abbreviate with
 # `…`, and may not say something else. Three had already drifted when it was written.
-grammar-keywords:        # every reserved word is reached by the grammar that reserves it
-	./scripts/grammar-keywords.sh
-
 grammar-mirror:                 # the prose companion still says what GRAMMAR says
 	./scripts/grammar-mirror.sh
 

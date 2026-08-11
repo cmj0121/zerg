@@ -54,9 +54,25 @@ is_typo_msg() {
 	printf '%s\n' "$1" | grep -qE "^(error: )?(expected |undefined |no type named |no field |unexpected )"
 }
 
+# TWO PROFILES, and the split is not a convenience. Everything in the core is answerable by
+# an implementation targeting anything at all; the SYSTEM profile is inline assembly, raw
+# pointers and the `unsafe` groups that hold them — forms whose meaning is a machine's, so an
+# implementation that has no machine to speak of (one targeting a VM, or a checker) declines
+# the profile rather than failing the language.
+#
+# Declining is not silence. A system chapter must still be REFUSED BY NAME, which is the
+# same rule as everywhere else — what the profile changes is whether refusing it is a
+# finding. See docs/conformance.md.
+is_system_chapter() {
+	case $1 in g12_*) return 0 ;; esac
+	return 1
+}
+
 fail=0
 parsed=0
 named=0
+sys_parsed=0
+sys_named=0
 
 for src in "$DIR"/g*.zg; do
 	[ -e "$src" ] || continue
@@ -66,7 +82,11 @@ for src in "$DIR"/g*.zg; do
 	status=$?
 
 	if [ $status -eq 0 ]; then
-		parsed=$((parsed + 1))
+		if is_system_chapter "$name"; then
+			sys_parsed=$((sys_parsed + 1))
+		else
+			parsed=$((parsed + 1))
+		fi
 		continue
 	fi
 
@@ -91,12 +111,25 @@ for src in "$DIR"/g*.zg; do
 		continue
 	fi
 
-	named=$((named + 1))
+	if is_system_chapter "$name"; then
+		sys_named=$((sys_named + 1))
+	else
+		named=$((named + 1))
+	fi
 done
 
-n=$((parsed + named + fail))
+n=$((parsed + named + sys_parsed + sys_named + fail))
 if [ "$n" -eq 0 ]; then
 	echo "conformance-check: no g*.zg found in $DIR — the corpus is one file per GRAMMAR chapter"
+	exit 1
+fi
+
+# The split matches chapters by NAME, so a corpus that renumbers its files would leave
+# `is_system_chapter` matching nothing — and the gate would go on passing while quietly
+# holding every chapter to the core profile. An empty side of a partition is the failure a
+# partition cannot report, so it is named here rather than inferred from the counts.
+if [ $((sys_parsed + sys_named)) -eq 0 ]; then
+	echo "conformance-check: no chapter classified system — is_system_chapter matches nothing in $DIR"
 	exit 1
 fi
 
@@ -105,4 +138,4 @@ if [ $fail -ne 0 ]; then
 	exit 1
 fi
 
-echo "conformance-check: $n GRAMMAR chapters — $parsed parse, $named are refused by name"
+echo "conformance-check: $n GRAMMAR chapters — core: $parsed parse, $named refused by name; system: $sys_parsed parse, $sys_named refused by name"

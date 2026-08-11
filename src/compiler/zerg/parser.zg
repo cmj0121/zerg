@@ -1397,7 +1397,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
-	return EnumDecl(name, variants)
+	return EnumDecl(name, variants, p.path)
 }
 
 fn tag_taken(variants: list[VariantDef], tag: int) -> bool {
@@ -1463,7 +1463,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)
-	return StructDecl(name, fields)
+	return StructDecl(name, fields, p.path)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,

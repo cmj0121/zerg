@@ -66,9 +66,9 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
 
-> **[deviation]** 頂層常數以**原始碼順序**初始化，不是依賴序，而且循環不會被診斷。初始化式讀到一個宣告在它**後面**
-> 的常數時，讀到的是那個常數的零值，程式照跑：`const A: int = B + 1` 寫在 `const B: int = 10` 上面，得到 `A == 1`。
-> 循環（`A` 讀 `B`、`B` 讀 `A`）編譯完全沒有任何 finding。兩者都是靜默的錯誤答案，而不是這裡所定的 compile error。
+這兩件事都已經實作。初始化式讀到一個宣告在它**後面**的常數時,拿到的是那個值、不是零——`const A: int = B + 1`
+寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
+_these constants depend on each other and none can be given a value first_。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依

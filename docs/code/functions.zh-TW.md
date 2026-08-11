@@ -88,7 +88,8 @@ variadic。
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
 單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——**已經實作**:
 捕獲的名字會變成閉包隨身帶著的一個 per-site 環境,而值在**寫下閉包的地方**被複製進去。
-捕獲一個 **`mut`** binding 是 **[not yet]**——先把它快照成 immutable binding（`snap := n`）。捕獲在語意上是
+捕獲一個 **`mut`** binding 也已經實作,而且拿到的是**寫下閉包那一刻**該 binding 持有的值——之後對那個 binding 的
+寫入,透過閉包看不到。那正是「複製帶入」的意思,也正是這兩種情況不需要兩條規則的原因。捕獲在語意上是
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
 而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
 
@@ -117,7 +118,7 @@ apply := fn(req: Request) -> Reply {
 
 兩個經典的閉包陷阱因此在結構上被排除。plain `for x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
 一份 copy），而 capture 是複製值——所以捕獲它的閉包保有**自己這一輪的值**，沒有共享 loop 變數的 bug、也不需快照
-（`for mut x` 這種就地形式是 `mut`，所以跟任何 `mut` 一樣不可捕獲——先快照）：
+（`for mut x` 這種就地形式是 `mut`，而 `mut` 也一樣是複製帶入——拿到的是寫下閉包那一刻的值）：
 
 ```text
 for x in xs {

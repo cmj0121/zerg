@@ -50,6 +50,10 @@ op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可�
 > here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
 > 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
 > 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
+>
+> 程式**到得了**的是下面的 [`#[obj]`](#obj把一個-spec-的方法當成值持有):同一個 existential,只是編碼成
+> 「一個裝著函式值、捕捉了實作者的 struct」,而不是「一個帶 vtable 的 boxed pointer」。它提供本節說 box 提供的東西、
+> 拒絕本節說 box 服務不了的成員——所以**機制在這裡,不在的是那個「型別」**。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
@@ -59,8 +63,8 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 不必寫 `[int]`。沒有任何引數提到的型別參數是編譯錯誤而非猜測;而 **bound 在 instantiation 時檢查**——那是具體型別
 第一次存在、可供檢查的地方。
 
-> **[not yet]** 泛型 **`fn`** 已實作。泛型 **`struct`**、泛型 **`enum`**、泛型 **method**,以及指名一個以上 spec 的
-> bound(`T: Eq + Ord`),各自都會被指名拒絕。
+> **[not yet]** 泛型 **`fn`** 已實作,指名一個以上 spec 的 bound 也已實作——`T: Eq + Show` 是一個連言,而沒被滿足的
+> 那個 spec 就是拒絕訊息會指名的那個。泛型 **`struct`**、泛型 **`enum`** 與泛型 **method** 各自仍被指名拒絕。
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的

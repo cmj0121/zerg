@@ -106,8 +106,10 @@ already taken for formatting; `print` stays a built-in construct, not a user-def
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
 an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
 boxed value) — is built: the captures become a per-site environment the closure carries, and the values are
-copied in where they are written. Capturing a **`mut`** binding is **[not yet]** — snapshot it into an
-immutable binding first (`snap := n`). Capture is **by copy** in meaning — a captured channel is
+copied in where they are written. Capturing a **`mut`** binding is built too, and it takes the value the
+binding held **at the point the closure was written** — a later write to that binding is not visible through
+the closure, which is what "copied in" means and why the two cases need no different rule. Capture is **by
+copy** in meaning — a captured channel is
 refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
 carries its own captures and can never dangle.
@@ -141,7 +143,8 @@ apply := fn(req: Request) -> Reply {
 Two classic closure hazards are ruled out by construction. A plain `for x in xs` variable is a **fresh
 immutable binding each iteration** (a copy of that element), and a capture copies the value — so a closure
 capturing it keeps **its own iteration's value**, no shared-loop-var bug and no snapshot needed (a
-`for mut x`, the in-place form, is `mut` and so, like any `mut`, uncapturable — snapshot it first):
+`for mut x`, the in-place form, is `mut` — and a `mut` is copied in the same way, so what the closure holds
+is the value at the point it was written):
 
 ```text
 for x in xs {

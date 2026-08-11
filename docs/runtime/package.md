@@ -83,11 +83,9 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 **source order** within a module. This whole ordering — topological, with the module-name-then-source
 tie-break — holds.
 
-> **[deviation]** Top-level constants are initialized in **source order**, not dependency order, and a
-> cycle is not diagnosed. A constant whose initializer reads one declared **after** it reads that
-> constant's zero value and the program runs: `const A: int = B + 1` above `const B: int = 10` yields
-> `A == 1`. A cycle (`A` reads `B`, `B` reads `A`) compiles with no finding at all. Both are silent wrong
-> answers rather than the compile error specified here.
+Both halves of that are built. A constant whose initializer reads one declared **after** it gets the
+value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields `A == 11` — and a cycle is a
+named refusal: _these constants depend on each other and none can be given a value first_.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent

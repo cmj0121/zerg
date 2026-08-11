@@ -247,11 +247,6 @@ and no symbol table. A generic call **infers** its type arguments from the argum
 not enough, a **typed binding** steers it (`xs: list[int] = empty()`) instead of a call-site list. The pattern
 grammar (group 6) is context-free for the same reason and by the same kind of rule.
 
-> **[not yet]** The refusals are unbuilt: a postfix `[…]` is still read as type arguments when the base
-> resolves to a generic (`list[byte](s)` still compiles), a **bare** name in pattern position is still read
-> as a variant, and `package` is still reserved. Each is a form this page no longer derives and the
-> compiler still accepts.
-
 ### Composite literals
 
 Values are **built** in expression position — the mirror of the patterns (group 6) that take them apart:

@@ -790,7 +790,6 @@ shipping compiler rather than a part of it (the line
 | `E426` | `…` has … fields and this gives …                                                           |
 | `E427` | variant pattern `…` cannot match a subject of type …                                        |
 | `E428` | non-exhaustive match: missing variant ….…                                                   |
-| `E429` | a closure capturing `…` — **[not yet]**                                                     |
 | `E430` | `…` on a … needs an `Eq` — there is no structural equality by default                       |
 | `E431` | a map key of type … — **[not yet]**                                                         |
 | `E432` | `…` is declared … and the value is …: unwrap it with `?? …`, `!` or `if … := …`             |

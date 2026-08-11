@@ -706,7 +706,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E426` | `…` has … fields and this gives …                                                                     |
 | `E427` | variant pattern `…` cannot match a subject of type …                                                  |
 | `E428` | non-exhaustive match                                                                                  |
-| `E429` | NotImplemented                                                                                        |
 | `E430` | `…` 在 … 上需要一個 `Eq`——預設沒有結構相等                                                            |
 | `E431` | NotImplemented                                                                                        |
 | `E432` | `…` is declared … and the value is …                                                                  |

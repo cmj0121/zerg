@@ -869,28 +869,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" associated-type-in-a-spec E230 <<'EOF'
-spec It {
-	type Item
-
-	fn get() -> int
-}
-
-fn main() {
-	print 1
-}
-EOF
-
-expect "$ZERG" associated-value-in-a-spec E211 <<'EOF'
-spec Bits {
-	BITS: int
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 expect "$ZERG" parameterized-bound E207 <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool

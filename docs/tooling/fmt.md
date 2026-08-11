@@ -614,7 +614,7 @@ shipping compiler rather than a part of it (the line
 | `E208` | `#[derive(…)]` has no declaration under it                                                  |
 | `E209` | a closure parameter without a type — **[not yet]**                                          |
 | `E210` | a `spec` member with a BODY — **[not yet]**                                                 |
-| `E211` | an associated value in a `spec` — **[not yet]**                                             |
+| `E211` | an associated value is not a `spec` member                                                  |
 | `E212` | a generic enum `…[…]` — **[not yet]**                                                       |
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given     |
 | `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque        |
@@ -630,7 +630,7 @@ shipping compiler rather than a part of it (the line
 | `E225` | an f-string ':spec' format spec — **[not yet]**                                             |
 | `E226` | an f-string '!r' / '!s' / '!a' conversion — **[not yet]**                                   |
 | `E227` | the f-string '{expr=}' self-documenting form — **[not yet]**                                |
-| `E230` | an associated type in a `spec` — **[not yet]**                                              |
+| `E230` | an associated type is not a `spec` member                                                   |
 | `E231` | an associated type binding `type … = …` in an `impl` — **[not yet]**                        |
 | `E232` | a tuple pattern in a `match` arm — **[not yet]**                                            |
 | `E233` | an array type `[T; N]` — **[not yet]**                                                      |
@@ -675,6 +675,8 @@ shipping compiler rather than a part of it (the line
 | `E273` | `…(…)` converts one value, and this gives …                                                 |
 | `E274` | a pattern names a variant through its enum, and this one is bare                            |
 | `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                         |
+| `E276` | a `spec` member that is neither a signature nor a provided method                           |
+| `E277` | an `impl` in neither the spec's module nor the type's                                       |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

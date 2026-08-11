@@ -679,6 +679,10 @@ shipping compiler rather than a part of it (the line
 | `E277` | an `impl` in neither the spec's module nor the type's                                       |
 | `E278` | `#[derive(S)]` on an enum, and a method takes a `This`                                      |
 | `E279` | `#[derive(S)]` on an enum, and a variant carries no value                                   |
+| `E280` | `#[obj]` on something that is not a `spec`                                                  |
+| `E281` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                         |
+| `E282` | `#[obj]` and a method taking `This` — an object has forgotten its type                      |
+| `E283` | `#[derive(…)]` on something with no structure to read                                       |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

@@ -237,6 +237,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   does not find `Either` and reports an undefined name. `zerg` requires the qualified form
   (a variant is named through its type, with no exception for a built-in), which is why the
   three corpus programs that use it are skipped here with that reason.
+- **`#[obj]` is an unknown decorator.** `zerg` expands it into a companion struct of
+  function values and a generic wrap; the seed reads `#[derive(…)]` and no other. Its
+  expansion needs closure capture, which the seed also has not got, so the hand-written half
+  of that pair is refused here too.
 - **A closure that CAPTURES is refused.** `zerg` lifts a lambda's captures into a per-site
   environment struct and hands it to the call through the fn value's own env slot; the seed
   turns a capturing lambda away — "a closure used as a value is not yet supported" — and is

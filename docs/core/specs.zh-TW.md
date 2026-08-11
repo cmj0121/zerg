@@ -73,6 +73,33 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > **單一模組**,其 coherence 鍵**過度近似**:它不區分泛型引數,所以 `list[int]` 與 `list[str]` 相撞、第二個實例化會被
 > 誤判為重複 impl 而拒絕。per-instantiation 規則如所規範成立;bootstrap 尚未精確強制它。
 
+## `#[obj]`——把一個 spec 的方法當成值持有
+
+**`spec` 永遠是 bound、不是型別**(見上),所以一個值不能被 spec 定型。`#[obj]` 就是你仍然想要異質集合時
+寫的東西:標在 spec 上,它生出一個 companion **函式值 struct**——一個方法一個欄位——加上一個**泛型包裝**,
+把任何實作者變成它。
+
+```zerg
+#[obj]
+spec Draw { fn draw() -> str }
+
+# 就是:
+struct DrawObj { draw: fn () -> str }
+fn draw_obj[T: Draw](v: T) -> DrawObj {
+    return DrawObj(fn () -> str { return v.draw() })
+}
+```
+
+**開放性來自包裝點**,不是來自執行期的任何東西:`draw_obj` 針對每個實作者 monomorphize,回來的東西只有一個
+型別。所以 `list[DrawObj]` 是異質的,而且**沒有 vtable、沒有任何值帶 header、也沒有 downcast**——你可以呼叫
+spec 宣告的東西,不能問裡面裝的是什麼。需要問的時候,答案是 `enum` 加 `match`。
+
+有三種形狀會被**拒絕**,判準與委派式 `derive` 相同——**那個改寫存不存在**:
+
+- **`mut fn`**:被包起來的值是複本,寫穿它會改到沒有人讀得到的東西。這裡的 object 是不可變的;
+- 收 **`This`** 的方法:它需要 object 已經忘掉的那個型別——那個形狀是 `enum` 上的 `#[derive(S)]` 在做的;
+- **不是 spec** 的東西:沒有方法可以持有。
+
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
 做裸 `x.foo()`）。Zerg 在編譯期**拒絕它**、而不引入 fully-qualified 呼叫語法來消歧——你把靜態脈絡收窄到單一 spec

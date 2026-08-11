@@ -70,21 +70,29 @@ zg_calls() {
 		grep -oE '[a-z_][A-Za-z0-9_]*' | sort -u
 }
 
-# reaches_into <caller.zg> <layer-name> <file…> — the caller must call nothing
-# defined in those files. A name the caller defines itself is its own, not a reach.
+# THE LAYER, extracted ONCE. Three callers below ask the same question of the same three
+# files — 640 KB of source — and each re-grepped them, so `emit.zg` alone was read six times
+# for one answer that cannot change between the calls.
+LAYER_FILES="$ZG/check.zg $ZG/emit.zg $ZG/generic.zg"
+LAYER_NAME="the checker and the emitter"
+# shellcheck disable=SC2086
+LAYER_DEFS=$(zg_defs $LAYER_FILES)
+
+if [ "$(printf '%s\n' "$LAYER_DEFS" | wc -l)" -lt 50 ]; then
+	note "$LAYER_NAME definitions did not extract — $(printf '%s\n' "$LAYER_DEFS" | wc -l) names found"
+	printf 'layering-check: the layer it measures against could not be read\n' >&2
+	exit 1
+fi
+
+# reaches_into <caller.zg> — the caller must call nothing defined in the layer. A name the
+# caller defines itself is its own, not a reach.
 reaches_into() {
-	local caller=$1 layer=$2
-	shift 2
-	local defs hits
-	defs=$(zg_defs "$@")
-	if [ "$(printf '%s\n' "$defs" | wc -l)" -lt 50 ]; then
-		note "the $layer definitions did not extract — $(printf '%s\n' "$defs" | wc -l) names found"
-		return
-	fi
-	hits=$(comm -12 <(zg_calls "$caller") <(printf '%s\n' "$defs") |
+	local caller=$1
+	local hits
+	hits=$(comm -12 <(zg_calls "$caller") <(printf '%s\n' "$LAYER_DEFS") |
 		comm -23 - <(zg_defs "$caller"))
 	if [ -n "$hits" ]; then
-		note "$(basename "$caller") reaches into $layer: $(printf '%s' "$hits" | tr '\n' ' ')"
+		note "$(basename "$caller") reaches into $LAYER_NAME: $(printf '%s' "$hits" | tr '\n' ' ')"
 	fi
 }
 
@@ -134,8 +142,7 @@ fi
 # `c_is_ctor` lived in the emitter and the parser called it — a lexical predicate in
 # the wrong file, which read as the parser reaching into codegen. It is `name_is_type`
 # in token.zg now, and this is what would have said so.
-reaches_into "$ZG/parser.zg" "the checker and the emitter" \
-	"$ZG/check.zg" "$ZG/emit.zg" "$ZG/generic.zg"
+reaches_into "$ZG/parser.zg"
 
 ZPARSER_FIELDS="toks pos impl_ty path depth edepth"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
@@ -152,8 +159,8 @@ fi
 # undefined name in it must still be `zerg fmt`. `lint.zg` is deliberately NOT here —
 # a linter that asks whether a method mutates its receiver is asking a checked
 # question, and says so by calling into the checker.
-reaches_into "$ZG/fmt.zg" "the checker and the emitter" "$ZG/check.zg" "$ZG/emit.zg" "$ZG/generic.zg"
-reaches_into "$ZG/desugar.zg" "the checker and the emitter" "$ZG/check.zg" "$ZG/emit.zg" "$ZG/generic.zg"
+reaches_into "$ZG/fmt.zg"
+reaches_into "$ZG/desugar.zg"
 
 # --- 3. inference is bottom-up -----------------------------------------------------
 #

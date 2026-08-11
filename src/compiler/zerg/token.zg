@@ -79,7 +79,6 @@ enum Kind {
 	Chan
 	Type
 	Impl
-	Package
 	Init
 	Defer
 	Del
@@ -207,7 +206,6 @@ fn kind_name(k: Kind) -> str {
 		Kind.Chan => "chan"
 		Kind.Type => "type"
 		Kind.Impl => "impl"
-		Kind.Package => "package"
 		Kind.Init => "init"
 		Kind.Defer => "defer"
 		Kind.Del => "del"
@@ -332,8 +330,6 @@ fn lookup_keyword(w: str) -> Kind {
 		return Kind.Type
 	} else if w == "impl" {
 		return Kind.Impl
-	} else if w == "package" {
-		return Kind.Package
 	} else if w == "init" {
 		return Kind.Init
 	} else if w == "defer" {

@@ -20,6 +20,22 @@
 implementation-defined。conforming implementation 不必產出 C，也不必與參考編譯器的產碼、mangling 或記憶體佈局
 相同。
 
+## 兩種 profile
+
+語言是一個,而實作要負責的是兩個。
+
+**core profile** 是所有意義屬於語言自己的東西:字面量、運算式、函式、控制流、型別、pattern、並行、module
+與清理。任何目標平台的實作都答得出來,而 conforming implementation **必須**答。
+
+**system profile** 是 inline assembly、raw pointer,以及裝著它們的 `unsafe` 群組——那些意義屬於**一台機器**
+而不是屬於語言的形式。沒有機器可談的實作(以 VM 為目標的、或永遠不 emit 的檢查器)**可以放棄這個 profile**。
+放棄不等於沉默:裡面的每個形式仍然必須**被指名拒絕**,那是其他地方一律適用的標準規則。profile 改變的只是
+「那個拒絕算不算缺陷」。
+
+實作要**說明自己主張哪些 profile**。這一個主張 core、放棄 system。主張一個 profile 不等於已經做完:凡是 `zerg`
+在某個 core 形式上不足的地方,該章會用 `[not yet]` 說出來、而那個形式被指名拒絕——那是**已主張的 profile 裡的
+欠債**。被放棄的 profile 沒有這種欠債,而那就是全部的差別。
+
 ## 語言 versus 這個編譯器
 
 Zerg 是以整體來規範;出貨的編譯器實作其中一個子集。與其只描述已出貨的部分,每章都規範「意圖中的特性」並標註

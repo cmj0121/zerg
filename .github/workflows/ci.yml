@@ -189,11 +189,6 @@ jobs:
       - name: Every linter rule has a program that makes it fire
         run: make lint-check
 
-      # The formatter's own corpus: every case is already canonical, so a change in
-      # layout shows up as a diff rather than as a passing run.
-      - name: Every fmt case is already canonical
-        run: make fmt-corpus
-
       # The cache is keyed by the compiler that filled it. Two compilers, two keys —
       # otherwise a stale object outlives the compiler that produced it.
       - name: The build cache names the compiler that filled it
@@ -251,7 +246,19 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make conformance
 
-      # --- 7d. formatting changes spacing, never meaning ------------------------
+      # --- 7d. the formatter's own corpus ---------------------------------------
+      # Every case is already canonical, so a change in layout shows up as a diff rather
+      # than as a passing run.
+      #
+      # AFTER the fetch, with its neighbours, and not up beside `fmt-self`: test-data/fmt
+      # is in the private corpus, so running it earlier met the submodule guard and failed
+      # the job outright on both platforms — a gate that had never run anywhere was put on
+      # the board in the one spot where its cases do not exist yet.
+      - name: Every fmt case is already canonical
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make fmt-corpus
+
+      # --- 7d'. formatting changes spacing, never meaning -----------------------
       # `fmt --check` and idempotence are both blind to a rule that is stably WRONG. This
       # is the property that is not: the token stream must survive being formatted.
       - name: Formatting does not move a token

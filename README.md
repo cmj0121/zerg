@@ -84,6 +84,9 @@ binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`,
 directory holds, and how the specification is meant to be read. Syntax is normative in
 [`GRAMMAR`](GRAMMAR); semantics are normative in the chapters under [`docs/`](docs).
 
+**[`FUTURE.md`](FUTURE.md)** is the other half: what the language decided **not** to have, and the
+threshold that would reopen each case. Nothing in it is part of the specification.
+
 ## Status
 
 The compiler that ships is **`zerg`**, written in Zerg and compiled by itself; **`zerg0`** is a

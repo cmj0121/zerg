@@ -2635,29 +2635,33 @@ fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
 # c_is_typedef asks the NAME list, not what the name is underneath: a typedef whose
 # underlying type nothing declares is registered as unknown so its uses stay quiet, and it is
 # still a declared type name — the mistake is in the declaration, which has already said so.
-fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
+# c_ty_row is THE typedef lookup, for the same reason c_var_row is the variant one: two
+# readers, one table. `c_repr_of` used to say so in a comment — "one scan answers both `is it
+# one` and `what is it`" — while being the only one that did.
+fn c_ty_row(mut &em: Emitter, nm: str) -> int {
 	mut i := 0
 	for i < em.ty_names.len() {
-		return true if em.ty_names[i] == nm
+		return i if em.ty_names[i] == nm
 		i = i + 1
 	}
-	return false
+	return -1
+}
+
+fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_row(em, nm) >= 0
 }
 
 # c_repr_of is a type as its REPRESENTATION — itself, unless it is a typedef, in which case
 # what it was declared over. Only the emitter asks this, and only where C needs a type: the
 # checker must never, because the distinctness is the feature.
 fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
-	nm := c_named_of(t)
-	mut i := 0
-	for i < em.ty_names.len() {
-		# a typedef whose underlying type nothing declares answers UNKNOWN rather than
-		# itself: that is what keeps its uses quiet while the declaration carries the
-		# diagnostic. One scan answers both "is it one" and "what is it".
-		return em.ty_unders[i] if em.ty_names[i] == nm
-		i = i + 1
-	}
-	return t
+	r := c_ty_row(em, c_named_of(t))
+
+	# a typedef whose underlying type nothing declares answers UNKNOWN rather than itself:
+	# that is what keeps its uses quiet while the declaration carries the diagnostic.
+	return t if r < 0
+
+	return em.ty_unders[r]
 }
 
 # c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
@@ -3304,31 +3308,38 @@ fn c_bare_variant(mut &em: Emitter, name: str) {
 	chk_at(em, "E383", f"`{name}` is a variant of `{c_variant_enum(em, name)}`, and a variant is named through its enum — write `{c_variant_enum(em, name)}.{name}`")
 }
 
-fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+# c_var_row is THE variant lookup. `var_name` / `var_enum` / `var_tag` are one table in
+# three columns, and each of the three readers below used to walk it itself — the shape this
+# file already criticises at the signature table, where a column-per-reader pair walked the
+# rows twice per call site.
+#
+# It matters more than the walk it saves: three scans are three chances for the answers to
+# disagree about which row they meant. They cannot now, because there is one row.
+fn c_var_row(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.var_name.len() {
-		return true if em.var_name[i] == name
+		return i if em.var_name[i] == name
 		i = i + 1
 	}
-	return false
+	return -1
+}
+
+fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+	return c_var_row(em, name) >= 0
 }
 
 fn c_variant_enum(mut &em: Emitter, name: str) -> str {
-	mut i := 0
-	for i < em.var_name.len() {
-		return em.var_enum[i] if em.var_name[i] == name
-		i = i + 1
-	}
-	return ""
+	r := c_var_row(em, name)
+	return "" if r < 0
+
+	return em.var_enum[r]
 }
 
 fn c_variant_tag(mut &em: Emitter, name: str) -> int {
-	mut i := 0
-	for i < em.var_name.len() {
-		return em.var_tag[i] if em.var_name[i] == name
-		i = i + 1
-	}
-	return 0
+	r := c_var_row(em, name)
+	return 0 if r < 0
+
+	return em.var_tag[r]
 }
 
 # c_enum_typedef emits an enum as a C tagged union: an int32 tag plus a union of the

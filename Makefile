@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror conformance lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -402,7 +402,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror conformance sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -433,6 +433,13 @@ docs-links:                     # every docs path the repo cites must resolve
 # no binary: a citation is text, and whether it resolves is a fact about the tree.
 grammar-cites:                  # every GRAMMAR citation the repo makes must resolve
 	./scripts/grammar-cites.sh
+
+# Two claims no test can reach, because both are about what the code MAY REACH rather than
+# what it does: the parser builds the AST from tokens alone, and inference runs bottom-up
+# over four named carve-outs. A compiler that broke either one passes every test it has,
+# until the day somebody formats a file with an undefined name in it.
+layering:                       # each stage knows only what it is allowed to know
+	./scripts/layering-check.sh
 
 # test-data/conformance is one file per GRAMMAR chapter and NOTHING RAN IT: twelve files,
 # 375 lines, named in no runner and no test, and eleven of the twelve did not build the day

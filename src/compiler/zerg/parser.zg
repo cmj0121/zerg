@@ -701,7 +701,9 @@ pub fn parse_at(src: str, path: str) -> File {
 			enums.append(ed)
 		} else if p_at(p, Kind.Spec) {
 			# `pub spec` — read and dropped, the struct arm's reason
-			specs.append(parse_spec(p))
+			sp := parse_spec(p)
+			p_take_derives(sp.name, pending, derive_on, derive_spec)
+			specs.append(sp)
 		} else if p_at(p, Kind.Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
@@ -1494,7 +1496,17 @@ fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 # meant nothing, so `==` on it either was refused or — on an enum — silently compared tags.
 fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	name := cur(p).lexeme
-	raise f"E217 NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
+
+	# `#[obj]` takes no arguments and goes on a `spec`. It rides the same pending list as a
+	# derive, under a marker no spec name can be — a `#` is not an identifier character — so
+	# the two never compete for a name while sharing one attachment mechanism.
+	if name == "obj" {
+		p_advance(p)
+		pending.append("#obj")
+		return
+	}
+
+	raise f"E217 NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and `#[obj]`, and no other" if name != "derive"
 
 	p_advance(p)
 	return if not p_at(p, Kind.LParen)

@@ -16,8 +16,8 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-`#[derive]` is the only decorator the compiler reads. Every other one — `#[test]`, `#[sealed]`, the
-layout directives — is **[not yet]** and refused by name.
+`#[derive]` and `#[obj]` are the decorators the compiler reads. Every other one — `#[test]`,
+`#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
@@ -25,7 +25,13 @@ layout directives — is **[not yet]** and refused by name.
   **`Hash`**, **`Encode`** and **`Decode`**, each specified here and **[not yet]**: naming one is a clean
   refusal, _NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and
   `Decode` are specified and unbuilt_. There is **no auto-derived `Object`**. A user spec can never be
-  derived (`#[derive(MySpec)]` is a compile error). See **[Derive & Default Behavior](derive.md)**.
+  derived **on a struct** (`#[derive(MySpec)]` there is a compile error); on an **`enum`** any spec may be,
+  because the generated impl is delegation to the payload rather than a reading of structure. See
+  **[Derive & Default Behavior](derive.md)**.
+- **`#[obj]`** — on a `spec`, no arguments. Generates a companion **struct of function values** and a
+  **generic wrap**, which is how a heterogeneous collection is written in a language where a spec is a bound
+  and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
+  See **[Specs & Generics](specs.md)**.
 - **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
   excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
   fails the test (see [Modules, Packages & Programs](../runtime/package.md) on where tests live).

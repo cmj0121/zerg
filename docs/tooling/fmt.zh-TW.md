@@ -530,7 +530,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E208` | `#[derive(…)]` has no declaration under it                                                            |
 | `E209` | NotImplemented                                                                                        |
 | `E210` | NotImplemented                                                                                        |
-| `E211` | NotImplemented                                                                                        |
+| `E211` | associated value 不是 `spec` 的成員                                                                   |
 | `E212` | NotImplemented                                                                                        |
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
 | `E214` | 在 variant 帶 payload 的 enum 上寫判別值 `… = …`——它的 tag 是不透明的                                 |
@@ -546,7 +546,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E225` | NotImplemented                                                                                        |
 | `E226` | NotImplemented                                                                                        |
 | `E227` | NotImplemented                                                                                        |
-| `E230` | NotImplemented                                                                                        |
+| `E230` | associated type 不是 `spec` 的成員                                                                    |
 | `E231` | NotImplemented                                                                                        |
 | `E232` | NotImplemented                                                                                        |
 | `E233` | NotImplemented                                                                                        |
@@ -591,6 +591,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E273` | `…(…)` 轉換一個值,而這裡給了 …                                                                        |
 | `E274` | pattern 透過 enum 指名 variant,而這個是裸的                                                           |
 | `E275` | 呼叫寫明型別引數,而 postfix `[ … ]` 是索引                                                            |
+| `E276` | `spec` 成員既不是簽章也不是 provided method                                                           |
 | `E301` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E302` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E303` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |

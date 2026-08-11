@@ -8,6 +8,8 @@
 # constructed from outside the module (a bootstrap limitation on cross-module enum
 # variants), so the driver only calls the module's pub functions.
 
+import "ascii"
+
 # Kind enumerates the lexical categories a token can belong to. The set mirrors
 # GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
 # lexer does not yet emit every kind (f-strings, decorators).
@@ -430,4 +432,20 @@ fn ends_item(k: Kind) -> bool {
 		Kind.Nop      => true
 		_             => false
 	}
+}
+
+# name_is_type reports whether an identifier NAMES A TYPE rather than a value. Zerg
+# types are PascalCase and functions and bindings are snake_case, so the first letter
+# is the whole rule — and it is a LEXICAL rule, which is why it lives here.
+#
+# It was written in the emitter, where the first reader needed it to tell a
+# constructor call from a function call. Two more readers are in the PARSER: `cli.Opt`
+# is a module qualifier and `It.Item` an associated-type projection, told apart by
+# exactly this; and a type parameter's bound names a spec or a concrete type by it as
+# well. A parser that reaches into the emitter cannot be said to parse without one, so
+# the shared fact moved to the layer both sides may see.
+fn name_is_type(name: str) -> bool {
+	b := bytearray(name)
+	return false if b.len() == 0
+	return ascii.is_upper(b[0])
 }

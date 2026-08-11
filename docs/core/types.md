@@ -159,6 +159,11 @@ itself:
 A **value generic** is not a fifth: a function's `N` is inferred **from** an argument's type
 (`fn sum[N: int](xs: [int; N])`), which runs the same direction as everything else here.
 
+**Four, and only four**, is checked rather than asserted: `make layering` holds the seed's bidirectional
+checker to exactly this list — every node kind it pushes a wanted type into, and no other — and holds
+`zerg`'s inference family to taking no wanted type at all. A fifth carve-out cannot be added without the
+gate naming it.
+
 The rule above holds at every position: **a position wraps a value, it never converts one.** So
 conversion is **not a fifth carve-out** — each of these decides a type the expression **does not have
 yet**, where a conversion would change one it already has, and the fix for a value that does not fit

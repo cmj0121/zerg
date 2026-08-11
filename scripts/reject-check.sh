@@ -2242,6 +2242,28 @@ fn main() {
 }
 EOF
 
+# The SAME rule with a NAMED type as the source, which is a different path through it: the
+# conversion asks what the name is REPRESENTED by, and a struct is represented by itself.
+# While the type tables were four, "is it a typedef" and "what is it underneath" were the
+# same scan of the same list, so a name with no row answered "not a typedef" for free. With
+# one table every type name has a row, and the second question had to learn to ask the kind
+# — an unguarded read answered UNKNOWN for a struct, which is the one answer that makes this
+# rule stand down, and `((int64_t)(zg_p))` went to cc.
+#
+# No emitted byte moved. A valid program never converts a struct, so the differential that
+# accepted that refactor could not have seen it: what a compiler REFUSES is not visible in
+# what it emits.
+reject convert-a-struct-to-an-int E455 no-place <<'EOF'
+struct P {
+	v: int
+}
+
+fn main() {
+	p := P(1)
+	print(f"{int(p)}")
+}
+EOF
+
 # --- and a str is not a container to subscript -----------------------------------
 #
 # docs/core/types.md: a str "iterates as `rune` and is NOT indexable" — it is UTF-8, so a

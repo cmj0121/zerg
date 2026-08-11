@@ -216,5 +216,6 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 一個資源如果它的釋放是**某人必須記得呼叫的方法**,那它根本不是 `with` 的案例——它是一個 `defer`,寫出來,
 寫在 `with` 剛剛打開的那個 block 裡。
 
-> **[not yet]** `with … as` 會被直接拒絕,就在關鍵字上:_NotImplemented: with_。今天要把一個資源綁進一段區間,
-> 就寫那個裸 block 和那個 `defer`——而那正是上面那條展開式所說的,所以沒有東西不可達,只是沒有簡寫。
+`with` **已經實作**,而且就是上面那條展開式、沒有別的:一個 block、一個 binding,以及 body 自己寫的那個
+`defer`。它本身不帶任何 teardown——一個 `with` 之所以會釋放東西,是因為 body 裡有 `defer` 這麼說,或因為那個值
+本來就像其他值一樣是 scope-owned 的。`examples/18_scoped.zg` 就是隨貨附上的示範。

@@ -68,9 +68,10 @@ Five notes carry the rules into the language:
   then refused at the binding — write `float(id(5))`. The demand neither solves `T` nor converts the
   answer: **inference is local**, twice over.
 
-> **[not yet]** Two notes run ahead of the compiler: an untyped closure parameter and a spec used as a
-> type are each refused by name — of the spec positions, the error tier (`Err` in a `Result[T]`) is the
-> one built.
+> **[not yet]** One note runs ahead of the compiler: a **spec used as a type** is refused by name — of
+> the spec positions, the error tier (`Err` in a `Result[T]`) is the one built. The **untyped closure
+> parameter** is not among them any more: it takes its type from the function type the closure is checked
+> against, and so does an omitted result type, at every typed position.
 >
 > Both compilers hold the rest of this chapter, and say where: a position that converts, an operator
 > whose operands are two types, and a typeless form with no position to take one from are each refused

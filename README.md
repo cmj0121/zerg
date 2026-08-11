@@ -84,6 +84,9 @@ binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`,
 directory holds, and how the specification is meant to be read. Syntax is normative in
 [`GRAMMAR`](GRAMMAR); semantics are normative in the chapters under [`docs/`](docs).
 
+**[`FUTURE.md`](FUTURE.md)** is the other half: what the language decided **not** to have, and the
+threshold that would reopen each case. Nothing in it is part of the specification.
+
 ## Status
 
 The compiler that ships is **`zerg`**, written in Zerg and compiled by itself; **`zerg0`** is a
@@ -98,14 +101,14 @@ linker against generated code nobody wrote. A feature the specification marks **
 `NotImplemented` and stops.
 
 **Where the compiler falls short of that, the specification says so** — a **[deviation]** in the
-chapter the feature belongs to. Three are **silent**, and are the ones to know before writing
-anything:
+chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
+ones, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                                  | Chapter                                   |
-| ----------------------------------------------------------------- | ----------------------------------------- |
-| a `str` literal `match` arm never fires                           | [control flow](docs/code/control-flow.md) |
-| an if-expression does not check that its branches agree on a type | [control flow](docs/code/control-flow.md) |
-| `~` on a `byte` yields the unmasked 64-bit complement             | [types](docs/core/types.md)               |
+| Silent deviation                                                       | Chapter                                 |
+| ---------------------------------------------------------------------- | --------------------------------------- |
+| a `list` is not frozen while iterated — appending during a `for` works | [collections](docs/code/collections.md) |
+| a refcounted value entering a carrier is never released — it leaks     | [values & memory](docs/core/memory.md)  |
+| a `list` fill form `[v; N]` re-evaluates `v` once per element          | [collections](docs/code/collections.md) |
 
 Two more are structural, and a running program feels them: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks
@@ -114,7 +117,8 @@ constants, not yet on types or fields ([modules](docs/runtime/package.md)).
 
 Everything else — what is built, what is refused by name, and every remaining deviation — is marked
 where it belongs in the specification. The gates that keep those markers honest are the targets in
-`make help`.
+`make help`; **`make ci`** runs the whole board, and `make gates` is what stops a gate from being on
+it in name only.
 
 ## License
 

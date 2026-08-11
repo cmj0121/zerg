@@ -20,6 +20,22 @@
 implementation-defined。conforming implementation 不必產出 C，也不必與參考編譯器的產碼、mangling 或記憶體佈局
 相同。
 
+## 兩種 profile
+
+語言是一個,而實作要負責的是兩個。
+
+**core profile** 是所有意義屬於語言自己的東西:字面量、運算式、函式、控制流、型別、pattern、並行、module
+與清理。任何目標平台的實作都答得出來,而 conforming implementation **必須**答。
+
+**system profile** 是 inline assembly、raw pointer,以及裝著它們的 `unsafe` 群組——那些意義屬於**一台機器**
+而不是屬於語言的形式。沒有機器可談的實作(以 VM 為目標的、或永遠不 emit 的檢查器)**可以放棄這個 profile**。
+放棄不等於沉默:裡面的每個形式仍然必須**被指名拒絕**,那是其他地方一律適用的標準規則。profile 改變的只是
+「那個拒絕算不算缺陷」。
+
+實作要**說明自己主張哪些 profile**。這一個主張 core、放棄 system。主張一個 profile 不等於已經做完:凡是 `zerg`
+在某個 core 形式上不足的地方,該章會用 `[not yet]` 說出來、而那個形式被指名拒絕——那是**已主張的 profile 裡的
+欠債**。被放棄的 profile 沒有這種欠債,而那就是全部的差別。
+
 ## 語言 versus 這個編譯器
 
 Zerg 是以整體來規範;出貨的編譯器實作其中一個子集。與其只描述已出貨的部分,每章都規範「意圖中的特性」並標註
@@ -95,6 +111,14 @@ module 的用途。
 > 運算式走訪在大約 310 個方法環節（530 個扁平 `+` 項）時耗盡，代換階段則在大約 400 時耗盡，而整個 repository
 > 裡最深的實際巢狀是五層。conforming implementation 可以另定上限；ISO C 自己也只承諾 63 層括號運算式。
 
+---
+
+> **[implementation-defined]** **format spec 的 width 與 precision 是翻譯上限。** `width` 超過 **4096**
+> 或 `precision` 超過 **4096** 會被拒絕而不是照做：兩者都是被格式化的文字要求實作產出的**大小**，而沒有界的
+> 那一個是披著渲染外衣的記憶體請求。**float** 另外最多渲染 **100** 位小數,那是對位數而不是對欄位的界,所以
+> 是 float 自己的。`type` 字母對每一種渲染都是封閉集合
+> ([文字與格式化](runtime/format.zh-TW.md))；落在集合外的字母以同樣的方式被拒。
+
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
@@ -117,7 +141,8 @@ taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會�
 寫下來，是因為 dialect 是本專案在首頁上作出的宣稱，而一個沒有任何章節寫明的編譯器旗標數字，就是會漂走的那種數字。
 
 dialect 是 **C17**。`ZERG_CSTD` 為需要的建置指定另一個——`c99` 與 `c11` 是 runtime 另外兩個寫得能編譯的 dialect，
-而 build cache 以 dialect 作為 object 的 key 的一部分，兩者不會把彼此的 object 交給對方。
+而 build cache 以 **dialect 與解析後的 `cc`**——一次編譯中,emitted C 沒有替它們代言的那兩個輸入——作為
+object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 object 交給對方。
 
 > **[not yet]** **fallback 不是自動的**。原意是：一個做不到 C17 的 `cc` 應被退回 C99；但沒有建置任何探測，所以這個
 > 退回是建置用 `ZERG_CSTD=c99` **主動要求**的，而不是編譯器自己發現的。兩種 dialect 都在 CI 上編譯並執行。

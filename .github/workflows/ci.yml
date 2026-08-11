@@ -63,6 +63,30 @@ jobs:
       - name: Check the grammar's prose companion against GRAMMAR
         run: make grammar-mirror
 
+      # Every reserved word must be reached by some production. A keyword the grammar
+      # never mentions is one whose entire effect is to forbid a name — which is what
+      # `package` had been doing for years.
+      - name: Every reserved word is reached by the grammar that reserves it
+        run: make grammar-keywords
+
+      # What each stage is ALLOWED to know: the parser sees tokens only, and inference
+      # runs bottom-up over four named carve-outs. Both are claims about what the code
+      # may reach, so both are read out of the sources rather than run.
+      - name: Each stage knows only what it is allowed to know
+        run: make layering
+
+      # A code is an identity, and an identity nothing checks is a number. This holds
+      # the compiler's codes, the gates that assert them, and the catalogue a reader
+      # looks them up in to being one set.
+      - name: Every error code is reported once, asserted, and listed
+        run: make error-codes-check
+
+      # And the board itself: a gate the workflow never runs is a gate that finds
+      # nothing. This is the check that would have caught the nine that were green
+      # only when somebody thought to type them.
+      - name: Every gate is on the board, and the board is run
+        run: make gates
+
   bootstrap-and-examples:
     name: bootstrap + examples (${{ matrix.os }})
     strategy:
@@ -155,6 +179,41 @@ jobs:
       # and that needs a built toolchain.
       - name: No editor file states a language fact the compiler denies
         run: make editor-align
+
+      # The linter over the compiler and the stdlib — the only bodies of Zerg large
+      # enough for a dead private function to hide in — and the check that every rule
+      # it documents still has a program that makes it fire.
+      - name: Lint the compiler and the stdlib with zerg itself
+        run: make lint
+
+      - name: Every linter rule has a program that makes it fire
+        run: make lint-check
+
+      # The formatter's own corpus: every case is already canonical, so a change in
+      # layout shows up as a diff rather than as a passing run.
+      - name: Every fmt case is already canonical
+        run: make fmt-corpus
+
+      # The cache is keyed by the compiler that filled it. Two compilers, two keys —
+      # otherwise a stale object outlives the compiler that produced it.
+      - name: The build cache names the compiler that filled it
+        run: make cache-key-check
+
+      # `make install` puts a toolchain on the machine and `make uninstall` takes it
+      # away; this is the gate that runs both and compiles from the installed path.
+      - name: The installed toolchain works, and uninstall takes it away
+        run: make install-check
+
+      # The unit suites, which `make examples` above does not reach: the Go seed's
+      # tests and the runtime's C tests.
+      - name: Unit suites, seed and runtime
+        run: make test
+
+      # The digest that names every cached object, held to FIPS 180-4's vectors and to the
+      # system tool. It needs a built compiler, which is why it is here and not in the
+      # text-only job.
+      - name: The pure-Zerg digest is the digest everyone else computes
+        run: make sha256
 
       - name: Fetch test-data submodule
         id: corpus_fetch

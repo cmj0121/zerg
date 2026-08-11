@@ -8,9 +8,8 @@
  *
  * Every runtime symbol carries the `zrt_` prefix so it cannot collide with the
  * `zg_` names the backend emits. The runtime is hosted (libc) for the MVP; the
- * allocator wrapper and the (non-atomic, single-threaded) refcount are the two
- * seams a later phase re-targets (freestanding allocator; atomic refcount for
- * the 1e scheduler) without touching emitted code.
+ * allocator wrapper is the seam a later phase re-targets (a freestanding
+ * allocator) without touching emitted code.
  */
 #ifndef ZERGRT_H
 #define ZERGRT_H
@@ -59,11 +58,22 @@ typedef void (*zrt_drop_fn)(void *payload);
  * C, a `void*` pointing at the header. The layout (rc width, drop signature,
  * inline payload) is a build-contract commitment the backend depends on. */
 typedef struct {
-	size_t      rc;   /* strong refcount; the last holder frees the block */
+	size_t      rc;   /* strong refcount; the last holder frees the block. See below. */
 	zrt_drop_fn drop; /* run at rc==0 before free (NULL = nothing to drop) */
 } zrt_ref_hdr;
 
+/* `rc` is a PLAIN size_t — deliberately not `_Atomic` — and is accessed only through the
+ * `__atomic_*` builtins, in ref.c. The distinction is a layout contract and not a style: the
+ * BACKEND writes this struct, brace-initializing an immortal cell as
+ * `static struct { zrt_ref_hdr h; char b[N]; } = {{ZRT_RC_IMMORTAL, NULL}, …}` (both
+ * emitters do), and `_Atomic` would change the type those initializers must satisfy and the
+ * dialects this header compiles under. Code outside ref.c that touches `rc` must use the
+ * builtins too — fmt.c reaches this header as `(zrt_ref_hdr *)s - 1` and does exactly that,
+ * by calling zrt_retain/zrt_release rather than the field. */
+
 /* ZRT_RC_IMMORTAL is the sentinel refcount of a cell that must never be freed: a
+ * cell in static storage, whose count is therefore never written by anyone — which is what
+ * makes reading it with a RELAXED atomic load sound (ref.c). It is: a
  * value in static storage (a string literal, a constant result such as the "true"/
  * "false" of zrt_display_bool). zrt_retain/zrt_release short-circuit on it, so such a
  * cell can be bound, copied, and "released" at scope exit without ever touching its
@@ -683,6 +693,14 @@ static inline int zrt_is_rune(int64_t cp) {
 
 int32_t zrt_conv_rune(int64_t v);
 
+/* The UTF-8 encoder, shared for the same reason zrt_is_rune is: `str(runes)` builds a
+ * whole string out of it and `{n:c}` builds one character, and two copies of "which code
+ * points a str can hold" is two answers waiting to disagree. zrt_utf8_len answers 0 for a
+ * code point no str can hold — a surrogate, out of range, or U+0000, whose byte is a NUL —
+ * and zrt_utf8_encode then writes nothing. */
+int zrt_utf8_len(int64_t cp);
+int zrt_utf8_encode(int64_t cp, char *out);
+
 /* `a // b` is floor division whose result is always an `int` (docs/core/types.md). For
  * two integers that IS zrt_div_i64 — the language has one integer division and `//` is
  * the spelling that says so. The float form is the one that needs a helper: it divides
@@ -819,7 +837,23 @@ long zrt_write_int(int fd, int64_t v);
  * fences; the SC ops keep the API correct for a future M:N scheduler with no
  * change to the Zerg surface. Each takes the payload pointer (from
  * zrt_ref_payload) so a copy of the box — shared across `spawn` — names the same
- * cell. */
+ * cell.
+ *
+ * THE RULE FOR EVERY COUNT IN THIS RUNTIME, since there are three of them and they do not
+ * share a mechanism: a count two threads can reach is either ATOMIC, or guarded by a lock
+ * named where the count is declared. There is no third option, and a plain `++` on a shared
+ * count is the bug this rule exists to keep out — it survived in ref.c for as long as it did
+ * because no gate looked. The three:
+ *
+ *   - the Ref header's `rc` (ref.c) — atomic, `__atomic_*` on a plain size_t, see above
+ *   - the copy-on-write list buffer's `rc` (list.c) — atomic, `zrt_atomic_add` on an int64_t
+ *   - a channel's `rc` (chan.c) — plain, and correct: every access is under `ch->lock`, which
+ *     it must be anyway because the decision to free is made inside the lock and acted on
+ *     outside it (chan_free destroys the lock it would be holding)
+ *
+ * They are deliberately not unified. The widths differ, only one has a sentinel, and only
+ * list.c reads its count for a decision other than freeing (`rc == 1` is its COW fast path).
+ * A shared primitive would be adopted by one of the three. */
 
 /* zrt_atomic_load returns *p read with sequential-consistency ordering. */
 int64_t zrt_atomic_load(int64_t *p);

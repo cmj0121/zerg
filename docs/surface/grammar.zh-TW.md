@@ -120,7 +120,7 @@ block      ::= '{' stmt-list '}'
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-chan  type   impl    package  init
+chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
@@ -224,10 +224,14 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
 `??` 則在最鬆的層級。
 
-postfix 的 `[…]` 是**索引**或**顯式型別引數**（`parse[int]("42")`、`collect[K, V](…)`），靠 **name resolution**
-分辨:base 是值就是索引,是泛型 function 或型別建構子就是型別引數——一個名字只會是其一(型別與 function 不能同名,
-group 7),所以**不需要 turbofish**。有逗號（`[X, Y]`）必為型別引數。這與 pattern 分辨 **variant** 或 **binding**
-（group 6）是同一套 name resolution;文法帶著 scope 解析,非純 context-free。
+postfix 的 `[…]` **一律是索引**。型別引數只寫在**型別位置**（group 7），兩個表面不再共用一對中括號,這裡也就沒有
+任何東西需要先解析才能剖析——不需要 turbofish,也不需要符號表。泛型呼叫由引數型別**推斷**其型別引數;推斷不足時,
+以**帶型別的 binding** 引導（`xs: list[int] = empty()`）,而不是在呼叫端給一份引數清單。pattern 文法（group 6）
+context-free 的理由與規則形狀完全相同。
+
+**不需要符號表**是一個關於編譯器的主張,所以它當成主張被檢查:`make layering` 讀兩側的 parser,斷言兩者都
+不越過自己的 token——seed 用它的 package import 與 parser 狀態,`zerg` 用它呼叫了哪些同模組檔案。這也正是
+`zerg fmt` 與 `zerg lsp` 能讀一個編不過的檔案的原因。
 
 ### 複合字面量（Composite literals）
 
@@ -361,10 +365,10 @@ list-pat-elem ::= pattern | '..' identifier?
 - **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。block 同時
   是一種 **expression**（`primary`，group 4）:它的**值 = 最後一個 statement 的值**——expr-statement 給出其 expr;
   其他 statement 或空 block 給出 `nil`。ASI `;` 只**分隔**、不丟棄值,所以 `guard { … }` 與多敘述的 `match` arm
-  （`P => { …; v }`）都能產出。**`with expr as y { … }`** 是裸 block 的 sugar：把 scoped 資源 `y` 綁進 block,並保證
-  資源的 **teardown 在每條離開路徑**（正常、`return`、abort）都跑。該值實作內建 **`Scoped`** spec（其唯一方法即
-  teardown）；`Ref[T]` 的 drop 已滿足它。所以 `with open(p) as f { f.read() }` ≈
-  `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省。
+  （`P => { …; v }`）都能產出。**`with expr as y { … }`** 是那個裸 block 的**純語法** sugar——
+  `with acquire() as y { … }` → `{ y := acquire(); … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省,
+  而**無名形式仍然綁定**:`e; …` 會讓值死在該敘述而不是 `}`。這個形式**不引入自己的 teardown**——釋放一個值的
+  是資源清理群組,未變。
 - **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
   （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。帶**必要 `else`** 的 `if` 同時是一個**運算式**
   （`x := if c { a } else { b }`）——產出被選中分支的 block 值,且每個分支須同型別;statement 位置則以 statement
@@ -392,11 +396,13 @@ list-pat-elem ::= pattern | '..' identifier?
   其餘）、`Div{..}`（任意）。預設列全表示加一個 field 會**弄壞**舊 pattern,逼你檢視。**list pattern** 比對 list——
   `[a, b]`、`[head, ..tail]`、`[..init, last]`、`[]`——**至多一個 `..`**;`..name` 把略過的一段綁成 list,裸 `..`
   丟棄（struct 的 `..` 只忽略、不綁）。pattern 位置的 `..` 是 **rest**,與值層的 range `..` 不同。
-- **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
-  新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
-- **限定 variant。** variant 也可以**由它的 enum 指名**——`Color.Red`、`Shape.Line(5)`,pattern 位置同樣可寫。
-  它是同一個值;多出來的是讀者不必自己解析名字就知道是**哪個** enum,而裸名形式要求他們自己解。這個限定必須為
-  **真**:`Color.Apple` 指的是另一個 enum 的 variant,那是錯誤,不是一個新的 binding。
+- **variant 或 binding** 由**語法**決定,永不由 scope 決定:variant **一律由它的 enum 指名**——`Color.Red`、
+  `Shape.Line(5)`——因為那個配對就是 variant 本身。pattern 位置的**裸名字一律是新的 binding**。`Red` 單獨一個
+  什麼都沒指名:兩個 enum 可以各宣告一個,而裸名字究竟指哪一個,是由當下 scope 裡剛好有什麼決定的——所以在
+  某個檔案宣告一個 variant,可能靜默改變另一個檔案裡某個 pattern 匹配的東西。名字**大小寫自由**,而決定這件事
+  的從來不是大小寫。因此 pattern 文法不需符號表即可剖析。
+- **這個限定必須為真。** `Color.Apple` 指的是另一個 enum 的 variant,那是錯誤——而且現在它只能是錯誤,不會退化
+  成一個新的 binding。
 - **`as` 綁定。** `pattern as name` 在 pattern 繼續解構的同時,把**整個**被比對的值綁到 `name`——`Move{x, y} as m`、
   `[first, ..] as all`、巢狀 `Some(inner as v)`。讀法同 `with` / `import`:`<東西> as <名字>`。在 or-pattern 上,`as`
   綁最近的 alternative（`A | B as m` 即 `A | (B as m)`）;兩側都要綁就寫 `A as m | B as m`。
@@ -407,7 +413,7 @@ list-pat-elem ::= pattern | '..' identifier?
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' 投影;可鏈式 'I.Item.Sub'
+base-type   ::= type-name type-args? ( '.' identifier )*   # 'text.Splitter' 透過 import 指名型別
               | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type：group 12（unsafe）
 type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
 generic-arg ::= type | const-expr             # 型別，或填入值泛型參數的 const-expr
@@ -419,14 +425,11 @@ const-expr  ::= expr                          # 可編譯期摺疊的 expr（無
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind | val-bind   # 方法／關聯函式、assoc type 綁定，或 assoc value
-assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' 滿足 spec 的 assoc type
-val-bind    ::= identifier ':=' const-expr    # 'BITS := 32' 滿足 spec 的 associated value
-spec-member ::= fn-sig | fn-decl | assoc-type | assoc-val
-assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item'（可加 bound）
-assoc-val   ::= identifier ':' type           # 'BITS: int'——required associated value
+impl-item   ::= fn-decl | val-bind            # 方法／關聯函式，或型別常數
+val-bind    ::= identifier ':=' const-expr    # 'SIZE := 4096'——每個型別一份的編譯期值
+spec-member ::= fn-sig | fn-decl              # 必要方法，或已提供實作的方法
 generics    ::= '[' type-param ( ',' type-param )* ']'
-type-param  ::= identifier ( ':' bound )?     # bound：spec → 型別參數；具體型別 → 值參數
+type-param  ::= identifier ( ':' bound )?     # bound 是 spec → 型別參數；具體型別 → 值參數
 bound         ::= type-name ( '+' type-name )*  # spec 的合取
 decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
@@ -452,49 +455,54 @@ NotFound = 404 }`——一個 C-style enum,值可觀察（`int(Status.Ok)` 取�
   default 是 `T?` field 的 `nil`（其自然的「不存在」狀態）。故 `struct Config { host: str; port: int? = 8080;
 tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略 `host` 為錯。
 - **建構（Construction）。** 型別名同時是它的**建構子**——`User(id: 1, name: "x")` 建一個 struct（field 依宣告順序
-  成為參數，positional 先、named 後）、`Circle(3.0)` 建一個 enum variant。這個名字與 function **共用 value 命名
-  空間**,所以型別和 function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
+  成為參數，positional 先、named 後）。**`enum` 放進去的是它自己的名字、不是它的 variant 名**:variant 要**經由**
+  enum 建構——`Shape.Circle(3.0)`——與 pattern 寫的是同一個 (enum, variant) 配對;所以 variant 名永遠不是一個
+  獨立的名字,兩個都宣告了 `Red` 的 enum 也就不會爭它。型別名與 function **共用 value 命名空間**,所以型別和
+  function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
   是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** *原意*是把 `T(...)` 降為模組私有(外部須改走
   公開的自訂 constructor、模組內部仍以 `T(...)` 建),但這個階段是**被識別並拒絕、尚未實作**(見 [Decorators](../core/decorators.zh-TW.md))。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別,非透明別名,在 runtime 降低成 `Y`。`generics?` 槽會被
   **解析**,但**泛型** alias `type X[T] = …` 這個階段**尚未實作**(在語意分析階段被拒絕)。
 - **編譯期常數（隱含）。** 編譯期摺疊是**隱含**的、與 `const` 關鍵字無關（`const` 只標記 shadow-proof 綁定，見
   group 4）。任何 RHS 是 `const-expr` 的綁定（`:=` 或 `const`）都會被**編譯期摺疊**，並可用於任何需要編譯期值之處：
-  陣列長度 `[T; N]`、enum discriminant、decorator 引數、值泛型引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
+  陣列長度 `[T; N]`、enum discriminant、decorator 引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
   編譯錯誤。`const-expr` 是編譯器**無求值引擎**下能摺疊的 `expr`——literal、其他可摺疊名字、discriminant 與運算子；
-  **無 function call**（故 `sizeof`/`len` 不是 const-expr）。spec 可要求一個 **associated value**——`BITS: int`——由各
-  impl 以 `BITS := 32`（一個 `val-bind`）提供。
+  **無 function call**（故 `sizeof`/`len` 不是 const-expr）。
 - **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
   `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`
   呼叫 `Eq`)。`impl` 自身的型別參數放在 **`impl` 之後**——`impl[T] Summable for list[T]`——故 `T` 可用於目標型別。
   泛型 **monomorphize**:每個相異型別引數各生一份特化的 C 函式,所以 bound 是承重的(它指名要特化的 impl,泛型碼裡
   `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
-  `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
-  一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。呼叫端顯式型別引數寫作 `f[T]`（靠
-  name resolution 與索引區分——group 4）。**值泛型**讓參數是編譯期值、且**無 `const` 關鍵字**：`[X: Y]` 中 Y 是 spec
-  → X 為型別參數，Y 是具體型別 → X 為值參數（`[N: int]`，primitive；composite 延後）。函式的值參數由引數型別**推斷**
-  （`fn sum[N: int](xs: [int; N])`），型別的則在型別位置給（`Matrix[3, 4]`）。**沒有 disjunction bound**（`T: A | B`）——body 無從
-  得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K]`
-  搭配 `impl Indexable[int]`（元素）與 `impl Indexable[Range]`（slice）——`xs[k]` 便依 `k` 的型別靜態分派,各 impl
-  保有自己的 associated `Output`——或用 `enum` 做 runtime 選擇。
-- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）、**提供**（完整方法）,或 **associated type**
-  （`type Item`——由 `impl` 填入、函數性決定、每個 impl 一個）。方法**不宣告 receiver**——`this` 在方法內為隱式,
-  透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self 型別是 **`This`**。
-  `impl … for …` 由手寫為某型別提供 spec 的方法(及其 `type Item = …` 綁定)。
+  `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。**沒有 erasure 的對應物**:要求產生一份共享
+  witness-table body 的 decorator 會被具名拒絕,因為 spec 是 **bound** 而不是型別。呼叫端顯式型別引數**沒有
+  表達式位置的表面**（group 4）——呼叫由引數推斷,或由帶型別的 binding 引導。**值泛型**讓參數是編譯期值、
+  且**無 `const` 關鍵字**:`[X: Y]` 中 Y 是 spec → X 為型別參數,Y 是具體型別 → X 為值參數（`[N: int]`,
+  primitive）。函式的值參數**由引數型別推斷**（`fn sum[N: int](xs: [int; N])`）、呼叫端從不寫它,所以它跑的是
+  與這裡其他推導**同一個方向**,不是那四個 carve-out 之一;型別的則寫在型別位置（`Matrix[3, 4]`）。沒有它,
+  陣列長度屬於型別的一部分這件事會讓 `[T; N]` 無法寫進簽章（**[not yet]**——值參數會被拒絕,
+  _NotImplemented: a value generic parameter `N: int`_,所以這個編譯器只有型別參數）。**沒有 disjunction bound**（`T: A | B`）——body 無從
+  得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K, V]`
+  搭配 `impl Indexable[int, T]`（元素）與 `impl Indexable[Range, list[T]]`（slice）——`xs[k]` 便依 `k` 的型別靜態
+  分派——或用 `enum` 做 runtime 選擇。
+- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。就這樣而已——spec 承載
+  **行為,別的都不承載**。**associated type** 與 **associated value** 不是這裡的成員,兩者皆被具名拒絕;單一輸出
+  的協定改以參數化 spec 表達（`spec Iterable[T]`）,而每個 impl 一份的常數是 associated fn。方法**不宣告
+  receiver**——`this` 在方法內為隱式,透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯
+  錯誤。self 型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
 - **Inherent `impl`。** 無 `for` 的 `impl User { … }` 加入**不綁任何 spec** 的方法——named constructor
   `User.from_json(…)`（關聯函式,不用 `this`,以 `Type.f(…)` 呼叫）或私有方法 `u.recompute()`（用 `this`,以
   `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
-- **Associated type。** 它讓**單輸出**的 protocol 良定義:`for x in it` 只有一種元素型別,因為 `Iterator` 的 `Item`
-  由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
-  （`fn collect[I: Iterator](it: I) -> list[I.Item]`）,當被投影型別本身有 associated type 時**可鏈式**——
-  `I.Item.Sub`。impl 以 `type Item = int` 提供它。spec 的 associated
-  **value** 是其值對應物——`BITS: int` 為必要，由 impl 以 `BITS := 32` 提供。
+- **沒有 associated type,也沒有 associated value。** spec 既不宣告由 `impl` 填入的型別（`type Item`,投影成
+  `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕。單一輸出的協定改以
+  參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
+  一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
+  另一件事。
 - **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
   [Derive & Default Behavior](../core/derive.zh-TW.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
   擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator 是編譯錯誤**,絕不被默默丟棄。今日已實作:
-  `#[derive]`（`#[dyn]` 與 `#[test]` 曾建成又已移除）;`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
+  `#[derive]`;`#[test]`、`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
   在實作前會被識別並拒絕。`#[` 是唯一不算註解的
   `#`——lexer peek 一字元即分辨。
 
@@ -659,23 +667,23 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一條都有對應案例,所以一個形式若悄悄開始能動、或悄悄
 換了失敗方式,gate 就會擋下來。
 
-| Group | 形式                                                                          |
-| ----- | ----------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                             |
-| 3     | 解構繫結 `(a, b) := …`                                                        |
-| 4     | 不是名字的 callee —— `f[T](…)`、`fs[0](…)`、`p?.m(…)`                         |
-| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                     |
-| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                        |
-| 6     | 泛型 `struct` / `enum`;泛型 METHOD;指名兩個 spec 的 bound(`T: Eq + Ord`)      |
-| 6     | 會捕獲的 closure;省略型別的 closure 參數                                      |
-| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>`  |
-| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member            |
-| 8     | associated function `Type.f(…)`;`spec` 或 `impl` 內的 associated type / value |
-| 8     | 對內建型別的 `impl`（`impl Tag for int`）                                     |
-| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                        |
-| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                             |
-| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                             |
-| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                        |
+| Group | 形式                                                                         |
+| ----- | ---------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                            |
+| 3     | 解構繫結 `(a, b) := …`                                                       |
+| 4     | 不是名字的 callee —— `fs[0](…)`、`p?.m(…)`                                   |
+| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                    |
+| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                       |
+| 6     | 泛型 `struct` / `enum`;泛型 METHOD;指名兩個 spec 的 bound(`T: Eq + Ord`)     |
+| 6     | 會捕獲的 closure;省略型別的 closure 參數                                     |
+| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>` |
+| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
+| 8     | associated function `Type.f(…)`                                              |
+| 8     | 對內建型別的 `impl`（`impl Tag for int`）                                    |
+| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
+| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                            |
+| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                            |
+| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的
 介面至少該有這個意思。被強制的是**簽章**:arity,以及每個位置上參數的名字、型別、`mut &`,和它有沒有預設值,

@@ -223,6 +223,11 @@ enum Stmt {
 	SContinue
 	SNop
 
+	# SScope is a bare `{ … }` block used as a STATEMENT (GRAMMAR#compound-stmt). It opens a
+	# scope and nothing else: the bindings made in it end at its `}`, which is the whole
+	# reason to write one — and the whole of what `with` expands to.
+	SScope(list[Stmt])
+
 	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
 	# out, last-scheduled-first.
 	SDefer(Expr)
@@ -357,6 +362,14 @@ pub struct Diag {
 	path: str
 	line: int
 	col: int
+
+	# `code` is the rule's IDENTITY — `E307`, `L502` — and it is a field rather than the first
+	# word of `msg` because everything that reads a diagnostic wants it separately: the
+	# renderer puts it in front of the sentence, a gate pins it instead of the prose, and an
+	# editor filters and groups by it. A code spelled only inside the text is one every reader
+	# has to parse back out, which is the second copy of a language fact this struct's `fix`
+	# field already exists to forbid. It is empty for a finding that has no code yet.
+	code: str
 	msg: str
 
 	# `fix` is the SOURCE THAT REPLACES what stands at the place — empty when the finding has
@@ -373,8 +386,8 @@ pub struct Diag {
 # module-qualified struct constructor (`zerg.Diag(…)` emits a type name in call position),
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
-pub fn diag_at(path: str, line: int, col: int, msg: str) -> Diag {
-	return Diag(path, line, col, msg, "")
+pub fn diag_at(path: str, line: int, col: int, code: str, msg: str) -> Diag {
+	return Diag(path, line, col, code, msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
@@ -404,6 +417,10 @@ struct FieldDef {
 struct StructDecl {
 	name: str
 	fields: list[FieldDef]
+
+	# the file it was declared in, so the module it belongs to can be asked. A type belongs
+	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
+	path: str
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -439,6 +456,9 @@ struct VariantDef {
 struct EnumDecl {
 	name: str
 	variants: list[VariantDef]
+
+	# the file it was declared in — see StructDecl.path
+	path: str
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -648,20 +668,21 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_ty, is_mut, is_const, value) => f"{ind}let {name} = {expr_kind(value)}\n"
-		SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
-		SPrint(x) => f"{ind}print {expr_kind(x)}\n"
-		SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"
-		SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
-		SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
-		SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
-		SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
-		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
-		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
-		SForSelect(arms) => ind + "for-select\n"
-		SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
-		SBreak => ind + "break\n"
-		SContinue => ind + "continue\n"
+		Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		Stmt.SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
+		Stmt.SPrint(x) => f"{ind}print {expr_kind(x)}\n"
+		Stmt.SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"
+		Stmt.SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
+		Stmt.SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
+		Stmt.SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
+		Stmt.SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
+		Stmt.SScope(body_b) => ind + "scope\n" + dump_block(body_b, ind + "\t")
+		Stmt.SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
+		Stmt.SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
+		Stmt.SForSelect(arms) => ind + "for-select\n"
+		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
+		Stmt.SBreak => ind + "break\n"
+		Stmt.SContinue => ind + "continue\n"
 		_ => ind + "nop\n"
 	}
 }
@@ -677,35 +698,35 @@ fn dump_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], ind: str) -> str 
 # expr_kind names an expression's shape, with the leaf's own text where it has one.
 pub fn expr_kind(e: Expr) -> str {
 	return match e {
-		EInt(lex, _, _) => "int " + lex
-		EFloat(lex) => "float " + lex
-		EStr(v) => "str"
-		EBool(v) => "bool"
-		ENil => "nil"
-		EIdent(n) => "ident " + n
-		EUnary(oper, x) => "unary " + oper
-		EBinary(oper, a, b) => "binary " + oper
-		ECall(name, args, _) => "call " + name
-		EField(target, name) => "field ." + name
-		EOptChain(target, name) => "optional chain ?." + name
-		ETry(x) => "try `?`"
-		EIndex(target, idx) => "index"
-		EMethod(target, meth, args) => "method ." + meth
-		EListLit(elems) => "list-literal"
-		EConv(ty, x, nm) => "convert " + nm
-		EIf(cond, then_e, else_e) => "if-expr"
-		EMatch(scrut, arms) => "match"
-		ERange(lo, hi, inclusive) => "range"
-		ETuple(elems) => "tuple"
-		EMapLit(ks, vs) => "map-literal"
-		EFn(ps, has_ret, ret, body) => "fn-expr"
-		EChanNew(t, cap) => "chan-new"
-		ERecv(ch) => "recv"
-		EForce(x) => "force"
-		ECoalesce(a, b, jump) => "coalesce"
-		EGuard(body) => "guard"
-		EIs(x, name) => "is " + name
-		EIn(x, set) => "in"
+		Expr.EInt(lex, _, _) => "int " + lex
+		Expr.EFloat(lex) => "float " + lex
+		Expr.EStr(v) => "str"
+		Expr.EBool(v) => "bool"
+		Expr.ENil => "nil"
+		Expr.EIdent(n) => "ident " + n
+		Expr.EUnary(oper, x) => "unary " + oper
+		Expr.EBinary(oper, a, b) => "binary " + oper
+		Expr.ECall(name, args, _) => "call " + name
+		Expr.EField(target, name) => "field ." + name
+		Expr.EOptChain(target, name) => "optional chain ?." + name
+		Expr.ETry(x) => "try `?`"
+		Expr.EIndex(target, idx) => "index"
+		Expr.EMethod(target, meth, args) => "method ." + meth
+		Expr.EListLit(elems) => "list-literal"
+		Expr.EConv(ty, x, nm) => "convert " + nm
+		Expr.EIf(cond, then_e, else_e) => "if-expr"
+		Expr.EMatch(scrut, arms) => "match"
+		Expr.ERange(lo, hi, inclusive) => "range"
+		Expr.ETuple(elems) => "tuple"
+		Expr.EMapLit(ks, vs) => "map-literal"
+		Expr.EFn(ps, has_ret, ret, body) => "fn-expr"
+		Expr.EChanNew(t, cap) => "chan-new"
+		Expr.ERecv(ch) => "recv"
+		Expr.EForce(x) => "force"
+		Expr.ECoalesce(a, b, jump) => "coalesce"
+		Expr.EGuard(body) => "guard"
+		Expr.EIs(x, name) => "is " + name
+		Expr.EIn(x, set) => "in"
 		_ => "?"
 	}
 }
@@ -727,35 +748,35 @@ pub fn expr_kind(e: Expr) -> str {
 # reach the same answer.
 fn expr_parts(e: Expr) -> list[Expr] {
 	return match e {
-		EInt(_, _, _) => expr_parts_none()
-		EFloat(_) => expr_parts_none()
-		EStr(_) => expr_parts_none()
-		EBool(_) => expr_parts_none()
-		ENil => expr_parts_none()
-		EIdent(_) => expr_parts_none()
-		EUnary(_, x) => [x]
-		EBinary(_, a, b) => [a, b]
-		ECall(_, args, _) => args
-		EField(x, _) => [x]
-		EOptChain(x, _) => [x]
-		ETry(x) => [x]
-		EIndex(x, i) => [x, i]
-		EMethod(x, _, args) => expr_parts_cons(x, args)
-		EListLit(elems) => elems
-		EConv(_, x, _) => [x]
-		EIf(c, a, b) => [c, a, b]
-		EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
-		ERange(lo, hi, _) => [lo, hi]
-		ETuple(elems) => elems
-		EMapLit(ks, vs) => expr_parts_cat(ks, vs)
-		EFn(ps, _, _, _) => expr_parts_defs(ps)
-		EChanNew(_, cap) => [cap]
-		ERecv(ch) => [ch]
-		EForce(x) => [x]
-		ECoalesce(a, b, _) => [a, b]
-		EGuard(_) => expr_parts_none()
-		EIs(x, _) => [x]
-		EIn(x, set) => [x, set]
+		Expr.EInt(_, _, _) => expr_parts_none()
+		Expr.EFloat(_) => expr_parts_none()
+		Expr.EStr(_) => expr_parts_none()
+		Expr.EBool(_) => expr_parts_none()
+		Expr.ENil => expr_parts_none()
+		Expr.EIdent(_) => expr_parts_none()
+		Expr.EUnary(_, x) => [x]
+		Expr.EBinary(_, a, b) => [a, b]
+		Expr.ECall(_, args, _) => args
+		Expr.EField(x, _) => [x]
+		Expr.EOptChain(x, _) => [x]
+		Expr.ETry(x) => [x]
+		Expr.EIndex(x, i) => [x, i]
+		Expr.EMethod(x, _, args) => expr_parts_cons(x, args)
+		Expr.EListLit(elems) => elems
+		Expr.EConv(_, x, _) => [x]
+		Expr.EIf(c, a, b) => [c, a, b]
+		Expr.EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
+		Expr.ERange(lo, hi, _) => [lo, hi]
+		Expr.ETuple(elems) => elems
+		Expr.EMapLit(ks, vs) => expr_parts_cat(ks, vs)
+		Expr.EFn(ps, _, _, _) => expr_parts_defs(ps)
+		Expr.EChanNew(_, cap) => [cap]
+		Expr.ERecv(ch) => [ch]
+		Expr.EForce(x) => [x]
+		Expr.ECoalesce(a, b, _) => [a, b]
+		Expr.EGuard(_) => expr_parts_none()
+		Expr.EIs(x, _) => [x]
+		Expr.EIn(x, set) => [x, set]
 	}
 }
 
@@ -822,8 +843,8 @@ fn either_name(l: Ty, r: Ty) -> str {
 
 fn is_err_ty(t: Ty) -> bool {
 	return match t {
-		TErr => true
-		_    => false
+		Ty.TErr => true
+		_       => false
 	}
 }
 
@@ -838,15 +859,15 @@ fn is_err_ty(t: Ty) -> bool {
 # so itself, which is what makes this answer mean one thing.
 fn ty_eq(a: Ty, b: Ty) -> bool {
 	return match a {
-		TNamed(an)      => ty_eq_named(an, b)
-		TList(ae)       => ty_eq_list(ae, b)
-		TOpt(ae)        => ty_eq_opt(ae, b)
-		TMap(ak, av)    => ty_eq_map(ak, av, b)
-		TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
-		TEither(al, ar) => ty_eq_either(al, ar, b)
-		TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
-		TTuple(aes)     => ty_eq_tuple(aes, b)
-		TUnknown        => false
+		Ty.TNamed(an)      => ty_eq_named(an, b)
+		Ty.TList(ae)       => ty_eq_list(ae, b)
+		Ty.TOpt(ae)        => ty_eq_opt(ae, b)
+		Ty.TMap(ak, av)    => ty_eq_map(ak, av, b)
+		Ty.TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
+		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
+		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
+		Ty.TTuple(aes)     => ty_eq_tuple(aes, b)
+		Ty.TUnknown        => false
 
 		# every remaining variant is a scalar with a spelling of its own, so the name IS
 		# the identity there — the one place the shortcut this function replaces was right
@@ -856,29 +877,29 @@ fn ty_eq(a: Ty, b: Ty) -> bool {
 
 fn ty_eq_named(an: str, b: Ty) -> bool {
 	return match b {
-		TNamed(bn) => an == bn
-		_          => false
+		Ty.TNamed(bn) => an == bn
+		_             => false
 	}
 }
 
 fn ty_eq_list(ae: Ty, b: Ty) -> bool {
 	return match b {
-		TList(be) => ty_eq(ae, be)
-		_         => false
+		Ty.TList(be) => ty_eq(ae, be)
+		_            => false
 	}
 }
 
 fn ty_eq_opt(ae: Ty, b: Ty) -> bool {
 	return match b {
-		TOpt(be) => ty_eq(ae, be)
-		_        => false
+		Ty.TOpt(be) => ty_eq(ae, be)
+		_           => false
 	}
 }
 
 fn ty_eq_map(ak: Ty, av: Ty, b: Ty) -> bool {
 	return match b {
-		TMap(bk, bv) => ty_eq(ak, bk) and ty_eq(av, bv)
-		_            => false
+		Ty.TMap(bk, bv) => ty_eq(ak, bk) and ty_eq(av, bv)
+		_ => false
 	}
 }
 
@@ -886,29 +907,29 @@ fn ty_eq_map(ak: Ty, av: Ty, b: Ty) -> bool {
 # interchangeable, and the emitter has its own direction check that says so more precisely.
 fn ty_eq_chan(ae: Ty, ad: int, b: Ty) -> bool {
 	return match b {
-		TChan(be, bd) => ad == bd and ty_eq(ae, be)
-		_             => false
+		Ty.TChan(be, bd) => ad == bd and ty_eq(ae, be)
+		_ => false
 	}
 }
 
 fn ty_eq_either(al: Ty, ar: Ty, b: Ty) -> bool {
 	return match b {
-		TEither(bl, br) => ty_eq(al, bl) and ty_eq(ar, br)
+		Ty.TEither(bl, br) => ty_eq(al, bl) and ty_eq(ar, br)
 		_ => false
 	}
 }
 
 fn ty_eq_fn(aps: list[Ty], ar: Ty, b: Ty) -> bool {
 	return match b {
-		TFn(bps, br) => ty_eq(ar, br) and ty_eq_all(aps, bps)
-		_            => false
+		Ty.TFn(bps, br) => ty_eq(ar, br) and ty_eq_all(aps, bps)
+		_ => false
 	}
 }
 
 fn ty_eq_tuple(aes: list[Ty], b: Ty) -> bool {
 	return match b {
-		TTuple(bes) => ty_eq_all(aes, bes)
-		_           => false
+		Ty.TTuple(bes) => ty_eq_all(aes, bes)
+		_ => false
 	}
 }
 
@@ -926,30 +947,30 @@ fn ty_eq_all(xs: list[Ty], ys: list[Ty]) -> bool {
 
 fn ty_name(t: Ty) -> str {
 	return match t {
-		TInt          => "int"
-		TFloat        => "float"
-		TStr          => "str"
-		TBool         => "bool"
-		TNil          => "nil"
-		TVoid         => "void"
-		TByte         => "byte"
-		TUint         => "uint"
-		TRune         => "rune"
-		TNamed(n)     => n
-		TList(e)      => f"list[{ty_name(e)}]"
-		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"
-		TChan(e, dir) => chan_ty_name(e, dir)
-		TEither(l, r) => either_name(l, r)
-		TOpt(e)       => f"{ty_name(e)}?"
-		TErr          => "Err"
-		TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
+		Ty.TInt          => "int"
+		Ty.TFloat        => "float"
+		Ty.TStr          => "str"
+		Ty.TBool         => "bool"
+		Ty.TNil          => "nil"
+		Ty.TVoid         => "void"
+		Ty.TByte         => "byte"
+		Ty.TUint         => "uint"
+		Ty.TRune         => "rune"
+		Ty.TNamed(n)     => n
+		Ty.TList(e)      => f"list[{ty_name(e)}]"
+		Ty.TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"
+		Ty.TChan(e, dir) => chan_ty_name(e, dir)
+		Ty.TEither(l, r) => either_name(l, r)
+		Ty.TOpt(e)       => f"{ty_name(e)}?"
+		Ty.TErr          => "Err"
+		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
 
 		# spelled, because a diagnostic that says "a ?" tells the reader nothing — and
 		# `print(a, b)` reaches one, since there is no two-argument `print` and the pair
 		# builds a tuple. Only TUnknown is left as `?`, which is the honest spelling of a
 		# type this compiler could not work out.
-		TTuple(es) => f"({ty_names(es)})"
-		_          => "?"
+		Ty.TTuple(es) => f"({ty_names(es)})"
+		_             => "?"
 	}
 }
 
@@ -960,22 +981,22 @@ fn ty_name(t: Ty) -> str {
 # ty_tuple_elems is a tuple's element types, or an empty list for anything else.
 fn ty_tuple_elems(t: Ty) -> list[Ty] {
 	return match t {
-		TTuple(es) => es
-		_          => []
+		Ty.TTuple(es) => es
+		_             => []
 	}
 }
 
 fn ty_is_chan(t: Ty) -> bool {
 	return match t {
-		TChan(_, _) => true
-		_           => false
+		Ty.TChan(_, _) => true
+		_ => false
 	}
 }
 
 fn ty_chan_elem(t: Ty) -> Ty {
 	return match t {
-		TChan(e, _) => e
-		_           => TUnknown
+		Ty.TChan(e, _) => e
+		_ => Ty.TUnknown
 	}
 }
 

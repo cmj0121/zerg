@@ -16,7 +16,7 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-`#[derive]` is the only decorator the compiler reads. Every other one — `#[dyn]`, `#[test]`,
+`#[derive]` and `#[obj]` are the decorators the compiler reads. Every other one — `#[test]`,
 `#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
@@ -25,10 +25,13 @@ is never silently ignored. Each decorator binds to the declaration that follows 
   **`Hash`**, **`Encode`** and **`Decode`**, each specified here and **[not yet]**: naming one is a clean
   refusal, _NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and
   `Decode` are specified and unbuilt_. There is **no auto-derived `Object`**. A user spec can never be
-  derived (`#[derive(MySpec)]` is a compile error). See **[Derive & Default Behavior](derive.md)**.
-- **`#[dyn]`** — on a generic `fn`. Compiles the generic to **one shared witness-table body** instead of
-  monomorphizing per type argument — trading zero-cost for smaller code, and letting the compiler cap
-  instantiation bloat. See **[Grammar](../surface/grammar.md)** (group 7).
+  derived **on a struct** (`#[derive(MySpec)]` there is a compile error); on an **`enum`** any spec may be,
+  because the generated impl is delegation to the payload rather than a reading of structure. See
+  **[Derive & Default Behavior](derive.md)**.
+- **`#[obj]`** — on a `spec`, no arguments. Generates a companion **struct of function values** and a
+  **generic wrap**, which is how a heterogeneous collection is written in a language where a spec is a bound
+  and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
+  See **[Specs & Generics](specs.md)**.
 - **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
   excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
   fails the test (see [Modules, Packages & Programs](../runtime/package.md) on where tests live).
@@ -47,7 +50,7 @@ is a "not yet supported" **compile error**, never a silent no-op:
   [Values & Memory](memory.md)). **[not yet]**
 
 > **[deviation]** The compiler does not distinguish a **recognized** decorator from an **unknown** one. Every
-> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[dyn]`, `#[test]` and
+> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[test]` and
 > the misspelled `#[frobnicate]` all get the same sentence — _NotImplemented: the decorator `#[X]` — this
 > compiler reads `#[derive(…)]` and no other_. Every one of them is refused, so nothing is silently dropped
 > and nothing miscompiles; what is lost is the distinction this section and **Reserved** below are built on.

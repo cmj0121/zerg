@@ -22,6 +22,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
+| [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性 |
 | [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help  |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                 |
 | [`testing`](#testing) | `import "testing"` | `#[test]` 函式用的斷言輔助         |
@@ -129,6 +130,20 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `parse_uint(s: str, base: int) -> uint` | `base` 的無號整數（可填滿最高位）       |
 | `to_string(n: int, base: int) -> str`   | 以 `base` 輸出 `n`，小寫，INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`，否則 `ValueError` |
+
+## `sha256`
+
+FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算子——沒有 libcrypto,也沒有 runtime leaf。
+`zerg build` 用它為每一個被快取的 object 命名。
+
+| 函式                           | 摘要                         |
+| ------------------------------ | ---------------------------- |
+| `sum(data: list[byte])`        | 32 bytes 的摘要              |
+| `hex(data: list[byte]) -> str` | 同一個摘要,64 個小寫十六進位 |
+
+它**不是 constant-time**,也不宣稱是。用它來「以內容為某個東西命名」、察覺檔案變了、或當 cache key;不要用它
+檢查密碼。`make sha256` 拿標準的 known-answer vectors 與系統工具(隨機輸入)來釘它——oracle 對它無效,因為兩個
+編譯器跑的是同一份原始碼。
 
 ## `time`
 

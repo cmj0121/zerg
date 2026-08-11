@@ -11,15 +11,27 @@
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
 
+匿名函式**可以省略參數型別,連帶省略回傳型別**——它們來自這個匿名函式被檢查時所對照的函式型別,也就是
+[carve-out (c)](../core/types.zh-TW.md)。每一個有型別的位置都供得出一個:宣告過型別的 binding、引數、
+`return`、struct 欄位、參數的預設值。
+
+```zerg
+    apply(fn (x) { return x + 1 }, 41)          # x 是 int,答案是 int
+    g: fn (int) -> int = fn (x) { return x * 2 }
+```
+
+寫出來的型別**贏**——`fn (x: str)` 放在 `fn (int) -> …` 的位置是一個指名兩個型別的型別錯誤,而不是被悄悄
+覆蓋掉的註記。而一個**遇不到**這種位置的 closure 無處可取,那是錯誤、不是猜測:`f := fn (x) { … }` 會報
+_the closure parameter `x` has no type, and this position gives it none_。
+
 > **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
 > 寫在它上一行的 `f := text.make` 會報 _module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條路
 > 上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
 >
-> **[not yet]** 型別引數只能**被推論**。在使用點顯式固定一個會被拒絕——`id[int](7)` 報 _NotImplemented: calling
-> index — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a
-> function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt_——因為一次呼叫的
-> callee 被 parse 成一個裸名字，index 運算式根本到不了呼叫那條路；三個看似無關的形式共用同一則拒絕就是這個
-> 緣故。從引數型別推論是做好的，也是今天實例化一個 generic 的唯一途徑。
+> **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
+> method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
+> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕。型別引數從引數型別
+> 推論,是今天實例化一個 generic 的唯一途徑。
 >
 > **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被 parser 拒絕：
 > `f: fn(mut &int) = bump` 報 _expected `,`, found `&`_，而 `GRAMMAR` 明明推導出
@@ -74,12 +86,18 @@ _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名�
 variadic。
 
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
-單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——是 **[not yet]**,
-連同 closure 的其餘部分；
-捕獲一個 **`mut`** binding 是 **[not yet]**——先把它快照成 immutable binding（`snap := n`）。捕獲在語意上是
+單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——**已經實作**:
+捕獲的名字會變成閉包隨身帶著的一個 per-site 環境,而值在**寫下閉包的地方**被複製進去。
+捕獲一個 **`mut`** binding 也已經實作,而且拿到的是**寫下閉包那一刻**該 binding 持有的值——之後對那個 binding 的
+寫入,透過閉包看不到。那正是「複製帶入」的意思,也正是這兩種情況不需要兩條規則的原因。捕獲在語意上是
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
-而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。因為每個捕獲都是
-immutable,retain 或 clone 都不可觀察。等價地說:
+而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
+
+> **[not yet]** 那個環境**永遠不會被釋放**。這個實作配置的其他每一個值都在造出它的 scope 被釋放,而閉包的不能——
+> 因為閉包可能活得比那個 scope 久,那正是「把值關進去」的意義。要正確釋放,fn value 必須自己帶 copy 與 drop
+> 函式,那是**型別**的改動而不是 lambda 的。在迴圈裡不斷造閉包的程式會長大。
+
+因為每個捕獲都是 immutable,retain 或 clone 都不可觀察。等價地說:
 
 > 一個閉包就是一個 scope-owned struct，它的欄位就是它的捕獲。
 
@@ -100,7 +118,7 @@ apply := fn(req: Request) -> Reply {
 
 兩個經典的閉包陷阱因此在結構上被排除。plain `for x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
 一份 copy），而 capture 是複製值——所以捕獲它的閉包保有**自己這一輪的值**，沒有共享 loop 變數的 bug、也不需快照
-（`for mut x` 這種就地形式是 `mut`，所以跟任何 `mut` 一樣不可捕獲——先快照）：
+（`for mut x` 這種就地形式是 `mut`，而 `mut` 也一樣是複製帶入——拿到的是寫下閉包那一刻的值）：
 
 ```text
 for x in xs {

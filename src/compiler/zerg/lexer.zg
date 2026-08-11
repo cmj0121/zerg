@@ -92,12 +92,26 @@ fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
 # The reason rides in the token's VALUE, which an Illegal has no other use for, and
 # `lex_diags` turns every one of them into a diagnostic with a place and a code.
 fn bad(mut &l: Lex, code: str, why: str, line: int, col: int, lexeme: str) -> Token {
-	return emit_val(l, Illegal, line, col, lexeme, f"{code} {why}")
+	return emit_val(l, Kind.Illegal, line, col, lexeme, f"{code} {why}")
 }
 
 fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
 	l.prev = k
 	return Token(k, lexeme, value, line, col)
+}
+
+# lex_code_end is where `bad` put the space, and it is the whole of the encoding: an Illegal
+# token has ONE spare field and a diagnostic wants two things out of it, so the code is
+# joined on the way in and cut off on the way out. Reading a code back out of a message
+# ANYWHERE ELSE would be the second copy `Diag.code` exists to prevent; here it is one
+# writer and one reader, a few lines apart.
+fn lex_code_end(b: list[byte]) -> int {
+	mut i := 0
+	for i < b.len() {
+		return i if b[i] == b' '
+		i = i + 1
+	}
+	return -1
 }
 
 # next returns the next token, inserting a ';' at a line break per the ASI rule and
@@ -111,7 +125,7 @@ fn next(mut &l: Lex) -> Token {
 			sline := l.line
 			scol := l.col
 			advance(l)
-			return emit(l, Semi, sline, scol, ";") if l.depth == 0 and ends_item(l.prev)
+			return emit(l, Kind.Semi, sline, scol, ";") if l.depth == 0 and ends_item(l.prev)
 		} else if c == b'#' {
 			return scan_token(l) if at(l, 1) == b'['
 			return scan_comment(l, l.line, l.col) if l.keep_trivia
@@ -121,7 +135,7 @@ fn next(mut &l: Lex) -> Token {
 			return scan_token(l)
 		}
 	}
-	return emit(l, Eof, l.line, l.col, "")
+	return emit(l, Kind.Eof, l.line, l.col, "")
 }
 
 fn skip_comment(mut &l: Lex) {
@@ -137,7 +151,7 @@ fn scan_comment(mut &l: Lex, sline: int, scol: int) -> Token {
 	for not eof(l) and at(l, 0) != byte(10) {
 		sb.append(advance(l))
 	}
-	return emit(l, Comment, sline, scol, str(sb))
+	return emit(l, Kind.Comment, sline, scol, str(sb))
 }
 
 fn scan_token(mut &l: Lex) -> Token {
@@ -152,13 +166,13 @@ fn scan_token(mut &l: Lex) -> Token {
 
 	if c == b'b' and at(l, 1) == b'\'' {
 		advance(l) # b
-		return scan_char_lit(l, Byte, true, sline, scol, soff)
+		return scan_char_lit(l, Kind.Byte, true, sline, scol, soff)
 	}
 
 	return scan_ident(l, sline, scol, soff) if ascii.is_alpha(c) or c == b'_'
 	return scan_number(l, sline, scol, soff) if ascii.is_digit(c)
 	return scan_string(l, sline, scol, soff) if c == b'"'
-	return scan_char_lit(l, Rune, false, sline, scol, soff) if c == b'\''
+	return scan_char_lit(l, Kind.Rune, false, sline, scol, soff) if c == b'\''
 	return scan_cmd(l, sline, scol, soff) if c == b'`'
 
 	if c == b'#' {
@@ -166,7 +180,7 @@ fn scan_token(mut &l: Lex) -> Token {
 		advance(l) # '#'
 		advance(l) # '['
 		l.depth = l.depth + 1
-		return emit(l, Hash, sline, scol, "#[")
+		return emit(l, Kind.Hash, sline, scol, "#[")
 	}
 	return scan_operator(l, sline, scol, soff)
 }
@@ -218,9 +232,9 @@ fn consume_based(mut &l: Lex, base: byte) {
 
 fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	# a number just after '.' is a bare decimal tuple index, never a float
-	if l.prev == Dot {
+	if l.prev == Kind.Dot {
 		consume_dec(l)
-		return emit(l, Int, sline, scol, lexeme_from(l, soff))
+		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 	if at(l, 0) == b'0' and (at(l, 1) == b'x' or at(l, 1) == b'o' or at(l, 1) == b'b') {
 		base := at(l, 1)
@@ -234,15 +248,15 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		digits := l.offs
 		consume_based(l, base)
 		return bad(l, "E108", "a based number needs at least one digit after its prefix", sline, scol, lexeme_from(l, soff)) if l.offs == digits
-		return emit(l, Int, sline, scol, lexeme_from(l, soff))
+		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 
 	consume_dec(l)
-	mut kind := Int
+	mut kind := Kind.Int
 
 	# fractional part: '.' immediately followed by a digit
 	if at(l, 0) == b'.' and ascii.is_digit(at(l, 1)) {
-		kind = Float
+		kind = Kind.Float
 		advance(l) # .
 		consume_dec(l)
 	}
@@ -251,7 +265,7 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	if at(l, 0) == b'e' or at(l, 0) == b'E' {
 		nx := at(l, 1)
 		if ascii.is_digit(nx) or (nx == b'+' or nx == b'-') and ascii.is_digit(at(l, 2)) {
-			kind = Float
+			kind = Kind.Float
 			advance(l) # e/E
 			if at(l, 0) == b'+' or at(l, 0) == b'-' {
 				advance(l)
@@ -366,6 +380,15 @@ fn eat_to_quote(mut &l: Lex, q: byte) {
 # literal. The noun names the literal form, as the seed's message does.
 fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
 	eat_to_quote(l, q)
+	return bad_escape_here(l, noun, sline, scol, soff)
+}
+
+# bad_escape_here is the SENTENCE, for a caller that has already recovered by itself: a
+# triple-quoted string ends at `"""` rather than at a line break, so it walks its own way out
+# and then says the same thing. One rule reported from two places is two rules wearing one
+# code, and this was one — the gate that says so could not see it until a code moved out of a
+# message and into an argument.
+fn bad_escape_here(mut &l: Lex, noun: str, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, "E109", f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
@@ -392,7 +415,7 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 	}
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # has_nul is the seed's NUL rule: a Zerg str is text, and the bridge that makes one refuses
@@ -465,7 +488,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 		}
 	}
-	return emit_val(l, FStr, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, Kind.FStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # copy_escape copies a backslash escape through VERBATIM, so the parser decodes it with the
@@ -526,7 +549,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 					}
 					advance(l)
 				}
-				return bad(l, "E109", "invalid escape in a string literal", sline, scol, lexeme_from(l, soff))
+				return bad_escape_here(l, "string", sline, scol, soff)
 			}
 			for e in utf8_encode(v) {
 				sb.append(e)
@@ -536,7 +559,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 	}
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -551,7 +574,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	}
 	advance(l) # closing "
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, RawStr, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, Kind.RawStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # scan_char_lit scans a single-quoted rune or byte literal; the cursor sits on the
@@ -620,7 +643,7 @@ fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 		sb.append(advance(l))
 	}
-	return emit_val(l, Cmd, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, Kind.Cmd, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # --- operators and punctuation -------------------------------------------------
@@ -639,102 +662,102 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	c := advance(l)
 	two := at(l, 0)
 	if c == b'+' {
-		return op(l, PlusMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Plus, sline, scol, soff, 0)
+		return op(l, Kind.PlusMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, Kind.Plus, sline, scol, soff, 0)
 	}
 	if c == b'-' {
-		return op(l, MinusMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Arrow, sline, scol, soff, 1) if two == b'>'
+		return op(l, Kind.MinusMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, Kind.Arrow, sline, scol, soff, 1) if two == b'>'
 
-		return op(l, Minus, sline, scol, soff, 0)
+		return op(l, Kind.Minus, sline, scol, soff, 0)
 	}
 	if c == b'*' {
-		return op(l, StarMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Star, sline, scol, soff, 0)
+		return op(l, Kind.StarMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, Kind.Star, sline, scol, soff, 0)
 	}
 
 	# `//` is floor division, not a comment: a Zerg comment starts with '#'.
 	if c == b'/' {
-		return op(l, SlashDiv, sline, scol, soff, 1) if two == b'/'
-		return op(l, Slash, sline, scol, soff, 0)
+		return op(l, Kind.SlashDiv, sline, scol, soff, 1) if two == b'/'
+		return op(l, Kind.Slash, sline, scol, soff, 0)
 	}
 
-	return op(l, Percent, sline, scol, soff, 0) if c == b'%'
-	return op(l, Amp, sline, scol, soff, 0) if c == b'&'
-	return op(l, Pipe, sline, scol, soff, 0) if c == b'|'
-	return op(l, Caret, sline, scol, soff, 0) if c == b'^'
-	return op(l, Tilde, sline, scol, soff, 0) if c == b'~'
+	return op(l, Kind.Percent, sline, scol, soff, 0) if c == b'%'
+	return op(l, Kind.Amp, sline, scol, soff, 0) if c == b'&'
+	return op(l, Kind.Pipe, sline, scol, soff, 0) if c == b'|'
+	return op(l, Kind.Caret, sline, scol, soff, 0) if c == b'^'
+	return op(l, Kind.Tilde, sline, scol, soff, 0) if c == b'~'
 
 	if c == b'<' {
-		return op(l, Shl, sline, scol, soff, 1) if two == b'<'
-		return op(l, Le, sline, scol, soff, 1) if two == b'='
-		return op(l, LArrow, sline, scol, soff, 1) if two == b'-'
+		return op(l, Kind.Shl, sline, scol, soff, 1) if two == b'<'
+		return op(l, Kind.Le, sline, scol, soff, 1) if two == b'='
+		return op(l, Kind.LArrow, sline, scol, soff, 1) if two == b'-'
 
-		return op(l, Lt, sline, scol, soff, 0)
+		return op(l, Kind.Lt, sline, scol, soff, 0)
 	}
 	if c == b'>' {
-		return op(l, Shr, sline, scol, soff, 1) if two == b'>'
-		return op(l, Ge, sline, scol, soff, 1) if two == b'='
+		return op(l, Kind.Shr, sline, scol, soff, 1) if two == b'>'
+		return op(l, Kind.Ge, sline, scol, soff, 1) if two == b'='
 
-		return op(l, Gt, sline, scol, soff, 0)
+		return op(l, Kind.Gt, sline, scol, soff, 0)
 	}
 	if c == b'=' {
-		return op(l, EqEq, sline, scol, soff, 1) if two == b'='
-		return op(l, FatArrow, sline, scol, soff, 1) if two == b'>'
+		return op(l, Kind.EqEq, sline, scol, soff, 1) if two == b'='
+		return op(l, Kind.FatArrow, sline, scol, soff, 1) if two == b'>'
 
-		return op(l, Assign, sline, scol, soff, 0)
+		return op(l, Kind.Assign, sline, scol, soff, 0)
 	}
 	if c == b'!' {
-		return op(l, Ne, sline, scol, soff, 1) if two == b'='
-		return op(l, Bang, sline, scol, soff, 0)
+		return op(l, Kind.Ne, sline, scol, soff, 1) if two == b'='
+		return op(l, Kind.Bang, sline, scol, soff, 0)
 	}
 	if c == b':' {
-		return op(l, Walrus, sline, scol, soff, 1) if two == b'='
-		return op(l, Colon, sline, scol, soff, 0)
+		return op(l, Kind.Walrus, sline, scol, soff, 1) if two == b'='
+		return op(l, Kind.Colon, sline, scol, soff, 0)
 	}
 	if c == b'?' {
-		return op(l, Coalesce, sline, scol, soff, 1) if two == b'?'
-		return op(l, OptDot, sline, scol, soff, 1) if two == b'.'
+		return op(l, Kind.Coalesce, sline, scol, soff, 1) if two == b'?'
+		return op(l, Kind.OptDot, sline, scol, soff, 1) if two == b'.'
 
-		return op(l, Question, sline, scol, soff, 0)
+		return op(l, Kind.Question, sline, scol, soff, 0)
 	}
 	if c == b'.' {
 		if two == b'.' {
-			return op(l, DotDotEq, sline, scol, soff, 2) if at(l, 1) == b'='
-			return op(l, DotDot, sline, scol, soff, 1)
+			return op(l, Kind.DotDotEq, sline, scol, soff, 2) if at(l, 1) == b'='
+			return op(l, Kind.DotDot, sline, scol, soff, 1)
 		}
-		return op(l, Dot, sline, scol, soff, 0)
+		return op(l, Kind.Dot, sline, scol, soff, 0)
 	}
-	return op(l, Comma, sline, scol, soff, 0) if c == b','
+	return op(l, Kind.Comma, sline, scol, soff, 0) if c == b','
 	if c == b'(' {
 		l.depth = l.depth + 1
-		return op(l, LParen, sline, scol, soff, 0)
+		return op(l, Kind.LParen, sline, scol, soff, 0)
 	}
 	if c == b')' {
 		if l.depth > 0 {
 			l.depth = l.depth - 1
 		}
-		return op(l, RParen, sline, scol, soff, 0)
+		return op(l, Kind.RParen, sline, scol, soff, 0)
 	}
 	if c == b'[' {
 		l.depth = l.depth + 1
-		return op(l, LBrack, sline, scol, soff, 0)
+		return op(l, Kind.LBrack, sline, scol, soff, 0)
 	}
 	if c == b']' {
 		if l.depth > 0 {
 			l.depth = l.depth - 1
 		}
-		return op(l, RBrack, sline, scol, soff, 0)
+		return op(l, Kind.RBrack, sline, scol, soff, 0)
 	}
 	if c == b'{' {
 		brace_push(l)
-		return op(l, LBrace, sline, scol, soff, 0)
+		return op(l, Kind.LBrace, sline, scol, soff, 0)
 	}
 	if c == b'}' {
 		brace_pop(l)
-		return op(l, RBrace, sline, scol, soff, 0)
+		return op(l, Kind.RBrace, sline, scol, soff, 0)
 	}
-	return op(l, Semi, sline, scol, soff, 0) if c == b';'
+	return op(l, Kind.Semi, sline, scol, soff, 0) if c == b';'
 	return bad(l, "E104", "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 
@@ -777,8 +800,10 @@ fn tokenize(src: str) -> list[Token] {
 pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	mut out: list[Diag] = []
 	for t in tokenize(src) {
-		if t.kind == Illegal {
-			out.append(Diag(path, t.line, t.col, t.value, ""))
+		if t.kind == Kind.Illegal {
+			b := bytearray(t.value)
+			at := lex_code_end(b)
+			out.append(Diag(path, t.line, t.col, fstr_slice(b, 0, at), fstr_slice(b, at + 1, b.len()), ""))
 		}
 	}
 	return out
@@ -789,8 +814,8 @@ pub fn tokenize_trivia(src: str) -> list[Token] {
 }
 
 fn lex_with(src: str, keep: bool) -> list[Token] {
-	b := list[byte](src)
-	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Semi, keep)
+	b := bytearray(src)
+	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Kind.Semi, keep)
 	mut out: list[Token] = []
 	for true {
 		t := next(l)
@@ -802,8 +827,8 @@ fn lex_with(src: str, keep: bool) -> list[Token] {
 
 fn is_eof(k: Kind) -> bool {
 	return match k {
-		Eof => true
-		_   => false
+		Kind.Eof => true
+		_        => false
 	}
 }
 
@@ -839,7 +864,7 @@ fn rune_len(b0: byte) -> int {
 	return 1
 }
 
-# rune_value is the code point a rune literal holds. It DELEGATES: `list[rune](s)` is the
+# rune_value is the code point a rune literal holds. It DELEGATES: `runearray(s)` is the
 # runtime's decoder (zrt_str_runes), which is the one the emitted programs use and the one
 # that rejects overlongs and surrogates. A hand-rolled continuation-byte fold here would be
 # a third UTF-8 decoder, one call away from the audited one, silently accepting what it
@@ -848,7 +873,7 @@ fn rune_len(b0: byte) -> int {
 # A rune literal is exactly one code point by construction, the scanner having already
 # refused a literal holding more.
 pub fn rune_value(text: str) -> int {
-	rs := list[rune](text)
+	rs := runearray(text)
 	return 0 if rs.len() == 0
 
 	return int(rs[0])
@@ -867,7 +892,7 @@ pub fn int_fits(lex: str) -> bool {
 # token — so -1 is not a value this can otherwise return, and one scan answers both
 # questions above.
 fn int_scan(lex: str) -> int {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	n := b.len()
 	mut base := 10
 	mut start := 0
@@ -931,7 +956,7 @@ pub fn uint_value(lex: str) -> uint {
 # would be reading a number that has already wrapped, and here it would also abort, since the
 # compiler's own arithmetic is checked.
 pub fn uint_scan(lex: str) -> UintLit {
-	b := list[byte](lex)
+	b := bytearray(lex)
 	n := b.len()
 	mut base := uint(10)
 	mut start := 0
@@ -969,22 +994,22 @@ pub fn uint_scan(lex: str) -> UintLit {
 # value), 0 -> the bare kind name.
 fn token_category(k: Kind) -> int {
 	return match k {
-		Int       => 1
-		Float     => 1
-		Ident     => 1
-		Str       => 2
-		FStr      => 2
-		RawStr    => 2
-		Rune      => 2
-		Byte      => 2
-		Cmd       => 2
-		FStrBegin => 2
-		FStrText  => 2
-		FCmdBegin => 2
-		FCmdText  => 2
-		Conv      => 2
-		FmtSpec   => 2
-		_         => 0
+		Kind.Int => 1
+		Kind.Float => 1
+		Kind.Ident => 1
+		Kind.Str => 2
+		Kind.FStr => 2
+		Kind.RawStr => 2
+		Kind.Rune => 2
+		Kind.Byte => 2
+		Kind.Cmd => 2
+		Kind.FStrBegin => 2
+		Kind.FStrText => 2
+		Kind.FCmdBegin => 2
+		Kind.FCmdText => 2
+		Kind.Conv => 2
+		Kind.FmtSpec => 2
+		_ => 0
 	}
 }
 
@@ -998,7 +1023,7 @@ fn token_category(k: Kind) -> int {
 fn quote(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		v := int(c)
 		if v == 34 {
 			out.append(byte(92))
@@ -1055,7 +1080,7 @@ pub fn dump_tokens(src: str) -> str {
 		line := strconv.to_string(t.line, 10)
 		col := strconv.to_string(t.col, 10)
 		s := f"{line}:{col}\t{render_token(t)}\n"
-		for c in list[byte](s) {
+		for c in bytearray(s) {
 			out.append(c)
 		}
 		i = i + 1

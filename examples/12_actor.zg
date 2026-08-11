@@ -38,8 +38,8 @@ fn counter(inbox: <-chan[Cmd]) {
 	# drains until the last sender leaves
 	for cmd in inbox {
 		n = match cmd {
-			Add(d)   => n + d
-			Get(rep) => answer(rep, n)
+			Cmd.Add(d)   => n + d
+			Cmd.Get(rep) => answer(rep, n)
 		}
 	}
 }
@@ -48,12 +48,12 @@ fn main() {
 	inbox := chan[Cmd](4)
 	spawn counter(inbox)
 
-	inbox <- Add(5)
-	inbox <- Add(7)
+	inbox <- Cmd.Add(5)
+	inbox <- Cmd.Add(7)
 
 	# ask: a fresh reply channel goes in with the message, and `rep` narrows to
 	# send-only on the way — the caller keeps the receive end it blocks on.
 	rep := chan[int](1)
-	inbox <- Get(rep)
+	inbox <- Cmd.Get(rep)
 	print (<-rep)!
 }

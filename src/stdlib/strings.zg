@@ -3,7 +3,7 @@
 # Bundled into a program that writes `import "strings"`; members are reached through
 # the namespace, as `strings.split(line, ",")` or `strings.join(parts, "/")`. Every
 # function here is ordinary safe Zerg — it decodes the str to its bytes with the
-# `list[byte](s)` built-in, works at the byte level, and rebuilds a str with `str(bs)`.
+# `bytearray(s)` built-in, works at the byte level, and rebuilds a str with `str(bs)`.
 # There is no foreign binding: Zerg is zero-external-dependency like Go.
 #
 # Byte-level search is UTF-8 correct: UTF-8 is self-synchronising, so a valid str
@@ -30,21 +30,21 @@ fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
 
 # has_prefix reports whether s begins with prefix. An empty prefix is always a prefix.
 pub fn has_prefix(s: str, prefix: str) -> bool {
-	return match_at(list[byte](s), list[byte](prefix), 0)
+	return match_at(bytearray(s), bytearray(prefix), 0)
 }
 
 # has_suffix reports whether s ends with suffix. An empty suffix is always a suffix.
 pub fn has_suffix(s: str, suffix: str) -> bool {
-	hay := list[byte](s)
-	suf := list[byte](suffix)
+	hay := bytearray(s)
+	suf := bytearray(suffix)
 	return match_at(hay, suf, hay.len() - suf.len())
 }
 
 # index_of returns the BYTE offset of the first occurrence of sub in s, or -1 when sub
 # is absent. An empty sub is found at 0. The offset is a byte index, not a rune count.
 pub fn index_of(s: str, sub: str) -> int {
-	hay := list[byte](s)
-	nee := list[byte](sub)
+	hay := bytearray(s)
+	nee := bytearray(sub)
 	n := hay.len()
 	mut i := 0
 	for i <= n {
@@ -63,8 +63,8 @@ pub fn contains(s: str, sub: str) -> bool {
 # occurrences (so N separators yield N+1 pieces, and a piece may be empty). Splitting on
 # an empty separator raises ValueError — demote it with `guard { strings.split(s, x) }`.
 pub fn split(s: str, sep: str) -> list[str] {
-	hay := list[byte](s)
-	sepb := list[byte](sep)
+	hay := bytearray(s)
+	sepb := bytearray(sep)
 	m := sepb.len()
 	raise "strings.split: empty separator" if m == 0
 
@@ -91,7 +91,7 @@ pub fn split(s: str, sep: str) -> list[str] {
 # accumulates in a byte list (decoding sep once) so the whole build is linear, not the
 # quadratic re-copy a chain of `+` concatenations would cost.
 pub fn join(parts: list[str], sep: str) -> str {
-	sepb := list[byte](sep)
+	sepb := bytearray(sep)
 	mut out: list[byte] = []
 	n := parts.len()
 	mut i := 0
@@ -101,7 +101,7 @@ pub fn join(parts: list[str], sep: str) -> str {
 				out.append(c)
 			}
 		}
-		for c in list[byte](parts[i]) {
+		for c in bytearray(parts[i]) {
 			out.append(c)
 		}
 		i = i + 1
@@ -115,7 +115,7 @@ pub fn join(parts: list[str], sep: str) -> str {
 pub fn repeat(s: str, count: int) -> str {
 	raise "strings.repeat: negative count" if count < 0
 
-	sb := list[byte](s)
+	sb := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < count {
@@ -144,7 +144,7 @@ fn slice_str(b: list[byte], lo: int, hi: int) -> str {
 # trim removes leading and trailing ASCII whitespace (the `ascii.is_space` set — space,
 # tab, LF, VT, FF, CR) from s.
 pub fn trim(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	n := b.len()
 	mut lo := 0
 	for lo < n and ascii.is_space(b[lo]) {
@@ -162,7 +162,7 @@ pub fn trim(s: str) -> str {
 # `ascii.fold_upper`.
 pub fn to_upper(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		out.append(ascii.fold_upper(c))
 	}
 	return str(out)
@@ -173,7 +173,7 @@ pub fn to_upper(s: str) -> str {
 # `ascii.fold_lower`.
 pub fn to_lower(s: str) -> str {
 	mut out: list[byte] = []
-	for c in list[byte](s) {
+	for c in bytearray(s) {
 		out.append(ascii.fold_lower(c))
 	}
 	return str(out)
@@ -182,8 +182,8 @@ pub fn to_lower(s: str) -> str {
 # count returns the number of non-overlapping occurrences of sub in s. An empty sub
 # raises ValueError.
 pub fn count(s: str, sub: str) -> int {
-	hay := list[byte](s)
-	nee := list[byte](sub)
+	hay := bytearray(s)
+	nee := bytearray(sub)
 	m := nee.len()
 	raise "strings.count: empty substring" if m == 0
 
@@ -204,12 +204,12 @@ pub fn count(s: str, sub: str) -> int {
 # replace returns s with every non-overlapping occurrence of old replaced by new,
 # scanning left to right. An empty old raises ValueError.
 pub fn replace(s: str, old: str, new: str) -> str {
-	oldb := list[byte](old)
+	oldb := bytearray(old)
 	m := oldb.len()
 	raise "strings.replace: empty target" if m == 0
 
-	hay := list[byte](s)
-	newb := list[byte](new)
+	hay := bytearray(s)
+	newb := bytearray(new)
 	n := hay.len()
 	mut out: list[byte] = []
 	mut i := 0
@@ -231,8 +231,8 @@ pub fn replace(s: str, old: str, new: str) -> str {
 # prefix, s is returned unchanged. It decodes s and prefix once and checks with match_at
 # directly (rather than re-decoding through has_prefix).
 pub fn trim_prefix(s: str, prefix: str) -> str {
-	b := list[byte](s)
-	p := list[byte](prefix)
+	b := bytearray(s)
+	p := bytearray(prefix)
 	return s if not match_at(b, p, 0)
 
 	return slice_str(b, p.len(), b.len())
@@ -242,8 +242,8 @@ pub fn trim_prefix(s: str, prefix: str) -> str {
 # suffix, s is returned unchanged. It decodes s and suffix once and checks with match_at
 # directly (rather than re-decoding through has_suffix).
 pub fn trim_suffix(s: str, suffix: str) -> str {
-	b := list[byte](s)
-	sf := list[byte](suffix)
+	b := bytearray(s)
+	sf := bytearray(suffix)
 	hi := b.len() - sf.len()
 	return s if not match_at(b, sf, hi)
 
@@ -254,7 +254,7 @@ pub fn trim_suffix(s: str, suffix: str) -> str {
 # (so leading, trailing, and repeated whitespace never yield an empty field). An all-
 # whitespace or empty s yields an empty list.
 pub fn fields(s: str) -> list[str] {
-	b := list[byte](s)
+	b := bytearray(s)
 	n := b.len()
 	mut out: list[str] = []
 	mut cur: list[byte] = []
@@ -280,8 +280,8 @@ pub fn fields(s: str) -> list[str] {
 # sub is absent. An empty sub is found at the end, which is where the last one is — the
 # mirror of index_of finding it at 0.
 pub fn last_index_of(s: str, sub: str) -> int {
-	hay := list[byte](s)
-	nee := list[byte](sub)
+	hay := bytearray(s)
+	nee := bytearray(sub)
 	mut i := hay.len() - nee.len()
 	for i >= 0 {
 		return i if match_at(hay, nee, i)
@@ -293,7 +293,7 @@ pub fn last_index_of(s: str, sub: str) -> int {
 # trim_left removes leading ASCII whitespace only; trim_right removes trailing only.
 # `trim` is both, and is the one to reach for unless a side matters.
 pub fn trim_left(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	n := b.len()
 	mut lo := 0
 	for lo < n and ascii.is_space(b[lo]) {
@@ -303,7 +303,7 @@ pub fn trim_left(s: str) -> str {
 }
 
 pub fn trim_right(s: str) -> str {
-	b := list[byte](s)
+	b := bytearray(s)
 	mut hi := b.len()
 	for hi > 0 and ascii.is_space(b[hi - 1]) {
 		hi = hi - 1
@@ -315,8 +315,8 @@ pub fn trim_right(s: str) -> str {
 # to_lower(b)`: that builds two strings to answer a question about bytes, and it stops at
 # the first difference rather than after two allocations.
 pub fn equal_fold(a: str, b: str) -> bool {
-	x := list[byte](a)
-	y := list[byte](b)
+	x := bytearray(a)
+	y := bytearray(b)
 	return false if x.len() != y.len()
 
 	mut i := 0
@@ -351,9 +351,9 @@ pub fn pad_end(s: str, width: int, fill: str) -> str {
 # pad_count validates the fill and answers how many of it are missing — never negative, so
 # a string already at or past the width pads with none.
 fn pad_count(s: str, width: int, fill: str) -> int {
-	raise "strings.pad: the fill is one byte" if list[byte](fill).len() != 1
+	raise "strings.pad: the fill is one byte" if bytearray(fill).len() != 1
 
-	n := width - list[byte](s).len()
+	n := width - bytearray(s).len()
 	return 0 if n < 0
 
 	return n

@@ -36,9 +36,11 @@ boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
   wrap (opt into roll-over with `+%`/`-%`/`*%`, below).
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
-- **`str` iterates as `rune` and is not indexable** — convert it to `list[byte]` (see
-  [Collections](../code/collections.md)) when you want raw bytes (or
-  binary that may contain a NUL, which a `str` never holds).
+- **`str` iterates as `rune` and is not indexable** — convert it with **`bytearray(s)`** when you want
+  raw bytes (or binary that may contain a NUL, which a `str` never holds), or **`runearray(s)`** for its
+  code points. Each names the list it builds — `bytearray` **is** `list[byte]` and `runearray` **is**
+  `list[rune]`, the same type under a shorter name, interchangeable with the spelled-out form everywhere
+  and **not** a strong typedef (see [Collections](../code/collections.md)).
 - **A `rune`'s values are not a range**, which makes it the one scalar whose bound is a
   **predicate**: a code point is `0..=0x10FFFF` **minus** the UTF-16 surrogates `0xD800..=0xDFFF`, which
   are not characters. So `rune(0xD800)` raises `OverflowError` even though the number fits the type's
@@ -124,7 +126,7 @@ that does not fit its position is refused, and the fix is the **written** conver
 
 **A carrier does not end a position — it moves it one level in.** Where the declared type is a `T?`, a
 `Result[T]` or an `Either[X, Y]`, what meets a value is the **payload**, and the payload is the same
-position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Left(e)` puts it at
+position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Either.Left(e)` puts it at
 the `return`'s. Every rule below reads `T` there, never the wrapper.
 
 The list grew one silent miscompile at a time — each position the compiler had not yet been told about
@@ -138,6 +140,34 @@ followed by `b + 300` is a compile error: `300` is not a value of `byte`, so it 
 is left is a `byte` beside an `int` — two types, no expression. It used to retype the whole expression to
 `int` and write `301`, which made the operand slot the one position where a literal escaped the range it
 was supposed to be measured against.
+
+### Where a type flows in — the four carve-outs
+
+Types are worked out **bottom-up**: an expression's type comes from its parts. Four carve-outs, and
+**only** these four, let a declared type flow the other way — into an expression that cannot speak for
+itself:
+
+- **(a) a literal's type.** An **untyped literal** adopts the type of the position it lands in, and is
+  computed in it (Numeric literals, below).
+- **(b) a composite's type.** A **composite literal with nothing to speak for it** — `[]`, `{:}`, and the
+  fill form `[v; N]` choosing between a `list` and a `[T; N]` array.
+- **(c) a closure's parameter types.** A closure's **omitted `: type`**, taken from the function type it
+  is checked against; one that never meets an expected type is an error.
+- **(d) a carrier's payload type.** A value, an `Err` or `nil` entering a `T?`, `Result[T]` or
+  `Either[X, Y]` — the payload is the same position, one level in.
+
+A **value generic** is not a fifth: a function's `N` is inferred **from** an argument's type
+(`fn sum[N: int](xs: [int; N])`), which runs the same direction as everything else here.
+
+**Four, and only four**, is checked rather than asserted: `make layering` holds the seed's bidirectional
+checker to exactly this list — every node kind it pushes a wanted type into, and no other — and holds
+`zerg`'s inference family to taking no wanted type at all. A fifth carve-out cannot be added without the
+gate naming it.
+
+The rule above holds at every position: **a position wraps a value, it never converts one.** So
+conversion is **not a fifth carve-out** — each of these decides a type the expression **does not have
+yet**, where a conversion would change one it already has, and the fix for a value that does not fit
+stays the written `T(x)` (Type Conversion, below).
 
 ### Numeric literals
 

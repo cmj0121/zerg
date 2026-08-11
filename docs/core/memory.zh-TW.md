@@ -85,6 +85,12 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
+> **[deviation]** 進入 **carrier** 的 reference-counted 值——channel 接收回傳的 `T?`、`Result[T]`——
+> **永遠不會被釋放**。drop 是有的、只是沒有人呼叫它:carrier 沒有 copy helper,所以登記那個 drop 會讓
+> 「同一個值的兩個名字」各還一次。凡是 refcount 過的東西跨越 `chan[T]` 都會漏掉一個 reference——`chan[int]`
+> 看不出來,`chan[str]` 是真的——由 `test-data/codegen/chan_str_shared.zg`(這棵樹裡第一支送 `str` 的程式)
+> 在 LeakSanitizer 下量到。
+
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
 遞迴** binding 的自動裝箱 cell：
@@ -106,12 +112,6 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 **聚合體內部**也被釘住：一個 `struct` 的欄位與一個 `enum` payload 的槽依**宣告的逆序**釋放。一個
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
 **後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
-
-> **[not yet]** 一個裸的 `{ … }` block 當作**述句**會被指名拒絕——
-> _NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing
-> function's scope, so a block of its own would not free anything at its `}`_——而那句訊息同時也是原因:binding 拿到
-> 的是函式的 scope、不是 block 的。所以「block 退出」永遠指的是一個函式、一個迴圈 body、或一個 arm 的退出,絕不是
-> 程式自己開出來的 scope,而下面那個 `defer` 的例子寫的是編譯器讀不了的形式。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 
@@ -208,9 +208,14 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
 `defer`；會 → `Ref[T]`。**
 
-一個 **`with` block** 把這種資源綁進一段語彙區間、在 block 退出時跑它的釋放。今天它僅限於 **Ref-bearing** 資源
-（一個 `chan` 或一個 `Ref[T]`）；`with` 施於一個一般的 `Scoped` 值是 **[not yet]**。
+一個 **`with` block** 把這種資源綁進一段語彙區間——而它是那個本來就會這麼做的裸 block 的**純語法** sugar:
+`with acquire() as y { … }` 就是 `{ y := acquire(); … }`,而無名的 `with e { … }` 仍然會綁定,綁到一個只有編譯器
+會寫的名字上,因為 `e; …` 會讓值死在該敘述而不是 `}`。它**不引入第四種機制**:跑釋放的是上面那條軸線,未變,
+而那條軸線本來就涵蓋每一條離開路徑,包括 abort。
 
-> **[not yet]** `with … as` 會被直接拒絕,就在關鍵字上:_NotImplemented: with_。所以上面那句限定,講的是一個編譯器
-> 根本沒讀過去的構造上的限制——兩半都尚未建置,Ref-bearing 的那個案例與一般 `Scoped` 的那個一樣,而今天要把一個資源
-> 綁進一段區間,只能親手寫那個 `defer`。
+一個資源如果它的釋放是**某人必須記得呼叫的方法**,那它根本不是 `with` 的案例——它是一個 `defer`,寫出來,
+寫在 `with` 剛剛打開的那個 block 裡。
+
+`with` **已經實作**,而且就是上面那條展開式、沒有別的:一個 block、一個 binding,以及 body 自己寫的那個
+`defer`。它本身不帶任何 teardown——一個 `with` 之所以會釋放東西,是因為 body 裡有 `defer` 這麼說,或因為那個值
+本來就像其他值一樣是 scope-owned 的。`examples/18_scoped.zg` 就是隨貨附上的示範。

@@ -76,7 +76,6 @@ const (
 	Chan
 	Type
 	Impl
-	Package
 	Init
 	Defer
 	Del
@@ -164,7 +163,7 @@ var names = map[Kind]string{
 	Not: "not", Is: "is", This: "this", As: "as", Pub: "pub", Import: "import",
 	From: "from", Match: "match", Spawn: "spawn", Select: "select", Struct: "struct",
 	Enum: "enum", Spec: "spec", Chan: "chan", Type: "type", Impl: "impl",
-	Package: "package", Init: "init", Defer: "defer", Del: "del", Raise: "raise",
+	Init: "init", Defer: "defer", Del: "del", Raise: "raise",
 	Guard: "guard", With: "with", Unsafe: "unsafe", Ptr: "ptr", Asm: "asm",
 
 	Plus: "+", Minus: "-", Star: "*", Slash: "/", SlashDiv: "//", Percent: "%",
@@ -185,7 +184,7 @@ var keywords = map[string]Kind{
 	"not": Not, "is": Is, "this": This, "as": As, "pub": Pub, "import": Import,
 	"from": From, "match": Match, "spawn": Spawn, "select": Select, "struct": Struct,
 	"enum": Enum, "spec": Spec, "chan": Chan, "type": Type, "impl": Impl,
-	"package": Package, "init": Init, "defer": Defer, "del": Del, "raise": Raise,
+	"init": Init, "defer": Defer, "del": Del, "raise": Raise,
 	"guard": Guard, "with": With, "unsafe": Unsafe, "ptr": Ptr, "asm": Asm,
 }
 

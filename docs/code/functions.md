@@ -8,23 +8,37 @@ A function is a **first-class value**: it has a type, and can be passed as an ar
 stored in a field, and bound to a variable. This holds **across modules** too — a function named through
 another module is an ordinary value: `f := other.helper` binds it, then `f(x)` calls it, exactly as for a
 local function. A **generic** function is **not first-class until instantiated**: the un-instantiated
-generic name is not itself a value — it becomes one only once its type arguments are fixed at a use site.
+generic name is not itself a value — it becomes one only once its type arguments are **inferred** at a
+use site.
 A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
 differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
 anonymous function.
 
+An **anonymous function may omit its parameter types, and its return type with them** — they come from the
+function type it is checked against, which is [carve-out (c)](../core/types.md). Every typed position
+supplies one: a declared binding, an argument, a `return`, a struct field, a parameter's default.
+
+```zerg
+    apply(fn (x) { return x + 1 }, 41)          # x is int, the answer is int
+    g: fn (int) -> int = fn (x) { return x * 2 }
+```
+
+A written type **wins** — `fn (x: str)` at a `fn (int) -> …` position is a type error naming both, not an
+annotation quietly overruled. And a closure that meets **no** such position has nowhere to take them from,
+which is an error rather than a guess: `f := fn (x) { … }` reports _the closure parameter `x` has no type,
+and this position gives it none_.
+
 > **[not yet]** The value stops at the module boundary. A function named through another module is a **call
 > target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _module `text` has no
 > `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path
 > never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
-> **[not yet]** Two of the three forms that share the indexed-callee shape are still unbuilt: a call through
-> a function VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. An explicit type
-> argument — `id[int](7)` — is built: the parser recovers it where the base and the bracket are both still in
-> hand, and a written argument on a name that is not generic is a checked rule with a place rather than a
-> silently swallowed bracket.
+> **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
+> VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
+> language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
+> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
 > **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,
@@ -91,13 +105,22 @@ already taken for formatting; `print` stays a built-in construct, not a user-def
 
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
 an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
-boxed value) — is **[not yet]**, along with the rest of closures; capturing a **`mut`** binding is
-**[not yet]** too — snapshot it into an
-immutable binding first (`snap := n`). Capture is **by copy** in meaning — a captured channel is
+boxed value) — is built: the captures become a per-site environment the closure carries, and the values are
+copied in where they are written. Capturing a **`mut`** binding is built too, and it takes the value the
+binding held **at the point the closure was written** — a later write to that binding is not visible through
+the closure, which is what "copied in" means and why the two cases need no different rule. Capture is **by
+copy** in meaning — a captured channel is
 refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
-carries its own captures and can never dangle. Because every capture is immutable, retaining versus cloning
-is unobservable. Equivalently:
+carries its own captures and can never dangle.
+
+> **[not yet]** The environment is **never freed**. Every other value this implementation allocates is
+> released at the scope that made it; a closure's cannot be, because the closure may outlive that scope —
+> which is what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
+> functions of its own, which is a change to the type rather than to the lambda. A program that makes
+> closures in a loop grows.
+
+Because every capture is immutable, retaining versus cloning is unobservable. Equivalently:
 
 > A closure is a scope-owned struct whose fields are its captures.
 
@@ -120,7 +143,8 @@ apply := fn(req: Request) -> Reply {
 Two classic closure hazards are ruled out by construction. A plain `for x in xs` variable is a **fresh
 immutable binding each iteration** (a copy of that element), and a capture copies the value — so a closure
 capturing it keeps **its own iteration's value**, no shared-loop-var bug and no snapshot needed (a
-`for mut x`, the in-place form, is `mut` and so, like any `mut`, uncapturable — snapshot it first):
+`for mut x`, the in-place form, is `mut` — and a `mut` is copied in the same way, so what the closure holds
+is the value at the point it was written):
 
 ```text
 for x in xs {

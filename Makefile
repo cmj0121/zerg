@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all ci clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -387,6 +387,22 @@ desugar:                        # a program and the same program desugared do th
 	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
 	@./scripts/desugar-golden.sh
 
+# The whole board, natively. `linux-ci` runs the same list in a container for the defects
+# only Linux shows; this is what a developer runs before asking for that. The LIST is the
+# point — `make gates` holds it to the Makefile's own targets and to what CI runs, because
+# a gate that is only on one of the three is a gate somebody has to remember.
+ci:                             # every gate on the board, in order
+	@fail=""; for t in $(LINUX_GATES); do printf '%-20s ' $$t; \
+		$(MAKE) $$t >/dev/null 2>&1 && echo OK || { echo FAIL; fail="$$fail $$t"; }; \
+	done; \
+	[ -z "$$fail" ] || { echo "ci: failed —$$fail (run each alone for its report)"; exit 1; }; \
+	echo "ci: $(words $(LINUX_GATES)) gates green"
+
+# Three places a gate has to appear before it protects anything: the Makefile, the board,
+# and the workflow. Nine were on fewer than three when this was written.
+gates:                          # every gate is on the board, and the board is run by CI
+	./scripts/gates-check.sh
+
 # Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
 # can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
 # from macOS. The docker flow that found them was driven by hand every time; this is it,
@@ -395,14 +411,11 @@ desugar:                        # a program and the same program desugared do th
 linux-ci:                       # run the Linux gates in a container, as CI does
 	@docker info >/dev/null 2>&1 || { echo "linux-ci: docker is not running"; exit 1; }
 	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
-		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && \
-		for t in $(LINUX_GATES); do printf "linux %-14s " $$t; \
-			make $$t >/dev/null 2>&1 && echo OK || { echo FAIL; exit 1; }; \
-		done'
+		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && make ci'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check gates sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

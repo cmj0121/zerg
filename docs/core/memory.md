@@ -110,6 +110,13 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
   visible via every holder** of that tail.
 
+> **[deviation]** A reference-counted value that **enters a carrier** — the `T?` a channel receive
+> answers, a `Result[T]` — is **never released**. The drop exists and nothing calls it: a carrier has no
+> copy helper, so registering the drop would let two names for one value each give it back. Everything
+> refcounted crossing a `chan[T]` leaks one reference per value, which is invisible for a `chan[int]` and
+> real for a `chan[str]` — measured under LeakSanitizer with `test-data/codegen/chan_str_shared.zg`, the
+> first case in this tree to send one.
+
 Copying a composite applies the rule field by field — its value-type parts are copied and any
 reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
 `Ref[T]`'s referent is fixed at construction, the only place a shared mutation is observable is the

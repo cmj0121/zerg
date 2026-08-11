@@ -229,10 +229,6 @@ postfix 的 `[…]` **一律是索引**。型別引數只寫在**型別位置**�
 以**帶型別的 binding** 引導（`xs: list[int] = empty()`）,而不是在呼叫端給一份引數清單。pattern 文法（group 6）
 context-free 的理由與規則形狀完全相同。
 
-> **[not yet]** 拒絕尚未建置:postfix `[…]` 在 base 解析到泛型時仍被讀成型別引數（`list[byte](s)` 仍可編譯）,
-> pattern 位置的**裸**名字仍被讀成 variant,而 `package` 仍是保留字。每一個都是本頁不再 derive、而編譯器仍接受
-> 的形式。
-
 ### 複合字面量（Composite literals）
 
 值在運算式位置**建構**——正是 group 6 那些拆解它們的 pattern 的鏡像:

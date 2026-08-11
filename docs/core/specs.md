@@ -94,7 +94,9 @@ implicit blanket impl.
 
 > **[deviation]** The intended coherence rule is **one impl per `(spec, type)` program-wide**, keyed by
 > each concrete instantiation — so `impl X for list[int]` and `impl X for list[str]` are **distinct**,
-> each resolvable — with the orphan rule enforced across packages. The bootstrap is **single-module**, and
+> each resolvable — with the orphan rule enforced across packages. The ORPHAN half is enforced, one scope
+> in: an `impl` belongs in the spec's module or the type's, because a module is the only scope this
+> implementation has. The bootstrap is **single-module** for coherence, and
 > its coherence key **over-approximates**: it does not distinguish generic arguments, so `list[int]` and
 > `list[str]` collide and a second instantiation is wrongly rejected as a duplicate impl. The
 > per-instantiation rule stands as specified; the bootstrap does not yet enforce it precisely.

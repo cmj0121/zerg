@@ -417,6 +417,10 @@ struct FieldDef {
 struct StructDecl {
 	name: str
 	fields: list[FieldDef]
+
+	# the file it was declared in, so the module it belongs to can be asked. A type belongs
+	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
+	path: str
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -452,6 +456,9 @@ struct VariantDef {
 struct EnumDecl {
 	name: str
 	variants: list[VariantDef]
+
+	# the file it was declared in — see StructDecl.path
+	path: str
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and

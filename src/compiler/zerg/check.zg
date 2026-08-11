@@ -422,6 +422,44 @@ fn chk_store_path(mut &em: Emitter, e: Expr) {
 #
 # What is NOT compared is the default's VALUE. A default's presence decides which calls are
 # legal, so it is interface; the value is what runs, and what runs is what an impl provides.
+# chk_impl_local is the ORPHAN RULE, at the only scope this compiler has one: a module. An
+# `impl Spec for T` belongs to whoever DECLARED something in it — the spec's module or the
+# type's — and nowhere else. Written anywhere else it is an impl neither module's author can
+# see, attached to a pair neither of them owns.
+#
+# docs/core/specs.md specifies coherence as one impl per (spec, type) program-wide with the
+# orphan rule enforced ACROSS PACKAGES. There is no package layer, so the rule lands one
+# scope in: across modules. That is the same rule at the scope that exists, and it is what
+# stops a third module from deciding what a type means to a spec.
+#
+# A declaration with no module — the entry file, a generated impl — is quiet, for the reason
+# every other rule about modules is: there is no module a reader could have written.
+fn chk_impl_local(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl) {
+	here := c_mod_of(ip.path)
+	return if here == ""
+
+	spec_mod := c_mod_of(sp.path)
+	type_mod := chk_type_mod(f, ip.target)
+	return if here == spec_mod or here == type_mod or spec_mod == "" or type_mod == ""
+
+	chk_at_place(em, ip.path, ip.line, ip.col, "E277", f"`impl {ip.on} for {ip.target}` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with one of the two (docs/core/specs.md)")
+}
+
+# chk_type_mod is the module a declared type was written in, or "" for one this program does
+# not declare — a built-in, or a name nothing here defines.
+fn chk_type_mod(f: File, name: str) -> str {
+	for sd in f.structs {
+		return c_mod_of(sd.path) if sd.name == name
+	}
+	for ed in f.enums {
+		return c_mod_of(ed.path) if ed.name == name
+	}
+	for td in f.types {
+		return c_mod_of(td.path) if td.name == name
+	}
+	return ""
+}
+
 fn chk_spec_impls(mut &em: Emitter, f: File) {
 	for ip in f.impls {
 		si := chk_spec_index(f, ip.on)
@@ -430,6 +468,7 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 			continue
 		}
 		sp := f.specs[si]
+		chk_impl_local(em, f, ip, sp)
 		if sp.params.len() != ip.args.len() {
 			# without this the mismatch surfaces one member at a time, as "parameter `k` is
 			# int, and the spec declares K" — true, and about the wrong thing. What went

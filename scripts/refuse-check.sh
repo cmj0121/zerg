@@ -2363,12 +2363,8 @@ EOF
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.
 expect "$ZERG" type-arguments-with-no-call E268 <<'EOF'
-fn id[T](x: T) -> T {
-	return x
-}
-
 fn main() {
-	g := id[int, int]
+	m := map[str, int]
 	print 1
 }
 EOF

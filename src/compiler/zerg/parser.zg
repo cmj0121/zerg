@@ -2465,18 +2465,20 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			#
 			# The shape is still in hand here, which is why the refusal belongs in the parser
 			# rather than downstream of the name it threw away.
-			# EXPLICIT TYPE ARGUMENTS. `id[int](7)` reached here as an INDEX of `id` — the
-			# postfix loop cannot tell a subscript from a type argument list, and neither can
-			# the grammar without knowing what `id` is. So the shape is recovered here, where
-			# the base and the bracket are both still in hand: an index whose base is a plain
-			# name and whose subscript is a TYPE NAME is a call that said its own type.
+			# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM. `id[int](7)` reaches here as an INDEX
+			# of `id`, and the only way to tell that subscript from a type argument list is to
+			# know what `id` is — which is a symbol table, in the parser, for one form.
+			# GRAMMAR settled it the other way: a postfix `[ … ]` is ALWAYS an index, and a
+			# generic call takes its type from its arguments.
+			#
+			# The shape is still in hand here, so this is where it is named. Downstream there
+			# is only a name that was thrown away.
 			mut tyargs: list[Ty] = []
 			if name == "" {
 				base := index_base_name(e)
 				tn := index_type_name(e)
 				if base != "" and tn != "" {
-					name = base
-					tyargs.append(p_ty_of_name(tn))
+					p_written_type_args(base, tn)
 				}
 			}
 			raise f"E222 NotImplemented: calling {expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt" if name == ""
@@ -2499,18 +2501,24 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 	return e
 }
 
-# p_type_arg_call finishes `base[A, B, …](args)` — the multi-argument type-args postfix,
-# entered once the comma has settled what the bracket is. The FIRST argument has already
-# been read as an EXPRESSION, since that is what the index branch does before it knows what
-# the bracket is; reading its type back off the name it parsed as is what keeps the bracket
-# to one parse. That is also why the first one has to be a bare name where the rest go
-# through parse_type — the expression already read is all there is to work back from.
+# p_type_arg_call is the MULTI-argument shape of a form the language does not have —
+# `base[A, B](args)`, entered once a comma has settled that the bracket is not an index.
+# `id[int](7)` is the one-argument shape, refused where the postfix loop recovers it; this
+# is the same refusal for the shape that never looked like an index at all.
+#
+# GRAMMAR settled it: a postfix `[ … ]` is ALWAYS an index, and a generic call takes its
+# type from its arguments. Telling the two apart in a parser needs to know what `base` is,
+# which is a symbol table for one form.
 fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 	name := ident_name(base)
-	raise f"NotImplemented: type arguments on {expr_kind(base)} — a callee is a plain name in this compiler, so the base of a `[A, B]` has to be one too" if name == ""
-
 	tn := ident_name(first)
-	raise f"a type argument has to be a type, and `{expr_kind(first)}` is not one" if tn == ""
+
+	# A BUILT-IN TYPE is not a generic call. `map[K, V](…)` names a TYPE and its arguments
+	# are the type's own, which is the one thing `[ … ]` after a name still means — so the
+	# refusal it earns is the one about a constructor, downstream, and not this one.
+	if not p_builtin_type_ctor(name) {
+		p_written_type_args(name, tn + ", …")
+	}
 
 	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
 	for p_at(p, Kind.Comma) {
@@ -2518,14 +2526,23 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 		tyargs.append(parse_type(p))
 	}
 	expect(p, Kind.RBrack)
-
-	# GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` is grammatical
-	# on its own — a generic function named as a VALUE at a chosen instantiation. This
-	# compiler monomorphizes at the CALL, so there is nothing for a bare one to be, and it
-	# is named rather than left to report the `(` that never came.
 	raise f"E268 NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments" if not p_at(p, Kind.LParen)
 
 	return Expr.ECall(name, parse_call_args(p), tyargs)
+}
+
+# p_written_type_args is the one complaint both shapes earn. `id[int](7)` is recovered from
+# an index in the postfix loop and `pairup[str, int](…)` never looked like one, but they are
+# the same form and a code answers to a rule rather than to a shape.
+fn p_written_type_args(name: str, tn: str) {
+	raise f"E275 `{name}[{tn}](…)` writes a call's type arguments, and a postfix `[ … ]` is an index — a generic takes its type from the arguments, so write `{name}(…)`"
+}
+
+# p_builtin_type_ctor names the built-in TYPES whose `[ … ]` is the type's own arguments
+# rather than a call's. GRAMMAR#base-type gives them type-args; they are not generic
+# functions and a program cannot declare one.
+fn p_builtin_type_ctor(name: str) -> bool {
+	return name == "map" or name == "set" or name == "list" or name == "chan" or name == "ptr" or name == "array"
 }
 
 fn parse_call_args(mut &p: Parser) -> list[Expr] {

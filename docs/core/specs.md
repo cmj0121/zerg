@@ -101,6 +101,36 @@ implicit blanket impl.
 > `list[str]` collide and a second instantiation is wrongly rejected as a duplicate impl. The
 > per-instantiation rule stands as specified; the bootstrap does not yet enforce it precisely.
 
+## `#[obj]` — a spec's methods, held as values
+
+A **`spec` is a bound, never a type** (above), so a value cannot be typed by one. `#[obj]` is what you
+write when you want a heterogeneous collection anyway: on a spec, it generates a companion **struct of
+function values** — one field per method — and a **generic wrap** that turns any implementer into one.
+
+```zerg
+#[obj]
+spec Draw { fn draw() -> str }
+
+# is:
+struct DrawObj { draw: fn () -> str }
+fn draw_obj[T: Draw](v: T) -> DrawObj {
+    return DrawObj(fn () -> str { return v.draw() })
+}
+```
+
+**The openness comes from the wrap point**, not from anything at run time: `draw_obj` is monomorphized
+per implementer, and what comes back has one type. So `list[DrawObj]` is heterogeneous with **no vtable,
+no header on any value, and no downcast** — you may call what the spec declares, and you may not ask what
+is inside. When you need to ask, the answer is an `enum` and a `match`.
+
+Three shapes are **refused**, by the same test the delegating `derive` uses — does the rewrite exist:
+
+- a **`mut fn`**: a wrapped value is a copy, so writing through it would change something nobody can
+  reach. An object is immutable here;
+- a method taking **`This`**: it needs the type an object has forgotten — that shape is what
+  `#[derive(S)]` on an `enum` is for;
+- anything that is **not a spec**: there are no methods to hold.
+
 Because specs are nominal, two independently declared specs may share a method name. A type can still
 implement both and be used as either one on its own — the ambiguity exists only where a single value
 must satisfy **both at once** (a `T: X + Y` bound, a value typed as `X + Y`, or a bare `x.foo()` on a value

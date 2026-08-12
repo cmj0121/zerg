@@ -154,6 +154,21 @@ a typed binding, a `type` declaration, a `chan` nested inside another type and t
 away. The same goes for a channel a generic makes — instantiating a `chan[T]` template with an
 optional is refused where the specialization is formed.
 
+A receive answering a **carrier** is also what decides how a receive **of a receive** is written.
+[`GRAMMAR#recv-base`](../../GRAMMAR) is self-recursive — `recv-base ::= '<-' recv-base | primary` — so
+`<-` may stand in front of another receive, and a `chan[chan[int]]` is an ordinary thing to build.
+But the outer receive answers `chan[int]?`, and a **carrier is not a channel**, so the nesting opens
+it in between:
+
+```text
+x := <-((<-cc)!)      # yes — the inner handle is insisted on, and x is an int?
+x := <-(<-cc)         # refused — `<-ch` needs a channel, and chan[int]? is not one
+```
+
+That is not a rule about nesting. **Every** channel operation asks the same question of what it is
+handed — `<-x`, `x <- v`, `close(x)`, and both kinds of `select` arm — and for anything that is not a
+channel end the answer is one refusal, by name and with a place.
+
 Every need falls out of the four operators `T?` already had — the **receiver** chooses:
 
 ```text

@@ -868,6 +868,68 @@ fn main() {
 }
 EOF
 
+# GRAMMAR#impl-decl derives type parameters on the `impl` itself — `impl generics? …` —
+# and its comment says why they sit there: a `T` introduced at that position is what the
+# TARGET is allowed to spell. There was no parse path for it at all, so the head began at
+# a `[` where a name was expected and the compiler answered "an `impl` needs a name, and
+# `[` is not one": a complaint about the token under the cursor, for a production the
+# grammar derives in full. The parameters are read now, and the form is named.
+
+expect "$ZERG" impl-with-its-own-type-parameters E288 place <<'EOF'
+spec Size {
+	fn size() -> int
+}
+
+impl[T] Size for list[T] {
+	fn size() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# The concrete half of the same gap, and the worse of the two: the target's type arguments
+# were SKIPPED, so `impl Size for list[int]` reached the emitter as an `impl` on a type
+# named `list` and was refused with "no type named `list`" — a sentence that is false about
+# a language whose grammar spells `list[T]`. An inherent `impl Box[int] { … }` went the
+# other way and was accepted with its `[int]` silently erased. Reading the arguments makes
+# both of them one refusal, about the form that was written and at the place it was.
+
+expect "$ZERG" impl-on-a-target-with-type-arguments E289 'on `list[int]`' place <<'EOF'
+spec Size {
+	fn size() -> int
+}
+
+impl Size for list[int] {
+	fn size() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" inherent-impl-on-a-target-with-type-arguments E289 'on `Box[int]`' place <<'EOF'
+struct Box {
+	v: int
+}
+
+impl Box[int] {
+	fn get() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 expect "$ZERG" parameterized-bound E207 <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool

@@ -68,14 +68,27 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
-（`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
-解析可判定。**沒有「所有型別都有」的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式
-的 blanket impl。
+——`list[T]` 可以實作 `Iterator`。
+
+> **[not yet]** 目標**帶著型別引數**的 `impl` 會被指名拒絕,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
+> `impl[T] Spec for list[T]`——參數就坐在 `impl` 上,正是為了讓目標能拼出它們——以及完全具體的
+> `impl Spec for list[int]`。所以沒有任何實作能掛到容器型別上,上一行說的「`list[T]` 可以實作 `Iterator`」是規範,
+> 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
+> monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
+
+以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定。**沒有「所有型別都有」
+的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式的 blanket impl。
 
 > **[deviation]** 意圖中的 coherence 規則是**全程式每組 `(spec, 型別)` 唯一一個 impl**、以每個具體實例化為鍵——所以
-> `impl X for list[int]` 與 `impl X for list[str]` 是**不同**、各自可解析——並跨 package 強制 orphan rule。bootstrap 是
-> **單一模組**,其 coherence 鍵**過度近似**:它不區分泛型引數,所以 `list[int]` 與 `list[str]` 相撞、第二個實例化會被
-> 誤判為重複 impl 而拒絕。per-instantiation 規則如所規範成立;bootstrap 尚未精確強制它。
+> `impl X for list[int]` 與 `impl X for list[str]` 會是**不同**、各自可解析——並跨 package 強制 orphan rule。其中兩半
+> 沒有做到,而第三半根本不是 deviation。
+>
+> orphan 那一半往內落了一層:一個 `impl` 屬於 spec 的模組或型別的模組,因為模組是這個實作唯一有的範圍,而且沒有
+> package 層可供這條規則伸到。**唯一性**根本沒有以 `(spec, 型別)` 這組鍵來判:讓第二個 `impl X for A` 成為錯誤的,
+> 是它的方法在「一個型別的方法共用的那一個命名空間」裡相撞,而那是比規則所問更窄的問題。至於鍵的**實例化**那一半,
+> 是 **[not yet]** 而非 deviation:帶型別引數的目標在上面就被拒絕了,所以從來沒有任何實例化會走到鍵那裡,鍵也就無從
+> 不精確。這一段從前宣稱鍵**過度近似**——說 `list[int]` 與 `list[str]` 會相撞、第二個被誤判為重複 impl。實測下來那是
+> 假的:兩者中的**第一個**就已被拒絕,而兩者都不曾被當成鍵。
 
 ## `#[obj]`——把一個 spec 的方法當成值持有
 

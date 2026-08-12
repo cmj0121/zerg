@@ -367,6 +367,10 @@ spec Into[T] {
   那條規則的全部,而一個並列的 `.into()` 會需要 position 說出它指的是哪個目標,那是 [型別系統](type-system.zh-TW.md)
   在同一句話裡禁止的。而轉成文字則根本沒有東西可加入:`display` 是內建的值**渲染**、不是 spec
   (見 [Format](../runtime/format.zh-TW.md)),所以 `str(x)` 對每個型別都有答案——想要文字的泛型完全不需要 bound。
+  (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E449 NotImplemented: rendering a P as text — a
+  composite needs the structural `Display` this compiler does not generate_,而泛型在 monomorphize 之後撞到的
+  是同一個拒絕。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染,對複合值尚未建置,一如
+  [Spec 與 Generics](specs.zh-TW.md) 所標。)
 - **剩下的是語言沒有的那種轉換**:`impl Into[Meters] for Feet`,以寫出來的 `x.into()` 呼叫。內建型別上的 `into`
   會被指名拒絕,並說出該改寫什麼。
 - **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。**引數

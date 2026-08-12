@@ -440,7 +440,11 @@ spec Into[T] {
   `.into()` beside it would need the position to say which target it meant, which
   [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
   `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
-  `str(x)` answers for every type — a generic that wants text needs no bound at all.
+  `str(x)` answers for every type — a generic that wants text needs no bound at all. (**[not yet]** for a
+  **composite**: `str(P(7))` on a `struct` is _E449 NotImplemented: rendering a P as text — a composite
+  needs the structural `Display` this compiler does not generate_, and a generic reaches the same refusal
+  once monomorphized. The no-bound rule is what holds; the rendering behind it is unbuilt for composites,
+  as [Specs & Generics](specs.md) marks.)
 - **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
   as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
 - **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed

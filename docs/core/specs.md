@@ -158,6 +158,12 @@ Three shapes are **refused**, by the same test the delegating `derive` uses — 
   `#[derive(S)]` on an `enum` is for;
 - anything that is **not a spec**: there are no methods to hold.
 
+> **[not yet]** A type cannot implement both. `impl A for P` and `impl B for P` where each spec declares
+> `go` is refused at the **second declaration** — _E451 `P` declares `go` twice — every method on a type
+> shares one namespace, spec or inherent alike_ — so the narrowing remedy below has no program to apply to.
+> The refusal is the same one that keeps a derived and a hand-written `Eq` from coexisting, applied one
+> case too wide.
+
 Because specs are nominal, two independently declared specs may share a method name. A type can still
 implement both and be used as either one on its own — the ambiguity exists only where a single value
 must satisfy **both at once** (a `T: X + Y` bound, a value typed as `X + Y`, or a bare `x.foo()` on a value

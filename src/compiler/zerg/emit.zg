@@ -8679,11 +8679,25 @@ fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
 }
 
 # c_init_calls is the `init()` invocations main opens with, in declaration order.
-fn c_init_calls(f: File) -> str {
+#
+# THROUGH c_fn_cname_in, like every other call in this file. An `init()` is parsed as an
+# ordinary function named `init__<n>`, where n is its position among the functions of ITS OWN
+# FILE — so two modules whose init sits at the same position are two declarations of one name,
+# and the collision rule in c_build_sigs already sees them: both are private, so both get a
+# module tag and are DEFINED as `zg_m1_init__1` and `zg_m2_init__1`. This line spelled the
+# untagged name by hand, so the calls main opened with named a symbol nothing defined:
+#
+#     error: call to undeclared function 'zg_init__1'
+#
+# — cc answering for generated C nobody wrote, which is the one outcome the standing rule
+# forbids outright. It went unseen because it depends on the POSITION of each `init()` rather
+# than on there being two: an entry file whose init is its first function and a module whose
+# init is its second mangle to different names and linked by luck.
+fn c_init_calls(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for fd in f.fns {
 		if is_init_name(fd.name) {
-			out = out + "    zg_" + fd.name + "();\n"
+			out = out + "    " + c_fn_cname_in(em, c_mod_of(fd.path), "", fd.name) + "();\n"
 		}
 	}
 	return out
@@ -12343,7 +12357,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# it were already taken from `f` for exactly this reason. It went unseen because the
 		# one example that owns this behaviour was built by the seed, whose single
 		# translation unit makes `own` and `f` the same file.
-		inits := c_const_assigns(em, f) + c_init_calls(f)
+		inits := c_const_assigns(em, f) + c_init_calls(em, f)
 
 		mainw = c_main_entry(em, own, inits)
 	}

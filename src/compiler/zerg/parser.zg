@@ -109,6 +109,40 @@ fn p_trailing_comma(mut &p: Parser, what: str, closer: str, line: int, col: int)
 	raise f"E289 a trailing comma before the closing `{closer}` of {what} — GRAMMAR writes the comma BETWEEN elements and derives none before the closer, so drop it" + p_place(p, line, col)
 }
 
+# p_list_sep is the whole separator rule, and it is ONE function because it is one rule: a
+# comma BETWEEN elements, and none before the closer. GRAMMAR states it for every
+# comma-separated production it has, and this parser used to state it once per reader —
+# twelve copies of six lines, differing only in which bracket closes the list and what to
+# call it.
+#
+# Twelve copies is not a style complaint. Every one of them was written because the reader
+# beside it had been found accepting a list with no separators at all — `(int int)` as a
+# two-element tuple type, `f(1 2)` as a two-argument call, `[1 2]` as a two-element list,
+# `map[str int]` as two type arguments — each read, accepted and lowered in silence. The
+# rule arrived at each site as its own bug was found, so the count of readers that HAD it
+# was always the count of bugs somebody had already hit; `spec Ix[K V]` was the twelfth and
+# it was still silent. `p_trailing_comma` was extracted from the middle of those copies and
+# the control flow around it was left behind, which is what let the list keep growing.
+#
+# `closer` is the closing token, `shut` its text for the message, and `what` names the
+# production — one code covers every call site, and a reader who meets it needs to be told
+# which list they are standing in.
+#
+# The separator is read wherever the caller's loop has room for it: after the element in
+# every reader that parses its own first one, and BEFORE it in the one whose first argument
+# arrives from its caller. The early return is what makes both work — at the closer there is
+# no separator to read, which is the end of the list in the first shape and an empty tail in
+# the second.
+fn p_list_sep(mut &p: Parser, closer: Kind, shut: str, what: str) {
+	return if p_at(p, closer)
+
+	ct := cur(p)
+	expect(p, Kind.Comma)
+	if p_at(p, closer) {
+		p_trailing_comma(p, what, shut, ct.line, ct.col)
+	}
+}
+
 # p_brace_head refuses a head that OPENS with `{`. GRAMMAR, group 7: "ANY '{'-opening
 # expression — a block OR a map literal — at the start of an if/for/with/match head must be
 # parenthesized", which is what follows from `{` being the block opener.
@@ -401,18 +435,7 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 	mut out: list[Ty] = []
 	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-
-		# the comma is REQUIRED between elements and absent before the `)`. Advancing on one
-		# only when it is there made it optional, so `(int int)` parsed as a two-element
-		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
-		# GRAMMAR#tuple-type, and both said nothing.
-		if not p_at(p, Kind.RParen) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RParen) {
-				p_trailing_comma(p, "a tuple type", ")", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RParen, ")", "a tuple type")
 	}
 	expect(p, Kind.RParen)
 	return out
@@ -449,17 +472,7 @@ fn parse_param_types(mut &p: Parser) -> list[Ty] {
 		raise f"E286 NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ty_name(t)})` is a distinct type from `fn({ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured" + p_place(p, mt.line, mt.col) if is_ref
 
 		out.append(t)
-
-		# the comma is REQUIRED between elements and absent before the `)`, the same rule the
-		# tuple reader states — see parse_paren_types for what an optional one silently
-		# accepted.
-		if not p_at(p, Kind.RParen) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RParen) {
-				p_trailing_comma(p, "a parameter type list", ")", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RParen, ")", "a parameter type list")
 	}
 	expect(p, Kind.RParen)
 	return out
@@ -755,19 +768,7 @@ fn parse_ty_args(mut &p: Parser) -> list[Ty] {
 	p_advance(p) # '['
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-
-		# the comma is REQUIRED between elements, the same rule parse_paren_types states and
-		# for the same reason: advancing on one only when it is there makes it OPTIONAL, so
-		# `map[str int]` read as a two-argument list and said nothing. GRAMMAR#type-args
-		# writes the separator between arguments and derives no list without it, and none
-		# before the closer either.
-		if not p_at(p, Kind.RBrack) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RBrack) {
-				p_trailing_comma(p, "a type argument list", "]", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RBrack, "]", "a type argument list")
 	}
 	expect(p, Kind.RBrack)
 	return out
@@ -1164,17 +1165,7 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 			raise f"E285 NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call" + p_place(p, nt.line, nt.col)
 		}
 		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
-
-		# the comma is REQUIRED between parameters and absent before the `)`
-		# (GRAMMAR#closure-param-list) — see parse_ty_args for what an optional one
-		# silently accepted.
-		if not p_at(p, Kind.RParen) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RParen) {
-				p_trailing_comma(p, "a parameter list", ")", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, Kind.RParen)
 	mut ret := Ty.TVoid
@@ -1462,18 +1453,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 				parse_bound(p, "a type parameter's bound", false)
 			}
 
-			# the comma is REQUIRED between parameters and absent before the `]`
-			# (GRAMMAR#type-param-list) — see parse_ty_args for what an optional one
-			# silently accepted, and it was silent HERE too: `spec Ix[K V]` read as two
-			# parameters and said nothing, so an `impl Ix[int]` was then told the spec is
-			# "parameterized by K, V" about a list the author never wrote.
-			if not p_at(p, Kind.RBrack) {
-				ct := cur(p)
-				expect(p, Kind.Comma)
-				if p_at(p, Kind.RBrack) {
-					p_trailing_comma(p, "a spec's type parameter list", "]", ct.line, ct.col)
-				}
-			}
+			p_list_sep(p, Kind.RBrack, "]", "a spec's type parameter list")
 		}
 		expect(p, Kind.RBrack)
 	}
@@ -1733,17 +1713,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			p_advance(p)
 			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 				fields.append(parse_type(p))
-
-				# the comma is REQUIRED between payload types and absent before the `)`
-				# (GRAMMAR#variant) — see parse_ty_args for what an optional one silently
-				# accepted.
-				if not p_at(p, Kind.RParen) {
-					ct := cur(p)
-					expect(p, Kind.Comma)
-					if p_at(p, Kind.RParen) {
-						p_trailing_comma(p, "a variant payload", ")", ct.line, ct.col)
-					}
-				}
+				p_list_sep(p, Kind.RParen, ")", "a variant payload")
 			}
 			expect(p, Kind.RParen)
 			payload = true
@@ -2055,19 +2025,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		}
 		names.append(nm)
 		bounds.append(bound)
-
-		# the comma is REQUIRED between parameters and absent before the `]`
-		# (GRAMMAR#type-param-list). Breaking out on anything that is not a comma left the
-		# `]` below to complain, so `fn f[T U]` said "expected `]`, found `U`" — a token,
-		# about a list whose separator is the thing that is missing — and `fn f[T,]` was
-		# taken without a word.
-		if not p_at(p, Kind.RBrack) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RBrack) {
-				p_trailing_comma(p, "a type parameter list", "]", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RBrack, "]", "a type parameter list")
 	}
 	expect(p, Kind.RBrack)
 }
@@ -2127,17 +2085,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 			has_def = true
 		}
 		params.append(Param(pname, pty, is_ref, has_def, def))
-
-		# the comma is REQUIRED between parameters and absent before the `)`
-		# (GRAMMAR#param-list) — see parse_ty_args for what an optional one silently
-		# accepted.
-		if not p_at(p, Kind.RParen) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RParen) {
-				p_trailing_comma(p, "a parameter list", ")", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, Kind.RParen)
 	mut has_ret := false
@@ -3032,18 +2980,12 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 		p_written_type_args(name, tn + ", …")
 	}
 
-	# the comma is REQUIRED between arguments and absent before the `]` (GRAMMAR#type-args).
-	# The first argument arrived as `first`, so the separator is read at the TOP of the loop
-	# rather than the bottom — the same rule, standing in the only position this reader has
-	# for it. Looping on a comma instead left the `]` below to complain, so `f[int int]`
-	# said "expected `]`, found `int`" and `f[int,]` was taken without a word.
+	# THE SEPARATOR AT THE TOP OF THE LOOP, because the first argument arrived as `first` and
+	# there is no element below it to follow. It is the same rule and the same reader of it
+	# (p_list_sep); this is the one call site with nowhere else to put the call.
 	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
-		ct := cur(p)
-		expect(p, Kind.Comma)
-		if p_at(p, Kind.RBrack) {
-			p_trailing_comma(p, "a type argument list", "]", ct.line, ct.col)
-		}
+		p_list_sep(p, Kind.RBrack, "]", "a type argument list")
 		tyargs.append(parse_type(p))
 	}
 	expect(p, Kind.RBrack)
@@ -3078,18 +3020,7 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 		raise f"E223 NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon
 
 		args.append(parse_expr(p))
-
-		# the comma is REQUIRED between arguments and absent before the `)`. Advancing on
-		# one only when it is there made it OPTIONAL, so `f(1 2)` read as a two-argument
-		# call and said nothing — the same silence parse_paren_types was fixed for on the
-		# TYPE side, left standing on the value side.
-		if not p_at(p, Kind.RParen) {
-			ct := cur(p)
-			expect(p, Kind.Comma)
-			if p_at(p, Kind.RParen) {
-				p_trailing_comma(p, "an argument list", ")", ct.line, ct.col)
-			}
-		}
+		p_list_sep(p, Kind.RParen, ")", "an argument list")
 	}
 	expect(p, Kind.RParen)
 	return args
@@ -3293,17 +3224,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 				return parse_fill(p, elems[0])
 			}
 
-			# the comma is REQUIRED between elements and absent before the `]`. Advancing on
-			# one only when it is there made it OPTIONAL, so `[1 2]` read as a two-element
-			# list and said nothing — the same silence parse_paren_types was fixed for on
-			# the TYPE side, left standing on the value side.
-			if not p_at(p, Kind.RBrack) {
-				ct := cur(p)
-				expect(p, Kind.Comma)
-				if p_at(p, Kind.RBrack) {
-					p_trailing_comma(p, "a list literal", "]", ct.line, ct.col)
-				}
-			}
+			p_list_sep(p, Kind.RBrack, "]", "a list literal")
 		}
 		expect(p, Kind.RBrack)
 		return Expr.EListLit(elems)
@@ -3490,17 +3411,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 				p_advance(p)
 				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 					binds.append(p_name(p, "a pattern binding"))
-
-					# the comma is REQUIRED between patterns and absent before the `)`
-					# (GRAMMAR#pattern-list) — see parse_ty_args for what an optional one
-					# silently accepted.
-					if not p_at(p, Kind.RParen) {
-						ct := cur(p)
-						expect(p, Kind.Comma)
-						if p_at(p, Kind.RParen) {
-							p_trailing_comma(p, "a pattern list", ")", ct.line, ct.col)
-						}
-					}
+					p_list_sep(p, Kind.RParen, ")", "a pattern list")
 				}
 				expect(p, Kind.RParen)
 			}

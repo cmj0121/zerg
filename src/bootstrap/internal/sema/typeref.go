@@ -45,7 +45,7 @@ func (c *checker) resolveType(t ast.Type) types.Type {
 	case *ast.ArrayType:
 		return &types.Array{Elem: c.resolveType(n.Elem), N: c.arrayLen(n.Count)}
 	case *ast.ChanType:
-		return &types.Chan{Elem: c.resolveType(n.Elem), Dir: types.ChanDir(n.Dir)}
+		return c.chanType(t.Span(), c.resolveType(n.Elem), types.ChanDir(n.Dir))
 	case *ast.PtrType:
 		if n.Elem == nil {
 			return &types.Ptr{}
@@ -215,7 +215,7 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 		c.checkMapKey(ref.Span(), k)
 		return &types.Map{Key: k, Val: v}, true
 	case "chan":
-		return &types.Chan{Elem: arg(0)}, true
+		return c.chanType(ref.Span(), arg(0), types.ChanBidi), true
 	case "Ref":
 		return &types.Ref{Elem: arg(0)}, true
 	case "ptr":
@@ -225,6 +225,29 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 		return &types.Ptr{Elem: arg(0)}, true
 	}
 	return nil, false
+}
+
+// chanType builds a channel type, and is the ONE place the seed enforces what a channel
+// may carry: not an optional (GRAMMAR group 9, docs/code/coroutine.md).
+//
+// The rule is a restriction rather than an omission, and the reason is the whole receive
+// story: a receive answers `T?`, and `T?` does not nest. So a `nil` back from a channel of
+// optionals would mean two different facts — the value that was sent is absent, and the
+// stream is over — with no operator able to tell them apart. A value that may be absent
+// travels in a struct, or as a sentinel the receiver agrees on.
+//
+// It sits at type RESOLUTION so that every position inherits it — a parameter, a result, a
+// struct field, a typed binding, a typedef, a channel nested inside another type — rather
+// than at the one position somebody remembered to attach it to.
+//
+// The type is still built after the diagnostic. A checker that returned something else
+// here would report a second, invented complaint about every use of the name, and this
+// pass reports every finding it can in one run.
+func (c *checker) chanType(at token.Span, elem types.Type, dir types.ChanDir) types.Type {
+	if _, opt := elem.(*types.Opt); opt {
+		c.errorf(at, "a channel of optionals chan[%s] is refused: a receive answers T?, so nil would mean both the value that was sent and the end of the stream, and no operator can tell those apart; wrap it in a struct, or agree on a sentinel", elem)
+	}
+	return &types.Chan{Elem: elem, Dir: dir}
 }
 
 // checkMapKey enforces the map key bound (docs/code/collections.md: `K: Hash`). This phase

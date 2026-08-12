@@ -225,7 +225,10 @@ func (c *checker) inferChanNew(n *ast.ChanNew) Type {
 			c.errorf(n.Cap.Span(), "channel capacity must be an integer, found %s", ct)
 		}
 	}
-	return &types.Chan{Elem: elem, Dir: types.ChanBidi}
+	// through chanType, which is where "a channel does not carry an optional" lives: the
+	// constructor is one position out of several that spell an element type, and a rule
+	// attached here alone is a rule every other position is missing.
+	return c.chanType(n.Span(), elem, types.ChanBidi)
 }
 
 // inferRecv types a channel receive '<-ch' (GRAMMAR group 9): it yields T? — nil once the

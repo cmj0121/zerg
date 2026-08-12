@@ -2366,8 +2366,34 @@ EOF
 # here", so the import was not made and `util/text` fell through to the statement loop as
 # a top-level expression — which compile mode treats as a nop. Built, printed, exited 0,
 # and had imported nothing.
-expect "$ZERG" bare-import-path E267 place <<'EOF'
+expect "$ZERG" bare-import-path E267 'write `import "util/text"`' place <<'EOF'
 import util/text
+
+fn main() {
+	print 1
+}
+EOF
+
+# A GUESS IS A PATH OR IT IS NOTHING. The reassembly used to run to the next `;` — and ASI
+# inserts none after `import`, a keyword that cannot END an item — so a bare `import` with
+# no path at all swept up the following declarations and offered `import "structQ{puba:int"`
+# as the spelling to write. What is quoted back at a reader has to be something they wrote.
+expect "$ZERG" import-with-no-path-at-all E267 'derives a str-lit and nothing else' place <<'EOF'
+import
+
+struct Q {
+	pub a: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# The same branch, one token along: a path is `identifier ( '/' identifier )*` and `3` starts
+# none, so there is nothing of the reader's to quote back.
+expect "$ZERG" import-path-that-is-not-a-path E267 'derives a str-lit and nothing else' place <<'EOF'
+import 3
 
 fn main() {
 	print 1

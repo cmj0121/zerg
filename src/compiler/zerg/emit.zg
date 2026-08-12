@@ -8115,19 +8115,28 @@ fn c_at(mut &em: Emitter, l: int, c: int) -> str {
 
 fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 	rendered := c_expr(em, e, c_nosub())
-	return f"{ind}(void)({rendered});\n" if c_is_braced_expr(e)
+	return f"{ind}(void)({rendered});\n" if c_discards_a_value(e)
 	return f"{ind}{rendered};\n"
 }
 
-# c_is_braced_expr names the two forms that lower to a GNU statement expression AND may have a
-# value nobody reads: `guard { risky() }` written for its catching alone, and a `{ … }`
-# block expression standing as a statement of its own. Both are legal and both draw a
-# `-Wunused-value` from cc, so the discard is written down as a cast — which says the same
-# thing to a reader and keeps the build log free of warnings nobody should learn to ignore.
-fn c_is_braced_expr(e: Expr) -> bool {
+# c_discards_a_value names the forms that ARE an expression, are legal as a statement, and
+# lower to C whose own value nobody then reads: `guard { risky() }` written for its catching
+# alone, a `{ … }` block standing as a statement of its own, and — GRAMMAR group 4's "a
+# match run for effect" — a `match` whose arms are all effect. All three draw a
+# `-Wunused-value`, so the discard is written down as a cast, which says the same thing to a
+# reader and keeps cc's warning AND the generated C line it quotes off the user's stderr.
+#
+# A `match` reaches it by a different C shape from the other two — a ternary rather than a
+# statement expression — which is why the name is about the DISCARD and no longer about the
+# braces: the brace was the thing the first two happened to share, not the reason either one
+# needed the cast. A match with a CALL in every arm never warned, so the gap looked like it
+# was about matches with literal arms; it is about every arm being a value cc can see is
+# unused.
+fn c_discards_a_value(e: Expr) -> bool {
 	return match e {
 		Expr.EGuard(_) => true
 		Expr.EBlock(_) => true
+		Expr.EMatch(_, _) => true
 		_ => false
 	}
 }

@@ -3372,6 +3372,18 @@ EOF
 # a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
 # carrier, is where the declared type lives.
 
+# AND THE SENTENCE MUST NOT DROP THE `?`. The payload is where the declared type lives, so
+# the comparison is right to be against the `int`; what was wrong is that the label went on
+# saying "the binding `x`", so the message read `the binding `x` is int` about a binding the
+# reader had declared `int?` two words earlier. The slot the value is entering is the
+# carrier's payload, and the label now says which carrier.
+reject str-into-an-optional-binding E338 'the int? payload of the binding `x`' <<'EOF'
+fn main() {
+	x: int? = "s"
+	print x ?? 0
+}
+EOF
+
 reject str-into-an-optional-list-element E338 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]

@@ -43,6 +43,14 @@ then-block only.
 other. Every other branch brings its own type, a literal included — a branch is not a typed
 position for its sibling, the same way one match arm is not one for the next.
 
+> **[deviation]** That `nil` branch lowers as **present**. `x: int? = if c { 1 } else { nil }` with a
+> false `c` gives a carrier holding `0`, so `x ?? 99` prints `0`; the `str?` spelling prints `(null)`, a
+> present carrier over a null pointer. Nothing is reported at any stage — the program builds, runs, and
+> answers the value the absence should have defaulted past, which is the shape of wrongness this project
+> forbids outright. Write the absence through a binding the checker sees as a carrier until it is fixed.
+
+---
+
 > **[not yet]** One shape of the value form is refused by name: **if-let in an expression position**.
 > `return if x := opt { use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, reports
 > _E270 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this

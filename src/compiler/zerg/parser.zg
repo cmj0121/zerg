@@ -685,7 +685,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise "E247 `pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
 			parse_import(p, imports)
 		} else if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, "", false))
+			fns.append(parse_fn(p, is_pub, "", false, in_unsafe))
 		} else if p_at(p, Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
 			# (parse_struct), it is read and dropped — type visibility is not enforced,
@@ -718,7 +718,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
 			raise "E249 `pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
-			parse_impl(p, fns, impls)
+			parse_impl(p, fns, impls, in_unsafe)
 		} else if p_at(p, Kind.Type) {
 			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, Kind.Hash) {
@@ -754,10 +754,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
 			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
-			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
-			# reading the `fn` as safe would erase the one thing the keyword says — but it
-			# must be refused AS ITSELF: the statement fallback below answered
+			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — nothing here
+			# records the marker, so reading the `fn` as safe would erase the one thing the
+			# keyword says, which is the caller rule the GROUP form now carries (E387) — but
+			# it must be refused AS ITSELF: the statement fallback below answered
 			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
 			# told it had marked a statement, about a form that is a declaration. `is_pub` is
 			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
@@ -1183,7 +1183,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 			# The receiver is `This` — the implementing type, which is not known here. Giving
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
-			sig := parse_fn_head(p, false, "This", recv_mut)
+			sig := parse_fn_head(p, false, "This", recv_mut, false)
 			raise f"E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, Kind.LBrace)
 
 			reqs.append(sig)
@@ -1242,7 +1242,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, Kind.RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [])
+	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false)
 }
 
 pub fn init_name(at: int) -> str {
@@ -1526,7 +1526,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	expect(p, Kind.RParen)
 }
 
-fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
+fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl], in_unsafe: bool) {
 	kw := cur(p)
 	p_advance(p) # 'impl'
 
@@ -1578,7 +1578,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 			recv_mut = true
 		}
 		if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut))
+			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe))
 		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
@@ -1594,11 +1594,11 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	p.impl_ty = outer
 }
 
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
-	head := parse_fn_head(p, is_pub, recv, recv_mut)
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> FnDecl {
+	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
 	body := parse_block(p)
 
-	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds)
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe)
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -1648,7 +1648,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 # whose body is empty. That is exactly a `fn-sig`, which is what a `spec` member is — so a
 # spec's requirement and an impl's supply are read by one piece of code, and a comparison
 # between them is a comparison of like with like rather than of two parsers' opinions.
-fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
+fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -1712,7 +1712,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 		has_ret = true
 	}
 	mut none: list[Stmt] = []
-	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

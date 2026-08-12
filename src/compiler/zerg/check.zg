@@ -159,6 +159,31 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	chk_at(em, "E301", f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
 }
 
+# chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
+# is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
+# unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust
+# boundary: the compiler makes no memory-safety guarantee on the far side of it, and the
+# author vouches for what happens there instead. A caller that never wrote the keyword never
+# made that promise.
+#
+# The group was built for its `mut` bindings, which are the language's only mutable global,
+# and the `fn` beside them came along accepted and callable from anywhere — so a safe `main`
+# reached straight into the one context nothing is guaranteed about, with no diagnostic. That
+# is the boundary erased, silently, which the standing rule does not allow: a form is lowered
+# correctly or refused by name.
+#
+# `what` is what the safe code was doing with the name, because there are two ways in and the
+# sentence has to say which one happened.
+fn chk_unsafe_reachable(mut &em: Emitter, name: str, callee_unsafe: bool, what: str) {
+	return if not callee_unsafe
+
+	# UNSAFE CALLS UNSAFE FREELY. That is the whole point of a group: a page table and the
+	# functions that touch it are declared together, and they reach each other.
+	return if em.in_unsafe_fn
+
+	chk_at(em, "E387", f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+}
+
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
 # every implicit conversion is a lint finding, and every one of them is also a legal program,
 # so it goes on a list that does not fail the build.

@@ -90,6 +90,7 @@
 | `return`                  | `return e`                     |
 | 引數                      | `f(e)`                         |
 | 參數的預設值              | `fn f(x: byte = e)`            |
+| 欄位的預設值              | `struct P { x: byte = e }`     |
 | struct 字面量的欄位       | `P(e)`                         |
 | enum variant 的 payload   | `Shape.Line(e)`                |
 | list 字面量的元素         | `xs: list[byte] = [e]`         |
@@ -267,9 +268,10 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 ## 建構與封裝（Construction & encapsulation）
 
 建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
-**constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal。因此只要型別
-有**任一私有欄位**，它對其 module 之外就是 **opaque**——struct literal 指不出私有欄位，外部只能透過那個 `pub` 函式
-建構；該函式在型別自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。
+**constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
+自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
+（見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
+decorator 的職責——**[not yet]**，所以今天只要型別可及，literal 就可及。
 
 > **[not yet]** struct literal **只依位置**綁定,所以那個指名欄位的形式並不存在:`P(a: 1, b: 2)` 報
 > _NotImplemented: the named argument `a:` — this compiler binds arguments by position only_
@@ -277,7 +279,23 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 > 用來陳述自己規則的那個寫法——「它會指名每個欄位」正是私有欄位之所以 opaque 的推導起點——而下面的
 > `Foo(age: 2, name: base.name)` 寫的是編譯器讀不了的形式。
 
-欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否。
+### 欄位預設值（Field defaults）
+
+欄位可以宣告**預設值**——`h: int = 4`——而預設值正是讓該欄位的 constructor 參數可以被**省略**的東西：對
+`Box(w, h)` 而言，`Box(1)` 建出的值與 `Box(1, 4)` 相同。這就是[函式參數預設值](../code/functions.zh-TW.md)本來
+就遵循的規則，套用在依欄位的 constructor 上；而且兩個方向都照著走：回填是從已寫出的參數尾端開始，所以預設值只讓
+**那一個**欄位可省略、不會讓它前面的欄位也可省略；而預設值是**每次建構各求值一次**，不是在宣告處只算一次——裡面
+若寫了運算式（一個呼叫、幾個 module 常數的和），每一次省略該欄位的建構都會再跑一次。
+
+**沒有零值（zero value）**。因此沒有預設值的非 optional 欄位在建構時是**必填**的，少給就是錯誤、並且會指名該欄位。
+**唯一的隱含預設值**是 `T?` 欄位的 `nil`，那是它天生的「不存在」狀態——`T?` 不必寫 `=` 就可以省略。
+
+兩半在可見性上會合：**非 `pub` 欄位是 module-private，而且必須帶預設值**。依欄位的 constructor 是公開的，所以
+「沒有預設值的欄位」就是每次建構都得供值的欄位——而外部無法為一個自己讀不到的欄位供值。沒有預設值的私有欄位會在
+該欄位自己的宣告處被拒絕（`E482`），並指名該欄位。
+
+欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否
+（**[deviation]**——跨 module 邊界的存取尚未被檢查，見 [Module、Package 與程式](../runtime/package.zh-TW.md)）。
 **沒有「對外可讀、對外不可寫」的獨立軸**；更細的控制以 method 表達。
 
 copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會動到持有者**自己那份 copy**，永遠影響不到別人的值

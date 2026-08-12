@@ -156,7 +156,7 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	# marker at the declaration itself, so its module answers here like any other reader's.
 	return if here == ""
 
-	chk_at(em, "E301", f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
+	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
@@ -2339,6 +2339,20 @@ fn chk_top_muts(mut &em: Emitter, own: File) {
 			chk_at_place(em, c.path, c.line, c.col, "E358", f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
 		}
 	}
+}
+
+# --- a qualified name's member -----------------------------------------------------
+
+# chk_no_member is the other half of a qualified name: the prefix IS a namespace, and the
+# module has no such member. It is one function for the three shapes that can ask — a member
+# read, a call, and a `spawn` / `defer` callee — because the answer is one sentence, and it
+# was three: the read raised without a place, the call said "the method `x` on a ?" (which
+# describes a namespace as a value of no type), and the callee named the form as not built.
+#
+# A CHECKED rule and not a raise: the question is well formed and the program is wrong, so it
+# owes a place like every other rule here, and the C written after it is discarded.
+fn chk_no_member(mut &em: Emitter, ns: str, member: str) {
+	chk_at(em, "E388", f"module `{ns}` has no `{member}`")
 }
 
 # --- the rendering overrides -------------------------------------------------------

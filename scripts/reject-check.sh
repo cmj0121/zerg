@@ -52,6 +52,17 @@ set -u
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
 
+# ABSOLUTE, because the `bare-entry` marker below runs the compiler from the case's OWN
+# directory — and a `./bin/zerg` resolved from there names nothing. Computed once, from
+# whatever the two variables above ended up holding, so an overridden $ZERG travels too.
+abspath() {
+	case $1 in
+	/*) printf '%s\n' "$1" ;;
+	*) printf '%s/%s\n' "$(pwd)" "${1#./}" ;;
+	esac
+}
+ZERG_ABS=$(abspath "$ZERG")
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -144,14 +155,27 @@ reject() {
 		case $fl in at=*) at=${fl#at=} ;; esac
 	done
 
-	local out status first
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
 	# only cc would reject looks accepted and assertions 3 and 4 can never fire. Linking
 	# for real is what makes "the compiler said so, not cc" a claim this gate can check —
 	# and it costs nothing while the gate is green, because a program the compiler rejects
 	# never reaches cc anyway.
-	out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
-	status=$?
+	#
+	# THE ENTRY PATH'S SPELLING IS PART OF THE PROGRAM, for one class of rule: a module is a
+	# directory, so a rule that asks "which module is this declaration in" answers from the
+	# path a file was read at — and a BARE filename has no directory component to answer
+	# with. Every case above hands the compiler `$tmp/<name>.d/<name>.zg`, which always has
+	# one, so the whole class was invisible here. `bare-entry` runs the build from the case's
+	# own directory and names the entry with no directory at all, which is what a reader
+	# standing in their own source tree types.
+	local out status first
+	if has_flag "$flags" bare-entry; then
+		out=$(cd "$dir" && "$ZERG_ABS" build --emit bin -o "$tmp/$name.bin" "$name.zg" 2>&1 >/dev/null)
+		status=$?
+	else
+		out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
+		status=$?
+	fi
 	first=${out%%$'\n'*}
 
 	if [ $status -eq 0 ]; then
@@ -4182,6 +4206,148 @@ fn hidden(s: str) {
 
 pub fn shout(s: str) -> str {
 	return s + "!"
+}
+EOF
+
+# THE SAME NAME, AND THE ENTRY NAMED WITH NO DIRECTORY. Every case above hands the compiler a
+# path that has one, and a module is a directory — so the rule asks a file's path which
+# module it is in, and for `zerg build m.zg` the answer was the empty string, which is also
+# the value that means "generated, no module a reader could have written". The entry module
+# collapsed into the sentinel and every visibility question went quiet: this exact program,
+# spelled `./m.zg`, was refused, and spelled `m.zg`, printed 42.
+reject a-module-private-name-from-a-bare-entry-path E301 bare-entry <<'EOF'
+import "text"
+
+fn main() {
+	print text.helper()
+}
+--- text/text.zg
+fn helper() -> int {
+	return 42
+}
+EOF
+
+# --- module-level `unsafe { … }`, on its `mut` binding ------------------------------------
+#
+# A module-level `unsafe { … }` group holds two kinds of item, and only one of them had a rule
+# about who may reach it. Its `fn` is an unsafe fn and a safe caller is refused (E387); its
+# `mut` binding — the language's ONLY mutable global (GRAMMAR group 12) — could be written
+# `pub`, and was then genuinely exported: another module's SAFE `main` both read `glob.shared`
+# and assigned it, with no `unsafe` anywhere in that file.
+#
+# The grammar makes the binding module-PRIVATE, which is what these cases pin, and it is the
+# whole of the crossing: without the `pub` a reader outside is refused by the ordinary
+# visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
+# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
+# `unsafe { … }` as an expression still E224 no function body can open an unsafe context, so
+# a rule there would make the group unreachable from anything a program can write.
+
+reject a-pub-mutable-global E484 at=2:2 <<'EOF'
+unsafe {
+	pub mut shared := 5
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AND WITHOUT THE `pub` THE EXPORT IS GONE, which is the other half of the same claim: the
+# binding is module-private, so a reader outside is refused by the ordinary visibility rule
+# and there is no second rule owed for a mutable global in particular. Both directions, since
+# a write is what the hole was really about.
+reject a-mutable-global-read-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+reject a-mutable-global-assigned-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	glob.shared = 11
+	print glob.read()
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+# ACROSS THE MODULE BOUNDARY, which is the shape the hole was found in: the group was in
+# another module and a safe `main` both read `glob.shared` and assigned it, with no `unsafe`
+# anywhere in the file. The finding lands on the DECLARATION and not on either use — the
+# export is what made the uses possible, and the module that wrote `pub` is the one with a
+# line to change. It is here because the rule walks the unit being emitted, so an imported
+# module has to be spoken about while ITS unit is compiled, not the entry's.
+reject a-pub-mutable-global-in-an-imported-module E484 'may not be `pub`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+	glob.shared = 11
+}
+--- glob/glob.zg
+unsafe {
+	pub mut shared := 5
+}
+EOF
+
+# --- import cycles ------------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
+# one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
+# initialization order no chapter defines.
+reject an-import-cycle-between-two-modules E485 no-place <<'EOF'
+import "ca"
+
+fn main() {
+	print ca.a_one()
+}
+--- ca/ca.zg
+import "cb"
+
+pub fn a_one() -> int {
+	return cb.b_one() + 1
+}
+--- cb/cb.zg
+import "ca"
+
+pub fn b_one() -> int {
+	return 10
+}
+EOF
+
+# A MODULE THAT IMPORTS ITSELF is the one-node cycle, and it is worth its own case because a
+# detector written as "have I seen this on the way down" answers it by a different branch
+# than the two-node one — the `seen` list a loader already keeps for deduplication makes the
+# self-edge look exactly like a module two files import.
+reject a-module-that-imports-itself E485 no-place <<'EOF'
+import "solo"
+
+fn main() {
+	print solo.one()
+}
+--- solo/solo.zg
+import "solo"
+
+pub fn one() -> int {
+	return 1
 }
 EOF
 

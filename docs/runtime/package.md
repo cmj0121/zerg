@@ -98,7 +98,8 @@ before `main`: each one runs **exactly once, in FIFO order, before `main`**.
 `init()` carries multi-step or effectful startup (open a resource, register, seed) rather than hiding it in
 a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
 shared mutable state travels by value or through channels, never a module-level variable — a top-level
-binding may not be `mut` outside a module-level `unsafe { … }` group.
+binding may not be `mut` outside a module-level `unsafe { … }` group, and one that is inside a group is
+**module-private**, never `pub` (see [Visibility](#visibility--exposing-a-declaration)).
 
 If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
 there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
@@ -107,16 +108,10 @@ failure, so no side effect repeats), and every later use **re-aborts with the sa
 half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
 
 > **[deviation]** Initialization is **eager, not lazy**. Every `init()` in the program runs before
-> `main`'s first statement, in declaration order over the whole program, rather than at the first use of
-> the module that owns it. Exactly-once and FIFO-within-a-module hold; "the first time the module is
-> used" does not, so an `init()` in a module a run never touches still runs.
->
-> **[deviation]** Two modules that each declare an `init()` **break the build inside `cc`**. The flattened
-> namespace emits two `zg_init__0`, and the entry translation unit calls one it never saw — _error: call to
-> undeclared function 'zg_init\_\_0'_, against generated C nobody wrote. That is the outcome the standing
-> rule forbids outright, so it is a bug with a fix owed rather than a debt: the form is neither lowered
-> nor refused by name. Cross-module initialization **order** consequently has no program that can observe
-> it.
+> `main`'s first statement, rather than at the first use of the module that owns it. Exactly-once holds,
+> and so does the order: a module's imports are readied before it is, and its own blocks run FIFO. What
+> does not hold is "the first time the module is used" — an `init()` in a module a run never touches
+> still runs.
 >
 > **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
 > cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
@@ -169,7 +164,10 @@ visible across the module's files but not outside it (see Visibility).
 
 Nesting is **flat**: a directory laid out under another only lengthens the import path — there is no
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
-between modules are rejected.**
+between modules are rejected** — a module that comes up again while it is still on the way down has no
+order for its `init()` blocks and module constants to be readied in, and the refusal names the loop
+rather than the walk that reached it. A module two others import is not a cycle, and a module importing
+**itself** is the one-node case of the same rule.
 
 So mutually recursive types and functions live in **one module** — which costs nothing, since a
 module is a directory of many files sharing a namespace: an `ast` module can spread `Expr` and `Stmt`
@@ -196,9 +194,6 @@ its own value.
 > so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
 > import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
 > denies the second exists.
->
-> **[deviation]** **Import cycles are not rejected.** Two modules that import each other compile and run.
-> Nothing detects the cycle, at either layer.
 
 ### Visibility — exposing a declaration
 
@@ -233,6 +228,12 @@ its `pub` methods are callable by dependents too — visibility reads on a metho
 > DIRECTORY a declaration was read from against the directory doing the reading, which is the module
 > boundary and not the package one; **package-internal** and **package-public** above still need a package
 > to exist.
+
+The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
+module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
+group 12). A group is one module's bargain with its own author, and `pub` on it would offer that bargain
+to everyone who imports the module; it is refused at the declaration, with a place. Expose a `pub fn`
+that reads the binding instead.
 
 ### Importing & referencing
 

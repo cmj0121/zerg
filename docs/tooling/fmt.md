@@ -862,6 +862,8 @@ shipping compiler rather than a part of it (the line
 | `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
 | `E482` | the field `…` of `…` is module-private, so it must carry a default                          |
 | `E483` | the default on field `…` reads the field `…` — **[not yet]**                                |
+| `E484` | the mutable global `…` may not be `pub`                                                     |
+| `E485` | import cycle: `…` -> `…` -> `…`                                                             |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

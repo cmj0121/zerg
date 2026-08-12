@@ -345,6 +345,10 @@ it — no terminal arm, no counter, no flag, and the exit sits in the head where
 - A receive arm binds a plain **`T`**. An arm that fires has a value by construction: a **cleanly**
   closed channel is an absence, so its arm is **dropped from the wait** — it never fires and never
   competes, which is what stops a finished producer from starving a live one.
+- **The binding belongs to its own arm**, and to nothing else: it is not in scope in another arm, nor
+  after the `select`. That is why every arm above may call its value `v` — the same rule an if-let
+  binding and a `for` loop variable each get, and the reason a name reaching past its arm is an
+  ordinary _undefined name_.
 - A **crash** close **raises** out of the select, carrying the producer's `Err`. It never reaches an
   arm body, so no receiver can run over it without noticing.
 - A **send arm** on a closed channel **aborts** when chosen (send-on-closed is a bug).

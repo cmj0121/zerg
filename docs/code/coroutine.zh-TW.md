@@ -295,6 +295,9 @@ for select {                # 同一種等待，但是 LOOP：一圈跑一條 re
 
 - receive arm 綁的是一個普通的 **`T`**。會觸發的 arm 一定有值：**乾淨關閉**是缺席，那條 arm 會被**從等待中除名**
   ——不觸發、也不參賽，這正是「結束的生產者不會餓死還活著的那條」的原因。
+- **綁定只屬於它自己那條 arm**，別的地方都不算：別條 arm 裡不在 scope，`select` 之後也不在。這正是上面每一條
+  arm 都可以把值叫做 `v` 的原因——與 `if x := …` 的綁定、`for x in …` 的迴圈變數是同一條規則，而一個伸出自己那
+  條 arm 的名字就是普通的 _undefined name_。
 - **崩潰關閉**會從 select **raise** 出去，帶著生產者的 `Err`。它永遠不會抵達任何 arm body，所以沒有接收端能在
   沒注意到的情況下跨過它。
 - 落在已 close channel 上的 **send arm** 被選到時 **abort**（send-on-closed 是 bug）。

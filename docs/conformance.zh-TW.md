@@ -118,10 +118,13 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 >
 > ---
 >
-> **檢查的規則並不豁免**，這正是舊文字說反了的地方。有四條 `zerg` 真正**檢查**的規則回報時沒有位置，其中三條
-> 連碼也沒有：常數環（_these constants depend on each other and none can be given a value first_）、
-> `` `x` is used after del `` 與 `` `x` is used after del on some paths ``——三者都兩樣皆缺——以及 `E382`，一個
-> 名字被宣告兩次，它有碼而沒有位置，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。
+> **檢查的規則並不豁免**，這正是舊文字說反了的地方。有兩條 `zerg` 真正**檢查**的規則回報時沒有位置：常數環
+> （_these constants depend on each other and none can be given a value first_），它連碼也沒有；以及 `E382`，
+> 一個名字被宣告兩次，它有碼而沒有位置，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。
+>
+> 還有兩條曾經在這份名單上、現在不在了：`` `x` is used after del `` 與它 on-some-paths 的手足，如今是 `E297`
+> 與 `E298`。規則本身沒有任何改變——它們從 `raise` 搬到了檢查通道，而那正是唯一決定這個問題的東西，
+> 這一搬就是整個修正。
 >
 > `zerg` 記錄的位置是**逐語句**的，所以欄位指的是語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到
 > 那個 token。

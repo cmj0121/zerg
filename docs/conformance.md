@@ -146,12 +146,14 @@ of what the two shapes are.
 >
 > ---
 >
-> **Checked rules are not exempt**, which is the part of this the older text had backwards. Four rules
-> `zerg` genuinely CHECKS report with no place, and three of those with no code either: a constant cycle
-> (_these constants depend on each other and none can be given a value first_), `` `x` is used after del ``
-> and `` `x` is used after del on some paths `` — none of the three carries either — and `E382`, a name
-> declared twice, which carries a code and no place because a struct and an enum are registered before
-> anything records one.
+> **Checked rules are not exempt**, which is the part of this the older text had backwards. Two rules
+> `zerg` genuinely CHECKS report with no place: a constant cycle (_these constants depend on each other and
+> none can be given a value first_), which carries no code either, and `E382`, a name declared twice, which
+> carries a code and no place because a struct and an enum are registered before anything records one.
+>
+> Two more used to be on that list and are not: `` `x` is used after del `` and its on-some-paths sibling,
+> now `E297` and `E298`. Nothing about the rules changed — they moved from `raise` to the checking channel,
+> which is the only thing that decides the question, and the move is the whole fix.
 >
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.

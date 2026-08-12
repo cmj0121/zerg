@@ -4522,6 +4522,22 @@ fn main() {
 }
 EOF
 
+# --- a block is an expression, and what is left over -------------------------------------
+#
+# A `{ … }` where an expression is wanted is a BLOCK (GRAMMAR, group 2, and `block` is in
+# `primary`), and only a `:` makes it a map instead. Settling that in the parser leaves one
+# ill-formed program behind that used to be reported as something else.
+#
+# THE MAP ENTRY WITHOUT A `:`. It used to be where the block/map ambiguity was
+# reported — `a block used as an expression`, which is what a match arm's block body got —
+# and with that ambiguity gone what reaches it is a genuine map literal missing a value.
+reject a-map-entry-with-no-colon E479 'a map entry is `key: value`' at=2:30 <<'EOF'
+fn main() {
+	m: map[str, int] = {"a": 1, "b"}
+	print m.len()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

@@ -848,33 +848,47 @@ fn fmt_next_code(mut &toks: list[Token], at: int) -> int {
 
 # fmt_opens_block reports whether the `{` at `at` opens a BLOCK rather than a map literal.
 #
-# The formatter reads TOKENS, so it has to decide this the way a reader does: from what stands
-# in front of the brace. Where a VALUE is expected — after `:=`, `=`, `:`, `,`, `(`, `[`,
-# `return` — a `{` is a map literal and everything about it stays on the line it was written
-# on. Everywhere else it opens a block.
+# It takes TWO questions, because a `{` answers to two different rules depending on where it
+# stands, and this formatter builds no tree.
 #
-# Without this, `m := {"a": 1}` came back as
+# WHERE. Most braces are a body the grammar hangs off something in front of them — a `fn`'s,
+# a `struct`'s, an `if`'s — and those are blocks whatever they hold. The positions where a
+# `{` could be a value instead are countable, and fmt_wants_value lists them; anywhere else
+# the answer is block and the contents are never consulted. That order matters: a struct's
+# `kind: int` is a `:` at the brace's own depth, so asking the contents FIRST reads every
+# declaration body in the language as a map literal.
 #
-#     m := {
-#         "a": 1
-#     }
+# WHAT, once the position allows a value. Here the discriminator is GRAMMAR's own: "that ':'
+# is exactly what distinguishes a '{ … }' map from a block, so a bare-element '{ … }' is
+# ALWAYS a block", which is why the empty map is spelled `{:}`. The position used to settle
+# it alone — a `{` after `:=` HAD to be a map — and that was true only while a block could
+# not BE a value. Now that it can (GRAMMAR, group 2: a block is a primary), `x := { y := 1
+# y + 1 }` came back with its body flattened onto the `:=` line's own indent, a block laid
+# out as though it were a one-line literal.
 #
-# which does not parse: the formatter turned a valid program into an invalid one. Nothing
-# caught it for the reason this file's failures usually hide — `make fmt-self` covers the
-# compiler and the stdlib, and neither of them writes a map literal, so the form the rule was
-# wrong about was a form no gated source contained. It is the third defect of that exact shape,
-# after `chan[T]<-` and `-1`.
+# The content half is p_brace_is_map's rule written a second time, because the two read
+# different things — this file has a token list and no Parser. What holds them together is a
+# gate rather than a call: a form the two disagree about is a form `zerg fmt` reshapes into a
+# program that means something else, which `fmt-tokens` and the `fmt` corpus are between them
+# there to catch.
+#
+# The failure this replaces is worth keeping in view: `m := {"a": 1}` once came back as three
+# lines, which does not parse — a formatter that turned a valid program into an invalid one.
+# Nothing caught it, because `make fmt-self` covers the compiler and the stdlib and neither
+# of them writes a map literal.
 fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
 	p := fmt_prev_code(toks, at)
-	return true if p < 0
 
-	return not fmt_wants_value(toks[p].kind)
+	return true if p < 0
+	return true if not fmt_wants_value(toks[p].kind)
+
+	return not fmt_brace_is_map(toks, at)
 }
 
 # fmt_wants_value is every token a VALUE may follow. It is written as the smaller list on
-# purpose: the positions a block opens in are open-ended — after a `)`, a name, `else`, `=>`,
-# another `{` — while the places an expression is expected are countable, and a new one joins
-# by being named here.
+# purpose: the positions a body opens in are open-ended — after a `)`, a name, `else`, a type
+# — while the places an expression is expected are countable, and a new one joins by being
+# named here.
 fn fmt_wants_value(k: Kind) -> bool {
 	return true if k == Kind.Walrus or k == Kind.Assign or k == Kind.Colon or k == Kind.Comma or k == Kind.LParen or k == Kind.LBrack
 
@@ -882,7 +896,65 @@ fn fmt_wants_value(k: Kind) -> bool {
 	# value on their right and can find a literal there. `in` and `<-` were missed when this
 	# list was first written, and the miss reproduced the very defect the list exists to fix,
 	# one token class over: `found := "a" in {"a": 1}` came back as a block.
-	return k == Kind.Return or k == Kind.In or k == Kind.LArrow
+	#
+	# `=>` joined them when a block became an expression: GRAMMAR#match-arm's body is an
+	# `expr`, so `Line(n) => { … }` is a block in a value's position and `Line(n) => {"a": 1}`
+	# is a map in the same one.
+	return k == Kind.Return or k == Kind.In or k == Kind.LArrow or k == Kind.FatArrow
+}
+
+# fmt_brace_is_map is the parser's p_brace_is_map over a token list: a `:` among the brace's
+# OWN tokens makes it a map, and a `;` — the lexer's statement separator — settles it the
+# other way before one is reached.
+#
+# The typed binding `{ x: int = 1 }` is the one shape the bare rule gets wrong, and it is
+# told apart by what FOLLOWS: a map entry ends at its `,` or the closing `}`, and a binding
+# puts an `=` in between. Depth counts all three bracket kinds, so a `:` belonging to a named
+# argument, a nested map or a slice is not this brace's.
+fn fmt_brace_is_map(mut &toks: list[Token], at: int) -> bool {
+	mut depth := 0
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return false if is_eof(k)
+		if is_open(k) or is_lbrace(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and is_semi(k) {
+			return false
+		} else if depth == 1 and k == Kind.Colon {
+			return not fmt_entry_assigns(toks, i + 1)
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# fmt_entry_assigns answers whether the entry a depth-1 `:` opened runs on to an `=` before
+# it ends — the typed binding `x: int = 1` rather than the map entry `"x": 1`.
+fn fmt_entry_assigns(mut &toks: list[Token], at: int) -> bool {
+	mut depth := 1
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return false if is_eof(k)
+		if is_open(k) or is_lbrace(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and (k == Kind.Comma or is_semi(k)) {
+			return false
+		} else if depth == 1 and k == Kind.Assign {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {

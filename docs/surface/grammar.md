@@ -134,7 +134,11 @@ unsafe ptr   asm
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
 
 A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
-conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
+conditional, and **also a value**: a block is an **expression** (a `primary`, group 4) whose value is its
+**last statement's** — an expression statement yields its expression, and any other statement, or an empty
+block, yields `nil`. The ASI `;` only **separates** statements; it does not discard a value the way a
+trailing `;` does in some languages, so `guard { … }` and a `match` arm can hold many statements and still
+yield. Its inner statements follow the same separator rules as the top level, so an empty block is
 written with the placeholder: `{ nop }`.
 
 **Newlines & ASI.** A line break is realized as a `;` separator by the lexer (automatic `;` insertion): at

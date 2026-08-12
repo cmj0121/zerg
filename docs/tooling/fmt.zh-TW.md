@@ -763,6 +763,9 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E476` | fill count 是要複製幾份,而 `…` 是負數                                                                 |
 | `E477` | range arm 的 bound 是編譯期常數,而 `…` 不是                                                           |
 | `E478` | `…` 需要一個 channel,而 … 不是                                                                        |
+| `E479` | map 項目是 `key: value`,而這個沒有 `:`                                                                |
+| `E480` | …的值沒有這個編譯器能命名的型別 — **[not yet]**                                                       |
+| `E481` | `…` 重新綁定 `match` arm 的 pattern 已經綁住的名字 — **[not yet]**                                    |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 

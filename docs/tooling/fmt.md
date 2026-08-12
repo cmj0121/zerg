@@ -848,6 +848,9 @@ shipping compiler rather than a part of it (the line
 | `E476` | a fill count is how many copies to make, and `…` is negative                                |
 | `E477` | a range arm's bound is a compile-time constant, and `…` is not one                          |
 | `E478` | `…` needs a channel, and … is not one                                                       |
+| `E479` | a map entry is `key: value`, and this one has no `:`                                        |
+| `E480` | … whose value has no type this compiler can name — **[not yet]**                            |
+| `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

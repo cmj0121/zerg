@@ -163,14 +163,14 @@ for v in ch { use(v) }                   # 同一種 drain，串流結束處就�
 至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以原本記在這裡的
 「`Result[T]` 活不進簽章」問題，已經不在 channel 這條路上了。
 
-上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
+上面那行 `match` 還值得再記一筆，關於 arm 裡可以放什麼。`match` arm 的 body 是一個**運算式**，而區塊**就是**
+一個運算式——所以 `Left(v) => { … }` 可以裝好幾個敘述、並且交出最後一個敘述的值，像 `print` 這種敘述在裡面站得
+非常穩。`c_match` 降階成三元運算鏈，而區塊降階成一個 statement expression，那就是三元運算鏈的一個運算元，和其他
+運算元沒有兩樣。
 
-> **[not yet]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
-> 文法——但 `c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
-> （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
-> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
-> **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
-> （GRAMMAR group 9）——`break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
+`select` 的 arm 不同，理由值得記清楚：`match` 的 arm 必須**產出**該次 match 的值，而 `select` 不產出值、它的
+arm 是**執行**。所以 select arm 的 body 是一個**敘述**（GRAMMAR group 9）——`break` 在那裡很平常，區塊只是眾多
+敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 

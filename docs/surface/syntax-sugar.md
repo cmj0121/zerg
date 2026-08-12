@@ -15,7 +15,7 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | `f"…{x}…"`                         | compile-time `str` concatenation, each hole `x.display()`               |
 | `f"{x!r}"` / `f"{x=}"`             | `f"{x.debug()}"` / the source text `x=` then the value                  |
 | `f"{x:spec}"`                      | `x.format(spec)` through the `Format` protocol                          |
-| `a + b`, `a == b`, `a[i]`, `-a`, … | the operator's spec method — `a.add(b)`, `a.equal(b)`, …                |
+| `a + b`, `a == b`, `a[i]`, `-a`, … | the operator's spec method — `a.add(b)`, `a.eq(b)`, …                   |
 | `for x in it { … }`                | the iteration protocol on `it` (a `StopIteration`-terminated loop)      |
 | `x..y` / `x..=y` / `x..`           | `range(x, y)` / `range(x, y + 1)` / an open range (all builtin)         |
 | `v in r`                           | `r.contains(v)` — membership (Range by `Ord`, else by iteration)        |
@@ -27,11 +27,20 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | `a ?? b` / `a?.m` / `e!`           | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`   |
 | `del ch`                           | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
 
-**Status.** Every row above works except inside an f-string hole, where only the plain `{x}` form does.
-A **conversion** (`!r` / `!s` / `!a`), a **format spec** (`{x:.2f}`), and the self-documenting `f"{x=}"`
-are each **[not yet]** and refused by name. A **composite** hole (a `struct`, `list`, or `map`) is
-rejected too, so structural rendering is **[not yet]** — see
-[Formatting & Text](../runtime/format.md). The interpolating command literal `` f`…` `` (grammar, not listed here) is
+**Status.** Every row above works except inside an f-string hole, plus `del ch` and the operator rows on a
+user-defined type. In a hole only the plain `{x}` form does:
+a **conversion** (`!r` / `!s` / `!a`), a **format spec** (`{x:.2f}`), and the self-documenting `f"{x=}"`
+are each **[not yet]** and refused by name. A **composite** hole is
+rejected too, so structural rendering is **[not yet]** — a `struct` by name (_E449 NotImplemented:
+rendering a P as text_) and a `list` or `map` by an ordinary checked rule that blames a bridge the program
+never wrote (_E417 `str(…)` over a list bridges bytes or code points_) — see
+[Formatting & Text](../runtime/format.md).
+
+**`del ch`** is **[not yet]**: _E470 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
+and at the release the binding's scope already performs. And the **operator** row desugars only where the
+operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E314 no spec named
+`Add`_ and `P(1) + P(2)` is _E345_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
+`#[derive(Eq)]` or a hand-written `impl Eq`. The interpolating command literal `` f`…` `` (grammar, not listed here) is
 likewise **[not yet]**. Each desugaring above is otherwise exactly as written.
 
 **Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and

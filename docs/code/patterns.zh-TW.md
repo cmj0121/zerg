@@ -105,8 +105,10 @@ q := new_query().where("age > 18").order("name").limit(10)
 什麼,見 [控制流](control-flow.zh-TW.md)。
 
 > **[not yet]** 上面那份清單裡不存在的是**巢狀**；四種 pattern 各自單獨用都成立。pattern 裡再放一個 pattern
-> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name, and `(` is not one_，因為
-> variant pattern 的 payload 位置只收一個 binding 名字——那裡從來沒讀過子 pattern，所以巢狀的 variant 與巢狀的
+> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name_，訊息裡指名的是站在那個位置上的
+> token（前者是 `` `(` ``、後者是 `` `0` ``）——一則沒有錯誤碼、也沒有位置的裸 parser 訊息，而這個 marker 自己的
+> 契約要的是一個 gate 釘得住的 `NotImplemented`。variant pattern 的 payload 位置只收一個 binding 名字——那裡從來
+> 沒讀過子 pattern，所以巢狀的 variant 與巢狀的
 > literal 都過不了 parser。一次比對一層，把 payload 綁起來，再對那個 binding 做一次 `match`。
 
 ## 刻意不加的

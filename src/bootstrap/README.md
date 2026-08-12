@@ -268,9 +268,9 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a
-  name beyond its keyword table. So `struct This`, `fn This()`, a parameter and an `enum`
-  variant all build here and `zerg` refuses each by name. (Lowercase `this` the seed does
-  refuse, because that one IS a keyword token.)
+  name beyond its keyword table. So `struct This`, `fn This()`, `type This = int`, a parameter
+  and an `enum` variant all build here and `zerg` refuses each by name. (Lowercase `this` the
+  seed does refuse, because that one IS a keyword token.)
 - **An `impl` whose TARGET carries type arguments is accepted, and implements nothing.**
   `impl Size for list[int] { … }` and the inherent `impl Box[int] { … }` both build here: the
   seed parses the whole of `GRAMMAR#impl-decl`, including the `impl`'s own `generics?`, and

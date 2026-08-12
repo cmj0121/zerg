@@ -2530,10 +2530,24 @@ fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 # that group is the one home the language gives a mutable global (docs/runtime/ffi.md,
 # GRAMMAR group 12), the parser records the context on the declaration (in_unsafe), and
 # the binding lowers as an ordinary module global whose k_mut row keeps it writable.
+#
+# AND IT MAY NOT BE `pub`. That is the other half of the same sentence — "a mutable global is
+# module-private (never `pub`)", docs/surface/grammar.md — and it is the half that decides how
+# far the escape hatch reaches. `unsafe { pub mut shared := 5 }` was accepted and genuinely
+# exported: another module's SAFE `main` both read `glob.shared` and assigned it, with no
+# `unsafe` anywhere and no diagnostic. A group is one module's bargain with its own author,
+# and `pub` on a `mut` binding offers that bargain to everyone who imports it.
+#
+# ONE of the sentences, never two, which is the discipline chk_assignable states above for the
+# same reason: `pub mut x := 5` at the top level with no group is answered by the rule about
+# the `mut`, and adding a second finding about the `pub` would describe a binding the reader
+# is not going to keep.
 fn chk_top_muts(mut &em: Emitter, own: File) {
 	for c in own.consts {
 		if c.is_mut and not c.in_unsafe {
 			chk_at_place(em, c.path, c.line, c.col, "E358", f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
+		} else if c.is_mut and c.is_pub {
+			chk_at_place(em, c.path, c.line, c.col, "E484", f"the mutable global `{c.name}` may not be `pub` — a module-level " + "`unsafe { … }` group is one module's bargain with its own author, so what it holds is module-private (docs/surface/grammar.md). Expose a `pub fn` that reads it instead")
 		}
 	}
 }

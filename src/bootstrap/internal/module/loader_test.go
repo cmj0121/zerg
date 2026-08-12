@@ -61,7 +61,7 @@ func TestNoImportIsUnchanged(t *testing.T) {
 
 func TestCrossModuleFlattenMangling(t *testing.T) {
 	root := memProvider{mods: map[string]string{
-		"util/text": "pub struct Pair {\n  lo: int\n}\npub fn make() -> Pair {\n  return Pair(lo: 1)\n}\n",
+		"util/text": "pub struct Pair {\n  pub lo: int\n}\npub fn make() -> Pair {\n  return Pair(lo: 1)\n}\n",
 	}}
 	l := NewLoader(root)
 	file, diags := l.LoadSource("import \"util/text\"\nfn main() {\n  p := text.make()\n  print p.lo\n}\n")

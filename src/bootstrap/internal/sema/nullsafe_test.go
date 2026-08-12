@@ -37,7 +37,7 @@ func TestCoalesceOperator(t *testing.T) {
 // TestOptChainOperator types the optional-chain postfix 'a?.b' (DESIGN-1b §6): a
 // must be optional and the result is the field type made optional.
 func TestOptChainOperator(t *testing.T) {
-	const point = "struct Point {\n  x: int\n}\n"
+	const point = "struct Point {\n  pub x: int\n}\n"
 	t.Run("reads a field through an optional", func(t *testing.T) {
 		wantOK(t, point+"fn f(p: Point?) -> int? {\n  return p?.x\n}")
 	})
@@ -83,7 +83,7 @@ func TestRaiseOperand(t *testing.T) {
 	wantOK(t, "fn f() {\n  raise \"boom\"\n}")
 	wantOK(t, "fn f() {\n  raise ValueError(\"bad\")\n}")
 	wantErr(t, "fn f() {\n  raise 5\n}", "raise carries an `Err`")
-	wantErr(t, "struct P {\n  a: int\n}\nfn f() {\n  raise P(1)\n}", "raise carries an `Err`")
+	wantErr(t, "struct P {\n  pub a: int\n}\nfn f() {\n  raise P(1)\n}", "raise carries an `Err`")
 }
 
 // TestResultOkWidening checks the context-typed Ok/Left widening (Phase 1f U0): a T

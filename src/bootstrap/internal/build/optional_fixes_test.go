@@ -17,7 +17,7 @@ import "testing"
 // This is a silent MISCOMPILE, not a leak (a POD carrier owns no heap), so it is asserted on
 // output under ASan+UBSan rather than on alloc balance.
 func TestOptFixPODOptionalStructField(t *testing.T) {
-	src := "struct Box {\n\tn: int?\n}\n" +
+	src := "struct Box {\n\tpub n: int?\n}\n" +
 		"fn main() {\n" +
 		"\tb := Box(n: 5)\n" +
 		"\tprint (b.n ?? -1)\n" +
@@ -36,7 +36,7 @@ func TestOptFixPODOptionalStructField(t *testing.T) {
 // emitted even when the program binds no other Ref local. Before the fix the C failed to
 // compile with "use of undeclared identifier 'zg_ref_drop'".
 func TestOptFixBoxedOptIfLetNoRefLocal(t *testing.T) {
-	src := "struct Node {\n\tval: int\n\tnext: Node?\n}\n" +
+	src := "struct Node {\n\tpub val: int\n\tpub next: Node?\n}\n" +
 		"fn main() {\n" +
 		"\ta := Node(val: 1, next: Node(val: 2, next: nil))\n" +
 		"\tif n := a.next {\n" +
@@ -149,8 +149,8 @@ func TestOptFixEarlyContinueRef(t *testing.T) {
 // two-pass could not satisfy (the `Inner?` carrier typedef followed `zg_Outer` that embeds it
 // by value). The topological typedef order emits each type after everything it embeds by value.
 func TestOptFixNestedOptionalStruct(t *testing.T) {
-	src := "struct Inner {\n\tlabel: str?\n}\n" +
-		"struct Outer {\n\tkid: Inner?\n}\n" +
+	src := "struct Inner {\n\tpub label: str?\n}\n" +
+		"struct Outer {\n\tpub kid: Inner?\n}\n" +
 		"fn main() {\n" +
 		"\to := Outer(kid: Inner(label: \"x\" + \"y\"))\n" +
 		"\tif k := o.kid {\n\t\tif l := k.label {\n\t\t\tprint l\n\t\t}\n\t}\n" +

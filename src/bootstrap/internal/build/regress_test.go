@@ -79,8 +79,8 @@ func TestManglingNoFunctionCollision(t *testing.T) {
 // 'Box__i' must not collide with the specialized 'Box[int]'. Both would key to
 // 'zg_Box__i' before the fix and merge; after it each is its own C type.
 func TestManglingNoTypeCollision(t *testing.T) {
-	got := runProgram(t, "struct Box[T] {\n  v: T\n}\n"+
-		"struct Box__i {\n  v: int\n}\n"+
+	got := runProgram(t, "struct Box[T] {\n  pub v: T\n}\n"+
+		"struct Box__i {\n  pub v: int\n}\n"+
 		"fn main() {\n  a := Box(5)\n  b := Box__i(9)\n  print a.v\n  print b.v\n}")
 	if got != "5\n9\n" {
 		t.Fatalf("type collision mis-dispatch: got %q, want %q", got, "5\n9\n")
@@ -92,7 +92,7 @@ func TestManglingNoTypeCollision(t *testing.T) {
 // dispatch to the impl method.
 func TestBoundMethodCallRuns(t *testing.T) {
 	got := runProgram(t, "spec Tag {\n  fn tag() -> int\n}\n"+
-		"struct A {\n  v: int\n}\n"+
+		"struct A {\n  pub v: int\n}\n"+
 		"impl Tag for A {\n  fn tag() -> int {\n    return this.v\n  }\n}\n"+
 		"fn label[T: Tag](x: T) -> int {\n  return x.tag()\n}\n"+
 		"fn main() {\n  print label(A(7))\n}")
@@ -114,7 +114,7 @@ func TestExplicitTypeArgCallRuns(t *testing.T) {
 // TestStructComparisonRuns (B2) compares two structs with a derived Eq/Ord — the
 // operator must lower to the impl method, not raw C '=='.
 func TestStructComparisonRuns(t *testing.T) {
-	got := runProgram(t, "#[derive(Eq, Ord)]\nstruct P {\n  x: int\n  y: int\n}\n"+
+	got := runProgram(t, "#[derive(Eq, Ord)]\nstruct P {\n  pub x: int\n  pub y: int\n}\n"+
 		"fn main() {\n  print P(1, 2) == P(1, 2)\n  print P(1, 2) == P(1, 3)\n  print P(1, 2) < P(2, 0)\n}")
 	if got != "true\nfalse\ntrue\n" {
 		t.Fatalf("struct comparison: got %q, want %q", got, "true\nfalse\ntrue\n")

@@ -44,7 +44,7 @@ func TestByRefPassOnwardRuns(t *testing.T) {
 // TestByRefStructRuns covers a whole struct behind the reference, and a struct FIELD
 // as the argument — both are lvalue paths rooted at a mut binding.
 func TestByRefStructRuns(t *testing.T) {
-	got := runProgramRT(t, "struct P {\n\tx: int\n\ty: int\n}\n"+
+	got := runProgramRT(t, "struct P {\n\tpub x: int\n\tpub y: int\n}\n"+
 		"fn shift(mut &p: P) {\n\tp.x = p.x + 10\n}\n"+
 		"fn bump(mut &n: int) {\n\tn = n + 1\n}\n"+
 		"fn main() {\n\tmut p := P(x: 1, y: 2)\n\tshift(p)\n\tprint p.x\n\tprint p.y\n"+
@@ -140,7 +140,7 @@ func TestByValueParamUnchanged(t *testing.T) {
 // case, but the receiver is still passed by value, so it must fail loudly rather than
 // silently discard the mutation.
 func TestMutFnReceiverGated(t *testing.T) {
-	_, _, diags := Compile("struct C {\n\tn: int\n}\n" +
+	_, _, diags := Compile("struct C {\n\tpub n: int\n}\n" +
 		"impl C {\n\tmut fn bump(d: int) {\n\t\tthis.n = this.n + d\n\t}\n}\n" +
 		"fn main() {\n\tmut c := C(n: 1)\n\tc.bump(1)\n}\n")
 	if len(diags) == 0 {

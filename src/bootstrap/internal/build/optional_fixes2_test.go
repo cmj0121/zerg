@@ -66,7 +66,7 @@ func TestOptFix2EnumPODOptionalPayload(t *testing.T) {
 // (the wrapped Some carries the Inner, whose own `str?` field is read back). ASan-balanced
 // because Inner's `label` is heap str.
 func TestOptFix2EnumNominalOptionalPayload(t *testing.T) {
-	src := "struct Inner {\n\tlabel: str?\n}\n" +
+	src := "struct Inner {\n\tpub label: str?\n}\n" +
 		"enum E {\n\tWrap(Inner?)\n\tNone\n}\n" +
 		"fn show(e: E) {\n\tmatch e {\n\t\tWrap(v) => {\n\t\t\tif inner := v {\n\t\t\t\tif l := inner.label {\n\t\t\t\t\tprint l\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t\tNone => {\n\t\t\tprint (\"no\" + \"ne\")\n\t\t}\n\t}\n}\n" +
 		"fn main() {\n\tshow(Wrap(Inner(label: \"x\" + \"y\")))\n\tshow(Wrap(nil))\n\tshow(None)\n}\n"

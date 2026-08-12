@@ -73,7 +73,7 @@ func TestAssocTypeInSpecSignature(t *testing.T) {
 // int' returns int (DESIGN-1c §3 associated-type resolution, U3).
 func TestAssocTypeInImplSignature(t *testing.T) {
 	src := "spec Get {\n  type Item\n  fn get() -> Item\n}\n" +
-		"struct Box {\n  v: int\n}\n" +
+		"struct Box {\n  pub v: int\n}\n" +
 		"impl Get for Box {\n  type Item = int\n  fn get() -> Item { return this.v }\n}"
 	reg := specRegistry(t, src)
 	var im *types.ImplDef
@@ -95,7 +95,7 @@ func TestAssocTypeInImplSignature(t *testing.T) {
 // is a type error (DESIGN-1c §3 associated-type resolution, U3).
 func TestAssocProjectionInTypePosition(t *testing.T) {
 	src := "spec Get {\n  type Item\n  fn get() -> Item\n}\n" +
-		"struct Box {\n  v: int\n}\n" +
+		"struct Box {\n  pub v: int\n}\n" +
 		"impl Get for Box {\n  type Item = int\n  fn get() -> Item { return this.v }\n}\n" +
 		"fn f() {\n  x: Box.Item = \"hi\"\n  print x\n}"
 	wantErr(t, src, "cannot bind str to a int binding")

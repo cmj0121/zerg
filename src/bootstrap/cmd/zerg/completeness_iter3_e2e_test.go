@@ -80,7 +80,7 @@ func TestVoidBlockStatementRuns(t *testing.T) {
 // a disjoint name so both the user struct typedef and the tuple carrier compile. It
 // runs, proving the program links and both types coexist.
 func TestUserTupleNameNoCollision(t *testing.T) {
-	const src = "struct tuple_0 { v: int }\n" +
+	const src = "struct tuple_0 { pub v: int }\n" +
 		"fn main() {\n" +
 		"  s := tuple_0(v: 7)\n" +
 		"  t := (1, 2)\n" +
@@ -103,9 +103,9 @@ func TestUserTupleNameNoCollision(t *testing.T) {
 // as the Result/optional/Either carriers. Each must be kept disjoint. Uses a general
 // `Result[int]` (a `zg_result_0` carrier) beside the colliding user types.
 func TestUserResultNamesNoCollision(t *testing.T) {
-	const src = "struct result_0 { a: int }\n" +
-		"struct opt_0 { b: int }\n" +
-		"struct either_0 { c: int }\n" +
+	const src = "struct result_0 { pub a: int }\n" +
+		"struct opt_0 { pub b: int }\n" +
+		"struct either_0 { pub c: int }\n" +
 		"fn ok_val() -> Result[int] {\n  return 5\n}\n" +
 		"fn main() -> Result[nil] {\n" +
 		"  r := result_0(a: 1)\n" +

@@ -65,7 +65,7 @@ func TestMarkBoxingRecursiveEnum(t *testing.T) {
 // TestMarkBoxingRecursiveStructOpt: a struct with a `Self?` field boxes that field and
 // records the struct cyclic (the cycle runs through the by-value Opt wrapper).
 func TestMarkBoxingRecursiveStructOpt(t *testing.T) {
-	prog := build(t, "struct Node { val: int; next: Node? }\n"+
+	prog := build(t, "struct Node { pub val: int; pub next: Node? }\n"+
 		"fn main() { n := Node(1, nil) }\n")
 	ti := structInst(t, prog, "Node")
 	for _, f := range ti.Fields {
@@ -120,7 +120,7 @@ func TestMarkBoxingMutualRecursion(t *testing.T) {
 // boxed and `Tree` is not recorded cyclic. This is the "no spurious boxing" property.
 func TestMarkBoxingAcyclicNoMarks(t *testing.T) {
 	prog := build(t, "enum Expr { Num(int); Add(Expr, Expr) }\n"+
-		"struct Tree { root: Expr }\n"+
+		"struct Tree { pub root: Expr }\n"+
 		"fn main() { t := Tree(Num(1)) }\n")
 	tree := structInst(t, prog, "Tree")
 	if tree.Fields[0].Boxed {

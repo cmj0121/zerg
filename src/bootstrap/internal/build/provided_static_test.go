@@ -14,7 +14,7 @@ func TestProvidedMethodStaticRuns(t *testing.T) {
 	got := runProgram(t, "spec Greet {\n"+
 		"\tfn hello() -> str { return \"hi\" }\n"+
 		"}\n"+
-		"struct Foo {\n\tn: int\n}\n"+
+		"struct Foo {\n\tpub n: int\n}\n"+
 		"impl Greet for Foo {}\n"+
 		"fn main() {\n\tf := Foo(1)\n\tprint f.hello()\n}\n")
 	if got != "hi\n" {
@@ -28,7 +28,7 @@ func TestProvidedMethodOverrideWins(t *testing.T) {
 	got := runProgram(t, "spec Greet {\n"+
 		"\tfn hello() -> str { return \"hi\" }\n"+
 		"}\n"+
-		"struct Bar {\n\tn: int\n}\n"+
+		"struct Bar {\n\tpub n: int\n}\n"+
 		"impl Greet for Bar {\n\tfn hello() -> str { return \"override\" }\n}\n"+
 		"fn main() {\n\tb := Bar(2)\n\tprint b.hello()\n}\n")
 	if got != "override\n" {
@@ -42,7 +42,7 @@ func TestProvidedMethodGenericBoundRuns(t *testing.T) {
 	got := runProgram(t, "spec Greet {\n"+
 		"\tfn hello() -> str { return \"hi\" }\n"+
 		"}\n"+
-		"struct Foo {\n\tn: int\n}\n"+
+		"struct Foo {\n\tpub n: int\n}\n"+
 		"impl Greet for Foo {}\n"+
 		"fn greet[T: Greet](x: T) -> str {\n\treturn x.hello()\n}\n"+
 		"fn main() {\n\tprint greet(Foo(1))\n}\n")
@@ -60,7 +60,7 @@ func TestProvidedMethodCallsProvidedStaticRuns(t *testing.T) {
 		"\tfn twice() -> int { return this.value() * 2 }\n"+
 		"\tfn quad() -> int { return this.twice() * 2 }\n"+
 		"}\n"+
-		"struct Wrap {\n\tn: int\n}\n"+
+		"struct Wrap {\n\tpub n: int\n}\n"+
 		"impl Show for Wrap {\n\tfn value() -> int { return this.n }\n}\n"+
 		"fn main() {\n\tw := Wrap(5)\n\tprint w.quad()\n}\n")
 	if got != "20\n" {

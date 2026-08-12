@@ -2086,14 +2086,26 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 	}
 }
 
-# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
-# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
-# about the numbering. One counted from 1 and the other from 0, so the same field of the same
-# struct was "field 1" or "field 0" depending on which mistake you made.
+# chk_field_says names a struct's field, and it is shared with the emitter's missing-field
+# diagnostic — because the two disagreed about the numbering. One counted from 1 and the
+# other from 0, so the same field of the same struct was "field 1" or "field 0" depending on
+# which mistake you made.
 #
-# `pos` arrives 1-based, which is chk_arg_says' convention.
-pub fn chk_field_says(sname: str, pos: int) -> str {
-	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
+# IT NAMES THE FIELD, which docs/core/types.md requires of the missing-field rule ("a
+# construction short of one is an error naming the field") and which `E482` beside it has
+# always done. It said "field 2 of `Config`" instead — a number the reader then has to count
+# their own declaration against, and one that means a different field the moment a field is
+# inserted above it. The position is what the CONSTRUCTION gives, since it binds by position;
+# the declaration is where the name is, and the compiler is holding both.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention; the field table is 0-based. A
+# struct nothing registered has no name to give, and then this falls back to the number
+# rather than printing an empty one.
+pub fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
+	row := c_struct_field_row(em, sname, pos - 1)
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`" if row < 0
+
+	return f"the field `{em.fld_name[row]}` of `{sname}`"
 }
 
 # --- assigned value ---------------------------------------------------------------

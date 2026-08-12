@@ -3352,6 +3352,82 @@ fn main() {
 }
 EOF
 
+# --- a channel operation needs a channel --------------------------------------------
+#
+# `<-x`, `x <- v`, `close(x)` and a `select` arm all name an END of a channel, and the
+# question of whether `x` IS one had an answer at exactly one of those six sites: `close`.
+# Everywhere else the emitter asked for the element type of whatever it had been given and
+# took the `TUnknown` it got back for a type, so a receive on a non-channel came out as
+# `TOpt(TUnknown)` — an optional of nothing, printed `?` — and the program went on being
+# compiled around it. What the reader was told about afterwards was the `?`: `` `??` on a
+# ? ``, `E434 … over a ?`, sentences about a type nothing in the source had written. Where
+# the walk did not touch the broken type at all, the C came out with a carrier struct in a
+# `zrt_chan *` slot and cc rejected generated code nobody wrote.
+#
+# The rule is one sentence in `c_chan_op_check` now, which is the place all six operations
+# already went through to be told whether a DIRECTION permits them; "it is not a channel
+# end at all" is the first thing that same question asks. So the cases below are again a
+# list of POSITIONS, not a list of copies.
+#
+# The nested receive is the case that motivated the rest, and it is worth reading twice:
+# `<-(<-cc)` is what the self-recursive GRAMMAR#recv-base derives, and it is ill-typed
+# for a reason that has nothing to do with nesting — a receive answers `T?` (group 9), and
+# `chan[int]?` is not a channel. The well-formed spelling unwraps in between, `<-((<-cc)!)`,
+# and it lives in the corpus as `chan_of_chan`.
+
+reject a-receive-of-a-receive E478 "chan[int]? is not one" at=6:2 <<'EOF'
+fn main() {
+	cc := chan[chan[int]](1)
+	inner := chan[int](1)
+	inner <- 7
+	cc <- inner
+	x := <-(<-cc)
+	print x ?? -1
+}
+EOF
+
+reject a-receive-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	x := <-n
+	print x ?? -1
+}
+EOF
+
+reject a-send-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	mut n := 3
+	n <- 7
+	print n
+}
+EOF
+
+reject a-close-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	close(n)
+	print n
+}
+EOF
+
+reject a-select-receive-arm-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	select {
+		v := <-n => print v
+	}
+}
+EOF
+
+reject a-select-send-arm-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	select {
+		n <- 7 => print "sent"
+	}
+}
+EOF
+
 # --- what only the driver can reject ------------------------------------------------
 #
 # A program build needs an entry point. `program ::= stmt-list` makes a main-less source

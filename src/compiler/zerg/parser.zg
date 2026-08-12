@@ -1697,9 +1697,15 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 	if not p_at(p, Kind.Str) {
 		guess := p_import_path_guess(p)
 
-		raise f"E267 an import path is a string — write `import \"{guess}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if guess != ""
+		# ONE RAISE, because it is one rule: a code answers to a rule, and reporting the same
+		# one from two sites is two rules wearing one identity (scripts/error-codes-check.sh).
+		# What differs between the two lines is the ADVICE, so that is the part that varies.
+		mut says := "there is no path here to quote back: GRAMMAR#import-path derives a str-lit and nothing else, so a module is named `import \"util/text\"`"
+		if guess != "" {
+			says = f"write `import \"{guess}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has"
+		}
 
-		raise "E267 an import path is a string, and there is no path here to quote back: GRAMMAR#import-path derives a str-lit and nothing else, so the module a program names is written `import \"util/text\"`" + p_place(p, cur(p).line, cur(p).col)
+		raise f"E267 an import path is a string — {says}" + p_place(p, cur(p).line, cur(p).col)
 	}
 
 	t := cur(p)

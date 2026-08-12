@@ -150,8 +150,10 @@ Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）,fire-a
 非搶佔式**（**[deviation]**——一個從不 park 的 CPU-bound coroutine 會佔住一條 worker，數量到達 worker 數就讓整個
 程式停擺；見 [Coroutines 與 Channels](code/coroutine.zh-TW.md)）。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
 `Ref` 型別;`Ref[T]` 是它持有資源的手足——見 [值與記憶體](core/memory.zh-TW.md)）——payload 複製、在最後一個 sender 離場時
-**自動 close**——或由 channel 專屬的敘述 **`close(ch)`** 提早結束——以 **`Result[T]`** 接收（`Right` = 已關,攜帶
-崩潰 `Err` 或 `StopIteration` 哨兵）、並用 **`select`** 多路等待。
+**自動 close**——或由 channel 專屬的敘述 **`close(ch)`** 提早結束——並用 **`select`** 多路等待。receive 得到的是
+**`T?`**：stream **結束**是一種缺席，所以排空後的 channel 給 `nil`、之後每次都給 `nil`；producer **死亡**是一種
+失敗，所以在 receive 處**被 raise**、攜帶該 producer 自己的 `Err`。兩種結束從不走同一條路,這也正是 `chan[T?]`
+被拒絕的原因——`nil` 會同時代表兩件事。
 
 完整模型——buffering、receive/close 語意、directional 端、`select`、timer、deadlock——見
 **[Coroutines 與 Channels](code/coroutine.zh-TW.md)** 參考文件。

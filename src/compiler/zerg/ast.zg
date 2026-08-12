@@ -202,14 +202,14 @@ enum Expr {
 # constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
 struct Arm {
-	pat: int
-	lit: Expr
-	bind: str
-	ctor: str
-	binds: list[str]
-	has_guard: bool
-	guard_expr: Expr
-	body: Expr
+	pub pat: int
+	pub lit: Expr
+	pub bind: str
+	pub ctor: str
+	pub binds: list[str]
+	pub has_guard: bool
+	pub guard_expr: Expr
+	pub body: Expr
 }
 
 # Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
@@ -306,11 +306,11 @@ enum Stmt {
 # the runtime's ZRT_SEL_* constants use for the first two, so the emitter maps rather
 # than translates. `bind` is the receive arm's optional name ("" when absent or `_`).
 pub struct SelArm {
-	op: int
-	bind: str
-	ch: Expr
-	val: Expr
-	body: list[Stmt]
+	pub op: int
+	pub bind: str
+	pub ch: Expr
+	pub val: Expr
+	pub body: list[Stmt]
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -322,11 +322,11 @@ pub struct SelArm {
 # also all the seed lowers correctly (docs/code/functions.md) — a default built from an
 # operator or a call is specified to be evaluated per call and is not honoured here.
 struct Param {
-	name: str
-	ty: Ty
-	is_ref: bool
-	has_def: bool
-	def: Expr
+	pub name: str
+	pub ty: Ty
+	pub is_ref: bool
+	pub has_def: bool
+	pub def: Expr
 }
 
 # FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free
@@ -342,13 +342,13 @@ struct Param {
 # `zg_<T>_<name>`, which is also what keeps a method off the flat name space a program
 # shares with every module it imports.
 struct FnDecl {
-	name: str
-	recv: str
-	params: list[Param]
-	has_ret: bool
-	ret: Ty
-	body: list[Stmt]
-	is_pub: bool
+	pub name: str
+	pub recv: str
+	pub params: list[Param]
+	pub has_ret: bool
+	pub ret: Ty
+	pub body: list[Stmt]
+	pub is_pub: bool
 
 	# path is the file this function was READ FROM. A diagnostic needs it, and a whole
 	# program is merged into one File before emission, so by then nothing else remembers
@@ -356,14 +356,14 @@ struct FnDecl {
 	# because a function comes wholly from one file — one field instead of one per
 	# statement — and rides on a STRUCT rather than an enum, so it costs its construction
 	# sites and no match arm anywhere.
-	path: str
+	pub path: str
 
 	# line / col are where the declaration begins. A diagnostic about the SIGNATURE — a
 	# default that cannot fit its parameter, a `mut &` given one — is made before any
 	# statement is emitted, so the SAt markers have not said anything yet and there is no
 	# other position to report.
-	line: int
-	col: int
+	pub line: int
+	pub col: int
 
 	# tparams / tbounds are `fn f[T, U: Eq](…)` — the type parameter NAMES and, in the same
 	# order, the bound each carries or "" for none. A bound is a CONJUNCTION — `T: Eq + Show`
@@ -371,8 +371,8 @@ struct FnDecl {
 	# bound is read in one place (the parser) and checked in one place (the instantiation),
 	# so the shape that matters is the shape there. `join_bounds` writes it and
 	# `c_split_bounds` reads it back; a `+` cannot appear in a spec name.
-	tparams: list[str]
-	tbounds: list[str]
+	pub tparams: list[str]
+	pub tbounds: list[str]
 
 	# in_unsafe is whether this function was declared inside a module-level `unsafe { … }`
 	# group, which GRAMMAR group 12 makes an unsafe fn: "unsafe throughout its body, callable
@@ -382,7 +382,7 @@ struct FnDecl {
 	#
 	# A method, a lambda and a monomorphized specialization each take the flag from whatever
 	# they were written in or made for, so the context is not lost by being copied.
-	in_unsafe: bool
+	pub in_unsafe: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -393,9 +393,9 @@ struct FnDecl {
 # `line` and `col` are 1-based and are where the STATEMENT starts; `path` is "" for a
 # source parsed without one, and the renderer then says the line and column alone.
 pub struct Diag {
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 
 	# `code` is the rule's IDENTITY — `E307`, `L502` — and it is a field rather than the first
 	# word of `msg` because everything that reads a diagnostic wants it separately: the
@@ -403,8 +403,8 @@ pub struct Diag {
 	# editor filters and groups by it. A code spelled only inside the text is one every reader
 	# has to parse back out, which is the second copy of a language fact this struct's `fix`
 	# field already exists to forbid. It is empty for a finding that has no code yet.
-	code: str
-	msg: str
+	pub code: str
+	pub msg: str
 
 	# `fix` is the SOURCE THAT REPLACES what stands at the place — empty when the finding has
 	# no mechanical answer, which is nearly all of them. It exists so that an editor's quick
@@ -412,7 +412,7 @@ pub struct Diag {
 	# that reads the replacement back out of its own message text, which is the second copy of
 	# a language fact docs/tooling/lsp.md exists to forbid. A finding carrying one owes an
 	# exact place too, since something is going to be overwritten there.
-	fix: str
+	pub fix: str
 }
 
 # diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
@@ -455,28 +455,28 @@ pub fn place_line(path: str, line: int, col: int) -> str {
 # CONSTRUCTION — so an expression in it is evaluated per construction, as a parameter
 # default is evaluated per call.
 struct FieldDef {
-	name: str
-	ty: Ty
-	is_pub: bool
-	has_def: bool
-	def: Expr
+	pub name: str
+	pub ty: Ty
+	pub is_pub: bool
+	pub has_def: bool
+	pub def: Expr
 
 	# line / col are where the field was written. The rule about a field is a rule about a
 	# DECLARATION, made before any statement is emitted, so there is no SAt marker to read
 	# and the field carries its own place — per field, not per struct, because a struct with
 	# twenty fields owes the reader the one that is wrong.
-	line: int
-	col: int
+	pub line: int
+	pub col: int
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.
 struct StructDecl {
-	name: str
-	fields: list[FieldDef]
+	pub name: str
+	pub fields: list[FieldDef]
 
 	# the file it was declared in, so the module it belongs to can be asked. A type belongs
 	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
-	path: str
+	pub path: str
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -487,12 +487,12 @@ struct StructDecl {
 # It carries its position because the checks about it are the ordinary declaration ones: a
 # name declared twice, a name that is also a struct, an underlying type nothing declares.
 pub struct TypeDecl {
-	name: str
-	under: Ty
-	is_pub: bool
-	path: str
-	line: int
-	col: int
+	pub name: str
+	pub under: Ty
+	pub is_pub: bool
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
@@ -511,21 +511,21 @@ pub struct TypeDecl {
 # sits at position 0, a distinction E214 rests on. `line` / `col` are the variant's own name
 # token, so a discriminant that does not fold is reported at the variant and not at the enum.
 struct VariantDef {
-	name: str
-	fields: list[Ty]
-	has_discr: bool
-	discr: Expr
-	line: int
-	col: int
+	pub name: str
+	pub fields: list[Ty]
+	pub has_discr: bool
+	pub discr: Expr
+	pub line: int
+	pub col: int
 }
 
 # EnumDecl is an enum type declaration: its name and variants in source (tag) order.
 struct EnumDecl {
-	name: str
-	variants: list[VariantDef]
+	pub name: str
+	pub variants: list[VariantDef]
 
 	# the file it was declared in — see StructDecl.path
-	path: str
+	pub path: str
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -544,9 +544,9 @@ struct EnumDecl {
 #
 # `reqs` are FnDecls with an empty body, because that is exactly what a `fn-sig` is.
 struct SpecDecl {
-	name: str
-	params: list[str]
-	supers: list[str]
+	pub name: str
+	pub params: list[str]
+	pub supers: list[str]
 
 	# super_args are the TYPE ARGUMENTS each super was written with, row for row beside
 	# `supers` — `spec Ord: Same[int]` keeps the `[int]`. They are a parallel list rather than
@@ -557,12 +557,12 @@ struct SpecDecl {
 	# Dropping them is what made a parameterized super refusable-only: the parameter stayed
 	# unsubstituted, so every correct `impl Ord` was turned away with "parameter `o` is int, and
 	# the spec declares T".
-	super_args: list[list[Ty]]
-	reqs: list[FnDecl]
+	pub super_args: list[list[Ty]]
+	pub reqs: list[FnDecl]
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
@@ -592,13 +592,13 @@ pub fn spec_key(name: str, args: list[Ty]) -> str {
 # when a required signature is compared against what the impl supplies.
 struct ImplDecl {
 	# `spec` is a keyword, so the field cannot be called that
-	on: str
-	args: list[Ty]
-	target: str
+	pub on: str
+	pub args: list[Ty]
+	pub target: str
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # ConstDecl is one module-level binding — `const K := 1`, `pub COUNT := 3`, or a plain
@@ -620,18 +620,18 @@ struct ImplDecl {
 # declaring module off the row, so a cross-module read of a non-`pub` constant is refused
 # the way a private function's call is.
 pub struct ConstDecl {
-	name: str
-	ty: Ty
-	has_ty: bool
-	is_mut: bool
-	is_const: bool
-	is_pub: bool
-	in_unsafe: bool
-	value: Expr
+	pub name: str
+	pub ty: Ty
+	pub has_ty: bool
+	pub is_mut: bool
+	pub is_const: bool
+	pub is_pub: bool
+	pub in_unsafe: bool
+	pub value: Expr
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # ImportDecl is one import SPEC — `pub? "path" (as name)?` (GRAMMAR#import-spec). It is a
@@ -649,46 +649,46 @@ pub struct ConstDecl {
 # name are otherwise indistinguishable rows.
 pub struct ImportDecl {
 	# the module path as written, without its quotes — `util/text`
-	path: str
+	pub path: str
 
 	# the name this import binds — the `as` alias, else the path's last segment
-	name: str
+	pub name: str
 
 	# `renamed` is whether an `as` was written. The name alone cannot say so, since
 	# `import "a/text" as text` binds exactly what the plain form does.
-	renamed: bool
+	pub renamed: bool
 
-	at: str
-	line: int
-	col: int
+	pub at: str
+	pub line: int
+	pub col: int
 }
 
 pub struct File {
-	imports: list[ImportDecl]
-	structs: list[StructDecl]
-	enums: list[EnumDecl]
-	specs: list[SpecDecl]
-	impls: list[ImplDecl]
-	fns: list[FnDecl]
+	pub imports: list[ImportDecl]
+	pub structs: list[StructDecl]
+	pub enums: list[EnumDecl]
+	pub specs: list[SpecDecl]
+	pub impls: list[ImplDecl]
+	pub fns: list[FnDecl]
 
 	# types are the `type X = Y` declarations — strong typedefs, kept apart from structs
 	# because they have no fields and from enums because they have no variants; what they
 	# have is one underlying type and an identity of their own.
-	types: list[TypeDecl]
+	pub types: list[TypeDecl]
 
 	# consts are the module-level bindings — the module's immutable state, `const`-marked
 	# or not, plus the `mut` ones kept so their refusal has a declaration to point at.
 	# They are not statements of any function: they become C globals, assigned once
 	# before anything runs.
-	consts: list[ConstDecl]
+	pub consts: list[ConstDecl]
 
 	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
 	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
 	# declaration because a decorator is its own top-level item here — it is read before the
 	# declaration it applies to exists — and because what consumes them is one pass that wants
 	# them all, not a walk over two kinds of declaration.
-	derive_on: list[str]
-	derive_spec: list[str]
+	pub derive_on: list[str]
+	pub derive_spec: list[str]
 }
 
 # last_segment is the name a module path ends with — `util/text` ends with `text`. It is

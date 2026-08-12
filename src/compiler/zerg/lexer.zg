@@ -17,20 +17,20 @@ import (
 # Lex holds the scan state. `stack` + `sp` implement the brace-depth stack over an
 # append-only list (list has no pop): push writes at sp and bumps it, pop just drops sp.
 struct Lex {
-	src: list[byte]
-	n: int
-	offs: int
-	line: int
-	col: int
-	depth: int
-	stack: list[int]
-	sp: int
-	prev: Kind
+	pub src: list[byte]
+	pub n: int
+	pub offs: int
+	pub line: int
+	pub col: int
+	pub depth: int
+	pub stack: list[int]
+	pub sp: int
+	pub prev: Kind
 
 	# keep_trivia makes a comment a TOKEN instead of nothing. The compiler never sets it —
 	# it would only have to skip them again — but the formatter cannot do its job without
 	# them, and a formatter that eats comments is not one anybody would run twice.
-	keep_trivia: bool
+	pub keep_trivia: bool
 }
 
 # --- character helpers ---------------------------------------------------------
@@ -952,8 +952,8 @@ fn int_scan(lex: str) -> int {
 # this file and a struct is the plainer thing for it to carry.
 
 pub struct UintLit {
-	ok: bool
-	value: uint
+	pub ok: bool
+	pub value: uint
 }
 
 pub fn uint_fits(lex: str) -> bool {

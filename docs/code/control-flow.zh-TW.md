@@ -40,8 +40,8 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
 要走 byte 就用 `bytearray(s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
-**`v in range`** 測試成員關係（`x in 0..n` → `bool`）是 **[not yet]**——這個形式會被指名拒絕——把 **range 當成值**
-用在別處也一樣；range 今天只存在於「`for` 走訪的東西」與「`match` arm 包含的東西」裡。
+**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
+會被指名拒絕；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in` 拿來測的東西」裡。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
@@ -124,8 +124,8 @@ product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。**g
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的
 語法糖，等同 `_ if _ in <range>`——它以**range 包含關係**比對（不是值相等）、**不綁定**任何值、同樣不計入覆蓋（要綁值
-就寫 `x if x in <range>`）。
-
-> **[not yet]** 上一句剛給的那個替代寫法今天寫不出來：`x if x in <range>` 需要成員測試 `v in range`，而它會被指名
-> 拒絕（見上文的 `for`）。所以 range arm 的值沒有任何路徑綁得到——arm 本身按設計就不綁，而本來要替它出面的那個
-> guard 也不行。
+就寫 `x if x in <range>`）。它的 **bound 是編譯期常數**:一個 literal，或一個常數的**名字**
+（[`GRAMMAR#range-bound`](../../GRAMMAR)），也就是任何初始式編譯器折得動的 `:=` 或 `const` 綁定——所以 `LO..HI`
+與 `MID..=HI` 讀起來就是它們指的那些數字，而由其他常數搭出來的 bound（`const MID := LO + 50`）與直接寫死的一樣好。
+一個**不是**常數的名字——執行期才讀到的值、`mut` 綁定——會報在要它的那個 arm 上，而不是報在該綁定自己那行；而
+**呼叫**根本不是 bound，因為該產生式導不出呼叫，所以 `f()..300` 由 parser 擋下。

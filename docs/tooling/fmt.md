@@ -839,6 +839,7 @@ shipping compiler rather than a part of it (the line
 | `E474` | the discriminant of `….…` is not a compile-time constant                                    |
 | `E475` | a fill count is a compile-time constant, and … is not one                                   |
 | `E476` | a fill count is how many copies to make, and `…` is negative                                |
+| `E477` | a range arm's bound is a compile-time constant, and `…` is not one                          |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

@@ -105,8 +105,8 @@ reading as an iteration.
 ### `D103` — a range-`for` becomes the infinite one
 
 ```zerg
-for i in 0..3 {                  zgd_hi7c2 := 3
-    print i              →       mut zgd_i7c2 := 0
+for i in 0..3 {                  mut zgd_i7c2 := 0
+    print i              →       zgd_hi7c2 := 3
 }                                for {
                                      if zgd_i7c2 >= zgd_hi7c2 {
                                          break
@@ -117,9 +117,11 @@ for i in 0..3 {                  zgd_hi7c2 := 3
                                  }
 ```
 
-The upper bound is **hoisted and evaluated once**, before the initial value, which is the order
-`c_forrange` computes them in. A bound re-evaluated per iteration would be a loop that means
-something else, and `for i in 0..f()` is where that shows.
+The upper bound is **hoisted and evaluated once**, after the initial value — the two bounds are
+computed in the order they are written, which is the order `c_forrange` computes them in and the
+order every other operand list in the language is now evaluated in. A bound re-evaluated per
+iteration would be a loop that means something else, and `for i in f()..g()` is where both halves
+of that show.
 
 The bindings are named for the **line and column** of the `for` they came from, so two loops in one
 function cannot collide and the name says where it came from. They are hoisted into the enclosing

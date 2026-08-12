@@ -474,6 +474,10 @@ fn parse_param_types(mut &p: Parser) -> list[Ty] {
 # it lived in the emitter, on the constructor's lowering path alone, so a `chan[int?]` was
 # refused where it was BUILT and accepted everywhere it was merely declared.
 #
+# The rule is asked HERE for the CONSTRUCTOR's sake: `chan[T](cap?)` builds an `EChanNew`
+# carrying the element type and never a `Ty.TChan`, so it is the one surface form that does
+# not pass through `ty_chan` (ast.zg), which every construction of the type does.
+#
 # `line`/`col` are the `chan` keyword's own, taken by the caller before that token was
 # consumed, so a refusal points at the type rather than at the statement holding it.
 fn parse_chan_elem(mut &p: Parser, line: int, col: int) -> Ty {
@@ -492,10 +496,11 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	raise "E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, Kind.LBrack)
 
 	if p_at(p, Kind.LArrow) {
+		ar := cur(p)
 		p_advance(p)
 		inner := parse_type(p)
 		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
-		return Ty.TChan(ty_chan_elem(inner), 2)
+		return ty_chan(ty_chan_elem(inner), 2, p_place(p, ar.line, ar.col))
 	}
 
 	# `(A, B)` — a TUPLE TYPE (GRAMMAR#tuple-type), two elements or more. The value form has
@@ -562,9 +567,9 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# element type, so nothing else that a `<-` may follow is ever eaten
 		if p_at(p, Kind.LArrow) {
 			p_advance(p)
-			return Ty.TChan(elem, 1)
+			return ty_chan(elem, 1, p_place(p, kw.line, kw.col))
 		}
-		return Ty.TChan(elem, 0)
+		return ty_chan(elem, 0, p_place(p, kw.line, kw.col))
 	}
 	if name == "map" and p_at(p, Kind.LBrack) {
 		p_advance(p)

@@ -667,7 +667,7 @@ fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
 		Ty.TList(e) => Ty.TList(chk_spec_subst(e, sp, ip))
 		Ty.TOpt(e) => Ty.TOpt(chk_spec_subst(e, sp, ip))
 		Ty.TMap(k, v) => Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => Ty.TChan(chk_spec_subst(e, sp, ip), d)
+		Ty.TChan(e, d) => ty_chan(chk_spec_subst(e, sp, ip), d, "")
 		Ty.TEither(l, r) => Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
 		Ty.TTuple(es) => Ty.TTuple(chk_subst_all(es, sp, ip))
 		Ty.TFn(ps, r) => Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))

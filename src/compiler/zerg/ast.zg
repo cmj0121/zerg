@@ -1154,6 +1154,24 @@ fn ty_chan_elem_check(elem: Ty, at: str) {
 	raise f"E404 `chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel" + at if ty_is_opt(elem)
 }
 
+# ty_chan is the ONE WAY to build a channel type, and it exists so the rule above cannot be
+# walked around. Calling the rule "where an element type is READ" was still a list of doors,
+# and a list of doors grows: the parser had two and the substituter one, and a fourth was
+# added later in `chk_spec_subst` — a spec's `chan[K]` under `impl S[int?]` rebuilt the type
+# by hand and asked nothing, so that one position accepted what the other three refuse.
+#
+# CONSTRUCTION is the door that cannot grow, because a `Ty.TChan` value cannot come into
+# existence any other way. It is the same place the Go seed hangs its rule (typeref.go's
+# `chanType`), which is why the seed never had a hole of this shape.
+#
+# `at` is a place trailer (p_place) when the caller knows where the type was written, and ""
+# when there is nothing to point at — a channel type reached by SUBSTITUTION is spelled
+# nowhere in the source.
+fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
+	ty_chan_elem_check(elem, at)
+	return Ty.TChan(elem, dir)
+}
+
 # ty_is_opt is the shape question the rule above asks. It is spelled here rather than
 # reached for in the emitter because the parser asks it too, and the parser may not call
 # into the emitter (scripts/layering-check.sh).

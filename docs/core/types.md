@@ -236,11 +236,15 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
+> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and
+> the **generic `enum`** is `E212 NotImplemented: a generic enum`Either[…]`— this compiler erases type
+parameters, and a variant's payload names one`. A generic `struct` is `E215` for the same reason. The
+> block shows the specified shapes; both of them wait on generic types.
+
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
-Its MVP limits (a `mut`-built cycle leaks; a long chain frees in O(depth)) are the [Values & Memory](memory.md)
-reference.
+What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
 
 > **[not yet]** A recursive **`struct`** cannot be declared. The `Node` written above is rejected with
 > _`Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
@@ -262,9 +266,18 @@ the form and a call is not; one that does not fold is an error **at the variant*
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
 the **enum name is a value namespace** — `Color.Green` names the variant and `Color.of(n)` reverses a number
 — with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding
-`nil`, never a wrong variant). A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
-reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
-`Encode` / `Decode` impl (**[not yet]**), never a decorator.
+`nil`, never a wrong variant).
+
+> **[deviation]** The namespace is not the enum's. A **variant name belongs to the first enum that declares
+> it**, program-wide: with `enum Colour { Red; Green }` ahead of `enum Signal { Red; Amber }`, the
+> qualified `Signal.Red` — the spelling this paragraph tells a reader to use — is refused with _E457 `Red`
+> is a variant of `Colour`, not of `Signal`_, a sentence that is false about the program it is reporting
+> on, and with no place. So the second enum's variant is unreachable and the enum itself is unusable. The
+> linter meanwhile still emits `L401` for the same pair and advises writing `Signal.Red`, which is the one
+> spelling the compiler will not take.
+> A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
+> reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
+> `Encode` / `Decode` impl (**[not yet]**), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,
@@ -289,9 +302,10 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 > **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
 > is refused by name — the parts-inheritance rule above is specified and the derivation over an unnamed
 > form is unbuilt (the shipped message still blames the missing declaration).
-> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports
-> _NotImplemented: `,` is not an expression this compiler reads_ — so a tuple result is stored and passed as
-> specified, and read back only through `.0` / `.1`.
+> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E205 expected
+> a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
+> name (the parenthesized `(a, b) := two()` does say it, as `E238`). Either way a tuple result is stored
+> and passed as specified, and read back only through `.0` / `.1`.
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
@@ -320,7 +334,9 @@ and need an explicit `ok_or` / `ok` to cross.
 The one primitive for building a value is the **struct literal** — it names every field, so it is
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
 (usually `pub`) associated function that returns a literal, which runs inside the type's module and can
-establish the type's invariant at the moment of construction. A **private field is one an outsider never
+establish the type's invariant at the moment of construction (**[not yet]** — an associated function is
+refused by name, _E424 `User.from_id(…)` is an associated function_, so the invariant-establishing
+constructor this section reasons from is written as a free function today). A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
 decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
@@ -467,8 +483,12 @@ or `//` for the division that lands there. `byte → float` is absent too: that 
 **A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
 as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
 time rather than left to run. Reachability does not enter into it; `if false { b := byte(300) }` is the
-same error. It holds through a generic call once monomorphized, too: `byte(id(300))` for
-`fn id[T](x: T) -> T` is the same known constant, refused at the same compile time.
+same error.
+
+> **[deviation]** It does **not** hold through a generic call. `byte(id(300))` for `fn id[T](x: T) -> T` is
+> the same known constant once monomorphized, and it compiles: the program builds and dies at run time with
+> _OverflowError: integer conversion out of range_. The constant-folding runs before substitution, so the
+> value the specialization makes known arrives after the only pass that would have refused it.
 
 **An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
 `1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different

@@ -203,10 +203,13 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
+> **[not yet]** 上面那一段的兩個宣告都編不過。遞迴 `struct` 是 `E452`(見下),而**泛型 `enum`** 是
+> _E212 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a variant's
+> payload names one_;泛型 `struct` 因同樣的理由是 `E215`。這段顯示的是規範中的形狀,兩者都在等泛型型別。
+
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
-參照**(refcount 共享),不是深拷貝。它的 MVP 限制(以 `mut` 建出的循環會洩漏;長鏈以 O(depth) 釋放)見
-[值與記憶體](memory.zh-TW.md)。
+參照**(refcount 共享),不是深拷貝。它不做的是釋放那條鏈,那是[值與記憶體](memory.zh-TW.md)自己那條 deviation。
 
 > **[not yet]** 遞迴 **`struct`** 宣告不出來。上面寫的那個 `Node` 會被拒絕、報 _`Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於
@@ -225,7 +228,15 @@ Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝�
 是；摺不出來的那個是**在該 variant 上**報錯。這種
 enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）;**enum 名稱是一個值命名空間**
 ——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
-`E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。要指定寬度就用 opt-in layout 裝飾器
+`E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。
+
+> **[deviation]** 那個命名空間不是 enum 的。一個 **variant 名字屬於全程式第一個宣告它的 enum**:當
+> `enum Colour { Red; Green }` 排在 `enum Signal { Red; Amber }` 之前,帶限定的 `Signal.Red`——正是本段要
+> 讀者採用的那個寫法——會被 _E457 `Red` is a variant of `Colour`, not of `Signal`_ 拒絕,而那句話對它正在報告
+> 的那支程式而言是假的,且沒有位置。於是第二個 enum 的 variant 搆不到,那個 enum 本身也無法使用。與此同時
+> linter 仍會對同一組發出 `L401`,並建議寫 `Signal.Red`——那正是編譯器唯一不收的寫法。
+
+要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是
 `Encode` / `Decode` impl（**[not yet]**）、絕不是裝飾器。
 
@@ -246,9 +257,9 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 > **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——上面的
 > 組成繼承規則已是規格,而無名形式上的衍生尚未建置(出貨的訊息仍把原因怪在沒有宣告可掛上)。
-> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報
-> _NotImplemented: `,` is not an expression this compiler reads_——所以 tuple 的結果如規範般可存、可傳,但只能用
-> `.0` / `.1` 讀回來。
+> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E205 expected a newline or `;` to separate
+> statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E238`)。
+> 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
@@ -269,7 +280,9 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
-自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
+自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好（**[not yet]**——associated function 會被指名
+拒絕,_E424 `User.from_id(…)` is an associated function_,所以本節推理所依據的那種「立 invariant 的 constructor」
+今天要寫成自由函式）。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
 decorator 的職責——**[not yet]**，所以今天只要型別可及，literal 就可及。
 
@@ -389,9 +402,11 @@ spec 的參數——兩件不同的事,做在不同的地方。
 別都有 `display`。
 
 **編譯器算得出來的轉換就會被算出來。** `byte(300)` 是良構的 —— 然後它以**常數**的身分失敗:值是已知的,轉換已知
-會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;`if false { b := byte(300) }` 是同一個錯誤。它也
-穿過 monomorphize 之後的泛型呼叫:對 `fn id[T](x: T) -> T` 而言,`byte(id(300))` 是同一個已知常數,在同一個編譯期
-被拒絕。
+會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;`if false { b := byte(300) }` 是同一個錯誤。
+
+> **[deviation]** 它**穿不過**泛型呼叫。對 `fn id[T](x: T) -> T` 而言,`byte(id(300))` 在 monomorphize 之後
+> 是同一個已知常數,而它編得過:程式建得起來,執行期才以 _OverflowError: integer conversion out of range_ 死掉。
+> 常數摺疊跑在代換之前,所以那個由特化才變成已知的值,抵達的時間晚於唯一會拒絕它的那一趟。
 
 **偏離字面量預設的採用是一個 lint finding**(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議而不是語言
 規則:`1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。

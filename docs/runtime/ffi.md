@@ -6,17 +6,20 @@ directly on the type, memory, error, and visibility models in the [Language Refe
 the public-surface rules in [Modules, Packages & Programs](package.md). Also in [繁體中文](ffi.zh-TW.md).
 
 > **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
-> `unsafe` context both of them sit inside is refused by name (`NotImplemented: unsafe`), which takes the
-> import edge with it: there is no `ffi` module in the shipped standard library, and `import "ffi"` is
-> accepted silently — an import that resolves to nothing is not diagnosed — so the failure arrives later, at
-> the `unsafe` the binding needs. On the export edge a `--emit lib` build writes an object and **no header**,
-> and nothing reports which `pub` declarations would have been left out of one. `sizeof` / `alignof`, which
-> this chapter calls a stdlib facility and [Built-ins](builtins.md) calls a built-in, exist in neither place.
+> `unsafe` context a foreign call sits inside is where it stops: the **block-expression** form is refused by
+> name, with a place (`E224`), and so is a standalone **`unsafe fn`** (`E264`) — which takes the import edge
+> with it. There is no `ffi` module in the shipped standard library, and `import "ffi"` is accepted silently
+> — an import that resolves to nothing is not diagnosed — so the failure arrives later, at the `unsafe` the
+> binding needs. The module-level **group** is the shape that IS built, for its `mut` bindings; what its
+> `fn` may do inside is still refused, one operation at a time. On the export edge a `--emit lib` build
+> writes an object and **no header**, and nothing reports which `pub` declarations would have been left out
+> of one. `sizeof` / `alignof`, which this chapter calls a stdlib facility and [Built-ins](builtins.md)
+> calls a built-in, exist in neither place.
 >
-> Two things here are not merely unbuilt but wrong today, and they are marked where they appear below: a
-> `fn` declared inside a module-level `unsafe { … }` group is callable from safe code with no diagnostic,
-> and a `handle`-typed binding escapes to `cc` against generated C. (A standalone `unsafe fn` declaration
-> is refused by name, with a place — an honest `[not yet]`, not a silent wrong answer.)
+> One thing here is not merely unbuilt but wrong today, and it is marked where it appears below: a
+> `handle`-typed binding escapes to `cc` against generated C. (The group's caller rule used to be the
+> second: a `fn` declared inside a module-level `unsafe { … }` group was callable from safe code with no
+> diagnostic. It is enforced now, and reported as `E387`.)
 
 ## Two edges, one contract
 
@@ -228,11 +231,13 @@ mutable global with nothing said.
 > form is turned away rather than silently disarmed. (It used to compile exactly that way:
 > `unsafe fn g() -> int { return 2 }` then `print g()` compiled, and `g` was callable from ordinary safe
 > code with no diagnostic at all.)
->
-> **[deviation]** **The trust boundary is not enforced.** A `fn` declared inside a module-level
-> `unsafe { … }` group is callable from ordinary safe code with no diagnostic at all. The keyword is parsed
-> and nothing reads it, so `unsafe` marks intent and confers no checking.
->
+
+The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
+unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is
+rejected as `E387`, with a place. Its callers are the other declarations in the group, which is what the
+group is for. Until the block-expression above is built, that is also the ONLY caller a program has: an
+entry point is safe, so a group's `fn` is reachable from another group member and from nowhere else.
+
 > **[deviation]** A `handle`-typed binding escapes to `cc`. `mut h: handle? = nil` produces no Zerg
 > diagnostic and fails as `error: unknown type name 'zg_handle'` against the generated C — the one place in
 > this chapter where a form breaks the standing contract by reaching the C compiler rather than being

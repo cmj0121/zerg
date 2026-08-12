@@ -82,15 +82,15 @@ func TestBracketResolution(t *testing.T) {
 	})
 }
 
-// TestNamePatternResolution settles a bare-name pattern: a name that resolves to
-// a variant in scope is a nullary variant pattern; otherwise it is a fresh
-// binding.
+// TestNamePatternResolution settles a name pattern: a QUALIFIED one is a nullary
+// variant pattern, and a BARE one is a fresh binding — whatever the name means in
+// scope, and whatever letter it starts with (GRAMMAR#pattern).
 func TestNamePatternResolution(t *testing.T) {
-	t.Run("known variant is a variant pattern", func(t *testing.T) {
-		// a trailing '_' keeps the match exhaustive; the resolver settles 'Red' as a
-		// variant because it names an enum variant in scope.
+	t.Run("a qualified name is a variant pattern", func(t *testing.T) {
+		// a trailing '_' keeps the match exhaustive; the resolver settles 'Color.Red'
+		// as a variant because the pattern named the enum it belongs to.
 		info, msgs := checkInfo(t, "enum Color {\n  Red\n  Green\n  Blue\n}\n"+
-			"fn f(c: Color) -> int {\n  return match c {\n    Red => 0\n    _ => 2\n  }\n}")
+			"fn f(c: Color) -> int {\n  return match c {\n    Color.Red => 0\n    _ => 2\n  }\n}")
 		if len(msgs) != 0 {
 			t.Fatalf("unexpected diags: %v", msgs)
 		}
@@ -100,6 +100,24 @@ func TestNamePatternResolution(t *testing.T) {
 		}
 		if res.Variant == nil || res.Variant.Name != "Red" {
 			t.Fatalf("variant = %v, want Red", res.Variant)
+		}
+	})
+
+	t.Run("a bare name binds even when a variant answers to it", func(t *testing.T) {
+		// 'Red' names a variant in scope and STILL binds: were it resolved, declaring a
+		// variant in another file would change what this arm matched. It is the only arm,
+		// so binding is also what keeps the match exhaustive.
+		info, msgs := checkInfo(t, "enum Color {\n  Red\n  Green\n  Blue\n}\n"+
+			"fn f(c: Color) -> int {\n  return match c {\n    Red => 0\n  }\n}")
+		if len(msgs) != 0 {
+			t.Fatalf("unexpected diags: %v", msgs)
+		}
+		res := onlyPattern(t, info)
+		if res.Kind != NameBinding {
+			t.Fatalf("pattern kind = %v, want NameBinding", res.Kind)
+		}
+		if res.Sym == nil || res.Sym.Name != "Red" {
+			t.Fatalf("binding symbol = %v, want Red", res.Sym)
 		}
 	})
 

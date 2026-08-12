@@ -24,7 +24,7 @@ func TestRecursiveEnumListBalanced(t *testing.T) {
 		"enum List { Nil; Cons(int, List) }\n"+
 			"fn sum(l: List) -> int {\n"+
 			"\treturn match l {\n"+
-			"\t\tNil => 0\n"+
+			"\t\tList.Nil => 0\n"+
 			"\t\tCons(h, t) => h + sum(t)\n"+
 			"\t}\n}\n"+
 			"fn main() -> Result[nil] {\n"+
@@ -73,9 +73,9 @@ func TestRecursiveMutualEnumBalanced(t *testing.T) {
 			"enum B { BEnd; BA(A) }\n"+
 			"fn count(a: A) -> int {\n"+
 			"\treturn match a {\n"+
-			"\t\tAEnd => 0\n"+
+			"\t\tA.AEnd => 0\n"+
 			"\t\tAB(b) => match b {\n"+
-			"\t\t\tBEnd => 1\n"+
+			"\t\t\tB.BEnd => 1\n"+
 			"\t\t\tBA(inner) => 1 + count(inner)\n"+
 			"\t\t}\n"+
 			"\t}\n}\n"+

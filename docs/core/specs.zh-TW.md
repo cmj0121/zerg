@@ -123,6 +123,11 @@ spec 宣告的東西,不能問裡面裝的是什麼。需要問的時候,答案�
 - 收 **`This`** 的方法:它需要 object 已經忘掉的那個型別——那個形狀是 `enum` 上的 `#[derive(S)]` 在做的;
 - **不是 spec** 的東西:沒有方法可以持有。
 
+> **[not yet]** 型別同時實作兩者是做不到的。當兩個 spec 各自宣告 `go` 時,`impl A for P` 與 `impl B for P` 會在
+> **第二個宣告**處被拒絕——_E451 `P` declares `go` twice — every method on a type shares one namespace, spec or
+> inherent alike_——所以下面那個「把靜態脈絡收窄到單一 spec」的解法沒有程式可以套用。這條拒絕就是讓 derived 與
+> 手寫 `Eq` 不能並存的同一條,只是多管了一格。
+
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
 做裸 `x.foo()`）。Zerg 在編譯期**拒絕它**、而不引入 fully-qualified 呼叫語法來消歧——你把靜態脈絡收窄到單一 spec

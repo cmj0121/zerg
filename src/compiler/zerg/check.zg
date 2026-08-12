@@ -1480,8 +1480,8 @@ fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 # this function's to report: an expression that cannot be folded is simply not one that adopts,
 # and the position then says what it always said about a value of the wrong type.
 struct Folded {
-	ok: bool
-	value: int
+	pub ok: bool
+	pub value: int
 }
 
 # chk_lit_eval works out an all-literal expression's value.

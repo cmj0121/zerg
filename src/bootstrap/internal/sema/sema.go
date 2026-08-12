@@ -383,13 +383,25 @@ func (c *checker) fillStruct(n *ast.StructDecl) {
 		own[f.Name] = true
 	}
 	for _, f := range n.Fields {
+		ft := c.resolveType(f.Type)
 		sym.TypeDef.Struct.Fields = append(sym.TypeDef.Struct.Fields, types.FieldDef{
-			Name: f.Name, Type: c.resolveType(f.Type), Pub: f.Pub, HasDefault: f.Default != nil,
+			Name: f.Name, Type: ft, Pub: f.Pub, HasDefault: f.Default != nil,
 		})
 		// FORK-A5: a field default is backfilled verbatim at the construct site, so it
 		// must be a self-contained constant that references no field of this struct.
 		if f.Default != nil {
 			c.checkConstDefault(f.Default, own)
+		}
+		// GRAMMAR#field: a non-`pub` field is module-private and MUST carry a default.
+		// The field-wise `T(...)` constructor is public and there are no zero values, so
+		// a field with no default is one every construction has to supply — and outside
+		// the module a private field cannot even be read, which makes such a type
+		// unbuildable from where it is used. A `T?` is the exception the note names: its
+		// implicit default is `nil`.
+		if !f.Pub && f.Default == nil {
+			if _, opt := ft.(*types.Opt); !opt {
+				c.errorf(f.Span(), "the field %q of %q is module-private, so it must carry a default; write `pub` to expose the field instead", f.Name, n.Name)
+			}
 		}
 	}
 	c.typeParams = saved

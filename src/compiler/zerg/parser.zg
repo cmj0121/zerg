@@ -12,19 +12,19 @@ import "strconv"
 # Parser holds the token list, the read cursor, and — while an `impl T { … }` block is
 # being read — the type that block is for, which is what `This` names inside it.
 struct Parser {
-	toks: list[Token]
-	pos: int
-	impl_ty: str
+	pub toks: list[Token]
+	pub pos: int
+	pub impl_ty: str
 
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
-	path: str
+	pub path: str
 
 	# depth counts how many recursion levels of nesting the parser is inside — one per
 	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
 	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
 	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
 	# is the only answer a recursive-descent parser can give before that happens.
-	depth: int
+	pub depth: int
 
 	# edepth counts how many parse_expr calls are open. It is not a second budget — it
 	# answers one question, "is the expression now finished the OUTERMOST one", so the
@@ -32,7 +32,7 @@ struct Parser {
 	# statement resets it, because a statement is where an expression tree ends: the block
 	# inside a `guard` or a closure holds statements, and each of their expressions is a
 	# root of its own.
-	edepth: int
+	pub edepth: int
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -1749,20 +1749,34 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
-		# a field may be declared `pub`; visibility does not reach the emitted C, which is
-		# one flat struct either way, so the marker is read and dropped
+		# where the field BEGINS, read before `pub` is consumed, so a diagnostic about the
+		# field points at the whole declaration rather than at the type halfway along it
+		at := cur(p)
+
+		# a field may be declared `pub`, which marks it for external instance access. It does
+		# not reach the emitted C — one flat struct either way — and it is carried because it
+		# decides whether the field is allowed to have no default (GRAMMAR#field).
+		mut is_pub := false
 		if p_at(p, Kind.Pub) {
 			p_advance(p)
+			is_pub = true
 		}
 		fname := p_name(p, "a struct field")
 		expect(p, Kind.Colon)
 		fty := parse_type(p)
 
-		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor. It was
-		# not read here, so the `=` began the next field: the struct gained a field named `=`
-		# of type `7`, and the error named those instead of the form that was written.
-		raise f"E216 NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Kind.Assign)
-		fields.append(FieldDef(fname, fty))
+		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor: it is
+		# what lets the field's argument be omitted, exactly as a parameter default lets a
+		# trailing call argument be omitted. It is one expression and it is kept whole, so it
+		# can be backfilled at each construction and evaluated there.
+		mut has_def := false
+		mut def := Expr.ENil
+		if p_at(p, Kind.Assign) {
+			p_advance(p)
+			def = parse_expr(p)
+			has_def = true
+		}
+		fields.append(FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col))
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)

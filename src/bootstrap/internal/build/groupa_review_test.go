@@ -33,7 +33,7 @@ func TestDefaultReferencingParamGates(t *testing.T) {
 // TestFieldDefaultReferencingFieldGates: a struct field default that names another
 // field is likewise not a self-contained constant and must gate cleanly.
 func TestFieldDefaultReferencingFieldGates(t *testing.T) {
-	code, _, diags := Compile("struct S {\n\tx: int\n\ty: int = x\n}\n" +
+	code, _, diags := Compile("struct S {\n\tpub x: int\n\ty: int = x\n}\n" +
 		"fn main() {\n\tprint S(x: 5).y\n}\n")
 	if len(diags) == 0 || code != "" {
 		t.Fatalf("a field default referencing a field must gate; diags=%v code=%q", diags, code)
@@ -71,7 +71,7 @@ func TestConstantParamDefaultRuns(t *testing.T) {
 // TestConstantFieldDefaultRuns: a constant literal field default still backfills at
 // the construct site.
 func TestConstantFieldDefaultRuns(t *testing.T) {
-	got := runProgram(t, "struct S {\n\tx: int\n\ty: int = 100\n}\n"+
+	got := runProgram(t, "struct S {\n\tpub x: int\n\ty: int = 100\n}\n"+
 		"fn main() {\n\tprint S(x: 5).y\n}\n")
 	if got != "100\n" {
 		t.Fatalf("S(x: 5).y with default y=100 = %q, want %q", got, "100\n")

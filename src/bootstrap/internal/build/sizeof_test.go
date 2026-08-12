@@ -11,7 +11,7 @@ import (
 // TestSizeofRuns covers primitives and a struct that is NEVER otherwise instantiated (so
 // the mono pass must still emit its C type), and that the result is an ordinary uint.
 func TestSizeofRuns(t *testing.T) {
-	got := runProgramRT(t, "struct Point { x: int; y: int }\n"+
+	got := runProgramRT(t, "struct Point { pub x: int; pub y: int }\n"+
 		"fn main() {\n"+
 		"\tprint sizeof[int]\n"+ // 8
 		"\tprint sizeof[byte]\n"+ // 1

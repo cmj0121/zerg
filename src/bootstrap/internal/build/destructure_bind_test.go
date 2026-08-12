@@ -42,7 +42,7 @@ func TestStructBindRuns(t *testing.T) {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	src := "struct Div {\n\tq: int\n\tr: int\n}\n" +
+	src := "struct Div {\n\tpub q: int\n\tpub r: int\n}\n" +
 		"fn divmod(a: int, b: int) -> Div {\n\treturn Div(q: a / b, r: a % b)\n}\n" +
 		"fn main() {\n\tDiv{q, r} := divmod(7, 2)\n\tprint q\n\tprint r\n}\n"
 	code, _, diags := Compile(src)
@@ -76,7 +76,7 @@ func TestTupleDestructureStrBalanced(t *testing.T) {
 // once at scope exit.
 func TestStructDestructureStrBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct P { a: str; b: str }\n"+
+		"struct P { pub a: str; pub b: str }\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\tP{a, b} := P(\"x\" + \"y\", \"z\" + \"w\")\n"+
 			"\tprint a\n"+

@@ -620,7 +620,6 @@ shipping compiler rather than a part of it (the line
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given     |
 | `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque        |
 | `E215` | a generic struct `…[…]` — **[not yet]**                                                     |
-| `E216` | a default on field `…` — **[not yet]**                                                      |
 | `E217` | the decorator `#[…]` — **[not yet]**                                                        |
 | `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
 | `E219` | `…` as an `impl` item — **[not yet]**                                                       |
@@ -851,6 +850,8 @@ shipping compiler rather than a part of it (the line
 | `E479` | a map entry is `key: value`, and this one has no `:`                                        |
 | `E480` | … whose value has no type this compiler can name — **[not yet]**                            |
 | `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
+| `E482` | the field `…` of `…` is module-private, so it must carry a default                          |
+| `E483` | the default on field `…` reads the field `…` — **[not yet]**                                |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

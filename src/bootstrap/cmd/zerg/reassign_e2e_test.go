@@ -32,7 +32,7 @@ var reassignCases = []struct {
 		// R7: reassign a struct-of-Ref binding. a's old inner Ref(1) is released via the
 		// struct deep-drop at the assignment; Ref(2) is retained then released to 0.
 		name:       "R7-struct-of-ref",
-		src:        "struct Box { v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n b := Box(Ref(2))\n a = b\n print deref(a.v)\n}",
+		src:        "struct Box { pub v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n b := Box(Ref(2))\n a = b\n print deref(a.v)\n}",
 		wantStdout: "2\n",
 		wantAllocs: "ALLOCS=2 LIVE=0",
 	},
@@ -48,7 +48,7 @@ var reassignCases = []struct {
 		// R8: reassign a Ref-typed field (a sub-place). The old field Ref(1) is released
 		// in place before the new one is stored; the struct's scope drop frees Ref(2).
 		name:       "R8-field-reassign",
-		src:        "struct Box { v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
+		src:        "struct Box { pub v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
 		wantStdout: "2\n",
 		wantAllocs: "ALLOCS=2 LIVE=0",
 	},

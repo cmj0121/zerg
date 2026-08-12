@@ -271,6 +271,15 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   name beyond its keyword table. So `struct This`, `fn This()`, a parameter and an `enum`
   variant all build here and `zerg` refuses each by name. (Lowercase `this` the seed does
   refuse, because that one IS a keyword token.)
+- **An `impl` whose TARGET carries type arguments is accepted, and implements nothing.**
+  `impl Size for list[int] { … }` and the inherent `impl Box[int] { … }` both build here: the
+  seed parses the whole of `GRAMMAR#impl-decl`, including the `impl`'s own `generics?`, and
+  then attaches the block to nothing a call can find, so `xs.size()` answers that a list has
+  no method by that name — a refusal at the USE, one step from a declaration that was never
+  turned away. `zerg` refuses the declaration itself, naming the form and its place. (The
+  parameterized `impl[T] Spec for list[T]` the seed does turn away, though for a reason of
+  its own: it drops the parameters it read, so the `T` in the target resolves to nothing and
+  the answer is `unknown type "T"` rather than a word about the form.)
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

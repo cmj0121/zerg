@@ -685,6 +685,8 @@ shipping compiler rather than a part of it (the line
 | `E285` | a default on a closure parameter — **[not yet]**                                            |
 | `E286` | a `mut &` parameter in a function type — **[not yet]**                                      |
 | `E287` | an `unsafe` `spec` signature — **[not yet]**                                                |
+| `E288` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                            |
+| `E289` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                         |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

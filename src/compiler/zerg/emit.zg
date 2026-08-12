@@ -3030,6 +3030,9 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 			c_check_private_field(em, sd, fd)
 		}
 		c_check_names_distinct(fnames, "a field", sd.name)
+		for fd in sd.fields {
+			c_check_field_default(sd, fnames, fd)
+		}
 	}
 	for ed in f.enums {
 		mut vnames: list[str] = []
@@ -3070,6 +3073,48 @@ fn c_check_private_field(mut &em: Emitter, sd: StructDecl, fd: FieldDef) {
 	return if fd.is_pub or fd.has_def or c_is_opt(fd.ty)
 
 	chk_at_place(em, sd.path, fd.line, fd.col, "E482", f"the field `{fd.name}` of `{sd.name}` is module-private, so it must carry a default (`{fd.name}: {ty_name(fd.ty)} = …`) — a construction outside the module cannot supply a value for a field it may not read. Write `pub` to expose the field instead")
+}
+
+# c_check_field_default refuses a default that names ANOTHER FIELD of the same struct, which
+# is the one shape of default this compiler cannot lower — and the shape that goes wrong
+# silently rather than loudly.
+#
+# The default is materialised at the CONSTRUCTION, where the struct's fields are not names in
+# scope, so `b: int = a * 2` reads whatever `a` means THERE. With no such name it is `E372
+# undefined name`, which is a true sentence about the wrong thing — `a` is a field, right
+# above. With a module constant called `a` it is worse: the default quietly reads the
+# constant, and `P(3).b` was 200 for `a := 100` where the field would have made it 6.
+#
+# It is the same refusal `docs/code/functions.md` records for a parameter default that reads
+# an earlier parameter, for the same reason, and the seed has gated it on both since it was
+# written. Refusing by name is what this compiler owes a form it cannot lower.
+fn c_check_field_default(sd: StructDecl, fnames: list[str], fd: FieldDef) {
+	return if not fd.has_def
+
+	nm := c_default_names_field(fnames, fd.def)
+
+	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
+	# the field carries its own line and column, so there is a position to give and no reason
+	# to make the reader find the struct themselves
+	raise f"E483 NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all)" + "\n" + place_line(sd.path, fd.line, fd.col) if nm != ""
+}
+
+# c_default_names_field is the first of `fnames` a default expression mentions, or "". The
+# walk is ITERATIVE over `expr_parts` for the reason `p_expr_root`'s is: a walk that runs
+# over an arbitrary program's expression must not be able to fail at depth.
+fn c_default_names_field(fnames: list[str], e: Expr) -> str {
+	mut nodes: list[Expr] = [e]
+	mut i := 0
+	for i < nodes.len() {
+		nm := c_ident_name(nodes[i])
+		return nm if nm != "" and c_name_in(fnames, nm)
+
+		for k in expr_parts(nodes[i]) {
+			nodes.append(k)
+		}
+		i = i + 1
+	}
+	return ""
 }
 
 fn c_check_names_distinct(names: list[str], what: str, whose: str) {

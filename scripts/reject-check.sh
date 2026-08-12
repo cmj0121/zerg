@@ -294,7 +294,7 @@ EOF
 
 reject assign-to-field-of-immutable E308 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -599,7 +599,7 @@ spec S {
 }
 
 struct A {
-	x: int
+	pub x: int
 }
 
 pub impl S for A {
@@ -642,7 +642,7 @@ EOF
 reject pub-before-a-decorator E250 at=1:1 <<'EOF'
 pub #[derive(Eq)]
 struct A {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -903,7 +903,7 @@ spec Show {
 }
 
 struct C {
-	r: int
+	pub r: int
 }
 
 impl Show for C {
@@ -932,7 +932,7 @@ spec Show {
 }
 
 struct C {
-	r: int
+	pub r: int
 }
 
 impl Show for C {
@@ -961,7 +961,7 @@ spec Show {
 
 #[derive(Show)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -998,7 +998,7 @@ EOF
 reject obj-on-something-that-is-not-a-spec E280 no-place <<'EOF'
 #[obj]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1151,7 +1151,7 @@ EOF
 reject order-a-struct-that-has-eq E346 'and these are P and P' <<'EOF'
 #[derive(Eq)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1386,7 +1386,7 @@ EOF
 
 reject str-into-an-int-struct-field E338 'field 1 of `P` is int, and this gives str' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1397,7 +1397,7 @@ EOF
 
 reject oversized-literal-into-a-byte-struct-field E330 '`300` is not a value a byte holds' <<'EOF'
 struct P {
-	x: byte
+	pub x: byte
 }
 
 fn main() {
@@ -1497,7 +1497,7 @@ EOF
 
 reject method-with-too-many-arguments E327 '`P.add` takes 2 arguments and this gives 3' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1541,7 +1541,7 @@ EOF
 
 reject str-argument-into-a-method E340 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1592,7 +1592,7 @@ EOF
 
 reject assign-str-to-an-int-field E339 'cannot assign str to that part of `p`, which holds int' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1613,11 +1613,11 @@ EOF
 
 reject bind-a-struct-to-another-struct E335 'cannot bind B to a A binding' <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn main() {
@@ -1628,11 +1628,11 @@ EOF
 
 reject pass-a-struct-where-another-goes E340 'argument 1 of `take` is A, and this gives B' <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn take(v: A) -> int {
@@ -1646,11 +1646,11 @@ EOF
 
 reject return-a-struct-the-signature-does-not-name E333 "this function's answer is A, and this gives B" <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn f() -> A {
@@ -2086,7 +2086,7 @@ EOF
 
 reject this-as-a-method-parameter E245 'is a reserved word and cannot name a parameter' no-place <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -2102,7 +2102,7 @@ EOF
 
 reject this-as-a-field E245 'is a reserved word and cannot name a struct field' no-place <<'EOF'
 struct P {
-	this: int
+	pub this: int
 }
 
 fn main() {
@@ -2123,7 +2123,7 @@ EOF
 
 reject this-as-a-type E245 'is a reserved word and cannot name a struct' no-place <<'EOF'
 struct this {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -2178,7 +2178,7 @@ EOF
 
 reject capital-this-as-a-type E245 'cannot name a struct' no-place seed-gap <<'EOF'
 struct This {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -2260,7 +2260,7 @@ EOF
 
 reject mut-fn-on-an-immutable-receiver E325 'which is a `mut fn`, writes back to `p`' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -2415,7 +2415,7 @@ EOF
 # what it emits.
 reject convert-a-struct-to-an-int E455 no-place <<'EOF'
 struct P {
-	v: int
+	pub v: int
 }
 
 fn main() {
@@ -2531,7 +2531,7 @@ EOF
 
 reject impl-misses-a-required-member E318 'does not implement `show`' seed-gap <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 spec Show {
@@ -2548,7 +2548,7 @@ EOF
 
 reject impl-misses-one-of-two E318 'does not implement `tag`' seed-gap <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 spec Show {
@@ -2585,7 +2585,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2605,7 +2605,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2625,7 +2625,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2645,7 +2645,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2666,7 +2666,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2686,7 +2686,7 @@ spec Bump {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Bump for A {
@@ -2707,7 +2707,7 @@ spec Bump {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Bump for A {
@@ -2728,7 +2728,7 @@ spec Eq {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Eq for A {
@@ -2748,7 +2748,7 @@ spec Ix[K] {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ix[int] for A {
@@ -2772,7 +2772,7 @@ spec Ord: Eq {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ord for A {
@@ -2788,7 +2788,7 @@ EOF
 
 reject impl-of-a-spec-that-does-not-exist E314 <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Nope for A {
@@ -2808,7 +2808,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2834,7 +2834,7 @@ spec Ix[K] {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ix for A {
@@ -2868,11 +2868,11 @@ EOF
 
 reject a-struct-declared-twice E382 no-place <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 struct A {
-	w: str
+	pub w: str
 }
 
 fn main() {
@@ -2904,7 +2904,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2920,7 +2920,7 @@ EOF
 
 reject a-struct-and-a-spec-share-a-name E381 'once as a struct, once as a spec' seed-gap <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 spec A {
@@ -2940,7 +2940,7 @@ EOF
 
 reject a-struct-and-a-function-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 fn A(n: int) -> int {
@@ -2958,7 +2958,7 @@ fn A(n: int) -> int {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 fn main() {
@@ -3012,7 +3012,7 @@ EOF
 # This case is what holds the name walk to the list that still has the templates in it.
 reject a-generic-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
 struct Box {
-	v: int
+	pub v: int
 }
 
 fn Box[T](x: T) -> T {
@@ -3032,7 +3032,7 @@ reject a-struct-and-a-module-constant-share-a-name E381 'once as a struct, once 
 const A := 1
 
 struct A {
-	v: int
+	pub v: int
 }
 
 fn main() {
@@ -3072,8 +3072,8 @@ EOF
 
 reject a-field-declared-twice E453 'declares a field named `v` twice' no-place seed-gap <<'EOF'
 struct A {
-	v: int
-	v: str
+	pub v: int
+	pub v: str
 }
 
 fn main() {
@@ -3211,7 +3211,7 @@ EOF
 
 reject str-into-an-optional-struct-field E338 'field 1 of `Box` is int' <<'EOF'
 struct Box {
-	v: int?
+	pub v: int?
 }
 
 fn main() {
@@ -3300,9 +3300,9 @@ EOF
 # the place is PINNED on this one, because a struct field is the position that carries no
 # statement and no declaration position of its own: the finding has to come from the type
 # as it is written, and nothing else here would notice it drifting to the file's first line.
-reject a-channel-of-optionals-as-a-field E404 at=2:6 <<'EOF'
+reject a-channel-of-optionals-as-a-field E404 at=2:10 <<'EOF'
 struct Box {
-	ch: chan[int?]
+	pub ch: chan[int?]
 }
 
 fn main() {
@@ -3327,7 +3327,7 @@ EOF
 
 reject a-channel-of-optionals-inside-a-list E404 <<'EOF'
 struct Box {
-	xs: list[chan[int?]]
+	pub xs: list[chan[int?]]
 }
 
 fn main() {
@@ -3525,7 +3525,7 @@ fi
 
 reject display-override-with-arguments E359 seed-gap <<'EOF'
 struct Point {
-	x: int
+	pub x: int
 }
 
 impl Point {
@@ -3541,7 +3541,7 @@ EOF
 
 reject display-override-wrong-answer E361 seed-gap <<'EOF'
 struct Point {
-	x: int
+	pub x: int
 }
 
 impl Point {
@@ -3733,7 +3733,7 @@ EOF
 # answer, and it is permanent.
 reject field-the-struct-does-not-have E376 <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 fn main() {
@@ -3786,7 +3786,7 @@ EOF
 # the stack ran out. A compiler that dies says nothing at all, about anything.
 reject struct-holding-itself-by-value E452 no-place <<'EOF'
 struct P {
-	p: P
+	pub p: P
 }
 
 fn main() {
@@ -3818,7 +3818,7 @@ EOF
 
 reject raise-a-struct E380 <<'EOF'
 struct P {
-	a: int
+	pub a: int
 }
 
 fn main() {
@@ -3986,7 +3986,7 @@ EOF
 
 reject assign-to-the-receiver E306 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 impl P {
 	fn set() {
@@ -4004,7 +4004,7 @@ spec A: Nope {
 	fn f()
 }
 struct P {
-	x: int
+	pub x: int
 }
 impl A for P {
 	fn f() {
@@ -4028,7 +4028,7 @@ EOF
 # saying `mut fn` — the half of the rule that is not about the argument at all.
 reject a-borrow-of-a-field-of-an-immutable-receiver E324 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 fn bump(mut &n: int) {
 	n = n + 1
@@ -4077,7 +4077,7 @@ EOF
 
 reject a-display-that-mutates E360 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 impl P {
 	mut fn display() -> str {
@@ -4092,12 +4092,66 @@ EOF
 
 reject a-struct-literal-missing-a-field E370 <<'EOF'
 struct P {
-	a: int
-	b: int
+	pub a: int
+	pub b: int
 }
 fn main() {
 	p := P(1)
 	print p.a
+}
+EOF
+
+# A DEFAULT MAKES ONE FIELD OPTIONAL, NOT THE ONES BEFORE IT. Backfilling runs from the end
+# of the written arguments forward, so a construction that stops short of a field with no
+# default is still short — the same rule a `fn` parameter default follows, and the one that
+# would go quiet if a defaulted field anywhere in the type were read as "this may be empty".
+reject a-required-field-before-a-defaulted-one E370 '`Box` needs a value for field 1' <<'EOF'
+struct Box {
+	pub w: int
+	pub h: int = 4
+}
+
+fn main() {
+	b := Box()
+	print b.h
+}
+EOF
+
+# --- a private field must carry a default -----------------------------------------------
+#
+# GRAMMAR's FIELD VISIBILITY & DEFAULTS note: a non-`pub` field is module-private, and MUST
+# carry a default. The field-wise `T(...)` constructor is public and there are no zero
+# values, so a field with no default is one every construction has to supply — and outside
+# the module a private field cannot even be read, which makes the type unbuildable from
+# where it is used.
+#
+# The rule was UNENFORCEABLE until field defaults existed, so the compiler accepted this and
+# the MUST was dead in both directions: no program could obey it, and none was asked to.
+reject a-private-field-with-no-default E482 '`m` of `Q`' <<'EOF'
+struct Q {
+	pub n: int
+	m: int
+}
+
+fn main() {
+	q := Q(9, 4)
+	print q.m
+}
+EOF
+
+# A `T?` IS THE EXCEPTION THE NOTE NAMES — its implicit default is `nil` — so the rule has to
+# be written against a field that is NOT one, and this pins that it still fires when the
+# struct has an optional beside it.
+reject a-private-field-beside-an-optional E482 '`m` of `R`' <<'EOF'
+struct R {
+	pub n: int
+	o: int?
+	m: str
+}
+
+fn main() {
+	r := R(9, 1, "x")
+	print r.m
 }
 EOF
 

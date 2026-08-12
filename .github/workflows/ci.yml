@@ -256,6 +256,16 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make productions
 
+      # --- 7c'''. and what GRAMMAR does NOT derive is refused ---------------------
+      # Every step above asks about programs that ARE Zerg, so none of them can see an
+      # over-acceptance. That blind spot held a 1-tuple `(1, )`, a trailing comma in four
+      # bracket kinds, `0x_1F`, a `{`-opening head, `?? raise … if`, and a comma that was
+      # optional in nine readers. Gated on `available`: the cases live in the private
+      # corpus.
+      - name: A program GRAMMAR does not derive is refused
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make counterexamples
+
       # --- 7d. the formatter's own corpus ---------------------------------------
       # Every case is already canonical, so a change in layout shows up as a diff rather
       # than as a passing run.

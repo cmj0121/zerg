@@ -252,9 +252,56 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 	})
 }
 
-// declareSurface inserts a top-level symbol, ignoring a duplicate (the Phase 0
-// checker reports duplicate functions; other duplicates are future work).
-func (r *resolver) declareSurface(sym *Symbol) { r.module.declareLocal(sym) }
+// declareSurface inserts a top-level symbol and reports a name the top level
+// already holds under a DIFFERENT kind of declaration.
+//
+// The top level is one namespace. A type name is not merely beside the value
+// names — 'struct User' is what makes 'User(…)' a call — so GRAMMAR's
+// construction note states the rule outright: "The type name is SHARED with
+// functions: a type and a function cannot share a name (a duplicate is an error
+// — Zerg has no overloading)." A module constant shares it too, since every one
+// of them mangles to 'zg_<name>'. Unchecked, 'struct Foo' beside 'fn Foo' built
+// and ran here, and the shipping compiler emitted C that cc refused as
+// "redefinition of 'zg_Foo' as different kind of symbol" — an error against
+// generated code nobody wrote.
+//
+// SAME-KIND duplicates are left where they already are: two functions are
+// collectFuncItems', and two types are the type pass'. This is the one question
+// neither of them can ask, because neither sees the other's list.
+func (r *resolver) declareSurface(sym *Symbol) {
+	prev := r.module.declareLocal(sym)
+	if prev == nil {
+		return
+	}
+	was, now := surfaceKind(prev.Kind), surfaceKind(sym.Kind)
+	if was == "" || now == "" || was == now {
+		return
+	}
+	r.errorf(sym.Span, "%q is declared twice — once as %s, once as %s; the top level is one namespace", sym.Name, was, now)
+}
+
+// surfaceKind words the kind of top-level declaration a symbol is, for the
+// one-namespace rule, and answers "" for a symbol the rule does not reach.
+//
+// An enum VARIANT is the one deliberate omission: GRAMMAR builds a variant
+// THROUGH its enum ('Shape.Circle(3.0)'), so "a variant name is therefore never a
+// name on its own, which is what keeps two enums that both declare a 'Red' from
+// competing for it". This resolver still binds one into the module scope as a
+// Phase 0 convenience, and a rule reading that table has to say so or it would
+// refuse two enums the language allows. An imported namespace is omitted for the
+// opposite reason: collectImport already reports its own collisions, with a
+// sentence about the import rather than about the declaration.
+func surfaceKind(k SymKind) string {
+	switch k {
+	case SymType:
+		return "a type"
+	case SymFunc:
+		return "a function"
+	case SymVar, SymConst:
+		return "a module constant"
+	}
+	return ""
+}
 
 // --- stage 2: bodies ----------------------------------------------------------
 

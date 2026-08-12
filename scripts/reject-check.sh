@@ -543,6 +543,44 @@ fn main() {
 }
 EOF
 
+# A `fn` DECLARED IN THE GROUP IS AN UNSAFE FN, and GRAMMAR group 12 says what that buys:
+# "a `fn` is an unsafe fn (unsafe throughout its body, callable only from unsafe)". The
+# group was built for its `mut` bindings — the language's only mutable global — and the
+# `fn` beside them came along accepted and callable from anywhere, so a safe `main` could
+# reach straight into the one context the compiler makes no guarantee about, with no
+# diagnostic. That is the trust boundary the keyword exists to draw, erased silently.
+#
+# The seed refuses both of these by not parsing a module-level group at all, which is its
+# own contract (src/bootstrap/README.md) and not a gap in this rule.
+reject unsafe-group-fn-called-from-safe E387 'this call is in safe code' <<'EOF'
+unsafe {
+	fn poke() -> int {
+		return 7
+	}
+}
+
+fn main() {
+	print poke()
+}
+EOF
+
+# THE SAME RULE AT THE NAME, not only at the call. A bare function name where a value is
+# wanted IS that function, so binding it and calling the binding would be the identical
+# call one line later — a rule that only watched call sites would be one `f := poke` away
+# from meaning nothing.
+reject unsafe-group-fn-as-a-value E387 'hand safe code the same call' <<'EOF'
+unsafe {
+	fn poke() -> int {
+		return 7
+	}
+}
+
+fn main() {
+	f := poke
+	print f()
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

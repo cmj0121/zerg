@@ -60,6 +60,18 @@ struct Emitter {
 	# needs is the walk c_in_scope already does.
 	env_const: list[bool]
 
+	# env_cval is what each binding's initializer FOLDED to, in the same order — a value when
+	# the initializer is a const-expr and the binding cannot be written, and the absence of one
+	# otherwise. It is what makes GRAMMAR group 7's "module-level or LOCAL" true for a local:
+	# `n := 4` followed by `[0; n]` needs n's VALUE at compile time, and the environment is the
+	# only structure that already knows which `n` that is.
+	#
+	# It is a column beside env_names rather than a table keyed by name because the question is
+	# scoped: a table would answer `4` for an `n` that a nearer binding has shadowed. A row
+	# that is a module constant carries no value here on purpose — kv_vals below is its one
+	# home — so the two can never disagree about the same constant.
+	env_cval: list[Folded]
+
 	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
 	# it holds, in declaration order, paired with the runtime function that gives it back.
 	# Today only channel bindings are on it — a channel binding owns a holder count, and a
@@ -139,6 +151,18 @@ struct Emitter {
 	# an annotated declaration that does not fit is deliberately not the one written.
 	k_decls: list[ConstDecl]
 	k_tys: list[Ty]
+
+	# kv_names / kv_vals are the module constants' FOLDED VALUES — one row per module-level
+	# binding, in declaration order, holding what its initializer works out to or the news
+	# that it works out to nothing.
+	#
+	# They are filled by a pass of their own (c_build_const_vals) ahead of every table below,
+	# because the first thing that asks for a compile-time value is c_build_enums — a
+	# discriminant may name a constant — and k_decls above is not filled until the globals are
+	# rendered, which is most of a unit later. Folding a VALUE needs no types, so the pass can
+	# run that early; inferring the constant's TYPE cannot, which is why the two stay apart.
+	kv_names: list[str]
+	kv_vals: list[Folded]
 
 	# tup_names are the tuple shapes already declared — one C struct per distinct shape,
 	# generated on demand. The declaration TEXT goes into res_decls: tuples and carriers
@@ -1343,6 +1367,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_mut = []
 	em.env_scope = []
 	em.env_const = []
+	em.env_cval = []
 
 	# scope 0 is the module: the constants below live there and it is open in every
 	# function. c_fn opens one more for the parameters, and the body block one after that.
@@ -1386,6 +1411,17 @@ fn c_reset_env(mut &em: Emitter) {
 # match-arm bind, parameter — enters the environment through this gate, so this is where
 # "no later binding may take a const's name" covers all of them at once; and asking before
 # the rows are appended is what keeps a `const` from colliding with itself.
+# c_fold_initializer is what a declaration contributes to env_cval: its initializer's value
+# when the binding cannot be written, and nothing when it can. It is a function of its own so
+# that the `mut` exemption is stated once — the rule is about the BINDING, not about the
+# expression, and reading it off `is_mut` at the one call site would put the rule inside a
+# forty-line function that is about something else.
+fn c_fold_initializer(mut &em: Emitter, is_mut: bool, ival: Expr) -> Folded {
+	return Folded(false, 0) if is_mut
+
+	return chk_const_eval(em, ival)
+}
+
 fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool, is_const: bool) {
 	chk_const_rebind(em, name)
 
@@ -1399,6 +1435,14 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool, is_const: bool) {
 
 	# a `const` is shadow-proof from here to the end of its block, which is this row's block
 	em.env_const.append(is_const)
+
+	# NOTHING IS A COMPILE-TIME VALUE BY DEFAULT. Every binder in the language arrives here —
+	# a parameter, a loop variable, a match-arm bind, a declaration — and only one of them can
+	# carry a folded value, so the row is opened empty and c_let fills the one case in. A
+	# default the other way round would make a loop variable fold to whatever the last
+	# declaration of that name was, silently, which is exactly the shape of bug a column
+	# parallel to env_names exists to prevent.
+	em.env_cval.append(Folded(false, 0))
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -3304,17 +3348,42 @@ fn c_named_of(t: Ty) -> str {
 	}
 }
 
+# c_build_enums registers every enum's variants, and it is where a discriminant becomes a
+# NUMBER: GRAMMAR#variant gives the position a const-expr, so the value may be `2 + 3` or the
+# name of a module constant, and neither is known until the program is whole and its constants
+# are folded (c_build_const_vals, which runs just before this).
+#
+# The numbering rule is GRAMMAR's: an unspelled variant is one past the previous one, from 0,
+# so a spelled value moves every variant after it. A discriminant that does not fold is
+# reported at the variant, and the variant then takes its positional number so the rest of the
+# enum still has a shape to be checked against — one bad discriminant should be one finding,
+# not one per variant after it.
 fn c_build_enums(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.enums.len() {
 		ed := f.enums[i]
 		c_ty_register(em, ed.name, TK_ENUM, Ty.TUnknown)
+
+		mut next := 0
+		mut taken: list[int] = []
 		mut j := 0
 		for j < ed.variants.len() {
 			v := ed.variants[j]
+			mut tag := next
+			if v.has_discr {
+				fv := chk_const_eval(em, v.discr)
+				if fv.ok {
+					tag = fv.value
+				} else {
+					chk_at_place(em, ed.path, v.line, v.col, "E474", f"the discriminant of `{ed.name}.{v.name}` is not a compile-time constant — GRAMMAR#variant gives the position a const-expr, which is literals, other compile-time constants and the operators over them, and no function calls")
+				}
+			}
+			raise f"E213 an enum discriminant is distinct across variants, and `{v.name} = {tag}` repeats one already given" if c_tag_taken(taken, tag)
+			taken.append(tag)
+			next = tag + 1
 			em.var_name.append(v.name)
 			em.var_enum.append(ed.name)
-			em.var_tag.append(v.tag)
+			em.var_tag.append(tag)
 			mut k := 0
 			for k < v.fields.len() {
 				em.vf_variant.append(v.name)
@@ -3329,6 +3398,16 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 		}
 		i = i + 1
 	}
+}
+
+# c_tag_taken is whether a discriminant has already been handed out inside the enum being
+# built. It walks the values COLLECTED SO FAR rather than em.var_tag, which holds every
+# variant of every enum in the program and would call `B.X = 0` a repeat of `A.Y = 0`.
+fn c_tag_taken(taken: list[int], tag: int) -> bool {
+	for t in taken {
+		return true if t == tag
+	}
+	return false
 }
 
 # c_is_flat_enum reports whether a name is a declared enum whose every variant is tag-only.
@@ -3771,6 +3850,7 @@ fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
 		Expr.EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
+		Expr.EFill(v, n) => c_list_lit(em, c_fill_elems(em, v, n), sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
@@ -6983,6 +7063,8 @@ fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
+
+		Expr.EFill(v, _) => c_infer_fill(em, v)
 		Expr.EConv(ty, x, nm) => ty
 		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
@@ -7168,6 +7250,15 @@ fn c_infer_listlit(mut &em: Emitter, elems: list[Expr]) -> Ty {
 	return Ty.TList(c_infer(em, elems[0]))
 }
 
+# c_infer_fill types `[v; N]` from the FILL VALUE and never from the count: the form is a
+# `list[T]` for the T of v whatever N turns out to be, including the N that does not fold.
+# Asking c_fill_elems here would report a bad count a second time — inference walks the same
+# expression the lowering does — and would answer TUnknown for `[v; 0]`, which is a list of a
+# known element type that happens to be empty.
+fn c_infer_fill(mut &em: Emitter, v: Expr) -> Ty {
+	return Ty.TList(c_infer(em, v))
+}
+
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
 	return Ty.TNamed(c_variant_enum(em, n)) if c_is_variant(em, n)
 	t := c_lookup_var(em, n)
@@ -7304,29 +7395,81 @@ fn c_is_guard(e: Expr) -> bool {
 	}
 }
 
+# c_is_listlit is whether an expression BUILDS A LIST IN PLACE, from elements written at this
+# expression rather than computed somewhere else. The fill form is one: `[7; 3]` is `[7, 7, 7]`
+# with the repetition factored out, so a declaration of `list[byte]` must adopt its elements
+# exactly as it adopts the spelled literal's. It is a node of its own only because its count is
+# a const-expr — that is a fact about the COUNT, not about the value.
 fn c_is_listlit(e: Expr) -> bool {
 	return match e {
 		Expr.EListLit(_) => true
+		Expr.EFill(_, _) => true
 		_ => false
 	}
 }
 
-# c_is_empty_listlit is `[]` and only `[]` — the literal that carries no element type and
-# needs one from the declaration it initializes. A literal WITH elements carries both.
 # c_listlit_elems is a list literal's ELEMENTS, or an empty list from anything else. It is
 # the one place `EListLit` is taken apart: the arm was written out at four sites across two
 # files, and the day the node grows a payload — an inferred element type is the obvious
 # candidate — four arms need editing and the one in check.zg is the one a reader of this file
-# will not find.
-fn c_listlit_elems(e: Expr) -> list[Expr] {
+# will not find. The fill form is expanded HERE for the same reason, so that every position
+# that reads a literal's elements reads a fill's without knowing there are two nodes.
+#
+# Expanding more than once per expression is free: the walk revisits a literal to check it, to
+# type it and to lower it, and a count that does not fold reports through chk_at_place, which
+# drops an exact repeat.
+fn c_listlit_elems(mut &em: Emitter, e: Expr) -> list[Expr] {
 	return match e {
 		Expr.EListLit(elems) => elems
+		Expr.EFill(v, n) => c_fill_elems(em, v, n)
 		_ => []
 	}
 }
 
+# c_is_empty_listlit is `[]` and only `[]` — the literal that carries no element type and
+# needs one from the declaration it initializes. A literal WITH elements carries both, and so
+# does `[v; 0]`: an empty EXPANSION still names its element in `v`, which is why the fill form
+# is not one of these however its count folds.
 fn c_is_empty_listlit(e: Expr) -> bool {
-	return c_is_listlit(e) and c_listlit_elems(e).len() == 0
+	return match e {
+		Expr.EListLit(elems) => elems.len() == 0
+		_ => false
+	}
+}
+
+# c_fill_elems expands `[v; N]` into the N copies it means (GRAMMAR group 4's `list-lit`).
+#
+# The count is a CONST-EXPR, so it goes through chk_const_eval — the one fold in this compiler
+# — rather than being read off a token: `[0; 256]`, `[0; 2 * 128]` and `[0; SIZE]` are the same
+# request, and a position that accepted only the first was accepting a literal, not a constant.
+#
+# A count that does not fold is reported HERE, at the use site, which is what GRAMMAR asks for:
+# the constant's declaration is a perfectly good line with nothing wrong on it, and the reader
+# needs the line that wanted a compile-time value. An empty expansion is what the rest of the
+# unit then sees, so one bad count is one finding rather than a cascade.
+fn c_fill_elems(mut &em: Emitter, v: Expr, n: Expr) -> list[Expr] {
+	mut out: list[Expr] = []
+	f := chk_const_eval(em, n)
+	if not f.ok {
+		chk_at(em, "E475", f"a fill count is a compile-time constant, and {expr_kind(n)} is not one — GRAMMAR gives `[v; N]` a const-expr, which is literals, other compile-time constants and the operators over them, and no function calls")
+		return out
+	}
+
+	# A COUNT IS A COUNT. The old parser could not reach this case — it read one integer token,
+	# so `-1` was "not an integer literal" — and the fold can: a negative count silently built
+	# the empty list, which is not what `[0; -1]` asks for and not something a reader would
+	# look for.
+	if f.value < 0 {
+		chk_at(em, "E476", f"a fill count is how many copies to make, and `{strconv.to_string(f.value, 10)}` is negative")
+		return out
+	}
+
+	mut i := 0
+	for i < f.value {
+		out.append(v)
+		i = i + 1
+	}
+	return out
 }
 
 # c_assign lowers `lhs = rhs`. Re-assigning a list literal to a name re-initialises the
@@ -7373,7 +7516,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 # the value's first bytes happened to be, when it compiled at all.
 fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 	mut out: list[str] = []
-	c_elem_exprs_into(em, c_listlit_elems(lit), elem, out)
+	c_elem_exprs_into(em, c_listlit_elems(em, lit), elem, out)
 	return out
 }
 
@@ -7403,7 +7546,7 @@ fn c_pushes_strs(target: str, et: str, vals: list[str], ind: str) -> str {
 
 # c_pushes emits a zrt_list_push per element of a list literal.
 fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
-	return c_pushes_of(em, target, et, c_listlit_elems(lit), ind)
+	return c_pushes_of(em, target, et, c_listlit_elems(em, lit), ind)
 }
 
 fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: str) -> str {
@@ -7429,6 +7572,39 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 #
 # The unit that DECLARES it defines it; every other unit declares it `extern`. `whole` is
 # the single-unit build, where own IS the program and `static` is right.
+# c_build_const_vals folds every module constant's initializer, once, into kv_names / kv_vals
+# — the table chk_fold_name reads when a compile-time position names a constant (GRAMMAR
+# group 7).
+#
+# IT RUNS FIRST, ahead of every other table, because the first pass that needs a compile-time
+# value is c_build_enums: `enum E { A = BASE }` is a discriminant naming a constant, and the
+# constants are not otherwise registered until the globals are rendered, most of a unit later.
+# Splitting the value out from the type is what makes that possible — folding `2 + 3` asks
+# nothing about types, while INFERRING the constant's type asks c_infer, which needs the enum
+# and struct tables this pass runs before.
+#
+# In c_const_order, not source order, so `const A := B` folds after `B` however they are
+# written — the same order c_const_globals assigns in, from the same function, because a
+# constant that folds here and is assigned there in a different order is two answers to one
+# question.
+fn c_build_const_vals(mut &em: Emitter, f: File) {
+	for i in c_const_order(em, f) {
+		c := f.consts[i]
+
+		# THE FOLD RUNS BEFORE THE ROW IS APPENDED, so `const A := A` names whatever `A` meant
+		# outside this declaration — nothing — rather than resolving to the row being built.
+		# A `mut` module binding is refused at its declaration (chk_top_muts) and would be a
+		# value that can change under a position that has already been given it, so it folds
+		# to nothing here regardless of what its initializer says.
+		mut v := Folded(false, 0)
+		if not c.is_mut {
+			v = chk_const_eval(em, c.value)
+		}
+		em.kv_names.append(c.name)
+		em.kv_vals.append(v)
+	}
+}
+
 fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	mut out := ""
 
@@ -7537,6 +7713,12 @@ fn c_const_bind(mut &em: Emitter, c: ConstDecl, ty: Ty) {
 	em.env_mut.append(c.is_mut)
 	em.env_scope.append(0)
 	em.env_const.append(c.is_const)
+
+	# EMPTY, and deliberately: a module constant's folded value lives in kv_vals, which
+	# c_build_const_vals filled before any of this ran. chk_fold_name routes a module-constant
+	# row there rather than reading this column, so the constant has exactly one value and no
+	# way for two copies of it to drift.
+	em.env_cval.append(Folded(false, 0))
 }
 
 fn c_const_in(f: File, name: str) -> bool {
@@ -9777,7 +9959,19 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	# `eff` is the INFERRED type when nothing was declared, and c_into is a no-op there
 	# because the value already has it.
 	val := c_into(em, eff, ival, c_nosub())
+
+	# WHAT THIS BINDING IS WORTH AT COMPILE TIME, folded before the row exists so that
+	# `n := n + 1` reads the OUTER n exactly as the emitted C does, and recorded after, on the
+	# row c_add_var has just appended. This is the LOCAL half of GRAMMAR group 7 — `n := 4`
+	# followed by `[0; n]` — and the three earlier returns above never reach it because a list,
+	# a map, a channel, a string and a carrier are none of them a compile-time integer.
+	#
+	# A `mut` binding folds to nothing however constant its initializer looks: the position
+	# that asks is asking for a value fixed for the whole program, and a name that may be
+	# assigned tomorrow is not one.
+	cval := c_fold_initializer(em, is_mut, ival)
 	c_add_var(em, name, eff, is_mut, is_const)
+	em.env_cval[em.env_cval.len() - 1] = cval
 	cn := c_var_cname(em, name)
 
 	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
@@ -11200,7 +11394,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [], "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [], "")
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -11215,6 +11409,10 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# and `Foo(3)` quietly meant the constructor. This is the one pass that asks about the
 	# name rather than about the body, so it is the one pass that reads the whole list.
 	c_build_top_names(em, f0)
+
+	# THE COMPILE-TIME VALUES, before the table that first asks for one: c_build_enums folds a
+	# discriminant, and a discriminant may name a module constant.
+	c_build_const_vals(em, f)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
 	# is exactly that collision, and the sentence about method namespaces is true and about

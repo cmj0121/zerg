@@ -1028,7 +1028,7 @@ fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 	# dedupe in chk_at_place is per message, so three wrong elements are three sentences.
 	mut reported := false
 	mut i := 0
-	for e in c_listlit_elems(ival) {
+	for e in c_listlit_elems(em, ival) {
 		i = i + 1
 		got := c_infer(em, e)
 		if not chk_fits_expr(em, we, got, e) {
@@ -1140,7 +1140,7 @@ fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool 
 fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 	return false if oper != "/" and oper != "%" and oper != "//"
 
-	f := chk_lit_eval(eb)
+	f := chk_lit_eval(em, eb)
 	return false if not f.ok or f.value != 0
 
 	chk_at(em, "E331", f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
@@ -1157,7 +1157,7 @@ fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 # A leaf past i64 is somebody else's finding — chk_int_literal reports it where the lexeme is —
 # so this speaks only when every leaf fits and the arithmetic between them does not.
 fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
-	f := chk_lit_eval(e)
+	f := chk_lit_eval(em, e)
 	return false if f.ok or not chk_lit_leaves_fit(e)
 
 	chk_at(em, "E332", f"this expression's value is past what an `int` holds, so it cannot be measured against {ty_name(want)} — every literal is measured against `int` before its position is consulted")
@@ -1205,7 +1205,7 @@ fn chk_lit_offender(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
 	return match e {
 		Expr.EUnary(_, x) => chk_lit_offender(em, want, x, not neg)
 		Expr.EBinary(_, a, b) => chk_lit_offender_pair(em, want, a, b, neg, e)
-		_ => chk_lit_says(e, neg)
+		_ => chk_lit_says(em, e, neg)
 	}
 }
 
@@ -1213,18 +1213,18 @@ fn chk_lit_offender_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr, neg: bool
 	return chk_lit_offender(em, want, a, false) if not chk_lit_in_range(em, want, a, false)
 	return chk_lit_offender(em, want, b, false) if not chk_lit_in_range(em, want, b, false)
 
-	return chk_lit_says(whole, neg)
+	return chk_lit_says(em, whole, neg)
 }
 
 # chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
 # on the node (every literal keeps its surface text so `fmt` can print it back verbatim), so
 # this reads it rather than re-rendering the parsed value — `0x1_00` in the source should be
 # `0x1_00` in the diagnostic, not `256`.
-fn chk_lit_says(e: Expr, neg: bool) -> str {
+fn chk_lit_says(mut &em: Emitter, e: Expr, neg: bool) -> str {
 	return match e {
-		Expr.EUnary(_, x) => chk_lit_says(x, not neg)
+		Expr.EUnary(_, x) => chk_lit_says(em, x, not neg)
 		Expr.EInt(lex, _, _) => chk_lit_sign(lex, neg)
-		Expr.EBinary(_, _, _) => chk_lit_folded_says(e, neg)
+		Expr.EBinary(_, _, _) => chk_lit_folded_says(em, e, neg)
 		_ => "this"
 	}
 }
@@ -1234,8 +1234,8 @@ fn chk_lit_says(e: Expr, neg: bool) -> str {
 # line back at them; what is wrong with `x: byte = 200 + 100` is that it is `300`, and `300`
 # is what the sentence says. A fold that failed has no value to name and falls back to "this",
 # which is the same answer every other unfoldable expression gets.
-fn chk_lit_folded_says(e: Expr, neg: bool) -> str {
-	f := chk_lit_eval(e)
+fn chk_lit_folded_says(mut &em: Emitter, e: Expr, neg: bool) -> str {
+	f := chk_lit_eval(em, e)
 	return "this" if not f.ok
 
 	v := f.value
@@ -1289,9 +1289,9 @@ fn chk_lit_note_leaves(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
 # ride on `EInt` for exactly this, and they are also what stops the two from deduping into one:
 # chk_note_at keys on the place, and these two places differ.
 fn chk_lit_note_leaf(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
-	shown := chk_lit_shown(want, e, neg)
+	shown := chk_lit_shown(em, want, e, neg)
 	code := "L502"
-	msg := f"the literal `{chk_lit_says(e, neg)}` is a {ty_name(want)} here — write `{shown}` and the page shows it"
+	msg := f"the literal `{chk_lit_says(em, e, neg)}` is a {ty_name(want)} here — write `{shown}` and the page shows it"
 
 	# THE SENTENCE AND THE FIX ARE ONE DECISION, made here and carried in one Diag. A server
 	# that read `shown` back out of `msg` would be a second copy of it, and the day the wording
@@ -1322,10 +1322,10 @@ fn chk_lit_note_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr) {
 # over, and the rewrite an editor can apply from it. Only `float` has a second spelling to
 # offer; a `byte` or a `uint` literal has no surface form of its own, so for those the finding
 # names the type and the reader writes the annotation.
-fn chk_lit_shown(want: Ty, e: Expr, neg: bool) -> str {
-	return f"{ty_name(want)}({chk_lit_says(e, neg)})" if not c_is_float(want)
+fn chk_lit_shown(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
+	return f"{ty_name(want)}({chk_lit_says(em, e, neg)})" if not c_is_float(want)
 
-	return f"{chk_lit_says(e, neg)}.0"
+	return f"{chk_lit_says(em, e, neg)}.0"
 }
 
 # chk_lit_adopts is the fit AND the finding, because a literal that takes a type is L502
@@ -1417,7 +1417,7 @@ fn chk_lit_pair_in_range(mut &em: Emitter, want: Ty, o: str, a: Expr, b: Expr, n
 
 	# a float carries no bounds to test — chk_lit_fits never asks it — so a pair reaching here
 	# is an integer one, and it is folded as one
-	f := chk_lit_eval_pair(o, a, b)
+	f := chk_fold_pair(em, o, a, b, false)
 	return false if not f.ok
 
 	return chk_folded_in_range(em, want, f.value, neg)
@@ -1459,7 +1459,26 @@ struct Folded {
 # floor, where negation is the one place unary arithmetic has an answer it cannot hold. Any
 # OTHER unary operator is not arithmetic chk_lit_oper knows, so the pair below folds it to
 # nothing — which is what a `not` over a literal should fold to.
-fn chk_lit_eval(e: Expr) -> Folded {
+fn chk_lit_eval(mut &em: Emitter, e: Expr) -> Folded {
+	return chk_fold(em, e, false)
+}
+
+# chk_const_eval is the same fold with ONE MORE LEAF — a name (GRAMMAR group 7: "any binding
+# — `:=` or `const`, module-level or local — whose initializer is a CONST-EXPR", usable
+# wherever a compile-time value is required). It is a second ENTRY and not a second folder:
+# the recursion, the operator set, the checked arithmetic and the "a lexeme past i64 has no
+# value" rule are all below, shared, because a compile-time `2 + 3` and a run-time one
+# answering different numbers is the failure this project has been bitten by before.
+#
+# The two entries exist because the leaf is not always wanted. The literal-adoption rules
+# (`x: byte = 200 + 100`) ask about a tree the reader WROTE, and resolving a name there would
+# quietly change which values adopt a narrower type; the compile-time POSITIONS — a fill count
+# `[v; N]`, an enum discriminant — are exactly where a name is the point.
+fn chk_const_eval(mut &em: Emitter, e: Expr) -> Folded {
+	return chk_fold(em, e, true)
+}
+
+fn chk_fold(mut &em: Emitter, e: Expr, names: bool) -> Folded {
 	return match e {
 		# A LEXEME PAST i64 HAS NO VALUE HERE. int_value answers `0` for one — deliberately,
 		# because the width is reported where the place is known — and a fold that believed it
@@ -1467,20 +1486,52 @@ fn chk_lit_eval(e: Expr) -> Folded {
 		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
 		# happen, which is what `ok` is for.
 		Expr.EInt(lex, _, _) => Folded(int_fits(lex), int_value(lex))
-		Expr.EUnary(o, x) => chk_lit_eval_pair(o, Expr.EInt("0", 0, 0), x)
-		Expr.EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
+		Expr.EIdent(n) => chk_fold_name(em, n, names)
+		Expr.EUnary(o, x) => chk_fold_pair(em, o, Expr.EInt("0", 0, 0), x, names)
+		Expr.EBinary(o, a, b) => chk_fold_pair(em, o, a, b, names)
 		_ => Folded(false, 0)
 	}
 }
 
-fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
+# chk_fold_name is the NAME leaf, and the whole of it is "ask the environment that already
+# knows". A binding's folded value is recorded where the binding is made — a local's in
+# c_let, a module constant's in c_build_const_vals — so nothing here re-reads an initializer
+# or re-decides what scope a name is in.
+#
+# THE INNERMOST BINDING WINS, which is why the environment is asked before the constant
+# table and not the other way round: `const N := 4` at the top level with `N := f()` inside a
+# body must fold to nothing, not to 4, and a table keyed by name alone cannot see the
+# shadow. A row that IS a module constant defers to the table, because the environment
+# carries types and the table carries values; a module constant has one home either way.
+fn chk_fold_name(mut &em: Emitter, n: str, names: bool) -> Folded {
+	return Folded(false, 0) if not names
+
+	idx := c_live_idx(em, n)
+	return em.env_cval[idx] if idx >= 0 and not chk_is_module_binding(em, idx)
+
+	return chk_const_of(em, n)
+}
+
+# chk_const_of is a module constant's folded value, or the news that it has none — a name
+# nothing declares and one whose initializer is not a const-expr answer the same way, since
+# neither is a value, and the position that asked reports at its own place.
+fn chk_const_of(mut &em: Emitter, n: str) -> Folded {
+	mut i := 0
+	for i < em.kv_names.len() {
+		return em.kv_vals[i] if em.kv_names[i] == n
+		i = i + 1
+	}
+	return Folded(false, 0)
+}
+
+fn chk_fold_pair(mut &em: Emitter, o: str, a: Expr, b: Expr, names: bool) -> Folded {
 	# THE OPERATOR IS ASKED FIRST, because chk_lit_apply has to end in some number and would
 	# hand back `0` for one it does not know — a value, and the wrong one. Asked here, an
 	# unknown operator is the absence of a value instead, which is what it is.
 	return Folded(false, 0) if not chk_lit_oper(o)
 
-	fa := chk_lit_eval(a)
-	fb := chk_lit_eval(b)
+	fa := chk_fold(em, a, names)
+	fb := chk_fold(em, b, names)
 	return Folded(false, 0) if not fa.ok or not fb.ok
 
 	return match guard { chk_lit_apply(o, fa.value, fb.value) } {
@@ -1494,7 +1545,7 @@ fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
 # runtime that would have computed it cannot disagree — `/` and `%` are Euclidean in both
 # because they are the same operator.
 #
-# The last line is unreachable — chk_lit_eval_pair has already refused every operator this
+# The last line is unreachable — chk_fold_pair has already refused every operator this
 # list does not name — and is here because a function ends in a value.
 fn chk_lit_apply(o: str, x: int, y: int) -> int {
 	return x + y if o == "+"

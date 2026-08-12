@@ -255,7 +255,9 @@ reference.
 An `enum`'s **discriminant behaves differently for a fieldless enum than for a payload one** — the split
 turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a variant an explicit
 `= <discriminant>` — a **compile-time-constant integer**, distinct across variants (an unspecified one is
-the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. Such an
+the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. It is the
+same **compile-time constant** an array length is, so `A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1` are all
+the form and a call is not; one that does not fold is an error **at the variant**. Such an
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
 the **enum name is a value namespace** — `Color.Green` names the variant and `Color.of(n)` reverses a number
 — with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding

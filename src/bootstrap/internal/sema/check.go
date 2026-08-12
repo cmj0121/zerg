@@ -321,6 +321,7 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 	}
 	c.info.BindTypes[b] = typ
 	c.declare(b.Span(), b.Name, typ, b.Mut)
+	c.bindConstVal(b.Name, b.Value, b.Mut)
 }
 
 // checkBindTarget binds a destructuring bind target's leaf names against the RHS type
@@ -859,13 +860,13 @@ func (c *checker) checkListFill(n *ast.ListFill, want Type) Type {
 	switch w := want.(type) {
 	case *types.Array:
 		c.checkElem(n.Value, w.Elem, "fill value")
-		if kv, ok := c.foldConst(n.Count); ok && w.N.Known && kv.I != w.N.I {
+		if kv, ok := c.fillCount(n); ok && w.N.Known && kv.I != w.N.I {
 			c.errorf(n.Span(), "fill count %d does not match array length %d", kv.I, w.N.I)
 		}
 		return w
 	case *types.List:
 		c.checkElem(n.Value, w.Elem, "fill value")
-		c.synth(n.Count)
+		c.fillCount(n)
 		return w
 	}
 	return c.synthListFill(n)
@@ -873,8 +874,31 @@ func (c *checker) checkListFill(n *ast.ListFill, want Type) Type {
 
 func (c *checker) synthListFill(n *ast.ListFill) Type {
 	elem := c.synth(n.Value)
-	c.synth(n.Count)
+	c.fillCount(n)
 	return &types.List{Elem: elem}
+}
+
+// fillCount folds the count in '[v; N]'. GRAMMAR gives the position a CONST-EXPR, and
+// this used to only type it: the count was emitted as the bound of a runtime loop, so
+// '[0; n]' for an n read at run time built a list of whatever n happened to be — a form
+// the language does not have, accepted silently, and one the self-hosting compiler
+// refuses. It is still typed as well, so a mistake INSIDE the count is reported as the
+// ordinary expression error it is rather than only as "not a constant".
+//
+// The refusal is at the COUNT's own span, not the literal's: what the reader has to
+// change is the expression that is not constant.
+func (c *checker) fillCount(n *ast.ListFill) (types.ConstVal, bool) {
+	c.synth(n.Count)
+	kv, ok := c.foldConst(n.Count)
+	if !ok || kv.Kind != types.KInt {
+		c.errorf(n.Count.Span(), "a fill count is a compile-time constant: literals, other compile-time constants, and the operators over them — not a value computed at run time")
+		return types.ConstVal{}, false
+	}
+	if kv.I < 0 {
+		c.errorf(n.Count.Span(), "a fill count is how many copies to make, and %d is negative", kv.I)
+		return types.ConstVal{}, false
+	}
+	return kv, true
 }
 
 func (c *checker) checkTupleLit(n *ast.TupleLit, want Type) Type {

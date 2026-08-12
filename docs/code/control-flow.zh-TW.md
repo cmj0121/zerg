@@ -33,6 +33,13 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 `x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
 例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
 
+> **[deviation]** 那個 `nil` 分支被降階成**存在**。`c` 為假時,`x: int? = if c { 1 } else { nil }` 得到的是一個
+> 持有 `0` 的 carrier,所以 `x ?? 99` 印 `0`;`str?` 的寫法印 `(null)`,一個蓋在 null 指標上的存在 carrier。任何
+> 階段都沒有任何回報——程式建得起來、跑得動,然後回答了那個本該被缺席跳過的值,而那正是本專案明文禁止的錯法。在它
+> 被修好之前,請用一個 checker 會當成 carrier 的 binding 來表達缺席。
+
+---
+
 > **[not yet]** 值形式只剩一種樣子會被指名拒絕：**在運算式位置的 if-let**。
 > `return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的 if-let，都會回報
 > _E270 NotImplemented: a binding head in an `if` EXPRESSION_——所以這個階段綁定形式只是 statement，而不是上文

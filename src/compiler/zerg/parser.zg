@@ -1243,6 +1243,13 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, Kind.LBrace)
 	mut one: list[Stmt] = []
+
+	# the marker parse_block stamps, stamped here for the same reason p_else_body stamps
+	# one: a braceless body is a statement built outside that loop, so without it a
+	# diagnostic about the arm named the whole `select` rather than the arm.
+	t := cur(p)
+	one.append(Stmt.SAt(t.line, t.col))
+
 	one.append(parse_stmt(p))
 	return one
 }
@@ -2435,6 +2442,16 @@ fn p_else_body(mut &p: Parser) -> list[Stmt] {
 
 	mut body: list[Stmt] = []
 	p_deeper(p)
+
+	# the marker parse_block would have stamped, stamped here for the same reason: this
+	# recursion opens no block, so the nested `if` is the ONE statement in the program that
+	# reached the emitter with no position of its own, and a diagnostic about its HEAD —
+	# `else if zzz > 0`, `else if x > 0` naming an if-let binding that has just gone out of
+	# scope — was reported against whatever statement spoke last, which is the closing line
+	# of the branch above it.
+	t := cur(p)
+	body.append(Stmt.SAt(t.line, t.col))
+
 	body.append(parse_if(p))
 	p_shallower(p)
 	return body

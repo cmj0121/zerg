@@ -2219,12 +2219,22 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 # form: a `(` — optionally after `mut` or `const` — whose group is followed by `:=` or `=`.
 # A parenthesised EXPRESSION statement looks the same up to the closing paren, so the
 # separator is what tells them apart.
-fn p_starts_destructure(mut &p: Parser) -> bool {
+#
+# It answers WHICH of the two, and not merely "one of them", because they are two forms:
+# `bind-target` (GRAMMAR#binding) and `assign-target` (GRAMMAR#assign-target) are separate
+# productions, so each is a separate thing this compiler has not built and each owes its own
+# sentence. One answer for both meant the `=` spelling was turned away with the `:=` one's
+# words — advice to write a binding, at a reader who had written an assignment.
+#
+#   0  not a destructuring statement
+#   1  a destructuring BINDING, `(a, b) := e` / `mut (a, b) := e`
+#   2  a destructuring ASSIGNMENT, `(a, b) = e`
+fn p_starts_destructure(mut &p: Parser) -> int {
 	mut i := p.pos
 	if p.toks[i].kind == Kind.Mut or p.toks[i].kind == Kind.Const {
 		i = i + 1
 	}
-	return false if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
+	return 0 if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
 
 	mut depth := 0
 	for i < p.toks.len() {
@@ -2235,14 +2245,16 @@ fn p_starts_destructure(mut &p: Parser) -> bool {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
-				return nxt == Kind.Walrus or nxt == Kind.Assign
+				return 1 if nxt == Kind.Walrus
+				return 2 if nxt == Kind.Assign
+				return 0
 			}
 		} else if k == Kind.Semi or k == Kind.Eof {
-			return false
+			return 0
 		}
 		i = i + 1
 	}
-	return false
+	return 0
 }
 
 # parse_stmt reads one statement, and it is a wrapper because a statement is where an
@@ -2300,7 +2312,13 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# reached the expression fallback and was named after its walrus, the `mut` one reported
 	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
 	# evaluated, assigned to no one, and the program printed the values it started with.
-	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
+	# THE `=` SPELLING IS ITS OWN FORM, and it used to borrow this sentence — so a reader who
+	# wrote `(a, b) = (1, 2)` was told about `(a, b) := …`, a form they had not written and a
+	# `:=` their source does not contain. GRAMMAR derives them as two productions and each is
+	# separately unbuilt; the place is the statement's own token, which neither carried.
+	dtor := p_starts_destructure(p)
+	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — GRAMMAR#bind-target derives the tuple form, and this compiler binds one name at a time" + p_place(p, cur(p).line, cur(p).col) if dtor == 1
+	raise "E486 NotImplemented: a destructuring assignment `(a, b) = …` — GRAMMAR#assign-target derives the tuple form, and this compiler assigns to one target at a time; write the two assignments out, reading the tuple with `.0` and `.1`" + p_place(p, cur(p).line, cur(p).col) if dtor == 2
 
 	if k == Kind.Nop {
 		p_advance(p)

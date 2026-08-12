@@ -1741,6 +1741,23 @@ fn main() {
 }
 EOF
 
+# THE SAME RULE, WRITTEN IN A CHARACTER THAT IS NOT ASCII. `GRAMMAR#identifier` derives ASCII
+# letters, digits and `_` and nothing else, so a character outside a string, a rune or a
+# comment is the same lexical error `@` is — and this used to KILL the compiler instead:
+# `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught runtime abort with no
+# code, no place and no form named. The lexer had reached its own E104 and then built the
+# diagnostic's lexeme out of ONE byte of a three-byte character.
+#
+# It is in the reject list rather than the refuse list because no future feature makes it
+# legal: `GRAMMAR:80` says the source is UTF-8, which is what lets this character be WRITTEN
+# in a comment or a literal, and identifier says which characters can spell a name.
+reject a-character-that-is-not-ascii E104 <<'EOF'
+fn main() {
+	x := 1
+	print 值
+}
+EOF
+
 reject based-number-with-no-digits E108 <<'EOF'
 fn main() {
 	n := 0x

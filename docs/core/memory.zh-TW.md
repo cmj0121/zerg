@@ -194,10 +194,16 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** `del` 一個 `Ref` 值——一個 `chan`;這裡沒有 `Ref[T]`,見上——放掉一個 holder（並在最後一個跑 `drop`）
-> 是可用。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
-> **[not yet]**：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所以
-> 上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況。
+> **狀態。** 上表最後一列正是 `zerg` 完全走不到的那一列。`del` 一個 `Ref` 值在兩半上都是 **[not yet]**：對
+> channel 做 `del ch` 會被具名拒絕（_E470 NotImplemented: `del ch` on a CHANNEL_，訊息要你改寫 `close(ch)`），
+> 而這裡根本沒有 `Ref[T]` 型別可 `del`——光是提到 `Ref` 就被拒絕（`E446`）。編譯器對 channel 做的事是在其 binding
+> 的 scope 結束處歸還它，所以 holder 仍會被放掉、最後一個仍會跑 `drop`；缺的是**提早**具名說出這件事的能力。
+>
+> ---
+>
+> `del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是 **[not yet]**，理由是
+> 同一件事的另一面：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所
+> 以上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況。
 
 `del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
 就釋放」（`mut &` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
@@ -210,6 +216,9 @@ flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可�
 都是編譯錯誤（_`ch` is used after del_）。因此它**不是**用來通知「沒有更多值」的方法：要在保留 handle 的情況下結束
 一條 stream，用 channel 專屬的敘述 **`close(ch)`**；要靠 scope 結束它，就讓該 binding 的 scope 離開去歸還它所持有
 的東西。兩者都在 [Coroutines](../code/coroutine.zh-TW.md)。當你連**名字**也用完了，才用 `del ch`。
+
+> **[not yet]** 上一段是規格所訂的規則；`del ch` 本身會被拒絕（`E470`，見上方狀態註）。其中已經成立的那一半是那
+> 個建議：`close(ch)` 結束一條 stream、scope 離開歸還持有，那兩件才是今天的程式寫得出來的。
 
 ## `defer`——在 block 退出時清理
 

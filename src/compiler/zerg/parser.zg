@@ -317,6 +317,49 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 	return out
 }
 
+# parse_param_types reads a function TYPE's parameter list, `( param-type, … )`
+# (GRAMMAR#param-type-list). It is not parse_paren_types, and the one token that separates
+# them is the whole reason it exists: GRAMMAR#param-type is `( 'mut' '&' )? type`, and a
+# tuple element is a bare type. Sharing the tuple reader is what made `fn(mut &int) -> bool`
+# answer `expected `,`, found `&`` — a punctuation complaint about a type this language has,
+# and the message a typo gets rather than the named refusal docs/code/functions.md promises.
+fn parse_param_types(mut &p: Parser) -> list[Ty] {
+	expect(p, Kind.LParen)
+	mut out: list[Ty] = []
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+		# The prefix is READ, and the type behind it read too, before anything is refused: a
+		# sentence made at the `&` names a bracket, and a sentence made here names the type
+		# the marker is on. `mut` with no `&` is not a param-type at all — the same rule
+		# GRAMMAR#param states for a declaration — so expect answers for it.
+		mut is_ref := false
+		mt := cur(p)
+		if p_at(p, Kind.Mut) {
+			p_advance(p)
+			expect(p, Kind.Amp)
+			is_ref = true
+		}
+		t := parse_type(p)
+
+		# `mut &` in a type is real in the LANGUAGE: it is part of the type, so `fn(mut &int)`
+		# and `fn(int)` are distinct (docs/code/functions.md). It is refused here because the
+		# value side of it is refused downstream anyway — a held function is a bare pointer in
+		# this compiler and the call site reads its convention from the callee's NAME (E469) —
+		# so accepting the spelling would only mean a type nothing can ever hold.
+		raise f"E286 NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ty_name(t)})` is a distinct type from `fn({ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured" + p_place(p, mt.line, mt.col) if is_ref
+
+		out.append(t)
+
+		# the comma is REQUIRED between elements and absent before the `)`, the same rule the
+		# tuple reader states — see parse_paren_types for what an optional one silently
+		# accepted.
+		if not p_at(p, Kind.RParen) {
+			expect(p, Kind.Comma)
+		}
+	}
+	expect(p, Kind.RParen)
+	return out
+}
+
 fn parse_base_type(mut &p: Parser) -> Ty {
 	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type). It is not built, and it was not turned away
 	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
@@ -377,7 +420,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, Kind.LParen) {
-		ptys := parse_paren_types(p)
+		ptys := parse_param_types(p)
 		mut fret := Ty.TVoid
 		if p_at(p, Kind.Arrow) {
 			p_advance(p)
@@ -927,6 +970,7 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 				is_ref = true
 			}
 		}
+		nt := cur(p)
 		pname := p_name(p, "a parameter")
 
 		# A CLOSURE parameter MAY OMIT its `: type` (GRAMMAR#closure-param), and one that
@@ -939,6 +983,24 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 		if p_at(p, Kind.Colon) {
 			p_advance(p)
 			pty = parse_type(p)
+		}
+
+		# The same production ends with `( '=' expr )?` — a DEFAULT, exactly the tail
+		# GRAMMAR#param gives a named declaration's parameter, and one a named `fn` has had
+		# since defaults were built. The closure half was never read: the loop went from the
+		# type straight to the comma, so the `=` was still sitting there when the next
+		# parameter's NAME was asked for, and the answer was `a parameter needs a name, and
+		# `=` is not one` — a complaint about the token, from a reader that had no idea a
+		# default was what it was looking at.
+		#
+		# The expression is read to its end before the refusal, so the sentence is about the
+		# form and not about wherever the reader stopped. Building it is more than parsing:
+		# a default is materialised AT THE CALL SITE out of the callee's DECLARATION, and a
+		# closure is reached through a value, which carries no declaration to read one from.
+		if p_at(p, Kind.Assign) {
+			p_advance(p)
+			parse_expr(p)
+			raise f"E285 NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call" + p_place(p, nt.line, nt.col)
 		}
 		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
 		if p_at(p, Kind.Comma) {
@@ -1170,6 +1232,30 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	skip_semis(p)
 	mut reqs: list[FnDecl] = []
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		# `unsafe` opens a fn-sig too — GRAMMAR#fn-sig is `'unsafe'? 'mut'? 'fn' …` — so
+		# `unsafe fn peek()` in a spec IS a member, and it used to fall to the catch-all at
+		# the bottom of this loop, whose sentence says the token starts no member AT ALL and
+		# cites GRAMMAR#spec-member while saying it. That denied a derivation the grammar
+		# plainly has, which is worse than not building the form: a reader is told the
+		# language is smaller than it is, by the document that defines it.
+		#
+		# The signature is READ to its end and then refused as itself, with the place a
+		# declaration owes — the same answer a top-level `unsafe fn` gets (E264) for the same
+		# reason, so one unenforced trust boundary now has one story in both positions. The
+		# lookahead is what keeps the catch-all honest for everything else: `unsafe { … }`
+		# inside a spec really does start no member, and still gets E276.
+		if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
+			u := cur(p)
+			p_advance(p)
+			mut u_mut := false
+			if p_at(p, Kind.Mut) {
+				p_advance(p)
+				u_mut = true
+			}
+			sig := parse_fn_head(p, false, "This", u_mut)
+			raise f"E287 NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped" + p_place(p, u.line, u.col)
+		}
+
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
 		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
 		# the requirement silent in both directions — a spec asking for `mut fn` was

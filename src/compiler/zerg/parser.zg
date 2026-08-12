@@ -1578,8 +1578,13 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	kw := cur(p)
 	p_advance(p)
 
-	name := cur(p).lexeme
-	expect(p, Kind.Ident)
+	# p_name, and not a bare `expect(p, Kind.Ident)`. Every other declaration in this file
+	# takes its name through p_name, which is where the reserved-word rule is asked
+	# (GRAMMAR group 7: `This` is the self type and no declaration may take it); an alias
+	# read its identifier for itself and so was the one declaration the rule never reached.
+	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
+	# `impl` still meant the implementing type — one word, two meanings, in one program.
+	name := p_name(p, "a type alias")
 	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, Kind.LBrack)
 
 	expect(p, Kind.Assign)

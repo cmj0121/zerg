@@ -2794,22 +2794,36 @@ fn c_scan_fnptr(mut &em: Emitter, sites: list[Site]) {
 	}
 }
 
-# c_build_type_names refuses a NAME DECLARED TWICE at the type level.
+# c_build_top_names refuses a NAME DECLARED TWICE at the top level.
 #
-# A `struct`, an `enum` and a `spec` share one namespace — every module of a program
-# flattens into one scope here, which is the same argument that already refuses a duplicate
-# function and a duplicate module constant. Nothing checked it, and the four shapes failed
-# four different ways:
+# THE TOP LEVEL IS ONE NAMESPACE, and six kinds of declaration live in it: a `struct`, an
+# `enum`, a `type`, a `spec`, a free `fn` and a module constant. A type name is not merely
+# beside the value names — GRAMMAR#struct-decl puts it INTO them, since `struct User` is
+# what makes `User(…)` a call — so "a type and a function cannot share a name (a duplicate
+# is an error — Zerg has no overloading)" is the same rule as "two functions cannot", and
+# every module of a program flattens into one scope here besides. Nothing checked it, and
+# the shapes failed several different ways:
 #
 #   struct A {v} + struct A {w}   MERGED into one struct of two fields; `A(7)` then wanted
 #                                 two arguments, a wrong answer with no diagnostic
 #   struct A {v} + struct A {v}   cc: "typedef redefinition", against .zerg-cache
 #   enum E + enum E               the same cc error
 #   spec T + spec T               silently ignored; the second's members required nothing
+#   struct A + fn A               cc: "redefinition of 'zg_A' as different kind of symbol",
+#                                 and BEFORE that `A(3)` quietly meant the constructor, so
+#                                 the program said something its reader did not write
+#   const A + struct A            the same cc error, against the constant's global
+#
+# The last two are why this walk owns the FUNCTIONS and the CONSTANTS as well as the types.
+# The constant-versus-function half was checked once, in c_const_globals, and a rule with
+# two checks has two extents: that one knew nothing about types, so `const A := 1` beside
+# `struct A` reached cc while `const A := 1` beside `fn A()` did not. One walk over every
+# top-level declaration is one extent, and it cannot drift from itself.
 #
 # It runs before the tables are built, so a later pass never sees the second declaration
-# and cannot be confused by it.
-fn c_build_type_names(mut &em: Emitter, f: File) {
+# and cannot be confused by it — which is also what keeps the constructor from winning an
+# argument it should never have been in.
+fn c_build_top_names(mut &em: Emitter, f: File) {
 	mut seen: list[str] = []
 	mut kind: list[str] = []
 	for sd in f.structs {
@@ -2827,6 +2841,27 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		# struct, an enum, a field and a variant carry no place, so those still raise —
 		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
 		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
+	}
+
+	# THE FUNCTIONS AFTER THE TYPES, so the finding lands on the `fn` in EITHER source
+	# order: a FnDecl knows its path, line and column and a struct or an enum does not, so
+	# walking the types first is what turns this whole family into a rule that says where.
+	#
+	# FREE functions only. A method is keyed by its receiving type — `impl Bar { fn Foo() }`
+	# mangles to `zg_Bar_Foo` and lives in that type's namespace (GRAMMAR#impl-decl), which
+	# is a different rule with its own report in c_build_sigs — so a method may share a name
+	# with a type and nothing is ambiguous about it.
+	for fn_i in f.fns {
+		if fn_i.recv == "" {
+			c_check_type_dup(em, seen, kind, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col)
+		}
+	}
+
+	# AND THE CONSTANTS LAST, which is where c_const_globals reported this rule's
+	# constant-versus-function half from, so the place a reader is pointed at does not move:
+	# the collision is reported at the constant's own declaration in both orders.
+	for c in f.consts {
+		c_check_type_dup(em, seen, kind, c.name, "a module constant", c.path, c.line, c.col)
 	}
 
 	# and one level down, where the same question has the same answer and three more ways
@@ -2892,6 +2927,15 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 		return
 	}
 
+	# TWO OF THE SAME KIND, and for two of the six kinds that is not this walk's answer to
+	# give. A second free function of one name may be two MODULES each declaring a PRIVATE
+	# one, which c_build_sigs tells apart by a module tag rather than refusing — reporting
+	# it here would refuse a program the language allows. A second module constant is
+	# c_const_globals', which says which of the two it means. Both are recorded here all
+	# the same, because a CONSTANT colliding with a FUNCTION is this walk's rule and it
+	# needs the first of each on the list to see it.
+	return if what == "a function" or what == "a module constant"
+
 	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
 }
 
@@ -2919,7 +2963,7 @@ fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: i
 # TYPE can say which of the two it is: a spec used where a type goes, or a typo.
 #
 # It runs LAST of the four registrars. A name declared as both a spec and something else is
-# reported by c_build_type_names and then belongs to the other one — which is the answer the
+# reported by c_build_top_names and then belongs to the other one — which is the answer the
 # separate tables used to give by accident, each saying yes to its own question, and the
 # answer the constructor path needs: `struct A` beside `spec A` still constructs.
 fn c_build_specs(mut &em: Emitter, f: File) {
@@ -7422,19 +7466,13 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# were written; this one linked — two definitions of `zg_N`, tolerated by a linker
 		# that still allows a common symbol — and the reader got whichever the linker chose.
 		# On a toolchain with `-fno-common` it is a duplicate symbol instead.
+		#
+		# A constant colliding with a FUNCTION or with a TYPE is the SAME rule and is not
+		# asked here, though it was: checked against the signature table alone, its extent
+		# was the half a constant walk could see, so `const f := 1` beside `fn f()` was
+		# refused and `const A := 1` beside `struct A` reached cc. c_build_top_names asks it
+		# of every top-level declaration at once now, and reports at this same place.
 		raise f"NotImplemented: two modules both define `{c.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_k_idx(em, c.name) >= 0
-
-		# A FUNCTION of the same name is a collision too: the top level is one namespace,
-		# so both mangle to `zg_<name>` and `const f := 1` beside `fn f()` reached cc as
-		# "redefinition of 'zg_f'" — against generated code, in either source order, since
-		# this walk runs after c_build_sigs has seen every declaration. A LOCAL named
-		# after a function is not this (it shadows, c_add_var's business); free functions
-		# only, because a method is keyed by its type and a generic template mangles per
-		# specialization, so neither ever shares the constant's symbol. Reported at the
-		# constant's declaration in `own`, so a multi-unit build says it once.
-		if c_is_free_fn(em, c.name) and c_const_in(own, c.name) {
-			chk_at_place(em, c.path, c.line, c.col, "E373", f"`{c.name}` is declared as both a module constant and a function — the top level is one namespace, so a name collision in either direction is an error")
-		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
 		# is chk_binding's — the value must fit the declared type, literals adopting the
@@ -11172,7 +11210,13 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	c_build_generics(em, f0)
 	f := c_without_templates(f0)
 	own := c_without_templates(c_with_derived(own0))
-	c_build_type_names(em, f)
+
+	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
+	# to lower, which is what the removal above says, but it IS a name at the top level:
+	# `fn Foo[T](x: T)` beside `struct Foo` is the same collision as the non-generic pair,
+	# and `Foo(3)` quietly meant the constructor. This is the one pass that asks about the
+	# name rather than about the body, so it is the one pass that reads the whole list.
+	c_build_top_names(em, f0)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
 	# is exactly that collision, and the sentence about method namespaces is true and about

@@ -218,7 +218,7 @@ fn declares_main(files: list[str]) -> bool {
 
 	mut found := false
 	guard {
-		src := str(io.read_file(files[0]))
+		src := read_source(files[0])
 		found = zerg.c_has_main(zerg.parse_at(src, files[0]))
 	}
 	return found
@@ -244,7 +244,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# silent success load_unit had, and worse here — these are the two stages a person
 	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
+		io.write(zerg.dump_tokens(read_source(files[0])))
 		return
 	}
 	if emit == "ast" {
@@ -830,7 +830,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	# names the lexical rule and where — so letting them out is what puts the real reason in
 	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		lex_check(src, f)
 		srcs.append(src)
 		paths.append(f)
@@ -1178,10 +1178,41 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	paths.append(file)
 }
 
+# read_source is the ONE place a file on disk becomes source text, and it exists because
+# that step could KILL the compiler. `str(bytes)` checks the str invariant and aborts on a
+# violation — `EncodingError: bytes are not valid UTF-8 for a str`, from the runtime, with no
+# code, no place and no file named — so a single stray byte in any file the toolchain was
+# pointed at ended the process before the lexer had read a character. `zerg build`, `zerg
+# fmt`, `zerg desugar` and the language server all went the same way.
+#
+# GRAMMAR#letter says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# saying which file is the whole of the answer. That is why this carries no `-->` trailer:
+# there is no line to name yet, the thing that would read one being what refused.
+#
+# THE READ IS OUTSIDE THE GUARD ON PURPOSE. A file that cannot be opened is a DIFFERENT
+# failure and raises its own `IOError`, and a `guard` around both would report it as an
+# encoding complaint about a file nobody could read — the swallowing `load_unit` above has a
+# paragraph about. The guard covers the conversion alone, which is the only thing in here
+# that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
+# failed on, which is a gap in `io` rather than one here.)
+fn read_source(path: str) -> str {
+	b := io.read_file(path)
+
+	mut src := ""
+	mut ok := false
+	guard {
+		src = str(b)
+		ok = true
+	}
+	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
+
+	return src
+}
+
 # buffer_src is the text of `file`: what the server is holding for it, or what the disk has.
 fn buffer_src(file: str, buf: Buffer) -> str {
 	return buf.text if file == buf.path
-	return str(io.read_file(file))
+	return read_source(file)
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,
@@ -1290,7 +1321,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 # formatted file is byte-identical to what it was, so running fmt twice is a no-op.
 fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 
 		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
 		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
@@ -1322,7 +1353,7 @@ fn run_fmt(files: list[str], off: list[str]) {
 fn run_fmt_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
 			bad = bad + 1
@@ -1346,7 +1377,7 @@ fn run_fmt_check(files: list[str], off: list[str]) -> int {
 # for, and the docs say so.
 fn run_desugar(files: list[str], off: list[str]) {
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		raise f"`{f}` has unbalanced brackets, so it cannot be desugared — the file is left as it is" if not zerg.fmt_balanced(src)
 
 		out := zerg.desugar_src_off(src, off)
@@ -1366,7 +1397,7 @@ fn run_desugar(files: list[str], off: list[str]) {
 fn run_desugar_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be desugared\n")
 			bad = bad + 1

@@ -613,6 +613,7 @@ shipping compiler rather than a part of it (the line
 | `E108` | a based number needs a digit immediately after its prefix                                   |
 | `E109` | invalid escape in a … literal                                                               |
 | `E110` | a string literal may not contain a NUL                                                      |
+| `E111` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                 |
 | `E201` | `close` is not a select arm head                                                            |
 | `E202` | a select needs at least one arm                                                             |
 | `E203` | `…` is not a select arm head                                                                |
@@ -698,6 +699,8 @@ shipping compiler rather than a part of it (the line
 | `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                        |
 | `E289` | a trailing comma before a closing `)`, `]` or `}`                                           |
 | `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                  |
+| `E293` | `…` is a reserved word and cannot name a field                                              |
+| `E294` | expected a field name (or a tuple index) after `.`, found `…`                               |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

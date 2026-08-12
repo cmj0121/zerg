@@ -2784,8 +2784,7 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 	for p_at(p, Kind.Dot) or p_at(p, Kind.LBrack) or p_at(p, Kind.OptDot) {
 		if p_at(p, Kind.OptDot) {
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, "?.", false)
 			e = Expr.EOptChain(e, fld)
 		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
@@ -2794,8 +2793,7 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 			e = Expr.EIndex(e, idx)
 		} else {
 			p_advance(p) # '.'
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, ".", true)
 			if p_at(p, Kind.LParen) {
 				e = Expr.EMethod(e, fld, parse_call_args(p))
 			} else {
@@ -2866,6 +2864,49 @@ fn p_ty_of_name(nm: str) -> Ty {
 	return Ty.TNamed(nm)
 }
 
+# p_field_name reads the selector a postfix `.` or `?.` takes, and it is ONE function for
+# the same reason p_one_tuple above is: four sites read one — `.` and `?.`, each of them in
+# parse_postfix and again in parse_chain_tail — and a rule written at one of four slots is
+# the shape of bug that keeps being found here.
+#
+# All four used to take `cur(p).lexeme` and advance, whatever token was sitting there, so
+# GRAMMAR#postfix — `'.' identifier`, `'.' dec-int`, `'?.' identifier` — described a surface
+# the parser did not have. What happened to the rest was NOT a parse error: `x.if` became a
+# field access whose field is named `if`, and the CHECKER answered it, ``E376 no field `if`
+# on int`` — a sentence about a field somebody might plausibly have declared, for a word
+# GRAMMAR#keyword says in so many words can never be an identifier. Every declaring position
+# already refuses one (E245, E257); this is the selecting position saying the same thing.
+#
+# The line-eating is the case that shows why it has to be caught HERE rather than downstream.
+# A `.` suppresses ASI, so in
+#
+#     print 1.
+#     print 2
+#
+# the second line's `print` was read as the field name of `1.`, the statement vanished, and
+# what got reported was `2` — under E205, on a line with nothing wrong with it. By the time
+# a field name is a string in an AST node, the token that was really the error is gone.
+#
+# `tuple_ok` is the difference between the two dots and it is GRAMMAR's: a tuple is read back
+# by static index off `.` alone, and `?.` derives an identifier and nothing else.
+fn p_field_name(mut &p: Parser, dot: str, tuple_ok: bool) -> str {
+	t := cur(p)
+	lx := t.lexeme
+
+	raise f"E293 `{lx}` is a reserved word and cannot name a field" + p_place(p, t.line, t.col) if p_reserved_word(lx)
+
+	if not p_at(p, Kind.Ident) and not (tuple_ok and p_at(p, Kind.Int)) {
+		mut want := "a field name"
+		if tuple_ok {
+			want = "a field name or a tuple index"
+		}
+		raise f"E294 expected {want} after `{dot}`, found `{lx}`" + p_place(p, t.line, t.col)
+	}
+
+	p_advance(p)
+	return lx
+}
+
 # parse_postfix parses a primary then a chain of calls. In the subset the callee is
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
@@ -2875,8 +2916,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			# `a?.b` — the lexer has produced this token since it existed and no parser ever
 			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, "?.", false)
 			e = Expr.EOptChain(e, fld)
 		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
@@ -2903,8 +2943,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			}
 		} else if p_at(p, Kind.Dot) {
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, ".", true)
 			if p_at(p, Kind.LParen) {
 				# method call: target.method(args)
 				e = Expr.EMethod(e, fld, parse_call_args(p))

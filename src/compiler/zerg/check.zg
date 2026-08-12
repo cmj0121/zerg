@@ -114,7 +114,22 @@ fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
 # The entry file's own directory is deliberately NOT a module here. A file beside the entry
 # is not compiled into the build at all, so nothing in it can be referenced and there is
 # nothing for this rule to say about it.
+#
+# THE EMPTY STRING MEANS "NO PATH", AND NOTHING ELSE. This is `dirname`, and it used to answer
+# `""` for a path with no directory component — which every caller already reads as "there is
+# no module here, be quiet". So `zerg build m.zg` gave the ENTRY the sentinel, and every rule
+# that asks which module a reference is in went silent: `text.helper()` on a module-private
+# `helper` printed 42, while the identical program spelled `./m.zg`, `t9/m.zg` or with an
+# absolute path was refused with E301 and a place. The module identity was a function of how
+# the entry path happened to be TYPED.
+#
+# A bare filename denotes a file in the current directory, so the dirname is `.` — which is
+# what POSIX `dirname` answers, and what `dir_of` in zergc.zg has always answered for the
+# path that goes on to resolve the imports. One spelling of the question, one answer to it.
+# `""` is left to what really has no module: a declaration NO FILE WROTE.
 fn c_mod_of(path: str) -> str {
+	return "" if c_synthetic_path(path)
+
 	b := bytearray(path)
 	mut cut := -1
 	mut i := 0
@@ -124,7 +139,7 @@ fn c_mod_of(path: str) -> str {
 		}
 		i = i + 1
 	}
-	return "" if cut < 0
+	return "." if cut < 0
 
 	mut out: list[byte] = []
 	mut j := 0
@@ -133,6 +148,26 @@ fn c_mod_of(path: str) -> str {
 		j = j + 1
 	}
 	return str(out)
+}
+
+# c_synthetic_path is whether a path names a tree the COMPILER wrote rather than a file it
+# read — `<builtin>` for the built-in specs, `<derive>` for what a decorator expands to — plus
+# the empty path, which is a declaration with no origin at all.
+#
+# It is the "there is no module here" sentinel, and until now it was arrived at by accident:
+# `<derive>` holds no '/', so the dirname above answered `""` and every module rule read that
+# as "be quiet". A real bare filename answered `""` for the same reason and got the same
+# silence, which is the hole. Naming the two apart is what lets a bare filename have a module
+# without a derived impl acquiring one.
+#
+# `<` is what marks it, because no path the loader ever hands over can start with one: a
+# source is either the entry as it was typed on the command line or a `.zg` file resolved
+# under a source root, and neither route produces an angle bracket.
+fn c_synthetic_path(path: str) -> bool {
+	b := bytearray(path)
+	return true if b.len() == 0
+
+	return b[0] == b'<'
 }
 
 # chk_visible is the rule. It is quiet on a `pub` declaration, on one from the module doing

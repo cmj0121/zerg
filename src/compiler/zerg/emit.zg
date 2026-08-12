@@ -553,7 +553,7 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: Ty, e: Expr, sb: Subst) -> str
 fn c_is_block_expr(e: Expr) -> bool {
 	return match e {
 		Expr.EBlock(_) => true
-		_              => false
+		_ => false
 	}
 }
 

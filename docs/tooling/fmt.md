@@ -698,6 +698,8 @@ shipping compiler rather than a part of it (the line
 | `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                        |
 | `E289` | a trailing comma before a closing `)`, `]` or `}`                                           |
 | `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                  |
+| `E293` | `…` is a reserved word and cannot name a field                                              |
+| `E294` | expected a field name (or a tuple index) after `.`, found `…`                               |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

@@ -422,37 +422,6 @@ fn main() {
 }
 EOF
 
-# --- a module constant may not take a function's name --------------------------------
-#
-# The top level is ONE namespace: a module constant and a free function both mangle to
-# `zg_<name>`, so `const f := 1` beside `fn f()` reached cc as "redefinition of 'zg_f'"
-# against generated code — in either source order, which is why both are here. A LOCAL
-# named after a function is not this (it shadows, and stays legal); the corpus pins that
-# half. The seed emits the collision too (its gap, src/bootstrap/README.md).
-reject const-taking-a-function-name E373 at=1:1 seed-gap <<'EOF'
-const f := 1
-
-fn f() {
-	print "x"
-}
-
-fn main() {
-	print "ok"
-}
-EOF
-
-reject function-taking-a-const-name E373 at=5:1 seed-gap <<'EOF'
-fn f() {
-	print "x"
-}
-
-const f := 1
-
-fn main() {
-	print "ok"
-}
-EOF
-
 # --- the top level is immutable in safe code --------------------------------------
 #
 # docs/runtime/package.md: a top-level binding may not be `mut` outside a module-level
@@ -2705,13 +2674,23 @@ fn main() {
 }
 EOF
 
-# --- a type name is one name -----------------------------------------------------
+# --- the top level is one namespace ----------------------------------------------
 #
-# A struct, an enum and a spec share one namespace — every module flattens into one scope
-# here, which is the argument that already refuses a duplicate function and a duplicate
-# module constant. Nothing checked it, and the shapes failed four different ways: two
-# structs MERGED into one of both their fields, two of the same reached cc as a "typedef
-# redefinition" against .zerg-cache, and two specs were simply accepted.
+# A struct, an enum, a type declaration, a spec, a free function and a module constant all
+# live in it — every module flattens into one scope here, and GRAMMAR's construction note
+# puts a type name into the VALUE namespace besides ("a type and a function cannot share a
+# name (a duplicate is an error — Zerg has no overloading)"), since `struct User` is what
+# makes `User(…)` a call. Nothing checked most of it, and the shapes failed several
+# different ways: two structs MERGED into one of both their fields, two of the same reached
+# cc as a "typedef redefinition" against .zerg-cache, two specs were simply accepted, and a
+# type beside a function reached cc as "redefinition of 'zg_Foo' as different kind of
+# symbol" — after `Foo(3)` had already been read as the CONSTRUCTOR rather than the call
+# the program wrote.
+#
+# One walk answers all of it (c_build_top_names), which is why the constant-versus-function
+# pair is here rather than in a section of its own: it used to be a second check, in the
+# constant walk, and a second check had a second extent — it knew about functions and not
+# about types, so `const A := 1` beside `struct A` went straight to cc.
 
 reject a-struct-declared-twice E382 no-place <<'EOF'
 struct A {
@@ -2765,7 +2744,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-and-a-spec-share-a-name E381 seed-gap <<'EOF'
+reject a-struct-and-a-spec-share-a-name E381 'once as a struct, once as a spec' seed-gap <<'EOF'
 struct A {
 	v: int
 }
@@ -2776,6 +2755,138 @@ spec A {
 
 fn main() {
 	print(f"{A(1).v}")
+}
+EOF
+
+# and the pairings a TYPE makes with a FUNCTION, which is the half GRAMMAR states outright
+# and nothing enforced. All four kinds of type are here because all four spell a different
+# C declaration and each failed cc its own way, and both source orders are here because the
+# finding must land on the `fn` either way: a FnDecl knows its place and a struct does not,
+# so walking the types first is what makes this whole family a rule that says WHERE.
+
+reject a-struct-and-a-function-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+struct A {
+	v: int
+}
+
+fn A(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=1:1 <<'EOF'
+fn A(n: int) -> int {
+	return n
+}
+
+struct A {
+	v: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject an-enum-and-a-function-share-a-name E381 'once as an enum, once as a function' at=5:1 <<'EOF'
+enum E {
+	X
+}
+
+fn E(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-typedef-and-a-function-share-a-name E381 'once as a type declaration, once as a function' at=3:1 <<'EOF'
+type Celsius = int
+
+fn Celsius(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-spec-and-a-function-share-a-name E381 'once as a spec, once as a function' at=5:1 <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+fn Tag(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# A TEMPLATE IS A NAME TOO. `fn Box[T](…)` is removed from the program before the passes
+# that lower it, on the grounds that a template is not a function — but it still claims
+# `Box` at the top level, and `Box(3)` beside `struct Box` quietly meant the constructor.
+# This case is what holds the name walk to the list that still has the templates in it.
+reject a-generic-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+struct Box {
+	v: int
+}
+
+fn Box[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# and the pairings a MODULE CONSTANT makes. The constant-versus-function pair was already
+# refused; the constant-versus-type pair is what the separate check could not see, and it
+# is the case that would go quiet again the day this rule is asked in two places. Every one
+# of them is reported at the CONSTANT, which is where the old check reported it from.
+reject a-struct-and-a-module-constant-share-a-name E381 'once as a struct, once as a module constant' at=1:1 <<'EOF'
+const A := 1
+
+struct A {
+	v: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject const-taking-a-function-name E381 'once as a function, once as a module constant' at=1:1 <<'EOF'
+const f := 1
+
+fn f() {
+	print "x"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject function-taking-a-const-name E381 'once as a function, once as a module constant' at=5:1 <<'EOF'
+fn f() {
+	print "x"
+}
+
+const f := 1
+
+fn main() {
+	print "ok"
 }
 EOF
 

@@ -347,6 +347,19 @@ struct Emitter {
 	sig_mod: list[str]
 	sig_pub: list[bool]
 
+	# sig_unsafe is the third such column: whether the declaration sat inside a module-level
+	# `unsafe { … }` group, which GRAMMAR group 12 makes callable only from unsafe. It is
+	# recorded beside the other two for the same reason — the namespace is flat by the time a
+	# call is resolved, and the CONTEXT a declaration was written in is exactly what is lost.
+	sig_unsafe: list[bool]
+
+	# in_unsafe_fn is whether the function being emitted RIGHT NOW is one of them, which is
+	# the other half of the rule: the check is a comparison between the callee's context and
+	# the caller's, and nothing else on this struct says which function the walk is inside.
+	# c_fn saves and restores it, because a lambda is emitted through c_fn in the middle of
+	# the enclosing function's expression.
+	in_unsafe_fn: bool
+
 	# depth counts how many recursion levels of the expression walk are active — one per
 	# c_expr or c_infer entry, the two doors every recursive descent into an expression
 	# goes through. The parser bounds NESTING, but a flat chain (`1 + 1 + … + 1`, or a
@@ -2057,6 +2070,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: FnDecl) {
 	em.sig_names.append(key)
 	em.sig_mod.append(c_mod_of(fn_i.path))
 	em.sig_pub.append(fn_i.is_pub)
+	em.sig_unsafe.append(fn_i.in_unsafe)
 	em.sig_rets.append(fn_i.ret)
 	em.sig_hasret.append(fn_i.has_ret)
 	em.sig_nparams.append(fn_i.params.len())
@@ -4270,6 +4284,11 @@ fn c_order_trivial(e: Expr) -> bool {
 # The FIRST operand is not asked about. Nothing is evaluated before it, so whatever it does
 # it does first whichever order the C compiler picks; it is a later operand having an effect
 # that makes the choice visible.
+#
+# That reasoning holds only while every operand is read ONCE, which is the second reason a
+# caller passes 0: `v in lo..hi` names its subject at each bound, so the subject's second
+# reading comes after the bounds and its own effect is what the order shows. c_in_range is the
+# one such form, and it asks from 0 for that reason rather than for the receiver's.
 fn c_needs_order(es: list[Expr], at: int) -> bool {
 	mut i := at
 	for i < es.len() {
@@ -4798,20 +4817,108 @@ fn c_in_eq(at: str, kv: str, elem: Ty) -> str {
 # c_set_says names the set on the right of an `in` for a diagnostic. A RANGE is asked about by
 # SHAPE rather than by type: nothing infers one yet, so asking c_infer answered `?` and the
 # refusal named nothing a reader had written.
+#
+# It names the range's ELEMENT, because a bare "a range" no longer tells a reader anything:
+# `v in lo..hi` is built now, and what is left refused is a range of something the bounds test
+# cannot compare — so the type IS the finding, and the lower bound is what carries it.
 fn c_set_says(mut &em: Emitter, set: Expr) -> str {
 	return match set {
-		Expr.ERange(_, _, _) => "a range"
+		Expr.ERange(lo, _, _) => f"a range of {ty_name(c_infer(em, lo))}"
 		_ => ty_name(c_infer(em, set))
 	}
+}
+
+# c_in_range lowers `v in lo..hi` — GRAMMAR#range-expr makes a range's MEMBERS its set, and
+# membership in a run of numbers is the pair of comparisons its bounds spell: `v >= lo` and
+# `v < hi`, `<=` for the inclusive `..=`, and the lower bound alone for the open `lo..`, which
+# has no upper bound to compare against.
+#
+# THE SUBJECT IS EVALUATED ONCE. The test names `v` at each bound, and `v` is an expression
+# rather than a name — so splicing its lowering in twice does not ask the same question twice,
+# it runs the program's code twice: `f() in 1..10` called `f()` once per bound, and the second
+# call landed AFTER the lower bound, so the count and the order were both wrong. c_ordered
+# binds each operand of the run to a temporary in source order, which is the machinery an
+# argument list and an operator pair already use, and it answers both at once.
+#
+# The trigger is c_needs_order asked from index 0 rather than 1, and that is the whole
+# difference between this form and every other run. The usual rule exempts the FIRST operand
+# because nothing precedes it; here the first operand is the one written twice, so its second
+# reading comes after every bound and any operand that can run code makes the order visible.
+fn c_in_range(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
+	lo := c_range_lo(set)
+	hi := c_range_hi(set)
+	open := c_is_nil_lit(hi)
+
+	# THE RUN IS THE SUBJECT AND ITS BOUNDS, in the order they are written. An absent upper
+	# bound is an open range and is not part of it at all — there is nothing to compare
+	# against and nothing to evaluate.
+	mut run := [x, lo]
+	if not open {
+		run.append(hi)
+	}
+
+	# WHAT C CAN COMPARE, and nothing wider. The lowering below writes C's `>=` and `<`
+	# straight out, so a `str` bound would compare two POINTERS — the silent wrong answer
+	# `"zzz" < "aaa"` was fixed for, arriving by a second route — and an aggregate has no
+	# comparison at all. Refused by name rather than lowered, which is what the rest of `in`
+	# does with a set it cannot read.
+	off := c_in_range_offender(em, run)
+	return c_in_refuse(em, set, f"a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way") if off != ""
+
+	# THE OPERANDS MEET EACH OTHER as the comparisons they are. Writing the C by hand means
+	# nothing else asks whether a subject and a bound are types `>=` relates — an optional, a
+	# `type X = Y`, an int against a float — so the two comparisons are put to the same rule
+	# `a >= b` goes through.
+	chk_binary(em, ">=", c_infer(em, x), c_infer(em, lo), x, lo)
+	if not open {
+		chk_binary(em, c_range_cmp(set), c_infer(em, x), c_infer(em, hi), x, hi)
+	}
+
+	seq := c_needs_order(run, 0)
+	sx := c_ordered(em, seq, c_expr(em, x, sb))
+	slo := c_ordered(em, seq, c_expr(em, lo, sb))
+	return f"(({sx}) >= ({slo}))" if open
+
+	shi := c_ordered(em, seq, c_expr(em, hi, sb))
+	return f"(({sx}) >= ({slo}) && ({sx}) {c_range_cmp(set)} ({shi}))"
+}
+
+# c_range_cmp is the comparison the UPPER bound is made with, which is the only thing `..` and
+# `..=` differ by: an exclusive range stops before its bound and an inclusive one stops on it.
+fn c_range_cmp(set: Expr) -> str {
+	return "<=" if c_range_incl(set)
+
+	return "<"
+}
+
+# c_in_range_offender names the first operand of the bounds test whose type C's `>=` means
+# nothing about, or "" when every one of them is fine. A `str` is compared by `strcmp` and an
+# aggregate is not compared at all, so neither can be spliced into the C the lowering writes.
+fn c_in_range_offender(mut &em: Emitter, run: list[Expr]) -> str {
+	mut i := 0
+	for i < run.len() {
+		t := c_infer(em, run[i])
+		return ty_name(t) if c_is_str(t) or c_is_aggregate(em, t)
+		i = i + 1
+	}
+	return ""
+}
+
+# c_in_refuse is the ONE place `E463` is reported from. Two rules answer with it — a set that
+# is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
+# an identity, so the sentence differs and the identity does not.
+fn c_in_refuse(mut &em: Emitter, set: Expr, why: str) -> str {
+	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}"
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
 #
 # What a set is depends on what names it, and docs/surface/grammar.md gives `in` one rule for
 # all of them: a container names its elements, a range names its members, and an ERROR KIND
-# names itself and everything below it in the taxonomy. A range is the one this compiler does
-# not read, and it is named rather than emitted — a membership test that silently answered
-# about the wrong set would be worse than one that says it is not built.
+# names itself and everything below it in the taxonomy. All three are read here; what is left
+# refused is a set that is none of them, and it is named rather than emitted — a membership
+# test that silently answered about the wrong set would be worse than one that says it is not
+# built.
 #
 # It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
 # reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
@@ -4824,10 +4931,15 @@ fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 	# anything else is asked what its TYPE is so the refusal names the set the reader wrote
 	# rather than the branch that happened to be taken.
 	if kind == 0 {
+		# A RANGE IS ASKED ABOUT BY SHAPE. Nothing infers a range type — a range used as a
+		# VALUE is still refused — so the only range that reaches `in` is one written at the
+		# operator, and c_infer would answer `?` about it.
+		return c_in_range(em, x, set, sb) if c_is_range(set)
+
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
+		return c_in_refuse(em, set, "this compiler reads `in` over a list, a map, a range, or an error kind")
 	}
 
 	t := c_infer(em, x)
@@ -6035,6 +6147,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# answers for every shape of call — a method, a constructor, an intrinsic — and only a
 	# plain function has a module that could be the wrong one.
 	c_chk_visible_fn(em, name)
+	c_chk_unsafe_fn(em, name, "this call is in safe code")
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname_in(em, c_mod_of(em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
@@ -6055,6 +6168,21 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str) {
 	return if r < 0
 
 	chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
+}
+
+# c_chk_unsafe_fn asks the same table the same way for the `unsafe` group's caller rule. It is
+# a second function rather than a second question inside the one above because the two rules
+# are asked at different places: visibility is a call's business alone, and this one is also
+# owed where a bare function NAME becomes a VALUE — `f := poke` would otherwise be one line
+# away from making the rule mean nothing.
+#
+# A key that is not there is quiet, for the reason the visibility rule is: a generated
+# declaration was written by nobody, so there is no context a reader could have been in.
+fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str) {
+	r := c_sig_row(em, c_sig_key("", name))
+	return if r < 0
+
+	chk_unsafe_reachable(em, name, em.sig_unsafe[r], what)
 }
 
 # c_chk_visible_const is the same rule for a module constant, against the rows
@@ -6502,6 +6630,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
 		c_no_ref_param_value(em, n)
+		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call")
 		em.used_fnptr = true
 		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
@@ -8609,7 +8738,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn)))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -10723,6 +10852,12 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	saved_ret := em.fn_ret
 	em.fn_ret = fn_d.ret
 
+	# and so is the trust context, for the same reason and with the same care: a lambda
+	# written inside an unsafe fn is unsafe code too, so it inherits the flag rather than
+	# resetting it, and the enclosing function gets its own back below.
+	saved_unsafe := em.in_unsafe_fn
+	em.in_unsafe_fn = fn_d.in_unsafe
+
 	# the parameters bind in a scope between the module and the body, so a parameter may
 	# shadow a PLAIN module binding and the body may shadow a parameter — `mut n := n`.
 	# A keyword `const` is the exception: it is shadow-proof everywhere, and c_add_var
@@ -10813,6 +10948,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	em.fn_mark_used = outer_used
 	out := sig + head + pdefer + rendered + tail + "}\n\n"
 	em.fn_ret = saved_ret
+	em.in_unsafe_fn = saved_unsafe
 	return out
 }
 
@@ -11394,7 +11530,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [], "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "")
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

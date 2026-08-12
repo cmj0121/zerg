@@ -1265,7 +1265,11 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 				p_advance(p)
 				u_mut = true
 			}
-			sig := parse_fn_head(p, false, "This", u_mut)
+			# `in_unsafe` is FALSE even though the word being read is `unsafe`: that parameter
+			# tracks whether the declaration sits inside a module-level `unsafe { … }` GROUP
+			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
+			# discarded by the raise below in any case.
+			sig := parse_fn_head(p, false, "This", u_mut, false)
 			raise f"E287 NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped" + p_place(p, u.line, u.col)
 		}
 

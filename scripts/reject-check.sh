@@ -117,7 +117,15 @@ reject() {
 	rm -rf "$dir"
 	mkdir -p "$dir"
 	local src="$dir/$name.zg"
-	awk -v dir="$dir" -v entry="$src" '
+
+	# LC_ALL=C, because this is a byte pipe and not a text one. A case is a PROGRAM, and one
+	# class of ill-formed program is ill-formed exactly because its bytes are not text: under
+	# the ambient UTF-8 locale macOS awk stops on `towc: multibyte conversion failure` and
+	# writes a TRUNCATED file, so the case that reaches the compiler is not the case that was
+	# written and the gate reports a mismatch on a rule it never exercised. In the C locale a
+	# record is bytes, `/^--- /` matches bytes, and every case — UTF-8, ASCII or neither —
+	# arrives as it was typed.
+	LC_ALL=C awk -v dir="$dir" -v entry="$src" '
 		/^--- / {
 			out = dir "/" $2
 			d = out
@@ -1741,6 +1749,45 @@ fn main() {
 }
 EOF
 
+# THE SAME RULE, WRITTEN IN A CHARACTER THAT IS NOT ASCII. `GRAMMAR#identifier` derives ASCII
+# letters, digits and `_` and nothing else, so a character outside a string, a rune or a
+# comment is the same lexical error `@` is — and this used to KILL the compiler instead:
+# `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught runtime abort with no
+# code, no place and no form named. The lexer had reached its own E104 and then built the
+# diagnostic's lexeme out of ONE byte of a three-byte character.
+#
+# It is in the reject list rather than the refuse list because no future feature makes it
+# legal: `GRAMMAR#letter` says the source is UTF-8, which is what lets this character be WRITTEN
+# in a comment or a literal, and identifier says which characters can spell a name.
+reject a-character-that-is-not-ascii E104 <<'EOF'
+fn main() {
+	x := 1
+	print 值
+}
+EOF
+
+# A FILE THAT IS NOT UTF-8 AT ALL, which is the same abort one stage earlier: the driver turns
+# the bytes it read into a `str` before the lexer sees a character, and `str(bytes)` checks the
+# invariant and KILLS the process on a violation. `zerg build`, `zerg fmt`, `zerg desugar`,
+# `zerg lint` and the language server all died the same way, on `EncodingError: bytes are not
+# valid UTF-8 for a str` — no code, no place, and not even the name of the file it was reading.
+#
+# `GRAMMAR#letter` says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# WHICH FILE is the whole of the answer — there is no line to name, the thing that would read
+# one being what refused. Hence `no-place`.
+#
+# The byte is spelled through the shell rather than written here, because a script holding an
+# invalid sequence is a script no editor, formatter or diff opens twice.
+#
+# `seed-gap`: the seed is byte-oriented and has no str invariant to violate, so it emits
+# `"\377"` into the C and answers nothing at all — the one direction where zerg is the
+# stricter compiler on an encoding.
+reject a-source-file-that-is-not-utf8 E111 no-place seed-gap <<EOF
+fn main() {
+	print "$(printf '\377')"
+}
+EOF
+
 reject based-number-with-no-digits E108 <<'EOF'
 fn main() {
 	n := 0x
@@ -3191,6 +3238,57 @@ reject statement-keyword-as-a-binding E257 no-place <<'EOF'
 fn main() {
 	print := 1
 	print(f"{print}")
+}
+EOF
+
+# --- the SELECTOR half of the same rule -------------------------------------------------
+#
+# `GRAMMAR#keyword` says outright that none of them can be an identifier, and `GRAMMAR#postfix`
+# derives `'.' identifier` and `'.' dec-int`. Every DECLARING position above already answers
+# that way; the postfix did not — it read whatever token followed the `.` as a field name and
+# handed it downstream, so `x.if` was answered by the CHECKER as ``E376 no field `if` on int``:
+# a sentence that treats a reserved word as a field somebody might plausibly have declared.
+#
+# The four sites that read a selector — `.` and `?.`, in `parse_postfix` and in
+# `parse_chain_tail` — now share one function, because a rule written at one of four slots is
+# the shape of bug this repo keeps finding.
+reject a-reserved-word-as-a-field E293 '`if` is a reserved word' <<'EOF'
+fn main() {
+	x := 1
+	print x.if
+}
+EOF
+
+# THE SWALLOWED LINE, and it is why this belongs at the postfix rather than at the checker.
+# A `.` suppresses ASI, so the `print` on the NEXT line was read as the field name of `1.` and
+# the line vanished from the program — what got reported was `2`, on a line that is correct,
+# under E205. Two statements in, three lines down, about the wrong one.
+reject a-dot-that-eats-the-next-line E293 '`print` is a reserved word' <<'EOF'
+fn main() {
+	print 1.
+	print 2
+}
+EOF
+
+# NOT A NAME AT ALL is the rest of the production, and it went the same way: an operator or a
+# literal after the `.` became a "field" whose name is `+` or `"a"`, and E376 said no int has
+# one. The seed has asked for "a field name or tuple index" since it was written and is the
+# oracle for all four of these.
+reject a-field-name-that-is-not-a-name E294 'found `+`' <<'EOF'
+fn main() {
+	x := 1
+	print x.+
+}
+EOF
+
+# `?.` derives ONLY an identifier — a tuple index is on `.` alone (GRAMMAR#postfix) — and this
+# read the `0` as a field, reaching the checker as ``no field `0` on (int, int)``, with no code
+# and no place on it at all.
+reject a-tuple-index-through-an-optional-chain E294 'after `?.`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	p: (int, int)? = t
+	print p?.0
 }
 EOF
 

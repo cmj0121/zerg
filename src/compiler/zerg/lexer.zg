@@ -182,7 +182,35 @@ fn scan_token(mut &l: Lex) -> Token {
 		l.depth = l.depth + 1
 		return emit(l, Kind.Hash, sline, scol, "#[")
 	}
+	return scan_nonascii(l, sline, scol, soff) if int(c) >= 0x80
+
 	return scan_operator(l, sline, scol, soff)
+}
+
+# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR#letter makes the source
+# UTF-8 — which is what lets a comment, a string and a rune hold any character at all —
+# and GRAMMAR#identifier derives ASCII letters, digits and `_`, so a character reaching
+# here spells nothing: the same lexical error `@` is, under the same code.
+#
+# IT IS CAUGHT BEFORE scan_operator RATHER THAN IN ITS FALLBACK, and the whole reason is
+# the lexeme. `lexeme_from` cuts the source between two offsets and reads the bytes back
+# as a `str`, scan_operator having consumed exactly ONE — so the diagnostic about `值`
+# asked for one third of a character, and the str constructor answered by KILLING the
+# compiler: `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught abort with
+# no code, no place and no form named, for a program the ASCII path reports cleanly.
+#
+# Consuming the whole character instead makes the lexeme what the reader wrote, which is
+# both a legal `str` and ONE error where a byte at a time would be three. The lead byte
+# always begins a well-formed sequence here, because the driver reads the file as a `str`
+# before this ever sees it, so `rune_len` is the whole of the answer.
+fn scan_nonascii(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	n := rune_len(at(l, 0))
+	mut i := 0
+	for i < n and not eof(l) {
+		advance(l)
+		i = i + 1
+	}
+	return bad_char(l, sline, scol, soff)
 }
 
 fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -771,6 +799,15 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		return op(l, Kind.RBrace, sline, scol, soff, 0)
 	}
 	return op(l, Kind.Semi, sline, scol, soff, 0) if c == b';'
+
+	return bad_char(l, sline, scol, soff)
+}
+
+# bad_char is E104's ONE reporting site. Two characters reach it — an ASCII one no operator
+# claims, and a non-ASCII one scan_nonascii has consumed whole — and they are one rule, so
+# they are one code and therefore one raise (scripts/error-codes-check.sh counts a code
+# reported twice as two rules sharing an identity).
+fn bad_char(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, "E104", "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 

@@ -683,6 +683,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E384` | `Either` 的一邊透過型別指名,而這個是裸的                                                              |
 | `E385` | closure 參數沒有型別,而它的位置也沒給它一個                                                           |
 | `E386` | 透過 function value 的呼叫給錯了引數個數                                                              |
+| `E387` | 這個名字已經被別的東西佔住了 — `import` 綁進唯一的 value 命名空間                                     |
+| `E388` | module `…` 沒有 `…` 這個成員                                                                          |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |

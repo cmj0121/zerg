@@ -78,6 +78,103 @@ fn p_place(mut &p: Parser, line: int, col: int) -> str {
 	return "\n" + place_line(p.path, line, col)
 }
 
+# --- the forms GRAMMAR does not derive --------------------------------------------------
+#
+# A production says what the language HAS, and a parser that reads past one invents. The
+# three refusals below each name a form GRAMMAR states in so many words is not there, and
+# each of them used to compile and run: a language nobody can read off the grammar is one
+# whose surface is whatever the parser happened to accept.
+#
+# Each is ONE function, called from every site that can reach the form, because a code is
+# an identity and two raises would be two rules under one number (scripts/error-codes-check.sh).
+# The trailing comma in particular is reached from four separate loops.
+
+# p_one_tuple refuses `( e , )`. GRAMMAR#tuple-lit is `'(' expr ',' expr ( ',' expr )* ')'`
+# — two elements or more — and the note beside it says a single `( expr )` is just
+# grouping. There is therefore no arity-one tuple type for `(1, )` to have, and it built
+# one anyway: `x := (1, )` gave `x` the type `(int)` and `x.0` read the element back.
+fn p_one_tuple(mut &p: Parser, line: int, col: int) {
+	raise "E288 a 1-tuple `( e, )` — GRAMMAR#tuple-lit is two elements or more, and a single `( expr )` is just grouping, so drop the comma" + p_place(p, line, col)
+}
+
+# p_trailing_comma refuses the comma before a closer. No comma-separated production in
+# GRAMMAR derives one — `tuple-lit`, `list-lit`, `map-lit` and `arg-list` all write the
+# separator BETWEEN elements — and all four read one silently. `zerg fmt` already deleted
+# them, which is the tell: every other part of the toolchain knew the form was not
+# canonical, and the parser was the one place that said nothing.
+#
+# `what` names the production and `closer` the bracket, because one code covers four call
+# sites and a reader who meets it needs to be told which list they are standing in.
+fn p_trailing_comma(mut &p: Parser, what: str, closer: str, line: int, col: int) {
+	raise f"E289 a trailing comma before the closing `{closer}` of {what} — GRAMMAR writes the comma BETWEEN elements and derives none before the closer, so drop it" + p_place(p, line, col)
+}
+
+# p_brace_head refuses a head that OPENS with `{`. GRAMMAR, group 7: "ANY '{'-opening
+# expression — a block OR a map literal — at the start of an if/for/with/match head must be
+# parenthesized", which is what follows from `{` being the block opener.
+#
+# The two heads failed in opposite ways and neither said the rule. `if {"a": 1}.len() == 1`
+# read the brace as a map literal and RAN; `for` reads a leading `{` as the loop's body, so
+# the same head was parsed as a block and the first entry inside it reported "a binding
+# needs a name, and `"a"` is not one" — a complaint about a key nobody wrote as a binding,
+# with no place on it. One rule, one sentence, both heads.
+fn p_brace_head(mut &p: Parser, kw: str, line: int, col: int) {
+	raise f"E290 a `{{`-opening expression at the start of {kw} — a `{{ … }}` is a block or a map literal (GRAMMAR#map-lit), so a head that begins with one must be parenthesized" + p_place(p, line, col)
+}
+
+# p_no_brace_head is the check every head runs, and it is one function so that the five
+# heads cannot drift into five answers. It reads `{` as a refusal outright, except under
+# `for`, where a leading `{` is the INFINITE LOOP's body (GRAMMAR#for-stmt makes the head
+# optional) — there the brace is a head only if something CONTINUES it as an expression,
+# which is what p_brace_continues answers.
+fn p_no_brace_head(mut &p: Parser, kw: str, head_optional: bool) {
+	return if not p_at(p, Kind.LBrace)
+	return if head_optional and not p_brace_continues(p)
+
+	t := cur(p)
+	p_brace_head(p, kw, t.line, t.col)
+}
+
+# p_brace_continues answers whether the `{` the parser stands on is followed, past its
+# matching `}`, by a token that can only CONTINUE an expression — a `.`, a call, an index,
+# an operator. That is the whole difference between `for { break }`, whose brace is the
+# body, and `for {"a": 1}.len() == 1 { … }`, whose brace was a head someone forgot to
+# parenthesize. Nothing else can tell them apart: both are `for` followed by `{`, and the
+# `:` inside is no signal either, since `{ x: int = 1 }` is a block holding a typed binding.
+#
+# The scan counts braces only. A `}` inside a nested `(` or `[` is still a `}` to this
+# parser's lexer, and a `{` inside one still opens a map literal or a block, so brace depth
+# alone is what pairs them.
+fn p_brace_continues(mut &p: Parser) -> bool {
+	mut depth := 0
+	mut i := 0
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+		if k == Kind.LBrace {
+			depth = depth + 1
+		} else if k == Kind.RBrace {
+			depth = depth - 1
+			break if depth == 0
+		}
+		i = i + 1
+	}
+	return p_continues_expr(peek_kind(p, i + 1))
+}
+
+# p_continues_expr names the tokens that can follow a complete expression and leave it
+# still incomplete. It is deliberately the POSTFIX and INFIX set rather than "anything that
+# is not a statement opener": a token this list does not hold ends the expression, and for
+# a `for` body that is every ordinary continuation — a `;` the lexer inserted, the `}` of
+# the enclosing block, the next statement's keyword.
+fn p_continues_expr(k: Kind) -> bool {
+	return true if k == Kind.Dot or k == Kind.OptDot or k == Kind.LParen or k == Kind.LBrack
+	return true if k == Kind.Question or k == Kind.Coalesce or k == Kind.DotDot or k == Kind.DotDotEq
+	return true if k == Kind.And or k == Kind.Or or k == Kind.In or k == Kind.As
+
+	return is_add_op(k) or is_mul_op(k) or is_cmp_op(k)
+}
+
 # ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
 # a language rule: this parser recurses once per nesting level, and on an 8 MB stack it
 # died of SIGSEGV — no diagnostic, exit 139 — at about 485 nested parentheses or list
@@ -1191,8 +1288,12 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		vs.append(parse_expr(p))
 		skip_semis(p)
 		break if not p_at(p, Kind.Comma)
+		ct := cur(p)
 		p_advance(p)
 		skip_semis(p)
+		if p_at(p, Kind.RBrace) {
+			p_trailing_comma(p, "a map literal", "}", ct.line, ct.col)
+		}
 	}
 	expect(p, Kind.RBrace)
 	return Expr.EMapLit(ks, vs)
@@ -1662,7 +1763,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	mut tp_names: list[str] = []
 	mut tp_bounds: list[str] = []
 	p_type_params(p, tp_names, tp_bounds)
-	raise f"E288 NotImplemented: an `impl` carrying its own type parameters `[{join_commas(tp_names)}]` — GRAMMAR#impl-decl puts them there so the target may spell them (`impl[T] Spec for list[T]`), and one impl standing for every instantiation of its target needs those instantiations monomorphized, which this compiler does only for a generic `fn`. Write the `impl` for one concrete target" + p_place(p, kw.line, kw.col) if tp_names.len() > 0
+	raise f"E291 NotImplemented: an `impl` carrying its own type parameters `[{join_commas(tp_names)}]` — GRAMMAR#impl-decl puts them there so the target may spell them (`impl[T] Spec for list[T]`), and one impl standing for every instantiation of its target needs those instantiations monomorphized, which this compiler does only for a generic `fn`. Write the `impl` for one concrete target" + p_place(p, kw.line, kw.col) if tp_names.len() > 0
 
 	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
 	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
@@ -1700,7 +1801,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
 	# one. Reading the arguments is what lets the refusal be about the form that was
 	# written, at the place it was written.
-	raise f"E289 NotImplemented: an `impl` on `{target}[{ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares" + p_place(p, ttok.line, ttok.col) if targs.len() > 0
+	raise f"E292 NotImplemented: an `impl` on `{target}[{ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares" + p_place(p, ttok.line, ttok.col) if targs.len() > 0
 
 	if sp != "" {
 		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))
@@ -1891,6 +1992,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 fn parse_with(mut &p: Parser) -> Stmt {
 	line := cur(p).line
 	p_advance(p)
+	p_no_brace_head(p, "a `with` head", false)
 	value := parse_expr(p)
 
 	mut name := f"_with_{strconv.to_string(line, 10)}"
@@ -2216,6 +2318,7 @@ fn parse_return(mut &p: Parser) -> Stmt {
 
 fn parse_if(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'if'
+	p_no_brace_head(p, "an `if` head", false)
 
 	# `if v := e { … }` — the binding form. It is told from an ordinary condition by the
 	# `:=` alone, one token of lookahead, because no condition may contain one. Without
@@ -2267,6 +2370,12 @@ fn p_else_body(mut &p: Parser) -> list[Stmt] {
 
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
+
+	# The head is OPTIONAL here, so a leading `{` is the infinite loop's BODY — unless
+	# something past its matching `}` continues it as an expression, which is the one
+	# reading under which it was a head. That check goes first: taken as a body, the head
+	# `{"a": 1}.len() == 1` was parsed as a block and complained about its first entry.
+	p_no_brace_head(p, "a `for` head", true)
 	return Stmt.SFor(false, Expr.ENil, parse_block(p)) if p_at(p, Kind.LBrace)
 
 	# `for select { … }` — one ready arm per round, until every watched channel has ended.
@@ -2769,7 +2878,11 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 
 		args.append(parse_expr(p))
 		if p_at(p, Kind.Comma) {
+			ct := cur(p)
 			p_advance(p)
+			if p_at(p, Kind.RParen) {
+				p_trailing_comma(p, "an argument list", ")", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RParen)
@@ -2929,8 +3042,19 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		mut elems: list[Expr] = []
 		elems.append(inner)
 		for p_at(p, Kind.Comma) {
+			ct := cur(p)
 			p_advance(p)
-			break if p_at(p, Kind.RParen)
+
+			# A COMMA WITH NOTHING AFTER IT is two different ill-formed programs, and which
+			# one it is depends on how many elements are already in hand: after one it is
+			# the 1-tuple `(1, )`, after two or more it is a trailing comma. The loop used
+			# to `break` here, which built a tuple out of either and said nothing.
+			if p_at(p, Kind.RParen) {
+				if elems.len() == 1 {
+					p_one_tuple(p, ct.line, ct.col)
+				}
+				p_trailing_comma(p, "a tuple literal", ")", ct.line, ct.col)
+			}
 			elems.append(parse_expr(p))
 		}
 		expect(p, Kind.RParen)
@@ -2952,7 +3076,11 @@ fn parse_primary(mut &p: Parser) -> Expr {
 				return parse_fill(p, elems[0])
 			}
 			if p_at(p, Kind.Comma) {
+				ct := cur(p)
 				p_advance(p)
+				if p_at(p, Kind.RBrack) {
+					p_trailing_comma(p, "a list literal", "]", ct.line, ct.col)
+				}
 			}
 		}
 		expect(p, Kind.RBrack)
@@ -3020,6 +3148,7 @@ fn is_stmt_kw(k: Kind) -> bool {
 # unchanged.
 fn parse_if_expr(mut &p: Parser) -> Expr {
 	p_advance(p) # 'if'
+	p_no_brace_head(p, "an `if` head", false)
 	t := cur(p)
 
 	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head), which runs the branch only when
@@ -3057,6 +3186,7 @@ fn parse_if_branch(mut &p: Parser) -> Expr {
 
 fn parse_match(mut &p: Parser) -> Expr {
 	p_advance(p) # 'match'
+	p_no_brace_head(p, "a `match` head", false)
 	scrut := parse_expr(p)
 	expect(p, Kind.LBrace)
 	skip_semis(p)

@@ -9275,16 +9275,50 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 # the loop whose end it owns. `break` and `continue` inside an arm are this loop's, which is
 # what makes the C `for (;;)` the honest lowering rather than a flag.
 fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
-	# the same two things c_loop_block does for an ordinary loop body, and for the same
-	# reasons: a `break` or a `continue` in an arm must release what the BODY owns and no
-	# more — without the mark it released the enclosing function's channels on its way round
-	# the loop, which closed a channel the loop was still reading and deadlocked — and a loop
-	# may run zero times, so the body's end state joins the entry state rather than replacing
-	# it.
+	# the same things c_loop_block does for an ordinary loop body, and for the same reasons:
+	# a `break` or a `continue` in an arm must release what the BODY owns and no more —
+	# without the mark it released the enclosing function's channels on its way round the
+	# loop, which closed a channel the loop was still reading and deadlocked — and a loop may
+	# run zero times, so the body's end state joins the entry state rather than replacing it.
+	#
+	# It said "the same two things" and did one of them. The mark half was never here: this
+	# is the only loop body in the language that is not a `stmt-list`, so it does not go
+	# through c_block, and the state a jump reads was left at whatever the ENCLOSING loop had
+	# — nothing, in the ordinary case of a `for select` at the top of a function. A `break`
+	# out of an arm holding a `defer` was therefore lowered to the bare keyword, and the
+	# deferred call outlived the loop exactly as it did in every other loop.
 	entry := c_live_save(em)
+
+	outer_mark := em.loop_mark
+	outer_keep := em.loop_keep
+	outer_used := em.loop_mark_used
+	outer_defer := em.loop_defer
+	mark := c_new_mark(em)
+	em.loop_mark = mark
+	em.loop_keep = em.rel_cnames.len()
+	em.loop_mark_used = false
+	em.loop_defer = false
+
 	body := c_select(em, arms, ind + "    ", true)
+
+	# the mark is DECLARED only where a jump named it, which is the rule c_block follows for
+	# a forced mark. Nothing else can reference it: an arm's own block unwinds what the arm
+	# scheduled on its normal way out, and the loop's exhausted-`break` runs with the stack
+	# already back where the iteration found it.
+	needs := em.loop_mark_used
+
+	em.loop_mark = outer_mark
+	em.loop_keep = outer_keep
+	em.loop_mark_used = outer_used
+	em.loop_defer = outer_defer
 	c_live_merge(em, entry)
-	return ind + "for (;;) {\n" + body + ind + "}\n"
+
+	return ind + "for (;;) {\n" + body + ind + "}\n" if not needs
+
+	em.used_rt = true
+	in2 := ind + "    "
+	head := ind + "for (;;) {\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	return head + body + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
 }
 
 # --- lambdas ----------------------------------------------------------------------

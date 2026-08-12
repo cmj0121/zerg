@@ -3352,6 +3352,35 @@ fn main() {
 }
 EOF
 
+# by SPEC SUBSTITUTION, which was the FOURTH door and the one that proved a list of doors
+# is the wrong shape for this rule. A spec's required signature writes `chan[K]`, and
+# `impl Ix[int?]` says `K` is `int?` — so the type the impl is being held to is a
+# `chan[int?]`. The checker rebuilt it by hand and asked nothing, so this position quietly
+# accepted what the parser and the specializer both refuse, and named the type back in a
+# mismatch message as though it were a type. The rule sits on CONSTRUCTION now (ty_chan),
+# which is the one door that cannot be walked around.
+#
+# No place, for the same reason as the case above: nothing in this source spells the type.
+reject a-channel-of-optionals-by-spec-substitution E404 no-place <<'EOF'
+spec Ix[K] {
+	fn c() -> chan[K]
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int?] for A {
+	fn c() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print(A(1).v)
+}
+EOF
+
 # --- and a channel, a map and a carrier are COMPARED like everything else ------------
 #
 # `chk_fits` opened with one line — "a carrier, a channel or a map is never a mismatch" —

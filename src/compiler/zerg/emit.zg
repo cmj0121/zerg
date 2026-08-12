@@ -3675,10 +3675,21 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 	return Ty.TUnknown
 }
 
-# c_bind_env registers an enum constructor arm's payload names in the variable
-# environment with their field types, so type inference inside the arm resolves them.
+# c_bind_env registers an arm's pattern bindings in the variable environment with the types
+# they hold, so type inference inside the arm resolves them.
+#
+# A NAME PATTERN BINDS TOO (GRAMMAR#bind-pat), and it was the one shape this did not
+# register. `match n { x => x }` therefore typed its arm body from a name nothing in the
+# environment answered for, and the whole match came back TUnknown — so `w := match n { x
+# => x }` declared `w` with no type, `c_is_bound` reads exactly that as "nothing bound it",
+# and the only finding was `undefined name` on the NEXT line, about a name the reader can
+# see being bound. `=> x * 1` escaped it by inferring from the literal instead, which is
+# what made the shape look arbitrary. A bind arm holds the SCRUTINEE's own type, which is
+# the same thing c_arm_subst splices in as text one function along.
 fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
-	if a.pat == 3 and c_is_either(st) {
+	if a.pat == 1 {
+		c_add_var(em, a.bind, st, false, false)
+	} else if a.pat == 3 and c_is_either(st) {
 		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
 		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
 		# Result-shaped assumption looks like — a `Right(b)` over an `Either[A, B]` then had

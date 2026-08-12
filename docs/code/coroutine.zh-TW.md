@@ -130,6 +130,20 @@ receive 回傳 **`T?`**。一條串流會結束的兩種方式，在這個語言
 巢在另一個型別裡的 `chan`，以及建構式 `chan[T?](…)`，都是同一個型別寫在不同位置，每一個都會被擋下來。
 泛型做出來的 channel 也一樣——用 optional 實例化 `chan[T]` 樣板，在特化成形的地方就被拒絕。
 
+receive 答的是一個 **carrier**，這件事同時決定了「receive 的 receive」該怎麼寫。
+[`GRAMMAR#recv-base`](../../GRAMMAR) 是自我遞迴的——`recv-base ::= '<-' recv-base | primary`——
+所以 `<-` 可以站在另一個 receive 前面，而 `chan[chan[int]]` 也是一種很平常的東西。
+只是外層那個 receive 答的是 `chan[int]?`，而 **carrier 不是 channel**，所以巢狀要在中間把它打開：
+
+```text
+x := <-((<-cc)!)      # 可以——內層的 handle 被堅持取出，x 是 int?
+x := <-(<-cc)         # 被拒絕——`<-ch` 需要一個 channel，而 chan[int]? 不是
+```
+
+這不是一條關於巢狀的規則。**每一個** channel 運算都對拿到的東西問同一個問題——`<-x`、`x <- v`、
+`close(x)`，以及兩種 `select` arm——而只要它不是一個 channel 端點，答案就是同一句具名的拒絕，
+而且帶著位置。
+
 每種需求都由 `T?` 本來就有的四個運算子掉出來——由 **receiver** 決定：
 
 ```text

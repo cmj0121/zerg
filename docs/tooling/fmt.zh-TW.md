@@ -526,6 +526,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E108` | 帶進位前綴的數字，前綴後緊接著就要有一位數字                                                          |
 | `E109` | 字串／rune／byte 字面量裡有無效的跳脫序列                                                             |
 | `E110` | 字串字面量裡不能有 NUL                                                                                |
+| `E111` | `…` 不是 UTF-8 文字,而 GRAMMAR:80 規定 Zerg 原始檔是 UTF-8                                            |
 | `E201` | `close` 是關鍵字,不是 select arm head                                                                 |
 | `E202` | 沒有 arm 的 select——它等不到任何東西                                                                  |
 | `E203` | 不是 send、receive 或 `_` 的 select arm head                                                          |

@@ -280,6 +280,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   parameterized `impl[T] Spec for list[T]` the seed does turn away, though for a reason of
   its own: it drops the parameters it read, so the `T` in the target resolves to nothing and
   the answer is `unknown type "T"` rather than a word about the form.)
+- **A SOURCE FILE THAT IS NOT UTF-8 is accepted.** `GRAMMAR:80` says the source is UTF-8, so
+  a file holding a stray `0xFF` is not a Zerg source file; the seed is byte-oriented from the
+  read to the emit and has no str invariant to violate, so the byte travels through the lexer
+  into a string literal and out as `"\377"` in the C. `zerg` reads a file into a `str` and
+  refuses one that cannot be, naming the path — the encoding is the one place where it is the
+  stricter compiler for a reason that is not a rule it added but a type it has.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

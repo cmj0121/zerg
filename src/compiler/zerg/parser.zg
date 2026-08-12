@@ -1461,8 +1461,18 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 				p_advance(p)
 				parse_bound(p, "a type parameter's bound", false)
 			}
-			if p_at(p, Kind.Comma) {
-				p_advance(p)
+
+			# the comma is REQUIRED between parameters and absent before the `]`
+			# (GRAMMAR#type-param-list) — see parse_ty_args for what an optional one
+			# silently accepted, and it was silent HERE too: `spec Ix[K V]` read as two
+			# parameters and said nothing, so an `impl Ix[int]` was then told the spec is
+			# "parameterized by K, V" about a list the author never wrote.
+			if not p_at(p, Kind.RBrack) {
+				ct := cur(p)
+				expect(p, Kind.Comma)
+				if p_at(p, Kind.RBrack) {
+					p_trailing_comma(p, "a spec's type parameter list", "]", ct.line, ct.col)
+				}
 			}
 		}
 		expect(p, Kind.RBrack)
@@ -2045,8 +2055,19 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		}
 		names.append(nm)
 		bounds.append(bound)
-		break if not p_at(p, Kind.Comma)
-		p_advance(p)
+
+		# the comma is REQUIRED between parameters and absent before the `]`
+		# (GRAMMAR#type-param-list). Breaking out on anything that is not a comma left the
+		# `]` below to complain, so `fn f[T U]` said "expected `]`, found `U`" — a token,
+		# about a list whose separator is the thing that is missing — and `fn f[T,]` was
+		# taken without a word.
+		if not p_at(p, Kind.RBrack) {
+			ct := cur(p)
+			expect(p, Kind.Comma)
+			if p_at(p, Kind.RBrack) {
+				p_trailing_comma(p, "a type parameter list", "]", ct.line, ct.col)
+			}
+		}
 	}
 	expect(p, Kind.RBrack)
 }
@@ -3011,9 +3032,18 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 		p_written_type_args(name, tn + ", …")
 	}
 
+	# the comma is REQUIRED between arguments and absent before the `]` (GRAMMAR#type-args).
+	# The first argument arrived as `first`, so the separator is read at the TOP of the loop
+	# rather than the bottom — the same rule, standing in the only position this reader has
+	# for it. Looping on a comma instead left the `]` below to complain, so `f[int int]`
+	# said "expected `]`, found `int`" and `f[int,]` was taken without a word.
 	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
-	for p_at(p, Kind.Comma) {
-		p_advance(p)
+	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
+		ct := cur(p)
+		expect(p, Kind.Comma)
+		if p_at(p, Kind.RBrack) {
+			p_trailing_comma(p, "a type argument list", "]", ct.line, ct.col)
+		}
 		tyargs.append(parse_type(p))
 	}
 	expect(p, Kind.RBrack)

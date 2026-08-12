@@ -5180,6 +5180,99 @@ fn main() {
 }
 EOF
 
+# --- `del` revokes a NAME, and it has to have one to revoke ------------------------------
+#
+# GRAMMAR#del-stmt is `'del' identifier`, and docs/core/memory.md says what the statement
+# means: it revokes THAT NAME's access to its storage. Both halves of that sentence are a
+# rule, and neither was checked.
+#
+# The name half: `del` looked the name up, and where nothing answered it revoked nothing and
+# said nothing — so `del totally_undefined` compiled and ran. The same spelling one line
+# further down, in a `print`, is `E372`; the difference was that the read path asks and the
+# `del` path did not. A function name is the same finding with a different reason: `g` names
+# something, and what it names has no storage a name can be revoked from.
+#
+# The storage half is the `mut &` parameter, which is the one binding whose reads never went
+# past the liveness check — a mutable reference is a pointer and is dereferenced on use, and
+# that dereference returned BEFORE the check every other read funnels through. So `del x` on
+# one revoked nothing observable: the parameter carried on reading and, worse, carried on
+# WRITING THROUGH to the caller's variable.
+#
+# The two `used after del` findings are here for a second reason as well. Both are rules the
+# compiler genuinely CHECKS, and both reported with neither a code nor a place — two of the
+# code-less sites docs/conformance.md counts — so nothing could pin either, and a case
+# asserting the sentence alone would have gone green against a message that says where
+# nothing.
+
+reject a-del-of-an-undefined-name E295 <<'EOF'
+fn main() {
+	del totally_undefined
+	print "unreached"
+}
+EOF
+
+reject a-del-of-a-function-name E296 <<'EOF'
+fn g() {
+	print "g"
+}
+
+fn main() {
+	del g
+}
+EOF
+
+reject a-read-after-del E297 '`x` is used after del' <<'EOF'
+fn main() {
+	x := 1
+	del x
+	print x
+}
+EOF
+
+reject a-write-after-del E297 '`x` is used after del' <<'EOF'
+fn main() {
+	mut x := 1
+	del x
+	x = 9
+	print "unreached"
+}
+EOF
+
+reject a-read-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+fn f(mut &x: int) -> int {
+	del x
+	return x
+}
+
+fn main() {
+	mut a := 1
+	print f(a)
+}
+EOF
+
+reject a-write-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+fn f(mut &x: int) {
+	del x
+	x = 9
+}
+
+fn main() {
+	mut a := 1
+	f(a)
+	print a
+}
+EOF
+
+reject a-read-after-del-on-some-paths E298 'used after del on some paths' <<'EOF'
+fn main() {
+	x := 1
+	if x == 1 {
+		del x
+	}
+	print x
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

@@ -682,6 +682,7 @@ shipping compiler rather than a part of it (the line
 | `E281` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                         |
 | `E282` | `#[obj]` and a method taking `This` — an object has forgotten its type                      |
 | `E283` | `#[derive(…)]` on something with no structure to read                                       |
+| `E284` | a `??` right-hand diverge with a trailing `if` guard                                        |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

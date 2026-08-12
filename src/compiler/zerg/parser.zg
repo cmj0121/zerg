@@ -2197,7 +2197,22 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 	p_advance(p)
 	mut jump: list[Stmt] = []
 	if is_divergent(cur_kind(p)) {
-		jump.append(parse_stmt(p))
+		# What GRAMMAR#coalesce-rhs takes here is the bare DIVERGE, and the postfix `if`
+		# guard belongs to the statement form beside it (GRAMMAR#raise-stmt). parse_stmt
+		# reads the statement form — one reader for `raise e from c`, and for the `return`
+		# whose leading `if` may be an if-expression — so what it comes back with has to be
+		# asked whether a guard was folded in, and refused when one was.
+		#
+		# UNDEFINED BEHAVIOUR FROM SAFE CODE is what accepting it produced. c_coalesce
+		# emits the divergent form as a temp assigned on the present branch and a statement
+		# on the other, because a diverge LEAVES and so needs no value; under a guard it
+		# does not leave, the `else` assigns nothing, and `q := p ?? raise Err("x") if
+		# false` read the temp uninitialised. There is no lowering to reach for — the form
+		# has no meaning to lower — so it is named here, before a tree exists to miscompile.
+		t := cur(p)
+		s := parse_stmt(p)
+		raise f"E284 a `??` right-hand `{t.lexeme}` takes no trailing `if` — the postfix guard belongs to the STATEMENT form of a diverge (GRAMMAR#raise-stmt), and written here it reads as the coalesce's condition rather than the `{t.lexeme}`'s: when it is false nothing diverges, and the `??` still owes the value it never produced. Guard the whole statement instead, or bind the coalesce first and guard what follows it" + p_place(p, t.line, t.col) if p_jump_is_guarded(s)
+		jump.append(s)
 		return Expr.ECoalesce(left, Expr.ENil, jump)
 	}
 
@@ -2212,6 +2227,29 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 # are allowed where an expression is otherwise required.
 fn is_divergent(k: Kind) -> bool {
 	return k == Kind.Break or k == Kind.Continue or k == Kind.Return or k == Kind.Raise
+}
+
+# p_jump_is_guarded reports whether the statement parse_coalesce just read for a `??`'s
+# right side came back WRAPPED IN A GUARD.
+#
+# It asks the SHAPE rather than looking ahead for an `if` token, because the token alone
+# cannot tell the two readings apart: `?? return if c { 1 } else { 2 }` returns an
+# if-EXPRESSION and is well-formed, while `?? return 7 if c` is the guard, and both put an
+# `if` in the same place. parse_return has already made that decision (p_if_has_block), so
+# reading its answer is what keeps the disambiguation in ONE place.
+#
+# ONE RULE, THREE SLOTS. The guard is folded in at three points and this covers all of
+# them: parse_jump_guard wraps `break`/`continue`/`raise` in an SIf, parse_return desugars
+# a bare `return if c` into the same, and `return e if c` becomes an SReturnIf. Entering
+# with one of the four diverge keywords, neither shape can be reached any other way — so
+# either one back from that call is a guard, and a rule written against parse_jump_guard
+# alone would have left the two return branches compiling.
+fn p_jump_is_guarded(s: Stmt) -> bool {
+	return match s {
+		Stmt.SIf(_, _, _, _) => true
+		Stmt.SReturnIf(_, _) => true
+		_ => false
+	}
 }
 
 fn parse_or(mut &p: Parser) -> Expr {

@@ -407,7 +407,11 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
 		# GRAMMAR#tuple-type, and both said nothing.
 		if not p_at(p, Kind.RParen) {
+			ct := cur(p)
 			expect(p, Kind.Comma)
+			if p_at(p, Kind.RParen) {
+				p_trailing_comma(p, "a tuple type", ")", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RParen)
@@ -450,7 +454,11 @@ fn parse_param_types(mut &p: Parser) -> list[Ty] {
 		# tuple reader states — see parse_paren_types for what an optional one silently
 		# accepted.
 		if not p_at(p, Kind.RParen) {
+			ct := cur(p)
 			expect(p, Kind.Comma)
+			if p_at(p, Kind.RParen) {
+				p_trailing_comma(p, "a parameter type list", ")", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RParen)
@@ -561,9 +569,12 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	if name == "map" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		kt := parse_type(p)
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+
+		# the comma is REQUIRED between the key type and the value type: `map` reads its two
+		# arguments here rather than through parse_ty_args, so it needs the rule stated
+		# again — advancing on a comma only when it is there made it optional, and
+		# `map[str int]` parsed with nothing said.
+		expect(p, Kind.Comma)
 		vt := parse_type(p)
 		expect(p, Kind.RBrack)
 		return Ty.TMap(kt, vt)
@@ -599,9 +610,11 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	if name == "Either" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		lt := parse_type(p)
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+
+		# the comma is REQUIRED between the two sides, for the reason `map` states above:
+		# this pair is read here rather than through parse_ty_args, so an optional comma
+		# here is `Either[int str]` accepted in silence.
+		expect(p, Kind.Comma)
 		rt := parse_type(p)
 		expect(p, Kind.RBrack)
 
@@ -737,8 +750,18 @@ fn parse_ty_args(mut &p: Parser) -> list[Ty] {
 	p_advance(p) # '['
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
+
+		# the comma is REQUIRED between elements, the same rule parse_paren_types states and
+		# for the same reason: advancing on one only when it is there makes it OPTIONAL, so
+		# `map[str int]` read as a two-argument list and said nothing. GRAMMAR#type-args
+		# writes the separator between arguments and derives no list without it, and none
+		# before the closer either.
+		if not p_at(p, Kind.RBrack) {
+			ct := cur(p)
+			expect(p, Kind.Comma)
+			if p_at(p, Kind.RBrack) {
+				p_trailing_comma(p, "a type argument list", "]", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RBrack)
@@ -1136,8 +1159,16 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 			raise f"E285 NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call" + p_place(p, nt.line, nt.col)
 		}
 		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
+
+		# the comma is REQUIRED between parameters and absent before the `)`
+		# (GRAMMAR#closure-param-list) — see parse_ty_args for what an optional one
+		# silently accepted.
+		if not p_at(p, Kind.RParen) {
+			ct := cur(p)
+			expect(p, Kind.Comma)
+			if p_at(p, Kind.RParen) {
+				p_trailing_comma(p, "a parameter list", ")", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RParen)
@@ -1687,8 +1718,16 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			p_advance(p)
 			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 				fields.append(parse_type(p))
-				if p_at(p, Kind.Comma) {
-					p_advance(p)
+
+				# the comma is REQUIRED between payload types and absent before the `)`
+				# (GRAMMAR#variant) — see parse_ty_args for what an optional one silently
+				# accepted.
+				if not p_at(p, Kind.RParen) {
+					ct := cur(p)
+					expect(p, Kind.Comma)
+					if p_at(p, Kind.RParen) {
+						p_trailing_comma(p, "a variant payload", ")", ct.line, ct.col)
+					}
 				}
 			}
 			expect(p, Kind.RParen)
@@ -1714,7 +1753,13 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			spelled.append(vname)
 		}
 		variants.append(VariantDef(vname, fields, has_discr, discr, vt.line, vt.col))
-		skip_semis(p)
+
+		# GRAMMAR#variant-list is `variant ( stmt-sep+ variant )*` — the same shape as a
+		# statement list, so the separator is REQUIRED and p_stmt_sep is the rule that says
+		# so. skip_semis skipped one when there was one and said nothing when there was not,
+		# which made `enum Shape { Dot Line }` two variants written as though they were one
+		# thing, accepted in silence.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 
@@ -1777,7 +1822,10 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 			has_def = true
 		}
 		fields.append(FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col))
-		skip_semis(p)
+
+		# GRAMMAR#field-list is `field ( stmt-sep+ field )*` — the separator is REQUIRED,
+		# the same rule the variant list states above and for the same reason.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 	return StructDecl(name, fields, p.path)
@@ -1797,7 +1845,14 @@ fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		parse_deco_item(p, pending)
 		break if not p_at(p, Kind.Comma)
+		ct := cur(p)
 		p_advance(p)
+
+		# GRAMMAR#decorator writes the comma BETWEEN items and derives none before the `]`,
+		# the same rule every other comma list here states.
+		if p_at(p, Kind.RBrack) {
+			p_trailing_comma(p, "a decorator", "]", ct.line, ct.col)
+		}
 	}
 	expect(p, Kind.RBrack)
 }
@@ -2046,8 +2101,16 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 			has_def = true
 		}
 		params.append(Param(pname, pty, is_ref, has_def, def))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
+
+		# the comma is REQUIRED between parameters and absent before the `)`
+		# (GRAMMAR#param-list) — see parse_ty_args for what an optional one silently
+		# accepted.
+		if not p_at(p, Kind.RParen) {
+			ct := cur(p)
+			expect(p, Kind.Comma)
+			if p_at(p, Kind.RParen) {
+				p_trailing_comma(p, "a parameter list", ")", ct.line, ct.col)
+			}
 		}
 	}
 	expect(p, Kind.RParen)
@@ -2980,9 +3043,14 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 		raise f"E223 NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon
 
 		args.append(parse_expr(p))
-		if p_at(p, Kind.Comma) {
+
+		# the comma is REQUIRED between arguments and absent before the `)`. Advancing on
+		# one only when it is there made it OPTIONAL, so `f(1 2)` read as a two-argument
+		# call and said nothing — the same silence parse_paren_types was fixed for on the
+		# TYPE side, left standing on the value side.
+		if not p_at(p, Kind.RParen) {
 			ct := cur(p)
-			p_advance(p)
+			expect(p, Kind.Comma)
 			if p_at(p, Kind.RParen) {
 				p_trailing_comma(p, "an argument list", ")", ct.line, ct.col)
 			}
@@ -3189,9 +3257,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 				p_advance(p)
 				return parse_fill(p, elems[0])
 			}
-			if p_at(p, Kind.Comma) {
+
+			# the comma is REQUIRED between elements and absent before the `]`. Advancing on
+			# one only when it is there made it OPTIONAL, so `[1 2]` read as a two-element
+			# list and said nothing — the same silence parse_paren_types was fixed for on
+			# the TYPE side, left standing on the value side.
+			if not p_at(p, Kind.RBrack) {
 				ct := cur(p)
-				p_advance(p)
+				expect(p, Kind.Comma)
 				if p_at(p, Kind.RBrack) {
 					p_trailing_comma(p, "a list literal", "]", ct.line, ct.col)
 				}
@@ -3382,8 +3455,16 @@ fn parse_arm(mut &p: Parser) -> Arm {
 				p_advance(p)
 				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 					binds.append(p_name(p, "a pattern binding"))
-					if p_at(p, Kind.Comma) {
-						p_advance(p)
+
+					# the comma is REQUIRED between patterns and absent before the `)`
+					# (GRAMMAR#pattern-list) — see parse_ty_args for what an optional one
+					# silently accepted.
+					if not p_at(p, Kind.RParen) {
+						ct := cur(p)
+						expect(p, Kind.Comma)
+						if p_at(p, Kind.RParen) {
+							p_trailing_comma(p, "a pattern list", ")", ct.line, ct.col)
+						}
 					}
 				}
 				expect(p, Kind.RParen)

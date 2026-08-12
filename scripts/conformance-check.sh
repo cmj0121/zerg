@@ -50,8 +50,15 @@ fi
 # It is a NEGATIVE test, so it fails open, which is the risk the list is worth taking: the
 # alternative is a per-file expected-message inventory, and a case name in this corpus is
 # private content that may not be written down in this repo.
+#
+# The CODE is optional in the pattern and was not, which is a fail-open that had already
+# happened: a checked rule now opens its message with `E204 …`, so the day the codes landed
+# this predicate stopped matching the very messages it was written for. Nothing went red,
+# because a stale negative test reports nothing. The same pattern is in
+# scripts/productions-check.sh, and the two are kept in step by hand — they are one list of
+# shapes rather than one fact about the compiler's output, which is what diag.sh is for.
 is_typo_msg() {
-	printf '%s\n' "$1" | grep -qE "^(error: )?(expected |undefined |no type named |no field |unexpected )"
+	printf '%s\n' "$1" | grep -qE "^(error: )?(E[0-9]{3} )?(expected |undefined |no type named |no field |unexpected )"
 }
 
 # TWO PROFILES, and the split is not a convenience. Everything in the core is answerable by

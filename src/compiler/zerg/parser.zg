@@ -1272,6 +1272,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 				p_advance(p)
 				u_mut = true
 			}
+
 			# `in_unsafe` is FALSE even though the word being read is `unsafe`: that parameter
 			# tracks whether the declaration sits inside a module-level `unsafe { … }` GROUP
 			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is

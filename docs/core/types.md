@@ -477,6 +477,13 @@ one: `T(x)` is a built-in form, and this is the list of pairs it has an answer f
 or `//` for the division that lands there. `byte → float` is absent too: that would be
 `byte → int → float`, and one step is what a conversion is — write the two.
 
+> **[deviation]** The table is not closed. Four pairs it declares absent are accepted and lower silently:
+> `float(b)` on a `byte` gives `65`, `byte(3.5)` gives `3`, `uint(3.5)` gives `3`, `rune(65.5)` gives `65`,
+> and `int(1.9)` / `int(-1.9)` truncate toward zero with nothing said. So `float → int` is not absent, it
+> is unwritten: the decision this paragraph says a spelling must make is made for the program instead.
+> (`int("42")` is the one extra pair that is intended — it **parses** a decimal string rather than
+> converting a number; see [Built-in Functions](../runtime/builtins.md) — and this table should name it.)
+
 **Any type to text is not in the table**, because it is not a conversion between types in this sense:
 `str(x)` renders a value through `display`, which every type has.
 

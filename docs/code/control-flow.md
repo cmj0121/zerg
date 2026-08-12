@@ -43,11 +43,12 @@ then-block only.
 other. Every other branch brings its own type, a literal included — a branch is not a typed
 position for its sibling, the same way one match arm is not one for the next.
 
-> **[not yet]** Two shapes of the value form are refused by name. An **`else if` chain** in an if-expression
-> (`x := if a { 1 } else if b { 2 } else { 3 }`) is one: the expression form takes a single trailing `else`,
-> and the chain stays a statement. **if-let in an expression position** is the other — `return if x := opt {
-use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, is turned away — so the
-> binding form is a statement only this phase, not the "wherever an `if` does" the paragraph above specifies.
+> **[not yet]** One shape of the value form is refused by name: **if-let in an expression position**.
+> `return if x := opt { use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, reports
+> _E270 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this
+> phase, not the "wherever an `if` does" the paragraph above specifies. The **`else if` chain** used to stand
+> beside it and no longer does: `x := if a { 1 } else if b { 2 } else { 3 }` is built, yields the taken
+> branch, and the one-type rule holds across the whole chain.
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds
@@ -120,9 +121,11 @@ a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
 > **[not yet]** A **nested pattern** does not parse: `Left(Some(v))`, and `L(0)` too, are turned away with
-> ``a pattern binding needs a name, and `(` is not one`` — a payload position takes a name and nothing else,
-> so every pattern is one level deep. That also empties the Note below on nested exhaustiveness: there is no
-> nested case for the checker to be weak about, because there is no nested pattern a program can write.
+> `a pattern binding needs a name`, naming whichever token stood where the name was wanted — `` `(` `` for
+> `Left(Some(v))`, `` `0` `` for `L(0)`, `` `.` `` for a qualified `L(Inner.Some(v))`. A payload position
+> takes a name and nothing else, so every pattern is one level deep. That also empties the Note below on
+> nested exhaustiveness: there is no nested case for the checker to be weak about, because there is no
+> nested pattern a program can write.
 >
 > **An or-pattern is refused, by name.** `|` in pattern position is read as the bitwise operator, so
 > `1 | 2 =>` would fold to `3 =>` and match neither 1 nor 2 — it used to compile and be silently wrong, and
@@ -152,6 +155,8 @@ as a binding that hands the concrete value back. A **product pattern** destructu
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
 return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
+Each of its four shapes is refused by its own name — `E238` and `E221` at a binding, `E232` and `E243` in
+an arm — so the tuple and the struct are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)

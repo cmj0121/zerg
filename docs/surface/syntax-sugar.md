@@ -6,27 +6,26 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 
 ## Landed sugar
 
-| Sugar                                    | Desugars to                                                             |
-| ---------------------------------------- | ----------------------------------------------------------------------- |
-| `break if c` / `continue if c`           | `if c { break }` / `if c { continue }`                                  |
-| `raise e if c`                           | `if c { raise e }` — the same postfix guard, on the fourth diverge      |
-| `if x := e { … }`                        | a one-arm `match` on `e` — the block runs only when `x` is present      |
-| `with e as y { … }`                      | `{ y := e; … }` (the block's own exits already cover it)                |
-| `f"…{x}…"`                               | compile-time `str` concatenation, each hole `x.display()`               |
-| `f"{x!r}"` / `f"{x=}"`                   | `f"{x.debug()}"` / the source text `x=` then the value                  |
-| `f"{x:spec}"`                            | `x.format(spec)` through the `Format` protocol                          |
-| `a + b`, `a == b`, `a[i]`, `-a`, …       | the operator's spec method — `a.add(b)`, `a.equal(b)`, …                |
-| `for x in it { … }`                      | the iteration protocol on `it` (a `StopIteration`-terminated loop)      |
-| `x..y` / `x..=y` / `x..`                 | `range(x, y)` / `range(x, y + 1)` / an open range (all builtin)         |
-| `v in r`                                 | `r.contains(v)` — membership (Range by `Ord`, else by iteration)        |
-| `lo..hi ->` (match arm)                  | a `_ if _ in lo..hi` arm — matches by containment, not `equal`          |
-| `xs[k]`                                  | `Indexable[type of k].index(k)` — element, slice (`Range`), or map key  |
-| `(a, b) := e` / `P{x, y} := e`           | destructuring a product/tuple return, each part bound **by copy**       |
-| `f(x: 1)` (named) / `p: T = e` (default) | positional rewrite at the call; a default `e` is evaluated per call     |
-| `print x`                                | a best-effort write of `x.display()` and a newline to stdout            |
-| `e?`                                     | unwrap the `Left`, else early-return the `Right` from the function      |
-| `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`   |
-| `del ch`                                 | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
+| Sugar                              | Desugars to                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `break if c` / `continue if c`     | `if c { break }` / `if c { continue }`                                  |
+| `raise e if c`                     | `if c { raise e }` — the same postfix guard, on the fourth diverge      |
+| `if x := e { … }`                  | a one-arm `match` on `e` — the block runs only when `x` is present      |
+| `with e as y { … }`                | `{ y := e; … }` (the block's own exits already cover it)                |
+| `f"…{x}…"`                         | compile-time `str` concatenation, each hole `x.display()`               |
+| `f"{x!r}"` / `f"{x=}"`             | `f"{x.debug()}"` / the source text `x=` then the value                  |
+| `f"{x:spec}"`                      | `x.format(spec)` through the `Format` protocol                          |
+| `a + b`, `a == b`, `a[i]`, `-a`, … | the operator's spec method — `a.add(b)`, `a.equal(b)`, …                |
+| `for x in it { … }`                | the iteration protocol on `it` (a `StopIteration`-terminated loop)      |
+| `x..y` / `x..=y` / `x..`           | `range(x, y)` / `range(x, y + 1)` / an open range (all builtin)         |
+| `v in r`                           | `r.contains(v)` — membership (Range by `Ord`, else by iteration)        |
+| `lo..hi =>` (match arm)            | a `_ if _ in lo..hi` arm — matches by containment, not `equal`          |
+| `xs[k]`                            | `Indexable[type of k].index(k)` — element, slice (`Range`), or map key  |
+| `p: T = e` (default)               | the argument a call omits; the default `e` is evaluated per call        |
+| `print x`                          | a best-effort write of `x.display()` and a newline to stdout            |
+| `e?`                               | unwrap the `Left`, else early-return the `Right` from the function      |
+| `a ?? b` / `a?.m` / `e!`           | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`   |
+| `del ch`                           | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
 
 **Status.** Every row above works except inside an f-string hole, where only the plain `{x}` form does.
 A **conversion** (`!r` / `!s` / `!a`), a **format spec** (`{x:.2f}`), and the self-documenting `f"{x=}"`
@@ -34,6 +33,14 @@ are each **[not yet]** and refused by name. A **composite** hole (a `struct`, `l
 rejected too, so structural rendering is **[not yet]** — see
 [Formatting & Text](../runtime/format.md). The interpolating command literal `` f`…` `` (grammar, not listed here) is
 likewise **[not yet]**. Each desugaring above is otherwise exactly as written.
+
+**Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and
+so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` and its
+struct form `P{x, y} := e`, which this compiler asks you to write as one name and a field access — and a
+**named argument** `f(x: 1)`, arguments binding by position only. A default parameter is the half of that
+row that did land, and is above. `zerg` refuses each of the three by its own name; the whole list of forms
+in this state, with the gate that holds it, is
+[What is specified and not built](grammar.md#what-is-specified-and-not-built).
 
 ## Undoing it
 

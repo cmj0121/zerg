@@ -755,6 +755,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E474` | `….…` 的 discriminant 不是編譯期常數                                                                  |
 | `E475` | fill count 是編譯期常數,而 … 不是                                                                     |
 | `E476` | fill count 是要複製幾份,而 `…` 是負數                                                                 |
+| `E477` | range arm 的 bound 是編譯期常數,而 `…` 不是                                                           |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 

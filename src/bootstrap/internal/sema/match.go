@@ -253,9 +253,35 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 		}
 	case *ast.RangeArm:
 		c.synth(p.Lo)
+		c.checkRangeBound(p.Lo)
 		if p.Hi != nil {
 			c.synth(p.Hi)
+			c.checkRangeBound(p.Hi)
 		}
+	}
+}
+
+// checkRangeBound holds one bound of a range arm to what GRAMMAR#range-bound derives:
+// "'-'? literal | identifier   # a compile-time constant bound". A literal is one by
+// construction; a NAME has to be looked up, and foldConst is the same fold a fill
+// count and an enum discriminant go through — so `LO..HI` works, and so does a bound
+// declared as `const MID := LO + 50`.
+//
+// The rule is written at the IDENTIFIER and nowhere wider, because that is the
+// alternative the name adds: every other head reaching here is a literal, and putting
+// one through an integer fold would refuse the `1.5..2.5` this compiler accepts.
+//
+// The seed used to emit the name and let C read it at run time, so `lo := size()` as a
+// bound compiled to a comparison against whatever `lo` held — a form the language does
+// not have, lowered in silence. The finding is reported at the USE site: the binding's
+// own line is fine, and the line the reader needs is the one that wanted a constant.
+func (c *checker) checkRangeBound(e ast.Expr) {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return
+	}
+	if _, ok := c.foldConst(id); !ok {
+		c.errorf(id.Span(), "a range arm's bound is a compile-time constant, and '%s' is not one", id.Name)
 	}
 }
 

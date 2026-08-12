@@ -105,6 +105,7 @@ They are these, and the list is **exhaustive**:
 | a `return`                    | `return e`                    |
 | an argument                   | `f(e)`                        |
 | a parameter's default         | `fn f(x: byte = e)`           |
+| a field's default             | `struct P { x: byte = e }`    |
 | a struct literal's field      | `P(e)`                        |
 | an enum variant's payload     | `Shape.Line(e)`               |
 | a list literal's element      | `xs: list[byte] = [e]`        |
@@ -318,10 +319,11 @@ and need an explicit `ok_or` / `ok` to cross.
 
 The one primitive for building a value is the **struct literal** — it names every field, so it is
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
-(usually `pub`) associated function that returns a literal. A type with any **private field** is
-therefore **opaque** outside its module — a struct literal cannot name the private field, so outsiders
-build it only through such a `pub` function, which runs inside the type's module and can establish the
-type's invariant at the moment of construction.
+(usually `pub`) associated function that returns a literal, which runs inside the type's module and can
+establish the type's invariant at the moment of construction. A **private field is one an outsider never
+names**: it must carry a default (below), so an outside construction leaves it off and the declaration
+decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
+decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
 
 > **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
 > `P(a: 1, b: 2)` reports _NotImplemented: the named argument `a:` — this compiler binds arguments by position
@@ -330,9 +332,29 @@ type's invariant at the moment of construction.
 > every field" is how the opacity of a private field is derived, and `Foo(age: 2, name: base.name)` below is
 > written in a form the compiler does not read.
 
+### Field defaults
+
+A field may declare a **default** — `h: int = 4` — and the default is what lets that field's
+constructor argument be **omitted**: `Box(1)` on a `Box(w, h)` builds the same value `Box(1, 4)` does.
+It is the rule a [function parameter's default](../code/functions.md) already follows, at the field-wise
+constructor, and it follows it in both directions: the backfill runs from the end of the written
+arguments, so a default makes **that** field optional and not the ones before it, and a default is
+evaluated **per construction** rather than once at the declaration — an expression in it (a call, a sum
+over module constants) runs again for every construction that omits the field.
+
+There are **no zero values**. A non-optional field with no default is therefore **required** at
+construction, and a construction short of one is an error naming the field. The **one implicit default**
+is `nil` for a `T?` field, its natural absent state — a `T?` is omittable with no `=` written.
+
+The two halves meet at visibility: a **non-`pub` field is module-private, and must carry a default**. The
+field-wise constructor is public, so a required field is one every construction has to supply a value for
+— and an outsider cannot supply a value for a field it may not read. A private field with no default is
+rejected at the field's own declaration (`E482`), naming the field.
+
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
-and, given a `mut` binding, writable; a private field is neither. There is no separate "public read,
-private write" axis; finer control is expressed with methods.
+and, given a `mut` binding, writable; a private field is neither (**[deviation]** — access across a
+module boundary is not yet checked; see [Modules, Packages & Programs](../runtime/package.md)). There is
+no separate "public read, private write" axis; finer control is expressed with methods.
 
 Copy-by-value reframes what a writable `pub` field means: writing one only ever changes the holder's
 **own copy**, never anyone else's value (there is no aliasing). So a `pub` mutable field is not a

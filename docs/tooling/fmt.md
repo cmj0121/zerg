@@ -850,6 +850,7 @@ shipping compiler rather than a part of it (the line
 | `E479` | a map entry is `key: value`, and this one has no `:`                                        |
 | `E480` | … whose value has no type this compiler can name — **[not yet]**                            |
 | `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
+| `E482` | the field `…` of `…` is module-private, so it must carry a default                          |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

@@ -2967,6 +2967,106 @@ EOF
 # legal C, so neither cc nor any gate had anything to say — the program simply answered
 # something other than what it was written to answer.
 
+# --- a channel does not carry an optional ------------------------------------------
+#
+# `chan[T?]` is refused by the LANGUAGE (GRAMMAR#chan-type, docs/code/coroutine.md), and
+# the reason is the one fact the whole receive story rests on: a receive answers `T?`, and
+# a clean close IS nil, so on a channel of optionals "a nil was sent" and "the stream is
+# over" are the same observation and no operator can tell them apart.
+#
+# It used to be checked at the CONSTRUCTOR alone — `chan[int?](1)`, one call in the
+# emitter — so every other position carrying the same type was accepted in silence: a
+# parameter, a result, a struct field, a typed binding, a typedef, a chan nested inside
+# another type. The rule now sits where a channel's element type is READ, which is one
+# place per compiler, so each case below is the same rule arriving through a position
+# rather than a rule written out per position. That is what makes this list a list of
+# POSITIONS and not a list of copies.
+#
+# The one case that does not come through the parser is the last: a template's `chan[T]`
+# becomes a `chan[int?]` by SUBSTITUTION, with nothing written in the source to point at.
+
+reject a-channel-of-optionals-constructed E404 <<'EOF'
+fn main() {
+	ch := chan[int?](1)
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-as-a-parameter E404 <<'EOF'
+fn f(ch: <-chan[int?]) {
+	print 1
+}
+
+fn main() {
+	print 2
+}
+EOF
+
+reject a-channel-of-optionals-as-a-result E404 <<'EOF'
+fn f() -> chan[int?] {
+	return chan[int](1)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# the place is PINNED on this one, because a struct field is the position that carries no
+# statement and no declaration position of its own: the finding has to come from the type
+# as it is written, and nothing else here would notice it drifting to the file's first line.
+reject a-channel-of-optionals-as-a-field E404 at=2:6 <<'EOF'
+struct Box {
+	ch: chan[int?]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-in-a-typed-binding E404 <<'EOF'
+fn main() {
+	ch: chan[int?] = chan[int](1)
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-under-a-typedef E404 <<'EOF'
+type C = chan[int?]
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-inside-a-list E404 <<'EOF'
+struct Box {
+	xs: list[chan[int?]]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# by SUBSTITUTION: nothing in this source spells `chan[int?]`, and the specialization of
+# `mk` for `int?` is one. The parser never sees that type, so the rule has to be on the
+# substitution too — and there is no source position to report, because the type is not
+# written anywhere.
+reject a-channel-of-optionals-by-substitution E404 no-place <<'EOF'
+fn mk[T](v: T) {
+	ch := chan[T](1)
+	ch <- v
+	print 1
+}
+
+fn main() {
+	mut x: int? = nil
+	mk(x)
+}
+EOF
+
 # --- what only the driver can reject ------------------------------------------------
 #
 # A program build needs an entry point. `program ::= stmt-list` makes a main-less source

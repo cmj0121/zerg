@@ -1689,7 +1689,18 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 	# statement loop as a top-level expression, which compile mode treats as a nop. The
 	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
 	# member access on a namespace that was never bound.
-	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Kind.Str)
+	# THE GUESS IS A PATH OR IT IS NOTHING, which is the other half of the same rule: a
+	# suggestion quotes the reader's own line back at them, so one assembled out of whatever
+	# followed is worse than none. It ran to the next `;` — and ASI inserts none after
+	# `import`, a keyword that cannot END an item (GRAMMAR group 2) — so a bare `import` with
+	# no path swept up the declarations under it and offered `import "structQ{puba:int"`.
+	if not p_at(p, Kind.Str) {
+		guess := p_import_path_guess(p)
+
+		raise f"E267 an import path is a string — write `import \"{guess}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if guess != ""
+
+		raise "E267 an import path is a string, and there is no path here to quote back: GRAMMAR#import-path derives a str-lit and nothing else, so the module a program names is written `import \"util/text\"`" + p_place(p, cur(p).line, cur(p).col)
+	}
 
 	t := cur(p)
 	p_advance(p) # the path
@@ -1710,14 +1721,22 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 # quote their own line back at them rather than a placeholder. It reads through the peek
 # pair, WITHOUT consuming: that raise ends the parse anyway, and a reader of this function
 # should not have to know it.
+#
+# It reads the SHAPE OF A PATH — `identifier ( '/' identifier )*`, which is what the string
+# in GRAMMAR#import-path holds — and stops at the first token that is not part of one. It
+# used to read to the next `;` instead, which is a terminator this position never meets: ASI
+# inserts one after a token that can END an item (GRAMMAR group 2) and `import` is not one,
+# so a bare `import` ran on through the declarations below it and the suggestion was
+# assembled out of a struct. Answering "" for a line that holds no path is what lets the
+# caller offer no suggestion rather than an invented one.
 fn p_import_path_guess(mut &p: Parser) -> str {
-	mut out := ""
-	mut n := 0
-	for true {
-		k := peek_kind(p, n)
-		break if k == Kind.Semi or k == Kind.Eof or k == Kind.RParen
-		out = out + peek_lexeme(p, n)
-		n = n + 1
+	return "" if peek_kind(p, 0) != Kind.Ident
+
+	mut out := peek_lexeme(p, 0)
+	mut n := 1
+	for peek_kind(p, n) == Kind.Slash and peek_kind(p, n + 1) == Kind.Ident {
+		out = out + "/" + peek_lexeme(p, n + 1)
+		n = n + 2
 	}
 	return out
 }

@@ -831,6 +831,9 @@ shipping compiler rather than a part of it (the line
 | `E471` | `…[…](…)` as a constructor — **[not yet]**                                                  |
 | `E472` | `nil` as a `match` pattern — **[not yet]**                                                  |
 | `E473` | a … may hold no value, so `…` has nothing to compare                                        |
+| `E474` | the discriminant of `….…` is not a compile-time constant                                    |
+| `E475` | a fill count is a compile-time constant, and … is not one                                   |
+| `E476` | a fill count is how many copies to make, and `…` is negative                                |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 

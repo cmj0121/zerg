@@ -219,7 +219,9 @@ Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝�
 
 一個 `enum` 的 **discriminant 對「fieldless enum」與「payload enum」行為不同**——分界在於是否*每一個* variant 都無
 欄位。一個 **fieldless** `enum` 可以給某個 variant 明確的 `= <discriminant>`——一個 **compile-time 常數整數**、
-在各 variant 間互異（未指定者為前一個 `+ 1`、從 `0` 起算）——使它成為 **C 式整數 enum**：`variant = <int>`。這種
+在各 variant 間互異（未指定者為前一個 `+ 1`、從 `0` 起算）——使它成為 **C 式整數 enum**：`variant = <int>`。它與
+陣列長度是**同一個編譯期常數**，所以 `A = BASE`、`A = 2 + 3` 與 `A = BASE * 2 - 1` 都是這個形式，而函式呼叫不
+是；摺不出來的那個是**在該 variant 上**報錯。這種
 enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）;**enum 名稱是一個值命名空間**
 ——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
 `E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。要指定寬度就用 opt-in layout 裝飾器

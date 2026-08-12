@@ -2311,6 +2311,20 @@ fn main() {
 }
 EOF
 
+# A TYPE ALIAS is a declaration like any other, and it was the one that never asked. Every
+# naming position above reaches p_name and is answered there; `type X = Y` read its own
+# identifier with a bare `expect`, so `type This = int` declared the self type as a synonym
+# for `int` at module level while `This` inside an `impl` went on meaning the implementing
+# type — the same word with two meanings in one program, which is exactly what reserving it
+# is for.
+reject capital-this-as-a-type-alias E245 'cannot name a type alias' no-place seed-gap <<'EOF'
+type This = int
+
+fn main() {
+	print 1
+}
+EOF
+
 reject this-outside-a-method E371 <<'EOF'
 fn f() -> int {
 	return this

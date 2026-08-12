@@ -604,9 +604,21 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	et := c_infer(em, e)
 
 	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
-	return c_opt_wrap(em, where, c_opt_elem(want), e, sb) if ty_is_opt(want)
 
-	return c_either_wrap(em, where, want, e, sb)
+	# THE PAYLOAD IS A SLOT OF ITS OWN, and the label has to say so or the sentence is false.
+	# A bare value entering a carrier is INJECTED as the payload, so the comparison one level
+	# down is against the payload's type — which is right, and is where the mistake is. What
+	# was not right is that the label travelled unchanged: `x: int? = "s"` reported _the
+	# binding `x` is int_ about a binding the reader had declared `int?` two words earlier,
+	# and the `?` was the only part of it they could see.
+	#
+	# It is refined HERE because this is the one place both wraps start, so a `Result[T]`'s
+	# payload and an optional's get the same treatment, and a carrier nested in a carrier
+	# reads as what it is — "the int? payload of the Result[int?] payload of …".
+	inner := chk_payload_says(where, want)
+	return c_opt_wrap(em, inner, c_opt_elem(want), e, sb) if ty_is_opt(want)
+
+	return c_either_wrap(em, inner, want, e, sb)
 }
 
 # c_fit_copied is what every site where a DECLARED type meets a value calls: a carrier is

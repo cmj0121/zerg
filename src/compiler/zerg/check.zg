@@ -884,6 +884,18 @@ pub fn chk_binding_says(name: str) -> str {
 	return f"the binding `{name}`"
 }
 
+# chk_payload_says names a CARRIER'S PAYLOAD as a slot, out of the slot the carrier itself
+# fills. A bare value entering a `T?`, a `Result[T]` or an `Either[X, Y]` is injected as the
+# payload, so the type it is checked against is the payload's — and the label used to be the
+# enclosing slot's, unchanged, which made the sentence untrue: `x: int? = "s"` said _the
+# binding `x` is int_ about a binding declared `int?`.
+#
+# It reads outward-in, so a nesting composes: "the int? payload of the Result[int?] payload
+# of this function's answer".
+pub fn chk_payload_says(where: str, carrier: Ty) -> str {
+	return f"the {ty_name(carrier)} payload of {where}"
+}
+
 # CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
 # so what the sentence can point at is the SIGNATURE.
 #

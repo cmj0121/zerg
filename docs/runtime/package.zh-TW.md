@@ -146,6 +146,11 @@ compile error。一個型別指名另一個型別**從來不是**這種循環—
 > 建置：指名該檔宣告的函式會得到 `undefined function`。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
 > 都成立；以 entry 檔為根的那個 module 是例外。
 >
+> **[deviation]** **單一檔案** import 得起來。`import "sib"` 在旁邊有一個 `sib.zg` 時,會解析到那一個檔案與它的
+> `pub` 名字,即使這裡的 module 是目錄、而 `E502` 自己的句子也這麼說——_a module is a directory of `.zg` files
+> beside the importer or in the standard library_。於是 import 路徑多了第二種未載於文件的形狀,而那則本該教會讀者
+> 第一種的診斷,否認第二種存在。
+>
 > **[deviation]** **import 循環不會被拒絕。** 兩個互相 import 的 module 編得過也跑得動。兩層都沒有任何東西偵測循環。
 
 ### 可見性——如何把宣告公開

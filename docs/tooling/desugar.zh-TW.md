@@ -12,6 +12,11 @@ zerg desugar --check <file.zg>...      # 回報哪些還不是 core 形式,不�
 zerg desugar --off D103 <file.zg>...   # 放過某一條規則(可重複)
 ```
 
+> **[deviation]** `--check` 回答的問題比它問的更寬。它拿檔案去比對 `zerg desugar` **會寫出來**的東西,而那個東西
+> 是 canonical 格式化過的 core——所以一個完全沒有糖的檔案,只要空白不是 `zerg fmt` 會產出的樣子,照樣會失敗,而且
+> 失敗時說的是 _still holds sugar (run `zerg desugar`)_。四格縮排的 `fn main() { x := 1; print x }` 就是整份重現。
+> exit status 對「這個檔案會被改動」而言是對的,那句話對「為什麼」而言是錯的。
+
 ## 為什麼需要它
 
 [`GRAMMAR`](../../GRAMMAR) 把好幾個 surface form **定義成**別的東西。`return x if c` 就是

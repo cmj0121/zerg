@@ -13,6 +13,13 @@ zerg desugar --check <file.zg>...      # report what is not already core, change
 zerg desugar --off D103 <file.zg>...   # leave one rule alone (repeatable)
 ```
 
+> **[deviation]** `--check` answers a wider question than it asks. It compares the file against what
+> `zerg desugar` would **write**, and what that writes is canonical-formatted core — so a file holding no
+> sugar at all still fails when its whitespace is not what `zerg fmt` would produce, and it fails saying
+> _still holds sugar (run `zerg desugar`)_. A four-space-indented `fn main() { x := 1; print x }` is the
+> whole reproduction. The exit status is right for "this file would change" and the sentence is wrong
+> about why.
+
 ## Why it exists
 
 [`GRAMMAR`](../../GRAMMAR) defines several surface forms **as** something else. `return x if c` is

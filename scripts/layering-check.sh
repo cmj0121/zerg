@@ -108,9 +108,14 @@ reaches_into() {
 # structs it never read.
 TAB=$(printf '\t')
 
+# A field may be declared `pub`, and every field in this compiler now is: GRAMMAR requires a
+# non-`pub` field to carry a default, and none of these has one. The marker is read past
+# rather than matched on, because what this asks about is the field's NAME — and a pattern
+# that quietly stopped matching would empty the set, which is the failure the paragraph above
+# describes and the floors below exist to catch.
 zg_fields() {
-	awk -v s="$2" '$0 ~ "^struct " s " \\{" {on=1; next} on && /^}/ {exit} on' "$1" |
-		grep -oE "^$TAB[a-z_][A-Za-z0-9_]*:" | tr -d "$TAB:" | sort -u
+	awk -v s="$2" '$0 ~ "^(pub )?struct " s " \\{" {on=1; next} on && /^}/ {exit} on' "$1" |
+		grep -oE "^$TAB(pub )?[a-z_][A-Za-z0-9_]*:" | sed "s/^$TAB//; s/^pub //; s/:\$//" | sort -u
 }
 
 go_fields() {

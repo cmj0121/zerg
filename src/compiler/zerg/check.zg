@@ -2576,6 +2576,39 @@ fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 # same reason: `pub mut x := 5` at the top level with no group is answered by the rule about
 # the `mut`, and adding a second finding about the `pub` would describe a binding the reader
 # is not going to keep.
+
+# chk_top_stmts is the OTHER thing the top level is not a place for: a statement.
+#
+# docs/runtime/package.md gives the module top level immutable state and nothing else —
+# constants, functions, types and specs, readied before `main`, which is where a program
+# begins. A statement asks to be RUN, and a compiled program has no moment at which to run
+# one. GRAMMAR#program still derives it: `program ::= stmt-list` is SCRIPT mode, and the
+# grammar opens the language with the `nop` program, so the form is well-formed syntax and
+# the parser reads it whole (p_take_top_stmt).
+#
+# WHICH END THIS TAKES, and why. It used to take neither: `print 999` at the top level, a
+# top-level `if true { … }`, a `for { break }` — all three were parsed and then DROPPED, with
+# no diagnostic and no lowering, so the program built and printed nothing. That is the silent
+# wrong answer docs/conformance.md's standing rule exists to forbid, and it is worse here
+# than most because the reader can see the statement in their own source.
+#
+# Running it is the other end, and it is not this compiler's to offer: script mode means a
+# top level with a lifetime, and what a build produces is an object or an executable whose
+# entry is `main`. So the honest answer is the refusal, and it lands where the missing `fn
+# main` lands — in the BUILD rather than the parse (docs/conformance.md), because a parse
+# that turned the form away would be claiming this compiler cannot read a production it can.
+#
+# `nop` is the exception, written down in the parser: it does nothing and yields nothing, so
+# running nothing for it IS running it.
+#
+# It walks `own` for chk_top_muts' reason: once per unit, or the whole-program view would
+# repeat the finding once per module.
+fn chk_top_stmts(mut &em: Emitter, own: File) {
+	for s in own.stmts {
+		chk_at_place(em, s.path, s.line, s.col, "E391", f"`{s.word}` opens a statement at the top level, and a compiled program has nowhere to run it — outside `main` lives only immutable state readied before it (docs/runtime/package.md), so move it into a `fn` body. GRAMMAR#program derives the form for SCRIPT mode, and `nop` is the one that costs nothing to run")
+	}
+}
+
 fn chk_top_muts(mut &em: Emitter, own: File) {
 	for c in own.consts {
 		if c.is_mut and not c.in_unsafe {

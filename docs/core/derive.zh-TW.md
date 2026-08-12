@@ -73,7 +73,7 @@ behavioral default；結構這一層是封閉的。
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
 **沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet: Phase 2]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
+**`Decode`** 在此規範、但 **[not yet]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
 
 > **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並會被指名拒絕。它的規則需要同時比對
 > 兩側的 tag **與** payload;無欄位的 `enum` 可以 derive,因為它的 variant 差異恰好就是 discriminant 的差異。
@@ -115,7 +115,7 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 ## Serialization——完整範例
 
-> **[not yet: Phase 2]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
+> **[not yet]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
 > 今天 `#[derive(Encode, Decode)]` 是編譯錯誤,因為這個 compiler 唯一會寫出的 derive 是 `Eq`。以下範例展示的是
 > 結構化 derive **意圖中**的樣貌。
 

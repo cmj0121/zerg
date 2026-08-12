@@ -4540,6 +4540,85 @@ fn main() {
 }
 EOF
 
+# THE THREE LIST READERS THAT WERE STILL SPELLING THE RULE THEIR OWN WAY. Twelve readers
+# were brought to "the comma is required between elements and absent before the closer" and
+# these three were not, which is the N+1 that a rule stated per site always has: a spec's
+# own type parameters, a function's, and a call's type arguments.
+#
+# The spec's list was the SILENT one — `spec Ix[K V]` read as two parameters and said
+# nothing, so a correct `impl Ix[int]` was then told the spec is "parameterized by K, V"
+# about a list nobody wrote. The other two were not silent, but the `]` below the loop was
+# what complained, so a missing separator was reported as a missing bracket.
+reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+spec Ix[K V] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int, int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-trailing-comma-in-a-spec-type-parameter-list E289 "the closing \`]\` of a spec's type parameter list" <<'EOF'
+spec Ix[K,] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+fn f[T U](a: T, b: U) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1, 2))
+}
+EOF
+
+reject a-trailing-comma-in-a-type-parameter-list E289 'the closing `]` of a type parameter list' <<'EOF'
+fn f[T,](a: T) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1))
+}
+EOF
+
+# The type ARGUMENT list, which is reached only through a built-in type's own arguments:
+# a program's own `f[int, str](…)` is refused as a form before the list is read (E275), so
+# `map[K, V]` is where this loop still runs.
+reject a-trailing-comma-in-a-type-argument-list E289 'the closing `]` of a type argument list' <<'EOF'
+fn main() {
+	m := map[str, int,]()
+	print m.len()
+}
+EOF
+
 # GRAMMAR, group 7: "ANY '{'-opening expression — a block OR a map literal — at the start
 # of an if/for/with/match head must be parenthesized", which follows from `{` being the
 # block opener. The `if` head read the brace as a map literal and ran the program; the

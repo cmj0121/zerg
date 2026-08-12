@@ -775,6 +775,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E481` | `…` 重新綁定 `match` arm 的 pattern 已經綁住的名字 — **[not yet]**                                    |
 | `E482` | `…` 的欄位 `…` 是 module-private,所以必須帶預設值                                                     |
 | `E483` | NotImplemented                                                                                        |
+| `E484` | 可變全域 `…` 不可以是 `pub`                                                                           |
+| `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 

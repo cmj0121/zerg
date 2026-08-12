@@ -6391,7 +6391,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 		# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the
 		# one shape where the reader has said which module they mean, and the one where
 		# reading a module-private name is unambiguous rather than accidental.
-		c_chk_visible_fn(em, meth)
+		c_chk_visible_fn(em, meth, c_sig_row_of(em, meth))
 
 		return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", meth)}({c_call_args(em, meth, args, sb)})"
 	}
@@ -6612,12 +6612,17 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		raise f"E425 undefined function `{name}`"
 	}
 
-	# The callee is a real free function, so the last question is whether this module is
-	# allowed to name it. It is asked HERE and not at the lookup above because the lookup
-	# answers for every shape of call — a method, a constructor, an intrinsic — and only a
-	# plain function has a module that could be the wrong one.
-	c_chk_visible_fn(em, name)
-	c_chk_unsafe_fn(em, name, "this call is in safe code")
+	# The callee is a real free function, so the last two questions are whether this module
+	# is allowed to name it and whether safe code may reach it. They are asked HERE and not
+	# at the lookup above because the lookup answers for every shape of call — a method, a
+	# constructor, an intrinsic — and only a plain function has a module and an `unsafe`
+	# group that could be the wrong ones.
+	#
+	# ONE ROW FOR BOTH: they read different columns of the same signature row, and looking it
+	# up once here is the difference between one scan of that table per call site and two.
+	sr := c_sig_row_of(em, name)
+	c_chk_visible_fn(em, name, sr)
+	c_chk_unsafe_fn(em, name, "this call is in safe code", sr)
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname_in(em, c_mod_of(em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
@@ -6625,31 +6630,35 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", name)}({c_call_args(em, name, args, sb)})"
 }
 
-# c_chk_visible_fn is the visibility rule for a free function. It goes through `c_sig_row`,
-# the one scan of that table there should be: a column-per-reader pair walked ~1.7k rows
-# twice per call site and built the key twice, which is the cost the table's own comment on
-# `sig_nparams` explains they precomputed two integers to avoid.
+# c_sig_row_of is a free function's signature row, or -1 when nothing registered one. It is
+# the ONE scan the two rules below share: each used to do its own, so a call site asking both
+# walked ~1.7k rows twice and built the key twice — which is the very cost the table's comment
+# on `sig_nparams` explains two precomputed integers were added to avoid.
+fn c_sig_row_of(mut &em: Emitter, name: str) -> int {
+	return c_sig_row(em, c_sig_key("", name))
+}
+
+# c_chk_visible_fn is the visibility rule for a free function, asked about the row its caller
+# already has.
 #
-# A key that is not there is quiet. A generated declaration — a `derive`d impl, a
-# monomorphized specialization — has no module a reader could have written, and a rule that
-# guessed there would refuse programs for a reason nobody can act on.
-fn c_chk_visible_fn(mut &em: Emitter, name: str) {
-	r := c_sig_row(em, c_sig_key("", name))
+# A row of -1 is quiet. A generated declaration — a `derive`d impl, a monomorphized
+# specialization — has no module a reader could have written, and a rule that guessed there
+# would refuse programs for a reason nobody can act on.
+fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
 
 	chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
 }
 
-# c_chk_unsafe_fn asks the same table the same way for the `unsafe` group's caller rule. It is
-# a second function rather than a second question inside the one above because the two rules
-# are asked at different places: visibility is a call's business alone, and this one is also
-# owed where a bare function NAME becomes a VALUE — `f := poke` would otherwise be one line
-# away from making the rule mean nothing.
+# c_chk_unsafe_fn reads the same row for the `unsafe` group's caller rule. It is a second
+# function rather than a second question inside the one above because the two rules are asked
+# at different places: visibility is a call's business alone, and this one is also owed where
+# a bare function NAME becomes a VALUE — `f := poke` would otherwise be one line away from
+# making the rule mean nothing. The ROW is what they share, not the question.
 #
-# A key that is not there is quiet, for the reason the visibility rule is: a generated
-# declaration was written by nobody, so there is no context a reader could have been in.
-fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str) {
-	r := c_sig_row(em, c_sig_key("", name))
+# A row of -1 is quiet, for the reason the visibility rule is: a generated declaration was
+# written by nobody, so there is no context a reader could have been in.
+fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str, r: int) {
 	return if r < 0
 
 	chk_unsafe_reachable(em, name, em.sig_unsafe[r], what)
@@ -7143,7 +7152,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
 		c_no_ref_param_value(em, n)
-		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call")
+		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call", c_sig_row_of(em, n))
 		em.used_fnptr = true
 		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
@@ -9695,8 +9704,9 @@ fn c_callee_args_of(x: Expr) -> list[Expr] {
 # resolvers is a rule one keyword away from meaning nothing — which is the same argument
 # c_ns_kind was extracted for, one question further along.
 fn c_callee_free(mut &em: Emitter, name: str, args: list[Expr], what: str) -> Callee {
-	c_chk_visible_fn(em, name)
-	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code")
+	sr := c_sig_row_of(em, name)
+	c_chk_visible_fn(em, name, sr)
+	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code", sr)
 
 	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", name), args, name)
 }

@@ -1576,23 +1576,26 @@ fn f() -> ptr[int] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" destructuring-binding E238 <<'EOF'
+expect "$ZERG" destructuring-binding E238 place <<'EOF'
 fn main() {
 	(a, b) := (1, 2)
 	print a + b
 }
 EOF
 
-expect "$ZERG" destructuring-binding-mut E238 <<'EOF'
+expect "$ZERG" destructuring-binding-mut E238 place <<'EOF'
 fn main() {
 	mut (a, b) := (1, 2)
 	print a + b
 }
 EOF
 
-# the third spelling BUILT and did nothing: the tuple was evaluated, assigned to no one,
-# and the program printed the values it started with
-expect "$ZERG" destructuring-assignment E238 <<'EOF'
+# THE THIRD SPELLING IS A DIFFERENT FORM. It BUILT and did nothing — the tuple was
+# evaluated, assigned to no one, and the program printed the values it started with — and
+# once it was refused it borrowed the binding's sentence, which quotes a `:=` at a reader
+# who wrote `=`. GRAMMAR#assign-target derives the tuple form on its own, so it is an unbuilt
+# form of its own and owes its own sentence.
+expect "$ZERG" destructuring-assignment E486 'a destructuring assignment' place <<'EOF'
 fn main() {
 	mut a := 1
 	mut b := 2

@@ -3783,6 +3783,86 @@ fn main() {
 }
 EOF
 
+# --- a compile-time position takes a CONST-EXPR, and only a const-expr -------------------
+#
+# GRAMMAR group 7: a const-expr is an ordinary expression "RESTRICTED to what the compiler
+# folds with no evaluation engine: literals, other const-foldable names, an enum's
+# discriminant, and the arithmetic / bitwise / comparison / logical operators. There are NO
+# function calls and no runtime values". The two positions below are the ones it names by
+# hand — an enum discriminant and a fill count — and each is rejected two ways, because the
+# two failures are different: a name whose binding is not constant, and a call, which no
+# binding can make constant.
+#
+# The fill count's runtime form is the one worth having a case for: the SEED used to accept
+# it. It lowers `[v; N]` to a loop bounded by N, so `[0; n]` for an n read at run time built
+# a list of whatever n happened to be — a form the language does not have, compiled in
+# silence, and one the shipping compiler always refused.
+
+reject a-discriminant-that-names-a-non-constant E474 'the discriminant of `E.A`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+n := size()
+
+enum E {
+	A = n
+	B
+}
+
+fn main() {
+	print int(E.A)
+}
+EOF
+
+reject a-discriminant-that-calls E474 'the discriminant of `E.B`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+enum E {
+	A
+	B = size()
+}
+
+fn main() {
+	print int(E.B)
+}
+EOF
+
+reject a-fill-count-read-at-run-time E475 <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	n := size()
+	xs := [0; n]
+	print xs.len()
+}
+EOF
+
+reject a-fill-count-that-calls E475 <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	xs := [0; size()]
+	print xs.len()
+}
+EOF
+
+# A COUNT IS A COUNT. The parser read one integer token here, so `-1` was refused as "not an
+# integer literal" and the case never reached a rule; the fold reaches it, and a negative
+# count that quietly built the empty list is not what `[0; -1]` asks for.
+reject a-negative-fill-count E476 <<'EOF'
+fn main() {
+	xs := [0; -1]
+	print xs.len()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

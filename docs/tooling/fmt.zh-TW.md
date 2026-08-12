@@ -588,7 +588,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E271` | `asm(…)` —— **[not yet]**                                                                             |
 | `E272` | `…(…)` 轉換一個值,而這裡一個也沒給                                                                    |
 | `E273` | `…(…)` 轉換一個值,而這裡給了 …                                                                        |
-| `E274` | pattern 透過 enum 指名 variant,而這個是裸的                                                           |
 | `E275` | 呼叫寫明型別引數,而 postfix `[ … ]` 是索引                                                            |
 | `E276` | `spec` 成員既不是簽章也不是 provided method                                                           |
 | `E277` | `impl` 既不在 spec 的 module、也不在型別的                                                            |
@@ -756,6 +755,13 @@ expression this compiler reads ``，指錯層級、指錯問題，而且印出�
 
 `E108` 以前根本沒有訊息。`0x` 被降到 C 的 `0x`，cc 把它讀成零，於是一個格式不良的字面量
 編譯成功、程式回答 0。
+
+`E274` 也曾在其中，現已**退場**。它報告的是 pattern 位置上的裸名字——「`Zzz` 是某個 enum 的
+variant，而 pattern 要透過 enum 指名」——判準卻是名字的第一個字母，而那個 parser 什麼都還沒
+解析、也不知道有哪些 enum。於是它會對一個根本沒宣告 enum 的程式開火，句子裡指名的那個 enum
+並不存在。pattern 位置上的裸名字**永遠**是一個新的 binding（[Grammar](../surface/grammar.md)），
+不看大小寫；而這條規則原本想擋的錯——兩個 variant 沒帶 enum 寫出來——改由 `E458` 回答：第一個
+arm 綁住了全部，它下面的 arm 都到不了。這個號碼不再重用。
 
 ## `zerg lint`
 

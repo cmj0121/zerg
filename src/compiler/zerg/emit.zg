@@ -7229,10 +7229,10 @@ fn c_arm_eq(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 # operand rule is met on the way through and `chk_binary` has to be asked for it here.
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
-	lo := c_expr(em, c_range_lo(a.lit), sb)
+	lo := c_arm_bound(em, c_range_lo(a.lit), sb)
 	mut base := f"({s} >= {lo})"
 	if not c_is_nil_lit(c_range_hi(a.lit)) {
-		hi := c_expr(em, c_range_hi(a.lit), sb)
+		hi := c_arm_bound(em, c_range_hi(a.lit), sb)
 		mut cmp := " < "
 		if c_range_incl(a.lit) {
 			cmp = " <= "
@@ -7248,6 +7248,35 @@ fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	# which values reach the guard, and the guard has the last word
 	return f"({base} && {c_arm_guard(em, a, sb)})" if a.has_guard
 	return base
+}
+
+# c_arm_bound renders ONE bound of a range arm. `range-bound ::= '-'? literal | identifier`
+# (GRAMMAR#range-bound), and the prose above `match-expr` calls both alternatives compile-time
+# constants — so a literal is emitted as it stands and a NAME is FOLDED to the value it names,
+# through the one fold this compiler has. `LO..HI`, `MID..=HI` and `250..=300` are then the
+# same request written three ways, and `const MID := LO + (HI - LO) / 2` is as good a bound as
+# a number, because the recursion behind chk_const_eval is the const-expr's own.
+#
+# THE RULE IS WRITTEN AT THE IDENTIFIER and nowhere wider, because that is the alternative
+# GRAMMAR adds: every other head an arm may carry reaches here as a literal that c_expr has
+# always rendered, and routing those through a fold that only knows integers would refuse a
+# `1.5..2.5` this compiler accepts today.
+#
+# A name that does NOT fold is reported HERE, at the use site — the same choice the fill count
+# and the enum discriminant make. The binding's own line is a perfectly good one with nothing
+# wrong on it; the line the reader needs is the one that asked for a compile-time value. `0` is
+# emitted in its place so that one bad bound is one finding rather than a broken expression the
+# rest of the arm then trips over.
+fn c_arm_bound(mut &em: Emitter, b: Expr, sb: Subst) -> str {
+	name := c_ident_name(b)
+	return c_expr(em, b, sb) if name == ""
+
+	f := chk_const_eval(em, b)
+	if not f.ok {
+		chk_at(em, "E477", f"a range arm's bound is a compile-time constant, and `{name}` is not one — GRAMMAR#range-bound gives the position a literal or a constant name, which is the value of a `:=` or `const` binding the compiler can fold, and no runtime value")
+		return "0"
+	}
+	return strconv.to_string(f.value, 10)
 }
 
 # An arm's bindings belong to the ARM. Nothing popped them, so `match b { A(x) => x … }`

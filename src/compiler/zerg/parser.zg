@@ -3018,9 +3018,29 @@ fn parse_match(mut &p: Parser) -> Expr {
 	return Expr.EMatch(scrut, arms)
 }
 
+# at_named_range_arm reports whether the arm head is a RANGE ARM whose lower bound is a name —
+# an identifier immediately followed by `..` or `..=` (GRAMMAR#range-bound, whose second
+# alternative is a bare `identifier`).
+#
+# It exists because a range arm is recognized BY ITS `..` and that recognition only ever ran on
+# a literal head: a non-identifier head falls to `parse_expr` below, which reads `200..300` as
+# the range it is, while an identifier head was claimed by the binding branch, which reads the
+# name and then demands the `=>` a range arm has not reached yet. So `LO..HI =>` came back as
+# `expected `=>`, found `..`` — a token-level complaint about a form GRAMMAR derives.
+#
+# ONE TOKEN OF LOOKAHEAD IS THE WHOLE DECISION, and deliberately so: GRAMMAR#pattern makes the
+# pattern grammar context-free — "nothing here has to be resolved to be parsed" — so the parser
+# may not ask what the name MEANS, and knows of no constants to ask about. Whether the name is
+# worth a compile-time value is a later question, put to `chk_const_eval` at the use site, where
+# a name that is not one is reported against the line that wanted a constant.
+fn at_named_range_arm(mut &p: Parser) -> bool {
+	k := peek_kind(p, 1)
+	return k == Kind.DotDot or k == Kind.DotDotEq
+}
+
 # parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
-# scrutinee (or is the `_` wildcard); anything else is a literal pattern matched by
-# equality.
+# scrutinee (or is the `_` wildcard) unless a `..` follows it, which makes it a range bound;
+# anything else is a literal pattern matched by equality.
 fn parse_arm(mut &p: Parser) -> Arm {
 	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
@@ -3033,7 +3053,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	mut bind := ""
 	mut ctor := ""
 	mut binds: list[str] = []
-	if p_at(p, Kind.Ident) {
+	if p_at(p, Kind.Ident) and not at_named_range_arm(p) {
 		mut name := cur(p).lexeme
 		p_advance(p)
 

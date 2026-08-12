@@ -51,8 +51,9 @@ three-clause `for`**. The infinite form, the while form, and `for x in it` over 
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
 the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
 writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
-(`x in 0..n` → `bool`) is **[not yet]** — the form is refused by name — as is treating a **range as a
-value** anywhere else; a range exists only as the thing a `for` walks and a `match` arm contains.
+(`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
+refused by name; a range exists only as the thing a `for` walks, a `match` arm contains, and an `in` tests
+against.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly
@@ -148,9 +149,11 @@ fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-pa
 covers the **whole or-pattern**. A guarded arm does **not** count toward exhaustiveness, so a guarded case
 still needs an unguarded arm or `_`. A **range arm** (`200..300 =>`, `400..=499 =>`, `500.. =>`) is a
 match-only sugar for `_ if _ in <range>` — it matches by **range containment** (not value equality), binds
-**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value).
-
-> **[not yet]** The workaround just offered is not writable: `x if x in <range>` needs the membership test
-> `v in range`, which is refused by name (see `for`, above). So a range arm's value cannot be bound by any
-> route today — not by the arm, which binds nothing by design, and not by the guard that was to stand in
-> for it.
+**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value). Its
+**bounds are compile-time constants**: a literal, or the **name** of one
+([`GRAMMAR#range-bound`](../../GRAMMAR)), which is any `:=` or `const` binding whose initializer the
+compiler folds — so `LO..HI` and `MID..=HI` read as the numbers they name, and a bound built out of other
+constants (`const MID := LO + 50`) is as good as a written one. A name that is **not** one — a value read
+at run time, a `mut` binding — is reported at the arm that wanted it, not at the binding's own line; a
+**call** is not a bound at all, since the production derives none, so `f()..300` is turned away by the
+parser.

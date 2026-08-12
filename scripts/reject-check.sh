@@ -3211,6 +3211,57 @@ fn main() {
 }
 EOF
 
+# --- the SELECTOR half of the same rule -------------------------------------------------
+#
+# `GRAMMAR#keyword` says outright that none of them can be an identifier, and `GRAMMAR#postfix`
+# derives `'.' identifier` and `'.' dec-int`. Every DECLARING position above already answers
+# that way; the postfix did not — it read whatever token followed the `.` as a field name and
+# handed it downstream, so `x.if` was answered by the CHECKER as ``E376 no field `if` on int``:
+# a sentence that treats a reserved word as a field somebody might plausibly have declared.
+#
+# The four sites that read a selector — `.` and `?.`, in `parse_postfix` and in
+# `parse_chain_tail` — now share one function, because a rule written at one of four slots is
+# the shape of bug this repo keeps finding.
+reject a-reserved-word-as-a-field E293 '`if` is a reserved word' <<'EOF'
+fn main() {
+	x := 1
+	print x.if
+}
+EOF
+
+# THE SWALLOWED LINE, and it is why this belongs at the postfix rather than at the checker.
+# A `.` suppresses ASI, so the `print` on the NEXT line was read as the field name of `1.` and
+# the line vanished from the program — what got reported was `2`, on a line that is correct,
+# under E205. Two statements in, three lines down, about the wrong one.
+reject a-dot-that-eats-the-next-line E293 '`print` is a reserved word' <<'EOF'
+fn main() {
+	print 1.
+	print 2
+}
+EOF
+
+# NOT A NAME AT ALL is the rest of the production, and it went the same way: an operator or a
+# literal after the `.` became a "field" whose name is `+` or `"a"`, and E376 said no int has
+# one. The seed has asked for "a field name or tuple index" since it was written and is the
+# oracle for all four of these.
+reject a-field-name-that-is-not-a-name E294 'found `+`' <<'EOF'
+fn main() {
+	x := 1
+	print x.+
+}
+EOF
+
+# `?.` derives ONLY an identifier — a tuple index is on `.` alone (GRAMMAR#postfix) — and this
+# read the `0` as a field, reaching the checker as ``no field `0` on (int, int)``, with no code
+# and no place on it at all.
+reject a-tuple-index-through-an-optional-chain E294 'after `?.`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	p: (int, int)? = t
+	print p?.0
+}
+EOF
+
 # --- a byte converts; a LIST of them does not ------------------------------------
 #
 # `Into` carries a `byte` into an `int` slot one value at a time. A `list[byte]` does not

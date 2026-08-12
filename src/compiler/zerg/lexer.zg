@@ -187,7 +187,7 @@ fn scan_token(mut &l: Lex) -> Token {
 	return scan_operator(l, sline, scol, soff)
 }
 
-# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR:80 makes the source
+# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR#letter makes the source
 # UTF-8 — which is what lets a comment, a string and a rune hold any character at all —
 # and GRAMMAR#identifier derives ASCII letters, digits and `_`, so a character reaching
 # here spells nothing: the same lexical error `@` is, under the same code.

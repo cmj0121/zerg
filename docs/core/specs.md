@@ -244,6 +244,14 @@ A spec's methods come in two kinds:
 > the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
 > no mechanism under it. The refusal names the form at the point it is written, so no program reaches the
 > dispatch question at all.
+>
+> **[not yet]** A signature may be **`unsafe`** — `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so
+> `unsafe fn peek() -> int` inside a `spec` is a member — and this compiler does not build it. It is read to
+> the end of the signature and refused as itself: _E287 NotImplemented: the `unsafe` `spec` signature `peek`_,
+> with the place. The reason is the one a standalone `unsafe fn` gets (`E264`): the trust boundary the keyword
+> marks is not enforced ([FFI](../runtime/ffi.md)), and reading the signature as a safe one would erase the
+> only thing `unsafe` says. Everything that starts **no** member at all — `unsafe { … }` in a spec body among
+> them — still gets `E276`.
 
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes

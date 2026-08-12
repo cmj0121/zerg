@@ -63,7 +63,16 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 就地被拋棄（沒有 join——要是某個 coroutine 必須先跑完，就用 channel 觀察到它完成、再讓 main 退；見
 [Coroutines 與 Channels](../code/coroutine.zh-TW.md)）。
 
-`main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。頂層常數以**依賴序**
+`main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。
+
+這句話講的是**什麼東西在哪裡跑**，所以它同時決定了一個 grammar 允許、而本節從來沒說過的形式：**寫在頂層的
+statement**。`GRAMMAR#program` 推導得出它——`program ::= stmt-list` 就是 Zerg 的 **script mode**，而 grammar 正是
+用 `nop` 程式為這個語言開場——所以它是合法語法，編譯器會把它整句讀完。但**編譯出來**的程式沒有任何一刻可以跑它：
+執行從 `main` 開始，上面的一切都是在那之前備妥的狀態。因此它會被**具名拒絕、並帶位置**，而且是由 build 而不是由
+parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）。`nop` 是唯一的例
+外，而且其實不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
+
+頂層常數以**依賴序**
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。

@@ -286,6 +286,13 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   into a string literal and out as `"\377"` in the C. `zerg` reads a file into a `str` and
   refuses one that cannot be, naming the path — the encoding is the one place where it is the
   stricter compiler for a reason that is not a rule it added but a type it has.
+- **A STATEMENT AT THE TOP LEVEL is accepted, and dropped.** `program ::= stmt-list`
+  (`GRAMMAR#program`) is Zerg's script mode, so a top-level `print 999`, `if …` or `for …` is
+  grammatical — and a compiled program has nowhere to run one, since outside `main` lives only
+  immutable state readied before it (docs/runtime/package.md). The seed parses each into
+  `file.Items` and neither lowers nor mentions it, so the program builds and prints nothing.
+  `zerg` refuses it by name at the line it was written on, `nop` excepted. This is a rule
+  `zerg` ADDED rather than one the seed lost, which is the ordinary direction here.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

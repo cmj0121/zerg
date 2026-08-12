@@ -689,6 +689,25 @@ pub struct File {
 	# them all, not a walk over two kinds of declaration.
 	pub derive_on: list[str]
 	pub derive_spec: list[str]
+
+	# stmts are the statements written at the TOP LEVEL. GRAMMAR#program derives them —
+	# `program ::= stmt-list`, which is what SCRIPT mode makes the top level — so they are
+	# grammatical and the parser reads each one whole; a COMPILE-mode build has nowhere to run
+	# one, and refusing it is the emitter's (chk_top_stmts), for the reason a program with no
+	# `fn main` is refused by the build and not by the parse (docs/conformance.md).
+	#
+	# What is kept is the PLACE and the word the statement starts with, not the tree: no pass
+	# will ever walk one, and carrying a Stmt that nothing lowers is an invitation to lower it.
+	pub stmts: list[TopStmt]
+}
+
+# TopStmt is one top-level statement, as much of it as a refusal needs: where it was written
+# and what it starts with, so the sentence can name the form the reader typed.
+pub struct TopStmt {
+	pub word: str
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # last_segment is the name a module path ends with — `util/text` ends with `text`. It is

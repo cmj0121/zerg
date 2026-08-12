@@ -9,10 +9,11 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 > **[deviation]** A `#[derive]` or `#[derive()]` with **no argument** is accepted and silently dropped, which
 > is the one outcome this page says cannot happen. The argument list is read as a loop over the spec names
 > inside the brackets, so an empty list is zero iterations and nothing is either generated or refused; and
-> because the check that a decorator sits on the right kind of declaration is made **per named spec**, the
-> bare form skips that too — `#[derive]` above a `fn` compiles, where `#[derive(Eq)]` above the same `fn` is
-> correctly rejected with _`#[derive(Eq)]` has no declaration under it_. Nothing is miscompiled, but a
-> directive is read and thrown away, which is what the closed set is supposed to rule out.
+> because what carries a decorator to its declaration is that same list of names, the bare form is carried
+> nowhere and so meets no rule at all — `#[derive]` above a `fn` compiles, where `#[derive(Eq)]` above the
+> same `fn` is rejected with _E487 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows
+> it, and what follows is `fn`_. Nothing is miscompiled, but a directive is read and thrown away, which is
+> what the closed set is supposed to rule out.
 
 ## The set
 

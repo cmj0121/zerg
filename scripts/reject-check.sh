@@ -1450,7 +1450,7 @@ fn main() {
 }
 EOF
 
-reject str-into-an-int-struct-field E338 'field 1 of `P` is int, and this gives str' <<'EOF'
+reject str-into-an-int-struct-field E338 'the field `x` of `P` is int, and this gives str' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2308,6 +2308,20 @@ fn f(This: int) {
 
 fn main() {
 	f(1)
+}
+EOF
+
+# A TYPE ALIAS is a declaration like any other, and it was the one that never asked. Every
+# naming position above reaches p_name and is answered there; `type X = Y` read its own
+# identifier with a bare `expect`, so `type This = int` declared the self type as a synonym
+# for `int` at module level while `This` inside an `impl` went on meaning the implementing
+# type — the same word with two meanings in one program, which is exactly what reserving it
+# is for.
+reject capital-this-as-a-type-alias E245 'cannot name a type alias' no-place seed-gap <<'EOF'
+type This = int
+
+fn main() {
+	print 1
 }
 EOF
 
@@ -3358,6 +3372,18 @@ EOF
 # a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
 # carrier, is where the declared type lives.
 
+# AND THE SENTENCE MUST NOT DROP THE `?`. The payload is where the declared type lives, so
+# the comparison is right to be against the `int`; what was wrong is that the label went on
+# saying "the binding `x`", so the message read `the binding `x` is int` about a binding the
+# reader had declared `int?` two words earlier. The slot the value is entering is the
+# carrier's payload, and the label now says which carrier.
+reject str-into-an-optional-binding E338 'the int? payload of the binding `x`' <<'EOF'
+fn main() {
+	x: int? = "s"
+	print x ?? 0
+}
+EOF
+
 reject str-into-an-optional-list-element E338 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]
@@ -3365,7 +3391,7 @@ fn main() {
 }
 EOF
 
-reject str-into-an-optional-struct-field E338 'field 1 of `Box` is int' <<'EOF'
+reject str-into-an-optional-struct-field E338 'the field `v` of `Box`' <<'EOF'
 struct Box {
 	pub v: int?
 }
@@ -3566,6 +3592,83 @@ fn main() {
 }
 EOF
 
+# --- a channel's DIRECTION, which is the other half of its type -------------------------
+#
+# Four rules, and until now none of them carried a code or a place — so a reader was told a
+# direction was wrong and left to find which of their sends it was, and no gate could pin
+# any of the four without pinning its prose. The SEED reports all four with a place, and
+# numbers a call's arguments from 1 the way `E340` does; these numbered from 0, so a reader
+# following one of them looked at the wrong parameter.
+#
+# Two rules and not one: what a NAME MAY DO with an end (E503-E505) is a different question
+# from where an end MAY GO (E506), which is why the narrowing rule has a code of its own.
+
+reject receive-on-a-send-only-channel E503 <<'EOF'
+fn take(ch: chan[int]<-) {
+	print <-ch!
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject send-on-a-receive-only-channel E504 <<'EOF'
+fn take(ch: <-chan[int]) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject close-a-receive-only-channel E505 <<'EOF'
+fn take(ch: <-chan[int]) {
+	close(ch)
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+# THE ARGUMENT IS NUMBERED FROM 1, which is what the sentence is asserted for: `take` has
+# one parameter, and this used to call it argument 0.
+reject a-direction-that-does-not-narrow-at-an-argument E506 'argument 1 of `take`' <<'EOF'
+fn take(ch: chan[int]<-) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	take(r)
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-binding E506 'binding `s`' <<'EOF'
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	s: chan[int]<- = r
+	print 1
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-return E506 "this function's answer" <<'EOF'
+fn f(c: <-chan[int]) -> chan[int]<- {
+	return c
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 reject an-int-into-a-map E335 'cannot bind int to a map[str, int] binding' <<'EOF'
 fn main() {
 	m: map[str, int] = 7
@@ -3690,11 +3793,56 @@ EOF
 # regression this catches is the entry-point check drifting somewhere every emit stage
 # passes through.
 printf 'x := 1\n' >"$tmp/module-without-main.zg"
-if "$ZERG" build --emit lib -o "$tmp/module-without-main" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
+if "$ZERG" build --emit lib -o "$tmp/module-without-main.o" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
 	[ -f "$tmp/module-without-main.o" ]; then
 	pass=$((pass + 1))
 else
 	echo "LIB       module-without-main — a main-less module no longer builds with --emit lib"
+	fail=$((fail + 1))
+fi
+
+# --- `-o` NAMES THE FILE WRITTEN, AT EVERY STAGE -----------------------------------
+#
+# It is asserted here for the reason the case above is: this file already owns the repo's
+# only `-o` assertion, and no other gate runs the DRIVER rather than the language. What it
+# catches is the flag meaning a different thing per stage — which is what it meant, in both
+# directions. `--emit lib` appended `.o` to a path the user had spelled in full, so `-o
+# out.o` wrote `out.o.o` and `out.o.o.c`; and `--emit c`, `--emit tokens` and `--emit ast`
+# discarded the flag and wrote stdout, so a build that asked for a file got none, said
+# nothing, and exited 0.
+printf 'fn main() {\n\tprint 1\n}\n' >"$tmp/oflag.zg"
+
+o_case() {
+	local name=$1
+	shift
+	if "$@" >/dev/null 2>&1 && [ -s "$tmp/$name" ]; then
+		pass=$((pass + 1))
+	else
+		echo "OUTPUT    $name — \`-o\` did not write the file it was given"
+		fail=$((fail + 1))
+	fi
+}
+
+o_case o-lib.o "$ZERG" build --emit lib -o "$tmp/o-lib.o" "$tmp/oflag.zg"
+o_case o-emit.c "$ZERG" build --emit c -o "$tmp/o-emit.c" "$tmp/oflag.zg"
+o_case o-tokens.txt "$ZERG" build --emit tokens -o "$tmp/o-tokens.txt" "$tmp/oflag.zg"
+o_case o-ast.txt "$ZERG" build --emit ast -o "$tmp/o-ast.txt" "$tmp/oflag.zg"
+o_case o-bin "$ZERG" build --emit bin -o "$tmp/o-bin" "$tmp/oflag.zg"
+
+# and the suffix is NOT appended twice: `out.o.o` is what the old rule left behind.
+if [ ! -e "$tmp/o-lib.o.o" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    o-lib-double-suffix — \`--emit lib -o out.o\` wrote out.o.o"
+	fail=$((fail + 1))
+fi
+
+# WITH NO `-o` the three reading stages stay on stdout, which is the pipe every other gate
+# here uses: only the DEFAULT differs per stage, never what an explicit `-o` means.
+if [ -n "$("$ZERG" build --emit c "$tmp/oflag.zg" 2>/dev/null)" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    c-without-o — \`--emit c\` with no \`-o\` wrote nothing to stdout"
 	fail=$((fail + 1))
 fi
 
@@ -4593,7 +4741,7 @@ EOF
 # of the written arguments forward, so a construction that stops short of a field with no
 # default is still short — the same rule a `fn` parameter default follows, and the one that
 # would go quiet if a defaulted field anywhere in the type were read as "this may be empty".
-reject a-required-field-before-a-defaulted-one E370 '`Box` needs a value for field 1' <<'EOF'
+reject a-required-field-before-a-defaulted-one E370 'the field `w` of `Box`' <<'EOF'
 struct Box {
 	pub w: int
 	pub h: int = 4

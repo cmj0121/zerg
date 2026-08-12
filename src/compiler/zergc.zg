@@ -71,7 +71,7 @@ fn build_cmd() -> cli.Command {
 	return (
 		cli.command("build", "compile a program (see --emit)")
 		.opt("e", "emit", "stop after a stage: tokens, ast, c, lib, bin — bin when the entry declares `main`, else lib", "")
-		.opt("o", "output", "where to write the result (default: the source name)")
+		.opt("o", "output", "where to write the result (default: stdout for tokens/ast/c, the source name for lib/bin)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
 		.run(do_build)
@@ -225,9 +225,22 @@ fn declares_main(files: list[str]) -> bool {
 	return found
 }
 
-# build_stage runs the pipeline as far as `emit` asks and no further. The early stages
-# print to stdout because they are something a person is reading; the two that produce a
-# FILE take an output path, defaulting to the entry file's name.
+# build_stage runs the pipeline as far as `emit` asks and no further.
+#
+# `-o` IS THE PATH WRITTEN, at every stage, which is the one sentence `--help` has always
+# made ("where to write the result") and which was true of one stage in five. `--emit c`,
+# `--emit tokens` and `--emit ast` ignored it entirely and wrote stdout — so `zerg build
+# --emit c f.zg -o f.c` put the C on the terminal, created no `f.c`, and exited 0, which is
+# the silent wrong answer this project forbids everywhere else. `--emit lib` read it and
+# then appended `.o` to it unconditionally, so `-o out.o` wrote `out.o.o` beside an
+# `out.o.o.c`.
+#
+# The DEFAULT is per stage and unchanged, because that is where the stages genuinely
+# differ: the three reading stages are something a person is looking at, so with no `-o`
+# they go to stdout and stay pipeable; the two that produce an artefact name it after the
+# entry file, `.o` included, since a default has to be a whole path and only `--emit lib`
+# knows the suffix its product wears. What no default may do is override what was asked
+# for — a suffix appended to an explicit `-o` is the driver overruling the user.
 #
 # The default stage is the ENTRY FILE'S ANSWER, not a fixed one. A source is a module until
 # something asks it to be a program, and what asks is `fn main` — so a file that declares
@@ -245,16 +258,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# silent success load_unit had, and worse here — these are the two stages a person
 	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		io.write(zerg.dump_tokens(read_source(files[0])))
+		write_result(zerg.dump_tokens(read_source(files[0])), out)
 		return
 	}
 	if emit == "ast" {
-		io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
+		write_result(zerg.dump_ast(zerg.merge_files(load_sources(files))), out)
 		return
-	}
-	mut output := out
-	if output == "" {
-		output = drop_ext(files[0])
 	}
 	if emit == "lib" {
 		# separate compilation: the unit DECLARES the whole program but DEFINES only this
@@ -270,7 +279,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		mut diags: list[zerg.Diag] = []
 		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], diags)
 		report_diags(diags, unit_srcs(units), unit_paths(units))
-		compile_to(obj_code, output + ".o", true)
+		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
 		return
 	}
 
@@ -284,7 +293,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# c_emit_unit runs, and it runs it with the same whole-program view (merge_asts) over
 	# every unit rather than once over the merge.
 	if emit == "bin" {
-		link_program(files[0], output, jobs)
+		link_program(files[0], out_or(out, drop_ext(files[0])), jobs)
 		return
 	}
 	if emit == "c" {
@@ -296,7 +305,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		code := zerg.emit_files_diag(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
 		guard {
-			io.write(code)
+			write_result(code, out)
 		}
 		return
 	}
@@ -764,6 +773,30 @@ fn compile_to(code: str, output: str, object_only: bool) {
 	if __zrt_exec(argv) != 0 {
 		io.ewrite("zerg: cc failed\n")
 		__zrt_exit(1)
+	}
+}
+
+# out_or is the `-o` path, or the stage's own default when none was given. It exists so the
+# defaults are written where they belong — at the stage that knows what its product is
+# called — rather than as one shared `output` computed ahead of the dispatch, which is how
+# `--emit lib` came to append `.o` to a path the user had spelled in full.
+fn out_or(out: str, dflt: str) -> str {
+	return dflt if out == ""
+
+	return out
+}
+
+# write_result writes a stage a person READS: to `-o` when there is one, and to stdout when
+# there is not, so the pipe that has always worked goes on working. The three stages that
+# use it took no path at all before, which made `-o` a flag the compiler accepted and
+# discarded.
+fn write_result(text: str, out: str) {
+	if out == "" {
+		io.write(text)
+		return
+	}
+	guard {
+		io.write_file(out, bytearray(text))
 	}
 }
 

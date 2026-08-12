@@ -1948,7 +1948,7 @@ fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 		# template's line: the template is fine, a second call to the same generic may well
 		# decide every parameter. The sentence says "this call", and without a place there was
 		# no way to tell which one.
-		raise f"E411 the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if c_is_unknown(sol[i])
+		raise f"E411 the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" + c_here(em) if c_is_unknown(sol[i])
 		i = i + 1
 	}
 }
@@ -3913,8 +3913,19 @@ fn c_deeper(mut &em: Emitter) {
 	em.depth = em.depth + 1
 	return if em.depth <= ZG_MAX_NESTING
 
-	place := "\n" + place_line(em.at_path, em.at_line, em.at_col)
-	raise f"E454 this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + place
+	raise f"E454 this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word" + c_here(em)
+}
+
+# c_here is the place trailer for a REFUSAL raised while emitting: the statement the walk is
+# inside, in the one layout place_line owns. It is p_place's opposite number — the parser
+# reports by raising and so does the emitter, so both carry their position inside the
+# message where a checked finding has a Diag line of its own for it.
+#
+# It exists because the expression was written out at each site that wanted it, and a rule
+# reached from six lowering paths would have made that six. The position is per STATEMENT
+# (the SAt marker c_at records), which is the resolution the emitter has.
+fn c_here(mut &em: Emitter) -> str {
+	return "\n" + place_line(em.at_path, em.at_line, em.at_col)
 }
 
 # c_shallower gives back the level c_deeper took.
@@ -8351,7 +8362,22 @@ fn c_chan_check(have: Ty, want: Ty, site: str) {
 # 0 receive, 1 send, 2 close — and each refusal is worded exactly once here, for the six
 # lowering sites that ask: `<-ch`, `ch <- v`, `close(ch)`, both kinds of `select` arm, and
 # `for v in ch`. A seventh gets the wording rather than a paraphrase of it.
-fn c_chan_op_check(t: Ty, op: int) {
+#
+# The FIRST question is whether there is a channel here at all, and it belongs to this
+# function for the same reason the direction rules do. It used to live at exactly one of
+# the six sites — `close(ch)`, worded there, with no code and no place — so the other five
+# asked `ty_chan_elem` for an element type, were handed the `TUnknown` it answers for
+# anything that is not a channel, and carried on. A receive then typed as `TOpt(TUnknown)`,
+# an optional of nothing that `ty_name` spells `?`, and every later sentence was about that
+# `?` rather than about the mistake: `` `??` on a ? ``, `E434 … over a ?`. Where the walk
+# never touched the broken type, the C came out with a carrier struct in a `zrt_chan *`
+# slot and cc rejected generated code nobody wrote.
+#
+# `at` is a place trailer (c_here), from the caller, because this function has the type and
+# only the caller knows which statement wrote it.
+fn c_chan_op_check(t: Ty, op: int, at: str) {
+	raise f"E478 `{c_chan_op_name(op)}` needs a channel, and {ty_name(t)} is not one" + c_chan_op_hint(t) + at if not ty_is_chan(t)
+
 	dir := c_chan_dir(t)
 	if op == 0 and dir == 1 {
 		# the guarantee the send-only end exists for: it cannot receive (steal) values
@@ -8360,6 +8386,28 @@ fn c_chan_op_check(t: Ty, op: int) {
 
 	raise "cannot send on a receive-only " + ty_name(t) if op == 1 and dir == 2
 	raise f"cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" if op == 2 and dir == 2
+}
+
+# c_chan_op_hint is the one shape the rule above can say more about than "that is not a
+# channel". A receive answers `T?` (GRAMMAR group 9), so in `<-(<-cc)` — the nesting the
+# self-recursive GRAMMAR#recv-base derives on its own — the OUTER receive is handed a
+# `chan[int]?`, and what is wrong with that has nothing to do with nesting: the carrier has
+# to be opened in between. It is conditional because saying so to someone who wrote `<-3`
+# would be advice about a program they did not write.
+fn c_chan_op_hint(t: Ty) -> str {
+	return " — a receive answers `T?`, so a receive OF a receive opens the carrier in between: `<-((<-cc)!)`" if ty_is_opt(t) and ty_is_chan(c_carrier_elem(t))
+	return ""
+}
+
+# c_chan_op_name spells the operation `op` numbers, the way the source writes it, so the
+# rule above names what the programmer typed rather than an internal number. A `select`
+# arm is the same two operations and gets the same two spellings; `for v in ch` is a
+# receive, and its own E379 has already said `in` by the time it reaches here.
+fn c_chan_op_name(op: int) -> str {
+	return "<-ch" if op == 0
+	return "ch <- v" if op == 1
+
+	return "close(ch)"
 }
 
 # --- what a direction does to the two reference counts -----------------------------
@@ -8434,7 +8482,7 @@ fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
 	em.used_conc = true
 	cty := c_infer(em, ch)
 
-	c_chan_op_check(cty, 0)
+	c_chan_op_check(cty, 0, c_here(em))
 	elem := ty_chan_elem(cty)
 	return f"{c_recv_helper(em, elem)}({c_expr(em, ch, sb)})"
 }
@@ -8485,7 +8533,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
 	cty := c_infer(em, ch)
-	c_chan_op_check(cty, 1)
+	c_chan_op_check(cty, 1, c_here(em))
 
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
@@ -8613,13 +8661,16 @@ fn c_close(mut &em: Emitter, ch: Expr, at_exit: bool, ind: str) -> str {
 }
 
 # c_close_callee is `close(ch)` as a CALLEE — the runtime function and its one argument —
-# after the two checks a close owes. There is no user symbol behind it: `close` is a
-# keyword, so it cannot be defined, shadowed or overloaded, and the file method `f.close()`
-# is an EMethod that never comes near here.
+# after the checks a close owes. There is no user symbol behind it: `close` is a keyword,
+# so it cannot be defined, shadowed or overloaded, and the file method `f.close()` is an
+# EMethod that never comes near here.
+#
+# BOTH checks are c_chan_op_check's now. "close requires a channel" was written out here,
+# which made this the one operation of the six that knew to ask — and it asked without a
+# code and without a place, so even here the answer was less than the rule deserved.
 fn c_close_callee(mut &em: Emitter, ch: Expr) -> Callee {
 	t := c_infer(em, ch)
-	raise "close requires a channel, found " + ty_name(t) if not ty_is_chan(t)
-	c_chan_op_check(t, 2)
+	c_chan_op_check(t, 2, c_here(em))
 	em.used_rt = true
 	em.used_conc = true
 	mut args: list[Expr] = []
@@ -8697,7 +8748,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 	for a in arms {
 		if a.op == 0 {
 			cty := c_infer(em, a.ch)
-			c_chan_op_check(cty, 0)
+			c_chan_op_check(cty, 0, c_here(em))
 			elem := ty_chan_elem(cty)
 			elems.append(elem)
 			nm := f"zgt_rv{tag}_{idx}"
@@ -8708,7 +8759,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			idx = idx + 1
 		} else if a.op == 1 {
 			cty := c_infer(em, a.ch)
-			c_chan_op_check(cty, 1)
+			c_chan_op_check(cty, 1, c_here(em))
 			elem := ty_chan_elem(cty)
 			elems.append(elem)
 			nm := f"zgt_sv{tag}_{idx}"
@@ -10044,7 +10095,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 # would keep the failure while losing the reason for it.
 fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], ind: str) -> str {
 	em.used_conc = true
-	c_chan_op_check(t, 0)
+	c_chan_op_check(t, 0, c_here(em))
 
 	elem := ty_chan_elem(t)
 	et := c_type(elem)
@@ -10592,7 +10643,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the same missing value written down — including `return if c`, GRAMMAR's bare early
 	# exit, which is only ever legal where a bare `return` is. What is refused is exactly
 	# what would have reached cc, because `c_is_nil_ty` is the predicate c_ret_type asks.
-	raise f"E468 a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + "\n" + place_line(em.at_path, em.at_line, em.at_col) if not c_is_nil_ty(em.fn_ret)
+	raise f"E468 a `return` with no value, in a function declared to answer {ty_name(em.fn_ret)} — every `return` in it has to carry one" + c_here(em) if not c_is_nil_ty(em.fn_ret)
 
 	return f"{pre}{ind}return;\n"
 }

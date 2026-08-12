@@ -189,8 +189,7 @@ The specification uses these terms precisely:
   `StackOverflowError` — see [Errors](code/errors.md)).
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
-  points, each detailed in its chapter, include: the evaluation order of call arguments and operator
-  operands ([Memory Model](core/memory.md) — the spec's intended left-to-right order is **[not yet]** enforced);
+  points, each detailed in its chapter, include:
   the winning arm of a `select` among several ready arms ([Coroutines](code/coroutine.md)); the precision and
   spelling of floating-point rendering ([Format](runtime/format.md)); and any coroutine ordering beyond the
   guaranteed send→receive happens-before ([Coroutines](code/coroutine.md)).

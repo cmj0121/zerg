@@ -108,7 +108,7 @@ own that frame ([FFI](ffi.md)).
 
 ## Process & command execution
 
-**[not yet]** — command literals are recognized by the grammar but **rejected at code generation** this
+**[not yet]** — a command literal is lexed and then **refused by the parser** (`E236`, with no place) this
 phase; the intended model below stands unchanged for when the runtime lands.
 
 A child process is spawned with a **backtick command literal** and observed through the same streams — its

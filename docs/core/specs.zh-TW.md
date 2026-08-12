@@ -276,13 +276,14 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 > **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
 > （見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
-> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
-> 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
+> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: E314 no spec named `Ord`_,也就是
+> 「沒有人寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。**使用**那一側則是被運算子、而不是被
+> spec 擋下:`P(1) < P(2)` 報的是 _E346 operator `<` orders two numbers or two strs, and these are P and P_,
+> 它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個所描述的**行為**是內建的、不經那個
 > spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
 > `chan` 的 refcounted 關閉——但它們由編譯器
-> 擁有,使用者型別加入不了:一個 `struct` 上的 `<` 報的是 _NotImplemented: `<` on a P — an ordering comes from
-> `Ord`, which this compiler does not generate_,不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都
-> 是對著這個缺口所寫的規範。
+> 擁有,使用者型別加入不了——不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都是對著這個缺口
+> 所寫的規範。
 
 其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 

@@ -8,9 +8,9 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
 > `unsafe` context a foreign call sits inside is where it stops: the **block-expression** form is refused by
 > name, with a place (`E224`), and so is a standalone **`unsafe fn`** (`E264`) — which takes the import edge
-> with it. There is no `ffi` module in the shipped standard library, and `import "ffi"` is accepted silently
-> — an import that resolves to nothing is not diagnosed — so the failure arrives later, at the `unsafe` the
-> binding needs. The module-level **group** is the shape that IS built, for its `mut` bindings; what its
+> with it. There is no `ffi` module in the shipped standard library, so `import "ffi"` fails at the import
+> itself — _E502 cannot resolve import `ffi` under any source root_ — rather than later, at the `unsafe` the
+> binding would have needed. The module-level **group** is the shape that IS built, for its `mut` bindings; what its
 > `fn` may do inside is still refused, one operation at a time. On the export edge a `--emit lib` build
 > writes an object and **no header**, and nothing reports which `pub` declarations would have been left out
 > of one. `sizeof` / `alignof`, which this chapter calls a stdlib facility and [Built-ins](builtins.md)

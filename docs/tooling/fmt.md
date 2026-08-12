@@ -871,6 +871,7 @@ shipping compiler rather than a part of it (the line
 | `E484` | the mutable global `…` may not be `pub`                                                     |
 | `E485` | import cycle: `…` -> `…` -> `…`                                                             |
 | `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                     |
+| `E487` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`      |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 | `E503` | cannot receive on a send-only `…`                                                           |

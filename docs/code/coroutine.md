@@ -148,6 +148,12 @@ the death. Nobody can forget now.
 that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
 or agree on a sentinel.
 
+It is the **type** that is refused, not one way of writing it: a parameter, a result, a struct field,
+a typed binding, a `type` declaration, a `chan` nested inside another type and the constructor
+`chan[T?](…)` are all the same type spelled in different places, and every one of them is turned
+away. The same goes for a channel a generic makes — instantiating a `chan[T]` template with an
+optional is refused where the specialization is formed.
+
 Every need falls out of the four operators `T?` already had — the **receiver** chooses:
 
 ```text

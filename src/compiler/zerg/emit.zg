@@ -4146,6 +4146,11 @@ fn c_order_trivial(e: Expr) -> bool {
 # The FIRST operand is not asked about. Nothing is evaluated before it, so whatever it does
 # it does first whichever order the C compiler picks; it is a later operand having an effect
 # that makes the choice visible.
+#
+# That reasoning holds only while every operand is read ONCE, which is the second reason a
+# caller passes 0: `v in lo..hi` names its subject at each bound, so the subject's second
+# reading comes after the bounds and its own effect is what the order shows. c_in_range is the
+# one such form, and it asks from 0 for that reason rather than for the receiver's.
 fn c_needs_order(es: list[Expr], at: int) -> bool {
 	mut i := at
 	for i < es.len() {
@@ -4674,20 +4679,108 @@ fn c_in_eq(at: str, kv: str, elem: Ty) -> str {
 # c_set_says names the set on the right of an `in` for a diagnostic. A RANGE is asked about by
 # SHAPE rather than by type: nothing infers one yet, so asking c_infer answered `?` and the
 # refusal named nothing a reader had written.
+#
+# It names the range's ELEMENT, because a bare "a range" no longer tells a reader anything:
+# `v in lo..hi` is built now, and what is left refused is a range of something the bounds test
+# cannot compare — so the type IS the finding, and the lower bound is what carries it.
 fn c_set_says(mut &em: Emitter, set: Expr) -> str {
 	return match set {
-		Expr.ERange(_, _, _) => "a range"
+		Expr.ERange(lo, _, _) => f"a range of {ty_name(c_infer(em, lo))}"
 		_ => ty_name(c_infer(em, set))
 	}
+}
+
+# c_in_range lowers `v in lo..hi` — GRAMMAR#range makes a range's MEMBERS its set, and
+# membership in a run of numbers is the pair of comparisons its bounds spell: `v >= lo` and
+# `v < hi`, `<=` for the inclusive `..=`, and the lower bound alone for the open `lo..`, which
+# has no upper bound to compare against.
+#
+# THE SUBJECT IS EVALUATED ONCE. The test names `v` at each bound, and `v` is an expression
+# rather than a name — so splicing its lowering in twice does not ask the same question twice,
+# it runs the program's code twice: `f() in 1..10` called `f()` once per bound, and the second
+# call landed AFTER the lower bound, so the count and the order were both wrong. c_ordered
+# binds each operand of the run to a temporary in source order, which is the machinery an
+# argument list and an operator pair already use, and it answers both at once.
+#
+# The trigger is c_needs_order asked from index 0 rather than 1, and that is the whole
+# difference between this form and every other run. The usual rule exempts the FIRST operand
+# because nothing precedes it; here the first operand is the one written twice, so its second
+# reading comes after every bound and any operand that can run code makes the order visible.
+fn c_in_range(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
+	lo := c_range_lo(set)
+	hi := c_range_hi(set)
+	open := c_is_nil_lit(hi)
+
+	# THE RUN IS THE SUBJECT AND ITS BOUNDS, in the order they are written. An absent upper
+	# bound is an open range and is not part of it at all — there is nothing to compare
+	# against and nothing to evaluate.
+	mut run := [x, lo]
+	if not open {
+		run.append(hi)
+	}
+
+	# WHAT C CAN COMPARE, and nothing wider. The lowering below writes C's `>=` and `<`
+	# straight out, so a `str` bound would compare two POINTERS — the silent wrong answer
+	# `"zzz" < "aaa"` was fixed for, arriving by a second route — and an aggregate has no
+	# comparison at all. Refused by name rather than lowered, which is what the rest of `in`
+	# does with a set it cannot read.
+	off := c_in_range_offender(em, run)
+	return c_in_refuse(em, set, f"a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way") if off != ""
+
+	# THE OPERANDS MEET EACH OTHER as the comparisons they are. Writing the C by hand means
+	# nothing else asks whether a subject and a bound are types `>=` relates — an optional, a
+	# `type X = Y`, an int against a float — so the two comparisons are put to the same rule
+	# `a >= b` goes through.
+	chk_binary(em, ">=", c_infer(em, x), c_infer(em, lo), x, lo)
+	if not open {
+		chk_binary(em, c_range_cmp(set), c_infer(em, x), c_infer(em, hi), x, hi)
+	}
+
+	seq := c_needs_order(run, 0)
+	sx := c_ordered(em, seq, c_expr(em, x, sb))
+	slo := c_ordered(em, seq, c_expr(em, lo, sb))
+	return f"(({sx}) >= ({slo}))" if open
+
+	shi := c_ordered(em, seq, c_expr(em, hi, sb))
+	return f"(({sx}) >= ({slo}) && ({sx}) {c_range_cmp(set)} ({shi}))"
+}
+
+# c_range_cmp is the comparison the UPPER bound is made with, which is the only thing `..` and
+# `..=` differ by: an exclusive range stops before its bound and an inclusive one stops on it.
+fn c_range_cmp(set: Expr) -> str {
+	return "<=" if c_range_incl(set)
+
+	return "<"
+}
+
+# c_in_range_offender names the first operand of the bounds test whose type C's `>=` means
+# nothing about, or "" when every one of them is fine. A `str` is compared by `strcmp` and an
+# aggregate is not compared at all, so neither can be spliced into the C the lowering writes.
+fn c_in_range_offender(mut &em: Emitter, run: list[Expr]) -> str {
+	mut i := 0
+	for i < run.len() {
+		t := c_infer(em, run[i])
+		return ty_name(t) if c_is_str(t) or c_is_aggregate(em, t)
+		i = i + 1
+	}
+	return ""
+}
+
+# c_in_refuse is the ONE place `E463` is reported from. Two rules answer with it — a set that
+# is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
+# an identity, so the sentence differs and the identity does not.
+fn c_in_refuse(mut &em: Emitter, set: Expr, why: str) -> str {
+	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}"
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
 #
 # What a set is depends on what names it, and docs/surface/grammar.md gives `in` one rule for
 # all of them: a container names its elements, a range names its members, and an ERROR KIND
-# names itself and everything below it in the taxonomy. A range is the one this compiler does
-# not read, and it is named rather than emitted — a membership test that silently answered
-# about the wrong set would be worse than one that says it is not built.
+# names itself and everything below it in the taxonomy. All three are read here; what is left
+# refused is a set that is none of them, and it is named rather than emitted — a membership
+# test that silently answered about the wrong set would be worse than one that says it is not
+# built.
 #
 # It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
 # reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
@@ -4700,10 +4793,15 @@ fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 	# anything else is asked what its TYPE is so the refusal names the set the reader wrote
 	# rather than the branch that happened to be taken.
 	if kind == 0 {
+		# A RANGE IS ASKED ABOUT BY SHAPE. Nothing infers a range type — a range used as a
+		# VALUE is still refused — so the only range that reaches `in` is one written at the
+		# operator, and c_infer would answer `?` about it.
+		return c_in_range(em, x, set, sb) if c_is_range(set)
+
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
+		return c_in_refuse(em, set, "this compiler reads `in` over a list, a map, a range, or an error kind")
 	}
 
 	t := c_infer(em, x)

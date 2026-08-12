@@ -104,6 +104,30 @@ func (e *emitter) orderOperands(xs []ast.Expr, skip []bool) (string, func()) {
 	if !needsOrdering(xs, skip) {
 		return "", func() {}
 	}
+	return e.materializeOperands(xs, skip)
+}
+
+// orderRepeated is orderOperands for a form that READS an operand more than once, rather
+// than one that merely combines each of them once. `v in lo..hi` is the only such form:
+// the bounds test names `v` at both bounds, so `f() in 1..10` called `f()` twice.
+//
+// The trigger has to be its own, because needsOrdering exempts the FIRST operand — nothing
+// precedes it in an ordinary combining form, so whatever it does it does first. That reason
+// does not hold here: the first operand is the one written twice, and its SECOND reading
+// comes after every bound. So ANY operand that can run code makes the run observable, the
+// subject included.
+func (e *emitter) orderRepeated(xs []ast.Expr) (string, func()) {
+	for _, x := range xs {
+		if x != nil && !orderTrivial(x) {
+			return e.materializeOperands(xs, nil)
+		}
+	}
+	return "", func() {}
+}
+
+// materializeOperands is the work orderOperands and orderRepeated share, with the decision
+// left to the caller: the two differ in WHEN a run is sequenced, never in how.
+func (e *emitter) materializeOperands(xs []ast.Expr, skip []bool) (string, func()) {
 	var b strings.Builder
 	pinned := make([]ast.Expr, 0, len(xs))
 	for i, x := range xs {

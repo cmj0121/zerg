@@ -70,7 +70,7 @@ extracting a function and `return`). The sugar **`break if cond`** / **`continue
 ```text
 for {
     line := <-input ?? break       # drain until the channel closes
-    continue if line.empty()       # skip blank lines
+    continue if line == ""         # skip blank lines
     break if line == "quit"        # stop on a sentinel
 
     handle(line)

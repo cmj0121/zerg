@@ -36,7 +36,7 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 寫入失敗——磁碟滿、broken pipe——是值、以 `?` 傳播；絕不靜默丟棄（那個便利只屬於 `print`）。
 
 ```text
-fn copy_lines(src: Reader, mut dst: Writer) -> Result[nil] {
+fn copy_lines(src: Reader, mut &dst: Writer) -> Result[nil] {
     for line in src.read() {
         dst.write_str(line)?
         dst.write_str("\n")?

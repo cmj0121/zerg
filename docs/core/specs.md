@@ -131,13 +131,19 @@ function values** — one field per method — and a **generic wrap** that turns
 ```zerg
 #[obj]
 spec Draw { fn draw() -> str }
+```
 
-# is:
-struct DrawObj { draw: fn () -> str }
+is:
+
+```zerg
+struct DrawObj { pub draw: fn () -> str }
 fn draw_obj[T: Draw](v: T) -> DrawObj {
     return DrawObj(fn () -> str { return v.draw() })
 }
 ```
+
+Two fences rather than one, because they are two spellings of the same declarations and not a program that
+holds both: writing them together is _E382 `DrawObj` is declared twice_.
 
 **The openness comes from the wrap point**, not from anything at run time: `draw_obj` is monomorphized
 per implementer, and what comes back has one type. So `list[DrawObj]` is heterogeneous with **no vtable,

@@ -39,6 +39,10 @@ invariant above). It lets a spec expose many methods from a small required core;
 **inherits** them or **overrides** one. Every user spec can carry these — this is the **extensible**
 tier.
 
+> **[not yet]** A `spec` member with a **body** is refused at the declaration — _E210 NotImplemented: a
+> `spec` member with a BODY_ — so the block below declares an interface no program can carry today.
+> Declare the signature and write the body in each `impl`; see [Specs & Generics](specs.md).
+
 ```text
 spec Summable {
     fn zero() -> This                       # required
@@ -171,10 +175,10 @@ one should hand-write per type, yet one that needs neither reflection nor a macr
 ```text
 # stdlib specs — behavioral interfaces, field-blind like every spec
 spec Encode {
-    fn encode(mut out: Sink)
+    fn encode(mut &out: Sink)
 }
 spec Decode {
-    fn decode(mut src: Source) -> Result[This]     # This = the reconstructed value
+    fn decode(mut &src: Source) -> Result[This]     # This = the reconstructed value
 }
 
 #[derive(Encode, Decode)]             # the compiler reads User's structure, writes both canonical impls
@@ -191,7 +195,7 @@ walk, each field delegating to **its own** `Encode`:
 
 ```text
 impl Encode for User {                            # generated, not written
-    fn encode(mut out: Sink) {
+    fn encode(mut &out: Sink) {
         out.begin(4)
         out.field("id")
         this.id.encode(out)
@@ -221,7 +225,7 @@ implementation, still no macro:
 
 ```text
 impl Encode for User {                            # replaces the derived one
-    fn encode(mut out: Sink) {
+    fn encode(mut &out: Sink) {
         out.field("uid")
         this.id.encode(out)       # custom key
         out.field("name")

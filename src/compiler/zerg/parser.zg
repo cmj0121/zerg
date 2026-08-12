@@ -1753,7 +1753,13 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			spelled.append(vname)
 		}
 		variants.append(VariantDef(vname, fields, has_discr, discr, vt.line, vt.col))
-		skip_semis(p)
+
+		# GRAMMAR#variant-list is `variant ( stmt-sep+ variant )*` — the same shape as a
+		# statement list, so the separator is REQUIRED and p_stmt_sep is the rule that says
+		# so. skip_semis skipped one when there was one and said nothing when there was not,
+		# which made `enum Shape { Dot Line }` two variants written as though they were one
+		# thing, accepted in silence.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 
@@ -1816,7 +1822,10 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 			has_def = true
 		}
 		fields.append(FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col))
-		skip_semis(p)
+
+		# GRAMMAR#field-list is `field ( stmt-sep+ field )*` — the separator is REQUIRED,
+		# the same rule the variant list states above and for the same reason.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 	return StructDecl(name, fields, p.path)
@@ -1836,7 +1845,14 @@ fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		parse_deco_item(p, pending)
 		break if not p_at(p, Kind.Comma)
+		ct := cur(p)
 		p_advance(p)
+
+		# GRAMMAR#decorator writes the comma BETWEEN items and derives none before the `]`,
+		# the same rule every other comma list here states.
+		if p_at(p, Kind.RBrack) {
+			p_trailing_comma(p, "a decorator", "]", ct.line, ct.col)
+		}
 	}
 	expect(p, Kind.RBrack)
 }
@@ -3439,8 +3455,16 @@ fn parse_arm(mut &p: Parser) -> Arm {
 				p_advance(p)
 				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 					binds.append(p_name(p, "a pattern binding"))
-					if p_at(p, Kind.Comma) {
-						p_advance(p)
+
+					# the comma is REQUIRED between patterns and absent before the `)`
+					# (GRAMMAR#pattern-list) — see parse_ty_args for what an optional one
+					# silently accepted.
+					if not p_at(p, Kind.RParen) {
+						ct := cur(p)
+						expect(p, Kind.Comma)
+						if p_at(p, Kind.RParen) {
+							p_trailing_comma(p, "a pattern list", ")", ct.line, ct.col)
+						}
 					}
 				}
 				expect(p, Kind.RParen)

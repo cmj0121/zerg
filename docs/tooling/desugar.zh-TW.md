@@ -160,7 +160,7 @@ statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 gu
 | `for select { … }`          | 第四種 head,不是條件                                     |
 | `for i in 0..`              | 沒有上界可數;編譯器會拒絕它,所以這裡留給編譯器拒絕       |
 | 帶註解的 guard              | 一行變四行,沒地方安置寫在行尾的註記                      |
-| `lo..=hi =>`(range arm)     | 它的 core 形式 `_ if _ in lo..=hi` 建不起來(見下)        |
+| `lo..=hi =>`(range arm)     | 還沒有人為它寫規則;它的 core 形式現在建得起來(見下)      |
 | `with` / `if x := e` / `?`  | 需要型別,或需要這個編譯器還沒有的 core 形式              |
 | `??` / `?.` / `!` / `print` | 同上                                                     |
 
@@ -168,10 +168,10 @@ statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 gu
 數迴圈、channel 是 receive、map 依插入順序走 key、str 變成它的 code point、list 走 runtime 的索引——而 token pass
 沒有任何東西能告訴它是哪一種。改寫成索引迴圈對 list 是對的、對 map 是錯的,所以它 decline。
 
-**range arm** 是另一種、也更尖銳的 decline。`GRAMMAR` 說 `200..300 =>` 是 guard `_ if _ in 200..300` 的 sugar,而
-那個 guard **編不過**:`in` 用在 range 上是這個編譯器點名為尚未實作的形式。所以目前 sugar 是唯一能動的寫法——與
-[`F408`](fmt.zh-TW.md) 描述的是同一件事的另一面,在那裡改寫正是把一個拒絕變成能動的程式碼。一道 desugar 只能在它的
-core 形式存在時被檢查。
+**range arm** 是另一種 decline。`GRAMMAR` 說 `200..300 =>` 是 guard `_ if _ in 200..300` 的 sugar,而那個 guard
+曾經就是理由:`in` 用在 range 上尚未實作,於是 sugar 是唯一能動的寫法,而一道 desugar 只能在它的 core 形式存在時被
+檢查。**那個 core 形式現在建得起來**——`_ if _ in 200..300 => …` 編得過也比對得到——所以剩下的是「還沒有人寫這條
+規則」,而不是「沒有東西檢查得了」。這個 arm 會原樣通過。
 
 ## Gate
 

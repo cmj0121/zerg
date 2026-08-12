@@ -35,6 +35,10 @@ provided method 是**寫在 `this` 上其他 method 之上的 default body**，�
 不變式）。它讓一個 spec 只靠很小的 required 核心，就導出許多 method；實作者可以**繼承**、也可以**覆寫**
 其中一個。每個使用者 spec 都能帶這種 default——這就是**可擴充**的那一層。
 
+> **[not yet]** 帶 **body** 的 `spec` 成員在宣告處就被拒絕——_E210 NotImplemented: a `spec` member with a
+> BODY_——所以下面這段宣告的是一個今天沒有程式載得動的介面。把簽章宣告出來、body 寫在每個 `impl` 裡;見
+> [Spec 與 Generics](specs.zh-TW.md)。
+
 ```text
 spec Summable {
     fn zero() -> This                       # required
@@ -73,7 +77,7 @@ behavioral default；結構這一層是封閉的。
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
 **沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet: Phase 2]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
+**`Decode`** 在此規範、但 **[not yet]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
 
 > **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並會被指名拒絕。它的規則需要同時比對
 > 兩側的 tag **與** payload;無欄位的 `enum` 可以 derive,因為它的 variant 差異恰好就是 discriminant 的差異。
@@ -115,7 +119,7 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 ## Serialization——完整範例
 
-> **[not yet: Phase 2]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
+> **[not yet]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
 > 今天 `#[derive(Encode, Decode)]` 是編譯錯誤,因為這個 compiler 唯一會寫出的 derive 是 `Eq`。以下範例展示的是
 > 結構化 derive **意圖中**的樣貌。
 
@@ -125,10 +129,10 @@ serialization 正是 structural derive 存在的目的：一種機械式、逐�
 ```text
 # stdlib spec——behavioral 介面，與每個 spec 一樣 field-blind
 spec Encode {
-    fn encode(mut out: Sink)
+    fn encode(mut &out: Sink)
 }
 spec Decode {
-    fn decode(mut src: Source) -> Result[This]     # This = 重建出的值
+    fn decode(mut &src: Source) -> Result[This]     # This = 重建出的值
 }
 
 #[derive(Encode, Decode)]             # compiler 讀 User 的結構，寫出兩份 canonical impl
@@ -145,7 +149,7 @@ compiler 生成的內容——概念示意，你永遠不會寫、也看不到�
 
 ```text
 impl Encode for User {                            # 生成，非手寫
-    fn encode(mut out: Sink) {
+    fn encode(mut &out: Sink) {
         out.begin(4)
         out.field("id")
         this.id.encode(out)
@@ -174,7 +178,7 @@ enum Shape {
 
 ```text
 impl Encode for User {                            # 取代 derive 出的那份
-    fn encode(mut out: Sink) {
+    fn encode(mut &out: Sink) {
         out.field("uid")
         this.id.encode(out)       # 自訂 key
         out.field("name")

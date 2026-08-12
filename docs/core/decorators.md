@@ -50,10 +50,11 @@ is a "not yet supported" **compile error**, never a silent no-op:
   [Values & Memory](memory.md)). **[not yet]**
 
 > **[deviation]** The compiler does not distinguish a **recognized** decorator from an **unknown** one. Every
-> `#[…]` other than `#[derive]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[test]` and
-> the misspelled `#[frobnicate]` all get the same sentence — _NotImplemented: the decorator `#[X]` — this
-> compiler reads `#[derive(…)]` and no other_. Every one of them is refused, so nothing is silently dropped
-> and nothing miscompiles; what is lost is the distinction this section and **Reserved** below are built on.
+> `#[…]` other than `#[derive]` and `#[obj]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[test]`
+> and the misspelled `#[frobnicate]` all get the same sentence — _E217 NotImplemented: the decorator `#[X]`
+> — this compiler reads `#[derive(…)]` and `#[obj]`, and no other_. Every one of them is refused, so nothing
+> is silently dropped and nothing miscompiles; what is lost is the distinction this section and **Reserved**
+> below are built on.
 > A typo is reported as though it were a reserved name awaiting implementation, and the promise that an
 > unknown decorator is an error the reader can tell apart from a not-yet-supported one is not kept.
 

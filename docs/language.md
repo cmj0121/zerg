@@ -13,7 +13,7 @@ feature carries a **status marker** that flags the gap between the language and 
 
 | Marker                       | Meaning                                                           |
 | ---------------------------- | ----------------------------------------------------------------- |
-| **[not yet: Phase N]**       | Specified, not yet built; using it is a clean compile error.      |
+| **[not yet]**                | Specified, not yet built; using it is a clean compile error.      |
 | **[implementation-defined]** | The spec does not pin this; a conforming implementation chooses.  |
 | **[deviation]**              | The bootstrap's current behavior does not match the spec (a bug). |
 
@@ -171,8 +171,10 @@ see [Coroutines & Channels](code/coroutine.md)).
 Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication;
 `Ref[T]` is its resource-holding sibling — see [Values & Memory](core/memory.md)) — payloads copied,
 **auto-closed** when their last sender leaves — or ended early by the channel-only statement
-**`close(ch)`** — received as **`Result[T]`** (`Right` = closed, carrying a crash `Err` or the
-`StopIteration` sentinel), and multiplexed with **`select`**.
+**`close(ch)`** — and multiplexed with **`select`**. A receive answers **`T?`**: the stream **ending** is
+an absence, so a drained channel gives `nil` and gives it every time after; a producer **dying** is a
+failure, so it is **raised** at the receive carrying that producer's own `Err`. The two endings never
+arrive by the same route, which is why `chan[T?]` is refused — `nil` would have to mean both.
 
 The full model — buffering, receive/close semantics, directional ends, `select`, timers, and deadlock —
 is the **[Coroutines & Channels](code/coroutine.md)** reference.

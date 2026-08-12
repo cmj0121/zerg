@@ -12,6 +12,11 @@ zerg desugar --check <file.zg>...      # 回報哪些還不是 core 形式,不�
 zerg desugar --off D103 <file.zg>...   # 放過某一條規則(可重複)
 ```
 
+> **[deviation]** `--check` 回答的問題比它問的更寬。它拿檔案去比對 `zerg desugar` **會寫出來**的東西,而那個東西
+> 是 canonical 格式化過的 core——所以一個完全沒有糖的檔案,只要空白不是 `zerg fmt` 會產出的樣子,照樣會失敗,而且
+> 失敗時說的是 _still holds sugar (run `zerg desugar`)_。四格縮排的 `fn main() { x := 1; print x }` 就是整份重現。
+> exit status 對「這個檔案會被改動」而言是對的,那句話對「為什麼」而言是錯的。
+
 ## 為什麼需要它
 
 [`GRAMMAR`](../../GRAMMAR) 把好幾個 surface form **定義成**別的東西。`return x if c` 就是
@@ -93,8 +98,8 @@ statement。
 ### `D103`——range-`for` 變回無限 `for`
 
 ```zerg
-for i in 0..3 {                  zgd_hi7c2 := 3
-    print i              →       mut zgd_i7c2 := 0
+for i in 0..3 {                  mut zgd_i7c2 := 0
+    print i              →       zgd_hi7c2 := 3
 }                                for {
                                      if zgd_i7c2 >= zgd_hi7c2 {
                                          break
@@ -105,8 +110,9 @@ for i in 0..3 {                  zgd_hi7c2 := 3
                                  }
 ```
 
-上界會被**提出來且只求值一次**,而且排在初始值之前,這是 `c_forrange` 計算它們的順序。每次迭代都重新求值的上界會是
-另一個意思的迴圈,而 `for i in 0..f()` 就是它現形的地方。
+上界會被**提出來且只求值一次**,而且排在初始值**之後**——兩個界依它們被寫下的順序計算,那既是 `c_forrange` 計算
+它們的順序,也是這個語言其他每一份 operand 清單如今的求值順序。每次迭代都重新求值的上界會是另一個意思的迴圈,而
+`for i in f()..g()` 就是這兩件事一起現形的地方。
 
 這些 binding 以它們來自的那個 `for` 的**行與欄**命名,所以同一個函式裡的兩個迴圈不可能撞名,而名字本身說明了它從哪
 來。它們被提到外層 scope 而不是包進自己的 block,因為裸的 `{ … }` statement 是這個編譯器拒絕的形式。
@@ -154,7 +160,7 @@ statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 gu
 | `for select { … }`          | 第四種 head,不是條件                                     |
 | `for i in 0..`              | 沒有上界可數;編譯器會拒絕它,所以這裡留給編譯器拒絕       |
 | 帶註解的 guard              | 一行變四行,沒地方安置寫在行尾的註記                      |
-| `lo..=hi =>`(range arm)     | 它的 core 形式 `_ if _ in lo..=hi` 建不起來(見下)        |
+| `lo..=hi =>`(range arm)     | 還沒有人為它寫規則;它的 core 形式現在建得起來(見下)      |
 | `with` / `if x := e` / `?`  | 需要型別,或需要這個編譯器還沒有的 core 形式              |
 | `??` / `?.` / `!` / `print` | 同上                                                     |
 
@@ -162,10 +168,10 @@ statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 gu
 數迴圈、channel 是 receive、map 依插入順序走 key、str 變成它的 code point、list 走 runtime 的索引——而 token pass
 沒有任何東西能告訴它是哪一種。改寫成索引迴圈對 list 是對的、對 map 是錯的,所以它 decline。
 
-**range arm** 是另一種、也更尖銳的 decline。`GRAMMAR` 說 `200..300 =>` 是 guard `_ if _ in 200..300` 的 sugar,而
-那個 guard **編不過**:`in` 用在 range 上是這個編譯器點名為尚未實作的形式。所以目前 sugar 是唯一能動的寫法——與
-[`F408`](fmt.zh-TW.md) 描述的是同一件事的另一面,在那裡改寫正是把一個拒絕變成能動的程式碼。一道 desugar 只能在它的
-core 形式存在時被檢查。
+**range arm** 是另一種 decline。`GRAMMAR` 說 `200..300 =>` 是 guard `_ if _ in 200..300` 的 sugar,而那個 guard
+曾經就是理由:`in` 用在 range 上尚未實作,於是 sugar 是唯一能動的寫法,而一道 desugar 只能在它的 core 形式存在時被
+檢查。**那個 core 形式現在建得起來**——`_ if _ in 200..300 => …` 編得過也比對得到——所以剩下的是「還沒有人寫這條
+規則」,而不是「沒有東西檢查得了」。這個 arm 會原樣通過。
 
 ## Gate
 

@@ -44,8 +44,8 @@
 [型別](../core/types.zh-TW.md)。
 
 > **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
-> `i32(5)` 回報的是 _undefined function `i32`_——一個普通的未解析名稱，而不是說明「這個形式尚未建置」的拒絕，
-> 這是本章唯一一處契約在結果上成立、在措辭上不成立的地方。上面點名的六個都可用，`uint(-1)` 也確實以
+> 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E465 NotImplemented: `i32` is part of the fixed-width
+> ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用，`uint(-1)` 也確實以
 > _OverflowError: integer conversion out of range_ abort，與規格一致。
 
 ## 解析字串（Parsing a string）
@@ -89,11 +89,10 @@
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 全部都沒有建，而拒絕訊息對此是誠實的——_NotImplemented: the raw-pointer built-in `addr` —
+> **[not yet]** 全部都沒有建，而拒絕訊息對此是誠實的——_E413 NotImplemented: the raw-pointer built-in `addr` —
 > bare-metal memory access, which is `unsafe`-only and not built here_，以及 _NotImplemented: `ptr` is not an
-> expression this compiler reads_。在**型別**位置措辭較弱：`fn f(p: ptr)` 回報 _no type named `ptr`_，而
-> `p: ptr = 0` 回報 _cannot bind int to a ptr binding_，讀起來像是 `ptr` 是個既有型別、只是值不合。它們所需的
-> `unsafe` 情境本身也還沒建。
+> expression this compiler reads_。**型別**位置如今答的是同一個 `E413`:`fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個
+> raw-pointer 內建,而不再讀起來像是 `ptr` 是個既有型別、只是值不合。它們所需的 `unsafe` 情境本身也還沒建。
 
 ## `sizeof` / `alignof`
 

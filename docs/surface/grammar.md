@@ -752,10 +752,11 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   is **module-private** (never `pub`). Prefer the **safe** alternative — an immutable `:=` holding a stdlib
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
-  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** — it needs
-  `Ref[T]`, for
-  **`Atomic[int]`** with **sequential consistency**; the **memory-ordering argument** and a **generic
-  `Atomic[T]`** are **[not yet]**.
+  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** in full: the
+  bundled `atomic` module declares `pub struct Atomic[T]`, a generic struct is unbuilt, and so `import
+"atomic"` on its own reports _E215 NotImplemented: a generic struct `Atomic[…]`_. Neither `Atomic[int]`,
+  the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
+  intended `Atomic[int]` with sequential consistency rests on — is `E446`.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as

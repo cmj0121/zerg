@@ -189,6 +189,14 @@ its own value.
 > `undefined function`. Files share one namespace in every module that is reached by an `import`; the
 > module rooted at the entry file is the exception.
 >
+> ---
+>
+> **[deviation]** A **single file** is importable as a module. `import "sib"` beside a `sib.zg` resolves
+> to that one file and its `pub` names, though a module is a directory here and `E502`'s own sentence says
+> so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
+> import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
+> denies the second exists.
+>
 > **[deviation]** **Import cycles are not rejected.** Two modules that import each other compile and run.
 > Nothing detects the cycle, at either layer.
 

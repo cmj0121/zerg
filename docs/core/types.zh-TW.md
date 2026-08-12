@@ -22,6 +22,13 @@
 `nil` 不是一個自己的型別——它是 `T?` 的 placeholder 值（[Null-safety 與錯誤處理](../code/errors.zh-TW.md));
 而 `str` 在記憶體裡以 NUL 結尾,是 C 邊界的事（[FFI](../runtime/ffi.zh-TW.md)),不是這個型別的性質。
 
+有兩種形式會**答出 `nil`**、而它們的外表看不出來:沒有 `-> type` 的 `fn`（`GRAMMAR#fn-decl`),以及最後一個
+statement 不是 expression、或根本沒有 statement 的 **block**（`GRAMMAR#block`）。它們答出來的是一個「不存在」,
+而**不存在不是任何位置握得住的值**——它沒有寬度、沒有儲存、也沒有 rendering。所以 `x := f()` 與 `z := { nop }`
+會被帶位置拒絕,`print f()`、f-string 的 `{f()}` 與 `str(f())` 也一樣;由它組成的**容器**同樣如此:`[f()]` 與
+`(f(), 1)` 往下一層仍然是儲存。真正接受「不存在」的位置是 `T?`,也就是 `z: int? = { nop }` 寫的那件事——一個
+carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md)說「位置可以 wrap」的那條規則。
+
 > **[not yet]** `zerg` 沒有固定寬度階梯的任何一部分:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib
 > 型別,而沒有任何 stdlib 宣告過其中一個。它是**具名**被拒的——一個寬度不過是普通的 identifier、不是關鍵字,所以
 > 拒絕曾經是 _undefined function `i32`_,任何拼錯的呼叫都會拿到的那句話,讀者被告知的是自己的名字不存在。**seed**

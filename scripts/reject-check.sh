@@ -3406,6 +3406,9 @@ fn main() {
 	y: int? = 5
 	x: str? = y
 	print y ?? 0
+}
+EOF
+
 # --- a channel operation needs a channel --------------------------------------------
 #
 # `<-x`, `x <- v`, `close(x)` and a `select` arm all name an END of a channel, and the
@@ -4394,6 +4397,10 @@ fn main() {
 	print match n {
 		lo..10 => "in"
 		_      => "out"
+	}
+}
+EOF
+
 # --- the forms GRAMMAR does not derive --------------------------------------------------
 #
 # A production is a contract about what the language HAS, and a parser that reads past it
@@ -4503,6 +4510,10 @@ fn main() {
 	print match n {
 		lo()..10 => "in"
 		_        => "out"
+	}
+}
+EOF
+
 reject a-brace-opening-for-head E290 'the start of a `for` head' <<'EOF'
 fn main() {
 	for {"a": 1}.len() == 1 {

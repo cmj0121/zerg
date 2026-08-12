@@ -1513,10 +1513,26 @@ fn c_fold_initializer(mut &em: Emitter, is_mut: bool, ival: Expr) -> Folded {
 }
 
 fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool, is_const: bool) {
+	c_add_var_named(em, name, t, c_fresh_cname(em, name), is_mut, is_const)
+}
+
+# c_add_var_named is c_add_var for a binding whose C NAME was decided by whoever is making
+# it, rather than minted here — a `select` arm's receive binding is the one such site, since
+# the value is already sitting in the per-arm temp the wait wrote it into.
+#
+# It exists because that site was writing the environment's columns BY HAND, and a row
+# written by hand is a row that can be the wrong shape. It was: seven of the eight columns
+# were appended and `env_cval` was not, so from the first receive binding onwards every
+# later binding's index into `env_names` pointed one row too far into `env_cval` — and
+# `chk_fold_name` reads that column by exactly that index. A program with a `select` in it
+# folded a range bound to the NEXT binding's value and matched against a number written
+# nowhere, silently. It also skipped the two rules every other binder passes (E356, E481).
+#
+# The columns are appended in ONE place now, so the count cannot drift again.
+fn c_add_var_named(mut &em: Emitter, name: str, t: Ty, cname: str, is_mut: bool, is_const: bool) {
 	chk_const_rebind(em, name)
 	c_no_shadow_sub(em, name)
 
-	cname := c_fresh_cname(em, name)
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
@@ -9181,14 +9197,12 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 
 			# bound right before the body, not up front: every recv arm may call its
 			# variable `v`, and one environment entry per arm would leave each body
-			# reading the last one's
-			em.env_names.append(a.bind)
-			em.env_tys.append(elem)
-			em.env_cnames.append(f"zgt_rv{tag}_{k - 1}")
-			em.env_dead.append(0)
-			em.env_mut.append(false)
-			em.env_scope.append(em.scope_cur)
-			em.env_const.append(false)
+			# reading the last one's.
+			#
+			# THROUGH THE FUNNEL, with the C name given rather than minted — the value is
+			# already in this arm's receive temp. Writing the columns out here instead is
+			# what left `env_cval` one row short of the rest (c_add_var_named).
+			c_add_var_named(em, a.bind, elem, f"zgt_rv{tag}_{k - 1}", false, false)
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")

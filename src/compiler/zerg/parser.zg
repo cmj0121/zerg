@@ -2956,16 +2956,11 @@ fn parse_arm(mut &p: Parser) -> Arm {
 
 		if name == "_" {
 			pat = 2
-		} else if is_pascal(name) {
-			# A VARIANT IS NAMED BY ITS ENUM, always (GRAMMAR#variant-pat). A bare name here
-			# was read as a constructor pattern because it started with a capital, which made
-			# the arm's meaning a NAMING CONVENTION: rename the binding `Value` to `value` and
-			# the same arm stops matching a variant and starts binding the subject. The other
-			# direction is worse — an enum that gains a variant silently turns an existing
-			# binding arm into a constructor one, and nothing about the program changed.
-			raise f"E274 `{name}` is a variant of some enum, and a pattern names one through its enum — write `Enum.{name}`" if not qualified
-
-			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`
+		} else if qualified or p_at(p, Kind.LParen) {
+			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`. What makes it
+			# one is the SHAPE — a qualifier, or a payload list — and not the capital the name
+			# happens to start with. Which enum it belongs to is the emitter's question, and
+			# `c_check_arm_pats` already asks it of every constructor pattern.
 			pat = 3
 			ctor = name
 			if p_at(p, Kind.LParen) {
@@ -2979,6 +2974,23 @@ fn parse_arm(mut &p: Parser) -> Arm {
 				expect(p, Kind.RParen)
 			}
 		} else {
+			# A BARE NAME IN PATTERN POSITION IS ALWAYS A FRESH BINDING (GRAMMAR#pattern), and
+			# nothing here has to be resolved to be parsed. It used to be a constructor pattern
+			# when it started with a capital, which made an arm's meaning a NAMING CONVENTION:
+			# rename the binding `Value` to `value` and the same arm stopped matching a variant
+			# and started binding the subject.
+			#
+			# The rule that stood here — E274, "`{name}` is a variant of some enum" — could not
+			# be true, because the parser has resolved nothing and knows of no enum: it fired
+			# on a program that declared none, and named an enum that did not exist. It is
+			# retired rather than moved, because moving it to where the enums ARE known would
+			# put a program's legality back under an unrelated declaration — an enum gaining a
+			# variant would turn a working binding arm elsewhere into an error, which is the
+			# same file-order coupling GRAMMAR retired the bare-variant form to be rid of.
+			#
+			# What guards the mistake it was aimed at — `match c { Red => …  Green => … }`,
+			# meaning two variants and getting one catch-all — is E458 in the emitter: a
+			# binding arm covers everything, so any arm after it is unreachable and said so.
 			pat = 1
 			bind = name
 		}

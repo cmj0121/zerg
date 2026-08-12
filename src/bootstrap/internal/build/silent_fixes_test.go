@@ -86,7 +86,7 @@ func TestEnumExplicitDiscriminantRoundTrip(t *testing.T) {
 	}
 	src := "enum C { Red = 1; Green; Blue = 10 }\n" +
 		"fn tag(x: C) -> int {\n" +
-		"\treturn match x {\n\t\tRed => 100\n\t\tGreen => 200\n\t\tBlue => 300\n\t}\n" +
+		"\treturn match x {\n\t\tC.Red => 100\n\t\tC.Green => 200\n\t\tC.Blue => 300\n\t}\n" +
 		"}\n" +
 		"fn main() {\n\tprint tag(Red)\n\tprint tag(Green)\n\tprint tag(Blue)\n}\n"
 	code, _, diags := Compile(src)

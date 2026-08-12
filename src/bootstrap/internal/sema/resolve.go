@@ -32,9 +32,11 @@ type BracketRes struct {
 type NameResKind int
 
 const (
-	// NameBinding is a fresh binding: the name matched no variant in scope.
+	// NameBinding is a fresh binding, which every BARE name in pattern position is.
 	NameBinding NameResKind = iota
-	// NameVariant is a nullary variant pattern: the name resolved to a variant.
+	// NameVariant is a nullary variant pattern: the name was QUALIFIED and its enum
+	// declares it. A derived match's arms are registered as this directly (derive.go),
+	// where the variant is known because the checker chose it rather than read it.
 	NameVariant
 )
 
@@ -147,8 +149,9 @@ func (r *resolver) collectEnum(n *ast.EnumDecl) {
 		}
 	}
 	r.declareSurface(&Symbol{Name: n.Name, Kind: SymType, Pub: n.Pub, Span: n.Span(), Decl: n, TypeDef: def})
-	// Variants live in the value namespace: a callable constructor and a name
-	// usable in pattern position. A nullary variant settles a bare NamePattern.
+	// Variants live in the value namespace: a callable constructor, and the name a
+	// QUALIFIED pattern resolves through. A bare one in pattern position never reaches
+	// this table — it binds (GRAMMAR#pattern).
 	for _, v := range n.Variants {
 		vd := &types.VariantDef{Name: v.Name}
 		for range v.Payload {
@@ -443,8 +446,8 @@ func (r *resolver) resolveSelect(n *ast.SelectStmt) {
 // declareBindTarget declares every leaf name of a destructuring bind target as a
 // fresh binding (GRAMMAR bind-target): a tuple/struct pattern's leaves are names or
 // nested tuple/struct patterns, and a struct shorthand '{x}' binds the field name x.
-// Unlike a match pattern, a bind-target leaf is always a fresh binding (never a
-// nullary variant).
+// A bind-target leaf is a NAME and nothing else — there is no qualified form here to
+// tell apart, so it needs none of resolveNamePattern's reading.
 func (r *resolver) declareBindTarget(pat ast.Pattern, mut, konst bool) {
 	kind := SymVar
 	if konst {
@@ -769,13 +772,26 @@ func (r *resolver) resolvePattern(p ast.Pattern) {
 	}
 }
 
-// resolveNamePattern settles a bare-name pattern (DESIGN-1b §2.3, GRAMMAR group
-// 6): a name that resolves to a variant in scope is a nullary variant pattern;
-// otherwise it is a fresh binding declared in the arm scope.
+// resolveNamePattern settles a name pattern (GRAMMAR#pattern). A QUALIFIED one —
+// 'Color.Red' — names a nullary variant, and a BARE one is a fresh binding declared in
+// the arm scope, always, whatever else the name means in scope.
+//
+// The bare case used to be looked up first, and a name that happened to match a variant
+// became a variant pattern. That is the coupling GRAMMAR names and rejects: declaring a
+// variant in one file silently changed what a pattern in another file matched, and two
+// enums that each declare a 'Red' could not both have it. It also made the arm's meaning
+// a naming convention in the shipping compiler, which read the same fork off the leading
+// CAPITAL and refused a bare capitalized binding outright.
+//
+// Nothing is lost by the mistake this used to absorb: 'match c { Red => …  Green => … }'
+// now binds on its first arm, so every arm below it is unreachable and checkUnreachable
+// says so, which is a diagnostic rather than a silently different program.
 func (r *resolver) resolveNamePattern(pat *ast.NamePattern) {
-	if sym := r.scope.lookup(pat.Name); sym != nil && sym.Kind == SymVariant {
-		r.info.Patterns[pat] = NameRes{Kind: NameVariant, Variant: sym.Variant}
-		return
+	if pat.Qualified {
+		if sym := r.scope.lookup(pat.Name); sym != nil && sym.Kind == SymVariant {
+			r.info.Patterns[pat] = NameRes{Kind: NameVariant, Variant: sym.Variant}
+			return
+		}
 	}
 	sym := &Symbol{Name: pat.Name, Kind: SymVar, Span: pat.Span(), Type: types.Unknown}
 	r.declareBinding(sym)

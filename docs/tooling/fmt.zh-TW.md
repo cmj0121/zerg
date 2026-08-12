@@ -306,6 +306,11 @@ y := sum(sum(1, 2), 3)
 寬度才是真正的判準，而數量是給寬度看不見的情況留的保險：六個引數不論多短，都是一份要用掃的
 清單，而不是一行要用讀的程式。
 
+> **[deviation]** 被這個 pass **放過**的群組會留著它的尾逗號,而之後也沒有別人反對。`x := sum( # before`
+> 底下接著 `1,` / `2,` 時,開頭那行帶著註解,於是 `F403` 讓群組保持斷開——而 `zerg fmt --check` 會說這個檔案
+> 是 canonical、exit 0,`zerg build` 卻用 _E289 a trailing comma before the closing `)` of an argument list_
+> 拒絕同一個檔案。一個為編譯器不收的檔案背書的 formatter,比一個把它重排掉的還糟,因為那張背書就是它的全部意義。
+
 兩條門檻都**不會下令**斷行，這是刻意的。這個 pass 一次只看到一個群組，而不是整行，所以跨過第
 80 欄的是那行**最後**一個群組，而不是值得斷開的那個——在 `return 0 if a or b or c(x, y)` 裡
 那是 `c`，它的兩個引數會被攤成三行，而真正讓這行變長、又沒有括號可斷的那個條件，卻原封不動。
@@ -903,14 +908,23 @@ coroutine 拿到的是同一條 channel 的另一個 handle，之後送出的東
 
 ### `L4xx` —— 解析
 
-| 代碼   | 規則                            |
-| ------ | ------------------------------- |
-| `L402` | 從不透過 `this` 寫入的 `mut fn` |
+| 代碼   | 規則                                                         |
+| ------ | ------------------------------------------------------------ |
+| `L401` | 兩個 enum 都宣告的同一個 variant 名（**[deviation]**，見下） |
+| `L402` | 從不透過 `this` 寫入的 `mut fn`                              |
 
-`L401` 曾在這裡,現已**退休**。它報的是兩個 enum 都宣告的同一個 variant 名:裸名字解析到 variant 時取的是
+`L401` 曾被**退休,而它仍在發**。它報的是兩個 enum 都宣告的同一個 variant 名:裸名字解析到 variant 時取的是
 **第一個**宣告,`c := Red` 就成了由宣告順序決定的擲硬幣。現在 variant 一律由它的 enum 指名
-（見[文法](../surface/grammar.zh-TW.md)）,所以 `Red` 單獨一個什麼都沒指名,兩份宣告也就不會相爭——這條 lint
-的整個對象是文法不再 derive 的形式。這個號碼不再重用。
+（見[文法](../surface/grammar.zh-TW.md)）,所以 `Red` 單獨一個什麼都沒指名——`c := Red` 是
+_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_——兩份宣告也就不會為一個裸名字
+相爭。
+
+> **[deviation]** `zerg lint` 仍然跑這條規則,所以兩個 enum 共用一個 variant 名時會拿到
+> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to `Colour` by
+> declaration order alone — name it `Signal.Red` where you mean this one_。這句話的兩半如今都是假的:裸 `Red`
+> 什麼都解析不到,而 `Signal.Red` 正是編譯器唯一不收的那個寫法(`E457`——見[型別](../core/types.zh-TW.md),
+> 那條拒絕自己就是一條 deviation)。沒有東西抓得到它,因為 `error-codes-check` 只把 `E` 碼和原始碼、gate 與這張
+> 表對起來,完全不讀 `L` 碼。
 
 `mut fn` 不是提示:它讓 receiver 變成 `mut &`,所以**每一個**呼叫端都得把實例放在 `mut` 綁定裡。一個只讀的
 method 讓呼叫端付這個代價卻什麼也沒回報 —— 而他們看不出原因,因為簽章就是全部的契約,而 `mut fn` 就是它說的

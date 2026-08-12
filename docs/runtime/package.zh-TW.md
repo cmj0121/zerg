@@ -77,21 +77,18 @@ _these constants depend on each other and none can be given a value first_。
 序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。每個 `init()` **恰好一次、依 FIFO
 順序、在 `main` 之前**執行。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
 藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
-channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`。
+channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
+**裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
 
 若某個 `init()` **abort**,該 abort 從觸發它的**首次使用點**往外傳——可在那裡用 `guard` 接住,否則就像任何未接的
 abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自己)。該 module 於是**中毒(poisoned)**:`init()`
 **不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
 半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
 
-> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，順序是
-> 整個程式的宣告序，而不是在擁有它的那個 module 首次被使用時。「恰好一次」與 module 內 FIFO 成立；「首次被使用時」
-> 不成立——所以一個執行從未碰到的 module，它的 `init()` 照樣會跑。
->
-> **[deviation]** 兩個各自宣告 `init()` 的 module 會讓建置**壞在 `cc` 裡**。壓平後的命名空間發出兩個
-> `zg_init__0`,而 entry 翻譯單元呼叫了一個它沒見過的——_error: call to undeclared function 'zg_init\_\_0'_,
-> 報在沒人寫過的產生碼上。那正是總則明文禁止的結局,所以它是一個欠著修的 bug、而不是一筆有帳的債:這個形式
-> 既沒有被下降、也沒有被具名拒絕。因此跨 module 的初始化**順序**目前沒有任何程式觀察得到。
+> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，而不是
+> 在擁有它的那個 module 首次被使用時。「恰好一次」成立，順序也成立：一個 module 的 imports 先備妥，然後才輪到它
+> 自己，而它自己的各個區塊依 FIFO 執行。不成立的是「首次被使用時」——一個執行從未碰到的 module，它的 `init()`
+> 照樣會跑。
 >
 > **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
 > 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
@@ -132,7 +129,9 @@ belong to whoever declared them, and an impl belongs with one of the two_ 拒絕
 私有單位：一個未加標記的宣告在該 module 的各檔案間可見，但不越出 module（見可見性）。
 
 巢狀是**扁平的**：把一個目錄放在另一個底下，只是讓 import path 變長——**沒有階層式私有**，內層 module 對外層並無
-特殊存取權。**module 之間的 import 循環會被拒絕。**
+特殊存取權。**module 之間的 import 循環會被拒絕**——一個在還走在下去的路上就又出現的 module，它的 `init()`
+區塊與 module 常數沒有任何順序可以被備妥，而那個拒絕指名的是這個環、不是走到它的那段路。被兩個 module 各自
+import 的同一個 module 不是環；一個 module import **它自己**，則是同一條規則的單節點情形。
 
 所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
 module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** 互相引用，編譯器 forward-declare、auto-boxing 讓遞迴有
@@ -150,8 +149,6 @@ compile error。一個型別指名另一個型別**從來不是**這種循環—
 > `pub` 名字,即使這裡的 module 是目錄、而 `E502` 自己的句子也這麼說——_a module is a directory of `.zg` files
 > beside the importer or in the standard library_。於是 import 路徑多了第二種未載於文件的形狀,而那則本該教會讀者
 > 第一種的診斷,否認第二種存在。
->
-> **[deviation]** **import 循環不會被拒絕。** 兩個互相 import 的 module 編得過也跑得動。兩層都沒有任何東西偵測循環。
 
 ### 可見性——如何把宣告公開
 
@@ -177,6 +174,10 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 > ——這也是兩個 module 宣告同名會相撞的原因，而那個拒絕針對的是名字、不是可見性。規則比較的是**宣告被讀進來的
 > 目錄**與**進行讀取的目錄**，也就是 module 邊界而非 package 邊界；上文的 **package-internal** 與
 > **package-public** 仍然需要先有 package 才談得上。
+
+唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
+module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
+import 它的人；它在宣告處就被拒絕，並帶位置。要對外開放，就寫一個讀它的 `pub fn`。
 
 ### 匯入與引用
 

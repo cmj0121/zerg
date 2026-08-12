@@ -8815,6 +8815,15 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 		# to be a `closed` flag nobody read: an arm that fired on a closed channel ran over
 		# the slot from the PREVIOUS receive and printed a value nobody sent. There is no
 		# flag now because there is no such arm.
+		# THE ARM OWNS ITS BINDING, which is the same statement `for x in …` and `if x := …`
+		# make about theirs, and it is made the same way: a scope of its own around the row.
+		# Appending the row into the ENCLOSING scope instead — the one thing this site did
+		# that no other binding construct does — left `v` nameable in every LATER arm and
+		# after the whole `select`, where its C slot is out of scope. The later arm was the
+		# worse of the two: `w := <-b => print v` compiled, silently, reading the slot the
+		# other arm's receive would have filled.
+		arm_scope := c_scope_open(em)
+
 		if a.op == 0 and a.bind != "" {
 			elem := elems[k - 1]
 
@@ -8831,6 +8840,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
+		c_scope_close(em, arm_scope)
 		if acc_set {
 			c_live_merge(em, acc)
 		}
@@ -10704,11 +10714,25 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	then_end := c_live_save(em)
 	c_live_restore(em, entry)
 	out = out + in2 + "}"
+
+	# THE BINDING GOES OUT OF SCOPE HERE, BEFORE THE `else` — not after it. The scope is what
+	# docs/code/control-flow.md means by "`x` is not in scope in the `else`, nor after the
+	# `if`", and both halves of that sentence are the same removal: c_scope_close is what
+	# takes the row out of c_in_scope's reach. Closing it after the else branch had been
+	# rendered enforced only the second half — an `else` naming the binding resolved to the
+	# then-branch's C local, which is declared inside the `if` body and does not exist there,
+	# so the program escaped to cc as `use of undeclared identifier 'zg_x'` against generated
+	# source nobody wrote (the outcome docs/conformance.md rules out outright), wearing the
+	# `.zg` filename the `#line` directives put on it. With the close moved up, the `else` is
+	# checked in the enclosing environment and an out-of-scope name reports E372 with a place,
+	# like any other undefined name — and an `else if` chain, which is an if-statement in the
+	# else BODY, gets the same answer in its head and in every branch below it for free.
+	c_scope_close(em, outer_scope)
+
 	if has_else {
 		out = out + " else {\n" + c_block(em, else_body, in2 + "    ") + in2 + "}"
 	}
 	c_live_merge(em, then_end)
-	c_scope_close(em, outer_scope)
 	return out + "\n" + ind + "}\n"
 }
 

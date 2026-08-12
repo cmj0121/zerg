@@ -1019,6 +1019,19 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
 
+	# A MAP LITERAL is the same thing one dimension wider, and it is already checked entry by
+	# entry — c_map_lit_at asks chk_slot_fits of every key and c_fit_copied of every value,
+	# against the DECLARED key and value types, so each entry is a typed position and a
+	# literal one adopts there. What must not happen is this rule speaking first: the literal's
+	# own inferred type comes from its FIRST entry alone (c_map_lit_ty), so `{"a": 1}` is a
+	# `map[str, int]` whatever it is being written into, and comparing the two containers would
+	# report `m: map[str, float] = {"a": 1}` as a mismatch when nothing is wrong with it.
+	#
+	# This is the map's half of the reshape the old short-circuit was protecting, and it is
+	# narrowed to the form that actually reshapes: a literal. Two maps that already exist are
+	# compared like everything else, by chk_map_fits.
+	return true if c_is_map(want) and c_is_maplit(e)
+
 	# A CLOSURE ADOPTS what the position declares — carve-out (c). A closure that omitted a
 	# parameter's type has `fn(?) -> void` for a type, which is not `fn(int) -> int` and
 	# never becomes one by comparison: asking chk_fits directly refuses the form GRAMMAR
@@ -1706,7 +1719,18 @@ fn chk_lit_float_tree(e: Expr) -> bool {
 # chk_fits is whether a value of type `got` may fill a slot declared `want`.
 fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
-	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
+
+	# THE THREE RESHAPING SLOTS ARE THREE RULES, and they used to be one line that answered
+	# yes to everything. `return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)`
+	# was written to protect three real reshapes — a bare value wrapping into a carrier, a
+	# bidirectional channel narrowing to one end, a map literal taking its types from the
+	# declaration — and it protected them by not comparing at all, so `ch: chan[str] =
+	# chan[int](1)` compiled and RAN, and `ch: chan[int] = 7` and `m: map[str, int] = 7`
+	# reached cc as pointer conversions against generated C. The seed refuses all three by
+	# name; each reshape keeps its exemption below, and nothing else keeps one.
+	return chk_carrier_fits(em, want, got) if c_is_carrier(want)
+	return chk_chan_fits(em, want, got) if ty_is_chan(want)
+	return chk_map_fits(em, want, got) if c_is_map(want)
 
 	# NO SCALAR WIDENS HERE, AND NONE WIDENS ANYWHERE. A conversion between two scalars is
 	# written — `int(b)`, `float(i)` — and there is no longer a second route through a
@@ -1747,6 +1771,68 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_opt(got)
 
 	return ty_eq(want, got)
+}
+
+# chk_carrier_fits is what a declared `T?`, `Result[T]` or `Either[X, Y]` takes.
+#
+# A carrier slot takes a value TWO ways, and c_carrier_fit is the emitter's half of both: a
+# carrier of its own shape PASSES THROUGH, and anything else is INJECTED as the payload —
+# which is a typed position of its own, checked by the recursion under c_fit_copied. So a
+# bare value entering a carrier already had a rule, and it is the one that reports `x: int?
+# = "hi"` against the `int` rather than against the `int?`, naming where the mistake is.
+#
+# What had no rule at all is a carrier meeting a DIFFERENT carrier. It can do neither thing:
+# `x: str? = y` for an `int?` cannot pass through, since the two are different C structs, and
+# cannot be injected either, since a `str` payload does not take an `int?`. It reached cc as
+# an incompatible pointer handed to `zrt_str_retain`. Answering `ty_eq` for that pairing is
+# the whole of this rule; everything else keeps the exemption it always had.
+fn chk_carrier_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return ty_eq(want, got) if c_is_carrier(got)
+
+	return true
+}
+
+# chk_chan_fits is what a declared channel end takes, and it is HALF of that question on
+# purpose. A channel type is an element and a direction, and the two are not the same rule:
+#
+#   the element is INVARIANT. `chan[int]` and `chan[str]` are one `zrt_chan *` in C and two
+#   types in the language, so nothing tells them apart at run time — `ch: chan[str] =
+#   chan[int](1)` compiled, ran, and would have read an int back out as a pointer. That is
+#   this rule, and it had none.
+#
+#   the direction only NARROWS. A bidirectional end fills any slot, a directional end fills
+#   only its own, and neither single direction crosses to the other (docs/code/coroutine.md;
+#   c_chan_dir_ok is the predicate). That rule already has an owner in c_chan_check, whose
+#   sentence names both ends AND the site — better than anything this comparison could say —
+#   so it is not repeated here. One rule reported from two places is two rules wearing one
+#   name, and this project retires codes for exactly that.
+#
+# An unknown element is not evidence of anything, the same exemption chk_fits opens with:
+# refusing on it would turn a gap in inference into a rejected program.
+fn chk_chan_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return false if not ty_is_chan(got)
+
+	we := ty_chan_elem(want)
+	ge := ty_chan_elem(got)
+	return true if c_is_unknown(we) or c_is_unknown(ge)
+
+	return ty_eq(we, ge)
+}
+
+# chk_map_fits is a map against a map, key against key and value against value. It recurses
+# through chk_fits rather than asking ty_eq, which is what the list rule beside it does and
+# for the same reason: an EMPTY literal infers `map[?, ?]` — c_map_lit_ty has no entry to
+# read a type from — and an unknown on either side is exempt one level down.
+#
+# The map literal that is NOT empty is exempt one level up, in chk_fits_expr, because it is
+# built at the declared types entry by entry. What is left for this rule is two maps that
+# both already exist, where `b: map[str, str] = a` for a `map[str, int]` used to be no
+# mismatch at all: the copy went through, and every value read back out was a `str` header
+# read off an int64_t.
+fn chk_map_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return false if not c_is_map(got)
+
+	return chk_fits(em, c_map_key_ty(want), c_map_key_ty(got)) and chk_fits(em, c_map_val_ty(want), c_map_val_ty(got))
 }
 
 # --- returned value ---------------------------------------------------------------

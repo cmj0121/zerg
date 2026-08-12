@@ -79,7 +79,18 @@ coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](../code/coroutine.md)).
 
 Outside `main` lives only **immutable top-level state** — constants, functions, types, and specs —
-readied before `main` runs. Top-level constants are initialized in **dependency order** — a
+readied before `main` runs.
+
+That is a statement about **what runs where**, so it settles a form the grammar allows and this section
+never spoke to: a **statement written at the top level**. `GRAMMAR#program` derives one — `program ::=
+stmt-list` is Zerg's **script mode**, and the grammar opens the language with the `nop` program — so it is
+well-formed syntax and a compiler reads it whole. A **compiled** program has no moment at which to run it:
+execution begins at `main`, and everything above is state readied before that. It is therefore **refused by
+name, with a place**, by the build rather than by the parse — the same split a program with no `fn main`
+takes ([Conformance](../conformance.md)). `nop` is the one exception, and not really an exception: it does
+nothing and yields nothing, so running nothing for it is running it.
+
+Top-level constants are initialized in **dependency order** — a
 constant is ready before any constant whose initializer reads it — a topological order of the reads-from
 graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
 (neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by

@@ -4446,6 +4446,114 @@ fn main() {
 }
 EOF
 
+# --- nil is not a value ------------------------------------------------------------
+#
+# Two forms ANSWER nil and neither says so on its face: a `fn` with no `-> type`
+# (GRAMMAR#fn-decl) and a block whose last statement is not an expression (GRAMMAR#block).
+# A TYPED position already judged both; the inference path had no rule at all, so all of
+# these reached cc — as `variable has incomplete type 'void'`, as `initializing 'int64_t'
+# with an expression of incompatible type 'void'`, and as a `void` list element and struct
+# field. The sentence tells the pair apart from the container pair.
+
+reject a-binding-inferred-from-a-void-call E390 'and this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	x := f()
+	print 1
+}
+EOF
+
+reject a-binding-inferred-from-a-valueless-block E390 'and this one is nil' <<'EOF'
+fn main() {
+	z := {
+		nop
+	}
+	print 1
+}
+EOF
+
+reject printing-a-void-call E390 '`print` needs a value' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+reject an-f-string-hole-holding-nil E390 'this rendering needs a value' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	print(f"{f()}")
+}
+EOF
+
+reject a-list-of-a-void-call E390 'a part of this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	xs := [f()]
+	print xs.len()
+}
+EOF
+
+reject a-tuple-holding-a-void-call E390 'a part of this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	t := (f(), 1)
+	print t.1
+}
+EOF
+
+# --- the top level runs nothing ----------------------------------------------------
+#
+# `program ::= stmt-list` (GRAMMAR#program) is script mode, and a compiled program has no
+# moment at which to run a statement — outside `main` lives only immutable state readied
+# before it (docs/runtime/package.md). All three used to be parsed and then DROPPED: the
+# program built, and printed nothing.
+#
+# The seed drops them too, which is the narrower compiler being narrower; its README says so.
+
+reject a-print-at-the-top-level E391 '`print` opens a statement' at=1:1 seed-gap <<'EOF'
+print 999
+
+fn main() {
+	print 1
+}
+EOF
+
+reject an-if-at-the-top-level E391 '`if` opens a statement' at=1:1 seed-gap <<'EOF'
+if true {
+	print 1
+}
+
+fn main() {
+	print 2
+}
+EOF
+
+reject a-loop-at-the-top-level E391 '`for` opens a statement' at=1:1 seed-gap <<'EOF'
+for {
+	break
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 reject an-if-on-an-optional E354 <<'EOF'
 fn main() {
 	x: int? = 1

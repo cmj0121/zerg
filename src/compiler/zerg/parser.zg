@@ -836,6 +836,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[ConstDecl] = []
+	mut stmts: list[TopStmt] = []
 
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
@@ -1006,14 +1007,19 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise "E254 a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
 			# GRAMMAR#program makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
-			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
+			# so a top-level statement is GRAMMATICAL and is read here, whole. What it
 			# must never be is SHREDDED: this fallback used to advance ONE TOKEN, so a
 			# statement's remaining tokens were re-dispatched as items of their own —
 			# `xs.each(fn (n: int) { … })` answered "a function needs a name" about a
-			# lambda that was never a declaration. One COMPLETE statement is consumed, and
-			# what becomes of it is decided once, here: nothing.
+			# lambda that was never a declaration. One COMPLETE statement is consumed.
+			#
+			# And what becomes of it is no longer "nothing". It is RECORDED, with its place,
+			# and refused by the build (chk_top_stmts) — for the reason the missing `fn main`
+			# is refused by the build and not by the parse: the form derives, so a parse that
+			# turned it away would be saying this compiler cannot READ a production it can.
 			raise "E255 `pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
-			parse_stmt(p)
+			s := parse_stmt(p)
+			p_take_top_stmt(stmts, t, s, p.path)
 		}
 
 		# The top level's end is the end of FILE, except inside a module-level `unsafe { … }`
@@ -1045,7 +1051,27 @@ pub fn parse_at(src: str, path: str) -> File {
 	# not the end of the file, because that is where the reader has to go.
 	raise "E256 this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
 
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
+}
+
+# p_take_top_stmt records a top-level statement for the build to refuse, and is the one
+# place the EXCEPTION is written down: `nop`.
+#
+# `nop` does nothing and yields nothing (GRAMMAR#nop), so a build that runs nothing for it
+# has run it exactly — and it is the statement GRAMMAR opens the language with, the whole of
+# the smallest well-formed program. Every other statement asks to be RUN, and the top level
+# is not a place anything runs.
+fn p_take_top_stmt(mut &stmts: list[TopStmt], t: Token, s: Stmt, path: str) {
+	return if p_is_nop(s)
+
+	stmts.append(TopStmt(t.lexeme, path, t.line, t.col))
+}
+
+fn p_is_nop(s: Stmt) -> bool {
+	return match s {
+		Stmt.SNop => true
+		_         => false
+	}
 }
 
 # p_top_binding reads one top-level binding and answers the module-constant DECLARATION it

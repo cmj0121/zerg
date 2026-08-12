@@ -3675,10 +3675,21 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 	return Ty.TUnknown
 }
 
-# c_bind_env registers an enum constructor arm's payload names in the variable
-# environment with their field types, so type inference inside the arm resolves them.
+# c_bind_env registers an arm's pattern bindings in the variable environment with the types
+# they hold, so type inference inside the arm resolves them.
+#
+# A NAME PATTERN BINDS TOO (GRAMMAR#binding-pat), and it was the one shape this did not
+# register. `match n { x => x }` therefore typed its arm body from a name nothing in the
+# environment answered for, and the whole match came back TUnknown — so `w := match n { x
+# => x }` declared `w` with no type, `c_is_bound` reads exactly that as "nothing bound it",
+# and the only finding was `undefined name` on the NEXT line, about a name the reader can
+# see being bound. `=> x * 1` escaped it by inferring from the literal instead, which is
+# what made the shape look arbitrary. A bind arm holds the SCRUTINEE's own type, which is
+# the same thing c_arm_subst splices in as text one function along.
 fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
-	if a.pat == 3 and c_is_either(st) {
+	if a.pat == 1 {
+		c_add_var(em, a.bind, st, false, false)
+	} else if a.pat == 3 and c_is_either(st) {
 		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
 		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
 		# Result-shaped assumption looks like — a `Right(b)` over an `Either[A, B]` then had
@@ -5372,8 +5383,12 @@ fn c_in_range_offender(mut &em: Emitter, run: list[Expr]) -> str {
 # c_in_refuse is the ONE place `E463` is reported from. Two rules answer with it — a set that
 # is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
 # an identity, so the sentence differs and the identity does not.
+#
+# It says WHERE (c_here), which is the trailer docs/conformance.md owes every diagnostic and
+# which this one had not got. `reject-fuzz` is what found it: retype one binding to `str` and
+# the guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
 fn c_in_refuse(mut &em: Emitter, set: Expr, why: str) -> str {
-	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}"
+	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}" + c_here(em)
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
@@ -5553,7 +5568,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 			return "\"\""
 		}
 
-		c_display_check(em, xt0)
+		c_display_check(em, xt0, "this rendering")
 		return c_display(xt0, c_expr(em, x, sb))
 	}
 	if c_is_list(ty) {
@@ -5896,11 +5911,22 @@ fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
 # c_display is the runtime leaf that renders one SCALAR. A composite has no rendering here
 # — the structural one is `Display`'s job and there is no derive for it — so it is named
 # rather than cast, which is what reached cc as "operand of type 'zg_P'".
-fn c_display_check(mut &em: Emitter, t: Ty) {
+fn c_display_check(mut &em: Emitter, t: Ty, where: str) {
 	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
 	# reader can actually write is the discriminant
 	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
 	raise f"E449 NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
+
+	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
+	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
+	# with no `-> type` answers nil, so `print f()` cast a `void` to `long long` and cc
+	# reported it against C nobody wrote; a written `print nil` cast nothing at all and
+	# printed a number. `where` is the caller's, because a rendering reached from an f-string
+	# hole is not the `print` a reader wrote.
+	#
+	# AFTER the two above, so a composite holding nil keeps the composite's own sentence: a
+	# `list[…]` has no rendering whatever it holds, and that is the more useful thing to say.
+	chk_no_nil_value(em, t, where)
 }
 
 fn c_display(t: Ty, inner: str) -> str {
@@ -8093,19 +8119,28 @@ fn c_at(mut &em: Emitter, l: int, c: int) -> str {
 
 fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 	rendered := c_expr(em, e, c_nosub())
-	return f"{ind}(void)({rendered});\n" if c_is_braced_expr(e)
+	return f"{ind}(void)({rendered});\n" if c_discards_a_value(e)
 	return f"{ind}{rendered};\n"
 }
 
-# c_is_braced_expr names the two forms that lower to a GNU statement expression AND may have a
-# value nobody reads: `guard { risky() }` written for its catching alone, and a `{ … }`
-# block expression standing as a statement of its own. Both are legal and both draw a
-# `-Wunused-value` from cc, so the discard is written down as a cast — which says the same
-# thing to a reader and keeps the build log free of warnings nobody should learn to ignore.
-fn c_is_braced_expr(e: Expr) -> bool {
+# c_discards_a_value names the forms that ARE an expression, are legal as a statement, and
+# lower to C whose own value nobody then reads: `guard { risky() }` written for its catching
+# alone, a `{ … }` block standing as a statement of its own, and — GRAMMAR group 4's "a
+# match run for effect" — a `match` whose arms are all effect. All three draw a
+# `-Wunused-value`, so the discard is written down as a cast, which says the same thing to a
+# reader and keeps cc's warning AND the generated C line it quotes off the user's stderr.
+#
+# A `match` reaches it by a different C shape from the other two — a ternary rather than a
+# statement expression — which is why the name is about the DISCARD and no longer about the
+# braces: the brace was the thing the first two happened to share, not the reason either one
+# needed the cast. A match with a CALL in every arm never warned, so the gap looked like it
+# was about matches with literal arms; it is about every arm being a value cc can see is
+# unused.
+fn c_discards_a_value(e: Expr) -> bool {
 	return match e {
 		Expr.EGuard(_) => true
 		Expr.EBlock(_) => true
+		Expr.EMatch(_, _) => true
 		_ => false
 	}
 }
@@ -10826,8 +10861,16 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
 		}
 	} else {
-		chk_needs_type(em, name, ival)
+		# THE TWO HALVES OF "THIS BINDING HAS NO TYPE TO TAKE". chk_needs_type is about the
+		# FORM — `[]`, `{:}`, a written `nil`, which carry none — and chk_no_nil_value is about
+		# what the expression ANSWERS, which is where `f()` with no `-> type` and `{ nop }` come
+		# in. The second is asked only when the first said nothing, because `x := nil` is a
+		# mistake both would name and one mistake earns one message.
+		reported := chk_needs_type(em, name, ival)
 		eff = c_infer(em, ival)
+		if not reported {
+			chk_no_nil_value(em, eff, chk_binding_says(name))
+		}
 	}
 
 	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
@@ -11088,7 +11131,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# cc reported it against C nobody wrote. `print(a, b)` is the way into this that a
 	# reader does not see coming — there is no two-argument `print`, so it builds a TUPLE
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
-	c_display_check(em, ty)
+	c_display_check(em, ty, "`print`")
 	ex := c_expr(em, e, c_nosub())
 
 	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
@@ -11602,6 +11645,33 @@ fn c_is_nil_ty(t: Ty) -> bool {
 	}
 }
 
+# c_holds_nil is whether nil sits ANYWHERE in a type, and it recurses because a container
+# gives its elements storage exactly as a binding does: `list[nil]` is a C `void` element
+# and `(nil, int)` a `void` field, both of which cc reported against a typedef nobody wrote.
+# `xs := [f()]` and `t := (f(), 1)` are the two that get there.
+#
+# `T?` is NOT one of them, and that is the whole reason this is a recursion over containers
+# rather than a walk over every variant: an optional is the type whose job is holding an
+# absence, so `list[int?]` holds nil legitimately and `xs: list[int?] = [nil, 7]` is a
+# program. A map is included for its VALUES and its keys alike, both being storage it spells.
+fn c_holds_nil(t: Ty) -> bool {
+	return true if c_is_nil_ty(t)
+
+	return match t {
+		Ty.TList(e)   => c_holds_nil(e)
+		Ty.TTuple(es) => c_holds_nil_any(es)
+		Ty.TMap(k, v) => c_holds_nil(k) or c_holds_nil(v)
+		_             => false
+	}
+}
+
+fn c_holds_nil_any(ts: list[Ty]) -> bool {
+	for t in ts {
+		return true if c_holds_nil(t)
+	}
+	return false
+}
+
 fn c_param_types(fn_d: FnDecl) -> str {
 	return "void" if fn_d.params.len() == 0
 	mut out := ""
@@ -11915,9 +11985,13 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut types: list[TypeDecl] = []
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
+	mut stmts: list[TopStmt] = []
 	for f in fs {
 		for c in f.consts {
 			consts.append(c)
+		}
+		for s in f.stmts {
+			stmts.append(s)
 		}
 		for im in f.imports {
 			imports.append(im)
@@ -11950,7 +12024,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 			i = i + 1
 		}
 	}
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
@@ -12454,6 +12528,10 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# (over `own`, so a multi-unit build reports it once), before c_const_globals walks
 	# the values — a rule about the declaration should not wait on its initializer
 	chk_top_muts(em, own)
+
+	# and the top level runs nothing: a statement written there is refused at the line it was
+	# written on, over `own` for the same once-per-unit reason
+	chk_top_stmts(em, own)
 
 	# the constants are declared before the prototypes, so a body may name one
 	globals := c_const_globals(em, f, own, whole)

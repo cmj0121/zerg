@@ -1940,11 +1940,45 @@ fn chk_bind_mismatch(mut &em: Emitter, path: str, line: int, col: int, got: Ty, 
 # in a cache file nobody wrote; `x := {:}` and `x := nil` compiled in silence and bound
 # something the rest of the program then read. A form the language says has no type must be
 # refused where it has no position, not given one by accident of lowering.
-fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) {
+#
+# It ANSWERS whether it reported, because chk_no_nil_value below stands right beside it at
+# the one caller and `x := nil` is a mistake both would name. One mistake earns one message.
+fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) -> bool {
 	what := chk_typeless_form(ival)
-	return if what == ""
+	return false if what == ""
 
 	chk_at(em, "E336", f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
+	return true
+}
+
+# chk_no_nil_value is THE rule that `nil` is not a value, and it is ONE function because it
+# is one rule: a position that must HOLD a value cannot take a thing with no width, no
+# storage and no rendering. Two forms ANSWER nil and neither says so on its face —
+# GRAMMAR#fn-decl gives a function with no `-> type` a nil result, and GRAMMAR#block gives a
+# block whose last statement is not an expression (or that has none at all) the same — so
+# what a reader writes is `x := f()` or `z := { nop }`, which look like values.
+#
+# BOTH ESCAPED TO CC, from the same missing site and by two different C errors: `void zg_x =
+# zg_f();` is "variable has incomplete type 'void'", and `{ nop }` infers nil, which c_type
+# spells `int64_t` by its fallback, so it is "initializing 'int64_t' with an expression of
+# incompatible type 'void'". They read as two bugs and are one — the TYPED positions
+# (`x: int = f()`, `w: int? = { nop }`) were already checked, and only the INFERENCE path
+# had no rule.
+#
+# `where` names the position rather than the value, because the value is exactly what the
+# reader cannot see: naming `f()` would say nothing the source does not already show.
+#
+# It asks c_holds_nil and not c_is_nil_ty, so a CONTAINER of nil is the same finding: a list
+# element and a tuple component are storage the C spells too, and `xs := [f()]` reached cc
+# by that route. Which part is nil is left to the reader — the expression is on the line.
+fn chk_no_nil_value(mut &em: Emitter, t: Ty, where: str) {
+	return if not c_holds_nil(t)
+
+	mut says := "and this one is nil"
+	if not c_is_nil_ty(t) {
+		says = "and a part of this one is nil"
+	}
+	chk_at(em, "E390", f"{where} needs a value, {says} — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl), and so does a block whose last statement is not an expression (GRAMMAR#block); nil has no storage and no rendering, so run it as a statement of its own, or give the `fn` a type to answer with")
 }
 
 # chk_typeless_form names the form when an expression is one of the ones that carry no type,

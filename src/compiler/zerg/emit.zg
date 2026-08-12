@@ -5564,7 +5564,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 			return "\"\""
 		}
 
-		c_display_check(em, xt0)
+		c_display_check(em, xt0, "this rendering")
 		return c_display(xt0, c_expr(em, x, sb))
 	}
 	if c_is_list(ty) {
@@ -5907,11 +5907,22 @@ fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
 # c_display is the runtime leaf that renders one SCALAR. A composite has no rendering here
 # — the structural one is `Display`'s job and there is no derive for it — so it is named
 # rather than cast, which is what reached cc as "operand of type 'zg_P'".
-fn c_display_check(mut &em: Emitter, t: Ty) {
+fn c_display_check(mut &em: Emitter, t: Ty, where: str) {
 	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
 	# reader can actually write is the discriminant
 	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
 	raise f"E449 NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
+
+	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
+	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
+	# with no `-> type` answers nil, so `print f()` cast a `void` to `long long` and cc
+	# reported it against C nobody wrote; a written `print nil` cast nothing at all and
+	# printed a number. `where` is the caller's, because a rendering reached from an f-string
+	# hole is not the `print` a reader wrote.
+	#
+	# AFTER the two above, so a composite holding nil keeps the composite's own sentence: a
+	# `list[…]` has no rendering whatever it holds, and that is the more useful thing to say.
+	chk_no_nil_value(em, t, where)
 }
 
 fn c_display(t: Ty, inner: str) -> str {
@@ -10837,8 +10848,16 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
 		}
 	} else {
-		chk_needs_type(em, name, ival)
+		# THE TWO HALVES OF "THIS BINDING HAS NO TYPE TO TAKE". chk_needs_type is about the
+		# FORM — `[]`, `{:}`, a written `nil`, which carry none — and chk_no_nil_value is about
+		# what the expression ANSWERS, which is where `f()` with no `-> type` and `{ nop }` come
+		# in. The second is asked only when the first said nothing, because `x := nil` is a
+		# mistake both would name and one mistake earns one message.
+		reported := chk_needs_type(em, name, ival)
 		eff = c_infer(em, ival)
+		if not reported {
+			chk_no_nil_value(em, eff, chk_binding_says(name))
+		}
 	}
 
 	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
@@ -11099,7 +11118,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# cc reported it against C nobody wrote. `print(a, b)` is the way into this that a
 	# reader does not see coming — there is no two-argument `print`, so it builds a TUPLE
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
-	c_display_check(em, ty)
+	c_display_check(em, ty, "`print`")
 	ex := c_expr(em, e, c_nosub())
 
 	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
@@ -11611,6 +11630,33 @@ fn c_is_nil_ty(t: Ty) -> bool {
 		Ty.TVoid => true
 		_        => false
 	}
+}
+
+# c_holds_nil is whether nil sits ANYWHERE in a type, and it recurses because a container
+# gives its elements storage exactly as a binding does: `list[nil]` is a C `void` element
+# and `(nil, int)` a `void` field, both of which cc reported against a typedef nobody wrote.
+# `xs := [f()]` and `t := (f(), 1)` are the two that get there.
+#
+# `T?` is NOT one of them, and that is the whole reason this is a recursion over containers
+# rather than a walk over every variant: an optional is the type whose job is holding an
+# absence, so `list[int?]` holds nil legitimately and `xs: list[int?] = [nil, 7]` is a
+# program. A map is included for its VALUES and its keys alike, both being storage it spells.
+fn c_holds_nil(t: Ty) -> bool {
+	return true if c_is_nil_ty(t)
+
+	return match t {
+		Ty.TList(e)   => c_holds_nil(e)
+		Ty.TTuple(es) => c_holds_nil_any(es)
+		Ty.TMap(k, v) => c_holds_nil(k) or c_holds_nil(v)
+		_             => false
+	}
+}
+
+fn c_holds_nil_any(ts: list[Ty]) -> bool {
+	for t in ts {
+		return true if c_holds_nil(t)
+	}
+	return false
 }
 
 fn c_param_types(fn_d: FnDecl) -> str {

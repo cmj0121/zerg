@@ -721,14 +721,6 @@ expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" field-default E216 <<'EOF'
-struct P {
-	x: int = 7
-}
-
-fn main() { print 1 }
-EOF
-
 expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
 	x: int

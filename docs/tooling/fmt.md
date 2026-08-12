@@ -620,7 +620,6 @@ shipping compiler rather than a part of it (the line
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given     |
 | `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque        |
 | `E215` | a generic struct `…[…]` — **[not yet]**                                                     |
-| `E216` | a default on field `…` — **[not yet]**                                                      |
 | `E217` | the decorator `#[…]` — **[not yet]**                                                        |
 | `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
 | `E219` | `…` as an `impl` item — **[not yet]**                                                       |

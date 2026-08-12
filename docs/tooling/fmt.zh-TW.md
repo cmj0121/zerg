@@ -535,7 +535,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
 | `E214` | 在 variant 帶 payload 的 enum 上寫判別值 `… = …`——它的 tag 是不透明的                                 |
 | `E215` | NotImplemented                                                                                        |
-| `E216` | NotImplemented                                                                                        |
 | `E217` | NotImplemented                                                                                        |
 | `E218` | NotImplemented                                                                                        |
 | `E219` | NotImplemented                                                                                        |

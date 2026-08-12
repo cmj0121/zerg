@@ -808,6 +808,28 @@ pub fn shout(s: str) -> str {
 }
 EOF
 
+# A TEMPLATE IS A NAME AT THE TOP LEVEL even though it is not a function to lower, and this
+# is the case that says which walk the rule reads. The import rule used to ask what a name
+# is by re-walking the top-level lists of the program with its TEMPLATES ALREADY REMOVED, so
+# a generic took an import's name in silence — while the identical non-generic pair above
+# was refused. It reads the table c_build_top_names records now, and that walk runs over the
+# whole program, templates and all, for exactly this reason.
+reject an-import-colliding-with-a-generic-function E389 'is already a function in this program' at=1:8 <<'EOF'
+import "util/text"
+
+fn text[T](v: T) -> T {
+	return v
+}
+
+fn main() {
+	print text(1)
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
 # --- generics -----------------------------------------------------------------------
 #
 # Both of these were `refuse` cases until the forms they name were built. What is left when

@@ -12,9 +12,16 @@ produces a **value** (Pattern matching); **`for`** is a **statement** that runs 
 expression whose value is its **last statement's value**, so a branch that ends in an expression carries
 that value out.
 
-> **[not yet]** A **block used as an expression** is refused by name: a bare `{ … }` at a `:=`, in an
-> argument, or after a `return` does not compile. The block-value rule holds where a construct asks for a
-> block — an `if` branch, a `match` arm — and nowhere else, so a block never reaches a value position alone.
+A **block reaches a value position on its own**: `x := { y := 1  y + 1 }`, a block as an argument, a
+block after a `return`. Its value is its last statement's — an expression statement yields its expression,
+and any other statement, or an empty block, yields `nil`. The `;` the lexer inserts only **separates**
+statements; it does not discard the value the way a trailing `;` does in some languages. What decides
+whether a `{` opens a block or a **map literal** is the `:` (see [Types](../core/types.md) and
+`GRAMMAR#map-lit`), which is why the empty map is spelled `{:}` and a brace with no `:` is always a block.
+
+At a **statement's start** the same braces are a block **statement** whose value is discarded, and a
+`{`-opening expression at the start of an `if` / `for` / `with` / `match` head must be parenthesized
+(`E290`).
 
 **`if`** — as a **statement**, `if cond { … }` with optional `else` / `else if` runs for effect and yields
 no value; the condition is a `bool` (no truthiness). With a **mandatory trailing `else`** it is instead an
@@ -85,7 +92,9 @@ conditional-return `if` takes a **bare condition and no block**.
 
 `match` is an **expression**: it tries a value against **arms** (`pattern => result`, the arm separator
 `=>` deliberately distinct from the `->` that introduces a function's return type), runs the first
-that fits, and yields its result. Every arm yields the **same type**, so a `match` is a value usable at a
+that fits, and yields its result. An arm's body is an **expression** (`GRAMMAR#match-arm`), and a **block
+is one** — so `pattern => { … }` holds several statements and still yields, its value being the block's
+last statement's. Every arm yields the **same type**, so a `match` is a value usable at a
 `:=`, a `return`, or an argument — arms that yield `nil` read as a plain statement. Coverage is
 **required** — a `match` that misses a case is a **compile error** (so **adding an `enum` variant a
 dependent's `match` doesn't handle breaks the build**, caught at compile time rather than silently). A

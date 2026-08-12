@@ -257,12 +257,13 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
   `[ … ]` always an index and a generic takes its type from its arguments. The
   one-argument shape (`id[int](7)`) the seed does turn away, for a reason of its own.
-- **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
-  its own name into the value namespace and not its variants', so a variant is reached
-  through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`
-  alone still resolves here; `zerg` refuses both halves by name. The seed's own sources need
-  no migration for the same reason its gaps are its own contract: it is the oracle on
-  programs that follow the rule, not the enforcer of it.
+- **A BARE VARIANT is accepted AS A VALUE.** GRAMMAR says an enum puts its own name into the
+  value namespace and not its variants', so a variant is reached through its enum —
+  `Color.Red`. The seed reads that form and does not require it, so `Red` alone still
+  resolves here; `zerg` refuses it by name. The seed's own sources need no migration for the
+  same reason its gaps are its own contract: it is the oracle on programs that follow the
+  rule, not the enforcer of it. (In PATTERN position there is no gap and no rule to enforce:
+  a bare name binds in both compilers, which is what GRAMMAR#pattern says it is.)
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a

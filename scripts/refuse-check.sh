@@ -541,14 +541,14 @@ EOF
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
 # namer, so a name is answered the same way wherever it is written.
-expect "$ZERG" ref-type-in-result E446 <<'EOF'
+expect "$ZERG" ref-type-in-result E446 place <<'EOF'
 fn mk(v: int) -> Ref[int] {
 	return Ref(v)
 }
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" ref-type-in-param E446 <<'EOF'
+expect "$ZERG" ref-type-in-param E446 place <<'EOF'
 fn load(a: Ref[int]) -> int {
 	return 0
 }
@@ -787,33 +787,33 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-expect "$ZERG" raw-pointer-builtin E413 <<'EOF'
+expect "$ZERG" raw-pointer-builtin E413 place <<'EOF'
 fn main() {
 	mut n := 1
 	print addr(n)
 }
 EOF
 
-expect "$ZERG" refcounted-box-builtin E446 <<'EOF'
+expect "$ZERG" refcounted-box-builtin E446 place <<'EOF'
 fn main() {
 	r := Ref(7)
 	print deref(r)
 }
 EOF
 
-expect "$ZERG" deref-builtin E446 <<'EOF'
+expect "$ZERG" deref-builtin E446 place <<'EOF'
 fn main() {
 	print deref(7)
 }
 EOF
 
-expect "$ZERG" sizeof-builtin E414 <<'EOF'
+expect "$ZERG" sizeof-builtin E414 place <<'EOF'
 fn main() {
 	print sizeof[int]
 }
 EOF
 
-expect "$ZERG" alignof-builtin E414 <<'EOF'
+expect "$ZERG" alignof-builtin E414 place <<'EOF'
 fn main() {
 	print alignof[int]
 }
@@ -1557,9 +1557,20 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-type E413 <<'EOF'
+expect "$ZERG" raw-pointer-type E413 place <<'EOF'
 fn f(p: ptr) -> int {
 	return 1
+}
+
+fn main() { print 1 }
+EOF
+
+# THE THIRD POSITION, and the one a signature reads last: a raw pointer as the RESULT. The
+# funnel that names every built-in this compiler has not got is one function, so a place is
+# owed at each of the three the same way — and none of them carried one.
+expect "$ZERG" raw-pointer-return-type E413 place <<'EOF'
+fn f() -> ptr[int] {
+	return 0
 }
 
 fn main() { print 1 }
@@ -2180,26 +2191,26 @@ EOF
 # Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
 # compiler has not caught up to, which is exactly what this file is for.
 
-expect "$ZERG" fixed-width-conversion E465 <<'EOF'
+expect "$ZERG" fixed-width-conversion E465 place <<'EOF'
 fn main() {
 	print i32(5)
 }
 EOF
 
-expect "$ZERG" fixed-width-annotation E465 <<'EOF'
+expect "$ZERG" fixed-width-annotation E465 place <<'EOF'
 fn main() {
 	x: u8 = 5
 	print int(x)
 }
 EOF
 
-expect "$ZERG" fixed-width-float E465 <<'EOF'
+expect "$ZERG" fixed-width-float E465 place <<'EOF'
 fn main() {
 	print f32(1.5)
 }
 EOF
 
-expect "$ZERG" fixed-width-typedef E465 <<'EOF'
+expect "$ZERG" fixed-width-typedef E465 place <<'EOF'
 type W = u8
 
 fn main() {
@@ -2236,7 +2247,7 @@ EOF
 # this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
 # is refused, this one shows the refusal is about the type not being built rather than about
 # where it was written.
-expect "$ZERG" ptr-type-in-an-unsafe-group E413 <<'EOF'
+expect "$ZERG" ptr-type-in-an-unsafe-group E413 place <<'EOF'
 unsafe {
 	fn f(p: ptr) -> int {
 		return 1
@@ -2272,7 +2283,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" set-constructor E466 <<'EOF'
+expect "$ZERG" set-constructor E466 place <<'EOF'
 fn main() {
 	s := set([1, 2])
 	print s.len()

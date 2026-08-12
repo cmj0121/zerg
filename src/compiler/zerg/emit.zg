@@ -4690,7 +4690,7 @@ fn c_set_says(mut &em: Emitter, set: Expr) -> str {
 	}
 }
 
-# c_in_range lowers `v in lo..hi` — GRAMMAR#range makes a range's MEMBERS its set, and
+# c_in_range lowers `v in lo..hi` — GRAMMAR#range-expr makes a range's MEMBERS its set, and
 # membership in a run of numbers is the pair of comparisons its bounds spell: `v >= lo` and
 # `v < hi`, `<=` for the inclusive `..=`, and the lower bound alone for the open `lo..`, which
 # has no upper bound to compare against.

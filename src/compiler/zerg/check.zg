@@ -2574,7 +2574,7 @@ fn chk_import_name(mut &em: Emitter, f: File, i: int) {
 		j = j + 1
 	}
 
-	what := chk_decl_kind(f, im.name)
+	what := chk_decl_kind(em, im.name)
 	return if what == ""
 
 	chk_import_taken(em, im, what)
@@ -2591,24 +2591,18 @@ fn chk_import_taken(mut &em: Emitter, im: ImportDecl, what: str) {
 # one. A type is not in the value namespace the import binds into, and it is asked about all
 # the same: this compiler mangles every top-level name into one C namespace, so a namespace
 # and a struct of one name would collide there whatever the language says about the two.
-fn chk_decl_kind(f: File, name: str) -> str {
-	for fd in f.fns {
-		return "a function in this program" if fd.name == name and fd.recv == ""
-	}
-	for c in f.consts {
-		return "a module constant in this program" if c.name == name
-	}
-	for s in f.structs {
-		return "a struct in this program" if s.name == name
-	}
-	for e in f.enums {
-		return "an enum in this program" if e.name == name
-	}
-	for td in f.types {
-		return "a type in this program" if td.name == name
-	}
-	for sp in f.specs {
-		return "a spec in this program" if sp.name == name
+#
+# IT READS THE TABLE, and does not build a second one. c_build_top_names already walks the
+# six top-level lists — that walk is what refuses a name declared twice — and it records
+# what each name is. This used to re-walk the same six, in a different order, with its own
+# wording for each of the six answers; the order was harmless (a name in two of them is
+# already refused) and the second walk was not, because it ran over the program with its
+# TEMPLATES REMOVED and so could not see `fn foo[T](…)` taking the name an import wanted.
+fn chk_decl_kind(mut &em: Emitter, name: str) -> str {
+	mut i := 0
+	for i < em.top_names.len() {
+		return em.top_kinds[i] + " in this program" if em.top_names[i] == name
+		i = i + 1
 	}
 	return ""
 }

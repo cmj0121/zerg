@@ -9121,8 +9121,48 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# there is no taking one entry out of the middle early.
 	raise f"E470 NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now" if ty_is_chan(c_lookup_var(em, name))
 
+	# THERE HAS TO BE SOMETHING TO REVOKE. `del` emits no C, so a name it could not find was
+	# revoked in nobody's environment and the statement vanished without a word: `del
+	# totally_undefined` compiled and ran, while the very same spelling in a `print` one line
+	# down is E372. The read path asked and this one did not, which is the whole of it.
+	c_del_target(em, name)
+
 	c_live_del(em, name)
 	return f"{ind}/* del {name} */\n"
+}
+
+# c_del_target is the rule that `del`'s operand names a BINDING. GRAMMAR#del-stmt is `'del'
+# identifier` and docs/core/memory.md says what the statement does with it — revokes THAT
+# NAME's access to its storage — so a name with no storage behind it is not a `del` this
+# language derives, whatever else the program may call it.
+#
+# Two findings rather than one, because they are two mistakes. A name nothing declares is a
+# typo, and the reader wants to be told the name is unknown. A name that DOES resolve —
+# a function, a struct, an enum, one of its variants — is a different confusion: the reader
+# meant something by it, and what they need told is that the thing they named is not a
+# binding and has no storage a name is an access to.
+fn c_del_target(mut &em: Emitter, name: str) {
+	return if c_live_idx(em, name) >= 0
+
+	kind := c_del_kind(em, name)
+	if kind == "" {
+		chk_at(em, "E295", f"`del {name}` names nothing this program declares — `del` revokes a BINDING's access to its storage (GRAMMAR#del-stmt), so there has to be a binding of `{name}` in scope for it to revoke")
+		return
+	}
+	chk_at(em, "E296", f"`del {name}` names a {kind}, and a {kind} is not a binding — it has no storage for a name to be an access to, so there is nothing here to revoke")
+}
+
+# c_del_kind names what a non-binding name resolves to, or "" when nothing does. The four
+# it asks about are the four namespaces a bare identifier can land in beside the
+# environment, and they are asked in the order c_ident_val resolves them so the two agree
+# about what a name IS.
+fn c_del_kind(mut &em: Emitter, name: str) -> str {
+	return "variant" if c_is_variant(em, name)
+	return "struct" if c_is_struct_name(em, name)
+	return "enum" if c_is_enum_name(em, name)
+	return "function" if c_is_free_fn(em, name)
+
+	return ""
 }
 
 # c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call

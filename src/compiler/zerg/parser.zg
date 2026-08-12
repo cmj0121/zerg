@@ -893,22 +893,15 @@ pub fn imports_of_at(src: str, path: str) -> list[str] {
 	return parse_at(src, path).imports
 }
 
-# parse_fill reads the tail of `[v; N]` and expands it: the count is a const-expr, and an
-# integer literal is the whole of that this compiler evaluates, so N copies are written out
-# here rather than carried as a shape the emitter would have to understand.
+# parse_fill reads the tail of `[v; N]`. The count is a CONST-EXPR (GRAMMAR group 4's
+# `list-lit`), so it is parsed as an ordinary expression and carried on the node — the parser
+# used to expand the form into N copies right here, which is why the count could only ever be
+# an integer literal: a const-expr may name a constant, and a name is not resolvable until
+# every file of the program has been merged. c_fill_elems does the expansion, over a program.
 fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
-	n := cur(p)
-	mut out: list[Expr] = []
-	raise "NotImplemented: a fill count that is not an integer literal" if n.kind != Kind.Int
-	p_advance(p)
+	n := parse_expr(p)
 	expect(p, Kind.RBrack)
-	mut i := 0
-	count := strconv.parse_int(n.lexeme, 10)
-	for i < count {
-		out.append(v)
-		i = i + 1
-	}
-	return Expr.EListLit(out)
+	return Expr.EFill(v, n)
 }
 
 # parse_fn_expr reads `fn(p: T) -> R { … }` in expression position — the same shape a
@@ -1362,9 +1355,9 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 
 	mut variants: list[VariantDef] = []
 	mut spelled: list[str] = []
-	mut next := 0
 	mut payload := false
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		vt := cur(p)
 		vname := p_name(p, "an enum variant")
 		mut fields: list[Ty] = []
 		if p_at(p, Kind.LParen) {
@@ -1383,15 +1376,21 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 		# to be read as the next variant's name — `A = 3` declared three variants, one of
 		# them called "=" — so an enum that spelled its own values compiled to nonsense with
 		# nothing said about it.
-		mut tag := next
+		#
+		# What is READ here and not decided here is the VALUE: the expression is a const-expr,
+		# so it may name a constant, and the numbering it feeds — this variant's value, and
+		# the next variant's default of one past it — is c_build_enums' to work out once the
+		# program is whole. That is also where E213's "distinct across variants" moved to,
+		# because two variants only collide once both have numbers.
+		mut has_discr := false
+		mut discr := Expr.ENil
 		if p_at(p, Kind.Assign) {
 			p_advance(p)
-			tag = parse_discriminant(p)
+			has_discr = true
+			discr = parse_expr(p)
 			spelled.append(vname)
 		}
-		raise f"E213 an enum discriminant is distinct across variants, and `{vname} = {tag}` repeats one already given" if tag_taken(variants, tag)
-		next = tag + 1
-		variants.append(VariantDef(vname, fields, tag))
+		variants.append(VariantDef(vname, fields, has_discr, discr, vt.line, vt.col))
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)
@@ -1403,30 +1402,6 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
 	return EnumDecl(name, variants, p.path)
-}
-
-fn tag_taken(variants: list[VariantDef], tag: int) -> bool {
-	for v in variants {
-		return true if v.tag == tag
-	}
-	return false
-}
-
-# parse_discriminant reads the integer a variant is declared to be. GRAMMAR calls for a
-# const-expr; an integer literal, optionally negated, is the whole of that this compiler
-# folds — anything else is refused here rather than read as a variant name.
-fn parse_discriminant(mut &p: Parser) -> int {
-	mut neg := false
-	if p_at(p, Kind.Minus) {
-		p_advance(p)
-		neg = true
-	}
-	t := cur(p)
-	raise f"an enum discriminant is a constant integer, not `{t.lexeme}`" if t.kind != Kind.Int
-	p_advance(p)
-	v := int_value(t.lexeme)
-	return 0 - v if neg
-	return v
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for

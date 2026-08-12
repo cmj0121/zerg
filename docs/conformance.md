@@ -55,12 +55,15 @@ carry a marker:
 
 | Marker                       | Meaning                                                                          |
 | ---------------------------- | -------------------------------------------------------------------------------- |
-| **[not yet]**                | Specified, not built. Using it raises `NotImplemented` — a clean compile error.  |
+| **[not yet]**                | Specified, not built. Using it is a clean compile error naming the form.         |
 | **[implementation-defined]** | The spec deliberately does not pin this; a conforming implementation may choose. |
 | **[deviation]**              | The behaviour does **not** match this spec; a tracked bug.                       |
 
 The distinction that matters is between the second marker and the third. A **[not yet]**
-is honest: the compiler says the form's name and stops. A **[deviation]** is a program
+is honest: the compiler says the form's name and stops. It usually says it as a
+`NotImplemented`, and a handful of forms are turned away by an ordinary checked rule
+instead — the chapter says which, and the point is the naming rather than the wording.
+A **[deviation]** is a program
 that compiles and behaves differently from what is written here — and the project's
 standing rule is that a form is implemented or refused by name, never silently wrong, so a
 deviation is a bug with a fix owed, not a documented state.
@@ -82,21 +85,33 @@ A well-formed program compiles; an ill-formed one is rejected with one or more *
 output binary is produced. Each diagnostic is written to standard error in the form
 
 ```text
-file:line:col: message
+error: E335 cannot bind str to a int binding: `x`
+  --> demo.zg:2:5
+   |
+ 2 |     x: int = "s"
+   |     ^
 ```
 
-where `line` and `col` are 1-based. A failed compilation exits with a non-zero status. Diagnostic wording
+The **place is a trailer**, not a prefix: the sentence comes first, and `--> file:line:col` sits on the
+line under it, where `line` and `col` are 1-based. A failed compilation exits with a non-zero status.
+Diagnostic wording
 is not normative — two implementations may phrase the same rejection differently — but **which** programs
 are rejected is (see each chapter's rules; the reject list is normative, the message text is not). The
 `fmt` and `lint` tools are advisory and never change a program's meaning.
 
 A diagnostic MAY be followed by the source line it is about and a caret marking what on that line it
-concerns; `zerg` renders one. A conforming implementation need not, and the shape of it is not normative.
+concerns; `zerg` renders one. A conforming implementation need not, and the shape of it is not normative —
+only that the place, where one is given, names a file, a line and a column.
 An ill-formed program SHOULD report every diagnostic it can find in one run rather than stopping at the
 first — `zerg` does, for the rules it checks.
 
-> **[deviation]** The `file:line:col` prefix is present on the rules `zerg` CHECKS, and absent on the forms
-> it REFUSES: a `NotImplemented` from the parser or the emitter still reports the form's name with no place.
+> **[deviation]** The place is on **every** rule `zerg` CHECKS and on only **some** of the forms it
+> REFUSES. Most `NotImplemented`s from the parser or the emitter still name the form and stop, with no
+> place — `E210`, `E217`, `E223`, `E236`, `E446`, `E465` and their neighbours — while a growing minority
+> carry one (`E224`, `E244`, `E285`, `E286`, `E404`, `E454`). Two diagnostics carry no **code** either: a
+> nested pattern reports _a pattern binding needs a name_, and an `is` on a non-error type reports
+> _NotImplemented: `is int`_, neither with an `E###` a gate could pin.
+>
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.
 
@@ -142,6 +157,12 @@ same source to an object file, which is what a module is for.
 > as a rendering. A **float** additionally renders at most **100** fractional digits, which is a bound
 > on digits rather than on a field and so is the float's own. The `type` letter is a closed set per rendering
 > ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
+>
+> None of it is reachable yet. The only surface that asks for a width or a precision is a **format spec in
+> an f-string hole**, and that is `[not yet]` — every `{x:…}`, `{x:.2f}` included, reports _E225
+> NotImplemented: an f-string ':spec' format spec_. The three bounds are implemented in the runtime and the
+> shipping compiler emits no call that reaches them, so this paragraph documents a contract a program
+> cannot yet observe.
 
 ## Runtime abort contract
 

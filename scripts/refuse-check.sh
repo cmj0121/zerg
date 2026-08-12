@@ -721,6 +721,21 @@ expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
 fn main() { print 1 }
 EOF
 
+# A FIELD DEFAULT IS BUILT; a field default that reads ANOTHER FIELD is not, and it is the
+# same shape docs/code/functions.md records for a parameter default reading an earlier
+# parameter. The default is materialised at the construction, where a field is not a name in
+# scope — so with a module constant of the same name it would quietly read that instead.
+expect "$ZERG" field-default-reading-a-field E483 <<'EOF'
+a := 100
+
+struct P {
+	pub a: int
+	pub b: int = a * 2
+}
+
+fn main() { print P(3).b }
+EOF
+
 expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
 	pub x: int

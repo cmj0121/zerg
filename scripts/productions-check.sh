@@ -81,14 +81,6 @@ fi
 # quietly dropped from a coverage claim.
 grammar_self_test || exit 1
 
-# A TYPO'S MESSAGE — the shapes a diagnostic takes when the compiler did not recognise the
-# form and reported the token it was standing on instead. Kept in step with the list in
-# conformance-check.sh, and extended by the code prefix, because a checked rule now opens
-# with one: `E204 expected `,`, found `2`` is the same finding as the bare sentence was.
-is_typo_msg() {
-	printf '%s\n' "$1" | grep -qE "^(error: )?(E[0-9]{3} )?(expected |undefined |no type named |no field |unexpected )"
-}
-
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 

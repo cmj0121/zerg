@@ -171,21 +171,12 @@ reject() {
 			;;
 		esac
 	fi
-	case $out in
-	*.zerg-cache*)
-		echo "VIA CC    $name — cc reported it against generated C, not the compiler against the source"
-		fail=$((fail + 1))
-		return
-		;;
-	esac
-	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
-	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
-	# the programmer wrote — which is better for a user and blinds the older test, since
-	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
-	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
-	# the place on an indented `-->` line beneath it.
-	if is_cc_diag "$out"; then
-		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
+	# CC MUST NOT BE THE ONE ANSWERING. Both tells — the message's SHAPE and a path into the
+	# build cache — are one predicate in diag.sh, asked the same way by the three gates that
+	# judge a refusal. They used to be two `case`/`if` pairs written out per script, which
+	# is exactly how one of them came to be asked in two places and not in the third.
+	if cc_answered "$out"; then
+		echo "VIA CC    $name — cc answered this, not the compiler against the source"
 		fail=$((fail + 1))
 		return
 	fi
@@ -419,6 +410,27 @@ fn main() {
 	e := E.A(7)
 	x := match e { E.A(v) => v  E.B => 0 }
 	print x
+}
+EOF
+
+# a `select` ARM's receive binding is a binding too, and it was the one name-introducing
+# site in the language that did not go through c_add_var: it wrote the environment's
+# columns out by hand, so it asked neither this rule nor the substitution rule beside it.
+# Its real cost was worse than a missed refusal — one of the eight columns was left off
+# and every later binding read the wrong row of it — but this is the half a gate can see.
+reject const-rebound-by-a-select-arm E356 <<'EOF'
+fn gen(out: chan[int]<-) {
+	out <- 1
+}
+
+fn main() {
+	const v := 9
+	a := chan[int](1)
+	spawn gen(a)
+	select {
+		v := <-a => print v
+	}
+	print v
 }
 EOF
 
@@ -789,6 +801,28 @@ fn text() -> str {
 
 fn main() {
 	print text()
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# A TEMPLATE IS A NAME AT THE TOP LEVEL even though it is not a function to lower, and this
+# is the case that says which walk the rule reads. The import rule used to ask what a name
+# is by re-walking the top-level lists of the program with its TEMPLATES ALREADY REMOVED, so
+# a generic took an import's name in silence — while the identical non-generic pair above
+# was refused. It reads the table c_build_top_names records now, and that walk runs over the
+# whole program, templates and all, for exactly this reason.
+reject an-import-colliding-with-a-generic-function E389 'is already a function in this program' at=1:8 <<'EOF'
+import "util/text"
+
+fn text[T](v: T) -> T {
+	return v
+}
+
+fn main() {
+	print text(1)
 }
 --- util/text/text.zg
 pub fn shout(s: str) -> str {
@@ -3352,6 +3386,35 @@ fn main() {
 }
 EOF
 
+# by SPEC SUBSTITUTION, which was the FOURTH door and the one that proved a list of doors
+# is the wrong shape for this rule. A spec's required signature writes `chan[K]`, and
+# `impl Ix[int?]` says `K` is `int?` — so the type the impl is being held to is a
+# `chan[int?]`. The checker rebuilt it by hand and asked nothing, so this position quietly
+# accepted what the parser and the specializer both refuse, and named the type back in a
+# mismatch message as though it were a type. The rule sits on CONSTRUCTION now (ty_chan),
+# which is the one door that cannot be walked around.
+#
+# No place, for the same reason as the case above: nothing in this source spells the type.
+reject a-channel-of-optionals-by-spec-substitution E404 no-place <<'EOF'
+spec Ix[K] {
+	fn c() -> chan[K]
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int?] for A {
+	fn c() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print(A(1).v)
+}
+EOF
+
 # --- and a channel, a map and a carrier are COMPARED like everything else ------------
 #
 # `chk_fits` opened with one line — "a carrier, a channel or a map is never a mismatch" —
@@ -3984,6 +4047,59 @@ fn main() {
 }
 EOF
 
+# THE SAME NAME, ONE KEYWORD EARLIER. `spawn` and `defer` resolve their callee down a path
+# of their own (c_callee_raw), and that path asked neither of the two rules the ordinary
+# call asks about the function it found — so a module-private name and an `unsafe { … }`
+# group's function were both reachable by writing `spawn` in front of the call that is
+# refused without it. Three cases, because they are the two shapes the path resolves (a
+# plain name and a namespaced one) and the two rules it skipped.
+reject a-module-private-name-spawned E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	spawn text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject a-module-private-name-deferred E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	defer text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
+unsafe {
+	fn poke() {
+		print 7
+	}
+}
+
+fn main() {
+	spawn poke()
+	print 1
+}
+EOF
+
 reject assign-to-the-receiver E306 <<'EOF'
 struct P {
 	pub x: int
@@ -4508,6 +4624,85 @@ fn add(a: int, b: int) -> int {
 
 fn main() {
 	print add(1, 2,)
+}
+EOF
+
+# THE THREE LIST READERS THAT WERE STILL SPELLING THE RULE THEIR OWN WAY. Twelve readers
+# were brought to "the comma is required between elements and absent before the closer" and
+# these three were not, which is the N+1 that a rule stated per site always has: a spec's
+# own type parameters, a function's, and a call's type arguments.
+#
+# The spec's list was the SILENT one — `spec Ix[K V]` read as two parameters and said
+# nothing, so a correct `impl Ix[int]` was then told the spec is "parameterized by K, V"
+# about a list nobody wrote. The other two were not silent, but the `]` below the loop was
+# what complained, so a missing separator was reported as a missing bracket.
+reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+spec Ix[K V] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int, int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-trailing-comma-in-a-spec-type-parameter-list E289 "the closing \`]\` of a spec's type parameter list" <<'EOF'
+spec Ix[K,] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+fn f[T U](a: T, b: U) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1, 2))
+}
+EOF
+
+reject a-trailing-comma-in-a-type-parameter-list E289 'the closing `]` of a type parameter list' <<'EOF'
+fn f[T,](a: T) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1))
+}
+EOF
+
+# The type ARGUMENT list, which is reached only through a built-in type's own arguments:
+# a program's own `f[int, str](…)` is refused as a form before the list is read (E275), so
+# `map[K, V]` is where this loop still runs.
+reject a-trailing-comma-in-a-type-argument-list E289 'the closing `]` of a type argument list' <<'EOF'
+fn main() {
+	m := map[str, int,]()
+	print m.len()
 }
 EOF
 

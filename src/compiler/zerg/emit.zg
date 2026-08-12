@@ -9289,15 +9289,8 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	# deferred call outlived the loop exactly as it did in every other loop.
 	entry := c_live_save(em)
 
-	outer_mark := em.loop_mark
-	outer_keep := em.loop_keep
-	outer_used := em.loop_mark_used
-	outer_defer := em.loop_defer
 	mark := c_new_mark(em)
-	em.loop_mark = mark
-	em.loop_keep = em.rel_cnames.len()
-	em.loop_mark_used = false
-	em.loop_defer = false
+	saved := c_loop_enter(em, mark)
 
 	body := c_select(em, arms, ind + "    ", true)
 
@@ -9307,10 +9300,7 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	# already back where the iteration found it.
 	needs := em.loop_mark_used
 
-	em.loop_mark = outer_mark
-	em.loop_keep = outer_keep
-	em.loop_mark_used = outer_used
-	em.loop_defer = outer_defer
+	c_loop_leave(em, saved)
 	c_live_merge(em, entry)
 
 	return ind + "for (;;) {\n" + body + ind + "}\n" if not needs
@@ -11242,6 +11232,44 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 	return head + c_loop_block(em, body, ind + "    ") + ind + "}\n"
 }
 
+# LoopFrame is what a loop BODY owns of the emitter's cleanup state: the mark its jumps
+# unwind to, the pending-release depth it started at, whether a jump actually named the
+# mark, and whether the body scheduled a `defer`. A nested loop saves all four on the way in
+# and puts them back on the way out, because each is an answer about ONE body.
+#
+# It is a struct rather than four locals per site because there are two sites, and two
+# copies of an N-field save is the defect this very state was fixed for: c_loop_block saved
+# three of these for as long as there were three, c_for_select saved none, and a jump out of
+# a `for select` therefore read whatever the ENCLOSING loop had left. A fifth field is one
+# edit here instead of a fresh chance for a site to remember four.
+struct LoopFrame {
+	pub mark: str
+	pub keep: int
+	pub used: bool
+	pub deferred: bool
+}
+
+# c_loop_enter takes the mark the body's jumps will unwind to and answers what was there
+# before. `keep` is read from the CURRENT release depth, which is this body's entry depth by
+# definition, and the other two start clean because they are answers about this body: a
+# defer in the enclosing function is that function's to unwind, and an inner loop must not
+# go on making the outer loop's jumps pay for a record it already gave back.
+fn c_loop_enter(mut &em: Emitter, mark: str) -> LoopFrame {
+	saved := LoopFrame(em.loop_mark, em.loop_keep, em.loop_mark_used, em.loop_defer)
+	em.loop_mark = mark
+	em.loop_keep = em.rel_cnames.len()
+	em.loop_mark_used = false
+	em.loop_defer = false
+	return saved
+}
+
+fn c_loop_leave(mut &em: Emitter, saved: LoopFrame) {
+	em.loop_mark = saved.mark
+	em.loop_keep = saved.keep
+	em.loop_mark_used = saved.used
+	em.loop_defer = saved.deferred
+}
+
 # c_loop_block emits a loop BODY. It exists for two things the C does not say: a loop may
 # run zero times, so the body's end state joins with the entry state instead of replacing
 # it — a name revoked inside a loop is INCONSISTENT after it, not dead — and this is where
@@ -11254,23 +11282,11 @@ fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	# `continue` unwinds to it — and whether the body registers anything is not known when
 	# the jump inside it is rendered. It is also the mark that keeps a loop from growing the
 	# cleanup stack: an iteration gives back what it took before the next one starts.
-	# loop_defer is saved with them and starts FALSE, so it answers about this body: a defer
-	# in the enclosing function is the enclosing function's to unwind, and an inner loop that
-	# schedules one must not go on making the OUTER loop's jumps pay for it after it ends.
-	outer_mark := em.loop_mark
-	outer_keep := em.loop_keep
-	outer_used := em.loop_mark_used
-	outer_defer := em.loop_defer
-	em.loop_mark = c_new_mark(em)
-	em.loop_keep = em.rel_cnames.len()
-	em.loop_mark_used = false
-	em.loop_defer = false
-	em.force_mark = em.loop_mark
+	mark := c_new_mark(em)
+	saved := c_loop_enter(em, mark)
+	em.force_mark = mark
 	out := c_block(em, body, ind)
-	em.loop_mark = outer_mark
-	em.loop_keep = outer_keep
-	em.loop_mark_used = outer_used
-	em.loop_defer = outer_defer
+	c_loop_leave(em, saved)
 	c_live_merge(em, entry)
 	return out
 }

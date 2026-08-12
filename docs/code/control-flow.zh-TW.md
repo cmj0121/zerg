@@ -33,10 +33,11 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 `x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
 例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
 
-> **[not yet]** 值形式有兩種樣子會被指名拒絕。一是 if 運算式裡的 **`else if` 串**
-> （`x := if a { 1 } else if b { 2 } else { 3 }`）：運算式形式只收一個結尾 `else`，串接的那種仍只是 statement。
-> 二是**在運算式位置的 if-let**——`return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的
-> if-let，都會被拒絕——所以這個階段綁定形式只是 statement，而不是上文所載的「`if` 能出現的任何位置」。
+> **[not yet]** 值形式只剩一種樣子會被指名拒絕：**在運算式位置的 if-let**。
+> `return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的 if-let，都會回報
+> _E270 NotImplemented: a binding head in an `if` EXPRESSION_——所以這個階段綁定形式只是 statement，而不是上文
+> 所載的「`if` 能出現的任何位置」。**`else if` 串**曾與它並列，現在不再：`x := if a { 1 } else if b { 2 } else { 3 }`
+> 已建置、產出被取用的那一支，而且一型規則橫跨整串成立。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
@@ -101,9 +102,10 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 且兩個相等的 literal 不保證共用儲存。
 
 > **[not yet]** **nested pattern** 根本 parse 不了：`Left(Some(v))`，還有 `L(0)`，都會被
-> ``a pattern binding needs a name, and `(` is not one`` 擋下——payload 位置只收一個名字、別的都不收，所以每個
-> pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，因為
-> 根本沒有程式寫得出巢狀 pattern。
+> `a pattern binding needs a name` 擋下,訊息裡指名的是站在名字該在的位置上的那個 token——`Left(Some(v))` 是
+> `` `(` ``、`L(0)` 是 `` `0` ``、帶限定的 `L(Inner.Some(v))` 是 `` `.` ``。payload 位置只收一個名字、別的都不收，
+> 所以每個 pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，
+> 因為根本沒有程式寫得出巢狀 pattern。
 >
 > **or-pattern 會被明確拒絕。** pattern 位置上的 `|` 被讀成位元運算子，所以 `1 | 2 =>` 會折成 `3 =>`，1 和 2
 > 都不中——它以前編得過而且靜默地錯，那正是編譯器最不該做的事，所以現在直接turn away。`zerg fmt` 會改寫唯一有可用
@@ -126,7 +128,8 @@ msg := match ev {
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
 具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用；
-product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
+product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。它的四種樣子各自被自己的名字拒絕——綁定位置是
+`E238` 與 `E221`、arm 裡是 `E232` 與 `E243`——所以 tuple 與 struct 在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的

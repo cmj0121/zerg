@@ -2344,17 +2344,23 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
 # nothing can yet assert that every row of builtins.md is either built or named. Whoever
 # unifies the three should start from those two names.
-fn c_builtin_check(n: str) {
-	c_fixed_width_check(n)
+# THE PLACE IS THE FUNNEL'S, which is the whole reason it is one function. Every name below
+# is refused from six call sites in four positions — a call, a constructor, a bare value, a
+# type annotation and a return type — and none of them carried a `--> file:line:col`, so a
+# reader was told `ptr` is not built and left to find which of their signatures said it. The
+# trailer is appended once here (c_here) rather than at each raise, for the reason the
+# sentences are written once here: a seventh caller inherits it instead of forgetting it.
+fn c_builtin_check(mut &em: Emitter, n: str) {
+	c_fixed_width_check(em, n)
 
-	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
-	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
-	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" + c_here(em) if n == "Ref" or n == "deref"
+	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" + c_here(em) if n == "addr" or n == "ptr"
+	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" + c_here(em) if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
+	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" + c_here(em) if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -2371,11 +2377,11 @@ fn c_builtin_check(n: str) {
 # the shape they have — a class letter, then a width the language names — that exactness was
 # something a reader had to derive from three tests and a substring, and the list it stood in
 # for is ten entries long.
-fn c_fixed_width_check(n: str) {
+fn c_fixed_width_check(mut &em: Emitter, n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
+	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`" + c_here(em)
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
@@ -2857,7 +2863,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
 	# `ptr`" while `ptr(x)` in a CALL had been named all along — one name, two positions, and
 	# only one of them told the reader what it was looking at.
-	c_builtin_check(nm)
+	c_builtin_check(em, nm)
 
 	raise f"no type named `{nm}` ({site})"
 }
@@ -6622,7 +6628,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
-	c_builtin_check(name)
+	c_builtin_check(em, name)
 	raise f"E471 NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
@@ -6705,7 +6711,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# It used to emit a compound literal of that name anyway, which cc rejected against
 		# generated C.
 		if not c_is_struct_name(em, name) {
-			c_builtin_check(name)
+			c_builtin_check(em, name)
 
 			raise f"no type named `{name}` to construct"
 		}
@@ -6723,7 +6729,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
 	# is exactly the answer this should be giving by name.
 	if not c_is_free_fn(em, name) {
-		c_builtin_check(name)
+		c_builtin_check(em, name)
 
 		raise f"E425 undefined function `{name}`"
 	}
@@ -7305,7 +7311,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		return "0"
 	}
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
-		c_builtin_check(n)
+		c_builtin_check(em, n)
 
 		# The ordinary unknown name is the same kind of statement and takes the same channel.
 		# It was a bare `raise` for as long as it existed, which said the sentence and nothing

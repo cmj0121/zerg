@@ -705,9 +705,62 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
-#[derive(Eq)]
+# A DECORATOR WITH NOTHING UNDER IT AT ALL — the last item in the file. This is the whole of
+# what E208 says, and it used to be said about `#[derive(Eq)] fn main()` as well, where there
+# very much IS a declaration under it: the pending list was only ever drained by a `struct`,
+# an `enum` or a `spec`, so every other declaration walked past it and the leftover was
+# reported at `Eof` as though nothing had followed.
+expect "$ZERG" derive-with-no-declaration E208 place <<'EOF'
 fn main() { print 1 }
+
+#[derive(Eq)]
+EOF
+
+# THE DECLARATION THAT FOLLOWS IS ONE A DECORATOR CANNOT GO ON. Four spellings, one rule —
+# and the `impl` one was not refused at all: the pending derive survived the block and landed
+# on whichever `struct` was declared next, which is a decorator silently changing a type the
+# reader never decorated.
+expect "$ZERG" derive-on-a-function E487 '`#[derive(Eq)]`' place <<'EOF'
+#[derive(Eq)]
+fn f() {
+	print 1
+}
+
+fn main() { f() }
+EOF
+
+expect "$ZERG" derive-on-a-type-alias E487 '`#[derive(Eq)]`' place <<'EOF'
+#[derive(Eq)]
+type X = int
+
+fn main() { print 1 }
+EOF
+
+# `#[obj]` RIDES THE SAME PENDING LIST under a marker no spec name can be, and every sentence
+# about that list spelled it as a derive — so `#[obj] fn f()` reported `#[derive(#obj)]`,
+# quoting a decorator the program does not contain.
+expect "$ZERG" obj-on-a-function E487 '`#[obj]`' place <<'EOF'
+#[obj]
+fn f() {
+	print 1
+}
+
+fn main() { f() }
+EOF
+
+expect "$ZERG" derive-on-an-impl E487 '`#[derive(Eq)]`' place <<'EOF'
+struct P {
+	pub x: int
+}
+
+#[derive(Eq)]
+impl P {
+	fn get() -> int {
+		return this.x
+	}
+}
+
+fn main() { print P(1).get() }
 EOF
 
 # A FIELD DEFAULT IS BUILT; a field default that reads ANOTHER FIELD is not, and it is the

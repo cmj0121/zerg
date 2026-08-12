@@ -32,8 +32,8 @@ import (
 # the path each came from. It is a struct rather than two lists because a function returns
 # one value, and the two are only ever right together.
 pub struct Program {
-	paths: list[str]
-	srcs: list[str]
+	pub paths: list[str]
+	pub srcs: list[str]
 }
 
 # program is the constructor the DRIVER calls. A struct declared here can be read anywhere,
@@ -46,23 +46,23 @@ pub fn program(paths: list[str], srcs: list[str]) -> Program {
 # the whole reason a language server exists, and it is why every compiler entry point this
 # file calls takes SOURCE rather than a path.
 struct Doc {
-	uri: str
-	text: str
+	pub uri: str
+	pub text: str
 }
 
 struct Server {
-	docs: list[Doc]
-	buf: list[byte]
-	stop: bool
-	down: bool
+	pub docs: list[Doc]
+	pub buf: list[byte]
+	pub stop: bool
+	pub down: bool
 }
 
 # Change is what a `didChange` carried: the new text, and whether there WAS one. The flag is
 # not redundant with an empty string — a client that clears a file to nothing sends `""`,
 # and a client that sends no change at all must leave the buffer alone.
 struct Change {
-	ok: bool
-	text: str
+	pub ok: bool
+	pub text: str
 }
 
 # serve reads frames until standard input ends or `exit` arrives.
@@ -519,10 +519,10 @@ fn ls_word_range(text: str, line: int, col: int) -> JVal {
 # the thing just built — so the numbers exist before the object does, and both the diagnostic
 # and the action are rendered from them.
 struct Span {
-	sl: int
-	sc: int
-	el: int
-	ec: int
+	pub sl: int
+	pub sc: int
+	pub el: int
+	pub ec: int
 }
 
 fn ls_word_span(text: str, line: int, col: int) -> Span {

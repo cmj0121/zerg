@@ -12,19 +12,19 @@ import "strconv"
 # Parser holds the token list, the read cursor, and — while an `impl T { … }` block is
 # being read — the type that block is for, which is what `This` names inside it.
 struct Parser {
-	toks: list[Token]
-	pos: int
-	impl_ty: str
+	pub toks: list[Token]
+	pub pos: int
+	pub impl_ty: str
 
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
-	path: str
+	pub path: str
 
 	# depth counts how many recursion levels of nesting the parser is inside — one per
 	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
 	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
 	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
 	# is the only answer a recursive-descent parser can give before that happens.
-	depth: int
+	pub depth: int
 
 	# edepth counts how many parse_expr calls are open. It is not a second budget — it
 	# answers one question, "is the expression now finished the OUTERMOST one", so the
@@ -32,7 +32,7 @@ struct Parser {
 	# statement resets it, because a statement is where an expression tree ends: the block
 	# inside a `guard` or a closure holds statements, and each of their expressions is a
 	# root of its own.
-	edepth: int
+	pub edepth: int
 }
 
 fn cur(mut &p: Parser) -> Token {

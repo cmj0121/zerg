@@ -61,7 +61,7 @@ pub fn compare_swap(a: Ref[int], expect: int, desired: int) -> bool {
 # operations, so the operations live in a concrete `impl Atomic[int]`; a general
 # `Atomic[T]` awaits relaxed/typed atomics.
 pub struct Atomic[T] {
-	cell: Ref[T]
+	pub cell: Ref[T]
 }
 
 impl Atomic[int] {

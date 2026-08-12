@@ -1000,6 +1000,39 @@ fn ty_chan_elem(t: Ty) -> Ty {
 	}
 }
 
+# ty_chan_elem_check is the ONE rule about what a channel may carry: not an optional.
+#
+# It is here, beside the shape questions above, because it is a fact about the TYPE rather
+# than about any position that spells one — and that is the whole point. It was once a
+# check inside the emitter's constructor path, so `chan[int?](1)` was refused and every
+# other position carrying the same type was accepted in silence: a parameter, a result, a
+# struct field, a typed binding, a typedef, a `chan` nested inside another type. Written
+# here and called where a channel's element type is READ, every position inherits it.
+#
+# WHY the rule exists, since it is a restriction and not an omission: a receive answers
+# `T?` (GRAMMAR group 9), and `T?` does not nest. So on a channel of optionals a `nil` back
+# from `<-ch` would mean two different facts — the value that was sent is absent, and the
+# stream is over — with no operator able to tell them apart. One loud rule is worth more
+# than that ambiguity; a value that may be absent travels in a struct, or as a sentinel the
+# receiver agrees on.
+#
+# `at` is a place trailer (p_place), from a caller that knows where the type was written.
+# It is "" for the one caller that cannot know: a `chan[T]` whose element arrives by
+# SUBSTITUTION is written nowhere in the source, so there is no position to point at.
+fn ty_chan_elem_check(elem: Ty, at: str) {
+	raise f"E404 `chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel" + at if ty_is_opt(elem)
+}
+
+# ty_is_opt is the shape question the rule above asks. It is spelled here rather than
+# reached for in the emitter because the parser asks it too, and the parser may not call
+# into the emitter (scripts/layering-check.sh).
+fn ty_is_opt(t: Ty) -> bool {
+	return match t {
+		Ty.TOpt(_) => true
+		_          => false
+	}
+}
+
 # chan_ty_name spells a channel end the way the source does, direction and all, so a
 # diagnostic about one can say which end it is talking about.
 fn chan_ty_name(elem: Ty, dir: int) -> str {

@@ -1450,7 +1450,7 @@ fn main() {
 }
 EOF
 
-reject str-into-an-int-struct-field E338 'field 1 of `P` is int, and this gives str' <<'EOF'
+reject str-into-an-int-struct-field E338 'the field `x` of `P` is int, and this gives str' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -3379,7 +3379,7 @@ fn main() {
 }
 EOF
 
-reject str-into-an-optional-struct-field E338 'field 1 of `Box` is int' <<'EOF'
+reject str-into-an-optional-struct-field E338 'the field `v` of `Box`' <<'EOF'
 struct Box {
 	pub v: int?
 }
@@ -4684,7 +4684,7 @@ EOF
 # of the written arguments forward, so a construction that stops short of a field with no
 # default is still short — the same rule a `fn` parameter default follows, and the one that
 # would go quiet if a defaulted field anywhere in the type were read as "this may be empty".
-reject a-required-field-before-a-defaulted-one E370 '`Box` needs a value for field 1' <<'EOF'
+reject a-required-field-before-a-defaulted-one E370 'the field `w` of `Box`' <<'EOF'
 struct Box {
 	pub w: int
 	pub h: int = 4

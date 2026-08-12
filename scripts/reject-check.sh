@@ -3580,6 +3580,83 @@ fn main() {
 }
 EOF
 
+# --- a channel's DIRECTION, which is the other half of its type -------------------------
+#
+# Four rules, and until now none of them carried a code or a place — so a reader was told a
+# direction was wrong and left to find which of their sends it was, and no gate could pin
+# any of the four without pinning its prose. The SEED reports all four with a place, and
+# numbers a call's arguments from 1 the way `E340` does; these numbered from 0, so a reader
+# following one of them looked at the wrong parameter.
+#
+# Two rules and not one: what a NAME MAY DO with an end (E503-E505) is a different question
+# from where an end MAY GO (E506), which is why the narrowing rule has a code of its own.
+
+reject receive-on-a-send-only-channel E503 <<'EOF'
+fn take(ch: chan[int]<-) {
+	print <-ch!
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject send-on-a-receive-only-channel E504 <<'EOF'
+fn take(ch: <-chan[int]) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject close-a-receive-only-channel E505 <<'EOF'
+fn take(ch: <-chan[int]) {
+	close(ch)
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+# THE ARGUMENT IS NUMBERED FROM 1, which is what the sentence is asserted for: `take` has
+# one parameter, and this used to call it argument 0.
+reject a-direction-that-does-not-narrow-at-an-argument E506 'argument 1 of `take`' <<'EOF'
+fn take(ch: chan[int]<-) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	take(r)
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-binding E506 'binding `s`' <<'EOF'
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	s: chan[int]<- = r
+	print 1
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-return E506 "this function's answer" <<'EOF'
+fn f(c: <-chan[int]) -> chan[int]<- {
+	return c
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 reject an-int-into-a-map E335 'cannot bind int to a map[str, int] binding' <<'EOF'
 fn main() {
 	m: map[str, int] = 7

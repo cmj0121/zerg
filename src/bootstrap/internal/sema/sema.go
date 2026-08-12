@@ -165,7 +165,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
-	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}}
+	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}, folding: map[*ast.BindStmt]bool{}}
 	// Validate every declaration's decorators first (GRAMMAR group 7 is a fixed,
 	// compiler-owned set): an unknown or not-yet-supported decorator is a clean error
 	// rather than a silent no-op.
@@ -186,6 +186,12 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 type symbol struct {
 	typ     Type
 	mutable bool
+	// cval is what this binding's initializer folded to, when the binding is
+	// immutable and the initializer is a const-expr (GRAMMAR group 7). It is what
+	// makes a LOCAL usable where a compile-time value is required — a fill count
+	// '[v; n]' — and it is carried on the symbol so that the scope chain decides
+	// which 'n' a name means, which a table keyed by name alone cannot.
+	cval types.ConstVal
 	// byref marks a 'mut &x' parameter — a mutable reference to the CALLER's
 	// variable rather than storage this body owns (GRAMMAR group 5). It is mutable
 	// inside the callee, and the backend gives it pointer storage.
@@ -226,6 +232,11 @@ type checker struct {
 	// of a non-live name is rejected, turning a would-be use-after-free into a clean
 	// compile error.
 	dead map[*symbol]liveness
+
+	// folding marks the module-constant declarations whose initializers are being
+	// folded right now, so 'const A := A' — or any longer ring — answers "not a
+	// constant" instead of recursing until the stack gives out.
+	folding map[*ast.BindStmt]bool
 
 	// frozenLists counts, per list-binding symbol, the number of enclosing `for x in
 	// xs` loops iterating it: a list is frozen against structural change (append or

@@ -4248,6 +4248,88 @@ fn main() {
 }
 EOF
 
+# --- the forms GRAMMAR does not derive --------------------------------------------------
+#
+# A production is a contract about what the language HAS, and a parser that reads past it
+# is one that silently invents. The three below are each a form `GRAMMAR` states in so many
+# words is not there, and each one compiled and ran.
+#
+# GRAMMAR#tuple-lit is `'(' expr ',' expr ( ',' expr )* ')'` — two or more elements, with
+# the prose beside it saying that "a single `( expr )` is just grouping". So `(1, )` is not
+# a tuple; it built one, of arity one, whose `.0` read back the element.
+reject a-one-tuple E288 <<'EOF'
+fn main() {
+	x := (1, )
+	print x.0
+}
+EOF
+
+# NO comma-separated list in GRAMMAR derives a trailing comma — not `tuple-lit`, not
+# `list-lit`, not `map-lit`, not `arg-list` — and all four read one silently. `zerg fmt`
+# already removed them, which is the tell: the toolchain knew the form was not canonical
+# and the parser was the one place that did not.
+#
+# Four cases and not one, because the four are four separate loops: the tuple's is the
+# comma loop in parse_primary, the list's is that primary's `[` branch, the map's is
+# parse_map_lit, and the argument list's is parse_call_args. A rule written against one of
+# them leaves the other three accepting.
+reject a-trailing-comma-in-a-tuple E289 'the closing `)` of a tuple literal' <<'EOF'
+fn main() {
+	t := (1, 2,)
+	print t.0
+}
+EOF
+
+reject a-trailing-comma-in-a-list E289 'the closing `]` of a list literal' <<'EOF'
+fn main() {
+	xs := [1, 2, ]
+	print xs.len()
+}
+EOF
+
+reject a-trailing-comma-in-a-map E289 'the closing `}` of a map literal' <<'EOF'
+fn main() {
+	m := {"a": 1,}
+	print m.len()
+}
+EOF
+
+reject a-trailing-comma-in-an-argument-list E289 'the closing `)` of an argument list' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	print add(1, 2,)
+}
+EOF
+
+# GRAMMAR, group 7: "ANY '{'-opening expression — a block OR a map literal — at the start
+# of an if/for/with/match head must be parenthesized", which follows from `{` being the
+# block opener. The `if` head read the brace as a map literal and ran the program; the
+# `for` head read it as the loop's BODY and reported a misparse from inside it — "a binding
+# needs a name, and `"a"` is not one", about a key nobody wrote as a binding.
+#
+# Both say the same thing now, because it is the same rule: a head that begins with `{`
+# needs parentheses. The `for` case is the one with something to decide, since `for { … }`
+# with no head IS the infinite loop — what separates them is whether the brace is CONTINUED
+# as an expression, which is the only reading under which it was a head at all.
+reject a-brace-opening-if-head E290 'the start of an `if` head' <<'EOF'
+fn main() {
+	if {"a": 1}.len() == 1 {
+		print "yes"
+	}
+}
+EOF
+
+reject a-brace-opening-for-head E290 'the start of a `for` head' <<'EOF'
+fn main() {
+	for {"a": 1}.len() == 1 {
+		break
+	}
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

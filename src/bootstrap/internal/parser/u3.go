@@ -164,6 +164,13 @@ func (p *parser) parseParenOrTuple() ast.Expr {
 		elems := []ast.Expr{first}
 		for p.accept(token.Comma) {
 			if p.at(token.RParen) {
+				// A comma with nothing after it is two different ill-formed programs,
+				// told apart by how many elements are already in hand: after one it is
+				// the 1-tuple, caught below by the arity rule; after two or more it is a
+				// trailing comma, which no comma-separated production in GRAMMAR derives.
+				if len(elems) >= 2 {
+					p.fail(p.cur().Span, "a trailing comma before the closing `)` of a tuple literal")
+				}
 				break
 			}
 			elems = append(elems, p.parseExpr())
@@ -201,7 +208,9 @@ func (p *parser) parseListLit() ast.Expr {
 	elems := []ast.Expr{first}
 	for p.accept(token.Comma) {
 		if p.at(token.RBrack) {
-			break
+			// GRAMMAR#list-lit writes the comma BETWEEN elements and derives none before
+			// the closer; this loop used to leave on one and build the list anyway.
+			p.fail(p.cur().Span, "a trailing comma before the closing `]` of a list literal")
 		}
 		elems = append(elems, p.parseExpr())
 	}
@@ -271,6 +280,14 @@ func (p *parser) parseMapLit() ast.Expr {
 		}
 		p.skipSemis()
 		if p.at(token.RBrace) {
+			// GRAMMAR#map-lit writes the comma BETWEEN entries and derives none before the
+			// closer, so `{"a": 1,}` is not a map literal — this loop used to leave on it.
+			//
+			// It reports and BREAKS rather than bailing out: unwinding from inside a brace
+			// leaves the recovery point past the literal's own '}', so the enclosing block's
+			// closer was then read as a stray one and a second, invented diagnostic came
+			// with it. Reading the map to its end costs nothing and says the rule once.
+			p.errorf(p.cur().Span, "a trailing comma before the closing `}` of a map literal")
 			break
 		}
 	}

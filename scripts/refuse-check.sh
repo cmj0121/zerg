@@ -875,7 +875,7 @@ EOF
 # `[` is not one": a complaint about the token under the cursor, for a production the
 # grammar derives in full. The parameters are read now, and the form is named.
 
-expect "$ZERG" impl-with-its-own-type-parameters E288 place <<'EOF'
+expect "$ZERG" impl-with-its-own-type-parameters E291 place <<'EOF'
 spec Size {
 	fn size() -> int
 }
@@ -898,7 +898,7 @@ EOF
 # other way and was accepted with its `[int]` silently erased. Reading the arguments makes
 # both of them one refusal, about the form that was written and at the place it was.
 
-expect "$ZERG" impl-on-a-target-with-type-arguments E289 'on `list[int]`' place <<'EOF'
+expect "$ZERG" impl-on-a-target-with-type-arguments E292 'on `list[int]`' place <<'EOF'
 spec Size {
 	fn size() -> int
 }
@@ -914,7 +914,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" inherent-impl-on-a-target-with-type-arguments E289 'on `Box[int]`' place <<'EOF'
+expect "$ZERG" inherent-impl-on-a-target-with-type-arguments E292 'on `Box[int]`' place <<'EOF'
 struct Box {
 	v: int
 }

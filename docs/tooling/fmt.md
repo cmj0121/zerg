@@ -406,10 +406,12 @@ n := (
 Like `F401`, it declines outright when a comment is anywhere inside: a comment is
 something a person put there and joining lines has nowhere to put it back.
 
-The **trailing comma goes** either way, joined or split. On one line it is a comma before
-a closer that nothing follows; on several, a multi-line parameter list is the one place
-the grammar does not accept one, and dropping it in a signature while keeping it in a call
-would be one shape in two spellings.
+The **trailing comma goes** either way, joined or split, and it is a repair rather than a
+preference: `GRAMMAR` writes the comma BETWEEN elements and derives one before a closer
+nowhere at all — not in a call, not in a tuple, list or map literal, not in a signature —
+so a file carrying one is not a Zerg program and the compiler says so (`E289`). The
+formatter reads the token stream and not the tree, which is what lets it fix a file the
+parser turns away — exactly the file a person reaches for a formatter over.
 
 `F405` is `F401`'s principle applied to strings: where the language offers a shorter
 surface for exactly what is written, the canonical form is the shorter one.
@@ -685,8 +687,11 @@ shipping compiler rather than a part of it (the line
 | `E285` | a default on a closure parameter — **[not yet]**                                            |
 | `E286` | a `mut &` parameter in a function type — **[not yet]**                                      |
 | `E287` | an `unsafe` `spec` signature — **[not yet]**                                                |
-| `E288` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                            |
-| `E289` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                         |
+| `E291` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                            |
+| `E292` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                         |
+| `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                        |
+| `E289` | a trailing comma before a closing `)`, `]` or `}`                                           |
+| `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                  |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |

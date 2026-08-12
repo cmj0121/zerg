@@ -3831,6 +3831,75 @@ fn c_ns_kind(mut &em: Emitter, target: Expr) -> NsKind {
 	return NsKind.NsUnknown
 }
 
+# --- a module-qualified TYPE name ----------------------------------------------------
+#
+# A TYPE NAME IS ALSO ITS CONSTRUCTOR (GRAMMAR group 7's CONSTRUCTION note), and reaching
+# the type through an `import` used to buy only half of that. `GRAMMAR#base-type` derives
+# `type-name type-args? ('.' identifier)*`, so `lib.Point` is a type wherever a type is
+# wanted — and parse_base_type has read it that way since it was written, by DROPPING the
+# qualifier: every module of a program flattens into one scope (docs/runtime/package.md), so
+# the qualifier says where the type came from and the last segment IS the name.
+#
+# The VALUE position never learned it. `p: lib.Point = lib.Point(1, 2)` was accepted on the
+# left of the `=` and refused on the right, in one line, with `E388 module `lib` has no
+# `Point`` — a sentence that is false, since the module declares exactly that. What each
+# qualified path asked was narrower than the rule: the CALL path asked only whether the last
+# segment named a function, and the FIELD path only whether it named a constant, so a type
+# was a member neither of them could see. `lib.Color.Red` and an `as` alias went the same
+# way, and `lib.make()` beside them worked, which is what made it read as a namespace bug
+# rather than a missing rule.
+#
+# It is fixed as a REWRITE and not as a fifth branch per path, because there is one rule
+# here and four shapes that would have had to spell it: a construction, a variant read, an
+# enum's `of`, and the inference half of each. Dropping the qualifier turns every one of
+# them into the unqualified form the compiler already lowers correctly, so nothing below
+# this point knows a qualifier was involved — which is precisely the arrangement the TYPE
+# position has always had.
+#
+# WHICH module answers is the flatten's business and not this rule's: `b.Point` resolves a
+# `Point` module `a` declared, exactly as `b.COUNT` resolves a constant `a` declared. That
+# is the documented deviation (docs/runtime/package.md), and it is one deviation rather than
+# two.
+fn c_ns_unqualify(mut &em: Emitter, e: Expr) -> Expr {
+	return match e {
+		Expr.EField(t, f) => c_ns_unqualify_field(em, t, f)
+		Expr.EMethod(t, m, args) => c_ns_unqualify_meth(em, t, m, args)
+		_ => e
+	}
+}
+
+# c_ns_unqualify_field is `lib.Point` read as a value — the prefix of `lib.Color.Red`, and
+# the whole of `lib.Color` in `lib.Color.of(n)`. The target is rewritten too when the pair
+# is not one, because the qualifier sits at the ROOT of a `.`-chain and the segment that
+# names the type may be anywhere along it.
+fn c_ns_unqualify_field(mut &em: Emitter, t: Expr, f: str) -> Expr {
+	return Expr.EIdent(f) if c_ns_names_type(em, t, f)
+
+	return Expr.EField(c_ns_unqualify(em, t), f)
+}
+
+# c_ns_unqualify_meth is `lib.Point(1, 2)` — a CONSTRUCTION, which is a call whose callee is
+# a type name and so becomes the ECall the unqualified spelling parses to.
+fn c_ns_unqualify_meth(mut &em: Emitter, t: Expr, m: str, args: list[Expr]) -> Expr {
+	if c_ns_names_type(em, t, m) {
+		mut none: list[Ty] = []
+		return Expr.ECall(m, args, none)
+	}
+
+	return Expr.EMethod(c_ns_unqualify(em, t), m, args)
+}
+
+# c_ns_names_type is the pair this rule is about: a MODULE qualifier, and a segment that
+# names a type the program declares. Both halves are required. Without the first an invented
+# prefix would resolve — `bogus.Point(1, 2)` is an undefined name and stays one — and
+# without the second a genuine missing member would stop being reported, which is the rule
+# E388 is for.
+fn c_ns_names_type(mut &em: Emitter, t: Expr, member: str) -> bool {
+	return false if c_ns_kind(em, t) != NsKind.NsModule
+
+	return c_is_struct_name(em, member) or c_is_enum_name(em, member) or c_is_typedef(em, member)
+}
+
 # c_undefined_name is THE report of a name nothing in the program bound, and it is one
 # function because it is one rule. It is reached from two shapes — a name read on its own
 # (c_ident_val) and the invented prefix of a qualified one (c_free_method, c_callee_raw) —
@@ -4161,7 +4230,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	c_deeper(em)
 	keep := em.seq_pre
 	em.seq_pre = ""
-	out := c_expr_node(em, e, c_sub_active(em, sb))
+	out := c_expr_node(em, c_ns_unqualify(em, e), c_sub_active(em, sb))
 	pre := em.seq_pre
 	em.seq_pre = keep
 	c_shallower(em)
@@ -7775,7 +7844,7 @@ fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
 # overflow it is refused by the same rule at the same number.
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	c_deeper(em)
-	t := c_infer_node(em, e)
+	t := c_infer_node(em, c_ns_unqualify(em, e))
 	c_shallower(em)
 	return t
 }

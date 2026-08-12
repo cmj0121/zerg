@@ -686,7 +686,7 @@ fn conv_ty(name: str) -> Ty {
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0, "", path, 0, 0)
-	mut imports: list[str] = []
+	mut imports: list[ImportDecl] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut specs: list[SpecDecl] = []
@@ -953,7 +953,14 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 # with genuinely no path" and no such caller ever appeared; what its existence did keep is
 # the one mistake this signature was introduced to make impossible.
 pub fn imports_of_at(src: str, path: str) -> list[str] {
-	return parse_at(src, path).imports
+	# the PATHS alone: the loader resolves a module to a file, and the name the import binds
+	# is a question about this file's scope, which the loader has no opinion about
+	f := parse_at(src, path)
+	mut out: list[str] = []
+	for im in f.imports {
+		out.append(im.path)
+	}
+	return out
 }
 
 # parse_fill reads the tail of `[v; N]`. The count is a CONST-EXPR (GRAMMAR group 4's
@@ -1375,12 +1382,12 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 # hand the driver an EMPTY import list for a file that imports things. Nothing would fail
 # at the parse — the module loader would simply not load `io`, and the failure would
 # surface later and elsewhere as an unknown name.
-fn parse_import(mut &p: Parser, mut &imports: list[str]) {
+fn parse_import(mut &p: Parser, mut &imports: list[ImportDecl]) {
 	p_advance(p) # 'import'
 	if not p_at(p, Kind.LParen) {
-		path := parse_import_spec(p)
-		if path != "" {
-			imports.append(path)
+		im := parse_import_spec(p)
+		if im.path != "" {
+			imports.append(im)
 		}
 		return
 	}
@@ -1388,9 +1395,9 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	skip_semis(p)
 	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		at := p.pos
-		path := parse_import_spec(p)
-		if path != "" {
-			imports.append(path)
+		im := parse_import_spec(p)
+		if im.path != "" {
+			imports.append(im)
 		}
 
 		# a spec that read nothing would leave the position where it was: step over the
@@ -1405,14 +1412,19 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	}
 }
 
-# parse_import_spec reads `pub? "path" (as name)?` and yields the path. Anything that is
-# not a string literal is refused below, so the only "" it can answer is the empty literal.
+# parse_import_spec reads `pub? "path" (as name)?` and yields the DECLARATION it is — the
+# path, the name it binds, and the place, which is everything a later pass needs to resolve
+# a qualified name against it. Anything that is not a string literal is refused below, so
+# the only empty path it can answer is the empty literal.
 #
 # `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
 # module is part of the program — so the marker is consumed and the path read as usual.
-# `as` renames the namespace, which is a binding this parser does not track, so the name
-# is consumed and the path is what comes back.
-fn parse_import_spec(mut &p: Parser) -> str {
+#
+# `as` RENAMES THE NAMESPACE, and the alias used to be read and thrown away: the binding was
+# recomputed downstream as the path's last segment, so `import "a/text" as at` bound `text`
+# and every `at.…` in the file was a name nothing declared. The alias is the binding when it
+# is there, which is a fact about the surface and so the parser's to record.
+fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 	if p_at(p, Kind.Pub) {
 		p_advance(p)
 	}
@@ -1430,10 +1442,14 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	if p_at(p, Kind.As) {
 		p_advance(p) # 'as'
 		if p_at(p, Kind.Ident) {
+			alias := cur(p).lexeme
 			p_advance(p)
+			return ImportDecl(t.value, alias, true, p.path, t.line, t.col)
 		}
 	}
-	return t.value # the decoded path, without its quotes
+
+	# `t.value` is the decoded path, without its quotes
+	return ImportDecl(t.value, last_segment(t.value), false, p.path, t.line, t.col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can

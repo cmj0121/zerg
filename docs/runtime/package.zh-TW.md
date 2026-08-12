@@ -182,12 +182,23 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 因為每個相依都被寫下來，import graph 是顯式的——這正是 module 與 package **循環得以被拒絕**的前提。
 
 > **狀態。** 這些小節描述的表面今日已接好：**字串路徑 import**（`import "util/text"`）、**括號 import
-> 群組**（`import ( … )`），以及**一層 `import pub` re-export** 到 root module 的公開表面。（re-export 只有一層：
+> 群組**（`import ( … )`）、**`as` 改名**（`import "a/text" as at`，綁的是整個命名空間——它的函式與它的 module
+> 常數一樣可達），以及**一層 `import pub` re-export** 到 root module 的公開表面。（re-export 只有一層：
 > `import pub` 把所命名的 module 露到本 module 表面；它不會遞迴地 re-export 那個 module 自己 re-export 的東西。）
 >
-> **[deviation]** **「無遞迴傳遞」未被強制。** 因為每個 module 都壓平進同一個命名空間，只要一個 module 被這次建置
-> 觸及，它就是其他每個 module 都指名得到的 module——不論有沒有 import 它。import graph 決定的是什麼被**編進**建置，
-> 不是建置內部什麼看得見。
+> import 所引入的**綁定**已被強制：受詞前綴必須是這次建置裡某個 `import` 真的綁過的命名空間，所以憑空捏造的
+> `bogus.f()`、或把路徑片段當成名字用（`import "util/text"` 之下寫 `util.f()`）都會被當成未定義的名字拒絕，並附
+> 位置；兩個綁定相撞的 import，以及被某個頂層宣告先佔走的綁定，同樣被拒絕，而 `as` 就是這兩者的解法。
+>
+> **[deviation]** **綁定是整個建置的，成員也是。** 同一個壓平的兩半，而且兩半都被程式看得見：
+>
+> - **「無遞迴傳遞」未被強制。** 在場的命名空間是這次建置裡每個 module 綁過的每一個命名空間——包含別的 module 的
+>   `as` 別名——所以本 module 從未 import 的 module，它仍然指名得到。import graph 決定的是什麼被**編進**建置，
+>   不是建置內部什麼名字叫得出來。
+> - **成員是在全程式範圍查的。** 前綴解出來之後，`.` 之後的名字是在那唯一一個壓平的命名空間裡找的，而不是在前綴
+>   所指的那個 module 裡找：於是同時 import 了 `a` 與 `b` 時，`b.helper()` 回答的是 module `a` 宣告的 `helper`。
+>   `pub` 仍然是對**宣告**該成員的 module 檢查的——這也是為什麼一個私有成員被拒絕時，訊息指名的是它真正的擁有者，
+>   而不是程式寫下的那個 module。seed 編譯器這一半是對的，它回報 `module "b" has no public member "helper"`。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
 > 這個成員——本節承諾的一等值到 module 邊界就停住了。

@@ -595,8 +595,37 @@ pub struct ConstDecl {
 	col: int
 }
 
+# ImportDecl is one import SPEC — `pub? "path" (as name)?` (GRAMMAR#import-spec). It is a
+# declaration and not a string because an import BINDS A NAMESPACE (GRAMMAR#import-stmt), and
+# a binding is a name: the path says which module is compiled into the build, and `name` says
+# what the program writes to reach it — the `as` alias when there is one, the path's last
+# segment otherwise. Keeping only the path is what made the prefix decoration: every
+# qualified name flattened to its last identifier, so an invented `bogus.f()` and a real
+# `text.f()` were the same expression by the time anything looked.
+#
+# `at` / `line` / `col` are the three a DECLARATION owes a diagnostic, for ConstDecl's
+# reason: by emission the whole program is one merged File, and an import belongs to no
+# function, so nothing else would remember which file wrote it or where. The place is also
+# an import's IDENTITY once the files are merged — two files importing one module under one
+# name are otherwise indistinguishable rows.
+pub struct ImportDecl {
+	# the module path as written, without its quotes — `util/text`
+	path: str
+
+	# the name this import binds — the `as` alias, else the path's last segment
+	name: str
+
+	# `renamed` is whether an `as` was written. The name alone cannot say so, since
+	# `import "a/text" as text` binds exactly what the plain form does.
+	renamed: bool
+
+	at: str
+	line: int
+	col: int
+}
+
 pub struct File {
-	imports: list[str]
+	imports: list[ImportDecl]
 	structs: list[StructDecl]
 	enums: list[EnumDecl]
 	specs: list[SpecDecl]
@@ -623,6 +652,30 @@ pub struct File {
 	derive_spec: list[str]
 }
 
+# last_segment is the name a module path ends with — `util/text` ends with `text`. It is
+# what an import with no `as` binds (GRAMMAR#import-spec) and what a diagnostic calls a
+# module, and it lives HERE, beside the declaration that needs it, because it used to live
+# in two: one copy in the emitter and one in the linter, spelled differently and answering
+# the same question. Two copies of a naming rule is one rule that can disagree with itself.
+pub fn last_segment(path: str) -> str {
+	b := bytearray(path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
 # --- rendering ---------------------------------------------------------------------------
 
 # dump_ast renders a parsed file as an indented tree — the `--emit ast` view. It is a
@@ -632,7 +685,13 @@ pub struct File {
 pub fn dump_ast(f: File) -> str {
 	mut out := "file\n"
 	for im in f.imports {
-		out = out + "\timport \"" + im + "\"\n"
+		# the binding is shown whenever it was renamed, because that is the half of an
+		# import this view exists to answer: which name the program reaches the module by
+		if im.renamed {
+			out = out + "\timport \"" + im.path + "\" as " + im.name + "\n"
+		} else {
+			out = out + "\timport \"" + im.path + "\"\n"
+		}
 	}
 	for s in f.structs {
 		out = out + "\tstruct " + s.name + "\n"

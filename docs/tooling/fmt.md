@@ -770,6 +770,8 @@ shipping compiler rather than a part of it (the line
 | `E385` | a closure parameter has no type, and its position gives it none                             |
 | `E386` | a call through a function value gives the wrong number of arguments                         |
 | `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code               |
+| `E388` | module `…` has no `…`                                                                       |
+| `E389` | `…` is already … — an import binds a name into the one value namespace                      |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

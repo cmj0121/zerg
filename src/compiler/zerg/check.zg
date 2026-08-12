@@ -156,7 +156,7 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	# marker at the declaration itself, so its module answers here like any other reader's.
 	return if here == ""
 
-	chk_at(em, "E301", f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
+	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
 
 # chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
@@ -2415,6 +2415,116 @@ fn chk_top_muts(mut &em: Emitter, own: File) {
 			chk_at_place(em, c.path, c.line, c.col, "E358", f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
 		}
 	}
+}
+
+# --- a qualified name's member -----------------------------------------------------
+
+# chk_no_member is the other half of a qualified name: the prefix IS a namespace, and the
+# module has no such member. It is one function for the three shapes that can ask — a member
+# read, a call, and a `spawn` / `defer` callee — because the answer is one sentence, and it
+# was three: the read raised without a place, the call said "the method `x` on a ?" (which
+# describes a namespace as a value of no type), and the callee named the form as not built.
+#
+# A CHECKED rule and not a raise: the question is well formed and the program is wrong, so it
+# owes a place like every other rule here, and the C written after it is discarded.
+fn chk_no_member(mut &em: Emitter, ns: str, member: str) {
+	chk_at(em, "E388", f"module `{ns}` has no `{member}`")
+}
+
+# --- what an import binds ----------------------------------------------------------
+#
+# An `import` binds a NAMESPACE, and GRAMMAR#import-stmt says where that binding lives: "the
+# bound name lives in the one value namespace, so colliding with a local name is an error —
+# rename with `as`". Nothing checked it. Two imports whose paths end in the same segment
+# both bound `text` and both answered through it, so `alt/text` and `util/text` were one
+# namespace holding the union of their members; a `fn text()` beside `import "util/text"`
+# coexisted with it, and which of the two a `text…` reached depended on whether the reader
+# wrote a `(` or a `.`.
+#
+# It is asked of the WHOLE program, which is the grain E382 already states for the same
+# reason: every module of a program flattens into one namespace here, so a name taken
+# anywhere is taken. A repeat of the SAME import is not a collision — a module two files
+# import is the ordinary case, and it binds one namespace to one module either way.
+# The verdict is the WHOLE program's and the reporting is the UNIT's, which is a split
+# chk_top_muts explains: this runs once per unit, so a rule that reported over the merged
+# list said the same thing once per module of the build. Every import is judged against
+# every other; only the ones this unit wrote are spoken about.
+fn chk_import_names(mut &em: Emitter, f: File, own: File) {
+	mut i := 0
+	for i < f.imports.len() {
+		if chk_import_here(own, f.imports[i]) {
+			chk_import_name(em, f, i)
+		}
+		i = i + 1
+	}
+}
+
+# chk_import_here is whether an import of the merged program is one this unit wrote. A place
+# is the identity: the unit's rows ARE the merged rows, copied, so nothing else distinguishes
+# two imports of one module written in two files.
+fn chk_import_here(own: File, im: ImportDecl) -> bool {
+	for o in own.imports {
+		return true if o.at == im.at and o.line == im.line and o.col == im.col
+	}
+	return false
+}
+
+# chk_import_name asks the one question of the import at row `i`: is this name already
+# something else? The answer is reported at the IMPORT, never at whatever it collides with,
+# because the import is the half that carries the fix — `as` renames it, and nothing renames
+# a function from its call sites.
+#
+# Only the rows BEFORE it are consulted, so the first spelling of a name is the one that
+# keeps it and one collision is one finding rather than two mirror images of it.
+fn chk_import_name(mut &em: Emitter, f: File, i: int) {
+	im := f.imports[i]
+	mut j := 0
+	for j < i {
+		other := f.imports[j]
+		if other.name == im.name and other.path != im.path {
+			chk_import_taken(em, im, f"the namespace of `{other.path}`")
+			return
+		}
+		j = j + 1
+	}
+
+	what := chk_decl_kind(f, im.name)
+	return if what == ""
+
+	chk_import_taken(em, im, what)
+}
+
+# chk_import_taken is the one wording of the one rule, whichever of the two things took the
+# name: the sentence tells the two cases apart and the CODE says it is one rule, which is
+# what a code is for.
+fn chk_import_taken(mut &em: Emitter, im: ImportDecl, what: str) {
+	chk_at_place(em, im.at, im.line, im.col, "E389", f"`{im.name}` is already {what} — an import binds a name into the one value namespace, so rename it with `as`")
+}
+
+# chk_decl_kind is what a top-level declaration of `name` IS, or "" when nothing declares
+# one. A type is not in the value namespace the import binds into, and it is asked about all
+# the same: this compiler mangles every top-level name into one C namespace, so a namespace
+# and a struct of one name would collide there whatever the language says about the two.
+fn chk_decl_kind(f: File, name: str) -> str {
+	for fd in f.fns {
+		return "a function in this program" if fd.name == name and fd.recv == ""
+	}
+	for c in f.consts {
+		return "a module constant in this program" if c.name == name
+	}
+	for s in f.structs {
+		return "a struct in this program" if s.name == name
+	}
+	for e in f.enums {
+		return "an enum in this program" if e.name == name
+	}
+	for td in f.types {
+		return "a type in this program" if td.name == name
+	}
+	for sp in f.specs {
+		return "a spec in this program" if sp.name == name
+	}
+	return ""
 }
 
 # --- the rendering overrides -------------------------------------------------------

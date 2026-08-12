@@ -22,6 +22,20 @@
 # The catalogue lives in fmt.md beside the formatter's F and the linter's L codes: three
 # schemes, one table per scheme, one page. That is deliberate — a reader who meets `E204`
 # and a reader who meets `L105` are asking the same question.
+#
+# AND IT ANSWERS ONE MORE QUESTION, which is the reason for the second half of this script:
+# what is the NEXT FREE CODE. Three collisions happened in one week — `E387`, `E477` and
+# `E288`/`E289` — each because parallel work could only grep the catalogue and could not see
+# a sibling's choice. This gate catches a collision once both halves are in one tree, which
+# is too late to be cheap; reporting the next free code per range is what lets it be asked
+# BEFORE, by a person or by an agent, with one command.
+#
+# That answer is only worth having while every number below a range's high-water mark is
+# accounted for. A code that is neither in the live table nor in the RETIRED one is a gap,
+# and a gap is a number somebody may reissue without knowing it once meant something else —
+# so a gap fails here. Retiring is the deliberate way to leave one behind: the number is
+# never reused, an old build's message keeps its meaning, and the range counts on from its
+# mark.
 set -uo pipefail
 
 SRC=${SRC:-src/compiler}
@@ -55,13 +69,37 @@ codes_in_gates() {
 }
 
 # A code the catalogue lists: one row per code, in a table whose first cell is the code.
+#
+# The RETIRED table has the same shape, so the two are told apart by which side of the
+# `### Retired codes` heading a row is on rather than by the row itself. A heading is what
+# a reader already uses to tell them apart, and giving the retired rows a different column
+# layout would be a second spelling of a code for the sake of a grep.
 codes_in_doc() {
-	grep -oE '^\| `E[0-9]{3}`' "$DOC" | grep -oE 'E[0-9]{3}' | sort -u
+	sed -n "1,/^### Retired codes/p" "$DOC" |
+		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
+}
+
+codes_retired() {
+	sed -n "/^### Retired codes/,\$p" "$DOC" |
+		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
 }
 
 src=$(codes_in_source)
 gates=$(codes_in_gates)
 doc=$(codes_in_doc)
+retired=$(codes_retired)
+
+# A FLOOR, and it is on the catalogue rather than on the compiler. Every comparison below is
+# a set difference, and a difference against an empty set is empty: a renamed heading, a
+# reformatted table, a `sed` range that stops matching, and all four `report` calls go quiet
+# while the range walk finds no marks to walk to. 150 against the 258 rows there are today.
+MIN_CODES=${MIN_CODES:-150}
+n_doc=$(printf '%s\n' "$doc" | grep -c .)
+if [ "$n_doc" -lt "$MIN_CODES" ]; then
+	printf 'error-codes-check: the catalogue yielded %s codes, below the floor of %s\n' "$n_doc" "$MIN_CODES" >&2
+	printf 'error-codes-check: %s no longer reads as one table per scheme, so nothing was compared\n' "$DOC" >&2
+	exit 1
+fi
 
 report() {
 	local what=$1 list=$2
@@ -100,10 +138,52 @@ report "reported without a code — a rule with no identity is one no gate can p
 dup=$(code_reports | sort | uniq -d)
 report "reported from more than one place — two rules under one identity" "$dup"
 
+# A code that is BOTH live and retired is the one state the two tables must never be in
+# together: a reader looking it up gets two answers, and the range walk below would accept
+# the number twice over.
+report "listed as live and as retired at once" \
+	"$(comm -12 <(printf '%s\n' "$doc") <(printf '%s\n' "$retired"))"
+
+# THE RANGE WALK, and it is what makes "the next free code" a fact rather than a guess. Each
+# range counts from its own `x01` up to its high-water mark, and every number in between is
+# either listed above or retired below. A number that is neither is a GAP: nothing says
+# whether it once meant something, so nothing stops the next rule taking it and quietly
+# reassigning every message an old build ever printed with it.
+#
+# The mark is per range, and it is the LIVE-or-retired maximum rather than the live one —
+# retiring the highest code in a range must not hand the number straight back.
+all_codes=$(printf '%s\n%s\n' "$doc" "$retired" | grep -E '^E[0-9]{3}$' | sort -u)
+next_free=""
+for r in 1 2 3 4 5; do
+	in_range=$(printf '%s\n' "$all_codes" | grep -E "^E$r" | sed 's/^E//')
+	[ -z "$in_range" ] && continue
+	mark=$(printf '%s\n' "$in_range" | sort -n | tail -1)
+
+	missing=""
+	n=$((r * 100 + 1))
+	while [ "$n" -le "$mark" ]; do
+		printf '%s\n' "$in_range" | grep -qx "$n" || missing="$missing E$n"
+		n=$((n + 1))
+	done
+	if [ -n "$missing" ]; then
+		printf 'error-codes-check: E%sxx has a number that is neither listed nor retired (%s)\n' \
+			"$r" "$(printf '%s' "$missing" | wc -w | tr -d ' ')" >&2
+		printf '   %s\n' "$missing" >&2
+		printf '    a gap is a code the next rule may reissue, silently reassigning every message an old build printed with it\n' >&2
+		printf '    retire it in the catalogue instead, with the reason\n' >&2
+		fail=1
+	fi
+	next_free="$next_free E$((mark + 1))"
+done
+
 if [ "$fail" -ne 0 ]; then
 	printf 'error-codes-check: the source, the gates and the catalogue disagree\n' >&2
 	exit 1
 fi
 
-printf 'error-codes-check: %s codes — each reported once, asserted by a gate, and listed\n' \
-	"$(printf '%s\n' "$src" | wc -l | tr -d ' ')"
+# THE ANSWER, printed on the way out whether or not anybody asked, because the cost of
+# printing it is a line and the cost of not having it was three collisions in a week.
+printf 'error-codes-check: %s codes — each reported once, asserted by a gate, and listed (%s retired)\n' \
+	"$(printf '%s\n' "$src" | wc -l | tr -d ' ')" \
+	"$(printf '%s\n' "$retired" | grep -c .)"
+printf 'error-codes-check: next free code per range —%s\n' "$next_free"

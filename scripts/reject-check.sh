@@ -4308,6 +4308,49 @@ unsafe {
 }
 EOF
 
+# --- import cycles ------------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
+# one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
+# initialization order no chapter defines.
+reject an-import-cycle-between-two-modules E485 no-place <<'EOF'
+import "ca"
+
+fn main() {
+	print ca.a_one()
+}
+--- ca/ca.zg
+import "cb"
+
+pub fn a_one() -> int {
+	return cb.b_one() + 1
+}
+--- cb/cb.zg
+import "ca"
+
+pub fn b_one() -> int {
+	return 10
+}
+EOF
+
+# A MODULE THAT IMPORTS ITSELF is the one-node cycle, and it is worth its own case because a
+# detector written as "have I seen this on the way down" answers it by a different branch
+# than the two-node one — the `seen` list a loader already keeps for deduplication makes the
+# self-edge look exactly like a module two files import.
+reject a-module-that-imports-itself E485 no-place <<'EOF'
+import "solo"
+
+fn main() {
+	print solo.one()
+}
+--- solo/solo.zg
+import "solo"
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
 reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
 unsafe {
 	fn poke() {

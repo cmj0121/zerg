@@ -360,6 +360,25 @@ fn parse_param_types(mut &p: Parser) -> list[Ty] {
 	return out
 }
 
+# parse_chan_elem reads the `[T]` of a channel and answers the element type.
+#
+# It is ONE function because a channel's element type has one rule on it, and this is the
+# only place either surface form reads that element: the TYPE `chan[T]` (GRAMMAR#chan-type,
+# in every position a type may be written) and the CONSTRUCTOR `chan[T](cap?)`
+# (GRAMMAR#chan-new). Both used to read it inline, and the rule was attached to neither —
+# it lived in the emitter, on the constructor's lowering path alone, so a `chan[int?]` was
+# refused where it was BUILT and accepted everywhere it was merely declared.
+#
+# `line`/`col` are the `chan` keyword's own, taken by the caller before that token was
+# consumed, so a refusal points at the type rather than at the statement holding it.
+fn parse_chan_elem(mut &p: Parser, line: int, col: int) -> Ty {
+	expect(p, Kind.LBrack)
+	elem := parse_type(p)
+	expect(p, Kind.RBrack)
+	ty_chan_elem_check(elem, p_place(p, line, col))
+	return elem
+}
+
 fn parse_base_type(mut &p: Parser) -> Ty {
 	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type). It is not built, and it was not turned away
 	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
@@ -390,7 +409,10 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return Ty.TTuple(elems)
 	}
 
-	mut name := cur(p).lexeme
+	# the head token is kept, not just its text: the `chan` branch below needs the keyword's
+	# own line and column to point a refusal at the type, and by then it is consumed.
+	kw := cur(p)
+	mut name := kw.lexeme
 	p_advance(p)
 
 	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
@@ -429,9 +451,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return Ty.TFn(ptys, fret)
 	}
 	if name == "chan" and p_at(p, Kind.LBrack) {
-		p_advance(p)
-		elem := parse_type(p)
-		expect(p, Kind.RBrack)
+		elem := parse_chan_elem(p, kw.line, kw.col)
 
 		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
 		# element type, so nothing else that a `<-` may follow is ever eaten
@@ -2817,9 +2837,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
 		# rendezvous, which is what a bare `chan[T]()` means
 		p_advance(p)
-		expect(p, Kind.LBrack)
-		elem := parse_type(p)
-		expect(p, Kind.RBrack)
+		elem := parse_chan_elem(p, t.line, t.col)
 		expect(p, Kind.LParen)
 		mut cap: Expr = Expr.EInt("0", 0, 0)
 		if not p_at(p, Kind.RParen) {

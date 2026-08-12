@@ -264,12 +264,11 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" channel-of-optionals E404 <<'EOF'
-fn main() {
-	ch := chan[int?](1)
-	print 1
-}
-EOF
+# `chan[T?]` was checked here, and it does not belong here: it is not a form this compiler
+# has yet to build, it is a form the LANGUAGE refuses (GRAMMAR group 9), so no future
+# feature makes it legal and the case can never retire. It lives in reject-check.sh now,
+# where a permanent rejection's lifetime says it belongs — with one case per POSITION that
+# can spell the type, which is what the single-position check here was hiding.
 
 # A select arm head is `_`, a receive or a send — and nothing else. This used to be
 # accepted: ANY identifier before `=>` became the `_` arm, so a typo (or the old `done`

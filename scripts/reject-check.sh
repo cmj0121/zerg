@@ -3793,11 +3793,56 @@ EOF
 # regression this catches is the entry-point check drifting somewhere every emit stage
 # passes through.
 printf 'x := 1\n' >"$tmp/module-without-main.zg"
-if "$ZERG" build --emit lib -o "$tmp/module-without-main" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
+if "$ZERG" build --emit lib -o "$tmp/module-without-main.o" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
 	[ -f "$tmp/module-without-main.o" ]; then
 	pass=$((pass + 1))
 else
 	echo "LIB       module-without-main — a main-less module no longer builds with --emit lib"
+	fail=$((fail + 1))
+fi
+
+# --- `-o` NAMES THE FILE WRITTEN, AT EVERY STAGE -----------------------------------
+#
+# It is asserted here for the reason the case above is: this file already owns the repo's
+# only `-o` assertion, and no other gate runs the DRIVER rather than the language. What it
+# catches is the flag meaning a different thing per stage — which is what it meant, in both
+# directions. `--emit lib` appended `.o` to a path the user had spelled in full, so `-o
+# out.o` wrote `out.o.o` and `out.o.o.c`; and `--emit c`, `--emit tokens` and `--emit ast`
+# discarded the flag and wrote stdout, so a build that asked for a file got none, said
+# nothing, and exited 0.
+printf 'fn main() {\n\tprint 1\n}\n' >"$tmp/oflag.zg"
+
+o_case() {
+	local name=$1
+	shift
+	if "$@" >/dev/null 2>&1 && [ -s "$tmp/$name" ]; then
+		pass=$((pass + 1))
+	else
+		echo "OUTPUT    $name — \`-o\` did not write the file it was given"
+		fail=$((fail + 1))
+	fi
+}
+
+o_case o-lib.o "$ZERG" build --emit lib -o "$tmp/o-lib.o" "$tmp/oflag.zg"
+o_case o-emit.c "$ZERG" build --emit c -o "$tmp/o-emit.c" "$tmp/oflag.zg"
+o_case o-tokens.txt "$ZERG" build --emit tokens -o "$tmp/o-tokens.txt" "$tmp/oflag.zg"
+o_case o-ast.txt "$ZERG" build --emit ast -o "$tmp/o-ast.txt" "$tmp/oflag.zg"
+o_case o-bin "$ZERG" build --emit bin -o "$tmp/o-bin" "$tmp/oflag.zg"
+
+# and the suffix is NOT appended twice: `out.o.o` is what the old rule left behind.
+if [ ! -e "$tmp/o-lib.o.o" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    o-lib-double-suffix — \`--emit lib -o out.o\` wrote out.o.o"
+	fail=$((fail + 1))
+fi
+
+# WITH NO `-o` the three reading stages stay on stdout, which is the pipe every other gate
+# here uses: only the DEFAULT differs per stage, never what an explicit `-o` means.
+if [ -n "$("$ZERG" build --emit c "$tmp/oflag.zg" 2>/dev/null)" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    c-without-o — \`--emit c\` with no \`-o\` wrote nothing to stdout"
 	fail=$((fail + 1))
 fi
 

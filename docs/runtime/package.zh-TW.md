@@ -19,10 +19,12 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > **[not yet]** **package 這一層在本工具鏈中不存在**。沒有 manifest、沒有版本宣告、沒有解析器、也沒有相依下載：
 > 一次建置就是一個 entry 檔，加上它的 import 在磁碟上碰得到的那些 module。下文凡是提到 package 的部分——版本、
 > package DAG、單一版本選擇、以位置定義的 package-public、以及倚賴圖無環的 orphan rule——描述的都是還沒有任何
-> 實作的一層。`import "name"` 在磁碟上找不到對應物時會被靜默接受，只有 `zerg lint` 會提（`L101 unused import`）。
+> 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E502 cannot resolve
+> import `name` under any source root_——而且早在它被 lex 之前就報出來。
 >
 > **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
-> 沒有任何可見性檢查。見下方「可見性」。
+> 而可見性只檢查了 module 所持有的一部分、不是全部——函式與 module 常數有檢查(_E301 `helper` is not a public
+> member of module `lib`_,且帶位置),struct 的欄位沒有。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module
@@ -86,8 +88,10 @@ abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自�
 > 整個程式的宣告序，而不是在擁有它的那個 module 首次被使用時。「恰好一次」與 module 內 FIFO 成立；「首次被使用時」
 > 不成立——所以一個執行從未碰到的 module，它的 `init()` 照樣會跑。
 >
-> **[not yet]** 兩個各自宣告 `init()` 的 module 會被具名拒絕——壓平後的命名空間分不出 `init__0` 與 `init__0`。
-> 因此跨 module 的初始化**順序**目前沒有任何程式觀察得到。
+> **[deviation]** 兩個各自宣告 `init()` 的 module 會讓建置**壞在 `cc` 裡**。壓平後的命名空間發出兩個
+> `zg_init__0`,而 entry 翻譯單元呼叫了一個它沒見過的——_error: call to undeclared function 'zg_init\_\_0'_,
+> 報在沒人寫過的產生碼上。那正是總則明文禁止的結局,所以它是一個欠著修的 bug、而不是一筆有帳的債:這個形式
+> 既沒有被下降、也沒有被具名拒絕。因此跨 module 的初始化**順序**目前沒有任何程式觀察得到。
 >
 > **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
 > 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
@@ -117,8 +121,10 @@ coherence **不需要全域註冊表**——orphan rule 加上**無環**的 pack
 另一個，任何第三方 package 也無法在不擁有其一的情況下同時指名兩者。所以該實作要是存在，就由構造保證唯一。單一版本
 選擇正是讓「一型別、一實作」有明確定義的前提。
 
-> **[not yet]** **orphan rule 未被強制**。第三個 module 可以寫 `impl Spec for T`，spec 與型別它都不擁有，照樣編得過。
-> 實際被檢查的是壓平命名空間看得到的那件較窄的事：同一次建置中兩個 `impl` 給同一型別同一個方法名，會被拒絕。
+orphan rule 有被強制,而且是以 module、而不是以上文推理所依據的 package 為單位:第三個 module 寫 `impl Spec
+for T`、spec 與型別都不擁有時,會被 _E277 `impl Speak for Dog` is in neither's module — a spec and a type
+belong to whoever declared them, and an impl belongs with one of the two_ 拒絕,且帶位置。同一次建置中兩個
+`impl` 給同一型別同一個方法名也會被拒絕,那是壓平命名空間自己看得到的那件較窄的事。
 
 ### Module
 
@@ -242,9 +248,12 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
 
-> **[not yet]** **沒有 test build**。`*_test.zg` 確實被排除在一般建置之外，這是慣例中可用的那一半；會把它納入的那個
-> 指令——`zerg test`——並不存在，所以上面的白箱／黑箱位置目前只是「檔案該放哪」，不是「怎麼跑起來」。在那之前，
-> `testing` 模組的 `assert` 系列可以從一般程式呼叫。
+> **[not yet]** **這個慣例沒有任何一部分被辨識。** 沒有 `zerg test` 指令,而 `*_test.zg` 也沒有被排除在任何
+> 東西之外:它跟 module 裡其他每個檔案一樣被編進一般建置,所以它的宣告**確實**進得了出貨產物,`pub` 的那些
+> **確實**加入了 module 的表面——`lib.only_in_test()` 在一支從未要求測試的程式裡解析得到也跑得動。它重複的
+> 名字會與同 module 的兄弟撞名,語法壞掉的那一個會讓一般建置失敗。所以上面的白箱／黑箱位置目前只是「檔案該放
+> 哪」、不是「怎麼跑起來」,而那個檔案在等待期間並不是惰性的。在那之前,`testing` 模組的 `assert` 系列可以從
+> 一般程式呼叫。
 
 ### Target 條件式檔案
 

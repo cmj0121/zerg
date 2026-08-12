@@ -1757,7 +1757,7 @@ EOF
 # diagnostic's lexeme out of ONE byte of a three-byte character.
 #
 # It is in the reject list rather than the refuse list because no future feature makes it
-# legal: `GRAMMAR:80` says the source is UTF-8, which is what lets this character be WRITTEN
+# legal: `GRAMMAR#letter` says the source is UTF-8, which is what lets this character be WRITTEN
 # in a comment or a literal, and identifier says which characters can spell a name.
 reject a-character-that-is-not-ascii E104 <<'EOF'
 fn main() {
@@ -1772,7 +1772,7 @@ EOF
 # `zerg lint` and the language server all died the same way, on `EncodingError: bytes are not
 # valid UTF-8 for a str` — no code, no place, and not even the name of the file it was reading.
 #
-# `GRAMMAR:80` says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# `GRAMMAR#letter` says the source is UTF-8, so a file that is not is not a Zerg source file, and
 # WHICH FILE is the whole of the answer — there is no line to name, the thing that would read
 # one being what refused. Hence `no-place`.
 #

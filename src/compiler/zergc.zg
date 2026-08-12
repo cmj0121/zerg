@@ -1185,14 +1185,16 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 # pointed at ended the process before the lexer had read a character. `zerg build`, `zerg
 # fmt`, `zerg desugar` and the language server all went the same way.
 #
-# GRAMMAR:80 says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# GRAMMAR#letter says the source is UTF-8, so a file that is not is not a Zerg source file, and
 # saying which file is the whole of the answer. That is why this carries no `-->` trailer:
 # there is no line to name yet, the thing that would read one being what refused.
 #
-# THE READ IS OUTSIDE THE GUARD ON PURPOSE. `io.read_file` names the path it could not open,
-# and a `guard` around both would turn a missing file into an encoding complaint — the same
-# swallowing `load_unit` above has a paragraph about. The guard covers the conversion alone,
-# which is the only thing in here that can abort.
+# THE READ IS OUTSIDE THE GUARD ON PURPOSE. A file that cannot be opened is a DIFFERENT
+# failure and raises its own `IOError`, and a `guard` around both would report it as an
+# encoding complaint about a file nobody could read — the swallowing `load_unit` above has a
+# paragraph about. The guard covers the conversion alone, which is the only thing in here
+# that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
+# failed on, which is a gap in `io` rather than one here.)
 fn read_source(path: str) -> str {
 	b := io.read_file(path)
 
@@ -1202,7 +1204,7 @@ fn read_source(path: str) -> str {
 		src = str(b)
 		ok = true
 	}
-	raise f"E111 `{path}` is not UTF-8 text, and GRAMMAR:80 makes a Zerg source file UTF-8" if not ok
+	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
 
 	return src
 }

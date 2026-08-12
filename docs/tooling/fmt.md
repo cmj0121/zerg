@@ -613,7 +613,7 @@ shipping compiler rather than a part of it (the line
 | `E108` | a based number needs a digit immediately after its prefix                                   |
 | `E109` | invalid escape in a … literal                                                               |
 | `E110` | a string literal may not contain a NUL                                                      |
-| `E111` | `…` is not UTF-8 text, and GRAMMAR:80 makes a Zerg source file UTF-8                        |
+| `E111` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                 |
 | `E201` | `close` is not a select arm head                                                            |
 | `E202` | a select needs at least one arm                                                             |
 | `E203` | `…` is not a select arm head                                                                |

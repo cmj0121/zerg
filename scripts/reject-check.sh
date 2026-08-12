@@ -3691,6 +3691,77 @@ fn main() {
 }
 EOF
 
+# --- a diverge on a `??`'s right takes no postfix guard ---------------------------------
+#
+# GRAMMAR#coalesce-rhs takes the bare DIVERGE, and GRAMMAR#raise-stmt is where the postfix
+# `if` guard lives: "'p ?? raise Err' takes no trailing 'if': the guard would read as the
+# coalesce's, not the raise's."
+#
+# The parser read it anyway, and what came out was UNDEFINED BEHAVIOUR FROM SAFE CODE —
+# the only such case the audit that found this turned up. The emitter lowers a `??` whose
+# right side diverges on the assumption that the diverge is unconditional, so it writes no
+# `else` for the temp the coalesce answers with: `q := p ?? raise ValueError("x") if false`
+# compiled clean and printed whatever the stack happened to hold. Every one of the five
+# shapes below did.
+#
+# Five cases and not one, because the guard is folded in at three different places —
+# parse_jump_guard for `break`/`continue`/`raise`, and two branches of parse_return for a
+# `return` with a value and one without — and a rule written against only the first would
+# have left the other two silently compiling.
+
+for kw in break continue; do
+	reject "a-coalesce-${kw}-with-a-guard" E284 "a \`??\` right-hand \`${kw}\` takes no trailing \`if\`" <<EOF
+fn main() {
+	mut total := 0
+	for i in 0..3 {
+		p: int? = nil
+		v := p ?? ${kw} if false
+		total = total + v
+	}
+	print total
+}
+EOF
+done
+
+reject a-coalesce-raise-with-a-guard E284 'a `??` right-hand `raise` takes no trailing `if`' <<'EOF'
+fn get() -> int? {
+	return nil
+}
+
+fn main() {
+	p := get()
+	q := p ?? raise ValueError("x") if false
+	print q
+}
+EOF
+
+reject a-coalesce-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+fn f() -> int {
+	p: int? = nil
+	q := p ?? return 7 if false
+	return q
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+# the same rule reached through parse_return's OTHER branch: a bare `return` under a guard
+# is desugared into `if c { return }`, so it comes back as an `if` statement where the one
+# above comes back as a conditional return. Both are the guard, and neither is the form.
+reject a-coalesce-bare-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+fn f() {
+	p: int? = nil
+	q := p ?? return if false
+	print q
+}
+
+fn main() {
+	f()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

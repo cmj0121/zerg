@@ -6835,7 +6835,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
+		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(em, sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0, sb)
@@ -6878,11 +6878,11 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst
 			# a default is an argument, so it meets its field's type like any other — which is
 			# what gives `xs: list[int] = []` an element size, exactly as it does for a
 			# parameter default
-			out = out + c_field_init(em, f"the default for {chk_field_says(sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
+			out = out + c_field_init(em, f"the default for {chk_field_says(em, sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
 		} else if ty_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
-			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
+			chk_at(em, "E370", f"{chk_field_says(em, sname, i + 1)} has no value and no default ({ty_name(ft)}): a construction binds by position and stopped short of it, and only a `T?` field has an implicit default — which is `nil`")
 			out = out + "0"
 		}
 		i = i + 1

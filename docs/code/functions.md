@@ -41,10 +41,11 @@ and this position gives it none_.
 > bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
-> **type** carrying it is rejected by the parser: `f: fn(mut &int) = bump` reports _expected `,`, found `&`_,
-> though `GRAMMAR` derives `param-type ::= ( 'mut' '&' )? type`. The parameter-type parser reads a plain type
-> and never the `mut &` prefix that production allows, so `fn(mut &int) -> bool` has no spelling and the two
-> types stay distinct only on paper.
+> **type** carrying it is read and then refused by name: `f: fn(mut &int) = bump` reports _E286
+> NotImplemented: a `mut &` parameter in a function type_, with the place the prefix sits at. The refusal is
+> the same rule the value side already states — a held function is a bare pointer here and the call site reads
+> a `mut &` from the callee's **name**, which a value has not got (`E469`) — so `fn(mut &int) -> bool` has no
+> spelling, and the two types stay distinct only on paper.
 
 **A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
 marking the one argument-level effect, a mutable reference that writes back to the caller — and its result, where a
@@ -81,6 +82,13 @@ greet("Sam", "Hi", true)     # all positional
   > names are not in scope, so the call reports _error: undefined name `a`_ instead of evaluating `a * 2`.
   > Every other default is lowered as specified, a bare constant and a computed expression alike:
   > `b: int = 1 + 2`, `b: int = side()` and `greeting: str = "a" + "b"` all evaluate at the call, each time.
+  >
+  > **[not yet]** A default on an **anonymous** function's parameter is not built. `GRAMMAR` derives it —
+  > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`, the same `( '=' expr )?` tail a
+  > declaration's parameter has — and `f := fn (x: int = 5) -> int { … }` reports _E285 NotImplemented: a
+  > default on the closure parameter `x`_, with the place. The reason is the one above: a default is
+  > materialised at the **call site** out of the callee's **declaration**, and a closure is reached through a
+  > **value**, which carries no declaration to read one from. Pass the argument at every call.
 
 - A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
   defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,

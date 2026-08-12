@@ -2484,6 +2484,83 @@ fn main() {
 }
 EOF
 
+# --- three productions GRAMMAR derives and this compiler does not build ------------
+#
+# Each of these had NO parse path at all, so the answer was whatever token the reader
+# tripped over — the message a TYPO gets, about a form the grammar plainly derives. That
+# breaks the contract in docs/conformance.md: a form is either lowered correctly or refused
+# BY NAME. The parser now READS each one to its end and refuses it as itself, with a place.
+
+# GRAMMAR#closure-param gives a closure parameter a default — `( '=' expr )?`, the same
+# tail GRAMMAR#param gives a named declaration's. A named `fn` has had defaults all along,
+# so this is the closure half of one feature; the reader stopped at the name and answered
+# "a parameter needs a name, and `=` is not one", which says the `=` is in the wrong place
+# rather than that the form is unbuilt.
+expect "$ZERG" closure-parameter-default E285 place <<'EOF'
+fn main() {
+	f := fn (x: int = 5) -> int {
+		return x
+	}
+	print f(1)
+}
+EOF
+
+# GRAMMAR#param-type puts `mut &` in a function TYPE — `param-type ::= ( 'mut' '&' )? type`
+# — and docs/code/functions.md says the distinction is real and cannot be written down. It
+# was refused by the tuple/parameter-list reader's `expect(Comma)`, so `fn(mut &int) -> bool`
+# answered "expected `,`, found `&`": a punctuation complaint about a type the language has.
+expect "$ZERG" mut-ref-in-a-fn-type E286 place <<'EOF'
+fn bump(mut &n: int) -> bool {
+	n = n + 1
+	return true
+}
+
+fn main() {
+	g: fn(mut &int) -> bool = bump
+	print 1
+}
+EOF
+
+# GRAMMAR#fn-sig opens a spec member with `'unsafe'? 'mut'? 'fn'`, so `unsafe fn f()` in a
+# spec IS a derivation. It used to be turned away by E276 — the catch-all for a token that
+# starts no member at all — which DENIED the derivation and cited GRAMMAR#spec-member while
+# doing it. A top-level `unsafe fn` gets E264 and a place, so the two spellings of one
+# unenforced trust boundary now answer alike.
+expect "$ZERG" unsafe-in-a-spec-signature E287 place <<'EOF'
+spec Raw {
+	unsafe fn peek() -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# The SEED had the opposite failure on the same form, and it is the worse one: it read the
+# signature, recorded `unsafe` on it, and then dropped the requirement — a plain `fn peek()`
+# satisfied `unsafe fn peek()`, built, and RAN. Its Tier 2 table has claimed `unsafe` is
+# refused since it was written; this is the path where that was not true.
+expect "$ZERG0" seed-unsafe-in-a-spec-signature "an \`unsafe\` spec signature is not yet supported" <<'EOF'
+spec Raw {
+	unsafe fn peek() -> int
+}
+
+struct T {
+	v: int
+}
+
+impl Raw for T {
+	fn peek() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	t := T(7)
+	print t.peek()
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

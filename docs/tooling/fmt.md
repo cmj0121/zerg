@@ -820,7 +820,7 @@ shipping compiler rather than a part of it (the line
 | `E460` | a … is an identity rather than a value, and the language gives it no equality               |
 | `E461` | a second `impl Into[…] for …` — **[not yet]**                                               |
 | `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                |
-| `E463` | `in` over anything but a list, a map or an error kind — **[not yet]**                       |
+| `E463` | `in` over anything but a list, a map, a range or an error kind — **[not yet]**              |
 | `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                   |
 | `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                       |
 | `E466` | the built-in `set` — **[not yet]**                                                          |

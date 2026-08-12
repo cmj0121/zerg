@@ -736,7 +736,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E460` | … 是身分而不是值,語言沒有給它相等                                                                     |
 | `E461` | 同一個型別上的第二個 `impl Into[…]` —— **[not yet]**                                                  |
 | `E462` | 對元素沒有 `==` 的 list 做 `in` —— **[not yet]**                                                      |
-| `E463` | 對 list、map 或 error kind 以外的東西做 `in` —— **[not yet]**                                         |
+| `E463` | 對 list、map、range 或 error kind 以外的東西做 `in` —— **[not yet]**                                  |
 | `E464` | `into` 是 `Into` spec 的方法,而沒有任何內建型別實作它                                                 |
 | `E465` | `…` 屬於固定寬度階梯 —— **[not yet]**                                                                 |
 | `E466` | 內建的 `set` —— **[not yet]**                                                                         |

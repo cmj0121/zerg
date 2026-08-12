@@ -49,6 +49,19 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 program builds module by module — `-j` compiles several units at once, and results are cached by
 content in `.zerg-cache/`, so a rebuild that changes one module recompiles one module.
 
+**`-o` does not mean the same thing at every stage**, which is worth knowing before you trust it:
+
+| Stage           | What `-o` does                                                                   |
+| --------------- | -------------------------------------------------------------------------------- |
+| `--emit bin`    | names the executable — `-o app` writes `app`                                     |
+| `--emit lib`    | names a **stem**, and `.o` is appended — `-o out.o` writes `out.o.o`             |
+| `--emit c`      | **ignored**; the C always goes to stdout, so redirect it — `--emit c f.zg > f.c` |
+| `tokens`, `ast` | ignored for the same reason — both stages write to stdout                        |
+
+Only the first is what the help text describes. The other two are bugs, not design: `--emit lib`
+appends `.o` to whatever it is given rather than to the default stem alone, and `--emit c` never
+consults `-o` at all. Give `--emit lib` a name with no extension until that is fixed.
+
 ## The language
 
 | Principle        | What it means                                                                           |

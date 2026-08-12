@@ -66,7 +66,9 @@ deviation 是一個欠著修的 bug,不是一個被記載下來的狀態。
 ## 診斷契約
 
 格式良好的程式會編譯成功；格式不良的會被拒絕、伴隨一個或多個**診斷**，且不產生輸出 binary。每個診斷寫到標準
-錯誤，形式為
+錯誤，而讀者會遇到**兩種算繪**，因為診斷抵達標準錯誤的路徑有兩條。
+
+由 **checker** 收集的規則透過診斷清單回報，那是完整的形式：
 
 ```text
 error: E335 cannot bind str to a int binding: `x`
@@ -76,20 +78,50 @@ error: E335 cannot bind str to a int binding: `x`
    |     ^
 ```
 
+被 **parser 或 emitter 拒絕**的形式則在原地停止整趟執行，它印出的是句子，以及——當該處手上有位置時——後綴；
+既沒有 `error:` 前綴，底下也沒有引出的原始碼行與 caret：
+
+```text
+E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
+expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
+  --> demo.zg:2:7
+```
+
+兩者都是診斷，也都在用字唯一 normative 的那個意義上是 normative 的：**哪些**程式被拒絕。算繪本身則否。這個差
+別值得說出來而不是藏起來，因為那正是讀者實際遇到的，也因為第二種形狀正是規則會弄丟位置與碼的那一種——見下方
+的 deviation。
+
 **位置是後綴、不是前綴**:句子先出現,`--> file:line:col` 排在它底下那一行,其中 `line` 與 `col` 為 1-based。
 編譯失敗以非零狀態結束。診斷用字非 normative——兩個實作可以用不同措辭表達同一個
 拒絕——但**哪些**程式被拒絕則是 normative（見各章規則；reject list 為 normative，訊息文字則否）。`fmt` 與 `lint`
 工具僅供參考，永不改變程式的意義。
 
-診斷之後**可以**附上它所指的原始碼行、以及一個標記該行上何處的 caret；`zerg` 會算繪一個。conforming 實作不必
-如此，其形狀也非 normative——normative 的只有「有給位置時,它要指出檔案、行與欄」。一個格式不良的程式**應該**在
-一次執行中報出所有找得到的診斷，而不是停在第一個 —— `zerg` 對它所檢查的規則就是如此。
+診斷之後**可以**附上它所指的原始碼行、以及一個標記該行上何處的 caret；`zerg` 對第一種形狀會算繪，第二種則不
+會。conforming 實作不必如此，其形狀也非 normative——normative 的只有「有給位置時,它要指出檔案、行與欄」。一個
+格式不良的程式**應該**在一次執行中報出所有找得到的診斷，而不是停在第一個 —— `zerg` 對它所檢查的規則就是如
+此；而一個拒絕會在第一個就結束整趟執行，那正是兩種形狀的另一半意義。
 
-> **[deviation]** 位置出現在 `zerg` **檢查**的**每一條**規則上，而在它**拒絕**的形式上只出現在**一部分**。
-> 來自 parser 或 emitter 的 `NotImplemented` 多數仍然只報形式名稱、不報位置——`E210`、`E217`、`E223`、`E236`、
-> `E446`、`E465` 這一族——而逐漸增加的少數帶著位置(`E224`、`E244`、`E285`、`E286`、`E404`、`E454`)。另有兩則
-> 診斷連**碼**都沒有:巢狀 pattern 報 _a pattern binding needs a name_、對非錯誤型別的 `is` 報
-> _NotImplemented: `is int`_,兩者都沒有一個 gate 釘得住的 `E###`。
+> **[deviation]** 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒
+> 絕。走檢查通道回報的規則永遠兩者俱全。用 `raise` 回報的規則，只有在它 raise 的字串本身寫上碼時才有碼、只有
+> 在該處自己接上後綴時才有位置——於是 parser 與 emitter 的拒絕就此分成兩半，而少數幾條**真正在檢查**的規則也
+> 跟著掉到分界線錯的那一邊。
+>
+> ---
+>
+> 今日量測：在由 `raise` 回報的碼裡，約四分之三不接位置——`E210`、`E217`、`E223`、`E236`、`E446`、`E465` 這一
+> 族——其餘則接（`E224`、`E244`、`E285`、`E286`、`E404`、`E454`、`E247`–`E256` 這一組巢狀家族、`E483`）。約有
+> **七十**處診斷完全沒有**碼**，遠多於本段曾經點名的那兩則：它們就是每一個訊息寫成散文、而非以 `E###` 開頭的
+> `raise`，從 parser 的萬用兜底 _NotImplemented: `X` is not an expression this compiler reads_，一路經過
+> emitter 的 carrier、method、module 與 match 幾個家族，到 lexer 的 _f-string: a bare '}' is not text_。
+> `scripts/error-codes-check.sh` 看不見它們：它比對的是已經存在的碼與 gate、catalogue 三者，而一條沒有碼的規則
+> 在三者裡都不存在。
+>
+> ---
+>
+> **檢查的規則並不豁免**，這正是舊文字說反了的地方。有四條 `zerg` 真正**檢查**的規則回報時沒有位置，其中三條
+> 連碼也沒有：常數環（_these constants depend on each other and none can be given a value first_）、
+> `` `x` is used after del `` 與 `` `x` is used after del on some paths ``——三者都兩樣皆缺——以及 `E382`，一個
+> 名字被宣告兩次，它有碼而沒有位置，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。
 >
 > `zerg` 記錄的位置是**逐語句**的，所以欄位指的是語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到
 > 那個 token。

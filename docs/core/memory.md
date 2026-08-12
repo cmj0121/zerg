@@ -241,11 +241,19 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** `del` of a `Ref` value — a `chan`; there is no `Ref[T]` here, above — dropping a holder (and
-> running `drop` at the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —
-> to free its storage **early** is **[not yet]**: today such a `del` revokes the name's access, but the
-> storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above is
-> thus the intended behavior, not yet the bootstrap's for owning values.
+> **Status.** The last row of the table is the one `zerg` does not reach at all. `del` of a `Ref` value is
+> **[not yet]** in both of its halves: `del ch` on a channel is refused by name (_E470 NotImplemented:
+> `del ch` on a CHANNEL_, which says to write `close(ch)` instead), and there is no `Ref[T]` type here to
+> `del` in the first place — naming `Ref` refuses too (`E446`). What the compiler does with a channel is
+> release it where its binding's scope ends, so the holder is dropped and `drop` still runs at the last
+> one; what is missing is the ability to say so **early**, by name.
+>
+> ---
+>
+> `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
+> **[not yet]** for the same reason from the other side: today such a `del` revokes the name's access, but
+> the storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above
+> is thus the intended behavior, not yet the bootstrap's for owning values.
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is
@@ -262,6 +270,10 @@ afterwards — a later `ch <- v` or `<-ch` is a compile error (_`ch` is used aft
 **not** the way to signal "no more values": to end a stream while keeping the handle, use the channel-only
 statement **`close(ch)`**; to end it by scope, let the binding's scope exit release what it holds. Both are
 in [Coroutines](../code/coroutine.md). Use `del ch` when you are finished with the **name** as well.
+
+> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E470`, the Status
+> note above). The half of it that already holds is the advice: `close(ch)` ends a stream and scope exit
+> releases the hold, and those are what a program writes today.
 
 ## `defer` — cleanup at block exit
 

@@ -241,13 +241,26 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		advance(l) # 0
 		advance(l) # x/o/b
 
-		# a based literal needs at least one DIGIT. `0x` on its own consumed nothing, was
-		# emitted as an Int, and lowered to a C `0x` — which cc read as the number zero, so
-		# a malformed literal compiled and answered 0. The prefix without digits is not a
-		# number, and saying so is the only way anyone finds out.
-		digits := l.offs
+		# a based literal needs a digit IMMEDIATELY after its prefix, which is what GRAMMAR
+		# group 3 writes as `'0x' hex-digit ( '_'? hex-digit )*`: the first digit is part of
+		# the prefix's own production, and only the ones after it may be grouped. `0x` on
+		# its own consumed nothing, was emitted as an Int, and lowered to a C `0x` — which
+		# cc read as the number zero, so a malformed literal compiled and answered 0.
+		#
+		# The question is put to the FIRST byte, not to how much `consume_based` swallowed,
+		# because those two are not the same question and `0x_1F` is the difference.
+		# `consume_based` takes a `_` whenever a valid digit follows it, which is the right
+		# rule everywhere it is asked EXCEPT at the first position: a grouping `_` sits
+		# between two digits, and here there is no digit to its left. A run LENGTH cannot
+		# see that — `0x_1F` consumed four bytes, passed, and meant 31.
+		lead := based_valid(at(l, 0), base)
+
+		# the malformed run is consumed before it is reported so the whole of it lands in
+		# ONE Illegal token. Reporting from where the bad byte was found would leave the
+		# lexer standing inside the literal, and `_1F` would come back as an identifier —
+		# one mistake, two messages, the second of them about a name nobody wrote.
 		consume_based(l, base)
-		return bad(l, "E108", "a based number needs at least one digit after its prefix", sline, scol, lexeme_from(l, soff)) if l.offs == digits
+		return bad(l, "E108", "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
 		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 

@@ -66,7 +66,7 @@ type Manifest struct {
 // describing which runtime features the program uses. When the returned
 // diagnostics are non-empty the source is empty and must not be compiled.
 func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
-	e := &emitter{prog: prog, info: prog.Info}
+	e := &emitter{prog: prog, info: prog.Info, pinned: map[ast.Expr]string{}}
 	e.program()
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
@@ -175,6 +175,14 @@ type emitter struct {
 	drops    []*scope
 	fnMark   string
 	deferIdx map[*ast.DeferStmt]int
+
+	// Left-to-right evaluation order (emit_order.go). pinned maps an operand this
+	// emitter has already materialized into a temp to that temp's C name, so the
+	// combining form's own rendering reads the temp instead of re-rendering — and so
+	// evaluating in source order costs one lookup at the head of expr() rather than a
+	// second lowering path per form. Empty except while a form that needs ordering is
+	// being rendered, so a program with no such form is byte-identical.
+	pinned map[ast.Expr]string
 
 	// Per-function name environment. Zerg allows a binding to shadow an outer
 	// name (e.g. 'mut n := n'), but C parameters and the top-level body share one
@@ -1526,6 +1534,12 @@ func (e *emitter) systemError(at ast.Node, format string, args ...any) string {
 // --- expressions --------------------------------------------------------------
 
 func (e *emitter) expr(x ast.Expr) string {
+	// An operand its combining form has already materialized into a temp, to fix the
+	// evaluation order (emit_order.go), IS that temp from here on — every copy, coercion
+	// and release the form goes on to apply is applied to the temp holding the value.
+	if t, ok := e.pinned[x]; ok {
+		return t
+	}
 	switch n := x.(type) {
 	case *ast.IntLit:
 		return strconv.FormatInt(n.Value, 10)
@@ -1586,40 +1600,7 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), x)
 	case *ast.Binary:
-		if md, ok := e.cur.OpCalls[n]; ok {
-			// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
-			// lvalue operand is copied (retain/deep-copy) exactly as the plain call path copies
-			// its args — otherwise a non-POD/boxed operand is double-freed when the callee
-			// releases its param (DESIGN-refcount §7 risk 8). The left operand is the borrowed
-			// receiver (never dropped by the callee), so it is passed raw. POD operands copy with
-			// a bare `=`, so an existing derived comparison stays byte-identical.
-			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.copyValue(e.cur.ExprType(e.info, n.R), n.R))
-		}
-		if n.Op == token.In {
-			// `v in lo..hi` range membership lowers to an inline bounds test.
-			if s, ok := e.rangeMembership(n); ok {
-				return s
-			}
-		}
-		// `str` is not a native C operand: '+' concatenates through the runtime and a
-		// comparison goes through strcmp (see emit_str.go).
-		if s, ok := e.strBinary(n); ok {
-			return s
-		}
-		l, r := e.expr(n.L), e.expr(n.R)
-		if n.Op == token.SlashDiv {
-			// the OPERAND type picks the lowering; the result is an int either way
-			return e.floorDiv(e.cur.ExprType(e.info, n.L), l, r)
-		}
-		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
-			return s
-		}
-		// the WRAPPING three have no helper by design — the suffix is what says so — and
-		// so were the one arithmetic path that came back from 64 bits by not coming back
-		if wrapsToWidth(n.Op) {
-			return e.wrapArith(e.cur.ExprType(e.info, n), fmt.Sprintf("%s %s %s", l, binaryOp(n.Op), r))
-		}
-		return fmt.Sprintf("(%s %s %s)", l, binaryOp(n.Op), r)
+		return e.orderedBinary(n)
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:
@@ -1748,6 +1729,76 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(x.Span(), "internal: unsupported expression node %T", x)
 		return "0"
 	}
+}
+
+// binaryValue lowers a binary operation once its operands' evaluation order is already
+// settled (orderedBinary decides that, and pins a temp per operand when it has to), so
+// every path below reads its operands through e.expr exactly as it always did.
+func (e *emitter) binaryValue(n *ast.Binary) string {
+	if md, ok := e.cur.OpCalls[n]; ok {
+		// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
+		// lvalue operand is copied (retain/deep-copy) exactly as the plain call path copies
+		// its args — otherwise a non-POD/boxed operand is double-freed when the callee
+		// releases its param (DESIGN-refcount §7 risk 8). The left operand is the borrowed
+		// receiver (never dropped by the callee), so it is passed raw. POD operands copy with
+		// a bare `=`, so an existing derived comparison stays byte-identical.
+		return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.copyValue(e.cur.ExprType(e.info, n.R), n.R))
+	}
+	if n.Op == token.In {
+		// `v in lo..hi` range membership lowers to an inline bounds test.
+		if s, ok := e.rangeMembership(n); ok {
+			return s
+		}
+	}
+	// `str` is not a native C operand: '+' concatenates through the runtime and a
+	// comparison goes through strcmp (see emit_str.go).
+	if s, ok := e.strBinary(n); ok {
+		return s
+	}
+	l, r := e.expr(n.L), e.expr(n.R)
+	if n.Op == token.SlashDiv {
+		// the OPERAND type picks the lowering; the result is an int either way
+		return e.floorDiv(e.cur.ExprType(e.info, n.L), l, r)
+	}
+	if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
+		return s
+	}
+	// the WRAPPING three have no helper by design — the suffix is what says so — and
+	// so were the one arithmetic path that came back from 64 bits by not coming back
+	if wrapsToWidth(n.Op) {
+		return e.wrapArith(e.cur.ExprType(e.info, n), fmt.Sprintf("%s %s %s", l, binaryOp(n.Op), r))
+	}
+	return fmt.Sprintf("(%s %s %s)", l, binaryOp(n.Op), r)
+}
+
+// orderedBinary evaluates a binary operation's two operands left to right when the right
+// one can run code, then combines them (emit_order.go). `a() + b()` used to hand both
+// calls to one C helper call, whose argument order is unspecified — so the same source
+// printed "a b" under one C compiler and "b a" under another.
+//
+// Two shapes are left alone. `and`/`or` are SHORT-CIRCUIT: they are already left to right,
+// and their whole point is that the right side may never be evaluated at all — sequencing
+// it into a temp would evaluate it always, which is not slower, it is wrong. And `v in
+// lo..hi` is not a two-operand combine but an inline bounds test over the RANGE's own
+// bounds; materializing the range operand would build a range carrier value where the
+// program asked for none.
+func (e *emitter) orderedBinary(n *ast.Binary) string {
+	if n.Op == token.And || n.Op == token.Or || orderTrivial(n.R) || e.isRangeMembership(n) {
+		return e.binaryValue(n)
+	}
+	pre, undo := e.orderOperands([]ast.Expr{n.L, n.R}, nil)
+	defer undo()
+	return orderedForm(pre, e.binaryValue(n))
+}
+
+// isRangeMembership reports whether a binary is the `v in lo..hi` bounds test, which
+// rangeMembership lowers without combining the two operands as values.
+func (e *emitter) isRangeMembership(n *ast.Binary) bool {
+	if n.Op != token.In {
+		return false
+	}
+	_, ok := e.cur.ExprType(e.info, n.R).(*types.Range)
+	return ok
 }
 
 // exprList renders a comma-separated list of expressions.
@@ -2335,6 +2386,14 @@ func (e *emitter) call(n *ast.Call) string {
 	if reordered != nil {
 		callArgs = reordered
 	}
+	// The arguments evaluate in SOURCE order (emit_order.go), which C's unspecified
+	// argument order does not give — and which is not the order they are WRITTEN into the
+	// call when the call names them: a named argument selects its parameter, so
+	// `f(b: g(), a: h())` emits h() first and must still RUN g() first. Sequencing
+	// therefore walks the source list and pins each temp on the argument node, leaving the
+	// rendering below to pick the temps up in whatever order the parameters put them.
+	pre, undo := e.orderOperands(argExprs(nil, n.Args), e.argByRefSkip(n.Args, callArgs, byref))
+	defer undo()
 	var args strings.Builder
 	for i, a := range callArgs {
 		if i > 0 {
@@ -2370,7 +2429,7 @@ func (e *emitter) call(n *ast.Call) string {
 			args.WriteString(e.paramDefaultArg(id, provided+i, def))
 		}
 	}
-	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
+	return orderedForm(pre, fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String()))
 }
 
 // namedArgSlots reorders a call's arguments into PARAMETER order, filling each omitted
@@ -2552,6 +2611,11 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	// A `mut &` parameter of the resolved function takes the argument's ADDRESS, exactly
 	// as a direct call does — sema already checked each such argument is a mut lvalue.
 	byref := e.namespaceByRefArgs(key)
+	// A module-qualified call is a call: its arguments evaluate in source order, by the
+	// same rule and the same mechanism a direct one's do (emit_order.go). It takes no
+	// named arguments, so its source list is already its slot list.
+	pre, undo := e.orderOperands(argExprs(nil, n.Args), byref)
+	defer undo()
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
@@ -2582,7 +2646,7 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	if m, ok := e.cur.Calls[n]; ok {
 		target = m
 	}
-	return fmt.Sprintf("%s(%s)", target, args.String()), true
+	return orderedForm(pre, fmt.Sprintf("%s(%s)", target, args.String())), true
 }
 
 // namespaceByRefArgs reports, per argument position of a resolved namespace member call
@@ -2661,9 +2725,15 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 // the resolved impl-method instance, passing the receiver first (B1).
 func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
+	byref := e.methodByRefArgs(md)
+	// `recv.m(a…)` evaluates the receiver first and then the arguments, left to right
+	// (emit_order.go); the receiver leads the operand list because that is where the
+	// source puts it, so `r().m(g())` runs r() before g() rather than in whichever order
+	// C picked for the two arguments of the lowered call.
+	pre, undo := e.orderOperands(argExprs(field.X, n.Args), argSkip(byref))
+	defer undo()
 	recv := e.expr(field.X)
 	args := recv
-	byref := e.methodByRefArgs(md)
 	for i, a := range n.Args {
 		// A `mut &` parameter binds the caller's variable itself — pass its address, and
 		// never a copy, which is the whole point of the writeback. Passing the value here
@@ -2685,7 +2755,7 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	for _, def := range e.methodTrailingDefaults(md, len(n.Args)) {
 		args += ", " + e.expr(def)
 	}
-	return fmt.Sprintf("%s(%s)", md.Mangled, args)
+	return orderedForm(pre, fmt.Sprintf("%s(%s)", md.Mangled, args))
 }
 
 // A method call reads its by-ref flags and its parameter defaults off the SAME node a
@@ -2721,6 +2791,12 @@ func (e *emitter) construct(n *ast.Call) string {
 	if reordered != nil {
 		ctorArgs = reordered
 	}
+	// A construction's field values evaluate in SOURCE order too (emit_order.go): a C
+	// compound literal's initializers are no more ordered than a call's arguments, and a
+	// construction that names its fields is reordered into declaration order below, so the
+	// temps are pinned on the source list exactly as a named call's are.
+	pre, undo := e.orderOperands(argExprs(nil, n.Args), nil)
+	defer undo()
 	var parts []string
 	for i, a := range ctorArgs {
 		parts = append(parts, e.fieldSlot(si, i, a.Value))
@@ -2734,7 +2810,7 @@ func (e *emitter) construct(n *ast.Call) string {
 			parts = append(parts, e.fieldDefaultSlot(si, provided+j, def))
 		}
 	}
-	return "((" + name + "){" + strings.Join(parts, ", ") + "})"
+	return orderedForm(pre, "(("+name+"){"+strings.Join(parts, ", ")+"})")
 }
 
 // namedFieldSlots is namedArgSlots for a struct construction: it reorders the arguments

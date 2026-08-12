@@ -66,12 +66,24 @@ through:
 side effect (a `mut &` argument, an abort) sequences predictably, unlike C, whose argument-evaluation order
 is unspecified.
 
-> **[deviation]** The bootstrap orders only the **elements of a literal** left-to-right; **function-call
-> arguments and binary operands** inherit C's unspecified order, so `add(f(1), g(2))` may evaluate `g(2)`
-> before `f(1)`. The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — **are**
-> honored left-to-right: the left operand is evaluated first and the right is skipped when the left decides
-> the result. [Conformance](../conformance.md) lists the call-argument / operand order as an
-> implementation-defined point until the intended left-to-right rule is enforced.
+Binary operands, a call's arguments, a method call's receiver-and-arguments, and a struct construction's
+fields are each **sequenced** where the order is observable: an operand after the first that can run code
+makes the whole list evaluate into temporaries, in source order. An operand that cannot run code — a
+literal, or a plain name read — is left where it stands, so the common `f(g())` and `x + 1` are unchanged.
+The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — are left-to-right in the
+stronger sense that the right side is **skipped** when the left decides the result.
+
+> **[deviation]** Three combining forms still hand their operands to one C construct and inherit C's
+> unspecified order: an **enum variant's payload** (`E.V(f(1), g(2))`), the built-in **`list` / `map`
+> methods**, and a call through a **function value**. Each needs two or more effectful operands before the
+> order is observable at all. Everything else named above is ordered.
+
+---
+
+> **[deviation]** `v in lo..hi` evaluates `v` **more than once** — two or three times, depending on the
+> bounds — because the membership test is inlined as a bounds comparison rather than built as a range. So
+> `f() in 1..10` calls `f()` repeatedly. This is a repeated evaluation rather than a misordered one, and it
+> is the same defect in both compilers.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The

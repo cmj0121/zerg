@@ -870,6 +870,7 @@ shipping compiler rather than a part of it (the line
 | `E483` | the default on field `…` reads the field `…` — **[not yet]**                                |
 | `E484` | the mutable global `…` may not be `pub`                                                     |
 | `E485` | import cycle: `…` -> `…` -> `…`                                                             |
+| `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                     |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 | `E503` | cannot receive on a send-only `…`                                                           |

@@ -8958,10 +8958,10 @@ fn c_chan_op_check(t: Ty, op: int, at: str) {
 	dir := c_chan_dir(t)
 	if op == 0 and dir == 1 {
 		# the guarantee the send-only end exists for: it cannot receive (steal) values
-		raise "E503 cannot receive on a send-only " + ty_name(t) + at
+		raise f"E503 cannot receive on a send-only {ty_name(t)}{at}"
 	}
 
-	raise "E504 cannot send on a receive-only " + ty_name(t) + at if op == 1 and dir == 2
+	raise f"E504 cannot send on a receive-only {ty_name(t)}{at}" if op == 1 and dir == 2
 	raise f"E505 cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" + at if op == 2 and dir == 2
 }
 

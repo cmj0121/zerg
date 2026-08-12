@@ -874,6 +874,43 @@ name in pattern position is **always** a fresh binding
 — two variants written without their enum — is `E458` instead: the first binds everything,
 so the arms below it are unreachable. The number is not reused.
 
+### Retired codes
+
+**A retired number is never reused.** A code is a stable identity, and reusing one makes an
+old build's message mean something it never meant — a report from a user, a log, a bug
+filed last year, all silently reassigned to a different rule. So a retired code leaves the
+table above and is listed here instead, and the range it sat in goes on counting from its
+own high-water mark.
+
+That is also what makes the catalogue **queryable**. `make error-codes-check` reports the
+**next free code in every range**, which is the question anybody adding a rule has —
+including two agents working in parallel, who between them collided on `E387`, `E477` and
+`E288`/`E289` in a single week because the only way to ask was to read the table by eye.
+The answer is only reliable while every number below the mark is accounted for, so the gate
+holds each range to exactly that: a number that is neither listed above nor listed here is a
+**gap**, and a gap is a code somebody may reissue without knowing.
+
+| Code   | Why it retired                                                                             |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `E209` | a closure parameter with no type — the form is built, so the refusal went with it          |
+| `E216` | a default on a struct field — built                                                        |
+| `E220` | a nested `{ … }` block as a statement — built                                              |
+| `E228` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E229` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E237` | a `with` block — built, and an example took the refusal's place                            |
+| `E274` | a bare name in pattern position, decided by its first letter — see above; `E458` covers it |
+| `E368` | `…` is not generic — the branch that reported it left, and the code left with it           |
+| `E373` | a name declared as both a module constant and a function — the rule is `E381`'s            |
+| `E429` | a closure capturing a name — built                                                         |
+| `E439` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E440` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E441` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E442` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E443` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E447` | never issued: the conversion pass that numbered `E4xx` skipped it                          |
+| `E448` | an ordering that comes from `Ord` — the rule it named is the checker's, and always was     |
+| `E450` | no field `…` on a type — the same rule as the row that kept the number below it            |
+
 ## `zerg lint`
 
 ```sh

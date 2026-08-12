@@ -52,6 +52,17 @@ set -u
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
 
+# ABSOLUTE, because the `bare-entry` marker below runs the compiler from the case's OWN
+# directory — and a `./bin/zerg` resolved from there names nothing. Computed once, from
+# whatever the two variables above ended up holding, so an overridden $ZERG travels too.
+abspath() {
+	case $1 in
+	/*) printf '%s\n' "$1" ;;
+	*) printf '%s/%s\n' "$(pwd)" "${1#./}" ;;
+	esac
+}
+ZERG_ABS=$(abspath "$ZERG")
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -144,14 +155,27 @@ reject() {
 		case $fl in at=*) at=${fl#at=} ;; esac
 	done
 
-	local out status first
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
 	# only cc would reject looks accepted and assertions 3 and 4 can never fire. Linking
 	# for real is what makes "the compiler said so, not cc" a claim this gate can check —
 	# and it costs nothing while the gate is green, because a program the compiler rejects
 	# never reaches cc anyway.
-	out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
-	status=$?
+	#
+	# THE ENTRY PATH'S SPELLING IS PART OF THE PROGRAM, for one class of rule: a module is a
+	# directory, so a rule that asks "which module is this declaration in" answers from the
+	# path a file was read at — and a BARE filename has no directory component to answer
+	# with. Every case above hands the compiler `$tmp/<name>.d/<name>.zg`, which always has
+	# one, so the whole class was invisible here. `bare-entry` runs the build from the case's
+	# own directory and names the entry with no directory at all, which is what a reader
+	# standing in their own source tree types.
+	local out status first
+	if has_flag "$flags" bare-entry; then
+		out=$(cd "$dir" && "$ZERG_ABS" build --emit bin -o "$tmp/$name.bin" "$name.zg" 2>&1 >/dev/null)
+		status=$?
+	else
+		out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
+		status=$?
+	fi
 	first=${out%%$'\n'*}
 
 	if [ $status -eq 0 ]; then
@@ -4182,6 +4206,24 @@ fn hidden(s: str) {
 
 pub fn shout(s: str) -> str {
 	return s + "!"
+}
+EOF
+
+# THE SAME NAME, AND THE ENTRY NAMED WITH NO DIRECTORY. Every case above hands the compiler a
+# path that has one, and a module is a directory — so the rule asks a file's path which
+# module it is in, and for `zerg build m.zg` the answer was the empty string, which is also
+# the value that means "generated, no module a reader could have written". The entry module
+# collapsed into the sentinel and every visibility question went quiet: this exact program,
+# spelled `./m.zg`, was refused, and spelled `m.zg`, printed 42.
+reject a-module-private-name-from-a-bare-entry-path E301 bare-entry <<'EOF'
+import "text"
+
+fn main() {
+	print text.helper()
+}
+--- text/text.zg
+fn helper() -> int {
+	return 42
 }
 EOF
 

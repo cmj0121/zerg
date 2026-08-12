@@ -122,9 +122,12 @@ refcount-bumped, and a **non-POD immutable value** is **retained into the closur
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
 carries its own captures and can never dangle.
 
-> **[not yet]** The environment is **never freed**. Every other value this implementation allocates is
-> released at the scope that made it; a closure's cannot be, because the closure may outlive that scope —
-> which is what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
+> **[deviation]** The environment is **never freed**. This is not a form the compiler turns away — the
+> closure compiles and runs, and the emitted C holds one `zrt_alloc` per construction and no matching free
+> anywhere in the translation unit — so it is a program that behaves differently from what is written here
+> rather than a debt with a name. Every other value this implementation allocates is released at the scope
+> that made it; a closure's cannot be by that rule, because the closure may outlive that scope, which is
+> what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
 > functions of its own, which is a change to the type rather than to the lambda. A program that makes
 > closures in a loop grows.
 
@@ -156,9 +159,17 @@ is the value at the point it was written):
 
 ```text
 for x in xs {
-    spawn fn() { handle(x) }       # each coroutine gets its own iteration's value
+    work := fn () { handle(x) }    # each closure holds its own iteration's value
+    work()
 }
 ```
+
+> **[not yet]** The coroutine spelling of that loop is not available. A closure **literal** is not one of
+> `spawn`'s three callee forms — `spawn fn () { … }()` is _E222 NotImplemented: calling fn-expr_ — and
+> `spawn work()` on the **named** closure above is worse: it emits a call to a C function nobody declared
+> and the build dies inside `cc` (**[deviation]**, since that is the one outcome the standing rule forbids).
+> `spawn handle(x)` is the form that works, and it snapshots its argument at the `spawn`, which gets the
+> same per-iteration value by the other route. See [Coroutines & Channels](coroutine.md).
 
 And because captures are always immutable copies, "captured the variable or the value?" has no
 observable answer — the captured value can never change, so the question disappears.

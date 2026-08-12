@@ -44,12 +44,17 @@ Or, procedural-first, just loop — the idiom [Control Flow](control-flow.md) en
 collection):
 
 ```text
-mut out := []
+mut out: list[int] = []
 for x in xs {
     continue if not positive(x)
     out.append(double(x))
 }
 ```
+
+The type is written on the left because the empty list has none of its own — `mut out := []` is _E336 the
+binding `out` gives the empty list `[]`, which has no type of its own_. That matters more here than it
+usually would: with the adapters unbuilt this loop is the only spelling, so it had better be one that
+builds.
 
 When an inline function is genuinely one-off, the parameter type its position supplies keeps it short:
 
@@ -117,8 +122,10 @@ silence is worse than one that does not build. See [Control Flow](control-flow.m
 do about the contiguous-integer case.
 
 > **[not yet]** Of that list it is the **nesting** that does not exist; the four kinds each work on their
-> own. A pattern inside a pattern is not parsed: `L(Yes(v))` and `L(0)` both report _a pattern binding needs
-> a name, and `(` is not one_, because a variant pattern's payload position accepts a binding name and
+> own. A pattern inside a pattern is not parsed: `L(Yes(v))` and `L(0)` report _a pattern binding needs a
+> name_, naming whichever token stood there (`` `(` `` for the first, `` `0` `` for the second) — a bare
+> parser message with **no error code and no place**, where the marker's own contract asks for a
+> `NotImplemented` a gate can pin. A variant pattern's payload position accepts a binding name and
 > nothing else — a sub-pattern there was never read, so neither a nested variant nor a nested literal gets
 > past the parser. Match one level, bind the payload, and `match` the binding in turn.
 

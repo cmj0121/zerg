@@ -38,12 +38,16 @@ result := xs.map(double).filter(positive).fold(0, add)
 collection）:
 
 ```text
-mut out := []
+mut out: list[int] = []
 for x in xs {
     continue if not positive(x)
     out.append(double(x))
 }
 ```
+
+型別寫在左邊,因為空 list 自己沒有型別——`mut out := []` 是 _E336 the binding `out` gives the empty list `[]`,
+which has no type of its own_。這件事在這裡比平常更要緊:adapter 尚未建置時,這個迴圈是唯一的寫法,那它最好是一個
+建得起來的寫法。
 
 若 inline 函式真的只用一次,由 position 供給的參數型別能讓它短:
 
@@ -105,8 +109,10 @@ q := new_query().where("age > 18").order("name").limit(10)
 什麼,見 [控制流](control-flow.zh-TW.md)。
 
 > **[not yet]** 上面那份清單裡不存在的是**巢狀**；四種 pattern 各自單獨用都成立。pattern 裡再放一個 pattern
-> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name, and `(` is not one_，因為
-> variant pattern 的 payload 位置只收一個 binding 名字——那裡從來沒讀過子 pattern，所以巢狀的 variant 與巢狀的
+> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name_，訊息裡指名的是站在那個位置上的
+> token（前者是 `` `(` ``、後者是 `` `0` ``）——一則沒有錯誤碼、也沒有位置的裸 parser 訊息，而這個 marker 自己的
+> 契約要的是一個 gate 釘得住的 `NotImplemented`。variant pattern 的 payload 位置只收一個 binding 名字——那裡從來
+> 沒讀過子 pattern，所以巢狀的 variant 與巢狀的
 > literal 都過不了 parser。一次比對一層，把 payload 綁起來，再對那個 binding 做一次 `match`。
 
 ## 刻意不加的

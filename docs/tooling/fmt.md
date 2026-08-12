@@ -368,6 +368,13 @@ y := sum(sum(1, 2), 3)
 Width is the real judgement and the count is the backstop for what width cannot see: six
 arguments read as a list to scan rather than a line to read, however short each one is.
 
+> **[deviation]** A group the pass **declines** keeps its trailing comma, and nothing else
+> then objects. `x := sum( # before` with `1,` / `2,` under it holds a comment on the open
+> line, so `F403` leaves the group broken — and `zerg fmt --check` calls the file canonical,
+> exit 0, while `zerg build` refuses the same file with _E289 a trailing comma before the
+> closing `)` of an argument list_. A formatter that certifies a file the compiler will not
+> take is worse than one that reformats it, because the certificate is the whole point.
+
 Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
 time rather than the whole line, so the group that crosses column 80 is the last one on
 the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
@@ -1006,16 +1013,25 @@ than every shape that could.
 
 ### `L4xx` — resolution
 
-| Code   | Rule                                        |
-| ------ | ------------------------------------------- |
-| `L402` | a `mut fn` that never writes through `this` |
+| Code   | Rule                                                      |
+| ------ | --------------------------------------------------------- |
+| `L401` | a variant name TWO enums declare (**[deviation]**, below) |
+| `L402` | a `mut fn` that never writes through `this`               |
 
-`L401` stood here and has **retired**. It reported a variant name two enums declare: a bare
-name was a variant when it resolved to one, resolution took the **first** declaration, and
-`c := Red` was a coin toss decided by declaration order. A variant is now always named by
-its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing and the two
-declarations never compete — the lint's whole subject is a form the grammar no longer
-derives. The number is not reused.
+`L401` was **retired and is still emitted**. It reported a variant name two enums declare:
+a bare name was a variant when it resolved to one, resolution took the **first**
+declaration, and `c := Red` was a coin toss decided by declaration order. A variant is now
+always named by its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing —
+`c := Red` is _E383 `Red` is a variant of `Colour`, and a variant is named through its enum_
+— and the two declarations never compete for a bare name.
+
+> **[deviation]** `zerg lint` still runs the rule, so two enums sharing a variant name draw
+> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to
+> `Colour` by declaration order alone — name it `Signal.Red` where you mean this one_. Both
+> halves of that sentence are now false: a bare `Red` resolves to nothing, and `Signal.Red`
+> is the one spelling the compiler refuses (`E457` — see [Types](../core/types.md), where
+> that refusal is its own deviation). Nothing catches it, because `error-codes-check` holds
+> the `E` codes to the source, the gates and this table, and reads no `L` code at all.
 
 `mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
 the instance in a `mut` binding. A method that only reads charges its callers that and gives

@@ -212,9 +212,8 @@ with **`is`** ([Type tests](../core/specs.md)):
 match guard { work() } {
     Either.Left(v)  => use(v)
     Either.Right(e) => {
-        if e is IOError { rebuild() }           # branch on the taxonomy kind
-        else if e is OverflowError { alert(e) }  # a built-in abort, reified by guard
-        else { report(e.message()) }            # everything else — a catch-all is required
+        # a taxonomy kind, then a built-in abort the guard reified, then the mandatory catch-all
+        if e is IOError { rebuild() } else if e is OverflowError { alert(e) } else { report(e.message()) }
     }
 }
 ```

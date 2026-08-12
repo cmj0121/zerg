@@ -36,8 +36,8 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
   **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
   are **[not yet]** — a conversion in a hole is refused by name.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
-  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — parsed, but **rejected at code
-  generation** this phase.
+  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
+  the parser** (`E227`) this phase.
 - **`{x:spec}`** hands the spec string to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers

@@ -99,13 +99,19 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 ```zerg
 #[obj]
 spec Draw { fn draw() -> str }
+```
 
-# 就是:
-struct DrawObj { draw: fn () -> str }
+就是:
+
+```zerg
+struct DrawObj { pub draw: fn () -> str }
 fn draw_obj[T: Draw](v: T) -> DrawObj {
     return DrawObj(fn () -> str { return v.draw() })
 }
 ```
+
+分成兩段 fence 而不是一段,因為它們是同一組宣告的兩種寫法、不是一支同時裝著兩者的程式:寫在一起是
+_E382 `DrawObj` is declared twice_。
 
 **開放性來自包裝點**,不是來自執行期的任何東西:`draw_obj` 針對每個實作者 monomorphize,回來的東西只有一個
 型別。所以 `list[DrawObj]` 是異質的,而且**沒有 vtable、沒有任何值帶 header、也沒有 downcast**——你可以呼叫
@@ -116,6 +122,11 @@ spec 宣告的東西,不能問裡面裝的是什麼。需要問的時候,答案�
 - **`mut fn`**:被包起來的值是複本,寫穿它會改到沒有人讀得到的東西。這裡的 object 是不可變的;
 - 收 **`This`** 的方法:它需要 object 已經忘掉的那個型別——那個形狀是 `enum` 上的 `#[derive(S)]` 在做的;
 - **不是 spec** 的東西:沒有方法可以持有。
+
+> **[not yet]** 型別同時實作兩者是做不到的。當兩個 spec 各自宣告 `go` 時,`impl A for P` 與 `impl B for P` 會在
+> **第二個宣告**處被拒絕——_E451 `P` declares `go` twice — every method on a type shares one namespace, spec or
+> inherent alike_——所以下面那個「把靜態脈絡收窄到單一 spec」的解法沒有程式可以套用。這條拒絕就是讓 derived 與
+> 手寫 `Eq` 不能並存的同一條,只是多管了一格。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
@@ -276,13 +287,14 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 > **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
 > （見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
-> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
-> 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
+> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: E314 no spec named `Ord`_,也就是
+> 「沒有人寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。**使用**那一側則是被運算子、而不是被
+> spec 擋下:`P(1) < P(2)` 報的是 _E346 operator `<` orders two numbers or two strs, and these are P and P_,
+> 它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個所描述的**行為**是內建的、不經那個
 > spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
 > `chan` 的 refcounted 關閉——但它們由編譯器
-> 擁有,使用者型別加入不了:一個 `struct` 上的 `<` 報的是 _NotImplemented: `<` on a P — an ordering comes from
-> `Ord`, which this compiler does not generate_,不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都
-> 是對著這個缺口所寫的規範。
+> 擁有,使用者型別加入不了——不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都是對著這個缺口
+> 所寫的規範。
 
 其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 

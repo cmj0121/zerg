@@ -13,16 +13,27 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 
 遞迴與自我參照型別不需要 pointer——直接宣告欄位(例如 `Node?`,或 `enum Expr { Num(int); Add(Expr, Expr) }`),
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
-深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。這個階段有兩個 MVP 注意事項:
-透過 `mut` binding 重新指派遞迴欄位而建出的 runtime **循環**會**洩漏**——尚無循環收集器(**[deviation]**);而釋放
-一條長鏈會在原生 C stack 上**遞迴 O(depth)**、並可能將其溢位(**[deviation]**——即 [Conformance](../conformance.zh-TW.md)
-與 [Errors](../code/errors.zh-TW.md) 所載、同一個不可回復的 stack-overflow deviation)。
+深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。
 
-> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那兩個注意事項都不可能經由它到達。
+> **[deviation]** 那條鏈**永遠不會被釋放**。cell 是配著一個 **no-op drop** 配出來的,而持有它的 binding 在
+> scope 結束時沒有登記任何 release,所以一個遞迴值在離開 scope 時會漏掉整條鏈——而且不需要循環就看得到,因為
+> 無環的情況也一樣沒人釋放。實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,常駐記憶體
+> 到 **20.8 MB**,而 5 輪是 1.9 MB——那是鏈在累積,不是高水位。
+>
+> 這取代了本段原本點名的兩個注意事項,兩個都比實情窄。透過 `mut` binding 重新指派遞迴欄位而建出的 runtime
+> **循環**確實會洩漏,但其他每一個遞迴值也會,所以「還沒有循環收集器」不是讀者最先遇到的東西。而釋放一條長鏈會在
+> 原生 C stack 上**遞迴 O(depth)** 並溢位,則根本到不了:八百萬節點的鏈跑完也沒有溢位任何東西,因為那個會遞迴的
+> 釋放從來沒有發生。
+
+---
+
+> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
 > `struct Node { value: int; next: Node? }` 會被拒絕、報 _`Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
-> 參照的槽從來沒拿到那個會給它一個大小的 cell。能運作的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享完全如上
-> 所述。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能觀察到共享變動之處——是規範中的形式,今天編不過。
+> 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
+> 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
+> 觀察到共享變動之處——是規範中的形式,今天編不過。它同時還帶著第二個未建置的形式:那些**具名引數**
+> (`Node(value: 1, …)`)是 `E223`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
 
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
@@ -57,9 +68,10 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 或單純的名稱讀取——留在原處，所以常見的 `f(g())` 與 `x + 1` 完全未變。**短路**運算子——`and`、`or`、`??`、`?.`,
 以及 `?` unwrap——是更強意義的左到右：當左邊已決定結果時，右邊被**跳過**。
 
-> **[deviation]** 仍有三種合併形式把運算元交給單一 C 構造、沿用 C 的 unspecified 順序:**enum variant 的
-> payload**(`E.V(f(1), g(2))`)、內建的 **`list`／`map` 方法**,以及透過**函式值**的呼叫。三者都要有兩個以上
-> 帶副作用的運算元，順序才可觀察。上面點名的其餘位置皆已排序。
+> **[deviation]** 仍有兩種合併形式把運算元交給單一 C 構造、沿用 C 的 unspecified 順序:**enum variant 的
+> payload**(`E.V(f(1), g(2))`)以及透過**函式值**的呼叫。兩者都要有兩個以上帶副作用的運算元，順序才可觀察。
+> 內建的 **`list`／`map` 方法**曾以第三種身分列在這裡,而它到不了:會收兩個帶副作用運算元的那幾個——`insert`、
+> `set`、`get`——自己就被指名拒絕,所以那樣的呼叫寫不出來。上面點名的其餘位置皆已排序。
 
 把某個運算元讀**不只一次**的形式，適用同一條規則，只有觸發條件不同。`v in lo..hi` 就是那一個：成員測試是界限比較，
 所以它在每個界都指名 `v`——而上面那種 run 之所以能豁免第一個運算元，是因為沒有東西排在它前面，這一個不能，因為 `v`
@@ -93,11 +105,12 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
-> **[deviation]** 進入 **carrier** 的 reference-counted 值——channel 接收回傳的 `T?`、`Result[T]`——
-> **永遠不會被釋放**。drop 是有的、只是沒有人呼叫它:carrier 沒有 copy helper,所以登記那個 drop 會讓
-> 「同一個值的兩個名字」各還一次。凡是 refcount 過的東西跨越 `chan[T]` 都會漏掉一個 reference——`chan[int]`
-> 看不出來,`chan[str]` 是真的——由 `test-data/codegen/chan_str_shared.zg`(這棵樹裡第一支送 `str` 的程式)
-> 在 LeakSanitizer 下量到。
+> **[deviation]** 進入 **carrier** 的 reference-counted 值——channel 接收回傳的 `T?`、`Result[T]`——只有在
+> carrier 被**就地解包**的地方才會釋放。`if v := <-c { … }` 在保留它所綁的值之後就發出 drop;而被給了一個
+> **名字**的 carrier,`got := <-c`,一個都沒登記,於是永遠不會被釋放。drop 是有的,只是第二條路不呼叫它:carrier
+> 沒有 copy helper,所以在那裡登記 drop 會讓「同一個值的兩個名字」各還一次。因此以那種方式綁定、跨越 `chan[T]`
+> 的 refcount 值,每個值會漏掉一個 reference——`chan[int]` 看不出來,`chan[str]` 是真的——由
+> `test-data/codegen/chan_str_shared.zg`(這棵樹裡第一支送 `str` 的程式)在 LeakSanitizer 下量到。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`

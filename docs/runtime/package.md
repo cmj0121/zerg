@@ -22,11 +22,14 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > declaration, no resolver and no dependency fetch: a build is an entry file and the modules its imports
 > reach on disk. Everything below that names a package — versioning, the package DAG, one-version
 > selection, package-public as a position, and the orphan rule that rests on the graph being acyclic —
-> describes a layer nothing implements yet. `import "name"` that resolves to nothing on disk is accepted
-> silently and only `zerg lint` mentions it (`L101 unused import`).
+> describes a layer nothing implements yet. An `import "name"` that resolves to nothing on disk is a hard
+> build error, not a silence — _E502 cannot resolve import `name` under any source root_ — reported before
+> a byte of it is lexed.
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
-> module is flattened into one namespace and no visibility is checked. See Visibility below.
+> module is flattened into one namespace, and visibility is checked on some of what a module holds and not
+> all — a function and a module constant are (_E301 `helper` is not a public member of module `lib`_, with
+> a place), a struct's fields are not. See Visibility below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
@@ -108,9 +111,12 @@ half-initialized module never becomes usable, and concurrent first-uses all obse
 > the module that owns it. Exactly-once and FIFO-within-a-module hold; "the first time the module is
 > used" does not, so an `init()` in a module a run never touches still runs.
 >
-> **[not yet]** Two modules that each declare an `init()` are refused by name — the flattened namespace
-> cannot tell `init__0` from `init__0`. So cross-module initialization **order** has no program that can
-> observe it yet.
+> **[deviation]** Two modules that each declare an `init()` **break the build inside `cc`**. The flattened
+> namespace emits two `zg_init__0`, and the entry translation unit calls one it never saw — _error: call to
+> undeclared function 'zg_init\_\_0'_, against generated C nobody wrote. That is the outcome the standing
+> rule forbids outright, so it is a bug with a fix owed rather than a debt: the form is neither lowered
+> nor refused by name. Cross-module initialization **order** consequently has no program that can observe
+> it.
 >
 > **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
 > cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
@@ -149,9 +155,11 @@ third package can name both without owning either. So the implementation, if it 
 construction. Single-version selection is what makes "one type, one implementation"
 well-defined.
 
-> **[not yet]** The **orphan rule is not enforced**. A third module may write `impl Spec for T` owning
-> neither the spec nor the type, and it compiles. What IS checked is the narrower thing the flattened
-> namespace can see: two `impl`s giving one type the same method name in one build are refused.
+The orphan rule is enforced, and by the module rather than by the package the paragraph above reasons
+from: a third module writing `impl Spec for T` while owning neither is refused with _E277 `impl Speak for
+Dog` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with
+one of the two_, with a place. Two `impl`s giving one type the same method name in one build are refused
+too, which is the narrower thing the flattened namespace can see on its own.
 
 ### Modules
 
@@ -180,6 +188,14 @@ its own value.
 > in its namespace and is not compiled into the build: naming a function declared there reports
 > `undefined function`. Files share one namespace in every module that is reached by an `import`; the
 > module rooted at the entry file is the exception.
+>
+> ---
+>
+> **[deviation]** A **single file** is importable as a module. `import "sib"` beside a `sib.zg` resolves
+> to that one file and its `pub` names, though a module is a directory here and `E502`'s own sentence says
+> so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
+> import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
+> denies the second exists.
 >
 > **[deviation]** **Import cycles are not rejected.** Two modules that import each other compile and run.
 > Nothing detects the cycle, at either layer.
@@ -317,10 +333,14 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** There is **no test build**. `*_test.zg` is kept out of an ordinary build, which is the
-> half of the convention that works; the command that would include it — `zerg test` — does not exist,
-> so the white-box and black-box positions above are places to put a file rather than a way to run one.
-> The `testing` module's `assert` family is callable from an ordinary program in the meantime.
+> **[not yet]** **No part of the convention is recognized.** There is no `zerg test` command, and a
+> `*_test.zg` file is not kept out of anything: it is compiled into an ordinary build like every other
+> file in its module, so its declarations DO reach the shipped artifact and a `pub` one DOES join the
+> module's surface — `lib.only_in_test()` resolves and runs from a program that never asked for a test.
+> A name it repeats collides with its siblings, and a syntactically broken one fails a normal build. So
+> the white-box and black-box positions above are places to put a file rather than a way to run one, and
+> the file is not inert while it waits. The `testing` module's `assert` family is callable from an
+> ordinary program in the meantime.
 
 ### Target-conditional files
 

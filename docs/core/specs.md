@@ -131,13 +131,19 @@ function values** — one field per method — and a **generic wrap** that turns
 ```zerg
 #[obj]
 spec Draw { fn draw() -> str }
+```
 
-# is:
-struct DrawObj { draw: fn () -> str }
+is:
+
+```zerg
+struct DrawObj { pub draw: fn () -> str }
 fn draw_obj[T: Draw](v: T) -> DrawObj {
     return DrawObj(fn () -> str { return v.draw() })
 }
 ```
+
+Two fences rather than one, because they are two spellings of the same declarations and not a program that
+holds both: writing them together is _E382 `DrawObj` is declared twice_.
 
 **The openness comes from the wrap point**, not from anything at run time: `draw_obj` is monomorphized
 per implementer, and what comes back has one type. So `list[DrawObj]` is heterogeneous with **no vtable,
@@ -151,6 +157,12 @@ Three shapes are **refused**, by the same test the delegating `derive` uses — 
 - a method taking **`This`**: it needs the type an object has forgotten — that shape is what
   `#[derive(S)]` on an `enum` is for;
 - anything that is **not a spec**: there are no methods to hold.
+
+> **[not yet]** A type cannot implement both. `impl A for P` and `impl B for P` where each spec declares
+> `go` is refused at the **second declaration** — _E451 `P` declares `go` twice — every method on a type
+> shares one namespace, spec or inherent alike_ — so the narrowing remedy below has no program to apply to.
+> The refusal is the same one that keeps a derived and a hand-written `Eq` from coexisting, applied one
+> case too wide.
 
 Because specs are nominal, two independently declared specs may share a method name. A type can still
 implement both and be used as either one on its own — the ambiguity exists only where a single value
@@ -354,14 +366,14 @@ tests) — "what concrete type is boxed here?", never "are these two the same va
 > **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Ord`, `Hash`, `Error`,
 > `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
-> `impl Ord for P` reports _error: no spec named `Ord`_, the ordinary message for a spec nobody wrote, and
-> `impl BitAnd for P` reports it too. Several of the **behaviours** are built in and reachable without their
-> spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err` names and the `message()` /
-> `unwrap()` it answers, a `chan`'s refcounted
-> close — but they are compiler-owned and a user type cannot join them: `<` on a `struct` reports
-> _NotImplemented: `<` on a P — an ordering comes from `Ord`, which this compiler does not generate_, with a
-> `#[derive(Eq)]` on the type or without one. Everything from here to the end of this chapter is specified
-> against that gap.
+> `impl Ord for P` reports _error: E314 no spec named `Ord`_, the ordinary message for a spec nobody wrote,
+> and `impl BitAnd for P` reports it too. The USE side is refused by the operator rather than by the spec:
+> `P(1) < P(2)` reports _E346 operator `<` orders two numbers or two strs, and these are P and P_, which
+> names the operand types and says nothing about the missing `Ord`. Several of the **behaviours** are built
+> in and reachable without their spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err`
+> names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted
+> close — but they are compiler-owned and a user type cannot join them, with a `#[derive(Eq)]` on the type
+> or without one. Everything from here to the end of this chapter is specified against that gap.
 
 The remaining specs are likewise **opt-in** — implement (or derive) the spec to gain the capability; a
 generic bound gates on it:

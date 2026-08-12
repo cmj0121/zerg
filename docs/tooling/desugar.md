@@ -13,6 +13,13 @@ zerg desugar --check <file.zg>...      # report what is not already core, change
 zerg desugar --off D103 <file.zg>...   # leave one rule alone (repeatable)
 ```
 
+> **[deviation]** `--check` answers a wider question than it asks. It compares the file against what
+> `zerg desugar` would **write**, and what that writes is canonical-formatted core — so a file holding no
+> sugar at all still fails when its whitespace is not what `zerg fmt` would produce, and it fails saying
+> _still holds sugar (run `zerg desugar`)_. A four-space-indented `fn main() { x := 1; print x }` is the
+> whole reproduction. The exit status is right for "this file would change" and the sentence is wrong
+> about why.
+
 ## Why it exists
 
 [`GRAMMAR`](../../GRAMMAR) defines several surface forms **as** something else. `return x if c` is
@@ -105,8 +112,8 @@ reading as an iteration.
 ### `D103` — a range-`for` becomes the infinite one
 
 ```zerg
-for i in 0..3 {                  zgd_hi7c2 := 3
-    print i              →       mut zgd_i7c2 := 0
+for i in 0..3 {                  mut zgd_i7c2 := 0
+    print i              →       zgd_hi7c2 := 3
 }                                for {
                                      if zgd_i7c2 >= zgd_hi7c2 {
                                          break
@@ -117,9 +124,11 @@ for i in 0..3 {                  zgd_hi7c2 := 3
                                  }
 ```
 
-The upper bound is **hoisted and evaluated once**, before the initial value, which is the order
-`c_forrange` computes them in. A bound re-evaluated per iteration would be a loop that means
-something else, and `for i in 0..f()` is where that shows.
+The upper bound is **hoisted and evaluated once**, after the initial value — the two bounds are
+computed in the order they are written, which is the order `c_forrange` computes them in and the
+order every other operand list in the language is now evaluated in. A bound re-evaluated per
+iteration would be a loop that means something else, and `for i in f()..g()` is where both halves
+of that show.
 
 The bindings are named for the **line and column** of the `for` they came from, so two loops in one
 function cannot collide and the name says where it came from. They are hoisted into the enclosing
@@ -174,7 +183,7 @@ exactly as written:
 | `for select { … }`          | the fourth head, and not a condition                                      |
 | `for i in 0..`              | no upper bound to count to; the compiler refuses it, so this leaves it    |
 | a guard carrying a comment  | one line becoming four has nowhere to put a note written at the end of it |
-| `lo..=hi =>` (a range arm)  | its core form, `_ if _ in lo..=hi`, does not build (see below)            |
+| `lo..=hi =>` (a range arm)  | no rule is written for it; its core form now builds (see below)           |
 | `with` / `if x := e` / `?`  | need types, or a core form this compiler does not have yet                |
 | `??` / `?.` / `!` / `print` | the same                                                                  |
 
@@ -184,11 +193,11 @@ is a receive, a map walks keys in insertion order, a str becomes its code points
 through the runtime — and a token pass has nothing to tell it which. Rewriting it as an index loop is
 right for a list and wrong for a map, so it declines.
 
-The **range arm** is a different kind of decline and a sharper one. `GRAMMAR` says `200..300 =>` is
-sugar for the guard `_ if _ in 200..300`, and that guard **does not compile**: `in` over a range is a
-form this compiler names as not built. So the sugar is currently the only working spelling — the same
-situation [`F408`](fmt.md) describes from the other side, where the rewrite is what turns a refusal
-into working code. A desugaring can only be checked where the core form exists.
+The **range arm** is a different kind of decline. `GRAMMAR` says `200..300 =>` is sugar for the guard
+`_ if _ in 200..300`, and that guard used to be the reason: `in` over a range was unbuilt, so the sugar
+was the only working spelling and a desugaring can only be checked where its core form exists. **The
+core form now builds** — `_ if _ in 200..300 => …` compiles and matches — so what is left is a rule
+nobody has written rather than a rule nothing could check. The arm is passed through unchanged.
 
 ## The gates
 

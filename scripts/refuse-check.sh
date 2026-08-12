@@ -1830,14 +1830,14 @@ EOF
 # left is a range whose bounds the bounds test cannot compare. A `str` one is the shape that
 # matters: C's `>=` on two `const char *` compares the POINTERS and answers, so lowering it
 # would give a wrong answer rather than an error, which is what the refusal is for.
-expect "$ZERG" in-over-a-range-of-str E463 <<'EOF'
+expect "$ZERG" in-over-a-range-of-str E463 place <<'EOF'
 fn main() {
 	print str("c" in "a".."z")
 }
 EOF
 
 # And a set that is no set at all, which is the rest of the same code.
-expect "$ZERG" in-over-a-plain-int E463 <<'EOF'
+expect "$ZERG" in-over-a-plain-int E463 place <<'EOF'
 fn main() {
 	print str(3 in 5)
 }

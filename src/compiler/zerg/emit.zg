@@ -3315,8 +3315,11 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # slot lowered by the same function twelve lines apart, and the label is now what carries the
 # difference between them rather than a second call nobody remembered to make.
 fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
+	# `where` and not the word "field": the label the FIT check is about to use already names
+	# this slot exactly ("field 2 of `P`", "payload 1 of `Shape.Line`"), and a second, vaguer
+	# spelling of the same slot is a second answer to one question.
 	if ty_is_chan(fty) {
-		c_chan_check(c_infer(em, arg), fty, "field")
+		c_chan_check(em, c_infer(em, arg), fty, where)
 	}
 
 	# a declared `T?` field takes a bare value or `nil` and wraps it, so `P(nil)` builds an
@@ -7124,8 +7127,14 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -
 	# guarded on the DECLARED type, which is already in hand: c_chan_check answers nothing
 	# unless it is a channel, and the c_infer it would otherwise take walks the argument's
 	# whole tree — on every argument of every call — only to be thrown away.
+	# NAMED BY chk_slot_says, which is the same helper `E340` uses for the same slot. This
+	# spelled the label itself and spelled it from `idx` — the PARAMETER's index, which is
+	# 0-based and differs from the argument's position by one on a method — so `take(r)`
+	# reported "argument 0 of `take`" while the type mismatch one line up reported "argument
+	# 1 of `take`" for the very same slot. A reader following the first looked at the wrong
+	# parameter, and a reader who met both was told two things about one argument.
 	if ty_is_chan(em.pr_ty[row]) {
-		c_chan_check(c_infer(em, a), em.pr_ty[row], f"argument {idx} of `{fname}`")
+		c_chan_check(em, c_infer(em, a), em.pr_ty[row], chk_slot_says(fname, pos))
 	}
 	return c_fit_copied(em, chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
 }
@@ -8897,8 +8906,14 @@ fn c_chan_dir_ok(have: int, want: int) -> bool {
 # c_chan_check is the narrowing check at every place a channel end fills a declared slot:
 # a call argument, a `return`, a typed binding, a struct or variant field. It emits
 # nothing — a direction costs no code — so this is the whole of it.
-fn c_chan_check(have: Ty, want: Ty, site: str) {
-	raise f"a channel direction only narrows: a {ty_name(have)} cannot fill a {ty_name(want)} ({site})" if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want))
+#
+# The CODE and the PLACE were both missing, and they are missing together for one reason: a
+# `raise` carries a code only when the string is written with one and a place only when the
+# site appends the trailer (docs/conformance.md). So this said which two ends disagreed and
+# not where, and no gate could pin the rule without pinning its prose. The seed has reported
+# it with a place since it was written.
+fn c_chan_check(mut &em: Emitter, have: Ty, want: Ty, site: str) {
+	raise f"E506 a channel direction only narrows: a {ty_name(have)} cannot fill a {ty_name(want)} ({site})" + c_here(em) if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want))
 }
 
 # c_chan_op_check is the OTHER half of a direction: not where a handle may go, but what a
@@ -8922,14 +8937,20 @@ fn c_chan_check(have: Ty, want: Ty, site: str) {
 fn c_chan_op_check(t: Ty, op: int, at: str) {
 	raise f"E478 `{c_chan_op_name(op)}` needs a channel, and {ty_name(t)} is not one" + c_chan_op_hint(t) + at if not ty_is_chan(t)
 
+	# THE THREE BELOW TAKE `at` TOO, and used to be the only refusals in this function that
+	# did not. E478 above has carried the trailer since it was written, so a program that
+	# wrote `<-3` was told where and a program that received on a send-only end was not —
+	# one function, one `at` in hand, and three of its four rules dropping it. Each also
+	# opens with a code now, for the reason every rule here does: a gate pins the RULE, and
+	# pinning the prose instead turns red the next time the wording improves.
 	dir := c_chan_dir(t)
 	if op == 0 and dir == 1 {
 		# the guarantee the send-only end exists for: it cannot receive (steal) values
-		raise "cannot receive on a send-only " + ty_name(t)
+		raise "E503 cannot receive on a send-only " + ty_name(t) + at
 	}
 
-	raise "cannot send on a receive-only " + ty_name(t) if op == 1 and dir == 2
-	raise f"cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" if op == 2 and dir == 2
+	raise "E504 cannot send on a receive-only " + ty_name(t) + at if op == 1 and dir == 2
+	raise f"E505 cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" + at if op == 2 and dir == 2
 }
 
 # c_chan_op_hint is the one shape the rule above can say more about than "that is not a
@@ -10933,7 +10954,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	if has_type {
 		chk_binding(em, name, ty, ival)
 		if ty_is_chan(ty) {
-			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
+			c_chan_check(em, c_infer(em, ival), ty, chk_binding_says(name))
 		}
 	} else {
 		# THE TWO HALVES OF "THIS BINDING HAS NO TYPE TO TAKE". chk_needs_type is about the
@@ -11270,7 +11291,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		et := chk_returned(em, e)
 		ret_chan := ty_is_chan(em.fn_ret)
 		if ret_chan {
-			c_chan_check(et, em.fn_ret, "return")
+			c_chan_check(em, et, em.fn_ret, CHK_ANSWER)
 		}
 
 		# a carrier result FITS the value rather than rendering it: `Left(v)` and `Right(e)`

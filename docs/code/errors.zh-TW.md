@@ -177,9 +177,8 @@ fn read_config(s: str) -> Result[Config] {
 match guard { work() } {
     Either.Left(v)  => use(v)
     Either.Right(e) => {
-        if e is IOError { rebuild() }           # 就分類種類分支
-        else if e is OverflowError { alert(e) }  # 內建 abort，被 guard 具現化
-        else { report(e.message()) }            # 其餘——catch-all 必備
+        # 先是分類種類，再來是 guard 具現化的內建 abort，最後是必備的 catch-all
+        if e is IOError { rebuild() } else if e is OverflowError { alert(e) } else { report(e.message()) }
     }
 }
 ```

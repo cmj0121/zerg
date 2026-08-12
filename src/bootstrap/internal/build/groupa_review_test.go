@@ -85,7 +85,7 @@ func TestConstantFieldDefaultRuns(t *testing.T) {
 // through a constant-true test on the first arm (the silent miscompile).
 func TestVariantOrPatternRuns(t *testing.T) {
 	got := runProgram(t, "enum Color {\n\tRed\n\tGreen\n\tBlue\n}\n"+
-		"fn code(c: Color) -> int {\n\treturn match c {\n\t\tRed | Green => 1\n\t\tBlue => 2\n\t}\n}\n"+
+		"fn code(c: Color) -> int {\n\treturn match c {\n\t\tColor.Red | Color.Green => 1\n\t\tColor.Blue => 2\n\t}\n}\n"+
 		"fn main() {\n\tprint code(Blue)\n\tprint code(Red)\n\tprint code(Green)\n}\n")
 	if got != "2\n1\n1\n" {
 		t.Fatalf("variant or-pattern dispatch = %q, want %q", got, "2\n1\n1\n")

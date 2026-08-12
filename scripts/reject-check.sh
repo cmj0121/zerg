@@ -3352,6 +3352,63 @@ fn main() {
 }
 EOF
 
+# --- and a channel, a map and a carrier are COMPARED like everything else ------------
+#
+# `chk_fits` opened with one line — "a carrier, a channel or a map is never a mismatch" —
+# and that line answered yes for every pairing whose WANTED side was one of the three,
+# whatever stood on the other. It was written to protect three real reshapes: a bare value
+# wrapping into a `T?` or a `Result[T]`, a bidirectional channel narrowing to one end, and
+# a map literal taking its key and value types from the declaration. All three are still
+# reshapes, and each now has its own clause — what they never licensed is the five below.
+#
+# The seed refuses every one of them, and has all along: this is a rule `zerg` lost on the
+# way to self-hosting, which `make oracle` cannot see because oracle compares the two
+# compilers on programs the seed ACCEPTS.
+
+reject a-channel-of-another-element E335 'cannot bind chan[int] to a chan[str] binding' <<'EOF'
+fn main() {
+	ch: chan[str] = chan[int](1)
+	print 1
+}
+EOF
+
+# it compiled to `zrt_chan *zg_ch = 7;`, which cc reported as an integer-to-pointer
+# conversion against a line nobody wrote
+reject an-int-into-a-channel E335 'cannot bind int to a chan[int] binding' <<'EOF'
+fn main() {
+	ch: chan[int] = 7
+	print 1
+}
+EOF
+
+reject an-int-into-a-map E335 'cannot bind int to a map[str, int] binding' <<'EOF'
+fn main() {
+	m: map[str, int] = 7
+	print 1
+}
+EOF
+
+# a map against a map is the pairing the literal escape does NOT cover: both sides are
+# maps and neither is a literal, so nothing here is taking its shape from the declaration
+reject a-map-of-another-value-type E335 'cannot bind map[str, int] to a map[str, str] binding' <<'EOF'
+fn main() {
+	a: map[str, int] = {"a": 1}
+	b: map[str, str] = a
+	print b.len()
+}
+EOF
+
+# A CARRIER PASSES THROUGH OR IS INJECTED, and a carrier of another shape does neither: an
+# `int?` cannot pass through into a `str?` — they are different C types — and cannot be the
+# `str` payload either. It reached cc as an incompatible-pointer argument to `zrt_str_retain`.
+reject an-optional-of-another-element E335 'cannot bind int? to a str? binding' <<'EOF'
+fn main() {
+	y: int? = 5
+	x: str? = y
+	print y ?? 0
+}
+EOF
+
 # --- what only the driver can reject ------------------------------------------------
 #
 # A program build needs an entry point. `program ::= stmt-list` makes a main-less source

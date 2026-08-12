@@ -841,7 +841,13 @@ pub fn parse_at(src: str, path: str) -> File {
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
 	# name it applies to is one iteration away.
+	# and the place it was WRITTEN at, which the list itself cannot carry: a decorator is
+	# refused for what follows it, so the position a reader has to go to is the `#[`, not the
+	# declaration under it and not the end of the file. It follows the `unsafe` group's
+	# arrangement one arm down, for the same reason.
 	mut pending: list[str] = []
+	mut deco_line := 0
+	mut deco_col := 0
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 
@@ -885,6 +891,23 @@ pub fn parse_at(src: str, path: str) -> File {
 			is_pub = true
 			p_advance(p)
 		}
+
+		# A PENDING DECORATOR BELONGS TO THIS ITEM, and until now only three arms below took
+		# one: `struct`, `enum` and `spec` call p_take_derives, and every other arm walked
+		# past the list without touching it. So a decorator on anything else was not refused
+		# where it stood — it SURVIVED, and either landed on whichever decoratable
+		# declaration came later (`#[derive(Eq)] impl P { … }` silently derived onto the next
+		# `struct` in the file) or was reported at `Eof` as having no declaration under it,
+		# which is a false sentence about a program whose next line is a declaration.
+		#
+		# It is asked HERE, at the one point every item passes, rather than as a fourth
+		# refusal hung off the arms that do not want one — the arms are nine and the rule is
+		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
+		# and `Hash` is allowed through so decorators stack.
+		if pending.len() > 0 and not p_deco_may_lead(p) {
+			raise f"E487 `{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about" + p_place(p, deco_line, deco_col)
+		}
+
 		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
@@ -931,6 +954,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise "E250 a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
+			if pending.len() == 0 {
+				deco_line = t.line
+				deco_col = t.col
+			}
 			parse_decorator(p, pending)
 		} else if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
@@ -1041,7 +1068,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
 	# same contract every other unsupported form has: what is written is either implemented
 	# or named, never quietly dropped.
-	raise f"E208 `#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
+	raise f"E208 `{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the `struct`, `enum` or `spec` that follows it, and this one is the last item in the file" + p_place(p, deco_line, deco_col) if pending.len() > 0
 
 	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
 	# one this function did not look at. The loop simply ran to `Eof` with the group still
@@ -1099,6 +1126,25 @@ fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_
 # yield the match's one type — the same shape as c_range_unsupported.
 fn p_not_a_binding() -> ConstDecl {
 	raise "parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else"
+}
+
+# p_deco_may_lead reports whether the item starting here is one a decorator may lead. The
+# three that TAKE one are the three that call p_take_derives — `struct`, `enum` and `spec` —
+# and a second decorator is let through so they stack: `#[derive(Eq)] #[obj] spec S` puts two
+# names on one pending list and the declaration under them takes both.
+fn p_deco_may_lead(mut &p: Parser) -> bool {
+	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec) or p_at(p, Kind.Hash)
+}
+
+# p_deco_says spells a PENDING entry the way the program wrote it. The list carries derive
+# arguments and `#obj` together — under a marker no spec name can be, since a `#` is not an
+# identifier character — and every sentence about the list assumed a derive, so `#[obj] fn f()`
+# was refused as `#[derive(#obj)]`: a decorator quoted at a reader who never wrote it, in a
+# spelling the language does not have.
+fn p_deco_says(nm: str) -> str {
+	return "#[obj]" if nm == "#obj"
+
+	return f"#[derive({nm})]"
 }
 
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.

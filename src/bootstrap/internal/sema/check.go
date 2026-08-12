@@ -285,6 +285,32 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 
 // --- bindings -----------------------------------------------------------------
 
+// holdsNil reports whether nil sits anywhere in a type — the type itself, or an element of
+// a container that would have to give it storage. The plain 'vt == Nil' test below missed
+// the nil that is one level down: 'xs := [f()]' reached cc as a 'void' list element and
+// 't := (f(), 1)' as a 'void' struct field, both against generated C nobody wrote.
+//
+// An optional is deliberately NOT a container here. 'T?' is the type whose job is holding
+// an absence, so 'xs: list[int?] = [nil, 7]' is a program and must stay one.
+func holdsNil(t Type) bool {
+	if t == Nil {
+		return true
+	}
+	switch u := t.(type) {
+	case *types.List:
+		return holdsNil(u.Elem)
+	case *types.Map:
+		return holdsNil(u.Key) || holdsNil(u.Val)
+	case *types.Tuple:
+		for _, e := range u.Elems {
+			if holdsNil(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *checker) checkBind(b *ast.BindStmt) {
 	if b.Target != nil {
 		// a destructuring bind '(a, b) := e' / 'P{x, y} := e': infer the RHS and bind each
@@ -306,7 +332,7 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 		if !bad(declared) && !bad(vt) && !c.assignable(declared, b.Value, vt) {
 			c.errorf(b.Span(), "cannot bind %s to a %s binding", vt, declared)
 		}
-	} else if vt := c.synth(b.Value); vt == Nil {
+	} else if vt := c.synth(b.Value); holdsNil(vt) {
 		c.errorf(b.Span(), "cannot infer a type from nil; use a type annotation")
 		typ = Invalid
 	} else if c.isVoidTryBind(b.Value) {

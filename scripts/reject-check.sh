@@ -4013,6 +4013,59 @@ fn main() {
 }
 EOF
 
+# THE SAME NAME, ONE KEYWORD EARLIER. `spawn` and `defer` resolve their callee down a path
+# of their own (c_callee_raw), and that path asked neither of the two rules the ordinary
+# call asks about the function it found — so a module-private name and an `unsafe { … }`
+# group's function were both reachable by writing `spawn` in front of the call that is
+# refused without it. Three cases, because they are the two shapes the path resolves (a
+# plain name and a namespaced one) and the two rules it skipped.
+reject a-module-private-name-spawned E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	spawn text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject a-module-private-name-deferred E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	defer text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
+unsafe {
+	fn poke() {
+		print 7
+	}
+}
+
+fn main() {
+	spawn poke()
+	print 1
+}
+EOF
+
 reject assign-to-the-receiver E306 <<'EOF'
 struct P {
 	pub x: int

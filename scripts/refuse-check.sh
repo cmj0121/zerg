@@ -2633,6 +2633,45 @@ fn main() {
 }
 EOF
 
+# --- what a block expression still cannot do ---------------------------------------------
+#
+# A `{ … }` is an expression now (GRAMMAR, group 2), and these two are what the form owes.
+#
+# A BLOCK'S VALUE NEEDS A TYPE THE COMPILER CAN NAME. The last statement is typed against
+# what the block binds, so a name bound inside it is no longer the problem it once was —
+# but a value with no type at all still is, and it is said rather than emitted as whatever
+# `int64_t` would make of it.
+expect "$ZERG" a-block-whose-value-has-no-type E480 <<'EOF'
+fn main() {
+	xs := {
+		[]
+	}
+	print xs.len()
+}
+EOF
+
+# A MATCH ARM'S BINDING IS SPLICED IN AS TEXT, not opened as a scope: every read of the
+# name inside the arm answers from the substitution before it asks what is bound. So a
+# binding taking that same name inside the arm's block would declare a C local nothing ever
+# reads — the arm's payload answering in its place, silently — and it is refused instead.
+expect "$ZERG" a-binding-shadowing-a-match-arms-pattern E481 <<'EOF'
+enum Shape {
+	Dot
+	Line(int)
+}
+
+fn main() {
+	s := Shape.Line(4)
+	print match s {
+		Shape.Dot     => 0
+		Shape.Line(n) => {
+			n := 1
+			n
+		}
+	}
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

@@ -236,14 +236,31 @@ Because every dependency is written down, the import graph is explicit — which
 package **cycles be rejected**.
 
 > **Status.** The surface these sections describe is wired today: **string-path imports**
-> (`import "util/text"`), **parenthesized import groups** (`import ( … )`), and **one-level `import pub`
-> re-export** onto the root module's public surface. (The re-export is one level: `import pub` exposes the
-> named module on this module's surface; it does not transitively re-export what that module itself
-> re-exports.)
+> (`import "util/text"`), **parenthesized import groups** (`import ( … )`), **`as` renames**
+> (`import "a/text" as at` binds the whole namespace — its functions and its module constants alike), and
+> **one-level `import pub` re-export** onto the root module's public surface. (The re-export is one level:
+> `import pub` exposes the named module on this module's surface; it does not transitively re-export what
+> that module itself re-exports.)
 >
-> **[deviation]** **No transitivity is not enforced.** Because every module flattens into one namespace,
-> a module a build reaches at all is a module every other one can name, whether it imported it or not.
-> The import graph decides what is COMPILED into the build, not what is visible inside it.
+> The **binding** an import introduces is enforced: the prefix of a qualified name must be a namespace
+> some `import` in the build actually bound, so an invented `bogus.f()` or a path segment used as a name
+> (`util.f()` under `import "util/text"`) is rejected as an undefined name, with a place; two imports
+> whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
+> is how both are resolved.
+>
+> **[deviation]** **The binding is the BUILD's, and so is the member.** Two halves of one flatten, and
+> both are visible to a program:
+>
+> - **No transitivity is not enforced.** The namespaces in scope are every namespace every module of the
+>   build bound — including another module's `as` alias — so a module this one never imported is one it
+>   can still name. The import graph decides what is COMPILED into the build, not what is nameable inside
+>   it.
+> - **The member is looked up program-wide.** Once the prefix resolves, the name after the `.` is found in
+>   the one flattened namespace rather than in the module the prefix named, so with `a` and `b` both
+>   imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked against the
+>   module that DECLARED the member, which is why a private one is refused naming its real owner rather
+>   than the module the program wrote. The seed compiler resolves this half correctly, and answers
+>   `module "b" has no public member "helper"`.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section

@@ -660,6 +660,142 @@ fn main() {
 }
 EOF
 
+# --- an import binds a namespace, and the prefix is real -----------------------------
+#
+# GRAMMAR#import-stmt: an `import` BINDS A NAMESPACE — the `as` alias, else the path's last
+# segment — and the bound name lives in the one value namespace, "so colliding with a local
+# name is an error". Neither half was checked.
+#
+# The prefix was not read AT ALL. A qualified name flattened to its last identifier and that
+# identifier was looked up in the one program-wide function space, so with `util/text`
+# imported, `bogus.text.shout(…)` and `util.shout(…)` compiled, linked and ran — the first
+# naming nothing whatever, the second naming a directory. Every case below built a working
+# binary before this branch, which is why they are here and not next door: none of them is a
+# form this compiler had not got to, and no future feature makes any of them legal.
+#
+# The seed has said `undefined name` to all four of them since it was written. That is the
+# reason reject-check makes it the oracle, said once more.
+
+reject an-invented-namespace-prefix E372 'undefined name `bogus`' <<'EOF'
+import "util/text"
+
+fn main() {
+	print bogus.text.shout("x")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject a-path-segment-is-not-a-namespace E372 'undefined name `util`' <<'EOF'
+import "util/text"
+
+fn main() {
+	print util.shout("z")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# THE NAMING HOLE IS NOT THE VISIBILITY HOLE, and this is the case that tells them apart.
+# `hidden` is module-private, and the visibility rule caught it — through the invented
+# prefix, reporting "`hidden` is not a public member of module `text`" about a module the
+# program never named here. The right answer is about `bogus`, and it is now the only one.
+reject an-invented-prefix-onto-a-private-member E372 'undefined name `bogus`' <<'EOF'
+import "caller"
+
+fn main() {
+	print caller.go()
+}
+--- caller/caller.zg
+import "util/text"
+
+pub fn go() -> str {
+	return bogus.hidden()
+}
+--- util/text/text.zg
+fn hidden() -> str {
+	return "private"
+}
+EOF
+
+# `spawn` and `defer` resolve a callee down their own path, so a rule the ordinary call
+# enforces is one they get only by asking the same question — which is why this asks it
+# once (c_ns_kind) and all three read the answer.
+reject an-invented-prefix-in-a-defer E372 'undefined name `bogus`' <<'EOF'
+import "util/text"
+
+fn main() {
+	defer bogus.shout("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# A REAL namespace and a member no module declares. It is the other half of the same
+# resolution — the prefix resolved, the member did not — and it used to be three different
+# answers depending on which shape asked: a placeless raise from a member read, "the method
+# `nosuch` on a ?" from a call, and a not-built refusal from a `spawn`.
+reject a-namespace-without-that-member E388 <<'EOF'
+import "util/text"
+
+fn main() {
+	print text.nosuch("a")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# TWO IMPORTS SHARING A LAST SEGMENT both bound `text`, and both answered through it: one
+# namespace holding the union of two modules' members, with no diagnostic. GRAMMAR says
+# `as` is "how two imports sharing a last segment coexist", which is only true if not
+# renaming them is an error.
+reject two-imports-sharing-a-last-segment E389 'is already the namespace of' at=3:2 <<'EOF'
+import (
+	"alt/text"
+	"util/text"
+)
+
+fn main() {
+	print text.shout("a")
+}
+--- alt/text/text.zg
+pub fn whisper(s: str) -> str {
+	return s + "..."
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# AND THE COLLISION WITH A LOCAL NAME, which is the one GRAMMAR states outright. `text()`
+# and `text.shout()` both worked, and which of the two a reader reached depended on whether
+# they wrote a `(` or a `.`.
+reject an-import-colliding-with-a-function E389 'is already a function in this program' at=1:8 <<'EOF'
+import "util/text"
+
+fn text() -> str {
+	return "local"
+}
+
+fn main() {
+	print text()
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
 # --- generics -----------------------------------------------------------------------
 #
 # Both of these were `refuse` cases until the forms they name were built. What is left when

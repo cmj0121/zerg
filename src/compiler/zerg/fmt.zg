@@ -2885,30 +2885,11 @@ fn fmt_sorted(paths: list[str]) -> list[str] {
 # LAST path segment (`import "std/io"` and `import "io"` are the same module), which is
 # what the driver's resolver does, so the test is on that segment.
 fn fmt_is_stdlib(path: str) -> bool {
-	name := fmt_last_segment(path)
+	name := last_segment(path)
 	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "strconv", "strings", "testing", "time"] {
 		return true if m == name
 	}
 	return false
-}
-
-fn fmt_last_segment(path: str) -> str {
-	b := bytearray(path)
-	mut cut := 0
-	mut i := 0
-	for i < b.len() {
-		if b[i] == b'/' {
-			cut = i + 1
-		}
-		i = i + 1
-	}
-	mut out: list[byte] = []
-	mut j := cut
-	for j < b.len() {
-		out.append(b[j])
-		j = j + 1
-	}
-	return str(out)
 }
 
 # fmt_first_import is the index of the first `import`, or -1 when the file has none.

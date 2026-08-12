@@ -247,16 +247,24 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 		kind = SymConst
 	}
 	r.declareSurface(&Symbol{
-		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const,
+		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const, Pub: n.Pub,
 		Span: n.Span(), Decl: n, Type: types.Unknown,
 	})
 }
 
-// declareSurface inserts a top-level symbol and reports a name the top level
-// already holds under a DIFFERENT kind of declaration.
+// declareSurface inserts a top-level symbol and reports two collisions the top
+// level cannot hold, in the order a reader meets them.
 //
-// The top level is one namespace. A type name is not merely beside the value
-// names — 'struct User' is what makes 'User(…)' a call — so GRAMMAR's
+// The FIRST is a declaration taking the name an IMPORT already bound. GRAMMAR
+// group 10 puts the bound name in the one value namespace, so colliding with a
+// local name is an error — and collectImport catches that collision only when the
+// IMPORT comes second. The other order was silent, so a 'fn text()' beside
+// 'import "util/text"' coexisted with it and which of the two a 'text…' reached
+// depended on whether the reader wrote a '(' or a '.'.
+//
+// The SECOND is a name the top level already holds under a DIFFERENT kind of
+// declaration. The top level is one namespace. A type name is not merely beside
+// the value names — 'struct User' is what makes 'User(…)' a call — so GRAMMAR's
 // construction note states the rule outright: "The type name is SHARED with
 // functions: a type and a function cannot share a name (a duplicate is an error
 // — Zerg has no overloading)." A module constant shares it too, since every one
@@ -269,6 +277,9 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 // collectFuncItems', and two types are the type pass'. This is the one question
 // neither of them can ask, because neither sees the other's list.
 func (r *resolver) declareSurface(sym *Symbol) {
+	if prev := r.module.local(sym.Name); prev != nil && prev.Kind == SymNamespace && sym.Kind != SymNamespace {
+		r.errorf(sym.Span, "%q is already the namespace an import bound; rename the import with 'as'", sym.Name)
+	}
 	prev := r.module.declareLocal(sym)
 	if prev == nil {
 		return

@@ -785,6 +785,10 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
+| `E503` | 不能在 send-only 的 `…` 上接收                                                                        |
+| `E504` | 不能在 receive-only 的 `…` 上送出                                                                     |
+| `E505` | 不能關閉 receive-only 的 channel `…`                                                                  |
+| `E506` | channel 方向只能收窄：`…` 不能填進 `…`                                                                |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

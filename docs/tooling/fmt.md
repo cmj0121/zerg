@@ -872,6 +872,10 @@ shipping compiler rather than a part of it (the line
 | `E485` | import cycle: `…` -> `…` -> `…`                                                             |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
+| `E503` | cannot receive on a send-only `…`                                                           |
+| `E504` | cannot send on a receive-only `…`                                                           |
+| `E505` | cannot close a receive-only channel `…`                                                     |
+| `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

@@ -1776,7 +1776,7 @@ fn chk_empty_says(n: int, says: str) -> str {
 # the whole declaration, so nothing said anything at all.
 fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
-	# registries exist, so asking would always answer no — c_build_type_names is the pass
+	# registries exist, so asking would always answer no — c_build_top_names is the pass
 	# that already asks it of every kind of type name at once, and the typedef joins it.
 	#
 	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth

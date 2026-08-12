@@ -4538,6 +4538,135 @@ fn main() {
 }
 EOF
 
+# --- a binding belongs to the construct that made it -------------------------------------
+#
+# docs/code/control-flow.md gives the if-let binding one scope: "`x` is not in scope in the
+# `else`, nor after the `if`". Only the second half was enforced, and the first half's failure
+# was worse than an ordinary miss — the name resolved to a C local declared inside the `if`
+# body, so `else { print x }` escaped to cc as `use of undeclared identifier 'zg_x'`, an error
+# against generated code nobody wrote, wearing the `.zg` filename the `#line` directives give
+# it. Assertions 4 and 5 are what these cases are here for.
+#
+# A `select` arm's receive binding is the same rule at the other binding site, and it was the
+# one construct that opened no scope at all: the name stayed live in every LATER arm and after
+# the whole `select`. The later arm is the case worth having twice over, because it was not an
+# escape but a silent ACCEPT — it compiled, and read the slot another arm's receive would fill.
+
+reject an-if-let-bind-in-the-else E372 'undefined name `x`' at=9:3 <<'EOF'
+fn find() -> int? {
+	return nil
+}
+
+fn main() {
+	if x := find() {
+		print x
+	} else {
+		print x
+	}
+}
+EOF
+
+# the `else if` HEAD, which is a distinct place rather than a distinct rule: a chain is a
+# nested if STATEMENT in the else BODY, so the one removal covers it — and the head is where
+# the place assertion has teeth, since that statement is built outside parse_block.
+reject an-if-let-bind-in-an-else-if-head E372 'undefined name `x`' at=8:9 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else if x > 0 {
+		print 2
+	} else {
+		print 3
+	}
+}
+EOF
+
+# and the far end of a chain — past a second if-let, whose own binding must not be what puts
+# the first one back within reach
+reject an-if-let-bind-in-the-final-else-of-a-chain E372 'undefined name `x`' at=15:3 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn b() -> int? {
+	return 2
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else if y := b() {
+		print y
+	} else {
+		print x
+	}
+}
+EOF
+
+# the same name bound again INSIDE the outer else. Both bindings are out of scope at the read,
+# and the inner one is what makes this more than a repeat: it took a C name of its own
+# (`zg_x__1`) precisely because the outer one was still in the environment, so a fix that only
+# hid the outer name would leave this reading the inner one.
+reject an-if-let-bind-shadowed-in-a-nested-else E372 'undefined name `x`' at=16:4 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn b() -> int? {
+	return 2
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else {
+		if x := b() {
+			print x
+		} else {
+			print x
+		}
+	}
+}
+EOF
+
+reject a-select-arm-bind-after-the-select E372 'undefined name `v`' at=12:2 <<'EOF'
+fn feed(ch: chan[int]) {
+	ch <- 1
+	close(ch)
+}
+
+fn main() {
+	ch := chan[int]()
+	spawn feed(ch)
+	for select {
+		v := <-ch => print v
+	}
+	print v
+}
+EOF
+
+reject a-select-arm-bind-in-a-later-arm E372 'undefined name `v`' at=13:15 <<'EOF'
+fn feed(ch: chan[int]) {
+	ch <- 1
+	close(ch)
+}
+
+fn main() {
+	a := chan[int]()
+	b := chan[int]()
+	spawn feed(a)
+	spawn feed(b)
+	for select {
+		v := <-a => print v
+		w := <-b => print v
+	}
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

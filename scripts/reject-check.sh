@@ -1571,6 +1571,23 @@ fn main() {
 }
 EOF
 
+# GRAMMAR group 3 spells the prefix and its first digit as one thing — `'0x' hex-digit ( '_'?
+# hex-digit )*` — so the `_` that groups digits has a digit on BOTH sides, and there is no
+# digit to its left when it comes first. `0x_1F` used to lex as an Int, and the digits it did
+# have were worth 31, so a literal the grammar has no production for compiled and answered a
+# number: the one shape of this mistake that never reaches a reader.
+#
+# The other two prefixes and the DOUBLED underscore ride on this one. `0o_7`, `0b_1` and
+# `0x__1F` are all the same question asked at the same place — is the byte after the prefix a
+# digit — and differ only in which `based_valid` they ask it with; the seed has answered no to
+# all four since it was written, and it is the oracle here.
+reject based-number-with-a-leading-underscore E108 <<'EOF'
+fn main() {
+	n := 0x_1F
+	print(f"{n}")
+}
+EOF
+
 # --- the escapes the decoder cannot read -------------------------------------------
 #
 # A malformed escape used to abort the COMPILER: `b'\xzz'` reached `byte(hi * 16 + lo)`

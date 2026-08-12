@@ -601,7 +601,7 @@ shipping compiler rather than a part of it (the line
 | `E105` | a triple-quoted string is never closed                                                      |
 | `E106` | a raw string has no closing quote on this line                                              |
 | `E107` | a command literal has no closing backtick                                                   |
-| `E108` | a based number needs at least one digit after its prefix                                    |
+| `E108` | a based number needs a digit immediately after its prefix                                   |
 | `E109` | invalid escape in a … literal                                                               |
 | `E110` | a string literal may not contain a NUL                                                      |
 | `E201` | `close` is not a select arm head                                                            |
@@ -840,7 +840,9 @@ That is what it used to say: `` `b'b` is not an expression this compiler reads `
 names the wrong layer, the wrong problem, and a fragment of what the person wrote.
 
 `E108` had no message at all. `0x` lowered to a C `0x`, which cc read as zero, so a
-malformed literal compiled and the program answered 0.
+malformed literal compiled and the program answered 0. It says **immediately** because the
+digit is part of the prefix's own production: `0x_1F` has digits after `0x` and is still not
+a number, since a grouping `_` sits between two digits and there is none to its left.
 
 ## `zerg lint`
 

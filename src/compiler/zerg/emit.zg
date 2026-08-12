@@ -9655,6 +9655,23 @@ fn c_callee_args_of(x: Expr) -> list[Expr] {
 	return c_meth_args_of(x)
 }
 
+# c_callee_free is a Callee for a FREE FUNCTION reached by a `spawn` or a `defer`, and it
+# exists so both shapes that get there — the plain `f(…)` and the namespaced `mod.f(…)` —
+# ask the two rules an ordinary call asks about its callee (c_call).
+#
+# Neither of them did. `spawn` and `defer` resolve a callee down a path of their own, so a
+# `defer mod.hidden()` reached a module-private function that the identical call written
+# plainly is refused for (E301), and `spawn poke()` reached an `unsafe { … }` group's
+# function straight out of safe code (E387). A rule enforced at one of a form's two
+# resolvers is a rule one keyword away from meaning nothing — which is the same argument
+# c_ns_kind was extracted for, one question further along.
+fn c_callee_free(mut &em: Emitter, name: str, args: list[Expr], what: str) -> Callee {
+	c_chk_visible_fn(em, name)
+	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code")
+
+	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", name), args, name)
+}
+
 fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	n := c_call_name(x)
 
@@ -9663,7 +9680,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# it has no symbol, having been taken out of the program. `chk_callsite` was looking up
 	# the same absent key, so the arity and argument rules were skipped as well.
 	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
-	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", n), c_call_args_of(x), n) if n != ""
+	return c_callee_free(em, n, c_call_args_of(x), what) if n != ""
 	raise f"NotImplemented: {what} of anything but a function, a method, or a namespaced function" if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)
@@ -9693,7 +9710,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 				chk_no_member(em, c_ns_root(tgt), m)
 				return Callee("0", [], "")
 			}
-			return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", m), margs, m)
+			return c_callee_free(em, m, margs, what)
 		}
 
 		raise f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function"

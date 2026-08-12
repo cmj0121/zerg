@@ -143,11 +143,11 @@ enum Kind {
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
 # value for string-like literals, and the 1-based line/column where it starts.
 struct Token {
-	kind: Kind
-	lexeme: str
-	value: str
-	line: int
-	col: int
+	pub kind: Kind
+	pub lexeme: str
+	pub value: str
+	pub line: int
+	pub col: int
 }
 
 # kind_name renders a kind exactly as the bootstrap's token.Kind.String, so the

@@ -144,7 +144,7 @@ func TestWithBinding(t *testing.T) {
 // TestDocBetweenDecorator pins follow-up F1: a doc-comment between a decorator
 // and its declaration is attached (parses with no diagnostics) rather than lost.
 func TestDocBetweenDecorator(t *testing.T) {
-	file := parseOK(t, "#[derive(Encode)]\n## a documented type\nstruct S {\nx: int\n}")
+	file := parseOK(t, "#[derive(Encode)]\n## a documented type\nstruct S {\npub x: int\n}")
 	if len(file.Items) != 1 {
 		t.Fatalf("want 1 decl, got %d", len(file.Items))
 	}

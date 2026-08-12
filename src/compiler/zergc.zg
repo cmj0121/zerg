@@ -791,14 +791,14 @@ fn drop_ext(path: str) -> str {
 # Unit is one module: the name it is known by (its import path, or the entry file's path)
 # and the sources that make it up.
 struct Unit {
-	name: str
-	srcs: list[str]
+	pub name: str
+	pub srcs: list[str]
 
 	# paths is where each of `srcs` was read from, in the same order. A unit is what a
 	# build compiles, so this is the only place the file a statement came from is still
 	# known — by the time the trees are merged into a whole-program view, nothing else
 	# remembers.
-	paths: list[str]
+	pub paths: list[str]
 }
 
 # load_units returns every unit of the program, dependencies before dependents, the entry
@@ -1139,8 +1139,8 @@ fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 # Buffer is the one source the loader must NOT read from disk: the file a language server
 # holds unsaved. An empty path means there is none, which is every build.
 struct Buffer {
-	path: str
-	text: str
+	pub path: str
+	pub text: str
 }
 
 # load_with is load_into with that substitution, and it is the same function because the

@@ -12,7 +12,7 @@
 import "proto"
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {

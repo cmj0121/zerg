@@ -571,7 +571,7 @@ EOF
 # consequence, two steps from the form the compiler had already decided not to support.
 expect "$ZERG" generic-struct E215 <<'EOF'
 struct B[T] {
-	n: T
+	pub n: T
 }
 fn main() { print "x" }
 EOF
@@ -629,7 +629,7 @@ EOF
 
 expect "$ZERG" associated-value-binding E218 <<'EOF'
 struct B {
-	n: int
+	pub n: int
 }
 
 impl B {
@@ -642,7 +642,7 @@ EOF
 expect "$ZERG" unknown-decorator E217 <<'EOF'
 #[dyn]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() { print 1 }
@@ -655,7 +655,7 @@ EOF
 
 expect "$ZERG" equality-with-no-eq E430 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -710,7 +710,7 @@ spec Show {
 
 #[derive(Show)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() { print 1 }
@@ -721,17 +721,24 @@ expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" field-default E216 <<'EOF'
+# A FIELD DEFAULT IS BUILT; a field default that reads ANOTHER FIELD is not, and it is the
+# same shape docs/code/functions.md records for a parameter default reading an earlier
+# parameter. The default is materialised at the construction, where a field is not a name in
+# scope — so with a module constant of the same name it would quietly read that instead.
+expect "$ZERG" field-default-reading-a-field E483 <<'EOF'
+a := 100
+
 struct P {
-	x: int = 7
+	pub a: int
+	pub b: int = a * 2
 }
 
-fn main() { print 1 }
+fn main() { print P(3).b }
 EOF
 
 expect "$ZERG" struct-pattern-binding E221 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -762,11 +769,11 @@ EOF
 
 expect "$ZERG" struct-cycle-by-value E452 <<'EOF'
 struct A {
-	b: B
+	pub b: B
 }
 
 struct B {
-	a: A
+	pub a: A
 }
 
 fn main() { print 1 }
@@ -834,7 +841,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -916,7 +923,7 @@ EOF
 
 expect "$ZERG" inherent-impl-on-a-target-with-type-arguments E292 'on `Box[int]`' place <<'EOF'
 struct Box {
-	v: int
+	pub v: int
 }
 
 impl Box[int] {
@@ -976,8 +983,8 @@ EOF
 
 expect "$ZERG" named-field-in-a-construction E223 <<'EOF'
 struct P {
-	x: int
-	y: int
+	pub x: int
+	pub y: int
 }
 
 fn main() {
@@ -988,7 +995,7 @@ EOF
 
 expect "$ZERG" optional-method-call E222 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1026,7 +1033,7 @@ EOF
 
 expect "$ZERG" associated-type-binding E231 <<'EOF'
 struct B {
-	n: int
+	pub n: int
 }
 
 impl B {
@@ -1038,7 +1045,7 @@ EOF
 
 expect "$ZERG" impl-item-that-is-not-a-method E219 <<'EOF'
 struct B {
-	n: int
+	pub n: int
 }
 
 impl B {
@@ -1063,7 +1070,7 @@ EOF
 # "excess elements" WARNING, so it compiled and the extra values were dropped.
 expect "$ZERG" too-many-constructor-arguments E426 <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 fn main() {
@@ -1074,7 +1081,7 @@ EOF
 expect "$ZERG" derive-of-an-unbuilt-spec E436 <<'EOF'
 #[derive(Ord)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1084,7 +1091,7 @@ EOF
 
 expect "$ZERG" rendering-a-composite E449 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1177,7 +1184,7 @@ EOF
 
 expect "$ZERG" chain-through-a-value E406 <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 fn main() {
 	p := P(1)
@@ -1187,8 +1194,8 @@ EOF
 
 expect "$ZERG" missing-required-field E370 <<'EOF'
 struct P {
-	n: int
-	m: int
+	pub n: int
+	pub m: int
 }
 fn main() {
 	p := P(1)
@@ -1272,7 +1279,7 @@ EOF
 # parameter the programmer had marked `mut`.
 expect "$ZERG" a-plain-mut-parameter E263 "a parameter is \`mut &\` or nothing" <<'EOF'
 struct Bag {
-	n: int
+	pub n: int
 }
 
 fn f(mut b: Bag) {
@@ -1290,7 +1297,7 @@ EOF
 # at inference having nothing to say rather than at the form.
 expect "$ZERG" associated-function E424 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1326,7 +1333,7 @@ EOF
 
 expect "$ZERG" struct-pattern E243 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1418,7 +1425,7 @@ EOF
 
 expect "$ZERG" generic-struct E215 <<'EOF'
 struct Box[T] {
-	v: T
+	pub v: T
 }
 
 fn main() { print 1 }
@@ -1435,7 +1442,7 @@ EOF
 
 expect "$ZERG" generic-method E409 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1474,7 +1481,7 @@ EOF
 
 expect "$ZERG" generic-bound-unmet E412 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn same[T: Eq](a: T, b: T) -> bool {
@@ -1775,11 +1782,11 @@ EOF
 
 expect "$ZERG" a-second-into-on-one-type E461 <<'EOF'
 struct Celsius {
-	deg: int
+	pub deg: int
 }
 
 struct Kelvin {
-	deg: int
+	pub deg: int
 }
 
 impl Into[int] for Celsius {
@@ -1821,7 +1828,7 @@ EOF
 # and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
 expect "$ZERG" in-over-a-list-of-structs E462 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1908,7 +1915,7 @@ EOF
 
 expect "$ZERG" position-struct-field E338 'is float, and this gives int' place <<'EOF'
 struct R {
-	deg: float
+	pub deg: float
 }
 
 fn main() {
@@ -1954,7 +1961,7 @@ EOF
 # (test-data/codegen/into_user.zg); what is refused is the position performing it.
 expect "$ZERG" position-user-into E335 'cannot bind C to a int binding' place <<'EOF'
 struct C {
-	deg: int
+	pub deg: int
 }
 
 impl Into[int] for C {
@@ -2155,7 +2162,7 @@ EOF
 
 expect "$ZERG" bound-with-the-wrong-argument E412 'does not implement `Into[str]`' <<'EOF'
 struct S {
-	v: int
+	pub v: int
 }
 
 impl Into[int] for S {
@@ -2618,7 +2625,7 @@ spec Raw {
 }
 
 struct T {
-	v: int
+	pub v: int
 }
 
 impl Raw for T {

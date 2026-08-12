@@ -1014,8 +1014,8 @@ fn fmt_fstr_min() -> int {
 # chain was one this rule may rewrite. They come out together because BUILDING the text is
 # what finds the operand that declines it.
 struct Fstr {
-	text: str
-	ok: bool
+	pub text: str
+	pub ok: bool
 }
 
 fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
@@ -1340,8 +1340,8 @@ fn fmt_wrap_elems() -> int {
 # Wrap is where a group's decision leaves the scan: the index just past its closer, and
 # the column the line is at once the closer is printed.
 struct Wrap {
-	next: int
-	col: int
+	pub next: int
+	pub col: int
 }
 
 fn fmt_wrap(mut &toks: list[Token]) -> list[Token] {
@@ -1737,9 +1737,9 @@ fn fmt_toks(mut &toks: list[Token], no_close: bool) -> str {
 # exactly like an arm's, and padding that one would not lay out a table — it would rewrite
 # the string.
 struct Printed {
-	text: str
-	arrow: list[int]
-	trail: list[int]
+	pub text: str
+	pub arrow: list[int]
+	pub trail: list[int]
 }
 
 # fmt_rbrace_closes_block is fmt_opens_block asked of the `}` end of the pair: it finds the

@@ -21,8 +21,8 @@
 # which is what `make examples` uses.
 
 struct Config {
-	name: str
-	port: int?
+	pub name: str
+	pub port: int?
 }
 
 # `?` needs a result that can carry an absence, which is what `-> int?` is.

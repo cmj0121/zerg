@@ -19,20 +19,20 @@ import (
 # Emitter carries the per-function variable environment (name -> type) and the
 # whole-file function signature table (name -> return type).
 struct Emitter {
-	env_names: list[str]
-	env_tys: list[Ty]
+	pub env_names: list[str]
+	pub env_tys: list[Ty]
 
 	# env_cnames is each binding's C NAME. A Zerg binding may shadow one already in scope
 	# — `mut n := n` rebinding a parameter is the ordinary way to get a mutable copy — but
 	# C has no shadowing inside a function, so the second one has to be spelled
 	# differently or the C compiler rejects the redefinition.
-	env_cnames: list[str]
+	pub env_cnames: list[str]
 
 	# env_dead is each binding's liveness after a `del`, in the same order: 0 live, 1
 	# revoked on every path reaching here, 2 revoked on some paths and not others. It is
 	# what makes `del` mean anything — without it `del v` followed by a use of `v` compiled
 	# happily for every type, and the statement was a comment with a keyword in front.
-	env_dead: list[int]
+	pub env_dead: list[int]
 
 	# env_mut is whether each binding may be WRITTEN, in the same order. The parser has
 	# always read `mut`, and until now nothing carried it past the AST: `x := 1` followed
@@ -40,7 +40,7 @@ struct Emitter {
 	# binding, and to a module `const`. That is not a missing diagnostic but a missing
 	# GUARANTEE — the memory model's "no shared mutable Zerg state" rests on a binding
 	# being unwritable unless it says otherwise, and nothing was holding the other end.
-	env_mut: list[bool]
+	pub env_mut: list[bool]
 
 	# env_scope is the id of the BLOCK each binding was made in, in the same order. A
 	# binding is not popped when its block ends — the C names already handed out have to
@@ -49,7 +49,7 @@ struct Emitter {
 	# entry is what tells `x := 1; x := 2` (an error) from the same two lines in different
 	# `if` arms (fine) and from shadowing an outer binding or a parameter (fine, and
 	# `mut n := n` is the ordinary way to get a writable copy of one).
-	env_scope: list[int]
+	pub env_scope: list[int]
 
 	# env_const is whether each binding was declared with the `const` KEYWORD, in the same
 	# order — shadow-proof, GRAMMAR group 4, since a plain `x := 1` is just as immutable but
@@ -58,7 +58,7 @@ struct Emitter {
 	# same moment, with the same name and the same block id, as an env row — so the two
 	# could only ever have gone out of step, never apart, and the open-scope walk the rule
 	# needs is the walk c_in_scope already does.
-	env_const: list[bool]
+	pub env_const: list[bool]
 
 	# env_cval is what each binding's initializer FOLDED to, in the same order — a value when
 	# the initializer is a const-expr and the binding cannot be written, and the absence of one
@@ -70,7 +70,7 @@ struct Emitter {
 	# scoped: a table would answer `4` for an `n` that a nearer binding has shadowed. A row
 	# that is a module constant carries no value here on purpose — kv_vals below is its one
 	# home — so the two can never disagree about the same constant.
-	env_cval: list[Folded]
+	pub env_cval: list[Folded]
 
 	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
 	# it holds, in declaration order, paired with the runtime function that gives it back.
@@ -83,9 +83,9 @@ struct Emitter {
 	# The list is not READ any more, only counted: a release is registered on the runtime's
 	# cleanup stack where the binding is declared, and every exit gives it back by unwinding
 	# to a mark. What the depth still decides is whether a block needs a mark at all.
-	rel_cnames: list[str]
-	rel_fns: list[str]
-	sig_names: list[str]
+	pub rel_cnames: list[str]
+	pub rel_fns: list[str]
+	pub sig_names: list[str]
 
 	# sig_nparams / sig_nreq are how many arguments a call to each signature MAY give and
 	# must give — the parameter count, and the count before the first defaulted one. They
@@ -93,50 +93,56 @@ struct Emitter {
 	# per CALL SITE, and counting means walking the whole program's parameter table: two
 	# scans of ~1.7k rows at every call in the program, for two integers that are fixed
 	# the moment the signature is read.
-	sig_nparams: list[int]
-	sig_nreq: list[int]
-	sig_rets: list[Ty]
-	sig_hasret: list[bool]
+	pub sig_nparams: list[int]
+	pub sig_nreq: list[int]
+	pub sig_rets: list[Ty]
+	pub sig_hasret: list[bool]
 
 	# tk_names / tk_kinds / tk_unders is THE type registry: one row per declared type
 	# name, its kind (TK_STRUCT / TK_ENUM / TK_SPEC / TK_TYPEDEF), and — for a typedef —
 	# what it was declared over. It is one table because "what kind of type is this name"
 	# is one question: it was four tables and five spellings, and `c_is_type_name` was the
 	# four-term disjunction that had to be edited in step with all of them.
-	tk_names: list[str]
-	tk_kinds: list[int]
-	tk_unders: list[Ty]
-	fld_struct: list[str]
-	fld_name: list[str]
-	fld_ty: list[Ty]
-	var_name: list[str]
-	var_enum: list[str]
-	var_tag: list[int]
-	vf_variant: list[str]
-	vf_index: list[int]
-	vf_boxed: list[bool]
-	vf_ty: list[Ty]
-	used_rt: bool
-	used_str: bool
+	pub tk_names: list[str]
+	pub tk_kinds: list[int]
+	pub tk_unders: list[Ty]
+	pub fld_struct: list[str]
+	pub fld_name: list[str]
+	pub fld_ty: list[Ty]
+
+	# fld_hasdef / fld_def carry each field's DEFAULT, so a construction that omits a
+	# trailing field can be filled in from the declaration — the same pair `pr_hasdef` /
+	# `pr_def` carry for a parameter, and read by the same kind of backfill.
+	pub fld_hasdef: list[bool]
+	pub fld_def: list[Expr]
+	pub var_name: list[str]
+	pub var_enum: list[str]
+	pub var_tag: list[int]
+	pub vf_variant: list[str]
+	pub vf_index: list[int]
+	pub vf_boxed: list[bool]
+	pub vf_ty: list[Ty]
+	pub used_rt: bool
+	pub used_str: bool
 
 	# used_fnptr records that some function was held as a VALUE, so the generic function
 	# pointer the header typedefs is only there for a program that has one.
-	used_fnptr: bool
-	ref_names: list[str]
-	pr_fn: list[str]
-	pr_idx: list[int]
-	pr_ref: list[bool]
+	pub used_fnptr: bool
+	pub ref_names: list[str]
+	pub pr_fn: list[str]
+	pub pr_idx: list[int]
+	pub pr_ref: list[bool]
 
 	# pr_ty is each parameter's TYPE, parallel to pr_fn / pr_idx. It is what lets a bare
 	# function name be given a type when it is used as a value: `fn(P...) -> R` needs the
 	# P's, and the return table alone has only the R.
-	pr_ty: list[Ty]
+	pub pr_ty: list[Ty]
 
 	# pr_hasdef / pr_def carry each parameter's DEFAULT, so a call that omits a trailing
 	# argument can be given it. The default belongs to the callee's declaration, and a call
 	# site is nowhere near it, which is the whole reason it has to be in a table.
-	pr_hasdef: list[bool]
-	pr_def: list[Expr]
+	pub pr_hasdef: list[bool]
+	pub pr_def: list[Expr]
 
 	# k_decls / k_tys are the module CONSTANTS. They are C globals, so they are in scope
 	# in every function — c_reset_env seeds the per-function env from them rather than
@@ -149,8 +155,8 @@ struct Emitter {
 	# was copied from and no rule notices; a row cannot. `k_tys` stays a column of its own
 	# because it is the one piece of NEW information: the type as INFERRED here, which for
 	# an annotated declaration that does not fit is deliberately not the one written.
-	k_decls: list[ConstDecl]
-	k_tys: list[Ty]
+	pub k_decls: list[ConstDecl]
+	pub k_tys: list[Ty]
 
 	# kv_names / kv_vals are the module constants' FOLDED VALUES — one row per module-level
 	# binding, in declaration order, holding what its initializer works out to or the news
@@ -161,47 +167,47 @@ struct Emitter {
 	# discriminant may name a constant — and k_decls above is not filled until the globals are
 	# rendered, which is most of a unit later. Folding a VALUE needs no types, so the pass can
 	# run that early; inferring the constant's TYPE cannot, which is why the two stay apart.
-	kv_names: list[str]
-	kv_vals: list[Folded]
+	pub kv_names: list[str]
+	pub kv_vals: list[Folded]
 
 	# tup_names are the tuple shapes already declared — one C struct per distinct shape,
 	# generated on demand. The declaration TEXT goes into res_decls: tuples and carriers
 	# spell each other, so the two share one stream in the order they were met, rather than
 	# two sections whose fixed order is wrong for whichever nesting came second.
-	tup_names: list[str]
+	pub tup_names: list[str]
 
 	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
 	# holding the hash and equality for the key type.
-	mvt_names: list[str]
-	mvt_decls: list[str]
+	pub mvt_names: list[str]
+	pub mvt_decls: list[str]
 
 	# dfn_decls are the generated defer thunks and their env structs, one per site.
 	# fn_mark is the cleanup-stack mark a `return` unwinds to, and loop_mark the one a
 	# `break` or `continue` unwinds to — empty when there is no defer to run.
-	dfn_decls: list[str]
-	dfn_n: int
+	pub dfn_decls: list[str]
+	pub dfn_n: int
 
 	# lam_defs are the lambdas lifted out of expression position, each a whole C function,
 	# and lam_n numbers them.
-	lam_defs: list[str]
-	lam_n: int
+	pub lam_defs: list[str]
+	pub lam_n: int
 
 	# rcv_names / rcv_decls are the per-element-type receive helpers, and used_conc
 	# records that this program touched a channel or a spawn — which is what decides
 	# whether main runs under the scheduler and whether the concurrency units link.
-	rcv_names: list[str]
-	rcv_decls: list[str]
-	used_conc: bool
-	fn_mark: str
-	loop_mark: str
+	pub rcv_names: list[str]
+	pub rcv_decls: list[str]
+	pub used_conc: bool
+	pub fn_mark: str
+	pub loop_mark: str
 
 	# res_names / res_decls are the `Result[T]` CARRIERS — one C struct per distinct
 	# payload shape, plus the `zg_force_*` helper that reads it back. They are registered
 	# exactly the way tup_names are, and for the same reason: the name is a pure function
 	# of the shape, so two modules of one program spell it alike. res_decls is the one
 	# on-demand stream — carrier AND tuple declarations, in the order they were met.
-	res_names: list[str]
-	res_decls: list[str]
+	pub res_names: list[str]
+	pub res_decls: list[str]
 
 	# fn_ret is the return type of the function currently being emitted, TVoid when it
 	# declares none. A `return` is a place a value fills a DECLARED slot, so it is one of
@@ -211,14 +217,14 @@ struct Emitter {
 	#
 	# There is no `has_ret` beside it: a function that declares no return type has TVoid
 	# here, and every reader is asking whether this is a CHANNEL, which TVoid is not.
-	fn_ret: Ty
+	pub fn_ret: Ty
 
 	# op_n numbers the temporaries the Result operators need. It is DELIBERATELY not
 	# dfn_n: that counter names the defer thunks, the spawn envs and the block marks, and
 	# a new operator drawing from it would renumber every one of them downstream — a
 	# whole-file diff for a change that touched one expression, and the first thing a
 	# fixpoint failure would show.
-	op_n: int
+	pub op_n: int
 
 	# scope_n hands out block ids and scope_cur is the block being emitted. They are
 	# separate from every other counter here because they must not renumber anything: a
@@ -227,9 +233,9 @@ struct Emitter {
 	# at_line / at_col are where the statement being emitted STARTS, updated by the SAt
 	# marker the parser puts before each one. Every diagnostic reads them, which is what
 	# turns a message into a message with a place.
-	at_path: str
-	at_line: int
-	at_col: int
+	pub at_path: str
+	pub at_line: int
+	pub at_col: int
 
 	# diags is every ILL-FORMED-PROGRAM finding this emission has made, rendered, in the
 	# order they were found. They are COLLECTED rather than raised because an error was a
@@ -240,17 +246,17 @@ struct Emitter {
 	# check.zg rules are on this list. Emit's own `NotImplemented` refusals still raise:
 	# they mean this compiler cannot lower the form at all, so there is nothing to carry
 	# on with. The C built after a finding is discarded, never handed to cc.
-	diags: list[Diag]
+	pub diags: list[Diag]
 
-	scope_n: int
-	scope_cur: int
+	pub scope_n: int
+	pub scope_cur: int
 
 	# open_scopes is the ids of the blocks currently being emitted, outermost first. A
 	# binding is NOT popped when its block ends, so without this a name resolves to the
 	# innermost binding that ever existed rather than the innermost one still in scope:
 	# `x := 1` then `if … { x := 2 }` then a read of `x` resolved to the inner binding's
 	# C name, which C has already closed the brace on.
-	open_scopes: list[int]
+	pub open_scopes: list[int]
 
 	# ns_names / ns_mods are THE NAMESPACE BINDINGS this program's imports introduce, as a
 	# pair of parallel rows: the name a qualified expression writes, and the module path it
@@ -266,8 +272,8 @@ struct Emitter {
 	# Without these a qualified name could not be told from a typo: `foo.n` with no `foo`
 	# anywhere got the advice written for `lib.LIMIT`, because the guard was "nothing else
 	# answers to this name" and a misspelling answers to nothing either.
-	ns_names: list[str]
-	ns_mods: list[str]
+	pub ns_names: list[str]
+	pub ns_mods: list[str]
 
 	# lv_write is set while the ASSIGNMENT TARGET of a statement is being lowered, and it
 	# is what tells `xs[0] = 9` from `x := xs[0]`. A list's buffer is copy-on-write, so a
@@ -278,31 +284,31 @@ struct Emitter {
 	# It travels DOWN a target — through a field and through an index — because every list
 	# on the path is written into: `xs[0].ys[1] = 9` stores into the struct that lives in
 	# `xs`'s buffer, so unsharing `ys` alone would edit a header other holders can see.
-	lv_write: bool
+	pub lv_write: bool
 
 	# tmp_n numbers the temporaries a call has to hold on to because the CALLER owns them
 	# (c_call_releasing). Its own counter, for the reason op_n has one: a name that reaches
 	# the emitted C must not renumber because something unrelated grew a thunk, or every
 	# fixpoint failure starts with a whole-file diff to read past.
-	tmp_n: int
+	pub tmp_n: int
 
 	# fn_mark_used records that something in this function's body unwound to the function's
 	# mark, which is what decides whether the mark is declared at all. It cannot be known
 	# before the body is walked and the mark's NAME cannot be known after, so the name is
 	# handed out up front and the declaration is prepended once the walk has answered.
-	fn_mark_used: bool
+	pub fn_mark_used: bool
 
 	# force_mark hands the next c_block the mark NAME to use instead of minting its own. A
 	# loop body needs that, because a `break` inside it unwinds to that name and the jump is
 	# rendered before the block has finished deciding whether it needs a mark at all.
-	force_mark: str
+	pub force_mark: str
 
 	# loop_keep is the pending-release depth at the loop BODY's entry and loop_mark_used
 	# whether a jump inside it actually emitted an unwind. Together they are what keeps a
 	# loop that owns nothing from paying a scope mark and an unwind EVERY ITERATION: the
 	# jump asks the depth, and the block asks whether the jump spoke.
-	loop_keep: int
-	loop_mark_used: bool
+	pub loop_keep: int
+	pub loop_mark_used: bool
 
 	# ty_names / ty_unders are the `type X = Y` declarations: a name and the type it takes
 	# its REPRESENTATION from. They are not struct_names, because a typedef has no fields and
@@ -315,61 +321,61 @@ struct Emitter {
 	# user conversion from the two types alone — a position converts nothing now, so what is
 	# left of the registry is the one question that survives it: has this type an `into`
 	# already (c_into_user_from), which is the "one Into per type" refusal.
-	into_src: list[str]
+	pub into_src: list[str]
 
 	# want_lints is whether anybody asked for the L5xx findings. A build does not — it passes a
 	# list it discards — and the dedupe below them is quadratic, so asking first is what keeps
 	# an ordinary build from paying for output nobody reads.
-	want_lints: bool
+	pub want_lints: bool
 
 	# lints are the ADVISORY findings the lowering walk notices — L5xx, every place a value
 	# converted or a literal adopted without the source saying so. They are kept apart from
 	# `diags` because they must not fail a build: the language allows every one of them, and
 	# what a lint says is that the page does not show what the program means.
-	lints: list[Diag]
+	pub lints: list[Diag]
 
 	# gen_names / gen_tpls are the GENERIC TEMPLATES — every `fn f[T](…)` in the program, by
 	# name. A template is not a function: it has no C symbol, no prototype and no body, and
 	# nothing but this table ever sees it. What reaches C is one specialization per distinct
 	# set of type arguments, below.
-	gen_names: list[str]
-	gen_tpls: list[FnDecl]
+	pub gen_names: list[str]
+	pub gen_tpls: list[FnDecl]
 
 	# inst_names / inst_fns are the specializations asked for so far, the mangled name beside
 	# the ordinary FnDecl that substitution produced. The list GROWS WHILE IT IS BEING WALKED
 	# — a specialized body may call another template — which is why the drain that emits them
 	# is a watermark loop rather than a `for`.
-	inst_names: list[str]
-	inst_fns: list[FnDecl]
+	pub inst_names: list[str]
+	pub inst_fns: list[FnDecl]
 
 	# impl_on / impl_target are every `impl <Spec> for <Type>`, as a pair of lists. Two
 	# questions read it and they are the same question: whether `==` on an aggregate has an
 	# `Eq` behind it (docs/core/derive.md makes `Eq` the SOLE source of it), and whether a
 	# generic's type argument meets the bound its parameter carries. It was an Eq-only list
 	# until the second asker arrived and wanted the same rows.
-	impl_on: list[str]
-	impl_target: list[str]
+	pub impl_on: list[str]
+	pub impl_target: list[str]
 
 	# sig_mod / sig_pub are, per signature, the MODULE that declared it and whether that
 	# declaration is `pub`. Visibility is the one question about a name that the flattened
 	# namespace cannot answer on its own: every module's names land in one space, so by the
 	# time a call is resolved there is nothing left to say where the callee came from. These
 	# two lists are what remembers it, recorded where the signature is.
-	sig_mod: list[str]
-	sig_pub: list[bool]
+	pub sig_mod: list[str]
+	pub sig_pub: list[bool]
 
 	# sig_unsafe is the third such column: whether the declaration sat inside a module-level
 	# `unsafe { … }` group, which GRAMMAR group 12 makes callable only from unsafe. It is
 	# recorded beside the other two for the same reason — the namespace is flat by the time a
 	# call is resolved, and the CONTEXT a declaration was written in is exactly what is lost.
-	sig_unsafe: list[bool]
+	pub sig_unsafe: list[bool]
 
 	# in_unsafe_fn is whether the function being emitted RIGHT NOW is one of them, which is
 	# the other half of the rule: the check is a comparison between the callee's context and
 	# the caller's, and nothing else on this struct says which function the walk is inside.
 	# c_fn saves and restores it, because a lambda is emitted through c_fn in the middle of
 	# the enclosing function's expression.
-	in_unsafe_fn: bool
+	pub in_unsafe_fn: bool
 
 	# depth counts how many recursion levels of the expression walk are active — one per
 	# c_expr or c_infer entry, the two doors every recursive descent into an expression
@@ -377,19 +383,19 @@ struct Emitter {
 	# long method chain) never gets deeper in the parser — it loops — while the walk here
 	# recurses once per link and died of SIGSEGV at about 310 links. c_deeper is the
 	# counted refusal that fires first.
-	depth: int
+	pub depth: int
 
 	# mod_tagged is every PRIVATE free-function name two or more modules declare. Such a name
 	# is answerable — nothing outside a module can reach its private names, so a bare call
 	# means the caller's own — but the two need different C symbols, and this is the list of
 	# names that get one.
-	mod_tagged: list[str]
+	pub mod_tagged: list[str]
 
 	# mod_order is the program's module names, SORTED, and a name's tag is its position here.
 	# Sorted rather than first-seen because `fixpoint` compares emitted C byte for byte: a
 	# tag that depended on the order files were read would move the output without the
 	# program changing.
-	mod_order: list[str]
+	pub mod_order: list[str]
 
 	# seq_pre is the declarations the expression BEING RENDERED has to run before it, in
 	# source order — the temporaries that give a call's arguments and an operator's operands
@@ -400,7 +406,7 @@ struct Emitter {
 	# whole node in the statement expression the declarations belong to. Every c_expr saves
 	# and clears it on the way in, so a nested render can never leave a declaration behind
 	# in an expression that is not its own.
-	seq_pre: str
+	pub seq_pre: str
 
 	# sub is the identifier substitution an enclosing BLOCK EXPRESSION left standing, and it
 	# is the only one that reaches a statement. Every other substitution is a parameter — a
@@ -412,7 +418,7 @@ struct Emitter {
 	# It is saved and restored around every construct that emits a body of its OWN — a
 	# lambda's, above all — because a substitution belongs to the block that opened it and
 	# means nothing inside a function lifted out of it.
-	sub: Subst
+	pub sub: Subst
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -420,8 +426,8 @@ struct Emitter {
 # arm's bound names — a scrutinee alias, or an enum payload field access — into the arm's
 # guard and body.
 struct Subst {
-	names: list[str]
-	repls: list[str]
+	pub names: list[str]
+	pub repls: list[str]
 }
 
 fn c_nosub() -> Subst {
@@ -2589,12 +2595,12 @@ fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 # once and each consumer reads the fields it needs, so a site added here is added for all
 # three and cannot be owed to any of them by hand.
 struct Site {
-	ty: Ty
-	place: str
-	tparams: list[str]
-	path: str
-	line: int
-	col: int
+	pub ty: Ty
+	pub place: str
+	pub tparams: list[str]
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # c_decl_sites is that list, in DECLARATION ORDER — structs, then enums, then functions,
@@ -3021,8 +3027,12 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 		mut fnames: list[str] = []
 		for fd in sd.fields {
 			fnames.append(fd.name)
+			c_check_private_field(em, sd, fd)
 		}
 		c_check_names_distinct(fnames, "a field", sd.name)
+		for fd in sd.fields {
+			c_check_field_default(sd, fnames, fd)
+		}
 	}
 	for ed in f.enums {
 		mut vnames: list[str] = []
@@ -3041,6 +3051,70 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 			pseen.append(pm.name)
 		}
 	}
+}
+
+# c_check_private_field is GRAMMAR's FIELD VISIBILITY & DEFAULTS rule, the half that is
+# about the field's DECLARATION rather than about a construction.
+#
+# A non-`pub` field is module-private, and it MUST carry a default. The two halves of the
+# note are one rule: the field-wise `T(...)` constructor is public, and there are NO zero
+# values — so a field with no default is one every construction has to supply a value for.
+# Outside the module a private field may not even be READ, and asking a caller for a value
+# it can never see back is a type nothing out there can build. A default is what makes the
+# argument omittable, which is what makes such a type constructible at all.
+#
+# Until field defaults existed the rule was UNENFORCEABLE — there was no way to write the
+# thing it demands — so the compiler accepted a private field with no default and the MUST
+# was dead in both directions. It arrives with them for that reason.
+#
+# A `T?` is the exception the note itself names: its implicit default is `nil`, so it is
+# already omittable and needs no `=`.
+fn c_check_private_field(mut &em: Emitter, sd: StructDecl, fd: FieldDef) {
+	return if fd.is_pub or fd.has_def or c_is_opt(fd.ty)
+
+	chk_at_place(em, sd.path, fd.line, fd.col, "E482", f"the field `{fd.name}` of `{sd.name}` is module-private, so it must carry a default (`{fd.name}: {ty_name(fd.ty)} = …`) — a construction outside the module cannot supply a value for a field it may not read. Write `pub` to expose the field instead")
+}
+
+# c_check_field_default refuses a default that names ANOTHER FIELD of the same struct, which
+# is the one shape of default this compiler cannot lower — and the shape that goes wrong
+# silently rather than loudly.
+#
+# The default is materialised at the CONSTRUCTION, where the struct's fields are not names in
+# scope, so `b: int = a * 2` reads whatever `a` means THERE. With no such name it is `E372
+# undefined name`, which is a true sentence about the wrong thing — `a` is a field, right
+# above. With a module constant called `a` it is worse: the default quietly reads the
+# constant, and `P(3).b` was 200 for `a := 100` where the field would have made it 6.
+#
+# It is the same refusal `docs/code/functions.md` records for a parameter default that reads
+# an earlier parameter, for the same reason, and the seed has gated it on both since it was
+# written. Refusing by name is what this compiler owes a form it cannot lower.
+fn c_check_field_default(sd: StructDecl, fnames: list[str], fd: FieldDef) {
+	return if not fd.has_def
+
+	nm := c_default_names_field(fnames, fd.def)
+
+	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
+	# the field carries its own line and column, so there is a position to give and no reason
+	# to make the reader find the struct themselves
+	raise f"E483 NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all)" + "\n" + place_line(sd.path, fd.line, fd.col) if nm != ""
+}
+
+# c_default_names_field is the first of `fnames` a default expression mentions, or "". The
+# walk is ITERATIVE over `expr_parts` for the reason `p_expr_root`'s is: a walk that runs
+# over an arbitrary program's expression must not be able to fail at depth.
+fn c_default_names_field(fnames: list[str], e: Expr) -> str {
+	mut nodes: list[Expr] = [e]
+	mut i := 0
+	for i < nodes.len() {
+		nm := c_ident_name(nodes[i])
+		return nm if nm != "" and c_name_in(fnames, nm)
+
+		for k in expr_parts(nodes[i]) {
+			nodes.append(k)
+		}
+		i = i + 1
+	}
+	return ""
 }
 
 fn c_check_names_distinct(names: list[str], what: str, whose: str) {
@@ -3140,6 +3214,8 @@ fn c_build_structs(mut &em: Emitter, f: File) {
 			em.fld_struct.append(sd.name)
 			em.fld_name.append(fd.name)
 			em.fld_ty.append(fd.ty)
+			em.fld_hasdef.append(fd.has_def)
+			em.fld_def.append(fd.def)
 			j = j + 1
 		}
 		i = i + 1
@@ -3157,16 +3233,9 @@ fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
 
 # c_struct_field_ty_at returns the type of a struct's idx-th field (declaration order).
 fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
-	mut n := 0
-	mut i := 0
-	for i < em.fld_struct.len() {
-		if em.fld_struct[i] == sname {
-			return em.fld_ty[i] if n == idx
-			n = n + 1
-		}
-		i = i + 1
-	}
-	return Ty.TUnknown
+	row := c_struct_field_row(em, sname, idx)
+	return Ty.TUnknown if row < 0
+	return em.fld_ty[row]
 }
 
 # c_field_init emits a constructor argument, initialising an EMPTY list `[]` to a properly
@@ -6604,7 +6673,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
 		i = i + 1
 	}
-	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
+	return out + c_struct_rest(em, sname, args.len(), args.len() > 0, sb)
 }
 
 # c_struct_rest fills the fields a construction left off the end. GRAMMAR group 7: there
@@ -6616,7 +6685,14 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 # is. `P(1)` on a struct with a `str?` printed `(null)` — an absent field read as a present
 # one. And a missing NON-optional field was equally silent, so the whole rule was decided
 # by C's zeroing rather than by the language.
-fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
+#
+# A DECLARED default is the third answer, and it is checked first, because it is the one the
+# programmer wrote: a field with an `=` is filled from that expression whatever its type, so
+# a `T?` with a default gets the default rather than `nil`. The expression is rendered HERE,
+# at the construction that omitted the field, which is what makes it evaluated per
+# construction — the same backfill, and the same consequence, as `c_default_args` gives a
+# parameter default at a call.
+fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst) -> str {
 	mut out := ""
 	mut i := given
 	mut sep := lead
@@ -6633,7 +6709,12 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		# was written. `0` stands in for the value the field never got, which keeps the
 		# initializer's shape so the walk carries on and names the fields after this one too;
 		# the C built after a finding is discarded.
-		if c_is_opt(ft) {
+		if c_struct_field_hasdef(em, sname, i) {
+			# a default is an argument, so it meets its field's type like any other — which is
+			# what gives `xs: list[int] = []` an element size, exactly as it does for a
+			# parameter default
+			out = out + c_field_init(em, f"the default for {chk_field_says(sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
+		} else if c_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
 			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
@@ -6642,6 +6723,37 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		i = i + 1
 	}
 	return out
+}
+
+# c_struct_field_row is the row a struct's idx-th field (declaration order) occupies in the
+# field table. The three per-column readers below go through it rather than each walking the
+# table themselves, which is the lesson `c_param_row` already carries for parameters: one
+# scan, one encoding of "the idx-th field of this struct".
+fn c_struct_field_row(mut &em: Emitter, sname: str, idx: int) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname {
+			return i if n == idx
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# c_struct_field_hasdef is whether the idx-th field declared a default.
+fn c_struct_field_hasdef(mut &em: Emitter, sname: str, idx: int) -> bool {
+	row := c_struct_field_row(em, sname, idx)
+	return false if row < 0
+	return em.fld_hasdef[row]
+}
+
+# c_struct_field_def is the idx-th field's default expression; only ask when it has one.
+fn c_struct_field_def(mut &em: Emitter, sname: str, idx: int) -> Expr {
+	row := c_struct_field_row(em, sname, idx)
+	return Expr.ENil if row < 0
+	return em.fld_def[row]
 }
 
 fn c_struct_field_n(mut &em: Emitter, sname: str) -> int {
@@ -9469,9 +9581,9 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 # so the question "what is being called" is asked in one place. Before this they each had
 # their own copy of it, and each copy knew only about a direct call.
 struct Callee {
-	cname: str
-	args: list[Expr]
-	key: str
+	pub cname: str
+	pub args: list[Expr]
+	pub key: str
 }
 
 # c_callee_of answers that question, or refuses by name. `what` is the statement asking,
@@ -11789,7 +11901,12 @@ fn c_obj_src(prog: File, target: str) -> str {
 		if req.has_ret {
 			ret = f" -> {ty_name(req.ret)}"
 		}
-		fields = fields + f"\t{req.name}: fn ({tys}){ret}\n"
+
+		# `pub`, because an object's method slots are the whole of what it is FOR: the
+		# wrapper is generated from the spec and used wherever the spec is, so a
+		# module-private slot would be a field nobody outside could reach — and a private
+		# field must carry a default, which a function value has none of.
+		fields = fields + f"\tpub {req.name}: fn ({tys}){ret}\n"
 		if inits != "" {
 			inits = inits + ", "
 		}
@@ -12026,7 +12143,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub())
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub())
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

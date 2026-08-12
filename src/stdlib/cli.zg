@@ -89,16 +89,16 @@ pub enum ArgKind {
 # It is built by `argument` / `flag` / `positional` and refined by the methods below, so a
 # program never spells the fields — which is why adding one here does not break callers.
 pub struct Argument {
-	short: str
-	long: str
-	help: str
-	fallback: str
-	kind: ArgKind
-	need: bool
-	repeats: bool
-	env_key: str
-	group: str
-	section: str
+	pub short: str
+	pub long: str
+	pub help: str
+	pub fallback: str
+	pub kind: ArgKind
+	pub need: bool
+	pub repeats: bool
+	pub env_key: str
+	pub group: str
+	pub section: str
 }
 
 # argument declares an option that takes a value. The short letter comes first because it
@@ -204,10 +204,10 @@ impl Argument {
 # positionals left over, and the path of command names that led here. Values are read by
 # NAME — the long form, or the short letter when there is no long one.
 pub struct Ctx {
-	names: list[str]
-	values: list[str]
-	rest: list[str]
-	cmd_path: str
+	pub names: list[str]
+	pub values: list[str]
+	pub rest: list[str]
+	pub cmd_path: str
 }
 
 # Arguments are held as two parallel lists — the names given, and the value each carries —
@@ -297,18 +297,18 @@ impl Ctx {
 # sub-commands and no action of its own prints its help when given none, which is the
 # behaviour a bare `git` has.
 pub struct Command {
-	name: str
-	about: str
-	ver: str
-	usage_text: str
-	args: list[Argument]
-	subs: list[Command]
-	action: fn (Ctx) -> int
-	has_action: bool
-	footer: str
-	auto_help: bool
-	group_names: list[str]
-	group_need: list[bool]
+	pub name: str
+	pub about: str
+	pub ver: str
+	pub usage_text: str
+	pub args: list[Argument]
+	pub subs: list[Command]
+	pub action: fn (Ctx) -> int
+	pub has_action: bool
+	pub footer: str
+	pub auto_help: bool
+	pub group_names: list[str]
+	pub group_need: list[bool]
 }
 
 # no_action is what a command runs before one is declared. It is never reached — a command
@@ -483,11 +483,11 @@ fn in_group(a: Argument, g: str) -> Argument {
 # an exclusive group is about what the user typed, so a default filling a slot must not
 # make two options look mutually given.
 struct Scan {
-	names: list[str]
-	values: list[str]
-	rest: list[str]
-	err: str
-	sub_at: int
+	pub names: list[str]
+	pub values: list[str]
+	pub rest: list[str]
+	pub err: str
+	pub sub_at: int
 }
 
 # scan walks argv until it runs out or reaches a sub-command name. Everything before that

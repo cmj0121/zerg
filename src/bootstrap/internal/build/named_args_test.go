@@ -37,7 +37,7 @@ func TestNamedArgSkipsADefault(t *testing.T) {
 // TestNamedFieldsReorder is the same rule for a struct construction, which had the same
 // positional loop: `P(y: 2, x: 1)` built `{2, 1}`.
 func TestNamedFieldsReorder(t *testing.T) {
-	got := runProgram(t, "struct P {\n\tx: int\n\ty: int\n}\n"+
+	got := runProgram(t, "struct P {\n\tpub x: int\n\tpub y: int\n}\n"+
 		"fn main() {\n\tp := P(y: 2, x: 1)\n\tprint p.x\n\tprint p.y\n}\n")
 	if got != "1\n2\n" {
 		t.Fatalf("named-field construction = %q, want %q", got, "1\n2\n")

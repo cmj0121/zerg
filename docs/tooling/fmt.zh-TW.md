@@ -535,7 +535,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
 | `E214` | 在 variant 帶 payload 的 enum 上寫判別值 `… = …`——它的 tag 是不透明的                                 |
 | `E215` | NotImplemented                                                                                        |
-| `E216` | NotImplemented                                                                                        |
 | `E217` | NotImplemented                                                                                        |
 | `E218` | NotImplemented                                                                                        |
 | `E219` | NotImplemented                                                                                        |
@@ -766,6 +765,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E479` | map 項目是 `key: value`,而這個沒有 `:`                                                                |
 | `E480` | …的值沒有這個編譯器能命名的型別 — **[not yet]**                                                       |
 | `E481` | `…` 重新綁定 `match` arm 的 pattern 已經綁住的名字 — **[not yet]**                                    |
+| `E482` | `…` 的欄位 `…` 是 module-private,所以必須帶預設值                                                     |
+| `E483` | NotImplemented                                                                                        |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 

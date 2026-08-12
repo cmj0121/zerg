@@ -48,7 +48,7 @@ func TestSemanticDiagnostics(t *testing.T) {
 		},
 		{
 			name:   "'?.' on a non-optional value",
-			src:    "struct Point {\n  x: int\n}\nfn f(p: Point) -> int {\n  return p?.x\n}",
+			src:    "struct Point {\n  pub x: int\n}\nfn f(p: Point) -> int {\n  return p?.x\n}",
 			substr: "'?.' requires an optional value",
 			line:   5, col: 10,
 		},

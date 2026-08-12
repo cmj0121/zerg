@@ -190,18 +190,16 @@ whether this stream ending badly is your business — and `guard` is where that 
 `?` on a receive, meanwhile, now needs only what any `T?` needs: the absence is an ordinary optional,
 so the `Result[T]`-in-a-signature problem that used to be noted here is off the channel path.
 
-The `match` line above also carries a restriction, and it is the one most likely to bite: what may
-stand in an arm.
+The `match` line above is worth one more note, about what may stand in an arm. A `match` arm's body is
+an **expression**, and a block **is** one — so `Left(v) => { … }` holds several statements and yields
+its last one's value, and a statement such as `print` stands in it perfectly well. `c_match` lowers to
+a ternary chain, and a block lowers to a statement expression, which is an operand of one like any
+other.
 
-> **[not yet]** The spec makes a `match` arm's body an expression, and a block **is** an
-> expression, so `Left(v) => { … }` is grammatical — but `c_match` lowers to a ternary chain, which
-> cannot hold a block, and the arm is refused by name (_a block used as an expression_), so a
-> statement such as `print` may not stand in one.
-> The workaround is to make the arm a **call** whose value is the arm's value, as the actor example
-> below does. `select` arms are unaffected, and for a reason worth keeping straight: a `match` arm
-> must **yield** the match's value, while a `select` yields nothing and its arm **runs**. So a select
-> arm's body is a **statement** (GRAMMAR group 9) — `break` is ordinary there, a bare `print` stands
-> in an arm, and a block is just one statement among them.
+`select` arms differ, and the reason is worth keeping straight: a `match` arm must **yield** the
+match's value, while a `select` yields nothing and its arm **runs**. So a select arm's body is a
+**statement** (GRAMMAR group 9) — `break` is ordinary there, and a block is just one statement among
+them.
 
 ## Closing — automatic on the last sender, `close(ch)` when it must be early
 

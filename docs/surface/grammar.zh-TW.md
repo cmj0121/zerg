@@ -129,8 +129,11 @@ unsafe ptr   asm
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
 
-**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
-內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
+**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上，**同時它
+也是一個值**：block 是一個 **expression**（`primary`，group 4），其值是**最後一個 statement 的值**——expression
+statement 交出它的 expression，其他任何 statement、以及空的 block，都交出 `nil`。ASI 的 `;` 只**分隔**
+statement，並不像某些語言的結尾 `;` 那樣把值丟掉，所以 `guard { … }` 與 `match` 的 arm 都能裝好幾個 statement
+而照樣產出值。block 內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
 
 **換行與 ASI。** 換行由 lexer 實現為 `;` 分隔符（automatic `;` insertion）：遇行尾，若該行最後一個 token 能
 **結束一個項目**——identifier、literal、`)`、`]`、`}`、`?`、`_`、`this`，或 `return` / `break` / `continue` /

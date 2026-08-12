@@ -541,14 +541,14 @@ EOF
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
 # namer, so a name is answered the same way wherever it is written.
-expect "$ZERG" ref-type-in-result E446 <<'EOF'
+expect "$ZERG" ref-type-in-result E446 place <<'EOF'
 fn mk(v: int) -> Ref[int] {
 	return Ref(v)
 }
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" ref-type-in-param E446 <<'EOF'
+expect "$ZERG" ref-type-in-param E446 place <<'EOF'
 fn load(a: Ref[int]) -> int {
 	return 0
 }
@@ -705,9 +705,62 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" derive-with-no-declaration E208 <<'EOF'
-#[derive(Eq)]
+# A DECORATOR WITH NOTHING UNDER IT AT ALL — the last item in the file. This is the whole of
+# what E208 says, and it used to be said about `#[derive(Eq)] fn main()` as well, where there
+# very much IS a declaration under it: the pending list was only ever drained by a `struct`,
+# an `enum` or a `spec`, so every other declaration walked past it and the leftover was
+# reported at `Eof` as though nothing had followed.
+expect "$ZERG" derive-with-no-declaration E208 place <<'EOF'
 fn main() { print 1 }
+
+#[derive(Eq)]
+EOF
+
+# THE DECLARATION THAT FOLLOWS IS ONE A DECORATOR CANNOT GO ON. Four spellings, one rule —
+# and the `impl` one was not refused at all: the pending derive survived the block and landed
+# on whichever `struct` was declared next, which is a decorator silently changing a type the
+# reader never decorated.
+expect "$ZERG" derive-on-a-function E487 '`#[derive(Eq)]`' place <<'EOF'
+#[derive(Eq)]
+fn f() {
+	print 1
+}
+
+fn main() { f() }
+EOF
+
+expect "$ZERG" derive-on-a-type-alias E487 '`#[derive(Eq)]`' place <<'EOF'
+#[derive(Eq)]
+type X = int
+
+fn main() { print 1 }
+EOF
+
+# `#[obj]` RIDES THE SAME PENDING LIST under a marker no spec name can be, and every sentence
+# about that list spelled it as a derive — so `#[obj] fn f()` reported `#[derive(#obj)]`,
+# quoting a decorator the program does not contain.
+expect "$ZERG" obj-on-a-function E487 '`#[obj]`' place <<'EOF'
+#[obj]
+fn f() {
+	print 1
+}
+
+fn main() { f() }
+EOF
+
+expect "$ZERG" derive-on-an-impl E487 '`#[derive(Eq)]`' place <<'EOF'
+struct P {
+	pub x: int
+}
+
+#[derive(Eq)]
+impl P {
+	fn get() -> int {
+		return this.x
+	}
+}
+
+fn main() { print P(1).get() }
 EOF
 
 # A FIELD DEFAULT IS BUILT; a field default that reads ANOTHER FIELD is not, and it is the
@@ -787,33 +840,33 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-expect "$ZERG" raw-pointer-builtin E413 <<'EOF'
+expect "$ZERG" raw-pointer-builtin E413 place <<'EOF'
 fn main() {
 	mut n := 1
 	print addr(n)
 }
 EOF
 
-expect "$ZERG" refcounted-box-builtin E446 <<'EOF'
+expect "$ZERG" refcounted-box-builtin E446 place <<'EOF'
 fn main() {
 	r := Ref(7)
 	print deref(r)
 }
 EOF
 
-expect "$ZERG" deref-builtin E446 <<'EOF'
+expect "$ZERG" deref-builtin E446 place <<'EOF'
 fn main() {
 	print deref(7)
 }
 EOF
 
-expect "$ZERG" sizeof-builtin E414 <<'EOF'
+expect "$ZERG" sizeof-builtin E414 place <<'EOF'
 fn main() {
 	print sizeof[int]
 }
 EOF
 
-expect "$ZERG" alignof-builtin E414 <<'EOF'
+expect "$ZERG" alignof-builtin E414 place <<'EOF'
 fn main() {
 	print alignof[int]
 }
@@ -1557,7 +1610,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-type E413 <<'EOF'
+expect "$ZERG" raw-pointer-type E413 place <<'EOF'
 fn f(p: ptr) -> int {
 	return 1
 }
@@ -1565,23 +1618,37 @@ fn f(p: ptr) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" destructuring-binding E238 <<'EOF'
+# THE THIRD POSITION, and the one a signature reads last: a raw pointer as the RESULT. The
+# funnel that names every built-in this compiler has not got is one function, so a place is
+# owed at each of the three the same way — and none of them carried one.
+expect "$ZERG" raw-pointer-return-type E413 place <<'EOF'
+fn f() -> ptr[int] {
+	return 0
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" destructuring-binding E238 place <<'EOF'
 fn main() {
 	(a, b) := (1, 2)
 	print a + b
 }
 EOF
 
-expect "$ZERG" destructuring-binding-mut E238 <<'EOF'
+expect "$ZERG" destructuring-binding-mut E238 place <<'EOF'
 fn main() {
 	mut (a, b) := (1, 2)
 	print a + b
 }
 EOF
 
-# the third spelling BUILT and did nothing: the tuple was evaluated, assigned to no one,
-# and the program printed the values it started with
-expect "$ZERG" destructuring-assignment E238 <<'EOF'
+# THE THIRD SPELLING IS A DIFFERENT FORM. It BUILT and did nothing — the tuple was
+# evaluated, assigned to no one, and the program printed the values it started with — and
+# once it was refused it borrowed the binding's sentence, which quotes a `:=` at a reader
+# who wrote `=`. GRAMMAR#assign-target derives the tuple form on its own, so it is an unbuilt
+# form of its own and owes its own sentence.
+expect "$ZERG" destructuring-assignment E486 'a destructuring assignment' place <<'EOF'
 fn main() {
 	mut a := 1
 	mut b := 2
@@ -2180,26 +2247,26 @@ EOF
 # Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
 # compiler has not caught up to, which is exactly what this file is for.
 
-expect "$ZERG" fixed-width-conversion E465 <<'EOF'
+expect "$ZERG" fixed-width-conversion E465 place <<'EOF'
 fn main() {
 	print i32(5)
 }
 EOF
 
-expect "$ZERG" fixed-width-annotation E465 <<'EOF'
+expect "$ZERG" fixed-width-annotation E465 place <<'EOF'
 fn main() {
 	x: u8 = 5
 	print int(x)
 }
 EOF
 
-expect "$ZERG" fixed-width-float E465 <<'EOF'
+expect "$ZERG" fixed-width-float E465 place <<'EOF'
 fn main() {
 	print f32(1.5)
 }
 EOF
 
-expect "$ZERG" fixed-width-typedef E465 <<'EOF'
+expect "$ZERG" fixed-width-typedef E465 place <<'EOF'
 type W = u8
 
 fn main() {
@@ -2236,7 +2303,7 @@ EOF
 # this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
 # is refused, this one shows the refusal is about the type not being built rather than about
 # where it was written.
-expect "$ZERG" ptr-type-in-an-unsafe-group E413 <<'EOF'
+expect "$ZERG" ptr-type-in-an-unsafe-group E413 place <<'EOF'
 unsafe {
 	fn f(p: ptr) -> int {
 		return 1
@@ -2272,7 +2339,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" set-constructor E466 <<'EOF'
+expect "$ZERG" set-constructor E466 place <<'EOF'
 fn main() {
 	s := set([1, 2])
 	print s.len()
@@ -2366,8 +2433,34 @@ EOF
 # here", so the import was not made and `util/text` fell through to the statement loop as
 # a top-level expression — which compile mode treats as a nop. Built, printed, exited 0,
 # and had imported nothing.
-expect "$ZERG" bare-import-path E267 place <<'EOF'
+expect "$ZERG" bare-import-path E267 'write `import "util/text"`' place <<'EOF'
 import util/text
+
+fn main() {
+	print 1
+}
+EOF
+
+# A GUESS IS A PATH OR IT IS NOTHING. The reassembly used to run to the next `;` — and ASI
+# inserts none after `import`, a keyword that cannot END an item — so a bare `import` with
+# no path at all swept up the following declarations and offered `import "structQ{puba:int"`
+# as the spelling to write. What is quoted back at a reader has to be something they wrote.
+expect "$ZERG" import-with-no-path-at-all E267 'derives a str-lit and nothing else' place <<'EOF'
+import
+
+struct Q {
+	pub a: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# The same branch, one token along: a path is `identifier ( '/' identifier )*` and `3` starts
+# none, so there is nothing of the reader's to quote back.
+expect "$ZERG" import-path-that-is-not-a-path E267 'derives a str-lit and nothing else' place <<'EOF'
+import 3
 
 fn main() {
 	print 1

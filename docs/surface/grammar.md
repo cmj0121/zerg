@@ -215,9 +215,10 @@ direction is an error). A **type-annotated** binding spells `name: T = expr` —
 An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
-any lvalue (`(a, obj.f) = …`). **[not yet]** in both directions: the compiler binds one name at a time, so
-the tuple shape is refused whichever operator it wears (_E238 a destructuring binding `(a, b) := …`_) and
-the struct shape as a pattern it does not read (_E221 a struct pattern `Div{…}`_).
+any lvalue (`(a, obj.f) = …`). **[not yet]** in both directions, and each direction is refused as itself:
+the compiler binds one name at a time (_E238 a destructuring binding `(a, b) := …`_) and assigns to one
+target at a time (_E486 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
+does not read (_E221 a struct pattern `Div{…}`_).
 
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.

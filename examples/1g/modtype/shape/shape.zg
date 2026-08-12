@@ -1,0 +1,18 @@
+# shape — a module whose TYPES are reached from another translation unit.
+#
+# A `pub struct` and a `pub enum` are both declarations the importing module names through
+# the namespace, and GRAMMAR group 7's CONSTRUCTION note makes each name its own
+# constructor — so `shape.Point(…)` and `shape.Colour.Red` are what the reader writes.
+pub struct Point {
+	pub x: int
+	pub y: int
+}
+
+pub enum Colour {
+	Red
+	Green
+}
+
+pub fn origin() -> Point {
+	return Point(0, 0)
+}

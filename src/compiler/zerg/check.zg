@@ -884,6 +884,18 @@ pub fn chk_binding_says(name: str) -> str {
 	return f"the binding `{name}`"
 }
 
+# chk_payload_says names a CARRIER'S PAYLOAD as a slot, out of the slot the carrier itself
+# fills. A bare value entering a `T?`, a `Result[T]` or an `Either[X, Y]` is injected as the
+# payload, so the type it is checked against is the payload's — and the label used to be the
+# enclosing slot's, unchanged, which made the sentence untrue: `x: int? = "s"` said _the
+# binding `x` is int_ about a binding declared `int?`.
+#
+# It reads outward-in, so a nesting composes: "the int? payload of the Result[int?] payload
+# of this function's answer".
+pub fn chk_payload_says(where: str, carrier: Ty) -> str {
+	return f"the {ty_name(carrier)} payload of {where}"
+}
+
 # CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
 # so what the sentence can point at is the SIGNATURE.
 #
@@ -1903,7 +1915,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	# the fixed-width ladder's own sentence behind it, which is what sent anybody looking.
 	nm := c_named_of(declared)
 	if nm != "" and not c_is_type_name(em, nm) {
-		c_builtin_check(nm)
+		c_builtin_check(em, nm)
 		chk_at(em, "E334", f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
 		return
 	}
@@ -2026,7 +2038,16 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 		# while claiming to cover them all: `type W = u8` reported "names no type — `u8` is not
 		# declared", which is the unnamed refusal the rule exists to kill, one type position
 		# over.
-		c_builtin_check(nm)
+		#
+		# The DECLARATION'S place is put on the emitter first, the way c_check_named_sites
+		# does it for the same reason: this pass runs before any statement is emitted, so the
+		# SAt markers have said nothing and the place trailer c_builtin_check appends would
+		# name the last unit's. The finding below already carries `td`'s place explicitly; a
+		# refusal raised inside the funnel can only read it from here.
+		em.at_path = td.path
+		em.at_line = td.line
+		em.at_col = td.col
+		c_builtin_check(em, nm)
 
 		chk_at_place(em, td.path, td.line, td.col, "E337", f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
 		return Ty.TUnknown
@@ -2077,14 +2098,26 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 	}
 }
 
-# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
-# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
-# about the numbering. One counted from 1 and the other from 0, so the same field of the same
-# struct was "field 1" or "field 0" depending on which mistake you made.
+# chk_field_says names a struct's field, and it is shared with the emitter's missing-field
+# diagnostic — because the two disagreed about the numbering. One counted from 1 and the
+# other from 0, so the same field of the same struct was "field 1" or "field 0" depending on
+# which mistake you made.
 #
-# `pos` arrives 1-based, which is chk_arg_says' convention.
-pub fn chk_field_says(sname: str, pos: int) -> str {
-	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
+# IT NAMES THE FIELD, which docs/core/types.md requires of the missing-field rule ("a
+# construction short of one is an error naming the field") and which `E482` beside it has
+# always done. It said "field 2 of `Config`" instead — a number the reader then has to count
+# their own declaration against, and one that means a different field the moment a field is
+# inserted above it. The position is what the CONSTRUCTION gives, since it binds by position;
+# the declaration is where the name is, and the compiler is holding both.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention; the field table is 0-based. A
+# struct nothing registered has no name to give, and then this falls back to the number
+# rather than printing an empty one.
+pub fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
+	row := c_struct_field_row(em, sname, pos - 1)
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`" if row < 0
+
+	return f"the field `{em.fld_name[row]}` of `{sname}`"
 }
 
 # --- assigned value ---------------------------------------------------------------

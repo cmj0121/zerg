@@ -841,7 +841,13 @@ pub fn parse_at(src: str, path: str) -> File {
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
 	# name it applies to is one iteration away.
+	# and the place it was WRITTEN at, which the list itself cannot carry: a decorator is
+	# refused for what follows it, so the position a reader has to go to is the `#[`, not the
+	# declaration under it and not the end of the file. It follows the `unsafe` group's
+	# arrangement one arm down, for the same reason.
 	mut pending: list[str] = []
+	mut deco_line := 0
+	mut deco_col := 0
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 
@@ -885,6 +891,21 @@ pub fn parse_at(src: str, path: str) -> File {
 			is_pub = true
 			p_advance(p)
 		}
+
+		# A PENDING DECORATOR BELONGS TO THIS ITEM, and until now only three arms below took
+		# one: `struct`, `enum` and `spec` call p_take_derives, and every other arm walked
+		# past the list without touching it. So a decorator on anything else was not refused
+		# where it stood — it SURVIVED, and either landed on whichever decoratable
+		# declaration came later (`#[derive(Eq)] impl P { … }` silently derived onto the next
+		# `struct` in the file) or was reported at `Eof` as having no declaration under it,
+		# which is a false sentence about a program whose next line is a declaration.
+		#
+		# It is asked HERE, at the one point every item passes, rather than as a fourth
+		# refusal hung off the arms that do not want one — the arms are nine and the rule is
+		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
+		# and `Hash` is allowed through so decorators stack.
+		raise f"E487 `{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about" + p_place(p, deco_line, deco_col) if pending.len() > 0 and not p_deco_may_lead(p)
+
 		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
@@ -931,6 +952,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise "E250 a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
+			if pending.len() == 0 {
+				deco_line = t.line
+				deco_col = t.col
+			}
 			parse_decorator(p, pending)
 		} else if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
@@ -1041,7 +1066,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
 	# same contract every other unsupported form has: what is written is either implemented
 	# or named, never quietly dropped.
-	raise f"E208 `#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
+	raise f"E208 `{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the `struct`, `enum` or `spec` that follows it, and this one is the last item in the file" + p_place(p, deco_line, deco_col) if pending.len() > 0
 
 	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
 	# one this function did not look at. The loop simply ran to `Eof` with the group still
@@ -1099,6 +1124,25 @@ fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_
 # yield the match's one type — the same shape as c_range_unsupported.
 fn p_not_a_binding() -> ConstDecl {
 	raise "parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else"
+}
+
+# p_deco_may_lead reports whether the item starting here is one a decorator may lead. The
+# three that TAKE one are the three that call p_take_derives — `struct`, `enum` and `spec` —
+# and a second decorator is let through so they stack: `#[derive(Eq)] #[obj] spec S` puts two
+# names on one pending list and the declaration under them takes both.
+fn p_deco_may_lead(mut &p: Parser) -> bool {
+	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec) or p_at(p, Kind.Hash)
+}
+
+# p_deco_says spells a PENDING entry the way the program wrote it. The list carries derive
+# arguments and `#obj` together — under a marker no spec name can be, since a `#` is not an
+# identifier character — and every sentence about the list assumed a derive, so `#[obj] fn f()`
+# was refused as `#[derive(#obj)]`: a decorator quoted at a reader who never wrote it, in a
+# spelling the language does not have.
+fn p_deco_says(nm: str) -> str {
+	return "#[obj]" if nm == "#obj"
+
+	return f"#[derive({nm})]"
 }
 
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
@@ -1578,8 +1622,13 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	kw := cur(p)
 	p_advance(p)
 
-	name := cur(p).lexeme
-	expect(p, Kind.Ident)
+	# p_name, and not a bare `expect(p, Kind.Ident)`. Every other declaration in this file
+	# takes its name through p_name, which is where the reserved-word rule is asked
+	# (GRAMMAR group 7: `This` is the self type and no declaration may take it); an alias
+	# read its identifier for itself and so was the one declaration the rule never reached.
+	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
+	# `impl` still meant the implementing type — one word, two meanings, in one program.
+	name := p_name(p, "a type alias")
 	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, Kind.LBrack)
 
 	expect(p, Kind.Assign)
@@ -1684,7 +1733,24 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 	# statement loop as a top-level expression, which compile mode treats as a nop. The
 	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
 	# member access on a namespace that was never bound.
-	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Kind.Str)
+	# THE GUESS IS A PATH OR IT IS NOTHING, which is the other half of the same rule: a
+	# suggestion quotes the reader's own line back at them, so one assembled out of whatever
+	# followed is worse than none. It ran to the next `;` — and ASI inserts none after
+	# `import`, a keyword that cannot END an item (GRAMMAR group 2) — so a bare `import` with
+	# no path swept up the declarations under it and offered `import "structQ{puba:int"`.
+	if not p_at(p, Kind.Str) {
+		guess := p_import_path_guess(p)
+
+		# ONE RAISE, because it is one rule: a code answers to a rule, and reporting the same
+		# one from two sites is two rules wearing one identity (scripts/error-codes-check.sh).
+		# What differs between the two lines is the ADVICE, so that is the part that varies.
+		mut says := "there is no path here to quote back: GRAMMAR#import-path derives a str-lit and nothing else, so a module is named `import \"util/text\"`"
+		if guess != "" {
+			says = f"write `import \"{guess}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has"
+		}
+
+		raise f"E267 an import path is a string — {says}" + p_place(p, cur(p).line, cur(p).col)
+	}
 
 	t := cur(p)
 	p_advance(p) # the path
@@ -1705,14 +1771,22 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 # quote their own line back at them rather than a placeholder. It reads through the peek
 # pair, WITHOUT consuming: that raise ends the parse anyway, and a reader of this function
 # should not have to know it.
+#
+# It reads the SHAPE OF A PATH — `identifier ( '/' identifier )*`, which is what the string
+# in GRAMMAR#import-path holds — and stops at the first token that is not part of one. It
+# used to read to the next `;` instead, which is a terminator this position never meets: ASI
+# inserts one after a token that can END an item (GRAMMAR group 2) and `import` is not one,
+# so a bare `import` ran on through the declarations below it and the suggestion was
+# assembled out of a struct. Answering "" for a line that holds no path is what lets the
+# caller offer no suggestion rather than an invented one.
 fn p_import_path_guess(mut &p: Parser) -> str {
-	mut out := ""
-	mut n := 0
-	for true {
-		k := peek_kind(p, n)
-		break if k == Kind.Semi or k == Kind.Eof or k == Kind.RParen
-		out = out + peek_lexeme(p, n)
-		n = n + 1
+	return "" if peek_kind(p, 0) != Kind.Ident
+
+	mut out := peek_lexeme(p, 0)
+	mut n := 1
+	for peek_kind(p, n) == Kind.Slash and peek_kind(p, n + 1) == Kind.Ident {
+		out = out + "/" + peek_lexeme(p, n + 1)
+		n = n + 2
 	}
 	return out
 }
@@ -2189,12 +2263,22 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 # form: a `(` — optionally after `mut` or `const` — whose group is followed by `:=` or `=`.
 # A parenthesised EXPRESSION statement looks the same up to the closing paren, so the
 # separator is what tells them apart.
-fn p_starts_destructure(mut &p: Parser) -> bool {
+#
+# It answers WHICH of the two, and not merely "one of them", because they are two forms:
+# `bind-target` (GRAMMAR#binding) and `assign-target` (GRAMMAR#assign-target) are separate
+# productions, so each is a separate thing this compiler has not built and each owes its own
+# sentence. One answer for both meant the `=` spelling was turned away with the `:=` one's
+# words — advice to write a binding, at a reader who had written an assignment.
+#
+#   0  not a destructuring statement
+#   1  a destructuring BINDING, `(a, b) := e` / `mut (a, b) := e`
+#   2  a destructuring ASSIGNMENT, `(a, b) = e`
+fn p_starts_destructure(mut &p: Parser) -> int {
 	mut i := p.pos
 	if p.toks[i].kind == Kind.Mut or p.toks[i].kind == Kind.Const {
 		i = i + 1
 	}
-	return false if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
+	return 0 if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
 
 	mut depth := 0
 	for i < p.toks.len() {
@@ -2205,14 +2289,18 @@ fn p_starts_destructure(mut &p: Parser) -> bool {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
-				return nxt == Kind.Walrus or nxt == Kind.Assign
+
+				return 1 if nxt == Kind.Walrus
+				return 2 if nxt == Kind.Assign
+
+				return 0
 			}
 		} else if k == Kind.Semi or k == Kind.Eof {
-			return false
+			return 0
 		}
 		i = i + 1
 	}
-	return false
+	return 0
 }
 
 # parse_stmt reads one statement, and it is a wrapper because a statement is where an
@@ -2270,7 +2358,14 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# reached the expression fallback and was named after its walrus, the `mut` one reported
 	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
 	# evaluated, assigned to no one, and the program printed the values it started with.
-	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
+	# THE `=` SPELLING IS ITS OWN FORM, and it used to borrow this sentence — so a reader who
+	# wrote `(a, b) = (1, 2)` was told about `(a, b) := …`, a form they had not written and a
+	# `:=` their source does not contain. GRAMMAR derives them as two productions and each is
+	# separately unbuilt; the place is the statement's own token, which neither carried.
+	dtor := p_starts_destructure(p)
+
+	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — GRAMMAR#bind-target derives the tuple form, and this compiler binds one name at a time" + p_place(p, cur(p).line, cur(p).col) if dtor == 1
+	raise "E486 NotImplemented: a destructuring assignment `(a, b) = …` — GRAMMAR#assign-target derives the tuple form, and this compiler assigns to one target at a time; write the two assignments out, reading the tuple with `.0` and `.1`" + p_place(p, cur(p).line, cur(p).col) if dtor == 2
 
 	if k == Kind.Nop {
 		p_advance(p)

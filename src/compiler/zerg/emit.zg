@@ -604,9 +604,21 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	et := c_infer(em, e)
 
 	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
-	return c_opt_wrap(em, where, c_opt_elem(want), e, sb) if ty_is_opt(want)
 
-	return c_either_wrap(em, where, want, e, sb)
+	# THE PAYLOAD IS A SLOT OF ITS OWN, and the label has to say so or the sentence is false.
+	# A bare value entering a carrier is INJECTED as the payload, so the comparison one level
+	# down is against the payload's type — which is right, and is where the mistake is. What
+	# was not right is that the label travelled unchanged: `x: int? = "s"` reported _the
+	# binding `x` is int_ about a binding the reader had declared `int?` two words earlier,
+	# and the `?` was the only part of it they could see.
+	#
+	# It is refined HERE because this is the one place both wraps start, so a `Result[T]`'s
+	# payload and an optional's get the same treatment, and a carrier nested in a carrier
+	# reads as what it is — "the int? payload of the Result[int?] payload of …".
+	inner := chk_payload_says(where, want)
+	return c_opt_wrap(em, inner, c_opt_elem(want), e, sb) if ty_is_opt(want)
+
+	return c_either_wrap(em, inner, want, e, sb)
 }
 
 # c_fit_copied is what every site where a DECLARED type meets a value calls: a carrier is
@@ -2344,17 +2356,23 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
 # nothing can yet assert that every row of builtins.md is either built or named. Whoever
 # unifies the three should start from those two names.
-fn c_builtin_check(n: str) {
-	c_fixed_width_check(n)
+# THE PLACE IS THE FUNNEL'S, which is the whole reason it is one function. Every name below
+# is refused from six call sites in four positions — a call, a constructor, a bare value, a
+# type annotation and a return type — and none of them carried a `--> file:line:col`, so a
+# reader was told `ptr` is not built and left to find which of their signatures said it. The
+# trailer is appended once here (c_here) rather than at each raise, for the reason the
+# sentences are written once here: a seventh caller inherits it instead of forgetting it.
+fn c_builtin_check(mut &em: Emitter, n: str) {
+	c_fixed_width_check(em, n)
 
-	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
-	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
-	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+	raise "E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" + c_here(em) if n == "Ref" or n == "deref"
+	raise f"E413 NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" + c_here(em) if n == "addr" or n == "ptr"
+	raise f"E414 NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" + c_here(em) if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" if n == "set"
+	raise "E466 NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only" + c_here(em) if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -2371,11 +2389,11 @@ fn c_builtin_check(n: str) {
 # the shape they have — a class letter, then a width the language names — that exactness was
 # something a reader had to derive from three tests and a substring, and the list it stood in
 # for is ten entries long.
-fn c_fixed_width_check(n: str) {
+fn c_fixed_width_check(mut &em: Emitter, n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`"
+	raise f"E465 NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`" + c_here(em)
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
@@ -2857,7 +2875,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
 	# `ptr`" while `ptr(x)` in a CALL had been named all along — one name, two positions, and
 	# only one of them told the reader what it was looking at.
-	c_builtin_check(nm)
+	c_builtin_check(em, nm)
 
 	raise f"no type named `{nm}` ({site})"
 }
@@ -3309,8 +3327,11 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # slot lowered by the same function twelve lines apart, and the label is now what carries the
 # difference between them rather than a second call nobody remembered to make.
 fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
+	# `where` and not the word "field": the label the FIT check is about to use already names
+	# this slot exactly ("field 2 of `P`", "payload 1 of `Shape.Line`"), and a second, vaguer
+	# spelling of the same slot is a second answer to one question.
 	if ty_is_chan(fty) {
-		c_chan_check(c_infer(em, arg), fty, "field")
+		c_chan_check(em, c_infer(em, arg), fty, where)
 	}
 
 	# a declared `T?` field takes a bare value or `nil` and wraps it, so `P(nil)` builds an
@@ -3831,6 +3852,75 @@ fn c_ns_kind(mut &em: Emitter, target: Expr) -> NsKind {
 	return NsKind.NsUnknown
 }
 
+# --- a module-qualified TYPE name ----------------------------------------------------
+#
+# A TYPE NAME IS ALSO ITS CONSTRUCTOR (GRAMMAR group 7's CONSTRUCTION note), and reaching
+# the type through an `import` used to buy only half of that. `GRAMMAR#base-type` derives
+# `type-name type-args? ('.' identifier)*`, so `lib.Point` is a type wherever a type is
+# wanted — and parse_base_type has read it that way since it was written, by DROPPING the
+# qualifier: every module of a program flattens into one scope (docs/runtime/package.md), so
+# the qualifier says where the type came from and the last segment IS the name.
+#
+# The VALUE position never learned it. `p: lib.Point = lib.Point(1, 2)` was accepted on the
+# left of the `=` and refused on the right, in one line, with `E388 module `lib` has no
+# `Point`` — a sentence that is false, since the module declares exactly that. What each
+# qualified path asked was narrower than the rule: the CALL path asked only whether the last
+# segment named a function, and the FIELD path only whether it named a constant, so a type
+# was a member neither of them could see. `lib.Color.Red` and an `as` alias went the same
+# way, and `lib.make()` beside them worked, which is what made it read as a namespace bug
+# rather than a missing rule.
+#
+# It is fixed as a REWRITE and not as a fifth branch per path, because there is one rule
+# here and four shapes that would have had to spell it: a construction, a variant read, an
+# enum's `of`, and the inference half of each. Dropping the qualifier turns every one of
+# them into the unqualified form the compiler already lowers correctly, so nothing below
+# this point knows a qualifier was involved — which is precisely the arrangement the TYPE
+# position has always had.
+#
+# WHICH module answers is the flatten's business and not this rule's: `b.Point` resolves a
+# `Point` module `a` declared, exactly as `b.COUNT` resolves a constant `a` declared. That
+# is the documented deviation (docs/runtime/package.md), and it is one deviation rather than
+# two.
+fn c_ns_unqualify(mut &em: Emitter, e: Expr) -> Expr {
+	return match e {
+		Expr.EField(t, f) => c_ns_unqualify_field(em, t, f)
+		Expr.EMethod(t, m, args) => c_ns_unqualify_meth(em, t, m, args)
+		_ => e
+	}
+}
+
+# c_ns_unqualify_field is `lib.Point` read as a value — the prefix of `lib.Color.Red`, and
+# the whole of `lib.Color` in `lib.Color.of(n)`. The target is rewritten too when the pair
+# is not one, because the qualifier sits at the ROOT of a `.`-chain and the segment that
+# names the type may be anywhere along it.
+fn c_ns_unqualify_field(mut &em: Emitter, t: Expr, f: str) -> Expr {
+	return Expr.EIdent(f) if c_ns_names_type(em, t, f)
+
+	return Expr.EField(c_ns_unqualify(em, t), f)
+}
+
+# c_ns_unqualify_meth is `lib.Point(1, 2)` — a CONSTRUCTION, which is a call whose callee is
+# a type name and so becomes the ECall the unqualified spelling parses to.
+fn c_ns_unqualify_meth(mut &em: Emitter, t: Expr, m: str, args: list[Expr]) -> Expr {
+	if c_ns_names_type(em, t, m) {
+		mut none: list[Ty] = []
+		return Expr.ECall(m, args, none)
+	}
+
+	return Expr.EMethod(c_ns_unqualify(em, t), m, args)
+}
+
+# c_ns_names_type is the pair this rule is about: a MODULE qualifier, and a segment that
+# names a type the program declares. Both halves are required. Without the first an invented
+# prefix would resolve — `bogus.Point(1, 2)` is an undefined name and stays one — and
+# without the second a genuine missing member would stop being reported, which is the rule
+# E388 is for.
+fn c_ns_names_type(mut &em: Emitter, t: Expr, member: str) -> bool {
+	return false if c_ns_kind(em, t) != NsKind.NsModule
+
+	return c_is_struct_name(em, member) or c_is_enum_name(em, member) or c_is_typedef(em, member)
+}
+
 # c_undefined_name is THE report of a name nothing in the program bound, and it is one
 # function because it is one rule. It is reached from two shapes — a name read on its own
 # (c_ident_val) and the invented prefix of a qualified one (c_free_method, c_callee_raw) —
@@ -4161,7 +4251,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	c_deeper(em)
 	keep := em.seq_pre
 	em.seq_pre = ""
-	out := c_expr_node(em, e, c_sub_active(em, sb))
+	out := c_expr_node(em, c_ns_unqualify(em, e), c_sub_active(em, sb))
 	pre := em.seq_pre
 	em.seq_pre = keep
 	c_shallower(em)
@@ -6553,7 +6643,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[Ty], s
 	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
-	c_builtin_check(name)
+	c_builtin_check(em, name)
 	raise f"E471 NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to" if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
@@ -6636,7 +6726,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# It used to emit a compound literal of that name anyway, which cc rejected against
 		# generated C.
 		if not c_is_struct_name(em, name) {
-			c_builtin_check(name)
+			c_builtin_check(em, name)
 
 			raise f"no type named `{name}` to construct"
 		}
@@ -6654,7 +6744,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
 	# is exactly the answer this should be giving by name.
 	if not c_is_free_fn(em, name) {
-		c_builtin_check(name)
+		c_builtin_check(em, name)
 
 		raise f"E425 undefined function `{name}`"
 	}
@@ -6757,7 +6847,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
+		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(em, sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0, sb)
@@ -6800,11 +6890,11 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst
 			# a default is an argument, so it meets its field's type like any other — which is
 			# what gives `xs: list[int] = []` an element size, exactly as it does for a
 			# parameter default
-			out = out + c_field_init(em, f"the default for {chk_field_says(sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
+			out = out + c_field_init(em, f"the default for {chk_field_says(em, sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
 		} else if ty_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
-			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
+			chk_at(em, "E370", f"{chk_field_says(em, sname, i + 1)} has no value and no default ({ty_name(ft)}): a construction binds by position and stopped short of it, and only a `T?` field has an implicit default — which is `nil`")
 			out = out + "0"
 		}
 		i = i + 1
@@ -7049,8 +7139,14 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -
 	# guarded on the DECLARED type, which is already in hand: c_chan_check answers nothing
 	# unless it is a channel, and the c_infer it would otherwise take walks the argument's
 	# whole tree — on every argument of every call — only to be thrown away.
+	# NAMED BY chk_slot_says, which is the same helper `E340` uses for the same slot. This
+	# spelled the label itself and spelled it from `idx` — the PARAMETER's index, which is
+	# 0-based and differs from the argument's position by one on a method — so `take(r)`
+	# reported "argument 0 of `take`" while the type mismatch one line up reported "argument
+	# 1 of `take`" for the very same slot. A reader following the first looked at the wrong
+	# parameter, and a reader who met both was told two things about one argument.
 	if ty_is_chan(em.pr_ty[row]) {
-		c_chan_check(c_infer(em, a), em.pr_ty[row], f"argument {idx} of `{fname}`")
+		c_chan_check(em, c_infer(em, a), em.pr_ty[row], chk_slot_says(fname, pos))
 	}
 	return c_fit_copied(em, chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
 }
@@ -7236,7 +7332,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		return "0"
 	}
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
-		c_builtin_check(n)
+		c_builtin_check(em, n)
 
 		# The ordinary unknown name is the same kind of statement and takes the same channel.
 		# It was a bare `raise` for as long as it existed, which said the sentence and nothing
@@ -7775,7 +7871,7 @@ fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
 # overflow it is refused by the same rule at the same number.
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	c_deeper(em)
-	t := c_infer_node(em, e)
+	t := c_infer_node(em, c_ns_unqualify(em, e))
 	c_shallower(em)
 	return t
 }
@@ -8822,8 +8918,14 @@ fn c_chan_dir_ok(have: int, want: int) -> bool {
 # c_chan_check is the narrowing check at every place a channel end fills a declared slot:
 # a call argument, a `return`, a typed binding, a struct or variant field. It emits
 # nothing — a direction costs no code — so this is the whole of it.
-fn c_chan_check(have: Ty, want: Ty, site: str) {
-	raise f"a channel direction only narrows: a {ty_name(have)} cannot fill a {ty_name(want)} ({site})" if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want))
+#
+# The CODE and the PLACE were both missing, and they are missing together for one reason: a
+# `raise` carries a code only when the string is written with one and a place only when the
+# site appends the trailer (docs/conformance.md). So this said which two ends disagreed and
+# not where, and no gate could pin the rule without pinning its prose. The seed has reported
+# it with a place since it was written.
+fn c_chan_check(mut &em: Emitter, have: Ty, want: Ty, site: str) {
+	raise f"E506 a channel direction only narrows: a {ty_name(have)} cannot fill a {ty_name(want)} ({site})" + c_here(em) if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want))
 }
 
 # c_chan_op_check is the OTHER half of a direction: not where a handle may go, but what a
@@ -8847,14 +8949,20 @@ fn c_chan_check(have: Ty, want: Ty, site: str) {
 fn c_chan_op_check(t: Ty, op: int, at: str) {
 	raise f"E478 `{c_chan_op_name(op)}` needs a channel, and {ty_name(t)} is not one" + c_chan_op_hint(t) + at if not ty_is_chan(t)
 
+	# THE THREE BELOW TAKE `at` TOO, and used to be the only refusals in this function that
+	# did not. E478 above has carried the trailer since it was written, so a program that
+	# wrote `<-3` was told where and a program that received on a send-only end was not —
+	# one function, one `at` in hand, and three of its four rules dropping it. Each also
+	# opens with a code now, for the reason every rule here does: a gate pins the RULE, and
+	# pinning the prose instead turns red the next time the wording improves.
 	dir := c_chan_dir(t)
 	if op == 0 and dir == 1 {
 		# the guarantee the send-only end exists for: it cannot receive (steal) values
-		raise "cannot receive on a send-only " + ty_name(t)
+		raise f"E503 cannot receive on a send-only {ty_name(t)}{at}"
 	}
 
-	raise "cannot send on a receive-only " + ty_name(t) if op == 1 and dir == 2
-	raise f"cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" if op == 2 and dir == 2
+	raise f"E504 cannot send on a receive-only {ty_name(t)}{at}" if op == 1 and dir == 2
+	raise f"E505 cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf" + at if op == 2 and dir == 2
 }
 
 # c_chan_op_hint is the one shape the rule above can say more about than "that is not a
@@ -10858,7 +10966,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	if has_type {
 		chk_binding(em, name, ty, ival)
 		if ty_is_chan(ty) {
-			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
+			c_chan_check(em, c_infer(em, ival), ty, chk_binding_says(name))
 		}
 	} else {
 		# THE TWO HALVES OF "THIS BINDING HAS NO TYPE TO TAKE". chk_needs_type is about the
@@ -11195,7 +11303,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		et := chk_returned(em, e)
 		ret_chan := ty_is_chan(em.fn_ret)
 		if ret_chan {
-			c_chan_check(et, em.fn_ret, "return")
+			c_chan_check(em, et, em.fn_ret, CHK_ANSWER)
 		}
 
 		# a carrier result FITS the value rather than rendering it: `Left(v)` and `Right(e)`

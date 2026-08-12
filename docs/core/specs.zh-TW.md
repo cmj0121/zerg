@@ -190,6 +190,13 @@ spec 的 method 分兩種：
 > 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
 > method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
 > 的那一點就指名了它,所以沒有任何程式走到 dispatch 這個問題。
+>
+> **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
+> `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
+> 拒絕：_E287 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
+> （`E264`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
+> 來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
+> 在其中——仍然拿到 `E276`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對

@@ -44,12 +44,17 @@ Or, procedural-first, just loop — the idiom [Control Flow](control-flow.md) en
 collection):
 
 ```text
-mut out := []
+mut out: list[int] = []
 for x in xs {
     continue if not positive(x)
     out.append(double(x))
 }
 ```
+
+The type is written on the left because the empty list has none of its own — `mut out := []` is _E336 the
+binding `out` gives the empty list `[]`, which has no type of its own_. That matters more here than it
+usually would: with the adapters unbuilt this loop is the only spelling, so it had better be one that
+builds.
 
 When an inline function is genuinely one-off, the parameter type its position supplies keeps it short:
 

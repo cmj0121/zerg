@@ -56,7 +56,7 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 ```text
 for {
     line := <-input ?? break       # 收到 channel 關閉為止
-    continue if line.empty()       # 跳過空行
+    continue if line == ""         # 跳過空行
     break if line == "quit"        # 遇到 sentinel 就停
 
     handle(line)

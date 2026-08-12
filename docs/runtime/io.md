@@ -42,7 +42,7 @@ and `flush()`. A write failure — full disk, broken pipe — is a value, `?`-pr
 drops (that is `print`'s alone).
 
 ```text
-fn copy_lines(src: Reader, mut dst: Writer) -> Result[nil] {
+fn copy_lines(src: Reader, mut &dst: Writer) -> Result[nil] {
     for line in src.read() {
         dst.write_str(line)?
         dst.write_str("\n")?

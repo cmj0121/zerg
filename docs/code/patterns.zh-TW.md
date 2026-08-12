@@ -38,12 +38,16 @@ result := xs.map(double).filter(positive).fold(0, add)
 collection）:
 
 ```text
-mut out := []
+mut out: list[int] = []
 for x in xs {
     continue if not positive(x)
     out.append(double(x))
 }
 ```
+
+型別寫在左邊,因為空 list 自己沒有型別——`mut out := []` 是 _E336 the binding `out` gives the empty list `[]`,
+which has no type of its own_。這件事在這裡比平常更要緊:adapter 尚未建置時,這個迴圈是唯一的寫法,那它最好是一個
+建得起來的寫法。
 
 若 inline 函式真的只用一次,由 position 供給的參數型別能讓它短:
 

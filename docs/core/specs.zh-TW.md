@@ -99,13 +99,19 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 ```zerg
 #[obj]
 spec Draw { fn draw() -> str }
+```
 
-# 就是:
-struct DrawObj { draw: fn () -> str }
+就是:
+
+```zerg
+struct DrawObj { pub draw: fn () -> str }
 fn draw_obj[T: Draw](v: T) -> DrawObj {
     return DrawObj(fn () -> str { return v.draw() })
 }
 ```
+
+分成兩段 fence 而不是一段,因為它們是同一組宣告的兩種寫法、不是一支同時裝著兩者的程式:寫在一起是
+_E382 `DrawObj` is declared twice_。
 
 **開放性來自包裝點**,不是來自執行期的任何東西:`draw_obj` 針對每個實作者 monomorphize,回來的東西只有一個
 型別。所以 `list[DrawObj]` 是異質的,而且**沒有 vtable、沒有任何值帶 header、也沒有 downcast**——你可以呼叫

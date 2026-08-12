@@ -4178,6 +4178,11 @@ EOF
 # two failures are different: a name whose binding is not constant, and a call, which no
 # binding can make constant.
 #
+# A MATCH ARM'S RANGE BOUND is the third position, and it fails the same two ways. Its call
+# form is turned away one step earlier than the other two: `range-bound ::= '-'? literal |
+# identifier` derives no call at all, so `f()..300` is not a range arm and never reaches a
+# fold — which is why that one is a parse rejection and its siblings are not.
+#
 # The fill count's runtime form is the one worth having a case for: the SEED used to accept
 # it. It lowers `[v; N]` to a loop bounded by N, so `[0; n]` for an n read at run time built
 # a list of whatever n happened to be — a form the language does not have, compiled in
@@ -4245,6 +4250,60 @@ reject a-negative-fill-count E476 <<'EOF'
 fn main() {
 	xs := [0; -1]
 	print xs.len()
+}
+EOF
+
+reject a-range-bound-read-at-run-time E477 '`lo`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	lo := size()
+	n := 5
+	print match n {
+		lo..10 => "in"
+		_      => "out"
+	}
+}
+EOF
+
+# THE INNERMOST BINDING ANSWERS, and it answers even when the answer is "not a constant".
+# A module binding named `lo` is a perfectly good bound everywhere else in the program; here a
+# local of the same name shadows it, and a fold that reached past the shadow to the module
+# would compile this arm against a number the reader cannot see on any line in scope.
+reject a-range-bound-shadowed-by-a-local E477 '`lo`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+lo := 1
+
+fn main() {
+	lo := size()
+	n := 5
+	print match n {
+		lo..10 => "in"
+		_      => "out"
+	}
+}
+EOF
+
+# A CALL IS NOT A BOUND, and it is refused by the parser rather than by the fold: the arm head
+# `f()` is read as an ordinary pattern, and the `..` after it is then a token no arm can hold.
+# The other two positions parse their const-expr and reject it on its value; this one has no
+# const-expr to parse.
+reject a-range-bound-that-calls E204 'found `..`' no-place <<'EOF'
+fn lo() -> int {
+	return 3
+}
+
+fn main() {
+	n := 5
+	print match n {
+		lo()..10 => "in"
+		_        => "out"
+	}
 }
 EOF
 

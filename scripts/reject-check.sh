@@ -4227,6 +4227,87 @@ fn helper() -> int {
 }
 EOF
 
+# --- module-level `unsafe { … }`, on its `mut` binding ------------------------------------
+#
+# A module-level `unsafe { … }` group holds two kinds of item, and only one of them had a rule
+# about who may reach it. Its `fn` is an unsafe fn and a safe caller is refused (E387); its
+# `mut` binding — the language's ONLY mutable global (GRAMMAR group 12) — could be written
+# `pub`, and was then genuinely exported: another module's SAFE `main` both read `glob.shared`
+# and assigned it, with no `unsafe` anywhere in that file.
+#
+# The grammar makes the binding module-PRIVATE, which is what these cases pin, and it is the
+# whole of the crossing: without the `pub` a reader outside is refused by the ordinary
+# visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
+# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
+# `unsafe { … }` as an expression still E224 no function body can open an unsafe context, so
+# a rule there would make the group unreachable from anything a program can write.
+
+reject a-pub-mutable-global E484 at=2:2 <<'EOF'
+unsafe {
+	pub mut shared := 5
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AND WITHOUT THE `pub` THE EXPORT IS GONE, which is the other half of the same claim: the
+# binding is module-private, so a reader outside is refused by the ordinary visibility rule
+# and there is no second rule owed for a mutable global in particular. Both directions, since
+# a write is what the hole was really about.
+reject a-mutable-global-read-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+reject a-mutable-global-assigned-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	glob.shared = 11
+	print glob.read()
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+# ACROSS THE MODULE BOUNDARY, which is the shape the hole was found in: the group was in
+# another module and a safe `main` both read `glob.shared` and assigned it, with no `unsafe`
+# anywhere in the file. The finding lands on the DECLARATION and not on either use — the
+# export is what made the uses possible, and the module that wrote `pub` is the one with a
+# line to change. It is here because the rule walks the unit being emitted, so an imported
+# module has to be spoken about while ITS unit is compiled, not the entry's.
+reject a-pub-mutable-global-in-an-imported-module E484 'may not be `pub`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+	glob.shared = 11
+}
+--- glob/glob.zg
+unsafe {
+	pub mut shared := 5
+}
+EOF
+
 reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
 unsafe {
 	fn poke() {

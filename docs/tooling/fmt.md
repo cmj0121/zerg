@@ -753,7 +753,6 @@ shipping compiler rather than a part of it (the line
 | `E370` | `…` needs a value for … (…): only a `T?` field has an implicit default, and it is `nil`     |
 | `E371` | `this` is a method's receiver, and this function has none                                   |
 | `E372` | undefined name `…`                                                                          |
-| `E373` | `…` is declared as both a module constant and a function                                    |
 | `E374` | a slice bound is an int, and this is …                                                      |
 | `E375` | a list index is an int, and this is …                                                       |
 | `E376` | no field `…` on …                                                                           |

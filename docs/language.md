@@ -13,7 +13,7 @@ feature carries a **status marker** that flags the gap between the language and 
 
 | Marker                       | Meaning                                                           |
 | ---------------------------- | ----------------------------------------------------------------- |
-| **[not yet: Phase N]**       | Specified, not yet built; using it is a clean compile error.      |
+| **[not yet]**                | Specified, not yet built; using it is a clean compile error.      |
 | **[implementation-defined]** | The spec does not pin this; a conforming implementation chooses.  |
 | **[deviation]**              | The bootstrap's current behavior does not match the spec (a bug). |
 

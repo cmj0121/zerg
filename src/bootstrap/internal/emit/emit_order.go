@@ -58,8 +58,16 @@ func orderTrivial(x ast.Expr) bool {
 // operand AFTER the first can run code.
 //
 // The first operand is exempt because nothing in the list precedes it — whatever C picks,
-// it cannot observe an effect that has not happened yet. It is the whole reason the common
-// single-argument call (`f(g())`) and the common `x + f(y)` stay byte-identical.
+// it cannot observe an effect that has not happened yet. That is what keeps a
+// single-argument call (`f(g())`) and a trailing-literal form (`f(g(), 1)`, `f(y) + 1`)
+// byte-identical to what this emitter wrote before.
+//
+// What it does NOT keep identical is `x + f(y)`: the second operand is a call, so the pair
+// is sequenced even though the first operand is only a name. That is deliberate rather
+// than an over-approximation — a callee taking `mut &x` may WRITE the very variable the
+// left operand reads, so `x + f(x)` has an observable order and no cheap test tells it
+// apart from `x + f(y)`. The cost of being wrong in this direction is one redundant temp;
+// the cost of being wrong in the other is a silently different answer.
 //
 // skip[i] marks an operand this form does not evaluate as a value (a `mut &` argument,
 // whose "evaluation" is taking an address and so is pure); it is neither counted here nor

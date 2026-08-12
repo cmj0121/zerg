@@ -254,7 +254,19 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 
 // declareSurface inserts a top-level symbol, ignoring a duplicate (the Phase 0
 // checker reports duplicate functions; other duplicates are future work).
-func (r *resolver) declareSurface(sym *Symbol) { r.module.declareLocal(sym) }
+//
+// One duplicate is NOT ignored: a declaration taking the name an import already bound.
+// GRAMMAR group 10 puts the bound name in the one value namespace, so colliding with a
+// local name is an error — and collectImport above only catches the collision when the
+// IMPORT comes second. The other order was silent, so a `fn text()` beside
+// `import "util/text"` coexisted with it and which of the two a `text…` reached depended
+// on whether the reader wrote a '(' or a '.'.
+func (r *resolver) declareSurface(sym *Symbol) {
+	if prev := r.module.local(sym.Name); prev != nil && prev.Kind == SymNamespace && sym.Kind != SymNamespace {
+		r.errorf(sym.Span, "%q is already the namespace an import bound; rename the import with 'as'", sym.Name)
+	}
+	r.module.declareLocal(sym)
+}
 
 // --- stage 2: bodies ----------------------------------------------------------
 

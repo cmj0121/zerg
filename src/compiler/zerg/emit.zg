@@ -3678,7 +3678,7 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 # c_bind_env registers an arm's pattern bindings in the variable environment with the types
 # they hold, so type inference inside the arm resolves them.
 #
-# A NAME PATTERN BINDS TOO (GRAMMAR#bind-pat), and it was the one shape this did not
+# A NAME PATTERN BINDS TOO (GRAMMAR#binding-pat), and it was the one shape this did not
 # register. `match n { x => x }` therefore typed its arm body from a name nothing in the
 # environment answered for, and the whole match came back TUnknown — so `w := match n { x
 # => x }` declared `w` with no type, `c_is_bound` reads exactly that as "nothing bound it",

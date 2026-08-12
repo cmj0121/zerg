@@ -25,6 +25,15 @@ the grammar:
 ([Null-safety & Errors](../code/errors.md)); the NUL-terminated in-memory form of a `str` is the C
 boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
 
+Two forms **answer `nil`** without saying so on their face: a `fn` with no `-> type` (`GRAMMAR#fn-decl`)
+and a **block** whose last statement is not an expression, or that has none at all (`GRAMMAR#block`). What
+they answer is an absence, and **an absence is not a value a position can hold** — it has no width, no
+storage and no rendering. So `x := f()` and `z := { nop }` are refused with a place, as are `print f()`,
+an f-string's `{f()}` and `str(f())`, and so is a **container** built out of one: `[f()]` and `(f(), 1)`
+are storage too, one level down. The position that **does** take an absence is a `T?`, which is what
+`z: int? = { nop }` writes — a carrier moves the position in and wraps, exactly as
+[Type System](type-system.md) says a position may.
+
 > **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
 > are specified as stdlib types and no stdlib declares one. It is refused **by name** — a width is an
 > ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the

@@ -792,6 +792,8 @@ shipping compiler rather than a part of it (the line
 | `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code               |
 | `E388` | module `…` has no `…`                                                                       |
 | `E389` | `…` is already … — an import binds a name into the one value namespace                      |
+| `E390` | this position needs a value, and nil is what it was given                                   |
+| `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

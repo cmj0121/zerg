@@ -563,6 +563,22 @@ fn join_bounds(specs: list[str]) -> str {
 	return out
 }
 
+# join_commas spells a list of names the way the source writes one — `T, U` — for a
+# diagnostic that has to quote a list back. It is `ty_names` for names that were never
+# types: an `impl`'s type parameters are read as a name and a bound, so there is no `Ty` to
+# hand that function, and a refusal that quoted only the first of them would be describing a
+# narrower form than the one it turned away.
+fn join_commas(names: list[str]) -> str {
+	mut out := ""
+	for nm in names {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + nm
+	}
+	return out
+}
+
 # parse_supers reads a spec's super list, keeping each super's NAME and its TYPE ARGUMENTS
 # apart. A bound bakes its arguments into the name (spec_key) because a bound is only ever
 # MATCHED against an impl's; a super's have to be SUBSTITUTED into the named spec's own
@@ -1632,6 +1648,22 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	kw := cur(p)
 	p_advance(p) # 'impl'
 
+	# `impl[T] Spec for list[T]` — GRAMMAR#impl-decl derives type parameters on the `impl`
+	# ITSELF, and its comment says why they sit at that position: a `T` introduced here is
+	# what the TARGET is then allowed to spell. Nothing read them, so the head began at a
+	# `[` where a name was expected and the answer was "an `impl` needs a name, and `[` is
+	# not one" — a complaint about the token under the cursor for a production the grammar
+	# derives in full, which is the one shape of message this project does not allow.
+	#
+	# They are READ, by the same reader `fn`, `struct` and `spec` already share, and the
+	# form is then refused BY NAME. A second reader here would be a second answer to one
+	# production; and reading them is what makes the refusal able to say which parameters
+	# it is turning away rather than which bracket it tripped over.
+	mut tp_names: list[str] = []
+	mut tp_bounds: list[str] = []
+	p_type_params(p, tp_names, tp_bounds)
+	raise f"E288 NotImplemented: an `impl` carrying its own type parameters `[{join_commas(tp_names)}]` — GRAMMAR#impl-decl puts them there so the target may spell them (`impl[T] Spec for list[T]`), and one impl standing for every instantiation of its target needs those instantiations monomorphized, which this compiler does only for a generic `fn`. Write the `impl` for one concrete target" + p_place(p, kw.line, kw.col) if tp_names.len() > 0
+
 	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
 	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
 	# question "are these type arguments, and does a `for` come after them?" — which a parse
@@ -1639,18 +1671,37 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	#
 	# `impl Spec[args] for Target` and `impl Target` are the same three steps: a name, an
 	# optional type-argument list, and then `for` deciding which of the two the name was.
+	ftok := cur(p)
 	mut first := p_name(p, "an `impl`")
 	mut args := parse_ty_args(p)
 	mut sp := ""
 	mut target := first
+
+	# the TARGET's arguments, which until this change were the one thing in the head that
+	# was skipped rather than read. `ttok` follows them, so the refusal below points at the
+	# target rather than at the `impl` keyword. Before the `for` is seen the two are the
+	# same token and the same list — an inherent `impl Box[int] { … }` has no spec to carry
+	# arguments, so the ones already read belong to its target.
+	mut ttok := ftok
+	mut targs := args
 	if p_at(p, Kind.For) {
 		p_advance(p)
 		sp = first
-
-		# the TARGET's own arguments are erased, as every type's are here
+		ttok = cur(p)
 		target = p_name(p, "an `impl … for …` target")
-		skip_ty_args(p)
+		targs = parse_ty_args(p)
 	}
+
+	# An `impl` is keyed here by a bare NAME — `ImplDecl` holds a `str` for its target, and
+	# a method's receiver is that same string — so `list[int]` and `list[str]` are one key
+	# and `list` is a name no declaration in the program introduces. Skipping the arguments
+	# made both of those invisible: `impl Size for list[int]` reached the emitter as an
+	# `impl` on a type called `list`, and answered "no type named `list`" — a sentence that
+	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
+	# one. Reading the arguments is what lets the refusal be about the form that was
+	# written, at the place it was written.
+	raise f"E289 NotImplemented: an `impl` on `{target}[{ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares" + p_place(p, ttok.line, ttok.col) if targs.len() > 0
+
 	if sp != "" {
 		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))
 	}

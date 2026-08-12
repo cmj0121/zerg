@@ -369,9 +369,24 @@ func (p *parser) parseSpecMember() ast.SpecMember {
 // when a '{' follows the signature, or a required FnSig otherwise.
 func (p *parser) parseFnMember() ast.SpecMember {
 	start := p.cur().Span.Start
+	unsafeTok := p.cur()
 	unsafe := p.accept(token.Unsafe)
 	mut := p.accept(token.Mut)
 	p.expect(token.Fn)
+
+	// GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so an `unsafe` required signature IS
+	// a spec member — and this read it, recorded Unsafe on the FnSig, and then dropped the
+	// requirement: an `impl` supplying a plain `fn peek()` for a spec asking `unsafe fn
+	// peek()` was accepted and RAN, with the one thing the keyword says silently gone. The
+	// impl side cannot spell `unsafe` at all (parseImplItem has no path for it), so a spec
+	// that asks for one can never be satisfied honestly. It is refused after the `fn` is
+	// consumed so that a `spec` body's `unsafe { … }` still gets expect's answer about the
+	// missing `fn` rather than this one about a signature it never wrote.
+	if unsafe {
+		p.fail(unsafeTok.Span, "an `unsafe` spec signature is not yet supported by the bootstrap seed; the trust boundary `unsafe` marks is not enforced across an impl, so the requirement would be dropped")
+		return nil
+	}
+
 	name := p.expect(token.Ident)
 	generics := p.optGenerics()
 	p.expect(token.LParen)

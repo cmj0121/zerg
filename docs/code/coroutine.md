@@ -244,7 +244,7 @@ It marks the **channel**, not a holder, and everything follows from that:
   answers the `Right`.
 - **A send after it aborts** (`SendOnClosedError`) rather than being quietly dropped.
 - **A receive-only end may not close** — a consumer must not end a stream on the producers' behalf. It
-  is a compile error (_cannot close a receive-only channel_).
+  is a compile error (_E505 cannot close a receive-only channel_).
 
 `close` does **not** replace auto-close, and two shapes say why. A **crashing** producer never reaches
 any statement. And in **fan-in** the last of several producers to finish ends the stream with no

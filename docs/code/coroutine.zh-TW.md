@@ -208,7 +208,7 @@ defer close(ch)        # ……在區塊離開時，每一條路徑都算，含 
 - **已 buffered 的值照樣送達**——receive 會先交出 channel 手上的東西，才回答 `Right`。
 - **之後的 send 會 abort**（`SendOnClosedError`），而不是被默默丟掉。
 - **receive-only 端不得 close**——consumer 不可以代替 producer 結束一條 stream。那是編譯錯誤
-  （_cannot close a receive-only channel_）。
+  （_E505 cannot close a receive-only channel_）。
 
 `close` **不**取代 auto-close，兩種形狀說明了原因。**崩潰中**的 producer 到不了任何敘述。而在 **fan-in** 裡，數個
 producer 中最後完成的那個自然結束了 stream、完全不需要協調——由其中一個手足呼叫的 channel 層級 close，會替其他人

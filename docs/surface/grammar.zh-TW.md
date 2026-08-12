@@ -201,9 +201,10 @@ field-target  ::= identifier ( ':' assign-target )?
 正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，
 或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
-`Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。兩個方向都是 **[not yet]**：編譯器
-一次只綁一個名字，所以 tuple 形狀不論戴哪個運算子都被拒絕（_E238 a destructuring binding `(a, b) := …`_），而
-struct 形狀則是它讀不懂的 pattern（_E221 a struct pattern `Div{…}`_）。
+`Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。兩個方向都是 **[not yet]**，而且
+各自被當成自己來拒絕：編譯器一次只綁一個名字（_E238 a destructuring binding `(a, b) := …`_）、一次只賦值給一個
+目標（_E486 a destructuring assignment `(a, b) = …`_），而 struct 形狀則是它讀不懂的
+pattern（_E221 a struct pattern `Div{…}`_）。
 
 expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 

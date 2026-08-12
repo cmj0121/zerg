@@ -1712,12 +1712,24 @@ fn c_live_del(mut &em: Emitter, name: str) {
 
 # c_live_use refuses a read of a revoked name. This is the whole payoff: what used to be a
 # use-after-free waiting to happen is a diagnostic at the line that wrote it.
+#
+# THROUGH THE CHECKING CHANNEL, which is where both of these belonged all along. They are
+# rules the compiler genuinely checks — a flow-sensitive analysis over the environment is
+# not a form it has failed to build — and they reported by `raise`, so they carried neither
+# a code nor a place. docs/conformance.md counted them among the handful of checked rules
+# that had fallen on the refusals' side of that split; chk_at is the other side, and it
+# hands over both. It also collects rather than stopping, so a file that reads two revoked
+# names is told about both.
 fn c_live_use(mut &em: Emitter, name: str) {
 	idx := c_live_idx(em, name)
 
 	return if idx < 0
-	raise f"`{name}` is used after del" if em.env_dead[idx] == 1
-	raise f"`{name}` is used after del on some paths" if em.env_dead[idx] == 2
+	if em.env_dead[idx] == 1 {
+		chk_at(em, "E297", f"`{name}` is used after del — `del {name}` revoked this name's access to its storage (GRAMMAR#del-stmt), and the revocation holds for the rest of the block")
+	}
+	if em.env_dead[idx] == 2 {
+		chk_at(em, "E298", f"`{name}` is used after del on some paths — one branch above revoked it and another did not, and `del` is flow-consistent: a name dead on ANY path is dead on all of them from there on")
+	}
 }
 
 # c_live_save copies the current liveness, so a branch can be analysed from the shared

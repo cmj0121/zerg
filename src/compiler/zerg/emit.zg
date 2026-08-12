@@ -313,6 +313,14 @@ struct Emitter {
 	pub loop_keep: int
 	pub loop_mark_used: bool
 
+	# loop_defer is the OTHER thing a jump has to give back, and the depth above cannot see
+	# it: a `defer` puts a record on the same cleanup stack without passing through the
+	# pending-release list, so a loop body holding one grew the stack by something
+	# `rel_cnames` never counted. It is the exact twin of fn_mark_used, which is what lets a
+	# `return` run the defers it is jumping over — and the two are set on the same line of
+	# c_defer_of, because a defer is one fact about two exits rather than two facts.
+	pub loop_defer: bool
+
 	# ty_names / ty_unders are the `type X = Y` declarations: a name and the type it takes
 	# its REPRESENTATION from. They are not struct_names, because a typedef has no fields and
 	# is not constructed like one — `Celsius(20)` is a conversion, not a struct literal — and
@@ -1477,6 +1485,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.rel_fns = []
 	em.loop_keep = 0
 	em.loop_mark_used = false
+	em.loop_defer = false
 	em.loop_mark = ""
 	em.force_mark = ""
 	em.fn_mark_used = false
@@ -9592,6 +9601,17 @@ fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
 # the other: a deferred thing is a function and its arguments, whatever wrote it down.
 fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	em.used_rt = true
+
+	# A RECORD ON THE CLEANUP STACK, and every exit that unwinds has to be told. There are
+	# two of them and they keep separate books: a `return` asks fn_mark_used, and a `break`
+	# or a `continue` asks loop_defer. Only the first was set here, so a jump out of a loop
+	# whose body held a defer emitted the bare keyword — the record stayed pending past the
+	# loop and ran at the FUNCTION's exit, reading an env struct whose storage the block had
+	# already given back. Both are set together because a defer is one fact, and answering
+	# it for one exit and not the other is how the second one went missing.
+	em.fn_mark_used = true
+	em.loop_defer = true
+
 	args := cal.args
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
@@ -9600,7 +9620,6 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
 		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		em.fn_mark_used = true
 		return f"{ind}zrt_defer(zg_dfn_{tag}, NULL);\n"
 	}
 
@@ -9622,7 +9641,6 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
 	mut out := ind + "zg_denv_" + tag + " zgt_de" + tag + " = { " + vals + " };\n"
-	em.fn_mark_used = true
 	return f"{out}{ind}zrt_defer(zg_dfn_{tag}, &zgt_de{tag});\n"
 }
 
@@ -9863,12 +9881,28 @@ fn c_return_if(mut &em: Emitter, val: Expr, cond: Expr, ind: str) -> str {
 # The unwind goes to the LOOP BODY's mark rather than to zero: a binding made outside the
 # loop is still in scope after the jump, and its own block gives it back.
 fn c_jump(mut &em: Emitter, kw: str, ind: str) -> str {
-	return f"{ind}{kw};\n" if em.loop_mark == "" or em.rel_cnames.len() <= em.loop_keep
+	return f"{ind}{kw};\n" if em.loop_mark == "" or not c_needs_loop_unwind(em)
 
 	# saying so is what lets the block declare the mark: a loop body is handed a name before
 	# it is walked, and this is the only thing that can ever name it
 	em.loop_mark_used = true
 	return f"{ind}zrt_unwind_to({em.loop_mark});\n" + f"{ind}{kw};\n"
+}
+
+# c_needs_loop_unwind is c_needs_fn_unwind's question asked about the LOOP body: has this
+# body put anything on the cleanup stack that a jump would otherwise leave pending? The two
+# ways to do so are the two the function-level twin already lists — a binding registers a
+# release, and a `defer` puts a record on the same stack without passing through the
+# release list — and this asked only the first. So `for { defer f(); if c { break } }` was
+# lowered to a bare `break`, the defer outlived the loop, and it ran on the function's way
+# out with its captured arguments already dead.
+#
+# The depth is compared against the BODY's entry depth rather than against zero, because a
+# jump gives back what the body owns and no more: a channel bound outside the loop is still
+# in scope after the jump, and releasing it here would close a stream the loop's own reader
+# is still on.
+fn c_needs_loop_unwind(mut &em: Emitter) -> bool {
+	return em.rel_cnames.len() > em.loop_keep or em.loop_defer
 }
 
 # --- maps -----------------------------------------------------------------------
@@ -11186,17 +11220,23 @@ fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	# `continue` unwinds to it — and whether the body registers anything is not known when
 	# the jump inside it is rendered. It is also the mark that keeps a loop from growing the
 	# cleanup stack: an iteration gives back what it took before the next one starts.
+	# loop_defer is saved with them and starts FALSE, so it answers about this body: a defer
+	# in the enclosing function is the enclosing function's to unwind, and an inner loop that
+	# schedules one must not go on making the OUTER loop's jumps pay for it after it ends.
 	outer_mark := em.loop_mark
 	outer_keep := em.loop_keep
 	outer_used := em.loop_mark_used
+	outer_defer := em.loop_defer
 	em.loop_mark = c_new_mark(em)
 	em.loop_keep = em.rel_cnames.len()
 	em.loop_mark_used = false
+	em.loop_defer = false
 	em.force_mark = em.loop_mark
 	out := c_block(em, body, ind)
 	em.loop_mark = outer_mark
 	em.loop_keep = outer_keep
 	em.loop_mark_used = outer_used
+	em.loop_defer = outer_defer
 	c_live_merge(em, entry)
 	return out
 }
@@ -12214,7 +12254,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

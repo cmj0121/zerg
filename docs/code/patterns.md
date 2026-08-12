@@ -117,8 +117,10 @@ silence is worse than one that does not build. See [Control Flow](control-flow.m
 do about the contiguous-integer case.
 
 > **[not yet]** Of that list it is the **nesting** that does not exist; the four kinds each work on their
-> own. A pattern inside a pattern is not parsed: `L(Yes(v))` and `L(0)` both report _a pattern binding needs
-> a name, and `(` is not one_, because a variant pattern's payload position accepts a binding name and
+> own. A pattern inside a pattern is not parsed: `L(Yes(v))` and `L(0)` report _a pattern binding needs a
+> name_, naming whichever token stood there (`` `(` `` for the first, `` `0` `` for the second) — a bare
+> parser message with **no error code and no place**, where the marker's own contract asks for a
+> `NotImplemented` a gate can pin. A variant pattern's payload position accepts a binding name and
 > nothing else — a sub-pattern there was never read, so neither a nested variant nor a nested literal gets
 > past the parser. Match one level, bind the payload, and `match` the binding in turn.
 

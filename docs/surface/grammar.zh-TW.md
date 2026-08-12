@@ -653,7 +653,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享
   可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
-  memory-ordering 參數。**[not yet]**——它需要 `Ref[T]`；**memory-ordering 引數**與泛型 **`Atomic[T]`** 亦然。
+  memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組宣告 `pub struct Atomic[T]`,而泛型 struct
+  尚未建置,所以光是 `import "atomic"` 就會回報 _E215 NotImplemented: a generic struct `Atomic[…]`_。
+  `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
+  所倚賴的 `Ref[T]` 是 `E446`。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與

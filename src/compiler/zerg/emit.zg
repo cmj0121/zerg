@@ -7793,20 +7793,18 @@ fn c_init_calls(f: File) -> str {
 # a Result back — `!`, `??`, `if v := <-ch`, `match <-ch { Left … Right … }` — works on a
 # receive with no channel-specific code behind it. It also means a close can say WHY:
 # there is somewhere to put "no value, and here is the reason", which a bare `T` had not.
+#
+# WHAT A CHANNEL MAY CARRY is not asked here, and used to be. `chan[T?]` was refused by a
+# call on this line — the constructor's lowering path — which is one position out of the
+# several a type can be written in, so a `chan[int?]` was turned away where it was BUILT
+# and accepted in silence as a parameter, a result, a field, a binding or a typedef. The
+# rule is `ty_chan_elem_check` now, applied where a channel's element type is READ
+# (parse_chan_elem) and where one is SUBSTITUTED (subst_chan_elem), so this path inherits it
+# from the parser rather than holding a copy of its own.
 fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	c_chan_elem_check(t)
 	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}))"
-}
-
-# c_chan_elem_check refuses `chan[T?]`, and it is the price of the receive answering `T?`.
-# `T?` does not nest, so a receive on a channel of optionals would answer nil for two
-# different facts — "the value that was sent is absent" and "the stream is over" — with no
-# way to tell them apart. One loud rule is worth more than that ambiguity; a value that
-# might be absent travels in a struct, or as a sentinel the receiver agrees on.
-fn c_chan_elem_check(t: Ty) {
-	raise "E404 a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel" if c_is_opt(t)
 }
 
 # --- channel direction ------------------------------------------------------------

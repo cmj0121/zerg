@@ -37,9 +37,10 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
-> **[deviation]** 編譯器並不區分一個**已識別**的 decorator 與一個**未知**的。除了 `#[derive]` 以外的每一個 `#[…]`
-> 都落進同一個分支,所以 `#[sealed]`、`#[repr]`、`#[test]`,以及拼錯的 `#[frobnicate]`,拿到的是同一句話
-> ——_NotImplemented: the decorator `#[X]` — this compiler reads `#[derive(…)]` and no other_。它們每一個都被拒絕,
+> **[deviation]** 編譯器並不區分一個**已識別**的 decorator 與一個**未知**的。除了 `#[derive]` 與 `#[obj]` 以外的
+> 每一個 `#[…]` 都落進同一個分支,所以 `#[sealed]`、`#[repr]`、`#[test]`,以及拼錯的 `#[frobnicate]`,拿到的是
+> 同一句話——_E217 NotImplemented: the decorator `#[X]` — this compiler reads `#[derive(…)]` and `#[obj]`, and
+> no other_。它們每一個都被拒絕,
 > 所以沒有任何東西被默默丟掉、也沒有任何東西被編錯;失去的是本節與下面〈保留〉賴以成立的那個區分。一個打錯的字會
 > 被報成一個「保留、等待實作」的名字,而「未知的 decorator 是一個讀者分辨得出來的錯誤」這個承諾並沒有兌現。
 

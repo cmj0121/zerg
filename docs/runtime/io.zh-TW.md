@@ -96,7 +96,7 @@ thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
 ## Process 與命令執行
 
-**[not yet]**——命令字面量雖被文法辨識，但此階段在**程式碼生成時被拒絕**；下方的預期模型不變，待 runtime 落地。
+**[not yet]**——命令字面量被 lex 之後由 **parser 拒絕**（`E236`，且沒有位置）；下方的預期模型不變，待 runtime 落地。
 
 子行程用**反引號命令字面量**啟動，並透過同一套串流觀察——它的 pipe 是 `Reader` 與 `Writer`、它的 handle 是一個
 `Ref[proc]`，其 `drop` 會 wait（或 kill）它、恰好回收一次。**`f` 標出危險：**

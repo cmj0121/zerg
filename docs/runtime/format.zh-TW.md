@@ -30,7 +30,7 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
   ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕。
 - **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04d}"`）。**[not yet]**
-  ——已被解析，但此階段在**程式碼生成時被拒絕**。
+  ——被辨識之後由 **parser 拒絕**（`E227`）。
 - **`{x:spec}`** 把 spec 字串交給型別的 **`Format`** 協定——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。這是
   **per-type 協定**、非 `display` 參數：語言只固定 `:spec` 的**語法**（到 `}` 為止的不透明文字）；一個 spec 的**意義**
   由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。對

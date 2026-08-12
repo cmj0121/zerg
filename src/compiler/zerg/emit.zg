@@ -579,7 +579,7 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 	et := c_infer(em, e)
 
 	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
-	return c_opt_wrap(em, where, c_opt_elem(want), e, sb) if c_is_opt(want)
+	return c_opt_wrap(em, where, c_opt_elem(want), e, sb) if ty_is_opt(want)
 
 	return c_either_wrap(em, where, want, e, sb)
 }
@@ -909,7 +909,7 @@ fn c_ctor_side_of(nm: str, n: int) -> int {
 # sides fill different fields of the answer.
 fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	t := c_infer(em, target)
-	raise f"E406 `?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there" if not c_is_opt(t)
+	raise f"E406 `?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there" if not ty_is_opt(t)
 	inner := c_opt_elem(t)
 	ft := c_field_ty(em, c_named_of(inner), fld)
 	raise f"no field `{fld}` on {ty_name(inner)} (optional chain `?.{fld}`)" if c_is_unknown(ft)
@@ -918,7 +918,7 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# `type ::= base-type '?'?` allows exactly one marker — and "nil in place" means the
 	# chain answers the same shape whether the absence came from the operand or the field.
 	mut oft := ft
-	if c_is_opt(ft) {
+	if ty_is_opt(ft) {
 		oft = c_opt_elem(ft)
 	}
 
@@ -932,7 +932,7 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	mut out := f"({{ {src} {tv} = {c_expr(em, target, sb)}; {dst} {rv};"
 	acc := f"{c_res_ok(tv)}.zg_{fld}"
 	mut take := f"{c_res_mark_left(rv)} {c_res_ok(rv)} = {acc};"
-	if c_is_opt(ft) {
+	if ty_is_opt(ft) {
 		# the field carries its own tag, so the answer IS the field
 		take = f"{rv} = {acc};"
 	}
@@ -977,7 +977,7 @@ fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
 	# carries the value that is the whole reason the early return happened
 	mut right := f"({rcn}){{ .tag = 1 }}"
-	if not c_is_opt(em.fn_ret) {
+	if not ty_is_opt(em.fn_ret) {
 		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
 	}
 	return out + " return " + right + "; } " + c_res_ok(tv) + "; })"
@@ -986,28 +986,21 @@ fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 # c_right_matches reports whether two carriers propagate the same thing: an optional's
 # right is `nil` and carries nothing, and an Either's is its declared right type.
 fn c_right_matches(a: Ty, b: Ty) -> bool {
-	return c_is_opt(b) if c_is_opt(a)
-	return false if c_is_opt(b)
+	return ty_is_opt(b) if ty_is_opt(a)
+	return false if ty_is_opt(b)
 
 	return ty_name(c_either_right(a)) == ty_name(c_either_right(b))
 }
 
 fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	t := c_infer(em, target)
-	return Ty.TUnknown if not c_is_opt(t)
+	return Ty.TUnknown if not ty_is_opt(t)
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
 
 	return Ty.TUnknown if c_is_unknown(ft)
-	return ft if c_is_opt(ft)
+	return ft if ty_is_opt(ft)
 
 	return Ty.TOpt(ft)
-}
-
-fn c_is_opt(t: Ty) -> bool {
-	return match t {
-		Ty.TOpt(_) => true
-		_          => false
-	}
 }
 
 fn c_opt_elem(t: Ty) -> Ty {
@@ -1021,17 +1014,17 @@ fn c_opt_elem(t: Ty) -> Ty {
 # Result: `??`, `!` and `if v := …` read a tag and a value, and both carriers have those.
 # The two only part company where the absent side is built or explained.
 fn c_is_carrier(t: Ty) -> bool {
-	return c_is_either(t) or c_is_opt(t)
+	return c_is_either(t) or ty_is_opt(t)
 }
 
 fn c_carrier_elem(t: Ty) -> Ty {
-	return c_opt_elem(t) if c_is_opt(t)
+	return c_opt_elem(t) if ty_is_opt(t)
 	return c_result_elem(t)
 }
 
 # c_carrier_of registers whichever carrier a type is and answers its C name.
 fn c_carrier_of(mut &em: Emitter, t: Ty) -> str {
-	return c_opt_name(em, c_opt_elem(t)) if c_is_opt(t)
+	return c_opt_name(em, c_opt_elem(t)) if ty_is_opt(t)
 	return c_carrier_name(em, c_either_left(t), c_either_right(t))
 }
 
@@ -1217,7 +1210,7 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# nil` wrote `zgt_tup_…` into this struct with nobody having written the tuple, and cc
 	# reported it against generated C
 	mut d := c_spelled_pre(em, left)
-	if c_is_opt(c) {
+	if ty_is_opt(c) {
 		d = d + f"typedef struct {{ int32_t tag; {ct} ok; }} {name};\n"
 	} else {
 		d = d + c_spelled_pre(em, c_either_right(c))
@@ -1229,7 +1222,7 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# optional's absent side and a general Either's Right carry no abort, so forcing one
 	# raises a message of its own.
 	mut fail := "zrt_raise_err(zrt_err_new(\"force-unwrap of a Right\"));"
-	if c_is_opt(c) {
+	if ty_is_opt(c) {
 		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
 	} else if c_is_err_ty(c_either_right(c)) {
 		fail = "zg_force_fail(" + c_res_err("r") + ");"
@@ -1256,12 +1249,12 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
 # without the caller having to know which of the two it holds.
 fn c_carrier_ty_cname(c: Ty) -> str {
-	return c_opt_cname(c_opt_elem(c)) if c_is_opt(c)
+	return c_opt_cname(c_opt_elem(c)) if ty_is_opt(c)
 	return c_carrier_cname(c_either_left(c), c_either_right(c))
 }
 
 fn c_carrier_left(c: Ty) -> Ty {
-	return c_opt_elem(c) if c_is_opt(c)
+	return c_opt_elem(c) if ty_is_opt(c)
 	return c_either_left(c)
 }
 
@@ -2539,7 +2532,7 @@ fn c_enum_deps(ed: EnumDecl) -> list[str] {
 
 fn c_carrier_deps(c: Ty) -> list[str] {
 	mut deps: list[str] = []
-	if c_is_opt(c) {
+	if ty_is_opt(c) {
 		c_ty_struct_deps(c_opt_elem(c), deps)
 	} else {
 		c_ty_struct_deps(c_either_left(c), deps)
@@ -2721,7 +2714,7 @@ fn c_decl_collect_carrier(c: Ty, mut &tups: list[Ty], mut &cars: list[Ty]) {
 	for x in cars {
 		return if c_carrier_ty_cname(x) == nm
 	}
-	if c_is_opt(c) {
+	if ty_is_opt(c) {
 		c_decl_collect(c_opt_elem(c), tups, cars)
 	} else {
 		c_decl_collect_two(c_either_left(c), c_either_right(c), tups, cars)
@@ -3086,7 +3079,7 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 # A `T?` is the exception the note itself names: its implicit default is `nil`, so it is
 # already omittable and needs no `=`.
 fn c_check_private_field(mut &em: Emitter, sd: StructDecl, fd: FieldDef) {
-	return if fd.is_pub or fd.has_def or c_is_opt(fd.ty)
+	return if fd.is_pub or fd.has_def or ty_is_opt(fd.ty)
 
 	chk_at_place(em, sd.path, fd.line, fd.col, "E482", f"the field `{fd.name}` of `{sd.name}` is module-private, so it must carry a default (`{fd.name}: {ty_name(fd.ty)} = …`) — a construction outside the module cannot supply a value for a field it may not read. Write `pub` to expose the field instead")
 }
@@ -6064,7 +6057,7 @@ fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 
 	# and every method on a CARRIER, for the same reason: `T?` and `Either[L, R]` are types
 	# the compiler builds rather than a program declares, so neither has anywhere to hang one.
-	return MethKind.MCarrier if c_is_opt(tty) or c_is_either(tty)
+	return MethKind.MCarrier if ty_is_opt(tty) or c_is_either(tty)
 	return MethKind.MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MethKind.MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -6163,7 +6156,7 @@ fn c_err_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb:
 # held a copy and nothing releases it there either. That is one behaviour, not two, and if it
 # is a leak it is the same leak in both places.
 fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
-	if meth == "ok_or" and c_is_opt(tty) {
+	if meth == "ok_or" and ty_is_opt(tty) {
 		raise "NotImplemented: `ok_or` takes the error to answer an absence with, and none was given" if args.len() == 0
 		raise "NotImplemented: `ok_or` takes ONE error to answer an absence with" if args.len() != 1
 
@@ -6211,7 +6204,7 @@ fn c_carrier_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
 # is a `Result[T]` whatever the optional held; `ok` keeps the Left and drops the Right.
 fn c_carrier_method_ret(mut &em: Emitter, tty: Ty, meth: str) -> Ty {
-	return Ty.TEither(c_opt_elem(tty), Ty.TErr) if meth == "ok_or" and c_is_opt(tty)
+	return Ty.TEither(c_opt_elem(tty), Ty.TErr) if meth == "ok_or" and ty_is_opt(tty)
 
 	# Raising rather than answering `TUnknown` for the same reason c_err_method_ret does:
 	# the two tables must agree about which names EXIST, and only a raise makes them.
@@ -6730,7 +6723,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst
 			# what gives `xs: list[int] = []` an element size, exactly as it does for a
 			# parameter default
 			out = out + c_field_init(em, f"the default for {chk_field_says(sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
-		} else if c_is_opt(ft) {
+		} else if ty_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
 			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
@@ -7748,7 +7741,7 @@ fn c_infer_node(mut &em: Emitter, e: Expr) -> Ty {
 # `a ?? b ?? 7` right-associate into a value rather than into a type nothing can name.
 fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 	tb := c_infer(em, b)
-	return tb if c_is_opt(tb)
+	return tb if ty_is_opt(tb)
 	return c_carrier_elem(c_infer(em, a))
 }
 
@@ -8906,7 +8899,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
 
-	# c_fit_copied wraps a carrier element itself — the `if c_is_opt(elem)` that used to stand
+	# c_fit_copied wraps a carrier element itself — the `if ty_is_opt(elem)` that used to stand
 	# here rendered the value a second time to reach the same answer, which is one temp and one
 	# walk of the expression per send
 	sv := c_fit_copied(em, "the value sent on this channel", elem, v, c_nosub())
@@ -10693,7 +10686,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
-	raise f"E432 `{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival))
+	raise f"E432 `{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not ty_is_opt(eff) and ty_is_opt(c_infer(em, ival))
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one; the
 	# value is rendered BEFORE the binding enters scope, so an initializer naming `name`
@@ -10911,7 +10904,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# to show for the absent side is the program's decision. `print x ?? "…"` or `print x!`
 	# says which one was meant; printing the carrier itself used to reach cc as an integer
 	# cast of a struct.
-	raise f"E433 `print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if c_is_opt(ty)
+	raise f"E433 `print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if ty_is_opt(ty)
 
 	# A USER OVERRIDE WINS: a type that declares `display()` (or `debug`, its default —
 	# docs/runtime/format.md) prints through it. The call answers a fresh owned cell, so

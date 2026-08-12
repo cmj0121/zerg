@@ -1172,9 +1172,15 @@ fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
 	return Ty.TChan(elem, dir)
 }
 
-# ty_is_opt is the shape question the rule above asks. It is spelled here rather than
-# reached for in the emitter because the parser asks it too, and the parser may not call
-# into the emitter (scripts/layering-check.sh).
+# ty_is_opt is the shape question the rule above asks, and it is spelled here because this
+# is the file every stage may read: the parser asks it and may not call into the emitter
+# (scripts/layering-check.sh), so an emitter-side copy could only ever be a second one.
+#
+# It was. `c_is_opt` sat in emit.zg, character for character the same match, answering the
+# same question at some thirty call sites — the shape a fact about types takes when the
+# stage that needed it first could not reach the stage that already had it. The emitter
+# reads this file directly (ty_is_chan, ty_chan_elem), so the copy had nothing left to be
+# for and is gone.
 fn ty_is_opt(t: Ty) -> bool {
 	return match t {
 		Ty.TOpt(_) => true

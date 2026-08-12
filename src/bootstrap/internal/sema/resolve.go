@@ -247,7 +247,7 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 		kind = SymConst
 	}
 	r.declareSurface(&Symbol{
-		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const,
+		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const, Pub: n.Pub,
 		Span: n.Span(), Decl: n, Type: types.Unknown,
 	})
 }

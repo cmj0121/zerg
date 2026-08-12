@@ -119,9 +119,10 @@ build.
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
 `spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,
-`Ref[T]`, struct and tuple patterns, a block as a `match` arm body, and `for c in s` over a
-str's code points. On several of those the seed is the **wider** of the two compilers, which
-is a fact about the seed and not about the language.
+`Ref[T]`, struct and tuple patterns, a block as a `match` arm body, `for c in s` over a
+str's code points, an `import … as` rename, and a `pub` module constant. On several of those
+the seed is the **wider** of the two compilers, which is a fact about the seed and not about
+the language.
 
 A form the FRONT END still parses is not thereby supported: the refusal may land in sema or
 at the emitter's door. Narrowing the parser is a separate pass, and not an urgent one — what

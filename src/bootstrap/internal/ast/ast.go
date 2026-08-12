@@ -116,8 +116,12 @@ type NopStmt struct{ base }
 // simple named form leaves Target nil (GRAMMAR bind-target).
 type BindStmt struct {
 	base
-	Mut    bool
-	Const  bool
+	Mut   bool
+	Const bool
+	// Pub is the visibility marker a MODULE-LEVEL binding may carry — 'pub COUNT := 3',
+	// the module constant a sibling module may read (docs/runtime/package.md). It is
+	// meaningless on a binding inside a function, where the parser never sets it.
+	Pub    bool
 	Name   string
 	Type   Type
 	Target Pattern // destructuring bind target; nil for the simple named form

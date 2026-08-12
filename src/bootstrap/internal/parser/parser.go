@@ -257,6 +257,21 @@ func (p *parser) parseTopStmt() ast.Stmt {
 	switch {
 	case p.at(token.Import):
 		return p.parseImport()
+	case p.atPubBinding():
+		// 'pub COUNT := 3' — a PUBLIC MODULE CONSTANT, which is a binding and not a
+		// declaration keyword, so parseDecl's dispatch fell off its end with "expected a
+		// declaration, found an identifier". A module constant is a module's public
+		// surface exactly as a 'pub fn' is (docs/runtime/package.md), and refusing to
+		// parse it made every module that exported one unreadable to this compiler.
+		pub := p.expect(token.Pub)
+		b := p.parseStmt()
+		if bind, ok := b.(*ast.BindStmt); ok {
+			bind.Pub = true
+			bind.SetSpan(token.Span{Start: pub.Span.Start, End: bind.Span().End})
+			return bind
+		}
+		p.fail(pub.Span, "'pub' marks a declaration or a module constant")
+		return b
 	case p.at(token.Hash), p.at(token.Pub):
 		// '#[…]' or a 'pub' prefix can only introduce a declaration.
 		return p.parseDecl()
@@ -265,6 +280,26 @@ func (p *parser) parseTopStmt() ast.Stmt {
 		return p.parseDecl()
 	}
 	return p.parseStmt()
+}
+
+// atPubBinding reports whether the cursor begins a PUBLIC MODULE CONSTANT — 'pub',
+// then the optional mut/const modifier, then a name introducing a binding (':=' or
+// ': T ='). It is the shape and not merely a 'pub' with no declaration keyword after
+// it: 'pub 5' is neither, and it owes the declaration dispatch's diagnostic rather
+// than a binding parse that would fail somewhere else with a worse message.
+func (p *parser) atPubBinding() bool {
+	if !p.at(token.Pub) {
+		return false
+	}
+	i := 1
+	for p.peek(i).Kind == token.Mut || p.peek(i).Kind == token.Const {
+		i++
+	}
+	if p.peek(i).Kind != token.Ident {
+		return false
+	}
+	next := p.peek(i + 1).Kind
+	return next == token.Walrus || next == token.Colon
 }
 
 // startsDecl reports whether the cursor begins a declaration (a decl keyword,

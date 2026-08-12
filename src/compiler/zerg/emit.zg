@@ -7151,6 +7151,17 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		c_bare_variant(em, n)
 		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
 	}
+
+	# EVERY READ OF A BINDING FUNNELS THROUGH HERE, which is what makes this the one place a
+	# use after `del` has to be caught — and it sits above the mutable-reference case rather
+	# than below it because that case RETURNS. A `mut &` parameter is a pointer dereferenced
+	# on use, so its reads left by the line below and never reached the check: `del x` on one
+	# revoked nothing anybody could observe, and the parameter went on writing through to the
+	# caller's variable, which is the one `del` target docs/core/memory.md says merely ends
+	# the borrow. A name nothing binds has no row and no state, so asking early costs a
+	# lookup that answers -1 and changes nothing for the shapes below.
+	c_live_use(em, n)
+
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return f"(*zg_{n})"
@@ -7197,10 +7208,6 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		c_undefined_name(em, n)
 		return "0"
 	}
-
-	# every read of a binding funnels through here, which is what makes this the one place
-	# a use after `del` has to be caught
-	c_live_use(em, n)
 
 	# A BARE read of a module constant answers the same visibility question the qualified
 	# `lib.FLOOR` does (c_fieldref): c_reset_env binds every module's constants into every

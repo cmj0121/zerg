@@ -5383,8 +5383,12 @@ fn c_in_range_offender(mut &em: Emitter, run: list[Expr]) -> str {
 # c_in_refuse is the ONE place `E463` is reported from. Two rules answer with it — a set that
 # is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
 # an identity, so the sentence differs and the identity does not.
+#
+# It says WHERE (c_here), which is the trailer docs/conformance.md owes every diagnostic and
+# which this one had not got. `reject-fuzz` is what found it: retype one binding to `str` and
+# the guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
 fn c_in_refuse(mut &em: Emitter, set: Expr, why: str) -> str {
-	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}"
+	raise f"E463 NotImplemented: `in` over {c_set_says(em, set)} — {why}" + c_here(em)
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?

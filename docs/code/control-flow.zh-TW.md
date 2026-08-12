@@ -9,9 +9,14 @@
 副作用而跑的 **statement**；**`if`** 則**兩者皆是**——既是 statement，也（在帶強制結尾 `else` 時）是 expression。**區塊**
 （block）本身就是一個 expression，其值是**最後一個 statement 的值**，所以以 expression 收尾的分支會把該值帶出來。
 
-> **[not yet]** **把區塊當 expression 用**會被指名拒絕：裸的 `{ … }` 出現在 `:=`、引數位置、或 `return` 之後都編
-> 不過。區塊的值規則只在某個構造本來就要一個區塊時成立——`if` 的分支、`match` 的 arm——此外皆無，所以區塊自己
-> 到不了任何值的位置。
+**區塊自己就到得了值的位置**：`x := { y := 1  y + 1 }`、當作引數的區塊、`return` 之後的區塊。它的值是最後一個
+statement 的值——expression statement 交出它的 expression，其他任何 statement、以及空區塊，都交出 `nil`。lexer 插入的
+`;` 只**分隔** statement，並不像某些語言的結尾 `;` 那樣把值丟掉。決定一個 `{` 開的是區塊還是 **map literal** 的是那個
+`:`（見[型別](../core/types.zh-TW.md)與 `GRAMMAR#map-lit`），這也正是空 map 寫成 `{:}`、而沒有 `:` 的大括號永遠是區塊
+的理由。
+
+在**一個 statement 的開頭**，同樣的大括號是一個區塊 **statement**、其值被丟棄；而在 `if` / `for` / `with` / `match`
+的 head 開頭以 `{` 起始的運算式必須加括號（`E290`）。
 
 **`if`**——作為 **statement** 時，`if cond { … }`（可接 `else` / `else if`）為副作用而跑、不產出值；條件是 `bool`
 （沒有 truthiness）。帶**強制結尾 `else`** 時它反而是 **expression**（`if-expr`，一個 `primary`）：它產出**被選中分支
@@ -71,7 +76,9 @@ collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 ## 模式比對（Pattern matching）
 
 `match` 是一個 **expression**：它用 **arm**（`pattern => result`，arm 分隔符 `=>` 刻意與引入函式回傳型別的 `->`
-區分）逐一試一個值，跑第一個命中的、產出它的 result。
+區分）逐一試一個值，跑第一個命中的、產出它的 result。arm 的 body 是一個**運算式**（`GRAMMAR#match-arm`），而區塊
+**就是**運算式——所以 `pattern => { … }` 可以裝好幾個 statement 並且照樣產出值，它的值就是該區塊最後一個 statement
+的值。
 每個 arm 產出**相同型別**，所以 `match` 是個值，可用於 `:=`、`return`、或引數——產出 `nil` 的 arm 讀來就是普通
 statement。覆蓋是**必需**的——漏掉某個 case 的 `match` 是**編譯錯誤**（所以**新增一個 dependent 的 `match` 未處理的
 `enum` variant 會讓建置失敗**，在編譯期抓到、而非默默放過）。帶 guard 或 range 的 arm（見下）**不**計入覆蓋——編譯器

@@ -268,6 +268,7 @@ fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
 		Expr.EForce(x) => Expr.EForce(subst_expr(names, args, x))
 		Expr.ECoalesce(a, b, jump) => Expr.ECoalesce(subst_expr(names, args, a), subst_expr(names, args, b), subst_block(names, args, jump))
 		Expr.EGuard(b) => Expr.EGuard(subst_block(names, args, b))
+		Expr.EBlock(b) => Expr.EBlock(subst_block(names, args, b))
 		Expr.EIs(x, nm) => Expr.EIs(subst_expr(names, args, x), nm)
 		Expr.EIn(x, s) => Expr.EIn(subst_expr(names, args, x), subst_expr(names, args, s))
 		_ => e

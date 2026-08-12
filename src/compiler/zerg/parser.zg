@@ -1247,11 +1247,79 @@ fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return one
 }
 
+# p_brace_is_map decides, standing on a `{` in EXPRESSION position, whether it opens a map
+# literal or a block. Both are primaries (GRAMMAR#primary lists `map-lit` and `block`), so
+# the decision has to be made before either is read.
+#
+# GRAMMAR names the discriminator: "that ':' is exactly what distinguishes a '{ … }' map
+# from a block, so a bare-element '{ … }' is ALWAYS a block". So the scan looks for a `:`
+# among the brace's OWN tokens — depth 1 — and answers block when there is none. `{}` is a
+# block and `{:}` is the empty map, which is why the empty map was given that spelling.
+#
+# The one shape the bare rule gets wrong is the one p_brace_continues already names: a
+# TYPED BINDING carries a `:` too — `{ x: int = 1 }` is a block holding one — and it is
+# told apart by what FOLLOWS. A map entry is `expr ':' expr` and ends at the `,` or the
+# `}`; a typed binding puts an `=` between the type and the value. So a depth-1 `:` whose
+# entry also holds a depth-1 `=` is a binding, and the brace is a block.
+#
+# A `;` at depth 1 ends the scan the same way: the lexer's inserted separator means the
+# brace holds STATEMENTS, and a map's entries are separated by `,` and never by one.
+#
+# Depth counts all three bracket kinds, because a `:` belonging to something nested — a
+# named argument `f(a: 1)`, a nested map, a slice — is not this brace's.
+fn p_brace_is_map(mut &p: Parser) -> bool {
+	mut depth := 0
+	mut i := 0
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+
+		if k == Kind.LBrace or k == Kind.LParen or k == Kind.LBrack {
+			depth = depth + 1
+		} else if k == Kind.RBrace or k == Kind.RParen or k == Kind.RBrack {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and k == Kind.Semi {
+			# a statement separator: these are statements, so this is a block
+			return false
+		} else if depth == 1 and k == Kind.Colon {
+			return not p_brace_entry_assigns(p, i + 1)
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# p_brace_entry_assigns answers whether the entry that a depth-1 `:` opened runs on to an
+# `=` before it ends — which is what makes `x: int = 1` a typed binding rather than a map
+# entry whose key is `x`. The entry ends at the enclosing brace's `,` or `}`, or at a `;`.
+fn p_brace_entry_assigns(mut &p: Parser, at: int) -> bool {
+	mut depth := 1
+	mut i := at
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+
+		if k == Kind.LBrace or k == Kind.LParen or k == Kind.LBrack {
+			depth = depth + 1
+		} else if k == Kind.RBrace or k == Kind.RParen or k == Kind.RBrack {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and (k == Kind.Comma or k == Kind.Semi) {
+			return false
+		} else if depth == 1 and k == Kind.Assign {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
 #
 # The `:` is what makes a map literal unambiguous: GRAMMAR gives the empty map the
 # spelling `{:}` rather than `{}` precisely so that a brace with no colon in it is ALWAYS
-# a block. Nothing here has to guess.
+# a block. Nothing here has to guess — p_brace_is_map above has already asked.
 fn parse_map_lit(mut &p: Parser) -> Expr {
 	p_advance(p) # '{'
 	mut ks: list[Expr] = []
@@ -1277,13 +1345,17 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		return Expr.EMapLit(ks, vs)
 	}
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		et := cur(p)
 		ks.append(parse_expr(p))
 
-		# no colon, so by the rule above this brace was a BLOCK, and this parser has no
-		# block expression. It used to read on regardless and build a map out of whatever
-		# the block's statements happened to parse as — a match arm written
-		# `Right(e) => { report(e); stop() }` came out as a one-entry map and ran neither.
-		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Kind.Colon)
+		# THIS ENTRY HAS NO `:`. The brace as a whole reached here because one of its entries
+		# had one, so a later entry without one is a map literal missing a value — `{a, "b": 1}`
+		# — and not the block/map ambiguity, which p_brace_is_map settled before this ran.
+		#
+		# It used to read on regardless and build a map out of whatever parsed, which is how a
+		# match arm written `Right(e) => { report(e); stop() }` came out as a one-entry map that
+		# ran neither call. That form is a BLOCK now and never reaches this function.
+		raise "E479 a map entry is `key: value`, and this one has no `:` — GRAMMAR#map-entry" + p_place(p, et.line, et.col) if not p_at(p, Kind.Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
 		skip_semis(p)
@@ -3060,7 +3132,18 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, Kind.RParen)
 		return Expr.ETuple(elems)
 	}
-	return parse_map_lit(p) if k == Kind.LBrace
+	if k == Kind.LBrace {
+		# A `{` IN EXPRESSION POSITION IS A MAP LITERAL OR A BLOCK, and GRAMMAR gives both
+		# to `primary`. p_brace_is_map decides on the `:` — the discriminator the grammar
+		# names — and a brace without one is the block EXPRESSION whose value is its last
+		# statement's (GRAMMAR, group 2).
+		#
+		# The same braces at a STATEMENT's start are a block statement (parse_stmt reads
+		# that one, as Stmt.SScope) and their value is discarded; a head that opens with `{`
+		# is E290. Position decides, and this function is only ever the expression position.
+		return parse_map_lit(p) if p_brace_is_map(p)
+		return Expr.EBlock(parse_block(p))
+	}
 	if k == Kind.LBrack {
 		# list literal: [] or [a, b, ...], or the FILL form [v; N]
 		p_advance(p)

@@ -117,7 +117,15 @@ reject() {
 	rm -rf "$dir"
 	mkdir -p "$dir"
 	local src="$dir/$name.zg"
-	awk -v dir="$dir" -v entry="$src" '
+
+	# LC_ALL=C, because this is a byte pipe and not a text one. A case is a PROGRAM, and one
+	# class of ill-formed program is ill-formed exactly because its bytes are not text: under
+	# the ambient UTF-8 locale macOS awk stops on `towc: multibyte conversion failure` and
+	# writes a TRUNCATED file, so the case that reaches the compiler is not the case that was
+	# written and the gate reports a mismatch on a rule it never exercised. In the C locale a
+	# record is bytes, `/^--- /` matches bytes, and every case — UTF-8, ASCII or neither —
+	# arrives as it was typed.
+	LC_ALL=C awk -v dir="$dir" -v entry="$src" '
 		/^--- / {
 			out = dir "/" $2
 			d = out

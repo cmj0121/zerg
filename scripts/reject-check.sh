@@ -171,21 +171,12 @@ reject() {
 			;;
 		esac
 	fi
-	case $out in
-	*.zerg-cache*)
-		echo "VIA CC    $name — cc reported it against generated C, not the compiler against the source"
-		fail=$((fail + 1))
-		return
-		;;
-	esac
-	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
-	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
-	# the programmer wrote — which is better for a user and blinds the older test, since
-	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
-	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
-	# the place on an indented `-->` line beneath it.
-	if is_cc_diag "$out"; then
-		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
+	# CC MUST NOT BE THE ONE ANSWERING. Both tells — the message's SHAPE and a path into the
+	# build cache — are one predicate in diag.sh, asked the same way by the three gates that
+	# judge a refusal. They used to be two `case`/`if` pairs written out per script, which
+	# is exactly how one of them came to be asked in two places and not in the third.
+	if cc_answered "$out"; then
+		echo "VIA CC    $name — cc answered this, not the compiler against the source"
 		fail=$((fail + 1))
 		return
 	fi

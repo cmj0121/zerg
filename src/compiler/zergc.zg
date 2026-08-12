@@ -163,7 +163,8 @@ fn lsp_program(path: str, text: str) -> lsp.Program {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
-	load_with(path, dir_of(path), seen, srcs, paths, Buffer(path, text))
+	mut root: list[str] = []
+	load_with(path, dir_of(path), seen, root, srcs, paths, Buffer(path, text))
 	return lsp.program(paths, srcs)
 }
 
@@ -807,12 +808,19 @@ fn load_units(entry: str) -> list[Unit] {
 	mut seen: list[str] = []
 	mut units: list[Unit] = []
 	mut one: list[str] = []
+	mut root: list[str] = []
 	one.append(entry)
-	load_unit(one, entry, dir_of(entry), seen, units)
+	load_unit(one, entry, dir_of(entry), seen, root, units)
 	return units
 }
 
-fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], mut &units: list[Unit]) {
+# `stack` is the path DOWN to this unit, and it is a separate list from `seen` because the two
+# answer different questions — see chk_import_cycle. It arrives BY VALUE, which is what saves
+# a pop: each frame appends its own name to its own copy, so unwinding is the return.
+fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+	mut here := stack
+	here.append(name)
+
 	for s in seen {
 		return if s == name
 	}
@@ -842,11 +850,51 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	mut si := 0
 	for si < srcs.len() {
 		for im in zerg.imports_of_at(srcs[si], paths[si]) {
-			load_unit(module_files(im, from_dir), im, from_dir, seen, units)
+			chk_import_cycle(here, im)
+			load_unit(module_files(im, from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
 	units.append(Unit(name, srcs, paths))
+}
+
+# --- import cycles ---------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md), and nothing
+# detected one, at either layer: `ca` importing `cb` importing `ca` compiled and ran.
+#
+# A cycle that BUILDS is worse than a cycle that is refused, which is why this is enforced
+# rather than documented away. Two mutually importing modules each have to be initialized
+# before the other — their `init()` blocks and their module constants both — and there is no
+# order that satisfies both, so whatever the build settles on is an order no chapter defines
+# and nothing can be written against.
+#
+# THE QUESTION IS ASKED OF THE PATH DOWN, not of what has been loaded. A module that two
+# others import is the ordinary case — a diamond — and `seen` is what answers that one, by
+# loading it once. What has no order is a module that comes up again while it is still ON the
+# way down, and only a stack can tell the two apart. The self-import is the one-node case of
+# exactly the same test, which is why it needs no branch of its own.
+#
+# The chain is reported from the first appearance, so what the reader is shown is the LOOP
+# and not the walk that reached it.
+fn chk_import_cycle(stack: list[str], im: str) {
+	mut at := -1
+	mut i := 0
+	for i < stack.len() {
+		if at < 0 and stack[i] == im {
+			at = i
+		}
+		i = i + 1
+	}
+	return if at < 0
+
+	mut chain := ""
+	mut j := at
+	for j < stack.len() {
+		chain = chain + path_tail(stack[j]) + " -> "
+		j = j + 1
+	}
+	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -1133,7 +1181,8 @@ fn path_tail(path: str) -> str {
 }
 
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
-	load_with(file, from_dir, seen, srcs, paths, Buffer("", ""))
+	mut root: list[str] = []
+	load_with(file, from_dir, seen, root, srcs, paths, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
@@ -1151,7 +1200,12 @@ struct Buffer {
 # downstream can say anything true about text that does not tokenize, so `lex_check` reports
 # and exits. In a server there is no exiting — the session is the process — so the unreadable
 # source is skipped and `lex_diags` reports it to the editor instead.
-fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
+# `stack` is the chain of MODULES on the way down to this file, and the cycle rule is asked of
+# it for the reason load_unit's is: this loader recurses per FILE and dedupes per file, so a
+# module reached a second time is skipped and the loop never runs — which terminates the walk
+# without noticing what it walked. The two loaders ask ONE function, so the rule and its
+# sentence are in one place and cannot drift apart the way the walks themselves have to.
+fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -1166,8 +1220,11 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
 	for im in zerg.imports_of_at(src, file) {
+		chk_import_cycle(stack, im)
+		mut here := stack
+		here.append(im)
 		for dep in module_files(im, from_dir) {
-			load_with(dep, from_dir, seen, srcs, paths, buf)
+			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}
 	srcs.append(src)

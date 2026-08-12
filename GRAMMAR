@@ -718,8 +718,9 @@ chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional cap
 #
 # An arm's body is a STATEMENT, not an expression: 'select' is a statement and yields
 # nothing, so an arm RUNS rather than yields — which is what lets 'break' and
-# 'v := <-ch => print v!' mean what they read as. A block is a statement like any other,
-# so '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
+# 'v := <-ch => print v' mean what they read as — 'v' is the plain T the paragraph above
+# binds, so it is printed, not unwrapped. A block is a statement like any other, and
+# '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
 # whose body must YIELD the match's value and is therefore an expression.
 select-stmt  ::= 'select' '{' select-arm+ '}'          # picks one ready arm
 for-select   ::= 'for' 'select' '{' select-arm+ '}'   # one per round, until every recv arm has ended

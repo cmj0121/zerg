@@ -443,6 +443,7 @@ fn lint_captures_let(nm: str, is_mut: bool, v: Expr, fname: str, refs: list[str]
 fn lint_captures_expr(e: Expr, fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
 	match e {
 		Expr.EGuard(b) => lint_captures_body(b, fname, refs, muts, out)
+		Expr.EBlock(b) => lint_captures_body(b, fname, refs, muts, out)
 		Expr.EFn(ps, has_ret, ret, b) => lint_captures_body(b, fname, refs, muts, out)
 		Expr.ECall(nm, args, _) => lint_captures_each(args, fname, refs, muts, out)
 		Expr.EMethod(t, m, args) => lint_captures_each(args, fname, refs, muts, out)
@@ -663,6 +664,7 @@ fn collect_binds_let(name: str, value: Expr, mut &names: list[str]) {
 fn collect_binds_expr(e: Expr, mut &names: list[str]) {
 	match e {
 		Expr.EGuard(body_b) => collect_binds(body_b, names)
+		Expr.EBlock(body_b) => collect_binds(body_b, names)
 
 		# a closure's body is a block too, and `walk_body` already counts the reads inside one
 		# — so without this the bindings in a closure were collected by nobody and answered to
@@ -777,6 +779,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		Expr.EForce(x) => walk_expr(x, ids, calls, ns)
 		Expr.ECoalesce(a, b, jump) => walk_coalesce(a, b, jump, ids, calls, ns)
 		Expr.EGuard(body) => walk_body(body, ids, calls, ns)
+		Expr.EBlock(body) => walk_body(body, ids, calls, ns)
 
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.

@@ -165,6 +165,23 @@ enum Expr {
 	# thing being guarded is usually several statements.
 	EGuard(list[Stmt])
 
+	# EBlock is a `{ … }` standing where an EXPRESSION is wanted (GRAMMAR, group 2: a block
+	# is a primary, group 4). Its value is its LAST statement's value — an expr-stmt yields
+	# its expr, and any other statement, or an empty block, yields `nil`. The `;` the lexer
+	# inserts only SEPARATES statements; it does not discard the value the way a trailing
+	# `;` does in some languages.
+	#
+	# It carries a whole `list[Stmt]` for the same reason EGuard above does, and it is the
+	# same node one brace along: `guard { … }` is a block expression under a catching
+	# handler, so the two share their value rule, their scope cleanup, and — in emit.zg —
+	# the statement-expression they lower to. What EBlock does not have is the abort-to-
+	# value demotion, which is the whole of the difference.
+	#
+	# The SAME braces at a statement's start are a block STATEMENT (Stmt.SScope) whose value
+	# is discarded. Position decides which, not shape, which is why the parser reads this one
+	# only from parse_primary.
+	EBlock(list[Stmt])
+
 	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
 	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
@@ -813,6 +830,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EForce(x) => "force"
 		Expr.ECoalesce(a, b, jump) => "coalesce"
 		Expr.EGuard(body) => "guard"
+		Expr.EBlock(body) => "block-expr"
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
@@ -830,7 +848,8 @@ pub fn expr_kind(e: Expr) -> str {
 # here answers "no parts" for a node that has them, which is a hole in the bound that
 # nothing reports. A new Expr variant must say what it contains.
 #
-# A BLOCK is not a part. `guard { … }`, a closure body and `?? break` carry STATEMENTS,
+# A BLOCK is not a part. `{ … }` as an expression, `guard { … }`, a closure body and
+# `?? break` all carry STATEMENTS,
 # and a statement's expressions are each measured on their own where that statement is
 # read (parser.zg's p_expr_root) — descending here would need a second walk over Stmt to
 # reach the same answer.
@@ -864,6 +883,7 @@ fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EForce(x) => [x]
 		Expr.ECoalesce(a, b, _) => [a, b]
 		Expr.EGuard(_) => expr_parts_none()
+		Expr.EBlock(_) => expr_parts_none()
 		Expr.EIs(x, _) => [x]
 		Expr.EIn(x, set) => [x, set]
 	}

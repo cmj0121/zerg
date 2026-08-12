@@ -422,6 +422,27 @@ fn main() {
 }
 EOF
 
+# a `select` ARM's receive binding is a binding too, and it was the one name-introducing
+# site in the language that did not go through c_add_var: it wrote the environment's
+# columns out by hand, so it asked neither this rule nor the substitution rule beside it.
+# Its real cost was worse than a missed refusal — one of the eight columns was left off
+# and every later binding read the wrong row of it — but this is the half a gate can see.
+reject const-rebound-by-a-select-arm E356 <<'EOF'
+fn gen(out: chan[int]<-) {
+	out <- 1
+}
+
+fn main() {
+	const v := 9
+	a := chan[int](1)
+	spawn gen(a)
+	select {
+		v := <-a => print v
+	}
+	print v
+}
+EOF
+
 # --- the top level is immutable in safe code --------------------------------------
 #
 # docs/runtime/package.md: a top-level binding may not be `mut` outside a module-level

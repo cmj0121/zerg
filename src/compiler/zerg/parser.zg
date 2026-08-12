@@ -904,9 +904,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		# refusal hung off the arms that do not want one — the arms are nine and the rule is
 		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
 		# and `Hash` is allowed through so decorators stack.
-		if pending.len() > 0 and not p_deco_may_lead(p) {
-			raise f"E487 `{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about" + p_place(p, deco_line, deco_col)
-		}
+		raise f"E487 `{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about" + p_place(p, deco_line, deco_col) if pending.len() > 0 and not p_deco_may_lead(p)
 
 		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
@@ -2291,8 +2289,10 @@ fn p_starts_destructure(mut &p: Parser) -> int {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
+
 				return 1 if nxt == Kind.Walrus
 				return 2 if nxt == Kind.Assign
+
 				return 0
 			}
 		} else if k == Kind.Semi or k == Kind.Eof {
@@ -2363,6 +2363,7 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# `:=` their source does not contain. GRAMMAR derives them as two productions and each is
 	# separately unbuilt; the place is the statement's own token, which neither carried.
 	dtor := p_starts_destructure(p)
+
 	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — GRAMMAR#bind-target derives the tuple form, and this compiler binds one name at a time" + p_place(p, cur(p).line, cur(p).col) if dtor == 1
 	raise "E486 NotImplemented: a destructuring assignment `(a, b) = …` — GRAMMAR#assign-target derives the tuple form, and this compiler assigns to one target at a time; write the two assignments out, reading the tuple with `.0` and `.1`" + p_place(p, cur(p).line, cur(p).col) if dtor == 2
 

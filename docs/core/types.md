@@ -329,8 +329,8 @@ decorator is for — **[not yet]**, so today the literal is reachable wherever t
 > `P(a: 1, b: 2)` reports _NotImplemented: the named argument `a:` — this compiler binds arguments by position
 > only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
 > itself is unaffected; what is missing is the spelling this section states its rules in terms of — "it names
-> every field" is how the opacity of a private field is derived, and `Foo(age: 2, name: base.name)` below is
-> written in a form the compiler does not read.
+> every field" is what makes a private field one an outsider cannot name, and `Foo(age: 2, name: base.name)`
+> below is written in a form the compiler does not read.
 
 ### Field defaults
 
@@ -350,6 +350,13 @@ The two halves meet at visibility: a **non-`pub` field is module-private, and mu
 field-wise constructor is public, so a required field is one every construction has to supply a value for
 — and an outsider cannot supply a value for a field it may not read. A private field with no default is
 rejected at the field's own declaration (`E482`), naming the field.
+
+> **[not yet]** A default that **reads another field** — `struct P { pub a: int; pub b: int = a * 2 }` — is
+> the one shape that is not built, and it is the same shape (and the same reason) as a parameter default
+> reading an earlier parameter in [Functions & Closures](../code/functions.md). The default is materialised
+> at the **construction**, where a field is not a name in scope, so `a` would resolve to whatever else
+> carries that name. It reports _NotImplemented: the default on field `b` of `P` reads the field `a`_,
+> with the field's place.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
 and, given a `mut` binding, writable; a private field is neither (**[deviation]** — access across a

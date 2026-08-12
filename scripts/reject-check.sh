@@ -1766,6 +1766,28 @@ fn main() {
 }
 EOF
 
+# A FILE THAT IS NOT UTF-8 AT ALL, which is the same abort one stage earlier: the driver turns
+# the bytes it read into a `str` before the lexer sees a character, and `str(bytes)` checks the
+# invariant and KILLS the process on a violation. `zerg build`, `zerg fmt`, `zerg desugar`,
+# `zerg lint` and the language server all died the same way, on `EncodingError: bytes are not
+# valid UTF-8 for a str` — no code, no place, and not even the name of the file it was reading.
+#
+# `GRAMMAR:80` says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# WHICH FILE is the whole of the answer — there is no line to name, the thing that would read
+# one being what refused. Hence `no-place`.
+#
+# The byte is spelled through the shell rather than written here, because a script holding an
+# invalid sequence is a script no editor, formatter or diff opens twice.
+#
+# `seed-gap`: the seed is byte-oriented and has no str invariant to violate, so it emits
+# `"\377"` into the C and answers nothing at all — the one direction where zerg is the
+# stricter compiler on an encoding.
+reject a-source-file-that-is-not-utf8 E111 no-place seed-gap <<EOF
+fn main() {
+	print "$(printf '\377')"
+}
+EOF
+
 reject based-number-with-no-digits E108 <<'EOF'
 fn main() {
 	n := 0x

@@ -95,20 +95,6 @@ late=0
 open=0
 prods=0
 
-# cc_answered — the message is a C compiler's, or names the build cache. The standing rule
-# is that `zerg` refuses, never cc against generated code nobody wrote, and before and after
-# a fix the case still "fails" either way, so no exit status can tell the two apart.
-#
-# The SHAPE half is `is_cc_diag`, from diag.sh, and not a copy of it: that predicate is one
-# fact about where this compiler puts a place in a line, three other gates already ask it,
-# and a second spelling of it is the failure diag.sh's own header recounts — a stale copy
-# stops matching and goes on passing forever. The cache path is the second question, kept
-# here because it is about a build's LAYOUT rather than a diagnostic's.
-cc_answered() {
-	is_cc_diag "$1" && return 0
-	printf '%s\n' "$1" | grep -q '\.zerg-cache'
-}
-
 for d in "$DIR"/*/; do
 	[ -d "$d" ] || continue
 	prod=$(basename "$d")

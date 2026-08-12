@@ -1,13 +1,17 @@
-# diag.sh — how a diagnostic from THIS compiler is told from one from cc.
+# diag.sh — the SHAPE of a diagnostic: how one from THIS compiler is told from one from cc,
+# and how a refusal by name is told from the message a typo gets.
 #
-# Sourced by refuse-check, reject-check and reject-fuzz. It is shared because it is one
-# fact about the compiler's output layout, not a list of cases: the argument for keeping
-# those three scripts apart is that their case lists have different lifetimes, and these
-# two predicates are not case lists.
+# Sourced by every gate that judges a diagnostic rather than a program — refuse-check,
+# reject-check, reject-fuzz, conformance-check, productions-check, counterexample-check. It
+# is shared because each of these is one fact about the compiler's OUTPUT LAYOUT, not a list
+# of cases: the argument for keeping those scripts apart is that their case lists have
+# different lifetimes, and none of these predicates is a case list.
 #
-# Both are NEGATIVE assertions, which is exactly why a copy is dangerous — a stale one
-# fails OPEN. When `#line` made cc name the `.zg`, the older test (looking for a
-# `.zerg-cache` path) stopped matching anything and would have gone on passing forever.
+# Every one of them is a NEGATIVE assertion, which is exactly why a copy is dangerous — a
+# stale one fails OPEN and goes on reporting success forever. It has happened twice already,
+# once per predicate: when `#line` made cc name the `.zg`, the older cc test (looking for a
+# `.zerg-cache` path) stopped matching anything; and when rules gained codes, both copies of
+# `is_typo_msg` stopped matching the very messages they were written for.
 
 # is_crash <status> — the compiler died of a signal. A crash is a NON-ZERO EXIT too, so
 # every wording assertion in both scripts reports it as a message that drifted: a SIGSEGV
@@ -24,6 +28,46 @@ is_crash() {
 # told apart by SHAPE rather than by the path inside them.
 is_cc_diag() {
 	printf '%s\n' "$1" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'
+}
+
+# cc_answered <text> — the diagnostic came from cc rather than from this compiler, by either
+# of the two tells. The standing rule is that `zerg` refuses and cc never speaks about a
+# program's source (docs/conformance.md), and a case whose finding moved from one to the
+# other still FAILS either way, so no exit status separates them.
+#
+# The two tells are not one. The SHAPE is `is_cc_diag` above: cc opens a line with the place
+# and this compiler puts the place on an indented `-->` beneath. The PATH is the second, and
+# it survived the first: `#line` directives point cc at the `.zg` the programmer wrote, so a
+# cc error can carry no `.zerg-cache` at all — but a build given no `-o` still leaves its
+# intermediate C in the cache, and a message naming that path is one nobody can open.
+#
+# All three gates that judge a refusal ask this — refuse, reject, counterexample — and each
+# had its own arrangement of the same two lines. That is the failure this file's header
+# recounts, one level up: not a stale predicate, but three call sites free to drift into
+# asking two questions, or one.
+cc_answered() {
+	is_cc_diag "$1" && return 0
+	printf '%s\n' "$1" | grep -q '\.zerg-cache'
+}
+
+# is_typo_msg <text> — the message a form gets when the compiler did not RECOGNISE it and
+# reported the token it was standing on instead. It is what the conformance and production
+# corpora assert against: a form GRAMMAR derives must be built or refused BY NAME, and "
+# expected `=>`, found `|`" is neither — it is the answer a misspelling gets, handed to a
+# derivation the language plainly has.
+#
+# It is a NEGATIVE test and it fails open, which is the risk the list is worth taking: the
+# alternative is a per-file expected-message inventory, and a case name in those corpora is
+# private content that may not be written down in this repo.
+#
+# The CODE is optional in the pattern, and it was not — a fail-open that had already
+# happened once. A checked rule opens its message with `E204 …` now, so the day the codes
+# landed this predicate stopped matching the very messages it was written for, and nothing
+# went red, because a stale negative test reports nothing. Both corpora's gates carried
+# their own copy of the pattern and were "kept in step by hand", which is the arrangement
+# that let it happen; there is one copy now.
+is_typo_msg() {
+	printf '%s\n' "$1" | grep -qE "^(error: )?(E[0-9]{3} )?(expected |undefined |no type named |no field |unexpected )"
 }
 
 # has_place <text> — every diagnostic owes a `--> file:line:col`.

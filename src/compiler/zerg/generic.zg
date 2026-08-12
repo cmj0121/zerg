@@ -173,7 +173,7 @@ fn subst_ty(names: list[str], args: list[Ty], t: Ty) -> Ty {
 	return match t {
 		Ty.TList(e) => Ty.TList(subst_ty(names, args, e))
 		Ty.TOpt(e) => Ty.TOpt(subst_ty(names, args, e))
-		Ty.TChan(e, d) => Ty.TChan(subst_chan_elem(names, args, e), d)
+		Ty.TChan(e, d) => ty_chan(subst_ty(names, args, e), d, "")
 		Ty.TMap(k, v) => Ty.TMap(subst_ty(names, args, k), subst_ty(names, args, v))
 		Ty.TTuple(es) => Ty.TTuple(subst_tys(names, args, es))
 		Ty.TEither(x, y) => Ty.TEither(subst_ty(names, args, x), subst_ty(names, args, y))
@@ -182,16 +182,16 @@ fn subst_ty(names: list[str], args: list[Ty], t: Ty) -> Ty {
 	}
 }
 
-# subst_chan_elem is a channel's element type after substitution, and it is the door the
-# parser cannot cover: a template writes `chan[T]`, which is well-formed, and specializing
-# it for `T = int?` makes a `chan[int?]`, which is not. Nothing in the source spells that
-# type, so there is no position to report — which is the one difference from the written
-# form; the rule itself is the same function, because it is the same rule.
+# subst_chan_elem is a channel CONSTRUCTOR's element type after substitution, and it is the
+# door the parser cannot cover: a template writes `chan[T](1)`, which is well-formed, and
+# specializing it for `T = int?` builds a `chan[int?]`, which is not. Nothing in the source
+# spells that type, so there is no position to report — which is the one difference from the
+# written form; the rule itself is the same function, because it is the same rule.
 #
-# It is called from both places an element type is substituted, which are the two the
-# parser reads one at: the channel TYPE and the channel CONSTRUCTOR. A constructor's node
-# carries the element rather than the channel type, so the `Ty.TChan` arm below does not
-# see it and covering only that arm left `chan[T](1)` in a template unchecked.
+# The channel TYPE needs nothing here: `subst_ty` builds its result through `ty_chan`
+# (ast.zg), which asks the rule at construction. A constructor's node carries the ELEMENT
+# rather than the channel type, so it never reaches that constructor — which is exactly why
+# this one stays, and why covering only the `Ty.TChan` arm once left `chan[T](1)` unchecked.
 fn subst_chan_elem(names: list[str], args: list[Ty], e: Ty) -> Ty {
 	el := subst_ty(names, args, e)
 	ty_chan_elem_check(el, "")

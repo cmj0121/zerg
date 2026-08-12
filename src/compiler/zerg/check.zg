@@ -667,7 +667,7 @@ fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
 		Ty.TList(e) => Ty.TList(chk_spec_subst(e, sp, ip))
 		Ty.TOpt(e) => Ty.TOpt(chk_spec_subst(e, sp, ip))
 		Ty.TMap(k, v) => Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => Ty.TChan(chk_spec_subst(e, sp, ip), d)
+		Ty.TChan(e, d) => ty_chan(chk_spec_subst(e, sp, ip), d, "")
 		Ty.TEither(l, r) => Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
 		Ty.TTuple(es) => Ty.TTuple(chk_subst_all(es, sp, ip))
 		Ty.TFn(ps, r) => Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
@@ -1768,7 +1768,7 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
-	return true if c_is_opt(got)
+	return true if ty_is_opt(got)
 
 	return ty_eq(want, got)
 }
@@ -2110,7 +2110,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	# this under the equality branch, which is where it went first, closed one family of
 	# five. The language's answer is the binding form, which is also the only one that
 	# hands over the value when there is one.
-	if c_is_opt(ta) or c_is_opt(tb) {
+	if ty_is_opt(ta) or ty_is_opt(tb) {
 		chk_at(em, "E341", f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
 		return
 	}
@@ -2378,7 +2378,7 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 
 	# an optional gets the binding advice ALONE: `x != 0` is a program the operand rule
 	# refuses, so following this diagnostic would earn a second one
-	if c_is_opt(t) {
+	if ty_is_opt(t) {
 		chk_at(em, "E354", f"the condition of {site} must be bool, and this one is {ty_name(t)} — bind it with `if v := x {{ … }}`, which also hands over what it holds")
 		return
 	}
@@ -2574,7 +2574,7 @@ fn chk_import_name(mut &em: Emitter, f: File, i: int) {
 		j = j + 1
 	}
 
-	what := chk_decl_kind(f, im.name)
+	what := chk_decl_kind(em, im.name)
 	return if what == ""
 
 	chk_import_taken(em, im, what)
@@ -2591,24 +2591,18 @@ fn chk_import_taken(mut &em: Emitter, im: ImportDecl, what: str) {
 # one. A type is not in the value namespace the import binds into, and it is asked about all
 # the same: this compiler mangles every top-level name into one C namespace, so a namespace
 # and a struct of one name would collide there whatever the language says about the two.
-fn chk_decl_kind(f: File, name: str) -> str {
-	for fd in f.fns {
-		return "a function in this program" if fd.name == name and fd.recv == ""
-	}
-	for c in f.consts {
-		return "a module constant in this program" if c.name == name
-	}
-	for s in f.structs {
-		return "a struct in this program" if s.name == name
-	}
-	for e in f.enums {
-		return "an enum in this program" if e.name == name
-	}
-	for td in f.types {
-		return "a type in this program" if td.name == name
-	}
-	for sp in f.specs {
-		return "a spec in this program" if sp.name == name
+#
+# IT READS THE TABLE, and does not build a second one. c_build_top_names already walks the
+# six top-level lists — that walk is what refuses a name declared twice — and it records
+# what each name is. This used to re-walk the same six, in a different order, with its own
+# wording for each of the six answers; the order was harmless (a name in two of them is
+# already refused) and the second walk was not, because it ran over the program with its
+# TEMPLATES REMOVED and so could not see `fn foo[T](…)` taking the name an import wanted.
+fn chk_decl_kind(mut &em: Emitter, name: str) -> str {
+	mut i := 0
+	for i < em.top_names.len() {
+		return em.top_kinds[i] + " in this program" if em.top_names[i] == name
+		i = i + 1
 	}
 	return ""
 }

@@ -441,10 +441,32 @@ pub fn place_line(path: str, line: int, col: int) -> str {
 	return f"  --> {path}:{l}:{c}"
 }
 
-# FieldDef is one struct field: its name and declared type.
+# FieldDef is one struct field: its name, its declared type, and the two things GRAMMAR's
+# FIELD VISIBILITY & DEFAULTS note gives it a tail for.
+#
+# is_pub is `pub`, which marks the field for external INSTANCE ACCESS. It does not reach the
+# emitted C — one flat struct either way — and it used to be read and dropped for exactly
+# that reason. What it is kept for is the rule it is half of: a NON-pub field is
+# module-private and must carry a default, so external code can construct the type without
+# naming a value it may not read.
+#
+# has_def / def are the field's DEFAULT, and they are `Param`'s pair under another name.
+# A default lets the field's constructor argument be omitted, and it is backfilled at each
+# CONSTRUCTION — so an expression in it is evaluated per construction, as a parameter
+# default is evaluated per call.
 struct FieldDef {
 	name: str
 	ty: Ty
+	is_pub: bool
+	has_def: bool
+	def: Expr
+
+	# line / col are where the field was written. The rule about a field is a rule about a
+	# DECLARATION, made before any statement is emitted, so there is no SAt marker to read
+	# and the field carries its own place — per field, not per struct, because a struct with
+	# twenty fields owes the reader the one that is wrong.
+	line: int
+	col: int
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.

@@ -109,6 +109,12 @@ struct Emitter {
 	fld_struct: list[str]
 	fld_name: list[str]
 	fld_ty: list[Ty]
+
+	# fld_hasdef / fld_def carry each field's DEFAULT, so a construction that omits a
+	# trailing field can be filled in from the declaration — the same pair `pr_hasdef` /
+	# `pr_def` carry for a parameter, and read by the same kind of backfill.
+	fld_hasdef: list[bool]
+	fld_def: list[Expr]
 	var_name: list[str]
 	var_enum: list[str]
 	var_tag: list[int]
@@ -3140,6 +3146,8 @@ fn c_build_structs(mut &em: Emitter, f: File) {
 			em.fld_struct.append(sd.name)
 			em.fld_name.append(fd.name)
 			em.fld_ty.append(fd.ty)
+			em.fld_hasdef.append(fd.has_def)
+			em.fld_def.append(fd.def)
 			j = j + 1
 		}
 		i = i + 1
@@ -3157,16 +3165,9 @@ fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
 
 # c_struct_field_ty_at returns the type of a struct's idx-th field (declaration order).
 fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
-	mut n := 0
-	mut i := 0
-	for i < em.fld_struct.len() {
-		if em.fld_struct[i] == sname {
-			return em.fld_ty[i] if n == idx
-			n = n + 1
-		}
-		i = i + 1
-	}
-	return Ty.TUnknown
+	row := c_struct_field_row(em, sname, idx)
+	return Ty.TUnknown if row < 0
+	return em.fld_ty[row]
 }
 
 # c_field_init emits a constructor argument, initialising an EMPTY list `[]` to a properly
@@ -6604,7 +6605,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
 		i = i + 1
 	}
-	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
+	return out + c_struct_rest(em, sname, args.len(), args.len() > 0, sb)
 }
 
 # c_struct_rest fills the fields a construction left off the end. GRAMMAR group 7: there
@@ -6616,7 +6617,14 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 # is. `P(1)` on a struct with a `str?` printed `(null)` — an absent field read as a present
 # one. And a missing NON-optional field was equally silent, so the whole rule was decided
 # by C's zeroing rather than by the language.
-fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
+#
+# A DECLARED default is the third answer, and it is checked first, because it is the one the
+# programmer wrote: a field with an `=` is filled from that expression whatever its type, so
+# a `T?` with a default gets the default rather than `nil`. The expression is rendered HERE,
+# at the construction that omitted the field, which is what makes it evaluated per
+# construction — the same backfill, and the same consequence, as `c_default_args` gives a
+# parameter default at a call.
+fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst) -> str {
 	mut out := ""
 	mut i := given
 	mut sep := lead
@@ -6633,7 +6641,12 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		# was written. `0` stands in for the value the field never got, which keeps the
 		# initializer's shape so the walk carries on and names the fields after this one too;
 		# the C built after a finding is discarded.
-		if c_is_opt(ft) {
+		if c_struct_field_hasdef(em, sname, i) {
+			# a default is an argument, so it meets its field's type like any other — which is
+			# what gives `xs: list[int] = []` an element size, exactly as it does for a
+			# parameter default
+			out = out + c_field_init(em, f"the default for {chk_field_says(sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
+		} else if c_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
 			chk_at(em, "E370", f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
@@ -6642,6 +6655,37 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 		i = i + 1
 	}
 	return out
+}
+
+# c_struct_field_row is the row a struct's idx-th field (declaration order) occupies in the
+# field table. The three per-column readers below go through it rather than each walking the
+# table themselves, which is the lesson `c_param_row` already carries for parameters: one
+# scan, one encoding of "the idx-th field of this struct".
+fn c_struct_field_row(mut &em: Emitter, sname: str, idx: int) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname {
+			return i if n == idx
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# c_struct_field_hasdef is whether the idx-th field declared a default.
+fn c_struct_field_hasdef(mut &em: Emitter, sname: str, idx: int) -> bool {
+	row := c_struct_field_row(em, sname, idx)
+	return false if row < 0
+	return em.fld_hasdef[row]
+}
+
+# c_struct_field_def is the idx-th field's default expression; only ask when it has one.
+fn c_struct_field_def(mut &em: Emitter, sname: str, idx: int) -> Expr {
+	row := c_struct_field_row(em, sname, idx)
+	return Expr.ENil if row < 0
+	return em.fld_def[row]
 }
 
 fn c_struct_field_n(mut &em: Emitter, sname: str) -> int {
@@ -12026,7 +12070,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub())
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub())
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

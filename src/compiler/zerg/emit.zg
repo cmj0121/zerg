@@ -342,6 +342,17 @@ struct Emitter {
 	# tag that depended on the order files were read would move the output without the
 	# program changing.
 	mod_order: list[str]
+
+	# seq_pre is the declarations the expression BEING RENDERED has to run before it, in
+	# source order — the temporaries that give a call's arguments and an operator's operands
+	# the left-to-right evaluation docs/core/memory.md specifies and C does not. It is a
+	# field rather than a return value because the operands are rendered deep inside helpers
+	# that hand back a fragment of an argument list and know nothing of the expression the
+	# fragment lands in; c_expr, which does, takes the list on the way out and wraps the
+	# whole node in the statement expression the declarations belong to. Every c_expr saves
+	# and clears it on the way in, so a nested render can never leave a declaration behind
+	# in an expression that is not its own.
+	seq_pre: str
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3679,11 +3690,24 @@ fn c_shallower(mut &em: Emitter) {
 #
 # It counts a level of the expression walk (c_deeper) and hands the node to c_expr_node,
 # so every recursive render pays the depth check without each arm's helper knowing it.
+#
+# It is also where the ORDERING temporaries land. A node whose operands had to be sequenced
+# (c_ordered) leaves their declarations on em.seq_pre, and they belong to THIS node and no
+# other — so the list is saved and cleared on the way in, and whatever the node put there is
+# wrapped around the node's own rendering on the way out. Every operand is rendered by a
+# nested c_expr doing the same, which is what keeps a call inside a call's argument from
+# leaving a declaration in the enclosing expression's wrapper.
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	c_deeper(em)
+	keep := em.seq_pre
+	em.seq_pre = ""
 	out := c_expr_node(em, e, sb)
+	pre := em.seq_pre
+	em.seq_pre = keep
 	c_shallower(em)
-	return out
+	return out if pre == ""
+
+	return f"({{ {pre}{out}; }})"
 }
 
 fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
@@ -4001,26 +4025,39 @@ fn c_guard_jump_err(kw: str) {
 # after the call and an expression has nowhere else to put it. A LITERAL is fresh by this
 # test and is deliberately skipped: its cell is immortal, so holding it would only make the
 # emitted C longer. An operand that NAMES storage is somebody else's, and is borrowed.
+#
+# The ORDER of the two is decided here too, and with these same temporaries rather than with
+# c_ordered's: this expression's declarations sit INSIDE its own statement expression and
+# c_ordered's sit outside it, so a run split between the two mechanisms would be evaluated
+# right-hand-side first. A left operand that owns nothing is bound anyway when the right one
+# could tell — it costs a name and nothing else, and it keeps one list in one place.
 fn c_str_concat(mut &em: Emitter, a: Expr, b: Expr, sb: Subst) -> str {
 	ra := c_expr(em, a, sb)
 	rb := c_expr(em, b, sb)
 	oa := c_owns_value(a)
 	ob := c_owns_value(b)
-	return f"zrt_str_concat({ra}, {rb})" if not oa and not ob
+	seq := c_needs_order([a, b], 1)
+	ba := oa or seq
+	bb := ob or seq
+	return f"zrt_str_concat({ra}, {rb})" if not ba and not bb
 
 	mut decls := ""
 	mut frees := ""
 	mut la := ra
 	mut lb := rb
-	if oa {
+	if ba {
 		la = c_tmp(em, "zgt_t")
 		decls = decls + f"const char *{la} = {ra}; "
-		frees = frees + f"zrt_str_release({la}); "
+		if oa {
+			frees = frees + f"zrt_str_release({la}); "
+		}
 	}
-	if ob {
+	if bb {
 		lb = c_tmp(em, "zgt_t")
 		decls = decls + f"const char *{lb} = {rb}; "
-		frees = frees + f"zrt_str_release({lb}); "
+		if ob {
+			frees = frees + f"zrt_str_release({lb}); "
+		}
 	}
 	rn := c_tmp(em, "zgt_t")
 	return f"({{ {decls}const char *{rn} = zrt_str_concat({la}, {lb}); {frees}{rn}; }})"
@@ -4047,6 +4084,136 @@ fn c_is_strlit(e: Expr) -> bool {
 	}
 }
 
+# --- left-to-right evaluation order ---------------------------------------------
+#
+# docs/core/memory.md: "Function arguments, operator operands, and the elements of a
+# `list`/`map` literal or a `set(...)` constructor evaluate in source order,
+# deterministically." C promises none of that. The order in which a call's arguments — and
+# the two operands of an operator that lowers to a call — are evaluated is UNSPECIFIED, and
+# the two compilers this emitter feeds disagree about it: `zrt_add_i64(zg_a(), zg_b())`
+# calls `a` first under clang on arm64 and `b` first under gcc on x86-64, so `print a() +
+# b()` printed `a b` on one machine and `b a` on the other. One program, one source, two
+# answers — which is a defect rather than an unstated choice, and it is not the backend's
+# to decide.
+#
+# What C does sequence is a DECLARATION. So the operands are bound to temporaries of their
+# own, in source order, inside the statement expression this emitter already uses for every
+# other value it has to hold on to (c_call_releasing, c_match, c_str_concat) — and what
+# reaches the operator or the argument list is a name, the calls behind it having already
+# happened in the order they were written.
+#
+# The temporaries are DECLARED WITH `__auto_type`, not with a C type read off the argument's
+# Zerg type. The value being bound is whatever the rendering already produced, and that is
+# not always the type inference names for the expression: a `mut &` argument renders as an
+# ADDRESS, a value at a typed slot renders through c_fit_copied at the PARAMETER's type, and
+# a literal tree beside a float renders as a double. `__auto_type` says "the type this
+# expression already has", which is the only claim this transformation is entitled to make —
+# a written type here would be a second, independent answer about the same value, and the
+# ways those two drift are what half the comments in this file are about.
+fn c_ord_decl(t: str, rendered: str) -> str {
+	return f"__auto_type {t} = {rendered}; "
+}
+
+# c_order_trivial is whether an operand can be left where it stands when the run around it
+# is NOT being sequenced: a literal or a plain name — a local, a parameter, a module constant
+# — reads no storage and calls nothing, so no other operand can tell whether it went first.
+# Everything else — a call, an index, a field, a receive, a nested operator, a `match` — has
+# an effect of its own or reads storage another operand may write, and is what makes the
+# order of the run observable.
+#
+# It is only the TRIGGER. Once a run is being sequenced every operand in it is bound,
+# trivial ones included, because a plain name IS observable from the other side: `f(x,
+# bump(mut &x))` reads `x` and writes it in one argument list, and leaving the read where it
+# stood would let it see the write C happened to do first.
+fn c_order_trivial(e: Expr) -> bool {
+	return match e {
+		Expr.EInt(_, _, _) => true
+		Expr.EFloat(_) => true
+		Expr.EStr(_) => true
+		Expr.EBool(_) => true
+		Expr.ENil => true
+		Expr.EIdent(_) => true
+		_ => false
+	}
+}
+
+# c_needs_order is whether a run of operands has an order the emitted C could get wrong.
+# `at` is the index of the run's SECOND operand — 1 where the run is exactly this list, and 0
+# where an operand already stands in front of it, which is a method's receiver: the receiver
+# is evaluated first and C sequences it against the arguments no better than it sequences
+# them against each other.
+#
+# The FIRST operand is not asked about. Nothing is evaluated before it, so whatever it does
+# it does first whichever order the C compiler picks; it is a later operand having an effect
+# that makes the choice visible.
+fn c_needs_order(es: list[Expr], at: int) -> bool {
+	mut i := at
+	for i < es.len() {
+		return true if not c_order_trivial(es[i])
+		i = i + 1
+	}
+	return false
+}
+
+# c_is_ref_param is whether the parameter at this index takes a `mut &`, which is the one
+# argument a sequenced run LEAVES WHERE IT STANDS. Such an argument renders as an ADDRESS —
+# `&(zg_xs)` — and taking the address of the caller's own storage calls nothing and reads
+# nothing, so it can neither observe the order of the run nor be observed by it. It does not
+# count toward the trigger either, for the same reason a bare name does not.
+fn c_is_ref_param(mut &em: Emitter, key: str, idx: int) -> bool {
+	row := c_param_row(em, key, idx)
+	return false if row < 0
+
+	return em.pr_ref[row]
+}
+
+# c_ref_args is that answer for each of a call's written arguments, in one pass. It is a LIST
+# rather than a question asked where it is needed, because each answer is a scan of the whole
+# program's parameter table and the ordering rule asks twice — once for the run, to decide
+# whether it is sequenced at all, and once per argument, to decide whether that one is bound.
+fn c_ref_args(mut &em: Emitter, key: str, base: int, args: list[Expr]) -> list[bool] {
+	mut out: list[bool] = []
+	mut i := 0
+	for i < args.len() {
+		out.append(c_is_ref_param(em, key, base + i))
+		i = i + 1
+	}
+	return out
+}
+
+# c_needs_order_args is c_needs_order over an ARGUMENT list, where a `mut &` argument is not
+# an operand the order can be told apart by. `refs` is c_ref_args' answer for the same list.
+fn c_needs_order_args(args: list[Expr], refs: list[bool], at: int) -> bool {
+	mut i := at
+	for i < args.len() {
+		return true if not c_order_trivial(args[i]) and not refs[i]
+		i = i + 1
+	}
+	return false
+}
+
+# c_ordered binds one already-rendered operand of a sequenced run to a temporary, and hands
+# back the name to use in its place. A run that needs no sequencing renders exactly the C it
+# rendered before this existed, which is the property that keeps `n + 1`, `x == y` and `f(n,
+# i)` out of the diff entirely.
+fn c_ordered(mut &em: Emitter, seq: bool, rendered: str) -> str {
+	return rendered if not seq
+
+	t := c_tmp(em, "zgt_ord")
+	em.seq_pre = em.seq_pre + c_ord_decl(t, rendered)
+	return t
+}
+
+# c_is_shortcircuit names the two operators whose right operand may not be evaluated at all.
+# `and` and `or` lower to C's `&&` and `||`, which are left-to-right AND skipping already —
+# so they need nothing here, and sequencing them would be a wrong answer rather than a
+# redundant one: a temporary evaluates the right side unconditionally, which is what `and`
+# exists not to do. (`??`, `?.` and `?` are expressions of their own, not binary operators,
+# and never reach c_binexpr.)
+fn c_is_shortcircuit(oper: str) -> bool {
+	return oper == "and" or oper == "or"
+}
+
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
@@ -4063,7 +4230,15 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		# `>=` fell through to the numeric path below and compared the two POINTERS: `"zzz" <
 		# "aaa"` answered TRUE, silently, and the seed answered false. An ordering is what a
 		# sort is built on, so the wrong answer does not stay local.
-		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) {oper} 0)" if c_is_cmp_op(oper)
+		#
+		# `strcmp` is a CALL, so its two arguments are an argument list like any other and
+		# get the same ordering the numeric path below gets.
+		if c_is_cmp_op(oper) {
+			seq := c_needs_order([a, b], 1)
+			la := c_ordered(em, seq, c_expr(em, a, sb))
+			lb := c_ordered(em, seq, c_expr(em, b, sb))
+			return f"(strcmp({la}, {lb}) {oper} 0)"
+		}
 	}
 
 	# AN AGGREGATE HAS NO C OPERATOR, and `Eq` is where its `==` comes from. C has no `==` for
@@ -4101,8 +4276,14 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# six slots it serves, at the seventh nobody had told.
 	tb := c_infer(em, b)
 	pair_is_float := c_is_float(ta) or c_is_float(tb)
-	ca := c_operand(em, pair_is_float, a, sb)
-	cb := c_operand(em, pair_is_float, b, sb)
+
+	# THE TWO OPERANDS ARE A RUN. Every arithmetic operator this compiler emits is a checked
+	# runtime CALL (`zrt_add_i64(a, b)`), so its two operands are two arguments and C leaves
+	# their order to the backend; the short-circuit pair is the one exception, and it is the
+	# one that must keep skipping its right side.
+	seq := c_needs_order([a, b], 1) and not c_is_shortcircuit(oper)
+	ca := c_ordered(em, seq, c_operand(em, pair_is_float, a, sb))
+	cb := c_ordered(em, seq, c_operand(em, pair_is_float, b, sb))
 	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
@@ -5539,7 +5720,15 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 	# GRAMMAR#fn-decl asks for by name: "the call site must hold the receiver in a `mut`
 	# binding". `pos` is 0 because a receiver has no written position; chk_ref_arg says
 	# "the receiver" rather than an argument number for it.
-	recv := c_arg(em, key, 0, 0, target, sb)
+	#
+	# The receiver is also the run's FIRST OPERAND — it is evaluated before every written
+	# argument, and C sequences it against them no better than it sequences them against
+	# each other. So the order question is asked here, where the receiver is still in hand;
+	# c_args_from below asks it again of the same list and gets the same answer, its `lead`
+	# saying that this operand stands in front. A `mut fn`'s receiver is a `mut &` like any
+	# other and is left where it stands for the same reason.
+	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0)
+	recv := c_ordered(em, seq and not c_is_ref_param(em, key, 0), c_arg(em, key, 0, 0, target, sb))
 	return recv + c_args_from(em, key, 1, args, true, sb)
 }
 
@@ -5778,13 +5967,19 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 	n := c_struct_field_n(em, sname)
 	raise f"E426 `{sname}` has {strconv.to_string(n, 10)} fields and this gives {strconv.to_string(args.len(), 10)}" if args.len() > n
 
+	# A CONSTRUCTION IS AN ARGUMENT LIST TOO. It lowers to a C compound literal, whose
+	# initializers C17 leaves unsequenced against each other exactly as it leaves a call's
+	# arguments — so `P(a(), b())` needs the same temporaries `f(a(), b())` needs, and for
+	# the same reason.
+	seq := c_needs_order(args, 1)
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb)
+		out = out + c_ordered(em, seq, c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
@@ -5859,13 +6054,26 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 		chk_ref_alias(em, key, args)
 	}
 
+	# `lead` is also the answer to "does an operand already stand in front of these": it is
+	# set exactly where a receiver has been rendered ahead of the written arguments, and a
+	# receiver is the run's first operand. With one there every written argument is a LATER
+	# operand, so any of them having an effect makes the order visible; without one the
+	# first argument is the one nothing precedes.
+	mut at := 1
+	if lead {
+		at = 0
+	}
+
+	refs := c_ref_args(em, key, base, args)
+	seq := c_needs_order_args(args, refs, at)
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if lead or i > 0 {
 			out = out + ", "
 		}
-		out = out + c_arg(em, key, base + i, i + 1, args[i], sb)
+		out = out + c_ordered(em, seq and not refs[i], c_arg(em, key, base + i, i + 1, args[i], sb))
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
@@ -5944,6 +6152,14 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[Expr], rels
 	chk_call_arity(em, key, 0, args.len())
 	chk_ref_alias(em, key, args)
 
+	# THE ORDER IS DECIDED WITH THESE DECLARATIONS and not with c_ordered's, for the reason
+	# c_str_concat gives: this call's own temporaries are declared INSIDE its statement
+	# expression and c_ordered's outside it, so a run split between the two would run its
+	# later arguments first. The argument that owns something is already bound here, and one
+	# that does not joins it whenever anything after the first can tell.
+	refs := c_ref_args(em, key, 0, args)
+	seq := c_needs_order_args(args, refs, 1)
+
 	mut decls := ""
 	mut call := cfn + "("
 	mut frees := ""
@@ -5954,7 +6170,13 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[Expr], rels
 		}
 		rendered := c_arg(em, key, i, i + 1, args[i], sb)
 		if rels[i] == "" {
-			call = call + rendered
+			if seq and not refs[i] {
+				on := c_tmp(em, "zgt_ord")
+				decls = decls + c_ord_decl(on, rendered)
+				call = call + on
+			} else {
+				call = call + rendered
+			}
 		} else {
 			tn := c_tmp(em, "zgt_t")
 			decls = decls + f"zrt_chan *{tn} = {rendered}; "
@@ -6279,6 +6501,13 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 #
 # A call with no declared type to read — an intrinsic, an err constructor — passes an empty
 # list and every argument goes through unchanged, which is what those want.
+#
+# It renders NO ordering temporaries, and that is a deliberate limit rather than an
+# oversight: its callers are the intrinsics, the built-in error constructors and the calls
+# through a function VALUE, and the Go seed leaves all three alone. The two compilers have
+# to agree about which operands are sequenced or `make oracle` becomes a tripwire waiting
+# for a program that can tell — so the boundary is drawn in the same place on both sides,
+# and moving it is a change to both.
 fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
@@ -10935,7 +11164,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
 	f0 := c_with_derived(c_with_builtin_specs(prog0))
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], want_lints, [], [], [], [], [], [], [], [], [], 0, [], [], "")
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

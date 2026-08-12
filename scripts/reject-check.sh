@@ -3606,12 +3606,16 @@ fn main() {
 }
 EOF
 
-# A BARE VARIANT IN A PATTERN was read as a constructor because it started with a capital,
-# which made an arm's meaning a naming convention: rename a binding `Value` to `value` and
-# the arm stops matching a variant and starts binding the subject. The other direction is the
-# one that keeps a person up — an enum that GAINS a variant silently turns an existing
-# binding arm into a constructor one, and nothing about the program changed.
-reject a-bare-variant-pattern E274 no-place seed-gap <<'EOF'
+# A VARIANT PATTERN WRITTEN WITHOUT ITS ENUM, which is the mistake the pattern rule is really
+# about — the author meant two variants and wrote two BARE names, and a bare name in pattern
+# position is always a fresh binding (GRAMMAR#pattern). So `Red` binds the subject and covers
+# everything, and `Green` below it can never run.
+#
+# It is E458 rather than a rule of its own, and that is the point: this is refused for what
+# the arms DO and not for how the first letter is typed. The rule that used to stand here
+# read the capital instead, so `n := 3; match n { 1 => …  Zzz => … }` was refused with
+# "`Zzz` is a variant of some enum" in a program that declared no enum at all.
+reject a-bare-name-pattern-covers-the-arms-below E458 no-place <<'EOF'
 enum Color {
 	Red
 	Green

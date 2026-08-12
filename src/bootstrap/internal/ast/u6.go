@@ -54,12 +54,15 @@ type RaiseStmt struct {
 
 // --- group 6: patterns --------------------------------------------------------
 
-// NamePattern is the provisional bare-name pattern (DESIGN §3b): a name in
-// pattern position that is not followed by '(' or '{' is either a nullary
-// variant or a fresh binding — resolved in 1b. The surface name is kept verbatim.
+// NamePattern is a name in pattern position that is not followed by '(' or '{':
+// 'Color.Red' — a nullary variant — or 'x', a fresh binding. The surface name is
+// kept verbatim, and the QUALIFIER is what tells the two apart, so it is recorded
+// rather than dropped: a BARE name is always a binding (GRAMMAR#pattern), and only
+// a qualified one names a variant.
 type NamePattern struct {
 	base
-	Name string
+	Name      string
+	Qualified bool // written as 'Enum.Name'; a bare name binds and never resolves
 }
 
 // VariantPattern is 'type-name ( pattern-list )' (GRAMMAR group 6): a name

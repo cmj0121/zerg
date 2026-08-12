@@ -672,7 +672,6 @@ shipping compiler rather than a part of it (the line
 | `E271` | `asm(…)` — **[not yet]**                                                                    |
 | `E272` | `…(…)` converts a VALUE and was given none                                                  |
 | `E273` | `…(…)` converts one value, and this gives …                                                 |
-| `E274` | a pattern names a variant through its enum, and this one is bare                            |
 | `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                         |
 | `E276` | a `spec` member that is neither a signature nor a provided method                           |
 | `E277` | an `impl` in neither the spec's module nor the type's                                       |
@@ -844,6 +843,15 @@ names the wrong layer, the wrong problem, and a fragment of what the person wrot
 malformed literal compiled and the program answered 0. It says **immediately** because the
 digit is part of the prefix's own production: `0x_1F` has digits after `0x` and is still not
 a number, since a grouping `_` sits between two digits and there is none to its left.
+
+`E274` stood among them and has **retired**. It reported a bare name in pattern position —
+"`Zzz` is a variant of some enum, and a pattern names one through its enum" — decided by the
+name's first letter, in a parser that had resolved nothing and knew of no enum. So it fired
+on programs that declared none, and the sentence naming the enum was simply false. A bare
+name in pattern position is **always** a fresh binding
+([Grammar](../surface/grammar.md)), whatever its case, and the mistake the rule was aimed at
+— two variants written without their enum — is `E458` instead: the first binds everything,
+so the arms below it are unreachable. The number is not reused.
 
 ## `zerg lint`
 

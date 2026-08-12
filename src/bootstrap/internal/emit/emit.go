@@ -1781,7 +1781,9 @@ func (e *emitter) binaryValue(n *ast.Binary) string {
 // it into a temp would evaluate it always, which is not slower, it is wrong. And `v in
 // lo..hi` is not a two-operand combine but an inline bounds test over the RANGE's own
 // bounds; materializing the range operand would build a range carrier value where the
-// program asked for none.
+// program asked for none. That second one still owes its own ordering, and pays it in
+// rangeMembership, which sequences the subject against the BOUNDS rather than against a
+// range value nothing builds.
 func (e *emitter) orderedBinary(n *ast.Binary) string {
 	if n.Op == token.And || n.Op == token.Or || orderTrivial(n.R) || e.isRangeMembership(n) {
 		return e.binaryValue(n)

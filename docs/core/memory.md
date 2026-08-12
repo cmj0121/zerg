@@ -78,12 +78,11 @@ stronger sense that the right side is **skipped** when the left decides the resu
 > methods**, and a call through a **function value**. Each needs two or more effectful operands before the
 > order is observable at all. Everything else named above is ordered.
 
----
-
-> **[deviation]** `v in lo..hi` evaluates `v` **more than once** — two or three times, depending on the
-> bounds — because the membership test is inlined as a bounds comparison rather than built as a range. So
-> `f() in 1..10` calls `f()` repeatedly. This is a repeated evaluation rather than a misordered one, and it
-> is the same defect in both compilers.
+A form that reads an operand **more than once** is ordered by the same rule, and the trigger is the only
+thing that differs. `v in lo..hi` is the one: the membership test is a bounds comparison, so it names `v`
+at each bound — and where the run above exempts its first operand, because nothing precedes it, this one
+cannot, because `v`'s second reading comes after the bounds. So the subject is evaluated **once**, before
+either bound, and the bounds after it in source order: `f() in 1..10` calls `f()` exactly once.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The

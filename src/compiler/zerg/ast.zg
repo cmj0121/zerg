@@ -356,6 +356,16 @@ struct FnDecl {
 	# `c_split_bounds` reads it back; a `+` cannot appear in a spec name.
 	tparams: list[str]
 	tbounds: list[str]
+
+	# in_unsafe is whether this function was declared inside a module-level `unsafe { … }`
+	# group, which GRAMMAR group 12 makes an unsafe fn: "unsafe throughout its body, callable
+	# only from unsafe". It rides on the declaration for the same reason `path` does — the
+	# whole program is merged into one File before emission, and by then nothing else
+	# remembers which group a function was written in.
+	#
+	# A method, a lambda and a monomorphized specialization each take the flag from whatever
+	# they were written in or made for, so the context is not lost by being copied.
+	in_unsafe: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

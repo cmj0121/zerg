@@ -769,6 +769,7 @@ shipping compiler rather than a part of it (the line
 | `E384` | a side of an `Either` is named through its type, and this one is bare                       |
 | `E385` | a closure parameter has no type, and its position gives it none                             |
 | `E386` | a call through a function value gives the wrong number of arguments                         |
+| `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code               |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |
@@ -822,7 +823,7 @@ shipping compiler rather than a part of it (the line
 | `E460` | a … is an identity rather than a value, and the language gives it no equality               |
 | `E461` | a second `impl Into[…] for …` — **[not yet]**                                               |
 | `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                |
-| `E463` | `in` over anything but a list, a map or an error kind — **[not yet]**                       |
+| `E463` | `in` over anything but a list, a map, a range or an error kind — **[not yet]**              |
 | `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                   |
 | `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                       |
 | `E466` | the built-in `set` — **[not yet]**                                                          |

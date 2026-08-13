@@ -293,6 +293,17 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `file.Items` and neither lowers nor mentions it, so the program builds and prints nothing.
   `zerg` refuses it by name at the line it was written on, `nop` excepted. This is a rule
   `zerg` ADDED rather than one the seed lost, which is the ordinary direction here.
+- **EVERY CONVERSION BETWEEN TWO SCALARS is accepted, whatever the pair.** docs/core/types.md
+  lists the pairs `T(x)` has "and no others" — `int` is the hub each of them stands on — but
+  the seed lowers a conversion by SHAPE, a class and a width, and a shape has an answer for
+  every pair. So `float(b)` on a `byte`, `rune(b)`, `uint(b)`, `byte(3.5)`, `uint(3.5)`,
+  `rune(65.5)` and `int(1.9)` all build here. `zerg` refuses each: a `float` source is a
+  decision spelled with a verb (`E394`, `math.trunc` and its three siblings), and any other
+  absent pair is the two steps through `int` written as one (`E395`). Seven cases in
+  `reject-check.sh` carry the marker, and this is the chapter where `zerg` is the stricter
+  compiler rather than the reverse. (The seed's own sources need no migration: nothing in
+  `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
+  the same standard library.)
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

@@ -182,12 +182,20 @@ order.
 value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
 
 > **[deviation]** Only a recursive `enum` and a carrier do that. Assigning over a `str`, a `list`, a `map`,
-> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does a
-> `tuple` at scope exit, which has a copy helper and no drop at all, and the collection a `for … in` over a
-> **map** copies to walk. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two
-> allocations a round, the closure's environment and the value it captured. Each is the same missing half
-> of one pair rather than a rule of its own, and none of them has a case in `make mem-check` yet — which is
-> what a gate not finding something looks like.
+> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does the
+> collection a `for … in` over a **map** copies to walk, and the payload a **force-unwrap** copies out:
+> `q!` hands back a copy of what the carrier holds, and an expression that reads one field of it discards
+> the rest. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two allocations a
+> round, the closure's environment and the value it captured. Measured for the force-unwrap: `p: str? = s`
+> then `q!` in a loop leaks one a round. Each is the same missing half of one pair rather than a rule of
+> its own, and none of them has a case in `make mem-check` yet — which is what a gate not finding something
+> looks like.
+>
+> A **tuple at scope exit** was on that list and no longer is. It had a copy helper and no drop at all, so
+> `t := (1, s)` retained the `str` and nothing gave it back; it has a `_drop` beside its `_copy` now, and
+> `make mem-check`'s `tuple_heap` counts it. That half was also why `(int, str)?` did not compile at all —
+> a carrier decides what to emit from the drop question and its callers name it from the copy question, so
+> the type those two disagreed about was named in C and declared nowhere.
 
 A **`spawn`'s captured values are the coroutine's**, not the spawning scope's: the environment takes a
 reference of its own for each one and HANDS IT OVER to the coroutine, whose by-value parameters give it

@@ -709,6 +709,10 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E391` | `…` 在頂層開了一個 statement,而編譯出來的程式沒有地方跑它                                             |
 | `E392` | 不能對 `…` 做 `…`:只有 `mut` 的 collection 能改動它的元素                                             |
 | `E393` | 不能 `…` `…`:collection 在自己的 `for` 迴圈裡對結構性改動是凍結的                                     |
+| `E394` | `float` 上的 `…(…)` —— 寫出動詞:`math.trunc` / `floor` / `ceil` / `round`                             |
+| `E395` | 一次轉換只有一步:`…` -> `…` 是 `…` -> `int` -> `…`,所以要寫成兩步                                     |
+| `E396` | `…` 不是編譯器 primitive —— `__zrt_…` 這個集合是封閉的                                                |
+| `E397` | 編譯器 primitive `…` 收 …,而這裡給了 …                                                                |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |

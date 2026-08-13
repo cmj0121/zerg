@@ -723,6 +723,18 @@ static inline int64_t zrt_floordiv_f(double a, double b) {
 	return t;
 }
 
+/* `math.trunc(x)` drops x's fractional part and answers an `int`. It is a leaf because
+ * `int(x)` on a float is REFUSED by the language (docs/core/types.md): dropping a fraction
+ * is a decision, so it is spelled with a verb, and the standard library needs a way down to
+ * the machine that the verb it defines cannot itself be written with.
+ *
+ * The range check is the one every float -> int goes through, so a magnitude no `int` holds
+ * raises OverflowError rather than being undefined — and that, not a value returned
+ * unchanged, is what the rounding family now answers for such an input. */
+static inline int64_t zrt_trunc(double v) {
+	return zrt_conv_i_from_f(v, -9223372036854775808.0, 9223372036854775807.0);
+}
+
 /* --- str <-> list bridge (str.c, docs/code/collections.md) ----------------------
  *
  * A str bridges to a list[byte] (raw octets) or list[rune] (code points) for scanning

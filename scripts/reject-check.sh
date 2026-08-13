@@ -1861,11 +1861,9 @@ fn main() {
 }
 EOF
 
-# The NAME being in the set does not make the CALL one. Arity was the half still escaping: the
-# emitter wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no
-# argument, against generated C, with no code and no place. (Operand TYPES still do —
-# `__zrt_trunc("hello")` is the gap named in check.zg, and the seed is the stricter compiler on
-# that one.)
+# The NAME being in the set does not make the CALL one. Arity was one half escaping: the emitter
+# wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no argument,
+# against generated C, with no code and no place.
 reject a-compiler-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
 fn main() {
 	print __zrt_trunc()
@@ -1875,6 +1873,25 @@ EOF
 reject a-compiler-primitive-with-too-many-arguments E397 'takes 1 argument and this gives 2' <<'EOF'
 fn main() {
 	print __zrt_trunc(1.5, 2.5)
+}
+EOF
+
+# and the operand TYPES were the other half, escaping in both directions. A primitive is
+# lowered by NAME to a C function with a real signature, so a wrong operand is either a cc
+# diagnostic against a file nobody wrote, or an answer that is quietly wrong where C converts
+# it for you: `__zrt_trunc(true)` built under BOTH compilers and printed `1`.
+#
+# Both carry `seed-gap`. The seed has the machinery — `unaryIntrinsic(n, Float, Int)` names the
+# argument type — and it does not fire, so it builds the bool and hands the str to cc.
+reject a-compiler-primitive-given-a-bool E398 'is float, and this gives bool' seed-gap <<'EOF'
+fn main() {
+	print __zrt_trunc(true)
+}
+EOF
+
+reject a-compiler-primitive-given-a-str E398 'is float, and this gives str' seed-gap <<'EOF'
+fn main() {
+	print __zrt_trunc("hello")
 }
 EOF
 

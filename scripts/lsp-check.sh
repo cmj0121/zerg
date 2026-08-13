@@ -30,6 +30,11 @@ fail=0
 ran=0
 outlined=0
 
+# A literal tab, for the outline's patterns further down. See the comment there: `\t` written
+# inside a pattern is a tab to BSD grep and the letter `t` to GNU grep, which is a gate that
+# asks one question on a developer's machine and a different one in CI.
+TAB=$(printf '\t')
+
 # A session is scripted here rather than in a fixture file so the request and the assertion
 # about its reply sit next to each other.
 session() {
@@ -215,16 +220,30 @@ PYEOF
 		# A METHOD is dumped as `fn P.get(this: P)`, so the optional `Type.` in the pattern is
 		# not decoration: without it the name read out of the dump was the RECEIVER, and the
 		# gate reported a struct declared twice and a method that did not exist.
+		#
+		# The indent is a LITERAL tab built by printf, never `\t` inside the pattern, for the
+		# reason editor-align.sh carries in full and layering-check.sh repeats: BSD grep reads
+		# `\t` as a tab and GNU grep reads it as an undefined escape, i.e. the letter `t`. This
+		# is the THIRD gate to walk into it. Here the pattern matched every declaration on
+		# macOS and none at all on Linux, so `ast.names` came back empty against an outline
+		# that was right — 55 files reported as the server having grown a view of the program,
+		# on the one platform nobody was reading the dump on.
 		"$ZERG" build --emit ast "$src" >"$tmp/ast" 2>/dev/null || true
-		grep -E '^\t(pub )?(fn|struct|enum|spec) ' "$tmp/ast" |
-			sed -E 's/^\t(pub )?(fn|struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*).*/\4/' |
+		grep -E "^$TAB(pub )?(fn|struct|enum|spec) " "$tmp/ast" |
+			sed -E "s/^$TAB(pub )?(fn|struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*).*/\4/" |
 			LC_ALL=C sort >"$tmp/ast.names"
 		# LC_ALL=C, because the other side of this diff is sorted by Python and Python sorts by
 		# CODE POINT. A UTF-8 locale puts `answer` before `Cmd` and a C locale puts `Cmd` first,
 		# so without it the gate reported a disagreement about ORDER as a disagreement about
 		# which declarations a file has.
 		printf '%s' "$got" | "$PY" -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin).get("symbols", []))))' >"$tmp/sym.names"
-		if ! diff -q "$tmp/ast.names" "$tmp/sym.names" >/dev/null; then
+		# An EMPTY dump is not a disagreement about declarations, it is this side of the
+		# comparison having failed to be read — and saying so is the difference between one
+		# line naming a broken extraction and 55 identical accusations against the server.
+		if [ ! -s "$tmp/ast.names" ] && [ -s "$tmp/sym.names" ]; then
+			echo "DISAGREE  $src — the parser dump named no declarations, so the outline was compared against nothing"
+			fail=$((fail + 1))
+		elif ! diff -q "$tmp/ast.names" "$tmp/sym.names" >/dev/null; then
 			echo "DISAGREE  $src — the outline is not the declarations the parser read"
 			diff "$tmp/ast.names" "$tmp/sym.names" | sed 's/^/  /'
 			fail=$((fail + 1))

@@ -942,23 +942,16 @@ coroutine 拿到的是同一條 channel 的另一個 handle，之後送出的東
 
 ### `L4xx` —— 解析
 
-| 代碼   | 規則                                                         |
-| ------ | ------------------------------------------------------------ |
-| `L401` | 兩個 enum 都宣告的同一個 variant 名（**[deviation]**，見下） |
-| `L402` | 從不透過 `this` 寫入的 `mut fn`                              |
+| 代碼   | 規則                            |
+| ------ | ------------------------------- |
+| `L402` | 從不透過 `this` 寫入的 `mut fn` |
 
-`L401` 曾被**退休,而它仍在發**。它報的是兩個 enum 都宣告的同一個 variant 名:裸名字解析到 variant 時取的是
-**第一個**宣告,`c := Red` 就成了由宣告順序決定的擲硬幣。現在 variant 一律由它的 enum 指名
-（見[文法](../surface/grammar.zh-TW.md)）,所以 `Red` 單獨一個什麼都沒指名——`c := Red` 是
-_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_——兩份宣告也就不會為一個裸名字
-相爭。
-
-> **[deviation]** `zerg lint` 仍然跑這條規則,所以兩個 enum 共用一個 variant 名時會拿到
-> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to `Colour` by
-> declaration order alone — name it `Signal.Red` where you mean this one_。這句話的兩半如今都是假的:裸 `Red`
-> 什麼都解析不到,而 `Signal.Red` 正是編譯器唯一不收的那個寫法(`E457`——見[型別](../core/types.zh-TW.md),
-> 那條拒絕自己就是一條 deviation)。沒有東西抓得到它,因為 `error-codes-check` 只把 `E` 碼和原始碼、gate 與這張
-> 表對起來,完全不讀 `L` 碼。
+`L401` 曾經在這裡,現已**退休**。它報的是兩個 enum 都宣告的同一個 variant 名:裸名字解析到 variant 時取的是
+**第一個**宣告,`c := Red` 就成了由宣告順序決定的擲硬幣。這說法的兩半如今都不成立。variant 一律由它的 enum
+指名（見[文法](../surface/grammar.zh-TW.md)）,所以 `Red` 單獨一個在哪一個 enum 裡都是
+_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_;而帶限定的 `Signal.Red` 是
+**在它指名的那個 enum 裡面**解析的,兩份宣告因此是兩個不同的 variant、不會相爭。這條規則是從 linter 裡拿掉,
+而不是留著繼續跑——否則它在 `lint-check` 裡那個案例就會一直斷言下去。
 
 `mut fn` 不是提示:它讓 receiver 變成 `mut &`,所以**每一個**呼叫端都得把實例放在 `mut` 綁定裡。一個只讀的
 method 讓呼叫端付這個代價卻什麼也沒回報 —— 而他們看不出原因,因為簽章就是全部的契約,而 `mut fn` 就是它說的

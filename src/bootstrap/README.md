@@ -293,6 +293,15 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `file.Items` and neither lowers nor mentions it, so the program builds and prints nothing.
   `zerg` refuses it by name at the line it was written on, `nop` excepted. This is a rule
   `zerg` ADDED rather than one the seed lost, which is the ordinary direction here.
+- **A CONVERSION FOLDS ONLY A WRITTEN LITERAL, so a known value reaching it through a name is
+  left to run.** docs/core/types.md reports `byte(300)` at compile time because "the value is
+  known", and what the language means by known is the const-expr — a literal, a binding whose
+  initializer is one, a `const`, and the operators over any of them. `zerg` asks that question
+  (the same one a fill count `[v; N]` asks), so `big := 300; byte(big)`, `const N := 300;
+byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone: it builds all
+  three and raises `OverflowError` where they run. Three cases in `reject-check.sh` carry the
+  marker. Both compilers stop at the same place on the other side — a CALL and a `mut` binding
+  are not constants for either — so the gap is the middle of the range and not its end.
 - **EVERY CONVERSION BETWEEN TWO SCALARS is accepted, whatever the pair.** docs/core/types.md
   lists the pairs `T(x)` has "and no others" — `int` is the hub each of them stands on — but
   the seed lowers a conversion by SHAPE, a class and a width, and a shape has an answer for

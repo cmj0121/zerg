@@ -54,7 +54,8 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
 要走 byte 就用 `bytearray(s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
 **`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
-會被指名拒絕；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in` 拿來測的東西」裡。
+會被指名拒絕、帶位置（`E493`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
+拿來測的東西」裡。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個

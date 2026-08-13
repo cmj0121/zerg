@@ -4,9 +4,17 @@ import "testing"
 
 // TestCoherenceConflict reports a duplicate 'impl Spec for Type': at most one impl
 // of a spec for a type may exist program-wide (DESIGN-1c §2.1, U2).
+//
+// It used to open by declaring 'spec Eq' itself, which is a thing no program may do: 'Eq'
+// is bound before a program is read, so a declaration of it does not add a spec but
+// REPLACES the built-in one. This test's own spec is the demonstration — it requires 'eq'
+// and not 'ne', and a program carrying it loses '!=' on every type: the shipping compiler
+// reports the method as unbuilt, and this seed emits C that cc rejects. The declaration is
+// refused now (parser.preludeRole), and nothing is lost here: 'Eq' is blessed, which is the
+// same fact TestOrphanImpl below rests on, so the two impls still ask the coherence
+// question they were written to ask.
 func TestCoherenceConflict(t *testing.T) {
-	src := "spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
-		"struct Point {\n  pub x: int\n}\n" +
+	src := "struct Point {\n  pub x: int\n}\n" +
 		"impl Eq for Point {\n}\n" +
 		"impl Eq for Point {\n}"
 	wantErr(t, src, "conflicting impl")

@@ -621,7 +621,18 @@ fn c_is_nil_lit(e: Expr) -> bool {
 fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
 	et := c_infer(em, e)
 
-	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
+	# COPIED, and this one line is where a carrier is copied AT ALL. A carrier of the right
+	# shape passes straight through here, so it never reaches c_copy_of — which is where the
+	# rule looks like it lives — and this was a bare `c_expr`: a bit copy that took no
+	# reference. Three paths ran through it, and each one of them is a defect of its own once
+	# the callee, the return or the new binding registers a drop: `f(got)` on a `str?`
+	# parameter would give one payload back twice, `return got` would hand the caller a
+	# payload the unwind had already released, and `x = y` would leave two names counting one
+	# reference.
+	#
+	# c_copied, not c_copy_of: only an LVALUE is a second name for something. A carrier just
+	# built — a call's result, a wrap — is nobody else's and copying it would only cost.
+	return c_copied(em, want, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
 
 	# AN `if` EXPRESSION FILLS A CARRIER BRANCH BY BRANCH, and until it did, the branch that
 	# was not the first one did not reach a carrier at all. `c_infer` answers an if-expr with
@@ -1321,16 +1332,34 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# for the carrier's buffer
 	d = d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
 
-	# and the DROP, for a carrier whose payload owns something. A carrier is not registered
-	# as a binding — it has no copy helper, so two names for one would each drop it — so this
-	# exists for the TEMPORARY a `!`, a `??` or an `if x := …` materialises: `(<-bags)!` copies
-	# the payload out and left the received carrier holding the other reference forever.
+	# and the PAIR, for a carrier whose payload owns something: a drop, and — this is the
+	# half that was missing — a copy.
+	#
+	# The drop alone is why `got := <-c` registered nothing. The argument written here used
+	# to be that registering it would let two names for one value each give it back, and
+	# that is true of a carrier with no copy: a carrier is a value holding a value, so
+	# without one the second name is a bit pattern nobody counted. With one, each name holds
+	# a reference of its own and gives back exactly what it took, which is the rule every
+	# other owning type in this file already follows.
+	#
+	# The copy retains only a PRESENT payload: `tag != 0` carries nothing, and retaining
+	# whatever bytes sit in `ok` would count a cell the carrier does not hold.
 	df := c_drop_stmt(em, left, "r->ok")
 	return d if df == "(void)(r->ok);"
 
 	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
 	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
-	return d + "}\n"
+	d = d + "}\n"
+	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n"
+	d = d + "    if (" + c_res_is_left("v") + ") { " + c_res_ok("v") + " = " + c_copy_of(em, left, c_res_ok("v")) + "; }\n"
+	d = d + "    return v;\n}\n"
+
+	# and the ELEMENT VTABLE, because a `list[str?]`, a map value and a struct field of
+	# carrier type all reach the pair through a thunk rather than by name — and so does
+	# c_drop_thunk, which is what a binding's `zrt_defer` is given. Nothing else would
+	# generate one: a carrier is not in `f.structs`, so a missing thunk is cc reporting an
+	# undefined symbol against generated code.
+	return d + c_elem_vt_helper(em, c)
 }
 
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
@@ -3471,6 +3500,13 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	# nothing but literals behaves exactly as it did.
 	return true if c_is_str(t)
 
+	# A CARRIER owns its payload — that is what `if v := c { … }` retaining what it binds
+	# already says — so it owes a copy exactly when the payload does. Answering `false` here
+	# is what made `got := <-c` a second name for one reference: the value was bit-copied in
+	# and nothing was registered, because a type that needs no copy is a type that owes
+	# nothing back.
+	return c_needs_copy(em, c_carrier_elem(t)) if c_is_carrier(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -3547,6 +3583,12 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
 	}
+
+	# a carrier's helper is named after the carrier's own C name, which is not `zg_` plus a
+	# declared name — so it is spelled here rather than falling into the line below, which
+	# would render `zg_copy_(x)` and leave cc to explain it
+	return f"zg_copy_{c_carrier_of(em, t)}({x})" if c_is_carrier(t)
+
 	return f"zg_copy_{c_named_of(t)}({x})"
 }
 
@@ -3557,7 +3599,7 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
 		if c_needs_copy(em, Ty.TNamed(sd.name)) {
-			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, sd.name)
+			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, Ty.TNamed(sd.name))
 		}
 	}
 
@@ -3567,7 +3609,7 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	# prototyped with its typedef.
 	for ed in f.enums {
 		if c_needs_copy(em, Ty.TNamed(ed.name)) {
-			out = out + c_enum_copy_helper(em, ed) + c_enum_drop_helper(em, ed) + c_elem_vt_helper(em, ed.name)
+			out = out + c_enum_copy_helper(em, ed) + c_enum_drop_helper(em, ed) + c_elem_vt_helper(em, Ty.TNamed(ed.name))
 		}
 	}
 	return out
@@ -3688,6 +3730,11 @@ fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ty_tuple_elems(t)) if c_is_tuple(t)
 
+	# a carrier's kind is its own C name, for the reason c_copy_of gives one line up: there
+	# is no declared name to build it out of. Without this a `list[str?]` took the memcpy
+	# vtable and a named carrier had no drop thunk to defer.
+	return c_carrier_of(em, t) if c_is_carrier(t)
+
 	return c_named_of(t)
 }
 
@@ -3697,13 +3744,21 @@ fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 # by-value parameter and a list buffer all give themselves back now — and the copy without
 # the drop is the asymmetry: a `list[Row]` deep-copied every Row it duplicated and released
 # none of them, so the copying was itself what leaked.
-fn c_elem_vt_helper(mut &em: Emitter, nm: str) -> str {
-	ct := "zg_" + nm
-	cp := c_copy_of(em, Ty.TNamed(nm), f"*(const {ct}*)src")
-	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
+#
+# IT TAKES THE TYPE, not a name. A struct, an enum and a CARRIER all need this trio and
+# only the first two are spelled `zg_<name>`: a carrier's C type is its own cname, and a
+# version that built the spelling out of a name could not serve it. Asking c_elem_kind,
+# c_type, c_copy_of and c_drop_fn instead means the three kinds differ in their answers
+# and not in their code — which is the whole reason c_elem_kind exists.
+fn c_elem_vt_helper(mut &em: Emitter, t: Ty) -> str {
+	k := c_elem_kind(em, t)
+	ct := c_type(t)
+	cp := c_copy_of(em, t, f"*(const {ct}*)src")
+	dr := c_drop_fn(em, t)
+	mut out := "static void zg_elemcopy_" + k + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
-	out = out + "static void zg_elemdrop_" + nm + "(void *elem) { zg_drop_" + nm + "((" + ct + "*)elem); }\n"
-	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", zg_elemdrop_" + nm + "};\n\n"
+	out = out + "static void zg_elemdrop_" + k + "(void *elem) { " + dr + "((" + ct + "*)elem); }\n"
+	return out + "static const zrt_elem_vt zg_listvt_" + k + " = {zg_elemcopy_" + k + ", zg_elemdrop_" + k + "};\n\n"
 }
 
 # c_drop_helper is c_copy_helper read backwards, and the two are written next to each other
@@ -3749,6 +3804,10 @@ fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
 	return "zrt_str_release" if c_is_str(t)
+
+	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
+	# the payload owns nothing
+	return c_carrier_drop_fn(em, t) if c_is_carrier(t)
 
 	nm := c_named_of(t)
 
@@ -8620,7 +8679,16 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
 	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
-	return f"{ind}{lv} = {c_carrier_fit(em, chk_target_name(lhs), lt, rhs, c_nosub())};\n" if c_is_carrier(lt)
+	#
+	# It leaves early, so it needs its OWN materialise-then-drop — the one at the bottom of
+	# this function is on a path a carrier never reaches. Two spellings of the same rule is
+	# what c_assign_dropping exists to prevent; what is written twice is only the call.
+	if c_is_carrier(lt) {
+		cval := c_carrier_fit(em, chk_target_name(lhs), lt, rhs, c_nosub())
+		return c_assign_dropping(em, lt, lv, cval, ind) if c_assign_drops(em, lt)
+
+		return f"{ind}{lv} = {cval};\n"
+	}
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
@@ -8644,11 +8712,17 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 #
 # A recursive enum has no choice: the binding's reference to the head cell is the only one
 # there is, so an assignment that does not release it loses the whole chain — the leak this
-# was written for cannot be closed at scope exit alone. Every other owning type still
-# abandons its old value here, which is a real gap and a wider cut: it reaches every `str`,
-# `list`, `map` and struct assignment in the language, it needs its own measurement, and it
-# is not what any of the three markers is about. docs/core/memory.md names it.
+# was written for cannot be closed at scope exit alone. A CARRIER is the same sentence one
+# shape along, and it joins for the same reason rather than by inheriting: the carrier arm
+# leaves c_assign early and never reaches the path the enum takes.
+#
+# Every other owning type still abandons its old value here, which is a real gap and a wider
+# cut: it reaches every `str`, `list`, `map` and struct assignment in the language, it needs
+# its own measurement, and it is not what any of the three markers is about.
+# docs/core/memory.md names it.
 fn c_assign_drops(mut &em: Emitter, t: Ty) -> bool {
+	return c_drop_fn(em, t) != "" if c_is_carrier(t)
+
 	nm := c_named_of(t)
 	return nm != "" and c_is_enum_name(em, nm) and c_needs_copy(em, t)
 }
@@ -11392,10 +11466,17 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one; the
 	# value is rendered BEFORE the binding enters scope, so an initializer naming `name`
 	# reads the old binding rather than the uninitialized new one
+	#
+	# The c_carrier_fit call is what WRAPS a bare value — `x: int? = 5` — and the path below
+	# would not: it ends at c_into, which converts and copies but never puts a value into a
+	# carrier. So this arm stays, and what it gains is the registration it never had, which
+	# is the same c_pend_drop the bottom of this function reaches.
 	if has_type and c_is_carrier(eff) {
 		cval := c_carrier_fit(em, chk_binding_says(name), eff, ival, c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
-		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {cval};\n"
+		ccn := c_var_cname(em, name)
+		cgive := c_pend_drop(em, eff, ccn, ind)
+		return f"{ind}{c_type(eff)} {ccn} = {cval};\n" + cgive
 	}
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
@@ -11800,21 +11881,46 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 
 	cv := c_var_cname(em, name)
 	in2 := ind + "    "
+	in3 := in2 + "    "
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
-	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n"
+
+	# THE BINDING OWNS WHAT c_res_taken COPIED OUT, and nothing gave it back. That is a
+	# second leak on this statement, beside the carrier one: the payload is retained into
+	# `cv` — which is what makes `if v := c { … }` safe to hold the value in — and the branch
+	# then ended without a release, so a `chan[str]` leaked one reference per value bound
+	# this way whether or not the carrier itself was named.
+	#
+	# It is safe ONLY because c_res_taken copies. An optimisation that dropped that retain
+	# would turn this release into a use-after-free.
+	#
+	# The mark is taken here rather than left to c_block: `cv` is declared OUTSIDE the body,
+	# so the body's own mark — which c_block places after this point — would not unwind it.
+	keep := em.rel_cnames.len()
+	give := c_pend_drop(em, elem, cv, in3)
+	mut mark := ""
+	if give != "" {
+		mark = c_new_mark(em)
+		em.used_rt = true
+		out = out + in3 + f"size_t {mark} = zrt_scope_mark();\n"
+	}
+	out = out + in3 + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n" + give
 
 	# the payload has been copied out, so the carrier this statement materialised has nothing
 	# left to say. Only one that names no storage is this statement's to give back, and only
 	# the Left side has a payload — which is why the drop sits inside this branch.
 	df := c_carrier_temp_drop(em, t, value)
 	if df != "" {
-		out = out + in2 + "    " + df + "(&" + tmp + ");\n"
+		out = out + in3 + df + "(&" + tmp + ");\n"
 	}
 	entry := c_live_save(em)
-	out = out + c_block(em, then_body, in2 + "    ")
+	out = out + c_block(em, then_body, in3)
 	then_end := c_live_save(em)
 	c_live_restore(em, entry)
+	if mark != "" {
+		out = out + in3 + f"zrt_unwind_to({mark});\n"
+	}
+	c_scope_forget(em, keep)
 	out = out + in2 + "}"
 
 	# THE BINDING GOES OUT OF SCOPE HERE, BEFORE THE `else` — not after it. The scope is what

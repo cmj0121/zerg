@@ -43,11 +43,11 @@ then-block only.
 other. Every other branch brings its own type, a literal included — a branch is not a typed
 position for its sibling, the same way one match arm is not one for the next.
 
-> **[deviation]** That `nil` branch lowers as **present**. `x: int? = if c { 1 } else { nil }` with a
-> false `c` gives a carrier holding `0`, so `x ?? 99` prints `0`; the `str?` spelling prints `(null)`, a
-> present carrier over a null pointer. Nothing is reported at any stage — the program builds, runs, and
-> answers the value the absence should have defaulted past, which is the shape of wrongness this project
-> forbids outright. Write the absence through a binding the checker sees as a carrier until it is fixed.
+That `nil` branch lowers as **absent**: the fit into the carrier is distributed over the branches, so each
+spelling enters the carrier on its own and `x: int? = if c { 1 } else { nil }` with a false `c` is empty —
+`x ?? 99` answers `99`. It used to wrap the whole ternary as one present payload, so the `nil` became a zero
+inside a present carrier and the absence was gone with nothing reported; the mirror image, `nil` in the
+**then** branch, was refused outright, so one spelling complained and the other miscompiled in silence.
 
 ---
 

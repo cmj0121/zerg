@@ -124,10 +124,10 @@ fn p_diag_at(mut &p: Parser, line: int, col: int, code: str, msg: str) -> str {
 # each spelling the layout out. What the newline adds is the one difference: a raise carries
 # its place inside the message, where a Diag has a line of its own for it.
 #
-# It is p_diag_at's, and no refusal here calls it directly any more. What keeps it `pub` to
-# this file is the place that has to travel ACROSS a layer: `chan[T?]` is refused in ast.zg,
-# where every reader of a channel's element type meets the rule (ty_chan), so the position
-# reaches it as a trailer the parser rendered.
+# It is p_diag_at's, and no refusal here calls it directly any more. What keeps it a function
+# of its own is the place that has to travel ACROSS a layer: `chan[T?]` is refused in ast.zg,
+# where every reader of a channel's element type meets the rule (ty_chan, ty_chan_elem_check),
+# so the position reaches it as a trailer the parser rendered, with no message around it yet.
 fn p_place(mut &p: Parser, line: int, col: int) -> str {
 	return "\n" + place_line(p.path, line, col)
 }

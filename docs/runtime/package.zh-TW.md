@@ -19,10 +19,12 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > **[not yet]** **package 這一層在本工具鏈中不存在**。沒有 manifest、沒有版本宣告、沒有解析器、也沒有相依下載：
 > 一次建置就是一個 entry 檔，加上它的 import 在磁碟上碰得到的那些 module。下文凡是提到 package 的部分——版本、
 > package DAG、單一版本選擇、以位置定義的 package-public、以及倚賴圖無環的 orphan rule——描述的都是還沒有任何
-> 實作的一層。`import "name"` 在磁碟上找不到對應物時會被靜默接受，只有 `zerg lint` 會提（`L101 unused import`）。
+> 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E502 cannot resolve
+> import `name` under any source root_——而且早在它被 lex 之前就報出來。
 >
 > **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
-> 沒有任何可見性檢查。見下方「可見性」。
+> 而可見性只檢查了 module 所持有的一部分、不是全部——函式與 module 常數有檢查(_E301 `helper` is not a public
+> member of module `lib`_,且帶位置),struct 的欄位沒有。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module
@@ -61,7 +63,16 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 就地被拋棄（沒有 join——要是某個 coroutine 必須先跑完，就用 channel 觀察到它完成、再讓 main 退；見
 [Coroutines 與 Channels](../code/coroutine.zh-TW.md)）。
 
-`main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。頂層常數以**依賴序**
+`main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。
+
+這句話講的是**什麼東西在哪裡跑**，所以它同時決定了一個 grammar 允許、而本節從來沒說過的形式：**寫在頂層的
+statement**。`GRAMMAR#program` 推導得出它——`program ::= stmt-list` 就是 Zerg 的 **script mode**，而 grammar 正是
+用 `nop` 程式為這個語言開場——所以它是合法語法，編譯器會把它整句讀完。但**編譯出來**的程式沒有任何一刻可以跑它：
+執行從 `main` 開始，上面的一切都是在那之前備妥的狀態。因此它會被**具名拒絕、並帶位置**，而且是由 build 而不是由
+parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）。`nop` 是唯一的例
+外，而且其實不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
+
+頂層常數以**依賴序**
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
@@ -75,19 +86,18 @@ _these constants depend on each other and none can be given a value first_。
 序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。每個 `init()` **恰好一次、依 FIFO
 順序、在 `main` 之前**執行。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
 藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
-channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`。
+channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
+**裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
 
 若某個 `init()` **abort**,該 abort 從觸發它的**首次使用點**往外傳——可在那裡用 `guard` 接住,否則就像任何未接的
 abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自己)。該 module 於是**中毒(poisoned)**:`init()`
 **不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
 半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
 
-> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，順序是
-> 整個程式的宣告序，而不是在擁有它的那個 module 首次被使用時。「恰好一次」與 module 內 FIFO 成立；「首次被使用時」
-> 不成立——所以一個執行從未碰到的 module，它的 `init()` 照樣會跑。
->
-> **[not yet]** 兩個各自宣告 `init()` 的 module 會被具名拒絕——壓平後的命名空間分不出 `init__0` 與 `init__0`。
-> 因此跨 module 的初始化**順序**目前沒有任何程式觀察得到。
+> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，而不是
+> 在擁有它的那個 module 首次被使用時。「恰好一次」成立，順序也成立：一個 module 的 imports 先備妥，然後才輪到它
+> 自己，而它自己的各個區塊依 FIFO 執行。不成立的是「首次被使用時」——一個執行從未碰到的 module，它的 `init()`
+> 照樣會跑。
 >
 > **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
 > 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
@@ -117,16 +127,24 @@ coherence **不需要全域註冊表**——orphan rule 加上**無環**的 pack
 另一個，任何第三方 package 也無法在不擁有其一的情況下同時指名兩者。所以該實作要是存在，就由構造保證唯一。單一版本
 選擇正是讓「一型別、一實作」有明確定義的前提。
 
-> **[not yet]** **orphan rule 未被強制**。第三個 module 可以寫 `impl Spec for T`，spec 與型別它都不擁有，照樣編得過。
-> 實際被檢查的是壓平命名空間看得到的那件較窄的事：同一次建置中兩個 `impl` 給同一型別同一個方法名，會被拒絕。
+orphan rule 有被強制,而且是以 module、而不是以上文推理所依據的 package 為單位:第三個 module 寫 `impl Spec
+for T`、spec 與型別都不擁有時,會被 _E277 `impl Speak for Dog` is in neither's module — a spec and a type
+belong to whoever declared them, and an impl belongs with one of the two_ 拒絕,且帶位置。同一次建置中兩個
+`impl` 給同一型別同一個方法名也會被拒絕,那是壓平命名空間自己看得到的那件較窄的事。
 
 ### Module
 
 **一個 module 就是一個目錄**；裡面的檔案是共享同一命名空間的實體切片——檔案數量是排版、不是語意。module 是預設的
 私有單位：一個未加標記的宣告在該 module 的各檔案間可見，但不越出 module（見可見性）。
 
+import path 的解析**先看 importer 旁邊**——也就是寫下該 `import` 的那個檔案所在的目錄——接著才是 entry 檔旁邊，
+再來是標準函式庫，先命中者勝。因此一個 module 可以把自己的相依帶著走：`api/` 底下可以放它所 import 的 `api/util/`，
+整組搬到別處時兩者一起搬。（seed 編譯器只搜尋 entry 檔的目錄，會拒絕以這種方式抵達的 module。）
+
 巢狀是**扁平的**：把一個目錄放在另一個底下，只是讓 import path 變長——**沒有階層式私有**，內層 module 對外層並無
-特殊存取權。**module 之間的 import 循環會被拒絕。**
+特殊存取權。**module 之間的 import 循環會被拒絕**——一個在還走在下去的路上就又出現的 module，它的 `init()`
+區塊與 module 常數沒有任何順序可以被備妥，而那個拒絕指名的是這個環、不是走到它的那段路。被兩個 module 各自
+import 的同一個 module 不是環；一個 module import **它自己**，則是同一條規則的單節點情形。
 
 所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
 module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** 互相引用，編譯器 forward-declare、auto-boxing 讓遞迴有
@@ -140,7 +158,10 @@ compile error。一個型別指名另一個型別**從來不是**這種循環—
 > 建置：指名該檔宣告的函式會得到 `undefined function`。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
 > 都成立；以 entry 檔為根的那個 module 是例外。
 >
-> **[deviation]** **import 循環不會被拒絕。** 兩個互相 import 的 module 編得過也跑得動。兩層都沒有任何東西偵測循環。
+> **[deviation]** **單一檔案** import 得起來。`import "sib"` 在旁邊有一個 `sib.zg` 時,會解析到那一個檔案與它的
+> `pub` 名字,即使這裡的 module 是目錄、而 `E502` 自己的句子也這麼說——_a module is a directory of `.zg` files
+> beside the importer or in the standard library_。於是 import 路徑多了第二種未載於文件的形狀,而那則本該教會讀者
+> 第一種的診斷,否認第二種存在。
 
 ### 可見性——如何把宣告公開
 
@@ -167,6 +188,10 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 > 目錄**與**進行讀取的目錄**，也就是 module 邊界而非 package 邊界；上文的 **package-internal** 與
 > **package-public** 仍然需要先有 package 才談得上。
 
+唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
+module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
+import 它的人；它在宣告處就被拒絕，並帶位置。要對外開放，就寫一個讀它的 `pub fn`。
+
 ### 匯入與引用
 
 引用另一個宣告一律**顯式**——無 wildcard、無遞迴傳遞（import 一個 package 只給你它的公開表面，絕不給你它自己
@@ -182,12 +207,23 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 因為每個相依都被寫下來，import graph 是顯式的——這正是 module 與 package **循環得以被拒絕**的前提。
 
 > **狀態。** 這些小節描述的表面今日已接好：**字串路徑 import**（`import "util/text"`）、**括號 import
-> 群組**（`import ( … )`），以及**一層 `import pub` re-export** 到 root module 的公開表面。（re-export 只有一層：
+> 群組**（`import ( … )`）、**`as` 改名**（`import "a/text" as at`，綁的是整個命名空間——它的函式與它的 module
+> 常數一樣可達），以及**一層 `import pub` re-export** 到 root module 的公開表面。（re-export 只有一層：
 > `import pub` 把所命名的 module 露到本 module 表面；它不會遞迴地 re-export 那個 module 自己 re-export 的東西。）
 >
-> **[deviation]** **「無遞迴傳遞」未被強制。** 因為每個 module 都壓平進同一個命名空間，只要一個 module 被這次建置
-> 觸及，它就是其他每個 module 都指名得到的 module——不論有沒有 import 它。import graph 決定的是什麼被**編進**建置，
-> 不是建置內部什麼看得見。
+> import 所引入的**綁定**已被強制：受詞前綴必須是這次建置裡某個 `import` 真的綁過的命名空間，所以憑空捏造的
+> `bogus.f()`、或把路徑片段當成名字用（`import "util/text"` 之下寫 `util.f()`）都會被當成未定義的名字拒絕，並附
+> 位置；兩個綁定相撞的 import，以及被某個頂層宣告先佔走的綁定，同樣被拒絕，而 `as` 就是這兩者的解法。
+>
+> **[deviation]** **綁定是整個建置的，成員也是。** 同一個壓平的兩半，而且兩半都被程式看得見：
+>
+> - **「無遞迴傳遞」未被強制。** 在場的命名空間是這次建置裡每個 module 綁過的每一個命名空間——包含別的 module 的
+>   `as` 別名——所以本 module 從未 import 的 module，它仍然指名得到。import graph 決定的是什麼被**編進**建置，
+>   不是建置內部什麼名字叫得出來。
+> - **成員是在全程式範圍查的。** 前綴解出來之後，`.` 之後的名字是在那唯一一個壓平的命名空間裡找的，而不是在前綴
+>   所指的那個 module 裡找：於是同時 import 了 `a` 與 `b` 時，`b.helper()` 回答的是 module `a` 宣告的 `helper`。
+>   `pub` 仍然是對**宣告**該成員的 module 檢查的——這也是為什麼一個私有成員被拒絕時，訊息指名的是它真正的擁有者，
+>   而不是程式寫下的那個 module。seed 編譯器這一半是對的，它回報 `module "b" has no public member "helper"`。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
 > 這個成員——本節承諾的一等值到 module 邊界就停住了。
@@ -231,9 +267,12 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
 
-> **[not yet]** **沒有 test build**。`*_test.zg` 確實被排除在一般建置之外，這是慣例中可用的那一半；會把它納入的那個
-> 指令——`zerg test`——並不存在，所以上面的白箱／黑箱位置目前只是「檔案該放哪」，不是「怎麼跑起來」。在那之前，
-> `testing` 模組的 `assert` 系列可以從一般程式呼叫。
+> **[not yet]** **這個慣例沒有任何一部分被辨識。** 沒有 `zerg test` 指令,而 `*_test.zg` 也沒有被排除在任何
+> 東西之外:它跟 module 裡其他每個檔案一樣被編進一般建置,所以它的宣告**確實**進得了出貨產物,`pub` 的那些
+> **確實**加入了 module 的表面——`lib.only_in_test()` 在一支從未要求測試的程式裡解析得到也跑得動。它重複的
+> 名字會與同 module 的兄弟撞名,語法壞掉的那一個會讓一般建置失敗。所以上面的白箱／黑箱位置目前只是「檔案該放
+> 哪」、不是「怎麼跑起來」,而那個檔案在等待期間並不是惰性的。在那之前,`testing` 模組的 `assert` 系列可以從
+> 一般程式呼叫。
 
 ### Target 條件式檔案
 

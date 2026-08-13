@@ -55,12 +55,15 @@ carry a marker:
 
 | Marker                       | Meaning                                                                          |
 | ---------------------------- | -------------------------------------------------------------------------------- |
-| **[not yet]**                | Specified, not built. Using it raises `NotImplemented` — a clean compile error.  |
+| **[not yet]**                | Specified, not built. Using it is a clean compile error naming the form.         |
 | **[implementation-defined]** | The spec deliberately does not pin this; a conforming implementation may choose. |
 | **[deviation]**              | The behaviour does **not** match this spec; a tracked bug.                       |
 
 The distinction that matters is between the second marker and the third. A **[not yet]**
-is honest: the compiler says the form's name and stops. A **[deviation]** is a program
+is honest: the compiler says the form's name and stops. It usually says it as a
+`NotImplemented`, and a handful of forms are turned away by an ordinary checked rule
+instead — the chapter says which, and the point is the naming rather than the wording.
+A **[deviation]** is a program
 that compiles and behaves differently from what is written here — and the project's
 standing rule is that a form is implemented or refused by name, never silently wrong, so a
 deviation is a bug with a fix owed, not a documented state.
@@ -79,24 +82,79 @@ own. A **[deviation]** always states both the specified behavior and what the im
 ## Diagnostics contract
 
 A well-formed program compiles; an ill-formed one is rejected with one or more **diagnostics** and no
-output binary is produced. Each diagnostic is written to standard error in the form
+output binary is produced. Each diagnostic is written to standard error, and a reader meets **two
+renderings** of one, because a diagnostic reaches standard error by two routes.
+
+A rule the **checker** collects reports through the diagnostic list, and that is the full form:
 
 ```text
-file:line:col: message
+error: E335 cannot bind str to a int binding: `x`
+  --> demo.zg:2:5
+   |
+ 2 |     x: int = "s"
+   |     ^
 ```
 
-where `line` and `col` are 1-based. A failed compilation exits with a non-zero status. Diagnostic wording
+A form the **parser or the emitter refuses** stops the run where it stands, and what it prints is the
+sentence and — when the site had a place to hand — the trailer, with neither the `error:` prefix nor the
+quoted line and caret under it:
+
+```text
+E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
+expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
+  --> demo.zg:2:7
+```
+
+Both are diagnostics and both are normative in the only sense the wording ever is: **which** programs are
+rejected. Neither rendering is. The difference is worth naming rather than hiding because it is what a
+reader actually meets, and because the second shape is the one a rule loses its place and its code in — see
+the deviation below.
+
+The **place is a trailer**, not a prefix: the sentence comes first, and `--> file:line:col` sits on the
+line under it, where `line` and `col` are 1-based. A failed compilation exits with a non-zero status.
+Diagnostic wording
 is not normative — two implementations may phrase the same rejection differently — but **which** programs
 are rejected is (see each chapter's rules; the reject list is normative, the message text is not). The
 `fmt` and `lint` tools are advisory and never change a program's meaning.
 
 A diagnostic MAY be followed by the source line it is about and a caret marking what on that line it
-concerns; `zerg` renders one. A conforming implementation need not, and the shape of it is not normative.
+concerns; `zerg` renders one for the first shape and not for the second. A conforming implementation need
+not, and the shape of it is not normative — only that the place, where one is given, names a file, a line
+and a column.
 An ill-formed program SHOULD report every diagnostic it can find in one run rather than stopping at the
-first — `zerg` does, for the rules it checks.
+first — `zerg` does, for the rules it checks; a refusal ends the run at the first, which is the other half
+of what the two shapes are.
 
-> **[deviation]** The `file:line:col` prefix is present on the rules `zerg` CHECKS, and absent on the forms
-> it REFUSES: a `NotImplemented` from the parser or the emitter still reports the form's name with no place.
+> **[deviation]** A place and a code are owed on every diagnostic, and what decides whether one carries
+> them is the **channel**, not whether the rule checks or refuses. A rule reported through the checking
+> channel always has both. A rule reported by `raise` has a code only when the string it raises is written
+> with one, and a place only when the site appends the trailer itself — so the parser's and the emitter's
+> refusals split, and a handful of genuinely CHECKED rules fall out on the wrong side of the split with
+> them.
+>
+> ---
+>
+> Measured today: of the codes reported by `raise`, roughly three quarters append no place — `E210`,
+> `E217`, `E223`, `E236`, `E446`, `E465` and their neighbours — and the rest do (`E224`, `E244`, `E285`,
+> `E286`, `E404`, `E454`, the `E247`–`E256` nesting family, `E483`). Around **seventy** diagnostic sites
+> carry no **code** at all, which is far more than the two this paragraph once named: they are every
+> `raise` whose message was written as prose rather than opened with an `E###`, and they run from the
+> parser's catch-all _NotImplemented: `X` is not an expression this compiler reads_ through the
+> emitter's carrier, method, module and match families to the lexer's _f-string: a bare '}' is not text_.
+> `scripts/error-codes-check.sh` cannot see them: it compares codes that exist against the gates and the
+> catalogue, and a rule with no code is absent from all three.
+>
+> ---
+>
+> **Checked rules are not exempt**, which is the part of this the older text had backwards. Two rules
+> `zerg` genuinely CHECKS report with no place: a constant cycle (_these constants depend on each other and
+> none can be given a value first_), which carries no code either, and `E382`, a name declared twice, which
+> carries a code and no place because a struct and an enum are registered before anything records one.
+>
+> Two more used to be on that list and are not: `` `x` is used after del `` and its on-some-paths sibling,
+> now `E297` and `E298`. Nothing about the rules changed — they moved from `raise` to the checking channel,
+> which is the only thing that decides the question, and the move is the whole fix.
+>
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
 > narrows to the token when the message quotes one that is on that line.
 
@@ -142,6 +200,12 @@ same source to an object file, which is what a module is for.
 > as a rendering. A **float** additionally renders at most **100** fractional digits, which is a bound
 > on digits rather than on a field and so is the float's own. The `type` letter is a closed set per rendering
 > ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
+>
+> None of it is reachable yet. The only surface that asks for a width or a precision is a **format spec in
+> an f-string hole**, and that is `[not yet]` — every `{x:…}`, `{x:.2f}` included, reports _E225
+> NotImplemented: an f-string ':spec' format spec_. The three bounds are implemented in the runtime and the
+> shipping compiler emits no call that reaches them, so this paragraph documents a contract a program
+> cannot yet observe.
 
 ## Runtime abort contract
 

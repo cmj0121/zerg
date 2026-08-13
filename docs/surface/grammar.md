@@ -104,14 +104,16 @@ fn answer() -> int { return 42 }
 ## Group 2 — Lexical
 
 Source is UTF-8. Horizontal whitespace (space, tab) separates tokens; a line break is significant only as a
-statement separator (group 1). The lexical group fixes what a token is:
+statement separator (group 1). A line break is an LF or a CRLF — the `\r` belongs to the break that follows it,
+not to the whitespace class, so a `\r` anywhere else is part of no token and is refused where it stands (inside
+a string or rune literal it is ordinary content). The lexical group fixes what a token is:
 
 ```text
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
-NEWLINE    ::= '\n'
-WS         ::= ( ' ' | '\t' )+
+NEWLINE    ::= '\r'? '\n'
+WS         ::= ( ' ' | '\t' )+     # horizontal whitespace — a '\r' is not one
 COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' not before '#' or '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment; attaches to the following declaration
 block      ::= '{' stmt-list '}'
@@ -134,7 +136,11 @@ unsafe ptr   asm
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
 
 A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
-conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
+conditional, and **also a value**: a block is an **expression** (a `primary`, group 4) whose value is its
+**last statement's** — an expression statement yields its expression, and any other statement, or an empty
+block, yields `nil`. The ASI `;` only **separates** statements; it does not discard a value the way a
+trailing `;` does in some languages, so `guard { … }` and a `match` arm can hold many statements and still
+yield. Its inner statements follow the same separator rules as the top level, so an empty block is
 written with the placeholder: `{ nop }`.
 
 **Newlines & ASI.** A line break is realized as a `;` separator by the lexer (automatic `;` insertion): at
@@ -211,7 +217,10 @@ direction is an error). A **type-annotated** binding spells `name: T = expr` —
 An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
-any lvalue (`(a, obj.f) = …`).
+any lvalue (`(a, obj.f) = …`). **[not yet]** in both directions, and each direction is refused as itself:
+the compiler binds one name at a time (_E238 a destructuring binding `(a, b) := …`_) and assigns to one
+target at a time (_E486 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
+does not read (_E221 a struct pattern `Div{…}`_).
 
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
@@ -748,10 +757,11 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   is **module-private** (never `pub`). Prefer the **safe** alternative — an immutable `:=` holding a stdlib
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
-  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** — it needs
-  `Ref[T]`, for
-  **`Atomic[int]`** with **sequential consistency**; the **memory-ordering argument** and a **generic
-  `Atomic[T]`** are **[not yet]**.
+  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** in full: the
+  bundled `atomic` module declares `pub struct Atomic[T]`, a generic struct is unbuilt, and so `import
+"atomic"` on its own reports _E215 NotImplemented: a generic struct `Atomic[…]`_. Neither `Atomic[int]`,
+  the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
+  intended `Atomic[int]` with sequential consistency rests on — is `E446`.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as
@@ -769,27 +779,48 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## What is specified and not built
 
 Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
-name**, and no program that uses one compiles into something else. This list is not prose —
-`scripts/refuse-check.sh` holds a case for each, so a form that quietly starts working, or
-quietly starts failing differently, fails the gate.
+name**, and no program that uses one compiles into something else. This list is mostly not
+prose — `scripts/refuse-check.sh` holds a case for nearly every row, pinned by the refusal's
+`E###`, so a form that quietly starts working, or quietly starts failing differently, fails
+the gate.
 
-| Group | Form                                                                                  |
-| ----- | ------------------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                       |
-| 3     | destructuring binding `(a, b) := …`                                                   |
-| 4     | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                   |
-| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                |
-| 5     | a named argument `f(b: 1)` — arguments bind by position                               |
-| 6     | generic `struct` / `enum`; a generic METHOD; a bound naming two specs (`T: Eq + Ord`) |
-| 6     | a closure that captures; an untyped closure parameter                                 |
-| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`      |
-| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body      |
-| 8     | associated function `Type.f(…)`                                                       |
-| 8     | an `impl` on a built-in type (`impl Tag for int`)                                     |
-| 8     | every decorator but `#[derive(…)]`                                                    |
-| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                        |
-| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                            |
-| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                               |
+**Nearly**, because three of the refusals below carry no code, and a case can pin nothing
+without one: a range used as a value, a `match` arm whose body is a reassignment or a send,
+and a generic `type X[T] = …` alias. Those three are held by this table and by nothing else —
+see the diagnostics deviation in [Conformance](../conformance.md), which is where that gap
+belongs.
+
+The **Group** column is this chapter's own numbering, above — the section that derives the
+production, not the one that first mentions it.
+
+| Group | Form                                                                                                      |
+| ----- | --------------------------------------------------------------------------------------------------------- |
+| 3     | command literal `` `…` `` (its interpolating form `` f`…` `` is group 5)                                  |
+| 4     | destructuring, in **both** directions — `(a, b) := …` and `(a, b) = …`, `Div{q, r} = …`                   |
+| 4     | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                                       |
+| 4     | a range with no **lower** bound — `xs[..n]`, and the list pattern `[a, ..rest]` with it                   |
+| 4     | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`                               |
+| 4     | a range as a **value** — `r := 0..3`; it is a `for … in` iterable and nothing else                        |
+| 4     | postfix type arguments with no call after them — `map[str, int]`, `f[int]`                                |
+| 4     | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                                       |
+| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                                    |
+| 5     | a named argument `f(b: 1)` — arguments bind by position, in a call and a construction                     |
+| 5     | a default on a **closure** parameter; a `mut &` parameter in a **function type**                          |
+| 5     | a generic METHOD                                                                                          |
+| 6     | struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`; `nil` as a pattern              |
+| 6     | a `match` arm whose body is a reassignment or a send — those need a block body                            |
+| 6     | `for mut v in …` — the loop binding that writes each edited element back                                  |
+| 6     | an `if` **expression** with a binding head, or with a branch of more than one statement                   |
+| 7     | generic `struct` / `enum`; a generic `type X[T] = …` alias                                                |
+| 7     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body                          |
+| 7     | associated function `Type.f(…)`                                                                           |
+| 7     | an `impl` on a built-in type, on a target with type arguments, or carrying its own `[T]`                  |
+| 7     | an `impl` item that is not a method — an associated value or type binding, or anything else               |
+| 7     | an associated type projection `It.Item`; a value generic `f[N: int]`; a parameterized bound `Eq[int]`     |
+| 7     | every decorator but `#[derive(…)]` and `#[obj]`                                                           |
+| 7     | a map key that is not an `int` or a `str` — a key needs `Hash`                                            |
+| 7     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`, and the fixed-width ladder `i8`…`f64` |
+| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`, a standalone `unsafe fn`, an `unsafe` `spec` signature           |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
 dispatches on the spec — that much a declared interface means. What is enforced is the

@@ -38,12 +38,16 @@ result := xs.map(double).filter(positive).fold(0, add)
 collection）:
 
 ```text
-mut out := []
+mut out: list[int] = []
 for x in xs {
     continue if not positive(x)
     out.append(double(x))
 }
 ```
+
+型別寫在左邊,因為空 list 自己沒有型別——`mut out := []` 是 _E336 the binding `out` gives the empty list `[]`,
+which has no type of its own_。這件事在這裡比平常更要緊:adapter 尚未建置時,這個迴圈是唯一的寫法,那它最好是一個
+建得起來的寫法。
 
 若 inline 函式真的只用一次,由 position 供給的參數型別能讓它短:
 
@@ -104,10 +108,11 @@ q := new_query().where("age > 18").order("name").limit(10)
 `|` 被讀成位元運算子,而一個靜默比對到錯的值的 arm,比一個編不過的 arm 更糟。`zerg fmt` 對「連續整數」那個情況能做
 什麼,見 [控制流](control-flow.zh-TW.md)。
 
-> **[not yet]** 上面那份清單裡不存在的是**巢狀**；四種 pattern 各自單獨用都成立。pattern 裡再放一個 pattern
-> 根本沒被 parse：`L(Yes(v))` 與 `L(0)` 都報 _a pattern binding needs a name, and `(` is not one_，因為
-> variant pattern 的 payload 位置只收一個 binding 名字——那裡從來沒讀過子 pattern，所以巢狀的 variant 與巢狀的
-> literal 都過不了 parser。一次比對一層，把 payload 綁起來，再對那個 binding 做一次 `match`。
+> **[not yet]** 上面那份清單裡不存在的是**巢狀**；四種 pattern 各自單獨用都成立。variant pattern 的 payload
+> 位置只收一個 binding 名字或 `_`——那裡從來沒讀過子 pattern——所以 `L(Yes(v))` 與 `L(0)` 都會被具名拒絕，而且
+> 帶位置：_E492 NotImplemented: a sub-pattern inside a variant payload, beginning at `…`_。（在此之前它是一則
+> 沒有錯誤碼、也沒有位置的裸 parser 訊息，指名的只是站在那個位置上的 token。）該位置上的**保留字**是另一條規則、
+> 保有它自己的碼：`L(this)` 是 `E245`。一次比對一層，把 payload 綁起來，再對那個 binding 做一次 `match`。
 
 ## 刻意不加的
 

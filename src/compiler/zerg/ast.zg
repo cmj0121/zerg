@@ -107,6 +107,13 @@ enum Expr {
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
 
+	# EFill is the fill form `[v; N]` — N copies of v (GRAMMAR group 4's `list-lit`). It is a
+	# node of its own rather than N copies written out by the parser because N is a CONST-EXPR
+	# and not a literal: it may name a module constant declared in another file, so the count
+	# is not known until the whole program is in front of the emitter. The parser used to
+	# expand it and could therefore only ever accept an integer literal there.
+	EFill(Expr, Expr)
+
 	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type — a diagnostic
 	# that reads the type back names a form in the compiler's spelling rather than the
 	# programmer's, and the two are not always the same word.
@@ -158,6 +165,23 @@ enum Expr {
 	# thing being guarded is usually several statements.
 	EGuard(list[Stmt])
 
+	# EBlock is a `{ … }` standing where an EXPRESSION is wanted (GRAMMAR, group 2: a block
+	# is a primary, group 4). Its value is its LAST statement's value — an expr-stmt yields
+	# its expr, and any other statement, or an empty block, yields `nil`. The `;` the lexer
+	# inserts only SEPARATES statements; it does not discard the value the way a trailing
+	# `;` does in some languages.
+	#
+	# It carries a whole `list[Stmt]` for the same reason EGuard above does, and it is the
+	# same node one brace along: `guard { … }` is a block expression under a catching
+	# handler, so the two share their value rule, their scope cleanup, and — in emit.zg —
+	# the statement-expression they lower to. What EBlock does not have is the abort-to-
+	# value demotion, which is the whole of the difference.
+	#
+	# The SAME braces at a statement's start are a block STATEMENT (Stmt.SScope) whose value
+	# is discarded. Position decides which, not shape, which is why the parser reads this one
+	# only from parse_primary.
+	EBlock(list[Stmt])
+
 	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
 	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
@@ -178,14 +202,14 @@ enum Expr {
 # constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
 struct Arm {
-	pat: int
-	lit: Expr
-	bind: str
-	ctor: str
-	binds: list[str]
-	has_guard: bool
-	guard_expr: Expr
-	body: Expr
+	pub pat: int
+	pub lit: Expr
+	pub bind: str
+	pub ctor: str
+	pub binds: list[str]
+	pub has_guard: bool
+	pub guard_expr: Expr
+	pub body: Expr
 }
 
 # Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
@@ -282,11 +306,11 @@ enum Stmt {
 # the runtime's ZRT_SEL_* constants use for the first two, so the emitter maps rather
 # than translates. `bind` is the receive arm's optional name ("" when absent or `_`).
 pub struct SelArm {
-	op: int
-	bind: str
-	ch: Expr
-	val: Expr
-	body: list[Stmt]
+	pub op: int
+	pub bind: str
+	pub ch: Expr
+	pub val: Expr
+	pub body: list[Stmt]
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -298,11 +322,11 @@ pub struct SelArm {
 # also all the seed lowers correctly (docs/code/functions.md) — a default built from an
 # operator or a call is specified to be evaluated per call and is not honoured here.
 struct Param {
-	name: str
-	ty: Ty
-	is_ref: bool
-	has_def: bool
-	def: Expr
+	pub name: str
+	pub ty: Ty
+	pub is_ref: bool
+	pub has_def: bool
+	pub def: Expr
 }
 
 # FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free
@@ -318,13 +342,13 @@ struct Param {
 # `zg_<T>_<name>`, which is also what keeps a method off the flat name space a program
 # shares with every module it imports.
 struct FnDecl {
-	name: str
-	recv: str
-	params: list[Param]
-	has_ret: bool
-	ret: Ty
-	body: list[Stmt]
-	is_pub: bool
+	pub name: str
+	pub recv: str
+	pub params: list[Param]
+	pub has_ret: bool
+	pub ret: Ty
+	pub body: list[Stmt]
+	pub is_pub: bool
 
 	# path is the file this function was READ FROM. A diagnostic needs it, and a whole
 	# program is merged into one File before emission, so by then nothing else remembers
@@ -332,14 +356,14 @@ struct FnDecl {
 	# because a function comes wholly from one file — one field instead of one per
 	# statement — and rides on a STRUCT rather than an enum, so it costs its construction
 	# sites and no match arm anywhere.
-	path: str
+	pub path: str
 
 	# line / col are where the declaration begins. A diagnostic about the SIGNATURE — a
 	# default that cannot fit its parameter, a `mut &` given one — is made before any
 	# statement is emitted, so the SAt markers have not said anything yet and there is no
 	# other position to report.
-	line: int
-	col: int
+	pub line: int
+	pub col: int
 
 	# tparams / tbounds are `fn f[T, U: Eq](…)` — the type parameter NAMES and, in the same
 	# order, the bound each carries or "" for none. A bound is a CONJUNCTION — `T: Eq + Show`
@@ -347,8 +371,18 @@ struct FnDecl {
 	# bound is read in one place (the parser) and checked in one place (the instantiation),
 	# so the shape that matters is the shape there. `join_bounds` writes it and
 	# `c_split_bounds` reads it back; a `+` cannot appear in a spec name.
-	tparams: list[str]
-	tbounds: list[str]
+	pub tparams: list[str]
+	pub tbounds: list[str]
+
+	# in_unsafe is whether this function was declared inside a module-level `unsafe { … }`
+	# group, which GRAMMAR group 12 makes an unsafe fn: "unsafe throughout its body, callable
+	# only from unsafe". It rides on the declaration for the same reason `path` does — the
+	# whole program is merged into one File before emission, and by then nothing else
+	# remembers which group a function was written in.
+	#
+	# A method, a lambda and a monomorphized specialization each take the flag from whatever
+	# they were written in or made for, so the context is not lost by being copied.
+	pub in_unsafe: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -359,9 +393,9 @@ struct FnDecl {
 # `line` and `col` are 1-based and are where the STATEMENT starts; `path` is "" for a
 # source parsed without one, and the renderer then says the line and column alone.
 pub struct Diag {
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 
 	# `code` is the rule's IDENTITY — `E307`, `L502` — and it is a field rather than the first
 	# word of `msg` because everything that reads a diagnostic wants it separately: the
@@ -369,8 +403,8 @@ pub struct Diag {
 	# editor filters and groups by it. A code spelled only inside the text is one every reader
 	# has to parse back out, which is the second copy of a language fact this struct's `fix`
 	# field already exists to forbid. It is empty for a finding that has no code yet.
-	code: str
-	msg: str
+	pub code: str
+	pub msg: str
 
 	# `fix` is the SOURCE THAT REPLACES what stands at the place — empty when the finding has
 	# no mechanical answer, which is nearly all of them. It exists so that an editor's quick
@@ -378,7 +412,7 @@ pub struct Diag {
 	# that reads the replacement back out of its own message text, which is the second copy of
 	# a language fact docs/tooling/lsp.md exists to forbid. A finding carrying one owes an
 	# exact place too, since something is going to be overwritten there.
-	fix: str
+	pub fix: str
 }
 
 # diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
@@ -407,20 +441,42 @@ pub fn place_line(path: str, line: int, col: int) -> str {
 	return f"  --> {path}:{l}:{c}"
 }
 
-# FieldDef is one struct field: its name and declared type.
+# FieldDef is one struct field: its name, its declared type, and the two things GRAMMAR's
+# FIELD VISIBILITY & DEFAULTS note gives it a tail for.
+#
+# is_pub is `pub`, which marks the field for external INSTANCE ACCESS. It does not reach the
+# emitted C — one flat struct either way — and it used to be read and dropped for exactly
+# that reason. What it is kept for is the rule it is half of: a NON-pub field is
+# module-private and must carry a default, so external code can construct the type without
+# naming a value it may not read.
+#
+# has_def / def are the field's DEFAULT, and they are `Param`'s pair under another name.
+# A default lets the field's constructor argument be omitted, and it is backfilled at each
+# CONSTRUCTION — so an expression in it is evaluated per construction, as a parameter
+# default is evaluated per call.
 struct FieldDef {
-	name: str
-	ty: Ty
+	pub name: str
+	pub ty: Ty
+	pub is_pub: bool
+	pub has_def: bool
+	pub def: Expr
+
+	# line / col are where the field was written. The rule about a field is a rule about a
+	# DECLARATION, made before any statement is emitted, so there is no SAt marker to read
+	# and the field carries its own place — per field, not per struct, because a struct with
+	# twenty fields owes the reader the one that is wrong.
+	pub line: int
+	pub col: int
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.
 struct StructDecl {
-	name: str
-	fields: list[FieldDef]
+	pub name: str
+	pub fields: list[FieldDef]
 
 	# the file it was declared in, so the module it belongs to can be asked. A type belongs
 	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
-	path: str
+	pub path: str
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -431,34 +487,45 @@ struct StructDecl {
 # It carries its position because the checks about it are the ordinary declaration ones: a
 # name declared twice, a name that is also a struct, an underlying type nothing declares.
 pub struct TypeDecl {
-	name: str
-	under: Ty
-	is_pub: bool
-	path: str
-	line: int
-	col: int
+	pub name: str
+	pub under: Ty
+	pub is_pub: bool
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
-# variant), and its DISCRIMINANT — the integer the variant is, which defaults to the
-# previous one plus one (from 0) and so is its position until a declaration says otherwise.
+# variant), and its DISCRIMINANT — the value the variant is, which defaults to the previous
+# one plus one (from 0) and so is its position until a declaration says otherwise.
 #
-# It is a field rather than the position it used to be because GRAMMAR#variant lets a fieldless
-# enum spell its own values (`A = 3`), and those values are OBSERVABLE: `int(v)` reads one
-# back and `E.of(n)` reverses it. A payload enum keeps its tag opaque and may not spell one.
+# It is carried at all because GRAMMAR#variant lets a fieldless enum spell its own values
+# (`A = 3`), and those values are OBSERVABLE: `int(v)` reads one back and `E.of(n)` reverses
+# it. A payload enum keeps its tag opaque and may not spell one.
+#
+# THE DISCRIMINANT IS THE EXPRESSION AS WRITTEN, not a number. GRAMMAR#variant gives the
+# position a const-expr, and a const-expr may name a module constant — a name no parser can
+# resolve, since the constant may be declared in another file of the same program and nothing
+# has merged them yet. So the fold happens in c_build_enums, over the whole program, and what
+# survives the parse is the tree; `has_discr` is what tells `A = 0` from an `A` that merely
+# sits at position 0, a distinction E214 rests on. `line` / `col` are the variant's own name
+# token, so a discriminant that does not fold is reported at the variant and not at the enum.
 struct VariantDef {
-	name: str
-	fields: list[Ty]
-	tag: int
+	pub name: str
+	pub fields: list[Ty]
+	pub has_discr: bool
+	pub discr: Expr
+	pub line: int
+	pub col: int
 }
 
 # EnumDecl is an enum type declaration: its name and variants in source (tag) order.
 struct EnumDecl {
-	name: str
-	variants: list[VariantDef]
+	pub name: str
+	pub variants: list[VariantDef]
 
 	# the file it was declared in — see StructDecl.path
-	path: str
+	pub path: str
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -477,9 +544,9 @@ struct EnumDecl {
 #
 # `reqs` are FnDecls with an empty body, because that is exactly what a `fn-sig` is.
 struct SpecDecl {
-	name: str
-	params: list[str]
-	supers: list[str]
+	pub name: str
+	pub params: list[str]
+	pub supers: list[str]
 
 	# super_args are the TYPE ARGUMENTS each super was written with, row for row beside
 	# `supers` — `spec Ord: Same[int]` keeps the `[int]`. They are a parallel list rather than
@@ -490,12 +557,12 @@ struct SpecDecl {
 	# Dropping them is what made a parameterized super refusable-only: the parameter stayed
 	# unsubstituted, so every correct `impl Ord` was turned away with "parameter `o` is int, and
 	# the spec declares T".
-	super_args: list[list[Ty]]
-	reqs: list[FnDecl]
+	pub super_args: list[list[Ty]]
+	pub reqs: list[FnDecl]
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
@@ -525,13 +592,13 @@ pub fn spec_key(name: str, args: list[Ty]) -> str {
 # when a required signature is compared against what the impl supplies.
 struct ImplDecl {
 	# `spec` is a keyword, so the field cannot be called that
-	on: str
-	args: list[Ty]
-	target: str
+	pub on: str
+	pub args: list[Ty]
+	pub target: str
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # ConstDecl is one module-level binding — `const K := 1`, `pub COUNT := 3`, or a plain
@@ -553,46 +620,118 @@ struct ImplDecl {
 # declaring module off the row, so a cross-module read of a non-`pub` constant is refused
 # the way a private function's call is.
 pub struct ConstDecl {
-	name: str
-	ty: Ty
-	has_ty: bool
-	is_mut: bool
-	is_const: bool
-	is_pub: bool
-	in_unsafe: bool
-	value: Expr
+	pub name: str
+	pub ty: Ty
+	pub has_ty: bool
+	pub is_mut: bool
+	pub is_const: bool
+	pub is_pub: bool
+	pub in_unsafe: bool
+	pub value: Expr
 
-	path: str
-	line: int
-	col: int
+	pub path: str
+	pub line: int
+	pub col: int
+}
+
+# ImportDecl is one import SPEC — `pub? "path" (as name)?` (GRAMMAR#import-spec). It is a
+# declaration and not a string because an import BINDS A NAMESPACE (GRAMMAR#import-stmt), and
+# a binding is a name: the path says which module is compiled into the build, and `name` says
+# what the program writes to reach it — the `as` alias when there is one, the path's last
+# segment otherwise. Keeping only the path is what made the prefix decoration: every
+# qualified name flattened to its last identifier, so an invented `bogus.f()` and a real
+# `text.f()` were the same expression by the time anything looked.
+#
+# `at` / `line` / `col` are the three a DECLARATION owes a diagnostic, for ConstDecl's
+# reason: by emission the whole program is one merged File, and an import belongs to no
+# function, so nothing else would remember which file wrote it or where. The place is also
+# an import's IDENTITY once the files are merged — two files importing one module under one
+# name are otherwise indistinguishable rows.
+pub struct ImportDecl {
+	# the module path as written, without its quotes — `util/text`
+	pub path: str
+
+	# the name this import binds — the `as` alias, else the path's last segment
+	pub name: str
+
+	# `renamed` is whether an `as` was written. The name alone cannot say so, since
+	# `import "a/text" as text` binds exactly what the plain form does.
+	pub renamed: bool
+
+	pub at: str
+	pub line: int
+	pub col: int
 }
 
 pub struct File {
-	imports: list[str]
-	structs: list[StructDecl]
-	enums: list[EnumDecl]
-	specs: list[SpecDecl]
-	impls: list[ImplDecl]
-	fns: list[FnDecl]
+	pub imports: list[ImportDecl]
+	pub structs: list[StructDecl]
+	pub enums: list[EnumDecl]
+	pub specs: list[SpecDecl]
+	pub impls: list[ImplDecl]
+	pub fns: list[FnDecl]
 
 	# types are the `type X = Y` declarations — strong typedefs, kept apart from structs
 	# because they have no fields and from enums because they have no variants; what they
 	# have is one underlying type and an identity of their own.
-	types: list[TypeDecl]
+	pub types: list[TypeDecl]
 
 	# consts are the module-level bindings — the module's immutable state, `const`-marked
 	# or not, plus the `mut` ones kept so their refusal has a declaration to point at.
 	# They are not statements of any function: they become C globals, assigned once
 	# before anything runs.
-	consts: list[ConstDecl]
+	pub consts: list[ConstDecl]
 
 	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
 	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
 	# declaration because a decorator is its own top-level item here — it is read before the
 	# declaration it applies to exists — and because what consumes them is one pass that wants
 	# them all, not a walk over two kinds of declaration.
-	derive_on: list[str]
-	derive_spec: list[str]
+	pub derive_on: list[str]
+	pub derive_spec: list[str]
+
+	# stmts are the statements written at the TOP LEVEL. GRAMMAR#program derives them —
+	# `program ::= stmt-list`, which is what SCRIPT mode makes the top level — so they are
+	# grammatical and the parser reads each one whole; a COMPILE-mode build has nowhere to run
+	# one, and refusing it is the emitter's (chk_top_stmts), for the reason a program with no
+	# `fn main` is refused by the build and not by the parse (docs/conformance.md).
+	#
+	# What is kept is the PLACE and the word the statement starts with, not the tree: no pass
+	# will ever walk one, and carrying a Stmt that nothing lowers is an invitation to lower it.
+	pub stmts: list[TopStmt]
+}
+
+# TopStmt is one top-level statement, as much of it as a refusal needs: where it was written
+# and what it starts with, so the sentence can name the form the reader typed.
+pub struct TopStmt {
+	pub word: str
+	pub path: str
+	pub line: int
+	pub col: int
+}
+
+# last_segment is the name a module path ends with — `util/text` ends with `text`. It is
+# what an import with no `as` binds (GRAMMAR#import-spec) and what a diagnostic calls a
+# module, and it lives HERE, beside the declaration that needs it, because it used to live
+# in two: one copy in the emitter and one in the linter, spelled differently and answering
+# the same question. Two copies of a naming rule is one rule that can disagree with itself.
+pub fn last_segment(path: str) -> str {
+	b := bytearray(path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
 }
 
 # --- rendering ---------------------------------------------------------------------------
@@ -604,7 +743,13 @@ pub struct File {
 pub fn dump_ast(f: File) -> str {
 	mut out := "file\n"
 	for im in f.imports {
-		out = out + "\timport \"" + im + "\"\n"
+		# the binding is shown whenever it was renamed, because that is the half of an
+		# import this view exists to answer: which name the program reaches the module by
+		if im.renamed {
+			out = out + "\timport \"" + im.path + "\" as " + im.name + "\n"
+		} else {
+			out = out + "\timport \"" + im.path + "\"\n"
+		}
 	}
 	for s in f.structs {
 		out = out + "\tstruct " + s.name + "\n"
@@ -713,6 +858,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EIndex(target, idx) => "index"
 		Expr.EMethod(target, meth, args) => "method ." + meth
 		Expr.EListLit(elems) => "list-literal"
+		Expr.EFill(v, n) => "fill"
 		Expr.EConv(ty, x, nm) => "convert " + nm
 		Expr.EIf(cond, then_e, else_e) => "if-expr"
 		Expr.EMatch(scrut, arms) => "match"
@@ -725,6 +871,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EForce(x) => "force"
 		Expr.ECoalesce(a, b, jump) => "coalesce"
 		Expr.EGuard(body) => "guard"
+		Expr.EBlock(body) => "block-expr"
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
@@ -742,7 +889,8 @@ pub fn expr_kind(e: Expr) -> str {
 # here answers "no parts" for a node that has them, which is a hole in the bound that
 # nothing reports. A new Expr variant must say what it contains.
 #
-# A BLOCK is not a part. `guard { … }`, a closure body and `?? break` carry STATEMENTS,
+# A BLOCK is not a part. `{ … }` as an expression, `guard { … }`, a closure body and
+# `?? break` all carry STATEMENTS,
 # and a statement's expressions are each measured on their own where that statement is
 # read (parser.zg's p_expr_root) — descending here would need a second walk over Stmt to
 # reach the same answer.
@@ -763,6 +911,7 @@ fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EIndex(x, i) => [x, i]
 		Expr.EMethod(x, _, args) => expr_parts_cons(x, args)
 		Expr.EListLit(elems) => elems
+		Expr.EFill(v, n) => [v, n]
 		Expr.EConv(_, x, _) => [x]
 		Expr.EIf(c, a, b) => [c, a, b]
 		Expr.EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
@@ -775,6 +924,7 @@ fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EForce(x) => [x]
 		Expr.ECoalesce(a, b, _) => [a, b]
 		Expr.EGuard(_) => expr_parts_none()
+		Expr.EBlock(_) => expr_parts_none()
 		Expr.EIs(x, _) => [x]
 		Expr.EIn(x, set) => [x, set]
 	}
@@ -993,10 +1143,77 @@ fn ty_is_chan(t: Ty) -> bool {
 	}
 }
 
+# ty_chan_dir reads back the direction ty_chan wrote: 0 bidirectional, 1 send-only,
+# 2 receive-only. A type that is not a channel has no direction, and answers the
+# bidirectional 0 rather than a value a caller would have to test for separately.
+fn ty_chan_dir(t: Ty) -> int {
+	return match t {
+		Ty.TChan(_, d) => d
+		_ => 0
+	}
+}
+
 fn ty_chan_elem(t: Ty) -> Ty {
 	return match t {
 		Ty.TChan(e, _) => e
 		_ => Ty.TUnknown
+	}
+}
+
+# ty_chan_elem_check is the ONE rule about what a channel may carry: not an optional.
+#
+# It is here, beside the shape questions above, because it is a fact about the TYPE rather
+# than about any position that spells one — and that is the whole point. It was once a
+# check inside the emitter's constructor path, so `chan[int?](1)` was refused and every
+# other position carrying the same type was accepted in silence: a parameter, a result, a
+# struct field, a typed binding, a typedef, a `chan` nested inside another type. Written
+# here and called where a channel's element type is READ, every position inherits it.
+#
+# WHY the rule exists, since it is a restriction and not an omission: a receive answers
+# `T?` (GRAMMAR group 9), and `T?` does not nest. So on a channel of optionals a `nil` back
+# from `<-ch` would mean two different facts — the value that was sent is absent, and the
+# stream is over — with no operator able to tell them apart. One loud rule is worth more
+# than that ambiguity; a value that may be absent travels in a struct, or as a sentinel the
+# receiver agrees on.
+#
+# `at` is a place trailer (p_place), from a caller that knows where the type was written.
+# It is "" for the one caller that cannot know: a `chan[T]` whose element arrives by
+# SUBSTITUTION is written nowhere in the source, so there is no position to point at.
+fn ty_chan_elem_check(elem: Ty, at: str) {
+	raise f"E404 `chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel" + at if ty_is_opt(elem)
+}
+
+# ty_chan is the ONE WAY to build a channel type, and it exists so the rule above cannot be
+# walked around. Calling the rule "where an element type is READ" was still a list of doors,
+# and a list of doors grows: the parser had two and the substituter one, and a fourth was
+# added later in `chk_spec_subst` — a spec's `chan[K]` under `impl S[int?]` rebuilt the type
+# by hand and asked nothing, so that one position accepted what the other three refuse.
+#
+# CONSTRUCTION is the door that cannot grow, because a `Ty.TChan` value cannot come into
+# existence any other way. It is the same place the Go seed hangs its rule (typeref.go's
+# `chanType`), which is why the seed never had a hole of this shape.
+#
+# `at` is a place trailer (p_place) when the caller knows where the type was written, and ""
+# when there is nothing to point at — a channel type reached by SUBSTITUTION is spelled
+# nowhere in the source.
+fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
+	ty_chan_elem_check(elem, at)
+	return Ty.TChan(elem, dir)
+}
+
+# ty_is_opt is the shape question the rule above asks, and it is spelled here because this
+# is the file every stage may read: the parser asks it and may not call into the emitter
+# (scripts/layering-check.sh), so an emitter-side copy could only ever be a second one.
+#
+# It was. `c_is_opt` sat in emit.zg, character for character the same match, answering the
+# same question at some thirty call sites — the shape a fact about types takes when the
+# stage that needed it first could not reach the stage that already had it. The emitter
+# reads this file directly (ty_is_chan, ty_chan_elem), so the copy had nothing left to be
+# for and is gone.
+fn ty_is_opt(t: Ty) -> bool {
+	return match t {
+		Ty.TOpt(_) => true
+		_          => false
 	}
 }
 

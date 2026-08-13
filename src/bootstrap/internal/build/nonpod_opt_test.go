@@ -84,7 +84,7 @@ func TestNonPODOptList(t *testing.T) {
 // struct's generated copy/drop must deep-copy/release the present payload; the carrier
 // typedef must precede the struct typedef. Balanced across a bind and an if-let read.
 func TestNonPODOptStructField(t *testing.T) {
-	src := "struct Box {\n\tname: str?\n}\n" +
+	src := "struct Box {\n\tpub name: str?\n}\n" +
 		"fn main() {\n" +
 		"\tb := Box(name: \"x\" + \"y\")\n" +
 		"\tc := b\n" +

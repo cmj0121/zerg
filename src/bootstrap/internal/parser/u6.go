@@ -345,22 +345,30 @@ func (p *parser) parsePatternCore() ast.Pattern {
 
 // parseNamedPattern parses an identifier-led pattern: '_' is the wildcard, a name
 // followed by '(' is a variant, a name followed by '{' is a struct pattern, and a
-// bare name is the provisional NamePattern (DESIGN §3b).
+// name on its own is a NamePattern.
 //
 // A VARIANT IS NAMED THROUGH ITS ENUM — 'Color.Red', 'Either.Left(v)' (GRAMMAR#variant-pat).
 // The qualifier is consumed here and the VARIANT is what every later pass resolves, which
 // is all the seed needs to read the same source the shipping compiler does: whether the
 // qualifier names the right enum is a rule 'zerg' enforces, and the seed's job is to be the
 // oracle on the programs that are well-formed, not a second dialect that cannot read them.
+//
+// WHETHER there was a qualifier is carried on, though, because it is the whole of what
+// separates a nullary variant from a binding: 'Color.Red' names a variant and a bare 'Red'
+// binds, always (GRAMMAR#pattern). Dropping it left the two indistinguishable downstream,
+// and the resolver told them apart by looking the name up — so what an arm MEANT depended
+// on a declaration that might be in another file.
 func (p *parser) parseNamedPattern() ast.Pattern {
 	name := p.advance()
 	if name.Lexeme == "_" {
 		return spanned(&ast.WildPattern{}, name.Span)
 	}
 	start := name.Span.Start
+	qualified := false
 	if p.at(token.Dot) {
 		p.advance()
 		name = p.expect(token.Ident)
+		qualified = true
 	}
 	switch p.cur().Kind {
 	case token.LParen:
@@ -368,7 +376,7 @@ func (p *parser) parseNamedPattern() ast.Pattern {
 	case token.LBrace:
 		return p.parseStructPattern(name)
 	default:
-		return spanned(&ast.NamePattern{Name: name.Lexeme}, span(start, name.Span.End))
+		return spanned(&ast.NamePattern{Name: name.Lexeme, Qualified: qualified}, span(start, name.Span.End))
 	}
 }
 

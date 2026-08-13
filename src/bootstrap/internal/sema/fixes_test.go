@@ -12,23 +12,23 @@ func TestVariantPatternValidation(t *testing.T) {
 	const maybe = "enum Maybe {\n  None\n  Some(int)\n}\n"
 
 	t.Run("a foreign enum's variant is rejected", func(t *testing.T) {
-		wantErr(t, enums+"fn f(c: Color) -> int {\n  return match c {\n    Circle => 0\n    _ => 1\n  }\n}",
+		wantErr(t, enums+"fn f(c: Color) -> int {\n  return match c {\n    Shape.Circle => 0\n    _ => 1\n  }\n}",
 			"has no variant \"Circle\"")
 	})
 	t.Run("a variant pattern on a non-enum subject is rejected", func(t *testing.T) {
-		wantErr(t, enums+"fn f(n: int) -> int {\n  return match n {\n    Red => 0\n    _ => 1\n  }\n}",
+		wantErr(t, enums+"fn f(n: int) -> int {\n  return match n {\n    Color.Red => 0\n    _ => 1\n  }\n}",
 			"cannot match a subject of type int")
 	})
 	t.Run("a payload variant in nullary form is rejected", func(t *testing.T) {
-		wantErr(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    None => 0\n    Some => 1\n  }\n}",
+		wantErr(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    Maybe.None => 0\n    Maybe.Some => 1\n  }\n}",
 			"requires a payload")
 	})
 	t.Run("a payload arity mismatch is rejected", func(t *testing.T) {
-		wantErr(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    None => 0\n    Some(a, b) => a\n  }\n}",
+		wantErr(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    Maybe.None => 0\n    Some(a, b) => a\n  }\n}",
 			"expects 1 payload value")
 	})
 	t.Run("a well-formed payload variant is accepted", func(t *testing.T) {
-		wantOK(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    None => 0\n    Some(a) => a\n  }\n}")
+		wantOK(t, maybe+"fn f(m: Maybe) -> int {\n  return match m {\n    Maybe.None => 0\n    Some(a) => a\n  }\n}")
 	})
 }
 

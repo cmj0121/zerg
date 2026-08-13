@@ -9,17 +9,20 @@ import (
 )
 
 // foldConst evaluates a compile-time-constant expression to a value (DESIGN-1b
-// §4.8). Phase 1b needs only the minimal set an array length '[T; N]', an enum
-// discriminant, or a value-generic argument can hold: integer and boolean
-// literals and the basic arithmetic/negation over them. The second result is
-// false when the expression is not foldable, leaving the caller to report the
-// error at the use site.
+// §4.8). It is the CONST-EXPR of GRAMMAR group 7: integer and boolean literals,
+// the arithmetic over them, and a NAME whose own binding folds — "any binding, ':='
+// or 'const', module-level or local, whose initializer is a CONST-EXPR". There are
+// no calls, so 'sizeof'/'len' are out. The second result is false when the
+// expression is not foldable, leaving the caller to report the error at the use
+// site, which is where the reader can see what the value was wanted for.
 func (c *checker) foldConst(e ast.Expr) (types.ConstVal, bool) {
 	switch n := e.(type) {
 	case *ast.IntLit:
 		return intConst(n.Value), true
 	case *ast.BoolLit:
 		return types.ConstVal{Kind: types.KBool, B: n.Value, Known: true}, true
+	case *ast.Ident:
+		return c.constOfName(n.Name)
 	case *ast.Unary:
 		v, ok := c.foldConst(n.X)
 		if !ok || v.Kind != types.KInt {
@@ -39,6 +42,68 @@ func (c *checker) foldConst(e ast.Expr) (types.ConstVal, bool) {
 
 func intConst(i int64) types.ConstVal {
 	return types.ConstVal{Kind: types.KInt, I: i, Known: true}
+}
+
+// constOfName is the NAME leaf of the fold: what a binding of this name is worth at
+// compile time, or the news that it is worth nothing.
+//
+// THE INNERMOST BINDING ANSWERS, and it answers even when the answer is "not a
+// constant": a local 'n := f()' shadowing a module 'const n := 4' must fold to
+// nothing rather than to 4, so the scope walk stops at the first binding of the name
+// instead of falling through to the module. The local scopes are walked directly
+// rather than through c.lookup, because a fold is not a use and must not record a
+// closure capture.
+//
+// A MODULE CONSTANT IS FOLDED FROM ITS DECLARATION, on demand. Nothing pre-computes
+// them: the constants are checked in dependency order elsewhere, and a compile-time
+// position may be reached before that order has been established (an enum
+// discriminant is resolved with the type declarations), so the value is worked out
+// from the initializer the symbol points back at.
+func (c *checker) constOfName(name string) (types.ConstVal, bool) {
+	for i := len(c.scopes) - 1; i >= 0; i-- {
+		if s, ok := c.scopes[i][name]; ok {
+			if s.cval.Known {
+				return s.cval, true
+			}
+			return types.ConstVal{}, false
+		}
+	}
+	sym := c.module.lookup(name)
+	if sym == nil || (sym.Kind != SymConst && sym.Kind != SymVar) {
+		return types.ConstVal{}, false
+	}
+	b, ok := sym.Decl.(*ast.BindStmt)
+	if !ok || b.Mut {
+		return types.ConstVal{}, false
+	}
+	// 'const A := A' and any longer cycle would recurse forever here. The declaration
+	// is marked while its own initializer is being folded, so a name that reaches
+	// itself is simply not a constant — the cycle itself is reported by the
+	// dependency sort, which is the pass that can name the whole ring.
+	if c.folding[b] {
+		return types.ConstVal{}, false
+	}
+	c.folding[b] = true
+	defer delete(c.folding, b)
+	return c.foldConst(b.Value)
+}
+
+// bindConstVal records what a binding's initializer folds to, on the symbol declare
+// has just created — the LOCAL half of GRAMMAR group 7, which is what lets 'n := 4'
+// be a fill count. A 'mut' binding folds to nothing however constant its initializer
+// looks: a compile-time position asks for a value fixed for the whole program, and a
+// name that may be assigned tomorrow is not one.
+func (c *checker) bindConstVal(name string, value ast.Expr, mut bool) {
+	if mut || value == nil {
+		return
+	}
+	sym, ok := c.scopes[len(c.scopes)-1][name]
+	if !ok {
+		return
+	}
+	if v, ok := c.foldConst(value); ok {
+		sym.cval = v
+	}
 }
 
 func foldUnary(op token.Kind, v types.ConstVal) (types.ConstVal, bool) {

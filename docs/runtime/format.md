@@ -19,13 +19,14 @@ An **override** is a method in the type's `impl` with a fixed shape: `fn display
 declaration. `print`, a format hole and `str(…)` all consult the override, and a type that writes only
 `debug` renders through it everywhere, since `display` defaults to it.
 
-> **Status.** Rendering a **scalar** or a **`str`** — through a plain `{x}` hole, `print`, or an f-string
-> — works, and an **override is consulted** on any named type (`type X = Y`, a `struct`, an `enum`) that
-> declares one. The **structural default rendering of a composite** (a `struct`, `list`, or `map` with no
-> override) is **[not yet]**: such a composite in a format hole is **rejected at compile time** today, so
-> the intended "every value renders" holds for scalars, strings and overridden types now, and for the rest
-> once structural `debug` lands. The exact spelling of a structural `debug` string is therefore **not
-> pinned** ([not yet]).
+> **Status.** Rendering a **scalar**, a **`str`**, or an **`Err`** — through a plain `{x}` hole, `print`,
+> or an f-string — works, and an **override is consulted** on any named type (`type X = Y`, a `struct`, an
+> `enum`) that declares one. An `Err` renders as its **message**; its kind is there to be compared
+> (`e is IOError`), not read out. The **structural default rendering of a composite** (a `struct`, `list`,
+> or `map` with no override) is **[not yet]**: such a composite in a format hole is **rejected at compile
+> time** today, so the intended "every value renders" holds for scalars, strings, errors and overridden
+> types now, and for the rest once structural `debug` lands. The exact spelling of a structural `debug`
+> string is therefore **not pinned** ([not yet]).
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile
@@ -36,8 +37,8 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
   **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
   are **[not yet]** — a conversion in a hole is refused by name.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
-  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — parsed, but **rejected at code
-  generation** this phase.
+  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
+  the parser** (`E227`) this phase.
 - **`{x:spec}`** hands the spec string to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers

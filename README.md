@@ -49,6 +49,20 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 program builds module by module — `-j` compiles several units at once, and results are cached by
 content in `.zerg-cache/`, so a rebuild that changes one module recompiles one module.
 
+**`-o` names the file written**, at every stage — `--emit c f.zg -o f.c` writes `f.c`, and
+`--emit lib f.zg -o out.o` writes exactly `out.o`. What differs per stage is only the DEFAULT, when
+no `-o` is given:
+
+| Stage                | With no `-o`                                                |
+| -------------------- | ----------------------------------------------------------- |
+| `tokens`, `ast`, `c` | stdout, so the stage stays pipeable — `--emit c f.zg > f.c` |
+| `--emit lib`         | the source name with `.o` — `f.zg` gives `f.o`              |
+| `--emit bin`         | the source name — `f.zg` gives `f`                          |
+
+It used to mean a different thing at each: `--emit lib` appended `.o` to whatever it was given, so
+`-o out.o` wrote `out.o.o`, and `--emit c`, `--emit tokens` and `--emit ast` discarded the flag and
+wrote stdout regardless — a build that asked for a file got none and exited 0.
+
 ## The language
 
 | Principle        | What it means                                                                           |

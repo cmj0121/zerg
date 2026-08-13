@@ -5,16 +5,18 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 錯誤與可見性模型，以及 [Module、Package 與 Program](package.zh-TW.md) 的 public surface 規則之上。
 亦有 [English](ffi.md) 版本。
 
-> **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 兩者所處的 `unsafe` 情境被具名拒絕
-> （`NotImplemented: unsafe`），import 那條邊也就一起沒了：出貨的標準函式庫裡沒有 `ffi` 模組，而
-> `import "ffi"` 會被靜默接受——一個解析不到東西的 import 不會被診斷——所以失敗發生在更後面，發生在該 binding
-> 需要的那個 `unsafe` 上。export 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些
-> `pub` 宣告會被排除在 header 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md)
-> 稱之為 built-in——兩處都沒有。
+> **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 外部呼叫所處的 `unsafe` 情境就是它
+> 停下來的地方：**block-expression** 形式被指名拒絕、帶位置（`E224`），獨立的 **`unsafe fn`** 也是（`E264`），
+> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E488`）——import 那條邊也就一起沒了。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗
+> ——_E502 cannot resolve import `ffi` under any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
+> **分組**是有建的那一種形式，為的是它的 `mut` binding；它的 `fn` 在裡面能做什麼，仍是一項一項被拒絕。export
+> 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header
+> 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md) 稱之為 built-in——兩處
+> 都沒有。
 >
-> 這裡有兩件事不只是沒建、而是今天就是錯的，它們標在下方各自出現的位置：宣告在 module 層級 `unsafe { … }`
-> 分組裡的 `fn` 可以從安全程式碼呼叫且沒有任何診斷，以及 `handle` 型別的 binding 會對著產生的 C 漏到 `cc`。
-> （獨立的 `unsafe fn` 宣告則被指名拒絕、帶位置——是誠實的 `[not yet]`，不是靜默的錯誤答案。）
+> 這裡有一件事不只是沒建、而是今天就是錯的，它標在下方出現的位置：`handle` 型別的 binding 會對著產生的 C 漏到
+> `cc`。（分組的呼叫者規則本來是第二件：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從安全程式碼呼叫
+> 且沒有任何診斷。它現在被強制了，回報為 `E387`。）
 
 ## 兩條邊、一份契約
 
@@ -196,11 +198,12 @@ global 的。
 > 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。（它以前
 > 正是那樣編過的：`unsafe fn g() -> int { return 2 }` 之後 `print g()` 編得過，`g` 從普通安全程式碼可呼叫、
 > 完全沒有診斷。）
->
-> **[deviation]** **信任邊界未被強制。** 宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從普通的安全
-> 程式碼呼叫，而且完全沒有診斷。這個關鍵字被 parse 了，然後沒有任何東西去讀它，所以 `unsafe` 只標示意圖、
-> 不帶來檢查。
->
+
+分組自己的規則**有**被強制：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是一個 unsafe fn，從安全程式碼指名
+它——呼叫它，或把裸名字綁成 function value——會以 `E387` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
+組存在的理由。在上面那個 block-expression 建起來之前，那也是一個程式僅有的呼叫者：進入點是安全的，所以分組的
+`fn` 只能被同一個分組的成員叫到，除此之外無處可及。
+
 > **[deviation]** `handle` 型別的 binding 會漏到 `cc`。`mut h: handle? = nil` 不產生任何 Zerg 診斷，而是對著
 > 產生的 C 以 `error: unknown type name 'zg_handle'` 失敗——這是本章唯一一處形式以「抵達 C 編譯器」而非「被拒絕」
 > 的方式打破標準契約。

@@ -11,8 +11,10 @@ join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
 
-> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕:這個階段的 lambda 什麼都捕獲不了,
-> 所以就算接受了那個形狀,也沒有環境可以交給一條 coroutine。
+> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕——`E222 NotImplemented: calling
+fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的形狀,與 closure 無關:lambda
+> **捕獲得了**(`add := fn (x: int) -> int { return x + n }` 讀得到 `n` 也跑得動),所以環境是有的;缺的是
+> 「透過名字以外的東西呼叫」。把 closure 綁到一個名字上,再用那個名字 `spawn`。
 
 - **引數是一份快照**——在 `spawn` **被寫下**的那一行取得，不是在呼叫執行的那一刻。之後才寫入的 `mut` 綁定
   不會被 coroutine 看到（它可能根本還沒開始跑）；`list`、`map`、`struct` 在那一刻成為 coroutine **自己的值**。
@@ -33,7 +35,7 @@ scope 久、也可以早早結束，而且沒有 parent 等它。
 這正是 fire-and-forget 的全部重點，是**選擇、不是遺漏**。把 coroutine 的 lifetime 綁在啟動它的 scope 上，就恰恰是
 **結構化並行**（一個會 join child 的 nursery）；Zerg 拒絕它，以保住 `spawn` 無 handle、保住模型的小。代價是被接受且
 明講的：**沒有 join、沒有 parent 等待、沒有自動的失敗傳播**——協調是 caller 的事、永遠透過 channel。child 的失敗只會以
-channel close 上的 `Right(err)` 傳到別人那裡（見未處理的 abort）；程式結束時，還在跑的 coroutine 只是不再被排程（見
+channel close 在別人下一次 receive 時 raise 出來的 `Err` 傳到（見未處理的 abort）；程式結束時，還在跑的 coroutine 只是不再被排程（見
 終止與 deadlock）。
 
 一個 scope-owned 的*值*仍可**通知**一條 coroutine——例如一個資源，它的 `drop` 往 coroutine 正在 watch 的一條 cancel
@@ -91,9 +93,10 @@ abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**
 的 send 以 `SendOnClosedError` raise，`DeadlockError` 則是「收尾與 deadlock」所述的乾淨、可攔截 abort，兩者都能用
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 
-**`StopIteration` 叫得出名字，卻刻意無法建構。** receiver 可以寫 `err is StopIteration` 來分辨乾淨結束與崩潰；但
-**沒有**任何程式能 `raise StopIteration(…)`——這個名字不是建構子，在**兩個編譯器**裡寫了都是編譯錯誤。這個不
-對稱正是「以**種類**測試、而非比對訊息字串」的全部理由：一個能 raise 這個哨兵的 sender，會讓自己的 channel 戴著
+**`StopIteration` 叫得出名字，卻刻意無法建構。** `err is StopIteration` 是合法的測試——它是內建種類之一——但
+**沒有**任何程式能 `raise StopIteration(…)`：這個名字不是建構子，在**兩個編譯器**裡寫了都是編譯錯誤。今天接收端
+看得到的東西沒有一個會讓那個測試成立，因為下面的 receive 已經以「從哪一條路抵達」分辨了乾淨結束與崩潰；這個哨兵
+是 runtime 自己的 end-of-stream 標記，正是為此而搆不到。一個能 raise 它的 sender，會讓自己的 channel 戴著
 end-of-stream 標記關閉，而它的 consumer 會把崩潰讀成乾淨結束。
 
 ### 送出——`ch <- v`
@@ -126,6 +129,24 @@ receive 回傳 **`T?`**。一條串流會結束的兩種方式，在這個語言
 `chan[T?]` 因此被**拒絕**，理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束了」，
 沒有任何運算子分得開。包進一個 struct，或約定一個哨兵值。
 
+被拒絕的是**型別**，不是某一種寫法：參數、回傳型別、struct 欄位、帶標註的繫結、`type` 宣告、
+巢在另一個型別裡的 `chan`，以及建構式 `chan[T?](…)`，都是同一個型別寫在不同位置，每一個都會被擋下來。
+泛型做出來的 channel 也一樣——用 optional 實例化 `chan[T]` 樣板，在特化成形的地方就被拒絕。
+
+receive 答的是一個 **carrier**，這件事同時決定了「receive 的 receive」該怎麼寫。
+[`GRAMMAR#recv-base`](../../GRAMMAR) 是自我遞迴的——`recv-base ::= '<-' recv-base | primary`——
+所以 `<-` 可以站在另一個 receive 前面，而 `chan[chan[int]]` 也是一種很平常的東西。
+只是外層那個 receive 答的是 `chan[int]?`，而 **carrier 不是 channel**，所以巢狀要在中間把它打開：
+
+```text
+x := <-((<-cc)!)      # 可以——內層的 handle 被堅持取出，x 是 int?
+x := <-(<-cc)         # 被拒絕——`<-ch` 需要一個 channel，而 chan[int]? 不是
+```
+
+這不是一條關於巢狀的規則。**每一個** channel 運算都對拿到的東西問同一個問題——`<-x`、`x <- v`、
+`close(x)`，以及兩種 `select` arm——而只要它不是一個 channel 端點，答案就是同一句具名的拒絕，
+而且帶著位置。
+
 每種需求都由 `T?` 本來就有的四個運算子掉出來——由 **receiver** 決定：
 
 ```text
@@ -145,14 +166,16 @@ for v in ch { use(v) }                   # 同一種 drain，串流結束處就�
 至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以原本記在這裡的
 「`Result[T]` 活不進簽章」問題，已經不在 channel 這條路上了。
 
-上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
+上面那行 `match` 還值得再記一筆，關於 arm 裡可以放什麼。`match` arm 的 body 是一個**運算式**，而區塊**就是**
+一個運算式——所以 `Left(v) => { … }` 可以裝好幾個敘述、並且交出最後一個敘述的值，像 `print` 這種敘述站在那個
+**區塊裡面**非常穩。`c_match` 降階成三元運算鏈，而區塊降階成一個 statement expression，那就是三元運算鏈的一個
+運算元，和其他運算元沒有兩樣。敘述不能當的是 arm 的**整個 body**:`1 => print "one"` 會被
+_NotImplemented: `print` is a statement, and an expression is wanted here_ 擋下,因為在那裡 arm 沒有別的東西
+可以交出。加上大括號,arm 就有了一個區塊,而區塊交得出來。
 
-> **[not yet]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
-> 文法——但 `c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
-> （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
-> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
-> **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
-> （GRAMMAR group 9）——`break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
+`select` 的 arm 不同，理由值得記清楚：`match` 的 arm 必須**產出**該次 match 的值，而 `select` 不產出值、它的
+arm 是**執行**。所以 select arm 的 body 是一個**敘述**（GRAMMAR group 9）——`break` 在那裡很平常，區塊只是眾多
+敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 
@@ -185,7 +208,7 @@ defer close(ch)        # ……在區塊離開時，每一條路徑都算，含 
 - **已 buffered 的值照樣送達**——receive 會先交出 channel 手上的東西，才回答 `Right`。
 - **之後的 send 會 abort**（`SendOnClosedError`），而不是被默默丟掉。
 - **receive-only 端不得 close**——consumer 不可以代替 producer 結束一條 stream。那是編譯錯誤
-  （_cannot close a receive-only channel_）。
+  （_E505 cannot close a receive-only channel_）。
 
 `close` **不**取代 auto-close，兩種形狀說明了原因。**崩潰中**的 producer 到不了任何敘述。而在 **fan-in** 裡，數個
 producer 中最後完成的那個自然結束了 stream、完全不需要協調——由其中一個手足呼叫的 channel 層級 close，會替其他人
@@ -277,6 +300,9 @@ for select {                # 同一種等待，但是 LOOP：一圈跑一條 re
 
 - receive arm 綁的是一個普通的 **`T`**。會觸發的 arm 一定有值：**乾淨關閉**是缺席，那條 arm 會被**從等待中除名**
   ——不觸發、也不參賽，這正是「結束的生產者不會餓死還活著的那條」的原因。
+- **綁定只屬於它自己那條 arm**，別的地方都不算：別條 arm 裡不在 scope，`select` 之後也不在。這正是上面每一條
+  arm 都可以把值叫做 `v` 的原因——與 `if x := …` 的綁定、`for x in …` 的迴圈變數是同一條規則，而一個伸出自己那
+  條 arm 的名字就是普通的 _undefined name_。
 - **崩潰關閉**會從 select **raise** 出去，帶著生產者的 `Err`。它永遠不會抵達任何 arm body，所以沒有接收端能在
   沒注意到的情況下跨過它。
 - 落在已 close channel 上的 **send arm** 被選到時 **abort**（send-on-closed 是 bug）。
@@ -321,8 +347,8 @@ fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 
     for select {
         v := <-work           => { total = total + v }          # v 是 int：會觸發的 arm 一定有值
-        <-cancel              => { out <- total  return }       # 提早停——有人 SEND 了一個值
-        <-time.after(1000000) => { out <- total  return }       # timeout——1ms，單位是奈秒
+        <-cancel              => { out <- total; return }       # 提早停——有人 SEND 了一個值
+        <-time.after(1000000) => { out <- total; return }       # timeout——1ms，單位是奈秒
     }
     out <- total                                                # work 與 cancel 都結束了
 }
@@ -385,8 +411,9 @@ fn counter(inbox: <-chan[Cmd]) {
 ```
 
 `answer` 之所以存在，是因為 **match arm 的 body 是一個運算式**：send 是敘述、不能站在 arm 裡，所以回覆改走一次呼
-叫、而它的值就是要保留的 state。這也順帶讓 owner 的 state 只在一個地方被寫。（區塊 `{ … }` 在文法上也是運算式、本
-來可以用在這裡，但出貨的 `zerg` 不行——見「接收」一節的 `[deviation]`。）
+叫、而它的值就是要保留的 state。這也順帶讓 owner 的 state 只在一個地方被寫。（區塊 `{ … }` 就是運算式，裝著 send
+的那種在這裡也能用——`Cmd.Get(rep) => { rep <- n; n }` 建得起來也跑得動。留著 `answer` 是為了把唯一那次寫集中在
+一個地方，不是因為區塊被拒絕。）
 
 - **tell**（fire-and-forget）就是一次普通 send——`inbox <- Add(5)`。
 - **ask**（request-reply）送一條全新 reply channel 並 block 等它——
@@ -411,7 +438,7 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 ## producer——generator pattern
 
 **generator 不是語言特性**——它就是一個**送值到 channel 的 coroutine**，由消費者用 `for v in ch` drain。那條
-channel _就是_ `Iterator`：它一直 yield 值，直到 producer 的 scope 離開、channel 關閉，收尾的 `StopIteration`
+channel _就是_ `Iterator`：它一直 yield 值，直到 producer 的 scope 離開、channel 關閉，而那次 close
 結束迴圈。沒有 `yield` 關鍵字、沒有 generator 型別；`send` 就是 yield。
 
 ```text
@@ -430,7 +457,7 @@ fn range(lo: int, hi: int) -> <-chan[int] {
     return ch               # 呼叫端拿到 receive-only 端，從來不是 sender
 }
 
-for v in range(0, 10) { use(v) }   # drain 到 StopIteration
+for v in range(0, 10) { use(v) }   # drain 到 producer 的 channel 關閉
 ```
 
 早退（消費者先停）是唯一的皺褶。若消費者先 `break`，一個 blocking 的 `out <- n` 會永遠等下去——Zerg 不會 abort
@@ -445,7 +472,8 @@ for v in range(0, 10) { use(v) }   # drain 到 StopIteration
 
 未被 `guard` 攔下的 abort（見錯誤模型）**只殺死該 coroutine**——它的 stack unwind（釋放 scope、遞減 channel
 refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**不會遺失**：以最後 sender 身分關閉 channel 時會帶著
-崩潰的 `Err`，consumer 讀到 `Right(err)`（乾淨結束則帶 `StopIteration`）。
+崩潰的 `Err`，並在 **consumer 下一次 receive 時 raise 出來**（乾淨結束則給 `nil`——見上面的「接收」）。實測:
+producer 送出一個值後 abort，consumer 第二次 `<-ch` 會 re-raise `IOError: disk went away`，而不是回答一次缺席。
 
 runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
 消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
@@ -456,7 +484,7 @@ runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如
 > `spawn` 位置可以掛上去。
 
 要回報*結構化*的結果——部分結果、特定錯誤、或不會關掉受監看 channel 的失敗——coroutine 仍會 `guard` 並送進
-channel。讓一個死亡變得*致命*是觀察者的職責（對 `Right(err)` 反應並 abort），絕不是 `spawn` 的事。
+channel。讓一個死亡變得*致命*是觀察者的職責（對那個被 raise 出來的 `Err` 反應並 abort），絕不是 `spawn` 的事。
 
 ## 排程與公平性
 

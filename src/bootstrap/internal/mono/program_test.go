@@ -111,7 +111,7 @@ func TestValueGeneric(t *testing.T) {
 // TestGenericStruct checks that a generic struct used at two types yields one
 // specialized C type per type argument, each with its field type concretized.
 func TestGenericStruct(t *testing.T) {
-	src := "struct Box[T] { value: T }\n" +
+	src := "struct Box[T] { pub value: T }\n" +
 		"fn main() { bi := Box(5)\n bb := Box(true)\n print bi.value\n print bb.value }"
 	prog := build(t, src)
 	if len(prog.Types) != 2 {

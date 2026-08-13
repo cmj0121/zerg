@@ -71,7 +71,7 @@ fn build_cmd() -> cli.Command {
 	return (
 		cli.command("build", "compile a program (see --emit)")
 		.opt("e", "emit", "stop after a stage: tokens, ast, c, lib, bin — bin when the entry declares `main`, else lib", "")
-		.opt("o", "output", "where to write the result (default: the source name)")
+		.opt("o", "output", "where to write the result (default: stdout for tokens/ast/c, the source name for lib/bin)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
 		.run(do_build)
@@ -163,7 +163,8 @@ fn lsp_program(path: str, text: str) -> lsp.Program {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
-	load_with(path, dir_of(path), seen, srcs, paths, Buffer(path, text))
+	mut root: list[str] = []
+	load_with(path, dir_of(path), seen, root, srcs, paths, Buffer(path, text))
 	return lsp.program(paths, srcs)
 }
 
@@ -218,15 +219,28 @@ fn declares_main(files: list[str]) -> bool {
 
 	mut found := false
 	guard {
-		src := str(io.read_file(files[0]))
+		src := read_source(files[0])
 		found = zerg.c_has_main(zerg.parse_at(src, files[0]))
 	}
 	return found
 }
 
-# build_stage runs the pipeline as far as `emit` asks and no further. The early stages
-# print to stdout because they are something a person is reading; the two that produce a
-# FILE take an output path, defaulting to the entry file's name.
+# build_stage runs the pipeline as far as `emit` asks and no further.
+#
+# `-o` IS THE PATH WRITTEN, at every stage, which is the one sentence `--help` has always
+# made ("where to write the result") and which was true of one stage in five. `--emit c`,
+# `--emit tokens` and `--emit ast` ignored it entirely and wrote stdout — so `zerg build
+# --emit c f.zg -o f.c` put the C on the terminal, created no `f.c`, and exited 0, which is
+# the silent wrong answer this project forbids everywhere else. `--emit lib` read it and
+# then appended `.o` to it unconditionally, so `-o out.o` wrote `out.o.o` beside an
+# `out.o.o.c`.
+#
+# The DEFAULT is per stage and unchanged, because that is where the stages genuinely
+# differ: the three reading stages are something a person is looking at, so with no `-o`
+# they go to stdout and stay pipeable; the two that produce an artefact name it after the
+# entry file, `.o` included, since a default has to be a whole path and only `--emit lib`
+# knows the suffix its product wears. What no default may do is override what was asked
+# for — a suffix appended to an explicit `-o` is the driver overruling the user.
 #
 # The default stage is the ENTRY FILE'S ANSWER, not a fixed one. A source is a module until
 # something asks it to be a program, and what asks is `fn main` — so a file that declares
@@ -244,16 +258,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# silent success load_unit had, and worse here — these are the two stages a person
 	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
+		write_result(zerg.dump_tokens(read_source(files[0])), out)
 		return
 	}
 	if emit == "ast" {
-		io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
+		write_result(zerg.dump_ast(zerg.merge_files(load_sources(files))), out)
 		return
-	}
-	mut output := out
-	if output == "" {
-		output = drop_ext(files[0])
 	}
 	if emit == "lib" {
 		# separate compilation: the unit DECLARES the whole program but DEFINES only this
@@ -269,7 +279,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		mut diags: list[zerg.Diag] = []
 		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], diags)
 		report_diags(diags, unit_srcs(units), unit_paths(units))
-		compile_to(obj_code, output + ".o", true)
+		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
 		return
 	}
 
@@ -283,7 +293,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# c_emit_unit runs, and it runs it with the same whole-program view (merge_asts) over
 	# every unit rather than once over the merge.
 	if emit == "bin" {
-		link_program(files[0], output, jobs)
+		link_program(files[0], out_or(out, drop_ext(files[0])), jobs)
 		return
 	}
 	if emit == "c" {
@@ -295,7 +305,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		code := zerg.emit_files_diag(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
 		guard {
-			io.write(code)
+			write_result(code, out)
 		}
 		return
 	}
@@ -766,6 +776,30 @@ fn compile_to(code: str, output: str, object_only: bool) {
 	}
 }
 
+# out_or is the `-o` path, or the stage's own default when none was given. It exists so the
+# defaults are written where they belong — at the stage that knows what its product is
+# called — rather than as one shared `output` computed ahead of the dispatch, which is how
+# `--emit lib` came to append `.o` to a path the user had spelled in full.
+fn out_or(out: str, dflt: str) -> str {
+	return dflt if out == ""
+
+	return out
+}
+
+# write_result writes a stage a person READS: to `-o` when there is one, and to stdout when
+# there is not, so the pipe that has always worked goes on working. The three stages that
+# use it took no path at all before, which made `-o` a flag the compiler accepted and
+# discarded.
+fn write_result(text: str, out: str) {
+	if out == "" {
+		io.write(text)
+		return
+	}
+	guard {
+		io.write_file(out, bytearray(text))
+	}
+}
+
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
 	return path if not has_suffix(path, ".zg")
@@ -791,14 +825,14 @@ fn drop_ext(path: str) -> str {
 # Unit is one module: the name it is known by (its import path, or the entry file's path)
 # and the sources that make it up.
 struct Unit {
-	name: str
-	srcs: list[str]
+	pub name: str
+	pub srcs: list[str]
 
 	# paths is where each of `srcs` was read from, in the same order. A unit is what a
 	# build compiles, so this is the only place the file a statement came from is still
 	# known — by the time the trees are merged into a whole-program view, nothing else
 	# remembers.
-	paths: list[str]
+	pub paths: list[str]
 }
 
 # load_units returns every unit of the program, dependencies before dependents, the entry
@@ -807,12 +841,19 @@ fn load_units(entry: str) -> list[Unit] {
 	mut seen: list[str] = []
 	mut units: list[Unit] = []
 	mut one: list[str] = []
+	mut root: list[str] = []
 	one.append(entry)
-	load_unit(one, entry, dir_of(entry), seen, units)
+	load_unit(one, entry, dir_of(entry), seen, root, units)
 	return units
 }
 
-fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], mut &units: list[Unit]) {
+# `stack` is the path DOWN to this unit, and it is a separate list from `seen` because the two
+# answer different questions — see chk_import_cycle. It arrives BY VALUE, which is what saves
+# a pop: each frame appends its own name to its own copy, so unwinding is the return.
+fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+	mut here := stack
+	here.append(name)
+
 	for s in seen {
 		return if s == name
 	}
@@ -830,7 +871,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	# names the lexical rule and where — so letting them out is what puts the real reason in
 	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		lex_check(src, f)
 		srcs.append(src)
 		paths.append(f)
@@ -842,11 +883,51 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	mut si := 0
 	for si < srcs.len() {
 		for im in zerg.imports_of_at(srcs[si], paths[si]) {
-			load_unit(module_files(im, from_dir), im, from_dir, seen, units)
+			chk_import_cycle(here, im)
+			load_unit(module_files(im, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
 	units.append(Unit(name, srcs, paths))
+}
+
+# --- import cycles ---------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md), and nothing
+# detected one, at either layer: `ca` importing `cb` importing `ca` compiled and ran.
+#
+# A cycle that BUILDS is worse than a cycle that is refused, which is why this is enforced
+# rather than documented away. Two mutually importing modules each have to be initialized
+# before the other — their `init()` blocks and their module constants both — and there is no
+# order that satisfies both, so whatever the build settles on is an order no chapter defines
+# and nothing can be written against.
+#
+# THE QUESTION IS ASKED OF THE PATH DOWN, not of what has been loaded. A module that two
+# others import is the ordinary case — a diamond — and `seen` is what answers that one, by
+# loading it once. What has no order is a module that comes up again while it is still ON the
+# way down, and only a stack can tell the two apart. The self-import is the one-node case of
+# exactly the same test, which is why it needs no branch of its own.
+#
+# The chain is reported from the first appearance, so what the reader is shown is the LOOP
+# and not the walk that reached it.
+fn chk_import_cycle(stack: list[str], im: str) {
+	mut at := -1
+	mut i := 0
+	for i < stack.len() {
+		if at < 0 and stack[i] == im {
+			at = i
+		}
+		i = i + 1
+	}
+	return if at < 0
+
+	mut chain := ""
+	mut j := at
+	for j < stack.len() {
+		chain = chain + path_tail(stack[j]) + " -> "
+		j = j + 1
+	}
+	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -1046,8 +1127,9 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # --- module resolution ------------------------------------------------------------------
 
 # module_files resolves one import path to the source files that make up that module,
-# searched in the entry program's own directory first (a user module beside the program),
-# then the standard library. A module is either a single `<path>.zg` file or a DIRECTORY
+# searched BESIDE THE IMPORTER first — the directory of the file that wrote the import —
+# then in the entry program's own directory, then the standard library. A module is either
+# a single `<path>.zg` file or a DIRECTORY
 # of them — the compiler's own `zerg` module is the second kind, and its files are read in
 # the sorted order the runtime guarantees so the emitted C never depends on the
 # filesystem.
@@ -1061,9 +1143,26 @@ fn has_suffix(s: str, suffix: str) -> bool {
 #
 # The refusal is the RESOLVER's rather than each caller's, because both callers want the same
 # answer and a third would have to remember to ask for it.
-fn module_files(path: str, from_dir: str) -> list[str] {
+# `near` is the directory of the FILE that wrote this import, and it is searched first.
+# Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
+# own imports were resolved against a directory that module knows nothing about: `api/api.zg`
+# importing `"util/text"` was refused with E502 while `api/util/text/` sat right beside it,
+# and the same import resolved once the directory was moved next to the entry file instead.
+# E502's own sentence — "a module is a directory of `.zg` files beside the importer" — was
+# describing the layout it turned away.
+#
+# The entry directory STAYS as the second root rather than being replaced: a nested module
+# reaching a module beside the program resolved before this and still does. So the change
+# only ever adds a place to look.
+fn module_files(path: str, near: str, from_dir: str) -> list[str] {
 	mut roots: list[str] = []
-	roots.append(from_dir)
+	roots.append(near)
+
+	# a plain `if` and not a trailing one: this file is compiled BY THE SEED, which does not
+	# read a postfix `if` on a call statement
+	if from_dir != near {
+		roots.append(from_dir)
+	}
 	roots.append(stdlib_dir())
 	for root in roots {
 		found := module_at(root, path)
@@ -1133,14 +1232,15 @@ fn path_tail(path: str) -> str {
 }
 
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
-	load_with(file, from_dir, seen, srcs, paths, Buffer("", ""))
+	mut root: list[str] = []
+	load_with(file, from_dir, seen, root, srcs, paths, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
 # holds unsaved. An empty path means there is none, which is every build.
 struct Buffer {
-	path: str
-	text: str
+	pub path: str
+	pub text: str
 }
 
 # load_with is load_into with that substitution, and it is the same function because the
@@ -1151,7 +1251,12 @@ struct Buffer {
 # downstream can say anything true about text that does not tokenize, so `lex_check` reports
 # and exits. In a server there is no exiting — the session is the process — so the unreadable
 # source is skipped and `lex_diags` reports it to the editor instead.
-fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
+# `stack` is the chain of MODULES on the way down to this file, and the cycle rule is asked of
+# it for the reason load_unit's is: this loader recurses per FILE and dedupes per file, so a
+# module reached a second time is skipped and the loop never runs — which terminates the walk
+# without noticing what it walked. The two loaders ask ONE function, so the rule and its
+# sentence are in one place and cannot drift apart the way the walks themselves have to.
+fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -1166,8 +1271,11 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
 	for im in zerg.imports_of_at(src, file) {
-		for dep in module_files(im, from_dir) {
-			load_with(dep, from_dir, seen, srcs, paths, buf)
+		chk_import_cycle(stack, im)
+		mut here := stack
+		here.append(im)
+		for dep in module_files(im, dir_of(file), from_dir) {
+			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}
 	srcs.append(src)
@@ -1178,10 +1286,41 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	paths.append(file)
 }
 
+# read_source is the ONE place a file on disk becomes source text, and it exists because
+# that step could KILL the compiler. `str(bytes)` checks the str invariant and aborts on a
+# violation — `EncodingError: bytes are not valid UTF-8 for a str`, from the runtime, with no
+# code, no place and no file named — so a single stray byte in any file the toolchain was
+# pointed at ended the process before the lexer had read a character. `zerg build`, `zerg
+# fmt`, `zerg desugar` and the language server all went the same way.
+#
+# GRAMMAR#letter says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# saying which file is the whole of the answer. That is why this carries no `-->` trailer:
+# there is no line to name yet, the thing that would read one being what refused.
+#
+# THE READ IS OUTSIDE THE GUARD ON PURPOSE. A file that cannot be opened is a DIFFERENT
+# failure and raises its own `IOError`, and a `guard` around both would report it as an
+# encoding complaint about a file nobody could read — the swallowing `load_unit` above has a
+# paragraph about. The guard covers the conversion alone, which is the only thing in here
+# that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
+# failed on, which is a gap in `io` rather than one here.)
+fn read_source(path: str) -> str {
+	b := io.read_file(path)
+
+	mut src := ""
+	mut ok := false
+	guard {
+		src = str(b)
+		ok = true
+	}
+	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
+
+	return src
+}
+
 # buffer_src is the text of `file`: what the server is holding for it, or what the disk has.
 fn buffer_src(file: str, buf: Buffer) -> str {
 	return buf.text if file == buf.path
-	return str(io.read_file(file))
+	return read_source(file)
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,
@@ -1290,7 +1429,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 # formatted file is byte-identical to what it was, so running fmt twice is a no-op.
 fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 
 		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
 		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
@@ -1322,7 +1461,7 @@ fn run_fmt(files: list[str], off: list[str]) {
 fn run_fmt_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
 			bad = bad + 1
@@ -1346,7 +1485,7 @@ fn run_fmt_check(files: list[str], off: list[str]) -> int {
 # for, and the docs say so.
 fn run_desugar(files: list[str], off: list[str]) {
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		raise f"`{f}` has unbalanced brackets, so it cannot be desugared — the file is left as it is" if not zerg.fmt_balanced(src)
 
 		out := zerg.desugar_src_off(src, off)
@@ -1366,7 +1505,7 @@ fn run_desugar(files: list[str], off: list[str]) {
 fn run_desugar_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
-		src := str(io.read_file(f))
+		src := read_source(f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be desugared\n")
 			bad = bad + 1

@@ -12,9 +12,16 @@ produces a **value** (Pattern matching); **`for`** is a **statement** that runs 
 expression whose value is its **last statement's value**, so a branch that ends in an expression carries
 that value out.
 
-> **[not yet]** A **block used as an expression** is refused by name: a bare `{ … }` at a `:=`, in an
-> argument, or after a `return` does not compile. The block-value rule holds where a construct asks for a
-> block — an `if` branch, a `match` arm — and nowhere else, so a block never reaches a value position alone.
+A **block reaches a value position on its own**: `x := { y := 1  y + 1 }`, a block as an argument, a
+block after a `return`. Its value is its last statement's — an expression statement yields its expression,
+and any other statement, or an empty block, yields `nil`. The `;` the lexer inserts only **separates**
+statements; it does not discard the value the way a trailing `;` does in some languages. What decides
+whether a `{` opens a block or a **map literal** is the `:` (see [Types](../core/types.md) and
+`GRAMMAR#map-lit`), which is why the empty map is spelled `{:}` and a brace with no `:` is always a block.
+
+At a **statement's start** the same braces are a block **statement** whose value is discarded, and a
+`{`-opening expression at the start of an `if` / `for` / `with` / `match` head must be parenthesized
+(`E290`).
 
 **`if`** — as a **statement**, `if cond { … }` with optional `else` / `else if` runs for effect and yields
 no value; the condition is a `bool` (no truthiness). With a **mandatory trailing `else`** it is instead an
@@ -36,11 +43,20 @@ then-block only.
 other. Every other branch brings its own type, a literal included — a branch is not a typed
 position for its sibling, the same way one match arm is not one for the next.
 
-> **[not yet]** Two shapes of the value form are refused by name. An **`else if` chain** in an if-expression
-> (`x := if a { 1 } else if b { 2 } else { 3 }`) is one: the expression form takes a single trailing `else`,
-> and the chain stays a statement. **if-let in an expression position** is the other — `return if x := opt {
-use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, is turned away — so the
-> binding form is a statement only this phase, not the "wherever an `if` does" the paragraph above specifies.
+That `nil` branch lowers as **absent**: the fit into the carrier is distributed over the branches, so each
+spelling enters the carrier on its own and `x: int? = if c { 1 } else { nil }` with a false `c` is empty —
+`x ?? 99` answers `99`. It used to wrap the whole ternary as one present payload, so the `nil` became a zero
+inside a present carrier and the absence was gone with nothing reported; the mirror image, `nil` in the
+**then** branch, was refused outright, so one spelling complained and the other miscompiled in silence.
+
+---
+
+> **[not yet]** One shape of the value form is refused by name: **if-let in an expression position**.
+> `return if x := opt { use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, reports
+> _E270 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this
+> phase, not the "wherever an `if` does" the paragraph above specifies. The **`else if` chain** used to stand
+> beside it and no longer does: `x := if a { 1 } else if b { 2 } else { 3 }` is built, yields the taken
+> branch, and the one-type rule holds across the whole chain.
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds
@@ -51,8 +67,9 @@ three-clause `for`**. The infinite form, the while form, and `for x in it` over 
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
 the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
 writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
-(`x in 0..n` → `bool`) is **[not yet]** — the form is refused by name — as is treating a **range as a
-value** anywhere else; a range exists only as the thing a `for` walks and a `match` arm contains.
+(`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
+refused by name and with a place (`E493`); a range exists only as the thing a `for` walks, a `match` arm
+contains, and an `in` tests against.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly
@@ -61,7 +78,7 @@ extracting a function and `return`). The sugar **`break if cond`** / **`continue
 ```text
 for {
     line := <-input ?? break       # drain until the channel closes
-    continue if line.empty()       # skip blank lines
+    continue if line == ""         # skip blank lines
     break if line == "quit"        # stop on a sentinel
 
     handle(line)
@@ -84,7 +101,9 @@ conditional-return `if` takes a **bare condition and no block**.
 
 `match` is an **expression**: it tries a value against **arms** (`pattern => result`, the arm separator
 `=>` deliberately distinct from the `->` that introduces a function's return type), runs the first
-that fits, and yields its result. Every arm yields the **same type**, so a `match` is a value usable at a
+that fits, and yields its result. An arm's body is an **expression** (`GRAMMAR#match-arm`), and a **block
+is one** — so `pattern => { … }` holds several statements and still yields, its value being the block's
+last statement's. Every arm yields the **same type**, so a `match` is a value usable at a
 `:=`, a `return`, or an argument — arms that yield `nil` read as a plain statement. Coverage is
 **required** — a `match` that misses a case is a **compile error** (so **adding an `enum` variant a
 dependent's `match` doesn't handle breaks the build**, caught at compile time rather than silently). A
@@ -110,9 +129,11 @@ a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
 > **[not yet]** A **nested pattern** does not parse: `Left(Some(v))`, and `L(0)` too, are turned away with
-> ``a pattern binding needs a name, and `(` is not one`` — a payload position takes a name and nothing else,
-> so every pattern is one level deep. That also empties the Note below on nested exhaustiveness: there is no
-> nested case for the checker to be weak about, because there is no nested pattern a program can write.
+> `a pattern binding needs a name`, naming whichever token stood where the name was wanted — `` `(` `` for
+> `Left(Some(v))`, `` `0` `` for `L(0)`, `` `.` `` for a qualified `L(Inner.Some(v))`. A payload position
+> takes a name and nothing else, so every pattern is one level deep. That also empties the Note below on
+> nested exhaustiveness: there is no nested case for the checker to be weak about, because there is no
+> nested pattern a program can write.
 >
 > **An or-pattern is refused, by name.** `|` in pattern position is read as the bitwise operator, so
 > `1 | 2 =>` would fold to `3 =>` and match neither 1 nor 2 — it used to compile and be silently wrong, and
@@ -142,15 +163,19 @@ as a binding that hands the concrete value back. A **product pattern** destructu
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
 return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
+Each of its four shapes is refused by its own name — `E238` and `E221` at a binding, `E232` and `E243` in
+an arm — so the tuple and the struct are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)
 covers the **whole or-pattern**. A guarded arm does **not** count toward exhaustiveness, so a guarded case
 still needs an unguarded arm or `_`. A **range arm** (`200..300 =>`, `400..=499 =>`, `500.. =>`) is a
 match-only sugar for `_ if _ in <range>` — it matches by **range containment** (not value equality), binds
-**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value).
-
-> **[not yet]** The workaround just offered is not writable: `x if x in <range>` needs the membership test
-> `v in range`, which is refused by name (see `for`, above). So a range arm's value cannot be bound by any
-> route today — not by the arm, which binds nothing by design, and not by the guard that was to stand in
-> for it.
+**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value). Its
+**bounds are compile-time constants**: a literal, or the **name** of one
+([`GRAMMAR#range-bound`](../../GRAMMAR)), which is any `:=` or `const` binding whose initializer the
+compiler folds — so `LO..HI` and `MID..=HI` read as the numbers they name, and a bound built out of other
+constants (`const MID := LO + 50`) is as good as a written one. A name that is **not** one — a value read
+at run time, a `mut` binding — is reported at the arm that wanted it, not at the binding's own line; a
+**call** is not a bound at all, since the production derives none, so `f()..300` is turned away by the
+parser.

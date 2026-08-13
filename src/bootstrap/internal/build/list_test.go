@@ -191,7 +191,7 @@ func TestListOfRef(t *testing.T) {
 // TestListOfStruct (L5): a list of a POD struct copies element-wise (memcpy fast
 // path) and reads a field back.
 func TestListOfStruct(t *testing.T) {
-	got := runProgramRT(t, "struct Point {\n\tx: int\n\ty: int\n}\n"+
+	got := runProgramRT(t, "struct Point {\n\tpub x: int\n\tpub y: int\n}\n"+
 		"fn main() {\n\tps := [Point(1, 2), Point(3, 4)]\n\tqs := ps\n"+
 		"\tprint ps[1].x\n\tprint qs[0].y\n}\n")
 	if got != "3\n2\n" {
@@ -284,7 +284,7 @@ func TestListForInRefNoOtherRefLocal(t *testing.T) {
 // iteration through the struct's drop-env thunk; ASan + a zero balance prove no leak
 // or double-free.
 func TestListForInStructRef(t *testing.T) {
-	got := runProgramRTBalanced(t, "struct Box {\n\tr: Ref[int]\n}\n"+
+	got := runProgramRTBalanced(t, "struct Box {\n\tpub r: Ref[int]\n}\n"+
 		"fn main() {\n\txs := [Box(Ref(10)), Box(Ref(20))]\n"+
 		"\tmut sum := 0\n\tfor x in xs { sum = sum + deref(x.r) }\n\tprint sum\n}\n")
 	if got != "30\n" {

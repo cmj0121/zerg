@@ -29,7 +29,7 @@ func TestMatchArmEnumPayloadBalanced(t *testing.T) {
 			"fn main() -> Result[nil] {\n"+
 			"\tm := Text(\"a\" + \"b\")\n"+
 			"\ts := match m {\n"+
-			"\t\tEmpty => \"none\"\n"+
+			"\t\tMsg.Empty => \"none\"\n"+
 			"\t\tText(s) => s\n"+
 			"\t}\n"+
 			"\tprint s\n"+
@@ -66,7 +66,7 @@ func TestMatchArmRefPayloadBalanced(t *testing.T) {
 			"fn main() -> Result[nil] {\n"+
 			"\tm := Full(Ref(5))\n"+
 			"\tr := match m {\n"+
-			"\t\tEmpty => Ref(0)\n"+
+			"\t\tRefBox.Empty => Ref(0)\n"+
 			"\t\tFull(x) => x\n"+
 			"\t}\n"+
 			"\tprint deref(r)\n"+
@@ -103,7 +103,7 @@ func TestMatchArmGetterReturnBalanced(t *testing.T) {
 		"enum Msg { Empty; Text(str) }\n"+
 			"fn get(m: Msg) -> str {\n"+
 			"\treturn match m {\n"+
-			"\t\tEmpty => \"e\"\n"+
+			"\t\tMsg.Empty => \"e\"\n"+
 			"\t\tText(s) => s\n"+
 			"\t}\n}\n"+
 			"fn main() -> Result[nil] {\n"+
@@ -146,7 +146,7 @@ func TestMatchSubjectEvaluatedOnce(t *testing.T) {
 			"\treturn Some(7)\n}\n"+
 			"fn main() {\n"+
 			"\tprint match make() {\n"+
-			"\t\tNone => 0\n"+
+			"\t\tOptI.None => 0\n"+
 			"\t\tSome(v) => v\n"+
 			"\t}\n}\n")
 	if want := "called\n7\n"; got != want {
@@ -164,7 +164,7 @@ func TestMatchNonPodProducerSubjectBalanced(t *testing.T) {
 			"\treturn Full(Ref(9))\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\tprint match make() {\n"+
-			"\t\tEmpty => 0\n"+
+			"\t\tRefBox.Empty => 0\n"+
 			"\t\tFull(x) => deref(x)\n"+
 			"\t}\n"+
 			"\treturn nil\n}\n")

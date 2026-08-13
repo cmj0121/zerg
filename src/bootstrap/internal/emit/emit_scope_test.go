@@ -84,7 +84,7 @@ func TestScopeEmit(t *testing.T) {
 			// the old field value in place, then stores the temp (review R8: a sub-place not
 			// tracked as a binding; temp-first ordering avoids a self-referential UAF).
 			name:        "reassign-ref-field-releases-old",
-			src:         "struct Box { v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
+			src:         "struct Box { pub v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
 			wantRuntime: true,
 			wantContains: []string{
 				"void* zg_as = zg_refnew_0(2);", // materialize the new box into a temp first

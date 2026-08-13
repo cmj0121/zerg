@@ -17,19 +17,32 @@ Recursive and self-referential types need no pointer — declare the field direc
 `enum Expr { Num(int); Add(Expr, Expr) }`) and the compiler **auto-boxes the self-referential slot behind a
 refcounted cell**. A recursive value therefore copies **by reference** (refcount-shared), not by deep clone:
 copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
-holder's scope exit. Two bounded MVP artifacts hold this phase: a runtime **cycle** built by
-reassigning a recursive field through a `mut` binding **leaks**, as there is no cycle collector yet
-(**[deviation]**); and freeing a long chain **recurses O(depth) on the native C stack** and can overflow it
-(**[deviation]** — the same unrecoverable stack-overflow deviation catalogued in
-[Conformance](../conformance.md) and [Errors](../code/errors.md)).
+holder's scope exit.
 
-> **[not yet]** A recursive **`struct`** cannot be declared at all, so neither artifact above is reachable
+> **[deviation]** The chain is **never freed**. The cell is allocated with a **no-op drop** and no release
+> is registered for the binding that holds it, so a recursive value leaks its whole chain at scope exit —
+> and a cycle is not required to see it, because nothing frees the acyclic case either. Measured: 200
+> rounds that each build and drop a 2000-node `enum L { Nil; Cons(int, L) }` reach **20.8 MB** of resident
+> memory where five rounds reach 1.9 MB, which is the chain accumulating and not a high-water mark.
+>
+> This supersedes two artifacts this paragraph used to name, and both were narrower than the truth. A
+> runtime **cycle** built by reassigning a recursive field does leak, but so does every other recursive
+> value, so the missing cycle collector is not what a reader meets first. And freeing a long chain
+> **recursing O(depth) on the native C stack** is not reachable at all: an eight-million-node chain runs to
+> completion without overflowing anything, because the free that would have recursed never happens.
+
+---
+
+> **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
 > through one. `struct Node { value: int; next: Node? }` is rejected with _`Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
-> that would have given it a size. The recursive **`enum`** is the half that works, boxing and
-> refcount-sharing exactly as described. The `Node` used below — in Copy vs reference semantics, where it is
-> the one place a shared mutation is observable — is the specified form and does not compile today.
+> that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
+> refcount-sharing as described — what it does not do is free, which is the deviation above. The `Node`
+> used below — in Copy vs reference semantics, where it is the one place a shared mutation is observable —
+> is the specified form and does not compile today. It
+> carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E223`, since
+> arguments bind by position here (see [Types](types.md)).
 
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
@@ -73,17 +86,18 @@ literal, or a plain name read — is left where it stands, so the common `f(g())
 The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — are left-to-right in the
 stronger sense that the right side is **skipped** when the left decides the result.
 
-> **[deviation]** Three combining forms still hand their operands to one C construct and inherit C's
-> unspecified order: an **enum variant's payload** (`E.V(f(1), g(2))`), the built-in **`list` / `map`
-> methods**, and a call through a **function value**. Each needs two or more effectful operands before the
-> order is observable at all. Everything else named above is ordered.
+> **[deviation]** Two combining forms still hand their operands to one C construct and inherit C's
+> unspecified order: an **enum variant's payload** (`E.V(f(1), g(2))`) and a call through a **function
+> value**. Each needs two or more effectful operands before the order is observable at all. The built-in
+> **`list` / `map` methods** stood here as a third and cannot: the ones that would take two effectful
+> operands — `insert`, `set`, `get` — are themselves refused by name, so no such call can be written.
+> Everything else named above is ordered.
 
----
-
-> **[deviation]** `v in lo..hi` evaluates `v` **more than once** — two or three times, depending on the
-> bounds — because the membership test is inlined as a bounds comparison rather than built as a range. So
-> `f() in 1..10` calls `f()` repeatedly. This is a repeated evaluation rather than a misordered one, and it
-> is the same defect in both compilers.
+A form that reads an operand **more than once** is ordered by the same rule, and the trigger is the only
+thing that differs. `v in lo..hi` is the one: the membership test is a bounds comparison, so it names `v`
+at each bound — and where the run above exempts its first operand, because nothing precedes it, this one
+cannot, because `v`'s second reading comes after the bounds. So the subject is evaluated **once**, before
+either bound, and the bounds after it in source order: `f() in 1..10` calls `f()` exactly once.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The
@@ -123,11 +137,13 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   visible via every holder** of that tail.
 
 > **[deviation]** A reference-counted value that **enters a carrier** — the `T?` a channel receive
-> answers, a `Result[T]` — is **never released**. The drop exists and nothing calls it: a carrier has no
-> copy helper, so registering the drop would let two names for one value each give it back. Everything
-> refcounted crossing a `chan[T]` leaks one reference per value, which is invisible for a `chan[int]` and
-> real for a `chan[str]` — measured under LeakSanitizer with `test-data/codegen/chan_str_shared.zg`, the
-> first case in this tree to send one.
+> answers, a `Result[T]` — is released only where the carrier is **unwrapped in place**. `if v := <-c { … }`
+> emits the drop after retaining what it bound; a carrier given a **name**, `got := <-c`, registers none,
+> so it is never released. The drop exists and that second path does not call it: a carrier has no copy
+> helper, so registering the drop there would let two names for one value each give it back. Refcounted
+> values crossing a `chan[T]` therefore leak one reference per value bound that way, which is invisible for
+> a `chan[int]` and real for a `chan[str]` — measured under LeakSanitizer with
+> `test-data/codegen/chan_str_shared.zg`, the first case in this tree to send one.
 
 Copying a composite applies the rule field by field — its value-type parts are copied and any
 reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
@@ -225,11 +241,19 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** `del` of a `Ref` value — a `chan`; there is no `Ref[T]` here, above — dropping a holder (and
-> running `drop` at the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —
-> to free its storage **early** is **[not yet]**: today such a `del` revokes the name's access, but the
-> storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above is
-> thus the intended behavior, not yet the bootstrap's for owning values.
+> **Status.** The last row of the table is the one `zerg` does not reach at all. `del` of a `Ref` value is
+> **[not yet]** in both of its halves: `del ch` on a channel is refused by name (_E470 NotImplemented:
+> `del ch` on a CHANNEL_, which says to write `close(ch)` instead), and there is no `Ref[T]` type here to
+> `del` in the first place — naming `Ref` refuses too (`E446`). What the compiler does with a channel is
+> release it where its binding's scope ends, so the holder is dropped and `drop` still runs at the last
+> one; what is missing is the ability to say so **early**, by name.
+>
+> ---
+>
+> `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
+> **[not yet]** for the same reason from the other side: today such a `del` revokes the name's access, but
+> the storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above
+> is thus the intended behavior, not yet the bootstrap's for owning values.
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is
@@ -246,6 +270,10 @@ afterwards — a later `ch <- v` or `<-ch` is a compile error (_`ch` is used aft
 **not** the way to signal "no more values": to end a stream while keeping the handle, use the channel-only
 statement **`close(ch)`**; to end it by scope, let the binding's scope exit release what it holds. Both are
 in [Coroutines](../code/coroutine.md). Use `del ch` when you are finished with the **name** as well.
+
+> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E470`, the Status
+> note above). The half of it that already holds is the advice: `close(ch)` ends a stream and scope exit
+> releases the hold, and those are what a program writes today.
 
 ## `defer` — cleanup at block exit
 

@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -446,7 +446,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check sha256 gates sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -501,6 +501,23 @@ layering:                       # each stage knows only what it is allowed to kn
 conformance:                    # every GRAMMAR chapter is read, or refused by name
 	$(MAKE) build
 	./scripts/conformance-check.sh
+
+# `conformance` claims the sentence below and cannot deliver it: a chapter file stops at its
+# FIRST refusal, so twelve files measure at most twelve of GRAMMAR's 171 productions — two
+# of them were masking `mut &` and `unsafe fn`, forms that gate had never once put to the
+# compiler. The unit here is the PRODUCTION: one sample each, one per file, so a refusal
+# costs the one form it is about. Coverage is asserted, not assumed.
+productions:                    # every GRAMMAR production is read, or refused by name
+	$(MAKE) build
+	./scripts/productions-check.sh
+
+# Every gate above asks the compiler about programs that ARE Zerg, so none of them can see
+# an OVER-ACCEPTANCE. That blind spot held a 1-tuple `(1, )`, a trailing comma in four
+# bracket kinds, `0x_1F`, an unparenthesised `{`-opening head, `?? raise … if`, and a comma
+# that was simply optional in nine readers — each accepted in silence, under a full board.
+counterexamples:                # a program GRAMMAR does not derive must be refused
+	$(MAKE) build
+	./scripts/counterexample-check.sh
 
 # A reserved word no production uses is a word nobody can write and every lexer refuses as a
 # name — which is what `package` was for years. It is grammar-cites reversed: not "does every

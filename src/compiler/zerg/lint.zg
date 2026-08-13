@@ -443,6 +443,7 @@ fn lint_captures_let(nm: str, is_mut: bool, v: Expr, fname: str, refs: list[str]
 fn lint_captures_expr(e: Expr, fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
 	match e {
 		Expr.EGuard(b) => lint_captures_body(b, fname, refs, muts, out)
+		Expr.EBlock(b) => lint_captures_body(b, fname, refs, muts, out)
 		Expr.EFn(ps, has_ret, ret, b) => lint_captures_body(b, fname, refs, muts, out)
 		Expr.ECall(nm, args, _) => lint_captures_each(args, fname, refs, muts, out)
 		Expr.EMethod(t, m, args) => lint_captures_each(args, fname, refs, muts, out)
@@ -546,9 +547,11 @@ fn ref_arg(nm: str, args: list[Expr], n: str, refs: list[str]) -> bool {
 # lint_imports reports an import whose namespace nothing reaches through.
 fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 	for im in f.imports {
-		name := last_segment(im)
-		if not has_str(ns, name) and not has_str(ids, name) {
-			out.append(f"L101 unused import \"{im}\"")
+		# the BINDING, not the path's last segment: an `as` rename is the name this file
+		# reaches the module by, so asking about anything else calls every renamed import
+		# unused and lets one that genuinely is go unreported
+		if not has_str(ns, im.name) and not has_str(ids, im.name) {
+			out.append(f"L101 unused import \"{im.path}\"")
 		}
 	}
 }
@@ -661,6 +664,7 @@ fn collect_binds_let(name: str, value: Expr, mut &names: list[str]) {
 fn collect_binds_expr(e: Expr, mut &names: list[str]) {
 	match e {
 		Expr.EGuard(body_b) => collect_binds(body_b, names)
+		Expr.EBlock(body_b) => collect_binds(body_b, names)
 
 		# a closure's body is a block too, and `walk_body` already counts the reads inside one
 		# — so without this the bindings in a closure were collected by nobody and answered to
@@ -762,6 +766,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		Expr.EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
 		Expr.EMethod(target, meth, args) => walk_method(target, meth, args, ids, calls, ns)
 		Expr.EListLit(elems) => walk_all(elems, ids, calls, ns)
+		Expr.EFill(v, n) => walk_pair(v, n, ids, calls, ns)
 		Expr.EConv(ty, x, nm) => walk_expr(x, ids, calls, ns)
 		Expr.EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		Expr.EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
@@ -774,6 +779,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		Expr.EForce(x) => walk_expr(x, ids, calls, ns)
 		Expr.ECoalesce(a, b, jump) => walk_coalesce(a, b, jump, ids, calls, ns)
 		Expr.EGuard(body) => walk_body(body, ids, calls, ns)
+		Expr.EBlock(body) => walk_body(body, ids, calls, ns)
 
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.
@@ -837,29 +843,6 @@ fn walk_match(scrut: Expr, arms: list[Arm], mut &ids: list[str], mut &calls: lis
 }
 
 # --- helpers -----------------------------------------------------------------------------
-
-# last_segment is the namespace an import is reached through: `import "a/b"` binds `b`.
-fn last_segment(path: str) -> str {
-	b := bytearray(path)
-	mut cut := 0
-	mut seen := false
-	mut i := 0
-	for i < b.len() {
-		if b[i] == b'/' {
-			cut = i + 1
-			seen = true
-		}
-		i = i + 1
-	}
-	return path if not seen
-	mut out: list[byte] = []
-	mut j := cut
-	for j < b.len() {
-		out.append(b[j])
-		j = j + 1
-	}
-	return str(out)
-}
 
 fn has_str(xs: list[str], want: str) -> bool {
 	for x in xs {

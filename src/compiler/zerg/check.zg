@@ -114,7 +114,22 @@ fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
 # The entry file's own directory is deliberately NOT a module here. A file beside the entry
 # is not compiled into the build at all, so nothing in it can be referenced and there is
 # nothing for this rule to say about it.
+#
+# THE EMPTY STRING MEANS "NO PATH", AND NOTHING ELSE. This is `dirname`, and it used to answer
+# `""` for a path with no directory component — which every caller already reads as "there is
+# no module here, be quiet". So `zerg build m.zg` gave the ENTRY the sentinel, and every rule
+# that asks which module a reference is in went silent: `text.helper()` on a module-private
+# `helper` printed 42, while the identical program spelled `./m.zg`, `t9/m.zg` or with an
+# absolute path was refused with E301 and a place. The module identity was a function of how
+# the entry path happened to be TYPED.
+#
+# A bare filename denotes a file in the current directory, so the dirname is `.` — which is
+# what POSIX `dirname` answers, and what `dir_of` in zergc.zg has always answered for the
+# path that goes on to resolve the imports. One spelling of the question, one answer to it.
+# `""` is left to what really has no module: a declaration NO FILE WROTE.
 fn c_mod_of(path: str) -> str {
+	return "" if c_synthetic_path(path)
+
 	b := bytearray(path)
 	mut cut := -1
 	mut i := 0
@@ -124,7 +139,7 @@ fn c_mod_of(path: str) -> str {
 		}
 		i = i + 1
 	}
-	return "" if cut < 0
+	return "." if cut < 0
 
 	mut out: list[byte] = []
 	mut j := 0
@@ -133,6 +148,26 @@ fn c_mod_of(path: str) -> str {
 		j = j + 1
 	}
 	return str(out)
+}
+
+# c_synthetic_path is whether a path names a tree the COMPILER wrote rather than a file it
+# read — `<builtin>` for the built-in specs, `<derive>` for what a decorator expands to — plus
+# the empty path, which is a declaration with no origin at all.
+#
+# It is the "there is no module here" sentinel, and until now it was arrived at by accident:
+# `<derive>` holds no '/', so the dirname above answered `""` and every module rule read that
+# as "be quiet". A real bare filename answered `""` for the same reason and got the same
+# silence, which is the hole. Naming the two apart is what lets a bare filename have a module
+# without a derived impl acquiring one.
+#
+# `<` is what marks it, because no path the loader ever hands over can start with one: a
+# source is either the entry as it was typed on the command line or a `.zg` file resolved
+# under a source root, and neither route produces an angle bracket.
+fn c_synthetic_path(path: str) -> bool {
+	b := bytearray(path)
+	return true if b.len() == 0
+
+	return b[0] == b'<'
 }
 
 # chk_visible is the rule. It is quiet on a `pub` declaration, on one from the module doing
@@ -156,7 +191,32 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	# marker at the declaration itself, so its module answers here like any other reader's.
 	return if here == ""
 
-	chk_at(em, "E301", f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
+	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
+}
+
+# chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
+# is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
+# unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust
+# boundary: the compiler makes no memory-safety guarantee on the far side of it, and the
+# author vouches for what happens there instead. A caller that never wrote the keyword never
+# made that promise.
+#
+# The group was built for its `mut` bindings, which are the language's only mutable global,
+# and the `fn` beside them came along accepted and callable from anywhere — so a safe `main`
+# reached straight into the one context nothing is guaranteed about, with no diagnostic. That
+# is the boundary erased, silently, which the standing rule does not allow: a form is lowered
+# correctly or refused by name.
+#
+# `what` is what the safe code was doing with the name, because there are two ways in and the
+# sentence has to say which one happened.
+fn chk_unsafe_reachable(mut &em: Emitter, name: str, callee_unsafe: bool, what: str) {
+	return if not callee_unsafe
+
+	# UNSAFE CALLS UNSAFE FREELY. That is the whole point of a group: a page table and the
+	# functions that touch it are declared together, and they reach each other.
+	return if em.in_unsafe_fn
+
+	chk_at(em, "E387", f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
@@ -642,7 +702,7 @@ fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
 		Ty.TList(e) => Ty.TList(chk_spec_subst(e, sp, ip))
 		Ty.TOpt(e) => Ty.TOpt(chk_spec_subst(e, sp, ip))
 		Ty.TMap(k, v) => Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => Ty.TChan(chk_spec_subst(e, sp, ip), d)
+		Ty.TChan(e, d) => ty_chan(chk_spec_subst(e, sp, ip), d, "")
 		Ty.TEither(l, r) => Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
 		Ty.TTuple(es) => Ty.TTuple(chk_subst_all(es, sp, ip))
 		Ty.TFn(ps, r) => Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
@@ -824,6 +884,18 @@ pub fn chk_binding_says(name: str) -> str {
 	return f"the binding `{name}`"
 }
 
+# chk_payload_says names a CARRIER'S PAYLOAD as a slot, out of the slot the carrier itself
+# fills. A bare value entering a `T?`, a `Result[T]` or an `Either[X, Y]` is injected as the
+# payload, so the type it is checked against is the payload's — and the label used to be the
+# enclosing slot's, unchanged, which made the sentence untrue: `x: int? = "s"` said _the
+# binding `x` is int_ about a binding declared `int?`.
+#
+# It reads outward-in, so a nesting composes: "the int? payload of the Result[int?] payload
+# of this function's answer".
+pub fn chk_payload_says(where: str, carrier: Ty) -> str {
+	return f"the {ty_name(carrier)} payload of {where}"
+}
+
 # CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
 # so what the sentence can point at is the SIGNATURE.
 #
@@ -994,6 +1066,19 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
 
+	# A MAP LITERAL is the same thing one dimension wider, and it is already checked entry by
+	# entry — c_map_lit_at asks chk_slot_fits of every key and c_fit_copied of every value,
+	# against the DECLARED key and value types, so each entry is a typed position and a
+	# literal one adopts there. What must not happen is this rule speaking first: the literal's
+	# own inferred type comes from its FIRST entry alone (c_map_lit_ty), so `{"a": 1}` is a
+	# `map[str, int]` whatever it is being written into, and comparing the two containers would
+	# report `m: map[str, float] = {"a": 1}` as a mismatch when nothing is wrong with it.
+	#
+	# This is the map's half of the reshape the old short-circuit was protecting, and it is
+	# narrowed to the form that actually reshapes: a literal. Two maps that already exist are
+	# compared like everything else, by chk_map_fits.
+	return true if c_is_map(want) and c_is_maplit(e)
+
 	# A CLOSURE ADOPTS what the position declares — carve-out (c). A closure that omitted a
 	# parameter's type has `fn(?) -> void` for a type, which is not `fn(int) -> int` and
 	# never becomes one by comparison: asking chk_fits directly refuses the form GRAMMAR
@@ -1028,7 +1113,7 @@ fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 	# dedupe in chk_at_place is per message, so three wrong elements are three sentences.
 	mut reported := false
 	mut i := 0
-	for e in c_listlit_elems(ival) {
+	for e in c_listlit_elems(em, ival) {
 		i = i + 1
 		got := c_infer(em, e)
 		if not chk_fits_expr(em, we, got, e) {
@@ -1140,7 +1225,7 @@ fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool 
 fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 	return false if oper != "/" and oper != "%" and oper != "//"
 
-	f := chk_lit_eval(eb)
+	f := chk_lit_eval(em, eb)
 	return false if not f.ok or f.value != 0
 
 	chk_at(em, "E331", f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
@@ -1157,7 +1242,7 @@ fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 # A leaf past i64 is somebody else's finding — chk_int_literal reports it where the lexeme is —
 # so this speaks only when every leaf fits and the arithmetic between them does not.
 fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
-	f := chk_lit_eval(e)
+	f := chk_lit_eval(em, e)
 	return false if f.ok or not chk_lit_leaves_fit(e)
 
 	chk_at(em, "E332", f"this expression's value is past what an `int` holds, so it cannot be measured against {ty_name(want)} — every literal is measured against `int` before its position is consulted")
@@ -1205,7 +1290,7 @@ fn chk_lit_offender(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
 	return match e {
 		Expr.EUnary(_, x) => chk_lit_offender(em, want, x, not neg)
 		Expr.EBinary(_, a, b) => chk_lit_offender_pair(em, want, a, b, neg, e)
-		_ => chk_lit_says(e, neg)
+		_ => chk_lit_says(em, e, neg)
 	}
 }
 
@@ -1213,18 +1298,18 @@ fn chk_lit_offender_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr, neg: bool
 	return chk_lit_offender(em, want, a, false) if not chk_lit_in_range(em, want, a, false)
 	return chk_lit_offender(em, want, b, false) if not chk_lit_in_range(em, want, b, false)
 
-	return chk_lit_says(whole, neg)
+	return chk_lit_says(em, whole, neg)
 }
 
 # chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
 # on the node (every literal keeps its surface text so `fmt` can print it back verbatim), so
 # this reads it rather than re-rendering the parsed value — `0x1_00` in the source should be
 # `0x1_00` in the diagnostic, not `256`.
-fn chk_lit_says(e: Expr, neg: bool) -> str {
+fn chk_lit_says(mut &em: Emitter, e: Expr, neg: bool) -> str {
 	return match e {
-		Expr.EUnary(_, x) => chk_lit_says(x, not neg)
+		Expr.EUnary(_, x) => chk_lit_says(em, x, not neg)
 		Expr.EInt(lex, _, _) => chk_lit_sign(lex, neg)
-		Expr.EBinary(_, _, _) => chk_lit_folded_says(e, neg)
+		Expr.EBinary(_, _, _) => chk_lit_folded_says(em, e, neg)
 		_ => "this"
 	}
 }
@@ -1234,8 +1319,8 @@ fn chk_lit_says(e: Expr, neg: bool) -> str {
 # line back at them; what is wrong with `x: byte = 200 + 100` is that it is `300`, and `300`
 # is what the sentence says. A fold that failed has no value to name and falls back to "this",
 # which is the same answer every other unfoldable expression gets.
-fn chk_lit_folded_says(e: Expr, neg: bool) -> str {
-	f := chk_lit_eval(e)
+fn chk_lit_folded_says(mut &em: Emitter, e: Expr, neg: bool) -> str {
+	f := chk_lit_eval(em, e)
 	return "this" if not f.ok
 
 	v := f.value
@@ -1289,9 +1374,9 @@ fn chk_lit_note_leaves(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
 # ride on `EInt` for exactly this, and they are also what stops the two from deduping into one:
 # chk_note_at keys on the place, and these two places differ.
 fn chk_lit_note_leaf(mut &em: Emitter, want: Ty, e: Expr, neg: bool) {
-	shown := chk_lit_shown(want, e, neg)
+	shown := chk_lit_shown(em, want, e, neg)
 	code := "L502"
-	msg := f"the literal `{chk_lit_says(e, neg)}` is a {ty_name(want)} here — write `{shown}` and the page shows it"
+	msg := f"the literal `{chk_lit_says(em, e, neg)}` is a {ty_name(want)} here — write `{shown}` and the page shows it"
 
 	# THE SENTENCE AND THE FIX ARE ONE DECISION, made here and carried in one Diag. A server
 	# that read `shown` back out of `msg` would be a second copy of it, and the day the wording
@@ -1322,10 +1407,10 @@ fn chk_lit_note_pair(mut &em: Emitter, want: Ty, a: Expr, b: Expr) {
 # over, and the rewrite an editor can apply from it. Only `float` has a second spelling to
 # offer; a `byte` or a `uint` literal has no surface form of its own, so for those the finding
 # names the type and the reader writes the annotation.
-fn chk_lit_shown(want: Ty, e: Expr, neg: bool) -> str {
-	return f"{ty_name(want)}({chk_lit_says(e, neg)})" if not c_is_float(want)
+fn chk_lit_shown(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> str {
+	return f"{ty_name(want)}({chk_lit_says(em, e, neg)})" if not c_is_float(want)
 
-	return f"{chk_lit_says(e, neg)}.0"
+	return f"{chk_lit_says(em, e, neg)}.0"
 }
 
 # chk_lit_adopts is the fit AND the finding, because a literal that takes a type is L502
@@ -1417,7 +1502,7 @@ fn chk_lit_pair_in_range(mut &em: Emitter, want: Ty, o: str, a: Expr, b: Expr, n
 
 	# a float carries no bounds to test — chk_lit_fits never asks it — so a pair reaching here
 	# is an integer one, and it is folded as one
-	f := chk_lit_eval_pair(o, a, b)
+	f := chk_fold_pair(em, o, a, b, false)
 	return false if not f.ok
 
 	return chk_folded_in_range(em, want, f.value, neg)
@@ -1442,8 +1527,8 @@ fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 # this function's to report: an expression that cannot be folded is simply not one that adopts,
 # and the position then says what it always said about a value of the wrong type.
 struct Folded {
-	ok: bool
-	value: int
+	pub ok: bool
+	pub value: int
 }
 
 # chk_lit_eval works out an all-literal expression's value.
@@ -1459,7 +1544,26 @@ struct Folded {
 # floor, where negation is the one place unary arithmetic has an answer it cannot hold. Any
 # OTHER unary operator is not arithmetic chk_lit_oper knows, so the pair below folds it to
 # nothing — which is what a `not` over a literal should fold to.
-fn chk_lit_eval(e: Expr) -> Folded {
+fn chk_lit_eval(mut &em: Emitter, e: Expr) -> Folded {
+	return chk_fold(em, e, false)
+}
+
+# chk_const_eval is the same fold with ONE MORE LEAF — a name (GRAMMAR group 7: "any binding
+# — `:=` or `const`, module-level or local — whose initializer is a CONST-EXPR", usable
+# wherever a compile-time value is required). It is a second ENTRY and not a second folder:
+# the recursion, the operator set, the checked arithmetic and the "a lexeme past i64 has no
+# value" rule are all below, shared, because a compile-time `2 + 3` and a run-time one
+# answering different numbers is the failure this project has been bitten by before.
+#
+# The two entries exist because the leaf is not always wanted. The literal-adoption rules
+# (`x: byte = 200 + 100`) ask about a tree the reader WROTE, and resolving a name there would
+# quietly change which values adopt a narrower type; the compile-time POSITIONS — a fill count
+# `[v; N]`, an enum discriminant — are exactly where a name is the point.
+fn chk_const_eval(mut &em: Emitter, e: Expr) -> Folded {
+	return chk_fold(em, e, true)
+}
+
+fn chk_fold(mut &em: Emitter, e: Expr, names: bool) -> Folded {
 	return match e {
 		# A LEXEME PAST i64 HAS NO VALUE HERE. int_value answers `0` for one — deliberately,
 		# because the width is reported where the place is known — and a fold that believed it
@@ -1467,20 +1571,52 @@ fn chk_lit_eval(e: Expr) -> Folded {
 		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
 		# happen, which is what `ok` is for.
 		Expr.EInt(lex, _, _) => Folded(int_fits(lex), int_value(lex))
-		Expr.EUnary(o, x) => chk_lit_eval_pair(o, Expr.EInt("0", 0, 0), x)
-		Expr.EBinary(o, a, b) => chk_lit_eval_pair(o, a, b)
+		Expr.EIdent(n) => chk_fold_name(em, n, names)
+		Expr.EUnary(o, x) => chk_fold_pair(em, o, Expr.EInt("0", 0, 0), x, names)
+		Expr.EBinary(o, a, b) => chk_fold_pair(em, o, a, b, names)
 		_ => Folded(false, 0)
 	}
 }
 
-fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
+# chk_fold_name is the NAME leaf, and the whole of it is "ask the environment that already
+# knows". A binding's folded value is recorded where the binding is made — a local's in
+# c_let, a module constant's in c_build_const_vals — so nothing here re-reads an initializer
+# or re-decides what scope a name is in.
+#
+# THE INNERMOST BINDING WINS, which is why the environment is asked before the constant
+# table and not the other way round: `const N := 4` at the top level with `N := f()` inside a
+# body must fold to nothing, not to 4, and a table keyed by name alone cannot see the
+# shadow. A row that IS a module constant defers to the table, because the environment
+# carries types and the table carries values; a module constant has one home either way.
+fn chk_fold_name(mut &em: Emitter, n: str, names: bool) -> Folded {
+	return Folded(false, 0) if not names
+
+	idx := c_live_idx(em, n)
+	return em.env_cval[idx] if idx >= 0 and not chk_is_module_binding(em, idx)
+
+	return chk_const_of(em, n)
+}
+
+# chk_const_of is a module constant's folded value, or the news that it has none — a name
+# nothing declares and one whose initializer is not a const-expr answer the same way, since
+# neither is a value, and the position that asked reports at its own place.
+fn chk_const_of(mut &em: Emitter, n: str) -> Folded {
+	mut i := 0
+	for i < em.kv_names.len() {
+		return em.kv_vals[i] if em.kv_names[i] == n
+		i = i + 1
+	}
+	return Folded(false, 0)
+}
+
+fn chk_fold_pair(mut &em: Emitter, o: str, a: Expr, b: Expr, names: bool) -> Folded {
 	# THE OPERATOR IS ASKED FIRST, because chk_lit_apply has to end in some number and would
 	# hand back `0` for one it does not know — a value, and the wrong one. Asked here, an
 	# unknown operator is the absence of a value instead, which is what it is.
 	return Folded(false, 0) if not chk_lit_oper(o)
 
-	fa := chk_lit_eval(a)
-	fb := chk_lit_eval(b)
+	fa := chk_fold(em, a, names)
+	fb := chk_fold(em, b, names)
 	return Folded(false, 0) if not fa.ok or not fb.ok
 
 	return match guard { chk_lit_apply(o, fa.value, fb.value) } {
@@ -1494,7 +1630,7 @@ fn chk_lit_eval_pair(o: str, a: Expr, b: Expr) -> Folded {
 # runtime that would have computed it cannot disagree — `/` and `%` are Euclidean in both
 # because they are the same operator.
 #
-# The last line is unreachable — chk_lit_eval_pair has already refused every operator this
+# The last line is unreachable — chk_fold_pair has already refused every operator this
 # list does not name — and is here because a function ends in a value.
 fn chk_lit_apply(o: str, x: int, y: int) -> int {
 	return x + y if o == "+"
@@ -1630,7 +1766,18 @@ fn chk_lit_float_tree(e: Expr) -> bool {
 # chk_fits is whether a value of type `got` may fill a slot declared `want`.
 fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
-	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
+
+	# THE THREE RESHAPING SLOTS ARE THREE RULES, and they used to be one line that answered
+	# yes to everything. `return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)`
+	# was written to protect three real reshapes — a bare value wrapping into a carrier, a
+	# bidirectional channel narrowing to one end, a map literal taking its types from the
+	# declaration — and it protected them by not comparing at all, so `ch: chan[str] =
+	# chan[int](1)` compiled and RAN, and `ch: chan[int] = 7` and `m: map[str, int] = 7`
+	# reached cc as pointer conversions against generated C. The seed refuses all three by
+	# name; each reshape keeps its exemption below, and nothing else keeps one.
+	return chk_carrier_fits(em, want, got) if c_is_carrier(want)
+	return chk_chan_fits(em, want, got) if ty_is_chan(want)
+	return chk_map_fits(em, want, got) if c_is_map(want)
 
 	# NO SCALAR WIDENS HERE, AND NONE WIDENS ANYWHERE. A conversion between two scalars is
 	# written — `int(b)`, `float(i)` — and there is no longer a second route through a
@@ -1668,9 +1815,71 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
-	return true if c_is_opt(got)
+	return true if ty_is_opt(got)
 
 	return ty_eq(want, got)
+}
+
+# chk_carrier_fits is what a declared `T?`, `Result[T]` or `Either[X, Y]` takes.
+#
+# A carrier slot takes a value TWO ways, and c_carrier_fit is the emitter's half of both: a
+# carrier of its own shape PASSES THROUGH, and anything else is INJECTED as the payload —
+# which is a typed position of its own, checked by the recursion under c_fit_copied. So a
+# bare value entering a carrier already had a rule, and it is the one that reports `x: int?
+# = "hi"` against the `int` rather than against the `int?`, naming where the mistake is.
+#
+# What had no rule at all is a carrier meeting a DIFFERENT carrier. It can do neither thing:
+# `x: str? = y` for an `int?` cannot pass through, since the two are different C structs, and
+# cannot be injected either, since a `str` payload does not take an `int?`. It reached cc as
+# an incompatible pointer handed to `zrt_str_retain`. Answering `ty_eq` for that pairing is
+# the whole of this rule; everything else keeps the exemption it always had.
+fn chk_carrier_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return ty_eq(want, got) if c_is_carrier(got)
+
+	return true
+}
+
+# chk_chan_fits is what a declared channel end takes, and it is HALF of that question on
+# purpose. A channel type is an element and a direction, and the two are not the same rule:
+#
+#   the element is INVARIANT. `chan[int]` and `chan[str]` are one `zrt_chan *` in C and two
+#   types in the language, so nothing tells them apart at run time — `ch: chan[str] =
+#   chan[int](1)` compiled, ran, and would have read an int back out as a pointer. That is
+#   this rule, and it had none.
+#
+#   the direction only NARROWS. A bidirectional end fills any slot, a directional end fills
+#   only its own, and neither single direction crosses to the other (docs/code/coroutine.md;
+#   c_chan_dir_ok is the predicate). That rule already has an owner in c_chan_check, whose
+#   sentence names both ends AND the site — better than anything this comparison could say —
+#   so it is not repeated here. One rule reported from two places is two rules wearing one
+#   name, and this project retires codes for exactly that.
+#
+# An unknown element is not evidence of anything, the same exemption chk_fits opens with:
+# refusing on it would turn a gap in inference into a rejected program.
+fn chk_chan_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return false if not ty_is_chan(got)
+
+	we := ty_chan_elem(want)
+	ge := ty_chan_elem(got)
+	return true if c_is_unknown(we) or c_is_unknown(ge)
+
+	return ty_eq(we, ge)
+}
+
+# chk_map_fits is a map against a map, key against key and value against value. It recurses
+# through chk_fits rather than asking ty_eq, which is what the list rule beside it does and
+# for the same reason: an EMPTY literal infers `map[?, ?]` — c_map_lit_ty has no entry to
+# read a type from — and an unknown on either side is exempt one level down.
+#
+# The map literal that is NOT empty is exempt one level up, in chk_fits_expr, because it is
+# built at the declared types entry by entry. What is left for this rule is two maps that
+# both already exist, where `b: map[str, str] = a` for a `map[str, int]` used to be no
+# mismatch at all: the copy went through, and every value read back out was a `str` header
+# read off an int64_t.
+fn chk_map_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return false if not c_is_map(got)
+
+	return chk_fits(em, c_map_key_ty(want), c_map_key_ty(got)) and chk_fits(em, c_map_val_ty(want), c_map_val_ty(got))
 }
 
 # --- returned value ---------------------------------------------------------------
@@ -1706,7 +1915,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	# the fixed-width ladder's own sentence behind it, which is what sent anybody looking.
 	nm := c_named_of(declared)
 	if nm != "" and not c_is_type_name(em, nm) {
-		c_builtin_check(nm)
+		c_builtin_check(em, nm)
 		chk_at(em, "E334", f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
 		return
 	}
@@ -1743,11 +1952,45 @@ fn chk_bind_mismatch(mut &em: Emitter, path: str, line: int, col: int, got: Ty, 
 # in a cache file nobody wrote; `x := {:}` and `x := nil` compiled in silence and bound
 # something the rest of the program then read. A form the language says has no type must be
 # refused where it has no position, not given one by accident of lowering.
-fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) {
+#
+# It ANSWERS whether it reported, because chk_no_nil_value below stands right beside it at
+# the one caller and `x := nil` is a mistake both would name. One mistake earns one message.
+fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) -> bool {
 	what := chk_typeless_form(ival)
-	return if what == ""
+	return false if what == ""
 
 	chk_at(em, "E336", f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
+	return true
+}
+
+# chk_no_nil_value is THE rule that `nil` is not a value, and it is ONE function because it
+# is one rule: a position that must HOLD a value cannot take a thing with no width, no
+# storage and no rendering. Two forms ANSWER nil and neither says so on its face —
+# GRAMMAR#fn-decl gives a function with no `-> type` a nil result, and GRAMMAR#block gives a
+# block whose last statement is not an expression (or that has none at all) the same — so
+# what a reader writes is `x := f()` or `z := { nop }`, which look like values.
+#
+# BOTH ESCAPED TO CC, from the same missing site and by two different C errors: `void zg_x =
+# zg_f();` is "variable has incomplete type 'void'", and `{ nop }` infers nil, which c_type
+# spells `int64_t` by its fallback, so it is "initializing 'int64_t' with an expression of
+# incompatible type 'void'". They read as two bugs and are one — the TYPED positions
+# (`x: int = f()`, `w: int? = { nop }`) were already checked, and only the INFERENCE path
+# had no rule.
+#
+# `where` names the position rather than the value, because the value is exactly what the
+# reader cannot see: naming `f()` would say nothing the source does not already show.
+#
+# It asks c_holds_nil and not c_is_nil_ty, so a CONTAINER of nil is the same finding: a list
+# element and a tuple component are storage the C spells too, and `xs := [f()]` reached cc
+# by that route. Which part is nil is left to the reader — the expression is on the line.
+fn chk_no_nil_value(mut &em: Emitter, t: Ty, where: str) {
+	return if not c_holds_nil(t)
+
+	mut says := "and this one is nil"
+	if not c_is_nil_ty(t) {
+		says = "and a part of this one is nil"
+	}
+	chk_at(em, "E390", f"{where} needs a value, {says} — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl), and so does a block whose last statement is not an expression (GRAMMAR#block); nil has no storage and no rendering, so run it as a statement of its own, or give the `fn` a type to answer with")
 }
 
 # chk_typeless_form names the form when an expression is one of the ones that carry no type,
@@ -1776,7 +2019,7 @@ fn chk_empty_says(n: int, says: str) -> str {
 # the whole declaration, so nothing said anything at all.
 fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
-	# registries exist, so asking would always answer no — c_build_type_names is the pass
+	# registries exist, so asking would always answer no — c_build_top_names is the pass
 	# that already asks it of every kind of type name at once, and the typedef joins it.
 	#
 	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
@@ -1795,7 +2038,16 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 		# while claiming to cover them all: `type W = u8` reported "names no type — `u8` is not
 		# declared", which is the unnamed refusal the rule exists to kill, one type position
 		# over.
-		c_builtin_check(nm)
+		#
+		# The DECLARATION'S place is put on the emitter first, the way c_check_named_sites
+		# does it for the same reason: this pass runs before any statement is emitted, so the
+		# SAt markers have said nothing and the place trailer c_builtin_check appends would
+		# name the last unit's. The finding below already carries `td`'s place explicitly; a
+		# refusal raised inside the funnel can only read it from here.
+		em.at_path = td.path
+		em.at_line = td.line
+		em.at_col = td.col
+		c_builtin_check(em, nm)
 
 		chk_at_place(em, td.path, td.line, td.col, "E337", f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
 		return Ty.TUnknown
@@ -1846,14 +2098,26 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 	}
 }
 
-# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
-# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
-# about the numbering. One counted from 1 and the other from 0, so the same field of the same
-# struct was "field 1" or "field 0" depending on which mistake you made.
+# chk_field_says names a struct's field, and it is shared with the emitter's missing-field
+# diagnostic — because the two disagreed about the numbering. One counted from 1 and the
+# other from 0, so the same field of the same struct was "field 1" or "field 0" depending on
+# which mistake you made.
 #
-# `pos` arrives 1-based, which is chk_arg_says' convention.
-pub fn chk_field_says(sname: str, pos: int) -> str {
-	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
+# IT NAMES THE FIELD, which docs/core/types.md requires of the missing-field rule ("a
+# construction short of one is an error naming the field") and which `E482` beside it has
+# always done. It said "field 2 of `Config`" instead — a number the reader then has to count
+# their own declaration against, and one that means a different field the moment a field is
+# inserted above it. The position is what the CONSTRUCTION gives, since it binds by position;
+# the declaration is where the name is, and the compiler is holding both.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention; the field table is 0-based. A
+# struct nothing registered has no name to give, and then this falls back to the number
+# rather than printing an empty one.
+pub fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
+	row := c_struct_field_row(em, sname, pos - 1)
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`" if row < 0
+
+	return f"the field `{em.fld_name[row]}` of `{sname}`"
 }
 
 # --- assigned value ---------------------------------------------------------------
@@ -1948,7 +2212,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	# this under the equality branch, which is where it went first, closed one family of
 	# five. The language's answer is the binding form, which is also the only one that
 	# hands over the value when there is one.
-	if c_is_opt(ta) or c_is_opt(tb) {
+	if ty_is_opt(ta) or ty_is_opt(tb) {
 		chk_at(em, "E341", f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
 		return
 	}
@@ -2216,7 +2480,7 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 
 	# an optional gets the binding advice ALONE: `x != 0` is a program the operand rule
 	# refuses, so following this diagnostic would earn a second one
-	if c_is_opt(t) {
+	if ty_is_opt(t) {
 		chk_at(em, "E354", f"the condition of {site} must be bool, and this one is {ty_name(t)} — bind it with `if v := x {{ … }}`, which also hands over what it holds")
 		return
 	}
@@ -2333,12 +2597,163 @@ fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 # that group is the one home the language gives a mutable global (docs/runtime/ffi.md,
 # GRAMMAR group 12), the parser records the context on the declaration (in_unsafe), and
 # the binding lowers as an ordinary module global whose k_mut row keeps it writable.
+#
+# AND IT MAY NOT BE `pub`. That is the other half of the same sentence — "a mutable global is
+# module-private (never `pub`)", docs/surface/grammar.md — and it is the half that decides how
+# far the escape hatch reaches. `unsafe { pub mut shared := 5 }` was accepted and genuinely
+# exported: another module's SAFE `main` both read `glob.shared` and assigned it, with no
+# `unsafe` anywhere and no diagnostic. A group is one module's bargain with its own author,
+# and `pub` on a `mut` binding offers that bargain to everyone who imports it.
+#
+# ONE of the sentences, never two, which is the discipline chk_assignable states above for the
+# same reason: `pub mut x := 5` at the top level with no group is answered by the rule about
+# the `mut`, and adding a second finding about the `pub` would describe a binding the reader
+# is not going to keep.
+
+# chk_top_stmts is the OTHER thing the top level is not a place for: a statement.
+#
+# docs/runtime/package.md gives the module top level immutable state and nothing else —
+# constants, functions, types and specs, readied before `main`, which is where a program
+# begins. A statement asks to be RUN, and a compiled program has no moment at which to run
+# one. GRAMMAR#program still derives it: `program ::= stmt-list` is SCRIPT mode, and the
+# grammar opens the language with the `nop` program, so the form is well-formed syntax and
+# the parser reads it whole (p_take_top_stmt).
+#
+# WHICH END THIS TAKES, and why. It used to take neither: `print 999` at the top level, a
+# top-level `if true { … }`, a `for { break }` — all three were parsed and then DROPPED, with
+# no diagnostic and no lowering, so the program built and printed nothing. That is the silent
+# wrong answer docs/conformance.md's standing rule exists to forbid, and it is worse here
+# than most because the reader can see the statement in their own source.
+#
+# Running it is the other end, and it is not this compiler's to offer: script mode means a
+# top level with a lifetime, and what a build produces is an object or an executable whose
+# entry is `main`. So the honest answer is the refusal, and it lands where the missing `fn
+# main` lands — in the BUILD rather than the parse (docs/conformance.md), because a parse
+# that turned the form away would be claiming this compiler cannot read a production it can.
+#
+# `nop` is the exception, written down in the parser: it does nothing and yields nothing, so
+# running nothing for it IS running it.
+#
+# It walks `own` for chk_top_muts' reason: once per unit, or the whole-program view would
+# repeat the finding once per module.
+fn chk_top_stmts(mut &em: Emitter, own: File) {
+	for s in own.stmts {
+		chk_at_place(em, s.path, s.line, s.col, "E391", f"`{s.word}` opens a statement at the top level, and a compiled program has nowhere to run it — outside `main` lives only immutable state readied before it (docs/runtime/package.md), so move it into a `fn` body. GRAMMAR#program derives the form for SCRIPT mode, and `nop` is the one that costs nothing to run")
+	}
+}
+
 fn chk_top_muts(mut &em: Emitter, own: File) {
 	for c in own.consts {
 		if c.is_mut and not c.in_unsafe {
 			chk_at_place(em, c.path, c.line, c.col, "E358", f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
+		} else if c.is_mut and c.is_pub {
+			chk_at_place(em, c.path, c.line, c.col, "E484", f"the mutable global `{c.name}` may not be `pub` — a module-level " + "`unsafe { … }` group is one module's bargain with its own author, so what it holds is module-private (docs/surface/grammar.md). Expose a `pub fn` that reads it instead")
 		}
 	}
+}
+
+# --- a qualified name's member -----------------------------------------------------
+
+# chk_no_member is the other half of a qualified name: the prefix IS a namespace, and the
+# module has no such member. It is one function for the three shapes that can ask — a member
+# read, a call, and a `spawn` / `defer` callee — because the answer is one sentence, and it
+# was three: the read raised without a place, the call said "the method `x` on a ?" (which
+# describes a namespace as a value of no type), and the callee named the form as not built.
+#
+# A CHECKED rule and not a raise: the question is well formed and the program is wrong, so it
+# owes a place like every other rule here, and the C written after it is discarded.
+fn chk_no_member(mut &em: Emitter, ns: str, member: str) {
+	chk_at(em, "E388", f"module `{ns}` has no `{member}`")
+}
+
+# --- what an import binds ----------------------------------------------------------
+#
+# An `import` binds a NAMESPACE, and GRAMMAR#import-stmt says where that binding lives: "the
+# bound name lives in the one value namespace, so colliding with a local name is an error —
+# rename with `as`". Nothing checked it. Two imports whose paths end in the same segment
+# both bound `text` and both answered through it, so `alt/text` and `util/text` were one
+# namespace holding the union of their members; a `fn text()` beside `import "util/text"`
+# coexisted with it, and which of the two a `text…` reached depended on whether the reader
+# wrote a `(` or a `.`.
+#
+# It is asked of the WHOLE program, which is the grain E382 already states for the same
+# reason: every module of a program flattens into one namespace here, so a name taken
+# anywhere is taken. A repeat of the SAME import is not a collision — a module two files
+# import is the ordinary case, and it binds one namespace to one module either way.
+# The verdict is the WHOLE program's and the reporting is the UNIT's, which is a split
+# chk_top_muts explains: this runs once per unit, so a rule that reported over the merged
+# list said the same thing once per module of the build. Every import is judged against
+# every other; only the ones this unit wrote are spoken about.
+fn chk_import_names(mut &em: Emitter, f: File, own: File) {
+	mut i := 0
+	for i < f.imports.len() {
+		if chk_import_here(own, f.imports[i]) {
+			chk_import_name(em, f, i)
+		}
+		i = i + 1
+	}
+}
+
+# chk_import_here is whether an import of the merged program is one this unit wrote. A place
+# is the identity: the unit's rows ARE the merged rows, copied, so nothing else distinguishes
+# two imports of one module written in two files.
+fn chk_import_here(own: File, im: ImportDecl) -> bool {
+	for o in own.imports {
+		return true if o.at == im.at and o.line == im.line and o.col == im.col
+	}
+	return false
+}
+
+# chk_import_name asks the one question of the import at row `i`: is this name already
+# something else? The answer is reported at the IMPORT, never at whatever it collides with,
+# because the import is the half that carries the fix — `as` renames it, and nothing renames
+# a function from its call sites.
+#
+# Only the rows BEFORE it are consulted, so the first spelling of a name is the one that
+# keeps it and one collision is one finding rather than two mirror images of it.
+fn chk_import_name(mut &em: Emitter, f: File, i: int) {
+	im := f.imports[i]
+	mut j := 0
+	for j < i {
+		other := f.imports[j]
+		if other.name == im.name and other.path != im.path {
+			chk_import_taken(em, im, f"the namespace of `{other.path}`")
+			return
+		}
+		j = j + 1
+	}
+
+	what := chk_decl_kind(em, im.name)
+	return if what == ""
+
+	chk_import_taken(em, im, what)
+}
+
+# chk_import_taken is the one wording of the one rule, whichever of the two things took the
+# name: the sentence tells the two cases apart and the CODE says it is one rule, which is
+# what a code is for.
+fn chk_import_taken(mut &em: Emitter, im: ImportDecl, what: str) {
+	chk_at_place(em, im.at, im.line, im.col, "E389", f"`{im.name}` is already {what} — an import binds a name into the one value namespace, so rename it with `as`")
+}
+
+# chk_decl_kind is what a top-level declaration of `name` IS, or "" when nothing declares
+# one. A type is not in the value namespace the import binds into, and it is asked about all
+# the same: this compiler mangles every top-level name into one C namespace, so a namespace
+# and a struct of one name would collide there whatever the language says about the two.
+#
+# IT READS THE TABLE, and does not build a second one. c_build_top_names already walks the
+# six top-level lists — that walk is what refuses a name declared twice — and it records
+# what each name is. This used to re-walk the same six, in a different order, with its own
+# wording for each of the six answers; the order was harmless (a name in two of them is
+# already refused) and the second walk was not, because it ran over the program with its
+# TEMPLATES REMOVED and so could not see `fn foo[T](…)` taking the name an import wanted.
+fn chk_decl_kind(mut &em: Emitter, name: str) -> str {
+	mut i := 0
+	for i < em.top_names.len() {
+		return em.top_kinds[i] + " in this program" if em.top_names[i] == name
+		i = i + 1
+	}
+	return ""
 }
 
 # --- the rendering overrides -------------------------------------------------------

@@ -25,6 +25,15 @@ the grammar:
 ([Null-safety & Errors](../code/errors.md)); the NUL-terminated in-memory form of a `str` is the C
 boundary's business ([FFI](../runtime/ffi.md)), not a property of the type.
 
+Two forms **answer `nil`** without saying so on their face: a `fn` with no `-> type` (`GRAMMAR#fn-decl`)
+and a **block** whose last statement is not an expression, or that has none at all (`GRAMMAR#block`). What
+they answer is an absence, and **an absence is not a value a position can hold** — it has no width, no
+storage and no rendering. So `x := f()` and `z := { nop }` are refused with a place, as are `print f()`,
+an f-string's `{f()}` and `str(f())`, and so is a **container** built out of one: `[f()]` and `(f(), 1)`
+are storage too, one level down. The position that **does** take an absence is a `T?`, which is what
+`z: int? = { nop }` writes — a carrier moves the position in and wraps, exactly as
+[Type System](type-system.md) says a position may.
+
 > **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
 > are specified as stdlib types and no stdlib declares one. It is refused **by name** — a width is an
 > ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the
@@ -105,6 +114,7 @@ They are these, and the list is **exhaustive**:
 | a `return`                    | `return e`                    |
 | an argument                   | `f(e)`                        |
 | a parameter's default         | `fn f(x: byte = e)`           |
+| a field's default             | `struct P { x: byte = e }`    |
 | a struct literal's field      | `P(e)`                        |
 | an enum variant's payload     | `Shape.Line(e)`               |
 | a list literal's element      | `xs: list[byte] = [e]`        |
@@ -235,11 +245,15 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
+> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and
+> the **generic `enum`** is `E212 NotImplemented: a generic enum`Either[…]`— this compiler erases type
+parameters, and a variant's payload names one`. A generic `struct` is `E215` for the same reason. The
+> block shows the specified shapes; both of them wait on generic types.
+
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
-Its MVP limits (a `mut`-built cycle leaks; a long chain frees in O(depth)) are the [Values & Memory](memory.md)
-reference.
+What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
 
 > **[not yet]** A recursive **`struct`** cannot be declared. The `Node` written above is rejected with
 > _`Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
@@ -255,13 +269,24 @@ reference.
 An `enum`'s **discriminant behaves differently for a fieldless enum than for a payload one** — the split
 turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a variant an explicit
 `= <discriminant>` — a **compile-time-constant integer**, distinct across variants (an unspecified one is
-the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. Such an
+the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. It is the
+same **compile-time constant** an array length is, so `A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1` are all
+the form and a call is not; one that does not fold is an error **at the variant**. Such an
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
 the **enum name is a value namespace** — `Color.Green` names the variant and `Color.of(n)` reverses a number
 — with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding
-`nil`, never a wrong variant). A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
-reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
-`Encode` / `Decode` impl (**[not yet]**), never a decorator.
+`nil`, never a wrong variant).
+
+> **[deviation]** The namespace is not the enum's. A **variant name belongs to the first enum that declares
+> it**, program-wide: with `enum Colour { Red; Green }` ahead of `enum Signal { Red; Amber }`, the
+> qualified `Signal.Red` — the spelling this paragraph tells a reader to use — is refused with _E457 `Red`
+> is a variant of `Colour`, not of `Signal`_, a sentence that is false about the program it is reporting
+> on, and with no place. So the second enum's variant is unreachable and the enum itself is unusable. The
+> linter meanwhile still emits `L401` for the same pair and advises writing `Signal.Red`, which is the one
+> spelling the compiler will not take.
+> A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
+> reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
+> `Encode` / `Decode` impl (**[not yet]**), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,
@@ -286,9 +311,10 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 > **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
 > is refused by name — the parts-inheritance rule above is specified and the derivation over an unnamed
 > form is unbuilt (the shipped message still blames the missing declaration).
-> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports
-> _NotImplemented: `,` is not an expression this compiler reads_ — so a tuple result is stored and passed as
-> specified, and read back only through `.0` / `.1`.
+> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E205 expected
+> a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
+> name (the parenthesized `(a, b) := two()` does say it, as `E238`). Either way a tuple result is stored
+> and passed as specified, and read back only through `.0` / `.1`.
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
@@ -316,21 +342,51 @@ and need an explicit `ok_or` / `ok` to cross.
 
 The one primitive for building a value is the **struct literal** — it names every field, so it is
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
-(usually `pub`) associated function that returns a literal. A type with any **private field** is
-therefore **opaque** outside its module — a struct literal cannot name the private field, so outsiders
-build it only through such a `pub` function, which runs inside the type's module and can establish the
-type's invariant at the moment of construction.
+(usually `pub`) associated function that returns a literal, which runs inside the type's module and can
+establish the type's invariant at the moment of construction (**[not yet]** — an associated function is
+refused by name, _E424 `User.from_id(…)` is an associated function_, so the invariant-establishing
+constructor this section reasons from is written as a free function today). A **private field is one an outsider never
+names**: it must carry a default (below), so an outside construction leaves it off and the declaration
+decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
+decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
 
 > **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
 > `P(a: 1, b: 2)` reports _NotImplemented: the named argument `a:` — this compiler binds arguments by position
 > only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
 > itself is unaffected; what is missing is the spelling this section states its rules in terms of — "it names
-> every field" is how the opacity of a private field is derived, and `Foo(age: 2, name: base.name)` below is
-> written in a form the compiler does not read.
+> every field" is what makes a private field one an outsider cannot name, and `Foo(age: 2, name: base.name)`
+> below is written in a form the compiler does not read.
+
+### Field defaults
+
+A field may declare a **default** — `h: int = 4` — and the default is what lets that field's
+constructor argument be **omitted**: `Box(1)` on a `Box(w, h)` builds the same value `Box(1, 4)` does.
+It is the rule a [function parameter's default](../code/functions.md) already follows, at the field-wise
+constructor, and it follows it in both directions: the backfill runs from the end of the written
+arguments, so a default makes **that** field optional and not the ones before it, and a default is
+evaluated **per construction** rather than once at the declaration — an expression in it (a call, a sum
+over module constants) runs again for every construction that omits the field.
+
+There are **no zero values**. A non-optional field with no default is therefore **required** at
+construction, and a construction short of one is an error naming the field. The **one implicit default**
+is `nil` for a `T?` field, its natural absent state — a `T?` is omittable with no `=` written.
+
+The two halves meet at visibility: a **non-`pub` field is module-private, and must carry a default**. The
+field-wise constructor is public, so a required field is one every construction has to supply a value for
+— and an outsider cannot supply a value for a field it may not read. A private field with no default is
+rejected at the field's own declaration (`E482`), naming the field.
+
+> **[not yet]** A default that **reads another field** — `struct P { pub a: int; pub b: int = a * 2 }` — is
+> the one shape that is not built, and it is the same shape (and the same reason) as a parameter default
+> reading an earlier parameter in [Functions & Closures](../code/functions.md). The default is materialised
+> at the **construction**, where a field is not a name in scope, so `a` would resolve to whatever else
+> carries that name. It reports _NotImplemented: the default on field `b` of `P` reads the field `a`_,
+> with the field's place.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
-and, given a `mut` binding, writable; a private field is neither. There is no separate "public read,
-private write" axis; finer control is expressed with methods.
+and, given a `mut` binding, writable; a private field is neither (**[deviation]** — access across a
+module boundary is not yet checked; see [Modules, Packages & Programs](../runtime/package.md)). There is
+no separate "public read, private write" axis; finer control is expressed with methods.
 
 Copy-by-value reframes what a writable `pub` field means: writing one only ever changes the holder's
 **own copy**, never anyone else's value (there is no aliasing). So a `pub` mutable field is not a
@@ -393,7 +449,11 @@ spec Into[T] {
   `.into()` beside it would need the position to say which target it meant, which
   [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
   `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
-  `str(x)` answers for every type — a generic that wants text needs no bound at all.
+  `str(x)` answers for every type — a generic that wants text needs no bound at all. (**[not yet]** for a
+  **composite**: `str(P(7))` on a `struct` is _E449 NotImplemented: rendering a P as text — a composite
+  needs the structural `Display` this compiler does not generate_, and a generic reaches the same refusal
+  once monomorphized. The no-bound rule is what holds; the rendering behind it is unbuilt for composites,
+  as [Specs & Generics](specs.md) marks.)
 - **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
   as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
 - **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed
@@ -430,14 +490,25 @@ one: `T(x)` is a built-in form, and this is the list of pairs it has an answer f
 or `//` for the division that lands there. `byte → float` is absent too: that would be
 `byte → int → float`, and one step is what a conversion is — write the two.
 
+> **[deviation]** The table is not closed. Four pairs it declares absent are accepted and lower silently:
+> `float(b)` on a `byte` gives `65`, `byte(3.5)` gives `3`, `uint(3.5)` gives `3`, `rune(65.5)` gives `65`,
+> and `int(1.9)` / `int(-1.9)` truncate toward zero with nothing said. So `float → int` is not absent, it
+> is unwritten: the decision this paragraph says a spelling must make is made for the program instead.
+> (`int("42")` is the one extra pair that is intended — it **parses** a decimal string rather than
+> converting a number; see [Built-in Functions](../runtime/builtins.md) — and this table should name it.)
+
 **Any type to text is not in the table**, because it is not a conversion between types in this sense:
 `str(x)` renders a value through `display`, which every type has.
 
 **A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
 as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
 time rather than left to run. Reachability does not enter into it; `if false { b := byte(300) }` is the
-same error. It holds through a generic call once monomorphized, too: `byte(id(300))` for
-`fn id[T](x: T) -> T` is the same known constant, refused at the same compile time.
+same error.
+
+> **[deviation]** It does **not** hold through a generic call. `byte(id(300))` for `fn id[T](x: T) -> T` is
+> the same known constant once monomorphized, and it compiles: the program builds and dies at run time with
+> _OverflowError: integer conversion out of range_. The constant-folding runs before substitution, so the
+> value the specialization makes known arrives after the only pass that would have refused it.
 
 **An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
 `1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different

@@ -27,7 +27,7 @@ func TestCompletenessIter1Runs(t *testing.T) {
 		},
 		{
 			name: "u3_concrete_method",
-			src: "struct Vec {\n  x: int\n  y: int\n}\n" +
+			src: "struct Vec {\n  pub x: int\n  pub y: int\n}\n" +
 				"impl Vec {\n  fn sum() -> int {\n    return this.x + this.y\n  }\n}\n" +
 				"fn main() {\n  v := Vec(1, 2)\n  print v.sum()\n}\n",
 			want: "3\n",
@@ -125,7 +125,7 @@ func TestCompletenessIter2Runs(t *testing.T) {
 		{
 			// tuple value + method dispatch (U3) + fixed-width local (U4) + if-expr (U1).
 			name: "u2_composed_with_iter1",
-			src: "struct Vec {\n  x: int\n  y: int\n}\n" +
+			src: "struct Vec {\n  pub x: int\n  pub y: int\n}\n" +
 				"impl Vec {\n  fn sum() -> int {\n    return this.x + this.y\n  }\n}\n" +
 				"fn main() {\n  w: u16 = 7\n  v := Vec(1, 2)\n" +
 				"  hi := if w > 5 { 100 } else { 0 }\n" +
@@ -170,7 +170,7 @@ func TestGuardResultNilReconciles(t *testing.T) {
 // stdlib nominal wrapper over a `Ref[int]` cell (zero backend change beyond the shared
 // generic/method machinery). It needs the runtime, so it is asserted at the C level.
 func TestAtomicNameableType(t *testing.T) {
-	src := "struct Atomic[T] {\n  cell: Ref[T]\n}\n" +
+	src := "struct Atomic[T] {\n  pub cell: Ref[T]\n}\n" +
 		"impl Atomic[int] {\n" +
 		"  fn load() -> int {\n    return __zrt_atomic_load(this.cell)\n  }\n" +
 		"  fn fetch_add(n: int) -> int {\n    return __zrt_atomic_add(this.cell, n)\n  }\n}\n" +

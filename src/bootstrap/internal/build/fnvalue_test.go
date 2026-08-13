@@ -49,7 +49,7 @@ func TestFunctionValueAsParameter(t *testing.T) {
 // function pointer, and declarations are written before any body, so a typedef decided
 // while lowering a body would arrive too late.
 func TestFunctionValueInStructField(t *testing.T) {
-	src := "struct Cmd {\n\tname: str\n\taction: fn(int) -> int\n}\n\n" +
+	src := "struct Cmd {\n\tpub name: str\n\tpub action: fn(int) -> int\n}\n\n" +
 		"impl Cmd {\n\tfn run(x: int) -> int {\n\t\treturn this.action(x)\n\t}\n}\n\n" +
 		"fn double(x: int) -> int {\n\treturn x * 2\n}\n" +
 		"fn square(x: int) -> int {\n\treturn x * x\n}\n" +

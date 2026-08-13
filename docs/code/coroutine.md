@@ -12,9 +12,11 @@ handle, no join/await; you observe results and completion **only through channel
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 
-> A **closure literal** is not one of the three callee forms, and is refused by name: a lambda may
-> capture nothing this phase, so there would be no environment to hand a coroutine even if the shape
-> were accepted.
+> A **closure literal** is not one of the three callee forms, and is refused by name — `E222
+NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. The reason is the callee
+> shape and nothing about closures: a lambda **does** capture (`add := fn (x: int) -> int { return x + n }`
+> reads `n` and runs), so an environment exists; what is missing is a call through anything but a name.
+> Bind the closure to a name and `spawn` it by that name.
 
 - **Arguments are a snapshot** — taken where the `spawn` is **written**, not where the call runs. A
   `mut` binding written afterwards is not seen by the coroutine, which may not have started; a `list`,
@@ -42,8 +44,9 @@ This is the whole point of fire-and-forget, and a **choice, not an omission**. B
 to its spawning scope is exactly **structured concurrency** (a nursery that joins its children); Zerg declines
 it to keep `spawn` handle-less and the model small. The costs are accepted and explicit: **no join, no
 parent-waits, no automatic failure propagation** — coordination is the caller's, always through channels. A
-child's failure reaches others only as a `Right(err)` on a channel close (see Unhandled aborts); at program
-end, still-running coroutines are simply no longer scheduled (see Termination & deadlock).
+child's failure reaches others only as the `Err` its channel close raises at their next receive (see
+Unhandled aborts); at program end, still-running coroutines are simply no longer scheduled (see
+Termination & deadlock).
 
 A scope-owned _value_ may still **signal** a coroutine — a resource whose `drop` **sends** on a cancel
 channel the coroutine watches — but that is cooperative signalling, not ownership: the coroutine observes
@@ -107,12 +110,13 @@ Both channel error kinds are **reified and nameable**: a send on a closed channe
 `SendOnClosedError`, `DeadlockError` is the clean, catchable abort described under Termination &
 deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).
 
-**`StopIteration` is nameable but deliberately not constructible.** A receiver may write
-`err is StopIteration` to tell a clean end from a crash; **no** program can `raise StopIteration(…)` —
-the name is not a constructor, and writing one is a compile error in **both** compilers. The asymmetry
-is the whole point of testing by **kind** rather than by comparing the message: a sender able to raise
-the sentinel would close its channel wearing the end-of-stream marker, and its consumer would read a
-crash as a clean finish.
+**`StopIteration` is nameable but deliberately not constructible.** `err is StopIteration` is a legal
+test — it is one of the built-in kinds — but **no** program can `raise StopIteration(…)`: the name is not
+a constructor, and writing one is a compile error in **both** compilers. Nothing a receiver sees answers
+that test today, because the receive below already tells a clean end from a crash by which of the two
+routes it arrives on; the sentinel is the runtime's own end-of-stream marker and stays out of reach for
+exactly that reason. A sender able to raise it would close its channel wearing the marker, and its
+consumer would read a crash as a clean finish.
 
 ### Send — `ch <- v`
 
@@ -148,6 +152,27 @@ the death. Nobody can forget now.
 that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
 or agree on a sentinel.
 
+It is the **type** that is refused, not one way of writing it: a parameter, a result, a struct field,
+a typed binding, a `type` declaration, a `chan` nested inside another type and the constructor
+`chan[T?](…)` are all the same type spelled in different places, and every one of them is turned
+away. The same goes for a channel a generic makes — instantiating a `chan[T]` template with an
+optional is refused where the specialization is formed.
+
+A receive answering a **carrier** is also what decides how a receive **of a receive** is written.
+[`GRAMMAR#recv-base`](../../GRAMMAR) is self-recursive — `recv-base ::= '<-' recv-base | primary` — so
+`<-` may stand in front of another receive, and a `chan[chan[int]]` is an ordinary thing to build.
+But the outer receive answers `chan[int]?`, and a **carrier is not a channel**, so the nesting opens
+it in between:
+
+```text
+x := <-((<-cc)!)      # yes — the inner handle is insisted on, and x is an int?
+x := <-(<-cc)         # refused — `<-ch` needs a channel, and chan[int]? is not one
+```
+
+That is not a rule about nesting. **Every** channel operation asks the same question of what it is
+handed — `<-x`, `x <- v`, `close(x)`, and both kinds of `select` arm — and for anything that is not a
+channel end the answer is one refusal, by name and with a place.
+
 Every need falls out of the four operators `T?` already had — the **receiver** chooses:
 
 ```text
@@ -169,18 +194,18 @@ whether this stream ending badly is your business — and `guard` is where that 
 `?` on a receive, meanwhile, now needs only what any `T?` needs: the absence is an ordinary optional,
 so the `Result[T]`-in-a-signature problem that used to be noted here is off the channel path.
 
-The `match` line above also carries a restriction, and it is the one most likely to bite: what may
-stand in an arm.
+The `match` line above is worth one more note, about what may stand in an arm. A `match` arm's body is
+an **expression**, and a block **is** one — so `Left(v) => { … }` holds several statements and yields
+its last one's value, and a statement such as `print` stands **inside** that block perfectly well.
+`c_match` lowers to a ternary chain, and a block lowers to a statement expression, which is an operand
+of one like any other. What a statement may not be is the arm's **whole body**: `1 => print "one"` is
+turned away with _NotImplemented: `print` is a statement, and an expression is wanted here_, because
+there the arm has nothing else to yield. Wrap it in braces and the arm has a block, which does.
 
-> **[not yet]** The spec makes a `match` arm's body an expression, and a block **is** an
-> expression, so `Left(v) => { … }` is grammatical — but `c_match` lowers to a ternary chain, which
-> cannot hold a block, and the arm is refused by name (_a block used as an expression_), so a
-> statement such as `print` may not stand in one.
-> The workaround is to make the arm a **call** whose value is the arm's value, as the actor example
-> below does. `select` arms are unaffected, and for a reason worth keeping straight: a `match` arm
-> must **yield** the match's value, while a `select` yields nothing and its arm **runs**. So a select
-> arm's body is a **statement** (GRAMMAR group 9) — `break` is ordinary there, a bare `print` stands
-> in an arm, and a block is just one statement among them.
+`select` arms differ, and the reason is worth keeping straight: a `match` arm must **yield** the
+match's value, while a `select` yields nothing and its arm **runs**. So a select arm's body is a
+**statement** (GRAMMAR group 9) — `break` is ordinary there, and a block is just one statement among
+them.
 
 ## Closing — automatic on the last sender, `close(ch)` when it must be early
 
@@ -219,7 +244,7 @@ It marks the **channel**, not a holder, and everything follows from that:
   answers the `Right`.
 - **A send after it aborts** (`SendOnClosedError`) rather than being quietly dropped.
 - **A receive-only end may not close** — a consumer must not end a stream on the producers' behalf. It
-  is a compile error (_cannot close a receive-only channel_).
+  is a compile error (_E505 cannot close a receive-only channel_).
 
 `close` does **not** replace auto-close, and two shapes say why. A **crashing** producer never reaches
 any statement. And in **fan-in** the last of several producers to finish ends the stream with no
@@ -324,6 +349,10 @@ it — no terminal arm, no counter, no flag, and the exit sits in the head where
 - A receive arm binds a plain **`T`**. An arm that fires has a value by construction: a **cleanly**
   closed channel is an absence, so its arm is **dropped from the wait** — it never fires and never
   competes, which is what stops a finished producer from starving a live one.
+- **The binding belongs to its own arm**, and to nothing else: it is not in scope in another arm, nor
+  after the `select`. That is why every arm above may call its value `v` — the same rule an if-let
+  binding and a `for` loop variable each get, and the reason a name reaching past its arm is an
+  ordinary _undefined name_.
 - A **crash** close **raises** out of the select, carrying the producer's `Err`. It never reaches an
   arm body, so no receiver can run over it without noticing.
 - A **send arm** on a closed channel **aborts** when chosen (send-on-closed is a bug).
@@ -377,8 +406,8 @@ fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 
     for select {
         v := <-work           => { total = total + v }          # v is an int: an arm that fires has a value
-        <-cancel              => { out <- total  return }       # stopped early — a value was SENT
-        <-time.after(1000000) => { out <- total  return }       # timeout — 1ms, in nanoseconds
+        <-cancel              => { out <- total; return }       # stopped early — a value was SENT
+        <-time.after(1000000) => { out <- total; return }       # timeout — 1ms, in nanoseconds
     }
     out <- total                                                # work and cancel both ended
 }
@@ -446,8 +475,8 @@ fn counter(inbox: <-chan[Cmd]) {
 `answer` exists because **a match arm's body is an expression**: a send is a statement and cannot
 stand in an arm, so the reply travels through a call whose value is the state to keep. That also has
 the pleasant effect of making the owner's state writable in exactly one place. (A block `{ … }` is an
-expression in the grammar and would serve here, but not in the shipped `zerg` — see the `[deviation]`
-under Receive.)
+expression, and one holding the send would serve here too — `Cmd.Get(rep) => { rep <- n; n }` builds and
+runs. `answer` is kept because it puts the one write in one place, not because the block is refused.)
 
 - **tell** (fire-and-forget) is a plain send — `inbox <- Add(5)`.
 - **ask** (request-reply) sends a fresh reply channel and blocks on it —
@@ -475,7 +504,7 @@ provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
 A **generator is not a language feature** — it is a **coroutine that sends to a channel**, drained by the
 consumer with `for v in ch`. The channel _is_ the `Iterator`: it yields values until the producer's scope
-exits and the channel closes, and the closing `StopIteration` ends the loop. There is no `yield` keyword and
+exits and the channel closes, and the close is what ends the loop. There is no `yield` keyword and
 no generator type; the `send` is the yield.
 
 ```text
@@ -494,7 +523,7 @@ fn range(lo: int, hi: int) -> <-chan[int] {
     return ch               # the caller gets a receive-only end and is never a sender
 }
 
-for v in range(0, 10) { use(v) }   # drains until StopIteration
+for v in range(0, 10) { use(v) }   # drains until the producer's channel closes
 ```
 
 Early consumer exit is the one wrinkle. If the consumer stops first (a `break`), a blocking `out <- n` waits
@@ -511,7 +540,9 @@ sugar over exactly the pieces above, added only if the need proves real (DDD), n
 An abort never caught by `guard` (see the error model) **kills only that coroutine** — its stack
 unwinds (freeing scopes, decrementing channel refcounts) while everything else runs on. This is
 fire-and-forget, but the failure is **not lost**: closing a channel as the last sender carries the
-crash `Err`, which the consumer reads as `Right(err)` (a clean finish carries `StopIteration` instead).
+crash `Err`, which is **raised at the consumer's next receive** (a clean finish gives `nil` instead —
+Receive, above). Measured: a producer that aborts after one send makes the consumer's second `<-ch`
+re-raise `IOError: disk went away` rather than answer an absence.
 
 The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at the top level prints one
 — and then that coroutine is gone and the program runs on. The report is **purely observational**:

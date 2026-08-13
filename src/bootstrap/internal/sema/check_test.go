@@ -73,16 +73,16 @@ func TestFixedWidthOperators(t *testing.T) {
 // TestStructConstructionAndField covers construction 'T(a: …)' with named
 // arguments (fields as parameters) and field access (DESIGN-1b §3.6/§4.6).
 func TestStructConstructionAndField(t *testing.T) {
-	src := "struct Point {\n  x: int\n  y: int\n}\n" +
+	src := "struct Point {\n  pub x: int\n  pub y: int\n}\n" +
 		"fn f() -> int {\n  p := Point(x: 1, y: 2)\n  return p.x\n}"
 	wantOK(t, src)
 
 	t.Run("an unknown field is an error", func(t *testing.T) {
-		wantErr(t, "struct Point {\n  x: int\n}\nfn f() -> int {\n  p := Point(x: 1)\n  return p.z\n}",
+		wantErr(t, "struct Point {\n  pub x: int\n}\nfn f() -> int {\n  p := Point(x: 1)\n  return p.z\n}",
 			"no field")
 	})
 	t.Run("a wrong field type is an error", func(t *testing.T) {
-		wantErr(t, "struct Point {\n  x: int\n}\nfn f() {\n  p := Point(x: true)\n}",
+		wantErr(t, "struct Point {\n  pub x: int\n}\nfn f() {\n  p := Point(x: true)\n}",
 			"cannot use bool as int")
 	})
 }
@@ -115,7 +115,7 @@ func TestReassignTypeMismatch(t *testing.T) {
 	wantErr(t, "fn f() {\n  mut x := 1\n  x = true\n}", "cannot assign")
 
 	t.Run("a struct field reassignment is typed", func(t *testing.T) {
-		wantErr(t, "struct Point {\n  x: int\n}\nfn f() {\n  mut p := Point(x: 1)\n  p.x = true\n}",
+		wantErr(t, "struct Point {\n  pub x: int\n}\nfn f() {\n  mut p := Point(x: 1)\n  p.x = true\n}",
 			"cannot assign")
 	})
 }
@@ -123,5 +123,5 @@ func TestReassignTypeMismatch(t *testing.T) {
 // TestThisInMethod binds 'this' to the receiver type inside an inherent method
 // body (DESIGN-1b §4.9).
 func TestThisInMethod(t *testing.T) {
-	wantOK(t, "struct Point {\n  x: int\n}\nimpl Point {\n  fn get() -> int {\n    return this.x\n  }\n}")
+	wantOK(t, "struct Point {\n  pub x: int\n}\nimpl Point {\n  fn get() -> int {\n    return this.x\n  }\n}")
 }

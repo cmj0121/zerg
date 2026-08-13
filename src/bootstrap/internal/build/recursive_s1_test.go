@@ -24,7 +24,7 @@ func TestRecursiveEnumListBalanced(t *testing.T) {
 		"enum List { Nil; Cons(int, List) }\n"+
 			"fn sum(l: List) -> int {\n"+
 			"\treturn match l {\n"+
-			"\t\tNil => 0\n"+
+			"\t\tList.Nil => 0\n"+
 			"\t\tCons(h, t) => h + sum(t)\n"+
 			"\t}\n}\n"+
 			"fn main() -> Result[nil] {\n"+
@@ -73,9 +73,9 @@ func TestRecursiveMutualEnumBalanced(t *testing.T) {
 			"enum B { BEnd; BA(A) }\n"+
 			"fn count(a: A) -> int {\n"+
 			"\treturn match a {\n"+
-			"\t\tAEnd => 0\n"+
+			"\t\tA.AEnd => 0\n"+
 			"\t\tAB(b) => match b {\n"+
-			"\t\t\tBEnd => 1\n"+
+			"\t\t\tB.BEnd => 1\n"+
 			"\t\t\tBA(inner) => 1 + count(inner)\n"+
 			"\t\t}\n"+
 			"\t}\n}\n"+
@@ -93,7 +93,7 @@ func TestRecursiveMutualEnumBalanced(t *testing.T) {
 // coercing a Node into the optional field, read back through force `!`, and freed.
 func TestRecursiveStructNodeOptBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Node {\n\tval: int\n\tnext: Node?\n}\n"+
+		"struct Node {\n\tpub val: int\n\tpub next: Node?\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\ttail := Node(2, nil)\n"+
 			"\thead := Node(1, tail)\n"+
@@ -110,7 +110,7 @@ func TestRecursiveStructNodeOptBalanced(t *testing.T) {
 // independent producer on each side balances with no leak or double-free.
 func TestRecursiveBoxedFieldReassignBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Node {\n\tval: int\n\tnext: Node?\n}\n"+
+		"struct Node {\n\tpub val: int\n\tpub next: Node?\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\ta := Node(10, nil)\n"+
 			"\tb := Node(20, nil)\n"+
@@ -129,7 +129,7 @@ func TestRecursiveBoxedFieldReassignBalanced(t *testing.T) {
 // exactly once.
 func TestRecursiveSharedBoxBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Node {\n\tval: int\n\tnext: Node?\n}\n"+
+		"struct Node {\n\tpub val: int\n\tpub next: Node?\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\tbase := Node(7, nil)\n"+
 			"\ta: Node? = base\n"+ // Some-coercion: a fresh box, rc=1
@@ -168,7 +168,7 @@ func TestRecursiveDerivedCompareBalanced(t *testing.T) {
 // so it is alloc/free balanced (no double-free when both the struct and the source drop).
 func TestConstructBorrowedStrFieldBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct P {\n\tname: str\n}\n"+
+		"struct P {\n\tpub name: str\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\ts := \"foo\" + \"bar\"\n"+ // a managed heap str, rc=1
 			"\tp := P(s)\n"+ // borrowed field: MUST retain, rc=2
@@ -184,7 +184,7 @@ func TestConstructBorrowedStrFieldBalanced(t *testing.T) {
 // built from a BORROWED Ref variable must retain the box, balanced under ASan.
 func TestConstructBorrowedRefFieldBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Q {\n\tr: Ref[int]\n}\n"+
+		"struct Q {\n\tpub r: Ref[int]\n}\n"+
 			"fn main() {\n"+
 			"\tr := Ref(42)\n"+ // a box, rc=1
 			"\tq := Q(r)\n"+ // borrowed field: MUST retain, rc=2

@@ -7,18 +7,22 @@ const colorEnum = "enum Color {\n  Red\n  Green\n  Blue\n}\n"
 // TestEnumExhaustive covers coverage over an enum subject (DESIGN-1b §5.1):
 // matching every variant is exhaustive without a catch-all, a catch-all covers
 // the rest, and a missing variant is reported by name.
+//
+// Every variant is written THROUGH ITS ENUM, which is the only spelling that names
+// one (GRAMMAR#variant-pat): a bare 'Red' is a fresh binding, so an arm list written
+// that way covers everything on its first arm and is a different test entirely.
 func TestEnumExhaustive(t *testing.T) {
 	t.Run("every variant is exhaustive", func(t *testing.T) {
 		wantOK(t, colorEnum+"fn f(c: Color) -> int {\n  return match c {\n"+
-			"    Red => 0\n    Green => 1\n    Blue => 2\n  }\n}")
+			"    Color.Red => 0\n    Color.Green => 1\n    Color.Blue => 2\n  }\n}")
 	})
 	t.Run("a catch-all covers the rest", func(t *testing.T) {
 		wantOK(t, colorEnum+"fn f(c: Color) -> int {\n  return match c {\n"+
-			"    Red => 0\n    _ => 1\n  }\n}")
+			"    Color.Red => 0\n    _ => 1\n  }\n}")
 	})
 	t.Run("a missing variant is reported", func(t *testing.T) {
 		wantErr(t, colorEnum+"fn f(c: Color) -> int {\n  return match c {\n"+
-			"    Red => 0\n    Green => 1\n  }\n}", "missing variant Color.Blue")
+			"    Color.Red => 0\n    Color.Green => 1\n  }\n}", "missing variant Color.Blue")
 	})
 }
 
@@ -27,7 +31,7 @@ func TestEnumExhaustive(t *testing.T) {
 // (DESIGN-1b §5.2).
 func TestGuardDoesNotCount(t *testing.T) {
 	wantErr(t, colorEnum+"fn f(c: Color) -> int {\n  return match c {\n"+
-		"    Red => 0\n    Green => 1\n    Blue if true => 2\n  }\n}", "missing variant Color.Blue")
+		"    Color.Red => 0\n    Color.Green => 1\n    Color.Blue if true => 2\n  }\n}", "missing variant Color.Blue")
 }
 
 // TestBoolExhaustive covers a bool subject: both truth values (or a catch-all)

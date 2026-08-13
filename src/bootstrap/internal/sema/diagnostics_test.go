@@ -23,14 +23,14 @@ func TestSemanticDiagnostics(t *testing.T) {
 		{
 			name: "non-exhaustive enum match",
 			src: "enum Color {\n  Red\n  Green\n  Blue\n}\n" +
-				"fn f(c: Color) -> int {\n  return match c {\n    Red => 0\n    Green => 1\n  }\n}",
+				"fn f(c: Color) -> int {\n  return match c {\n    Color.Red => 0\n    Color.Green => 1\n  }\n}",
 			substr: "non-exhaustive match: missing variant Color.Blue",
 			line:   7, col: 10,
 		},
 		{
 			name: "a guarded arm does not count toward coverage",
 			src: "enum Color {\n  Red\n  Green\n  Blue\n}\n" +
-				"fn f(c: Color) -> int {\n  return match c {\n    Red => 0\n    Green => 1\n    Blue if true => 2\n  }\n}",
+				"fn f(c: Color) -> int {\n  return match c {\n    Color.Red => 0\n    Color.Green => 1\n    Color.Blue if true => 2\n  }\n}",
 			substr: "non-exhaustive match: missing variant Color.Blue",
 			line:   7, col: 10,
 		},
@@ -48,7 +48,7 @@ func TestSemanticDiagnostics(t *testing.T) {
 		},
 		{
 			name:   "'?.' on a non-optional value",
-			src:    "struct Point {\n  x: int\n}\nfn f(p: Point) -> int {\n  return p?.x\n}",
+			src:    "struct Point {\n  pub x: int\n}\nfn f(p: Point) -> int {\n  return p?.x\n}",
 			substr: "'?.' requires an optional value",
 			line:   5, col: 10,
 		},

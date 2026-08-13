@@ -180,7 +180,7 @@ EOF
 
 lint L402 'never writes through `this`' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {

@@ -368,6 +368,13 @@ y := sum(sum(1, 2), 3)
 Width is the real judgement and the count is the backstop for what width cannot see: six
 arguments read as a list to scan rather than a line to read, however short each one is.
 
+> **[deviation]** A group the pass **declines** keeps its trailing comma, and nothing else
+> then objects. `x := sum( # before` with `1,` / `2,` under it holds a comment on the open
+> line, so `F403` leaves the group broken — and `zerg fmt --check` calls the file canonical,
+> exit 0, while `zerg build` refuses the same file with _E289 a trailing comma before the
+> closing `)` of an argument list_. A formatter that certifies a file the compiler will not
+> take is worse than one that reformats it, because the certificate is the whole point.
+
 Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
 time rather than the whole line, so the group that crosses column 80 is the last one on
 the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
@@ -406,10 +413,12 @@ n := (
 Like `F401`, it declines outright when a comment is anywhere inside: a comment is
 something a person put there and joining lines has nowhere to put it back.
 
-The **trailing comma goes** either way, joined or split. On one line it is a comma before
-a closer that nothing follows; on several, a multi-line parameter list is the one place
-the grammar does not accept one, and dropping it in a signature while keeping it in a call
-would be one shape in two spellings.
+The **trailing comma goes** either way, joined or split, and it is a repair rather than a
+preference: `GRAMMAR` writes the comma BETWEEN elements and derives one before a closer
+nowhere at all — not in a call, not in a tuple, list or map literal, not in a signature —
+so a file carrying one is not a Zerg program and the compiler says so (`E289`). The
+formatter reads the token stream and not the tree, which is what lets it fix a file the
+parser turns away — exactly the file a person reaches for a formatter over.
 
 `F405` is `F401`'s principle applied to strings: where the language offers a shorter
 surface for exactly what is written, the canonical form is the shorter one.
@@ -601,9 +610,10 @@ shipping compiler rather than a part of it (the line
 | `E105` | a triple-quoted string is never closed                                                      |
 | `E106` | a raw string has no closing quote on this line                                              |
 | `E107` | a command literal has no closing backtick                                                   |
-| `E108` | a based number needs at least one digit after its prefix                                    |
+| `E108` | a based number needs a digit immediately after its prefix                                   |
 | `E109` | invalid escape in a … literal                                                               |
 | `E110` | a string literal may not contain a NUL                                                      |
+| `E111` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                 |
 | `E201` | `close` is not a select arm head                                                            |
 | `E202` | a select needs at least one arm                                                             |
 | `E203` | `…` is not a select arm head                                                                |
@@ -618,7 +628,6 @@ shipping compiler rather than a part of it (the line
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given     |
 | `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque        |
 | `E215` | a generic struct `…[…]` — **[not yet]**                                                     |
-| `E216` | a default on field `…` — **[not yet]**                                                      |
 | `E217` | the decorator `#[…]` — **[not yet]**                                                        |
 | `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
 | `E219` | `…` as an `impl` item — **[not yet]**                                                       |
@@ -672,7 +681,6 @@ shipping compiler rather than a part of it (the line
 | `E271` | `asm(…)` — **[not yet]**                                                                    |
 | `E272` | `…(…)` converts a VALUE and was given none                                                  |
 | `E273` | `…(…)` converts one value, and this gives …                                                 |
-| `E274` | a pattern names a variant through its enum, and this one is bare                            |
 | `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                         |
 | `E276` | a `spec` member that is neither a signature nor a provided method                           |
 | `E277` | an `impl` in neither the spec's module nor the type's                                       |
@@ -682,6 +690,21 @@ shipping compiler rather than a part of it (the line
 | `E281` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                         |
 | `E282` | `#[obj]` and a method taking `This` — an object has forgotten its type                      |
 | `E283` | `#[derive(…)]` on something with no structure to read                                       |
+| `E284` | a `??` right-hand diverge with a trailing `if` guard                                        |
+| `E285` | a default on a closure parameter — **[not yet]**                                            |
+| `E286` | a `mut &` parameter in a function type — **[not yet]**                                      |
+| `E287` | an `unsafe` `spec` signature — **[not yet]**                                                |
+| `E291` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                            |
+| `E292` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                         |
+| `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                        |
+| `E289` | a trailing comma before a closing `)`, `]` or `}`                                           |
+| `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                  |
+| `E293` | `…` is a reserved word and cannot name a field                                              |
+| `E294` | expected a field name (or a tuple index) after `.`, found `…`                               |
+| `E295` | `del …` names nothing this program declares                                                 |
+| `E296` | `del …` names a function, struct, enum or variant — not a binding                           |
+| `E297` | `…` is used after del                                                                       |
+| `E298` | `…` is used after del on some paths                                                         |
 | `E301` | `…` is not a public member of module `…`                                                    |
 | `E302` | `…` is not a place, and an assignment needs one                                             |
 | `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |
@@ -753,7 +776,6 @@ shipping compiler rather than a part of it (the line
 | `E370` | `…` needs a value for … (…): only a `T?` field has an implicit default, and it is `nil`     |
 | `E371` | `this` is a method's receiver, and this function has none                                   |
 | `E372` | undefined name `…`                                                                          |
-| `E373` | `…` is declared as both a module constant and a function                                    |
 | `E374` | a slice bound is an int, and this is …                                                      |
 | `E375` | a list index is an int, and this is …                                                       |
 | `E376` | no field `…` on …                                                                           |
@@ -767,6 +789,11 @@ shipping compiler rather than a part of it (the line
 | `E384` | a side of an `Either` is named through its type, and this one is bare                       |
 | `E385` | a closure parameter has no type, and its position gives it none                             |
 | `E386` | a call through a function value gives the wrong number of arguments                         |
+| `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code               |
+| `E388` | module `…` has no `…`                                                                       |
+| `E389` | `…` is already … — an import binds a name into the one value namespace                      |
+| `E390` | this position needs a value, and nil is what it was given                                   |
+| `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |
@@ -820,7 +847,7 @@ shipping compiler rather than a part of it (the line
 | `E460` | a … is an identity rather than a value, and the language gives it no equality               |
 | `E461` | a second `impl Into[…] for …` — **[not yet]**                                               |
 | `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                |
-| `E463` | `in` over anything but a list, a map or an error kind — **[not yet]**                       |
+| `E463` | `in` over anything but a list, a map, a range or an error kind — **[not yet]**              |
 | `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                   |
 | `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                       |
 | `E466` | the built-in `set` — **[not yet]**                                                          |
@@ -831,8 +858,37 @@ shipping compiler rather than a part of it (the line
 | `E471` | `…[…](…)` as a constructor — **[not yet]**                                                  |
 | `E472` | `nil` as a `match` pattern — **[not yet]**                                                  |
 | `E473` | a … may hold no value, so `…` has nothing to compare                                        |
+| `E474` | the discriminant of `….…` is not a compile-time constant                                    |
+| `E475` | a fill count is a compile-time constant, and … is not one                                   |
+| `E476` | a fill count is how many copies to make, and `…` is negative                                |
+| `E477` | a range arm's bound is a compile-time constant, and `…` is not one                          |
+| `E478` | `…` needs a channel, and … is not one                                                       |
+| `E479` | a map entry is `key: value`, and this one has no `:`                                        |
+| `E480` | … whose value has no type this compiler can name — **[not yet]**                            |
+| `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
+| `E482` | the field `…` of `…` is module-private, so it must carry a default                          |
+| `E483` | the default on field `…` reads the field `…` — **[not yet]**                                |
+| `E484` | the mutable global `…` may not be `pub`                                                     |
+| `E485` | import cycle: `…` -> `…` -> `…`                                                             |
+| `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                     |
+| `E487` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`      |
+| `E488` | an `unsafe fn(…)` TYPE — **[not yet]**                                                      |
+| `E489` | an `impl` on `….…` — a dotted target — **[not yet]**                                        |
+| `E490` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import     |
+| `E491` | a generic `type …[…] = …` — **[not yet]**                                                   |
+| `E492` | a sub-pattern inside a variant payload — **[not yet]**                                      |
+| `E493` | a range used as a value — **[not yet]**                                                     |
+| `E494` | `is …` names one of the built-in error kinds — **[not yet]**                                |
+| `E495` | a decorator holds at least one item, and `#[]` names nothing to apply                       |
+| `E496` | the decorator `#[sealed]` — reserved — **[not yet]**                                        |
+| `E497` | a `#[derive]` names the specs to generate                                                   |
+| `E498` | a channel is bidirectional, receive-only or send-only                                       |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
+| `E503` | cannot receive on a send-only `…`                                                           |
+| `E504` | cannot send on a receive-only `…`                                                           |
+| `E505` | cannot close a receive-only channel `…`                                                     |
+| `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -840,7 +896,55 @@ That is what it used to say: `` `b'b` is not an expression this compiler reads `
 names the wrong layer, the wrong problem, and a fragment of what the person wrote.
 
 `E108` had no message at all. `0x` lowered to a C `0x`, which cc read as zero, so a
-malformed literal compiled and the program answered 0.
+malformed literal compiled and the program answered 0. It says **immediately** because the
+digit is part of the prefix's own production: `0x_1F` has digits after `0x` and is still not
+a number, since a grouping `_` sits between two digits and there is none to its left.
+
+`E274` stood among them and has **retired**. It reported a bare name in pattern position —
+"`Zzz` is a variant of some enum, and a pattern names one through its enum" — decided by the
+name's first letter, in a parser that had resolved nothing and knew of no enum. So it fired
+on programs that declared none, and the sentence naming the enum was simply false. A bare
+name in pattern position is **always** a fresh binding
+([Grammar](../surface/grammar.md)), whatever its case, and the mistake the rule was aimed at
+— two variants written without their enum — is `E458` instead: the first binds everything,
+so the arms below it are unreachable. The number is not reused.
+
+### Retired codes
+
+**A retired number is never reused.** A code is a stable identity, and reusing one makes an
+old build's message mean something it never meant — a report from a user, a log, a bug
+filed last year, all silently reassigned to a different rule. So a retired code leaves the
+table above and is listed here instead, and the range it sat in goes on counting from its
+own high-water mark.
+
+That is also what makes the catalogue **queryable**. `make error-codes-check` reports the
+**next free code in every range**, which is the question anybody adding a rule has —
+including two agents working in parallel, who between them collided on `E387`, `E477` and
+`E288`/`E289` in a single week because the only way to ask was to read the table by eye.
+The answer is only reliable while every number below the mark is accounted for, so the gate
+holds each range to exactly that: a number that is neither listed above nor listed here is a
+**gap**, and a gap is a code somebody may reissue without knowing.
+
+| Code   | Why it retired                                                                             |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `E209` | a closure parameter with no type — the form is built, so the refusal went with it          |
+| `E216` | a default on a struct field — built                                                        |
+| `E220` | a nested `{ … }` block as a statement — built                                              |
+| `E228` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E229` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E237` | a `with` block — built, and an example took the refusal's place                            |
+| `E274` | a bare name in pattern position, decided by its first letter — see above; `E458` covers it |
+| `E368` | `…` is not generic — the branch that reported it left, and the code left with it           |
+| `E373` | a name declared as both a module constant and a function — the rule is `E381`'s            |
+| `E429` | a closure capturing a name — built                                                         |
+| `E439` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E440` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E441` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E442` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E443` | stamped twice by the code conversion, and dropped from the site no case reached            |
+| `E447` | never issued: the conversion pass that numbered `E4xx` skipped it                          |
+| `E448` | an ordering that comes from `Ord` — the rule it named is the checker's, and always was     |
+| `E450` | no field `…` on a type — the same rule as the row that kept the number below it            |
 
 ## `zerg lint`
 
@@ -937,16 +1041,25 @@ than every shape that could.
 
 ### `L4xx` — resolution
 
-| Code   | Rule                                        |
-| ------ | ------------------------------------------- |
-| `L402` | a `mut fn` that never writes through `this` |
+| Code   | Rule                                                      |
+| ------ | --------------------------------------------------------- |
+| `L401` | a variant name TWO enums declare (**[deviation]**, below) |
+| `L402` | a `mut fn` that never writes through `this`               |
 
-`L401` stood here and has **retired**. It reported a variant name two enums declare: a bare
-name was a variant when it resolved to one, resolution took the **first** declaration, and
-`c := Red` was a coin toss decided by declaration order. A variant is now always named by
-its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing and the two
-declarations never compete — the lint's whole subject is a form the grammar no longer
-derives. The number is not reused.
+`L401` was **retired and is still emitted**. It reported a variant name two enums declare:
+a bare name was a variant when it resolved to one, resolution took the **first**
+declaration, and `c := Red` was a coin toss decided by declaration order. A variant is now
+always named by its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing —
+`c := Red` is _E383 `Red` is a variant of `Colour`, and a variant is named through its enum_
+— and the two declarations never compete for a bare name.
+
+> **[deviation]** `zerg lint` still runs the rule, so two enums sharing a variant name draw
+> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to
+> `Colour` by declaration order alone — name it `Signal.Red` where you mean this one_. Both
+> halves of that sentence are now false: a bare `Red` resolves to nothing, and `Signal.Red`
+> is the one spelling the compiler refuses (`E457` — see [Types](../core/types.md), where
+> that refusal is its own deviation). Nothing catches it, because `error-codes-check` holds
+> the `E` codes to the source, the gates and this table, and reads no `L` code at all.
 
 `mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
 the instance in a `mut` binding. A method that only reads charges its callers that and gives

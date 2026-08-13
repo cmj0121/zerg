@@ -9,9 +9,14 @@
 副作用而跑的 **statement**；**`if`** 則**兩者皆是**——既是 statement，也（在帶強制結尾 `else` 時）是 expression。**區塊**
 （block）本身就是一個 expression，其值是**最後一個 statement 的值**，所以以 expression 收尾的分支會把該值帶出來。
 
-> **[not yet]** **把區塊當 expression 用**會被指名拒絕：裸的 `{ … }` 出現在 `:=`、引數位置、或 `return` 之後都編
-> 不過。區塊的值規則只在某個構造本來就要一個區塊時成立——`if` 的分支、`match` 的 arm——此外皆無，所以區塊自己
-> 到不了任何值的位置。
+**區塊自己就到得了值的位置**：`x := { y := 1  y + 1 }`、當作引數的區塊、`return` 之後的區塊。它的值是最後一個
+statement 的值——expression statement 交出它的 expression，其他任何 statement、以及空區塊，都交出 `nil`。lexer 插入的
+`;` 只**分隔** statement，並不像某些語言的結尾 `;` 那樣把值丟掉。決定一個 `{` 開的是區塊還是 **map literal** 的是那個
+`:`（見[型別](../core/types.zh-TW.md)與 `GRAMMAR#map-lit`），這也正是空 map 寫成 `{:}`、而沒有 `:` 的大括號永遠是區塊
+的理由。
+
+在**一個 statement 的開頭**，同樣的大括號是一個區塊 **statement**、其值被丟棄；而在 `if` / `for` / `with` / `match`
+的 head 開頭以 `{` 起始的運算式必須加括號（`E290`）。
 
 **`if`**——作為 **statement** 時，`if cond { … }`（可接 `else` / `else if`）為副作用而跑、不產出值；條件是 `bool`
 （沒有 truthiness）。帶**強制結尾 `else`** 時它反而是 **expression**（`if-expr`，一個 `primary`）：它產出**被選中分支
@@ -28,10 +33,18 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 `x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
 例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
 
-> **[not yet]** 值形式有兩種樣子會被指名拒絕。一是 if 運算式裡的 **`else if` 串**
-> （`x := if a { 1 } else if b { 2 } else { 3 }`）：運算式形式只收一個結尾 `else`，串接的那種仍只是 statement。
-> 二是**在運算式位置的 if-let**——`return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的
-> if-let，都會被拒絕——所以這個階段綁定形式只是 statement，而不是上文所載的「`if` 能出現的任何位置」。
+那個 `nil` 分支降階成**缺席**:填入 carrier 的動作被分配到各個分支上,每一種拼法各自進入 carrier,所以 `c` 為假時
+`x: int? = if c { 1 } else { nil }` 是空的——`x ?? 99` 回答 `99`。過去它把整個三元式當成單一個 present payload 包
+起來,`nil` 於是變成 present carrier 裡的一個零,缺席就這樣不見了、而且任何階段都沒有回報;鏡像的寫法(`nil` 在
+**then** 分支)則是直接被拒絕——一種拼法會抱怨,另一種靜默答錯。
+
+---
+
+> **[not yet]** 值形式只剩一種樣子會被指名拒絕：**在運算式位置的 if-let**。
+> `return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的 if-let，都會回報
+> _E270 NotImplemented: a binding head in an `if` EXPRESSION_——所以這個階段綁定形式只是 statement，而不是上文
+> 所載的「`if` 能出現的任何位置」。**`else if` 串**曾與它並列，現在不再：`x := if a { 1 } else if b { 2 } else { 3 }`
+> 已建置、產出被取用的那一支，而且一型規則橫跨整串成立。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
@@ -40,8 +53,9 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
 要走 byte 就用 `bytearray(s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
-**`v in range`** 測試成員關係（`x in 0..n` → `bool`）是 **[not yet]**——這個形式會被指名拒絕——把 **range 當成值**
-用在別處也一樣；range 今天只存在於「`for` 走訪的東西」與「`match` arm 包含的東西」裡。
+**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
+會被指名拒絕、帶位置（`E493`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
+拿來測的東西」裡。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
@@ -50,7 +64,7 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 ```text
 for {
     line := <-input ?? break       # 收到 channel 關閉為止
-    continue if line.empty()       # 跳過空行
+    continue if line == ""         # 跳過空行
     break if line == "quit"        # 遇到 sentinel 就停
 
     handle(line)
@@ -71,7 +85,9 @@ collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 ## 模式比對（Pattern matching）
 
 `match` 是一個 **expression**：它用 **arm**（`pattern => result`，arm 分隔符 `=>` 刻意與引入函式回傳型別的 `->`
-區分）逐一試一個值，跑第一個命中的、產出它的 result。
+區分）逐一試一個值，跑第一個命中的、產出它的 result。arm 的 body 是一個**運算式**（`GRAMMAR#match-arm`），而區塊
+**就是**運算式——所以 `pattern => { … }` 可以裝好幾個 statement 並且照樣產出值，它的值就是該區塊最後一個 statement
+的值。
 每個 arm 產出**相同型別**，所以 `match` 是個值，可用於 `:=`、`return`、或引數——產出 `nil` 的 arm 讀來就是普通
 statement。覆蓋是**必需**的——漏掉某個 case 的 `match` 是**編譯錯誤**（所以**新增一個 dependent 的 `match` 未處理的
 `enum` variant 會讓建置失敗**，在編譯期抓到、而非默默放過）。帶 guard 或 range 的 arm（見下）**不**計入覆蓋——編譯器
@@ -94,9 +110,10 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 且兩個相等的 literal 不保證共用儲存。
 
 > **[not yet]** **nested pattern** 根本 parse 不了：`Left(Some(v))`，還有 `L(0)`，都會被
-> ``a pattern binding needs a name, and `(` is not one`` 擋下——payload 位置只收一個名字、別的都不收，所以每個
-> pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，因為
-> 根本沒有程式寫得出巢狀 pattern。
+> `a pattern binding needs a name` 擋下,訊息裡指名的是站在名字該在的位置上的那個 token——`Left(Some(v))` 是
+> `` `(` ``、`L(0)` 是 `` `0` ``、帶限定的 `L(Inner.Some(v))` 是 `` `.` ``。payload 位置只收一個名字、別的都不收，
+> 所以每個 pattern 都只有一層深。這也把下面那則關於巢狀 exhaustiveness 的註掏空了：沒有巢狀 case 可以讓檢查器弱，
+> 因為根本沒有程式寫得出巢狀 pattern。
 >
 > **or-pattern 會被明確拒絕。** pattern 位置上的 `|` 被讀成位元運算子，所以 `1 | 2 =>` 會折成 `3 =>`，1 和 2
 > 都不中——它以前編得過而且靜默地錯，那正是編譯器最不該做的事，所以現在直接turn away。`zerg fmt` 會改寫唯一有可用
@@ -119,13 +136,14 @@ msg := match ev {
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
 具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用；
-product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
+product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。它的四種樣子各自被自己的名字拒絕——綁定位置是
+`E238` 與 `E221`、arm 裡是 `E232` 與 `E243`——所以 tuple 與 struct 在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的
 語法糖，等同 `_ if _ in <range>`——它以**range 包含關係**比對（不是值相等）、**不綁定**任何值、同樣不計入覆蓋（要綁值
-就寫 `x if x in <range>`）。
-
-> **[not yet]** 上一句剛給的那個替代寫法今天寫不出來：`x if x in <range>` 需要成員測試 `v in range`，而它會被指名
-> 拒絕（見上文的 `for`）。所以 range arm 的值沒有任何路徑綁得到——arm 本身按設計就不綁，而本來要替它出面的那個
-> guard 也不行。
+就寫 `x if x in <range>`）。它的 **bound 是編譯期常數**:一個 literal，或一個常數的**名字**
+（[`GRAMMAR#range-bound`](../../GRAMMAR)），也就是任何初始式編譯器折得動的 `:=` 或 `const` 綁定——所以 `LO..HI`
+與 `MID..=HI` 讀起來就是它們指的那些數字，而由其他常數搭出來的 bound（`const MID := LO + 50`）與直接寫死的一樣好。
+一個**不是**常數的名字——執行期才讀到的值、`mut` 綁定——會報在要它的那個 arm 上，而不是報在該綁定自己那行；而
+**呼叫**根本不是 bound，因為該產生式導不出呼叫，所以 `f()..300` 由 parser 擋下。

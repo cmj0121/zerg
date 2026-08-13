@@ -46,10 +46,10 @@ value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-
 loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
 
 > **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
-> types nor conversions, and `i32(5)` reports _undefined function `i32`_ — an ordinary unresolved name rather
-> than a refusal saying the form is unbuilt, which is the one place in this chapter where the standing
-> contract is met in outcome and not in wording. The six named above all work, and `uint(-1)` aborts with
-> _OverflowError: integer conversion out of range_ exactly as specified.
+> types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E465
+> NotImplemented: `i32` is part of the fixed-width ladder — … the built-in widths are `int`, `uint`, `byte`,
+> `rune` and `float`_. The six named above all work, and `uint(-1)` aborts with _OverflowError: integer
+> conversion out of range_ exactly as specified.
 
 ## Parsing a string
 
@@ -96,11 +96,12 @@ addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast)
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](../core/memory.md).
 
-> **[not yet]** None of it is built, and the refusals say so — _NotImplemented: the raw-pointer built-in
-> `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, and _NotImplemented: `ptr`
-> is not an expression this compiler reads_. In a TYPE position the wording is weaker: `fn f(p: ptr)` reports
-> _no type named `ptr`_ and `p: ptr = 0` reports _cannot bind int to a ptr binding_, which reads as though
-> `ptr` were an existing type the value did not suit. The `unsafe` context they need is itself unbuilt.
+> **[not yet]** None of it is built, and the refusals say so — _E413 NotImplemented: the raw-pointer
+> built-in `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, and
+> _NotImplemented: `ptr` is not an expression this compiler reads_. A TYPE position now answers with the
+> same `E413`: `fn f(p: ptr)` and `p: ptr = 0` both name the raw-pointer built-in rather than reading as
+> though `ptr` were an existing type the value did not suit. The `unsafe` context they need is itself
+> unbuilt.
 
 ## `sizeof` / `alignof`
 

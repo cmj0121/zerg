@@ -37,7 +37,7 @@ func TestDeferMethodRuns(t *testing.T) {
 // after the deferred call), so it is alloc/free balanced under ASan+UBSan.
 func TestDeferMethodNonPodTemporaryReceiver(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Res {\n\tr: Ref[int]\n}\n"+
+		"struct Res {\n\tpub r: Ref[int]\n}\n"+
 			"impl Res {\n\tpub fn use() {\n\t\tprint deref(this.r)\n\t}\n}\n"+
 			"fn make_res() -> Res {\n\treturn Res(r: Ref(7))\n}\n"+
 			"fn main() {\n"+
@@ -55,7 +55,7 @@ func TestDeferMethodNonPodTemporaryReceiver(t *testing.T) {
 // free) and LIFO ordering against a second defer is preserved.
 func TestDeferMethodNonPodLocalLifoBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Res {\n\tr: Ref[int]\n}\n"+
+		"struct Res {\n\tpub r: Ref[int]\n}\n"+
 			"impl Res {\n\tpub fn use() {\n\t\tprint deref(this.r)\n\t}\n}\n"+
 			"fn main() {\n"+
 			"\ta := Res(r: Ref(1))\n"+
@@ -77,7 +77,7 @@ func TestDeferMethodNonPodLocalLifoBalanced(t *testing.T) {
 // unwind — with no ASan/UBSan error (balanced release on the abort path).
 func TestDeferMethodRunsOnAbortPath(t *testing.T) {
 	out := runProgramRTAbort(t,
-		"struct Res {\n\tr: Ref[int]\n}\n"+
+		"struct Res {\n\tpub r: Ref[int]\n}\n"+
 			"impl Res {\n\tpub fn use() {\n\t\tprint deref(this.r)\n\t}\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\tx := Res(r: Ref(9))\n"+

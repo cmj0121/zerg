@@ -22,7 +22,7 @@ func TestOrderSequencesEffectfulOperands(t *testing.T) {
 	}{
 		{"binary", "fn main() { print a() + b() }"},
 		{"call-args", "fn f(p: int, q: int) -> int { return p + q }\nfn main() { print f(a(), b()) }"},
-		{"construct", "struct P {\n x: int\n y: int\n}\nfn main() { print P(a(), b()).x }"},
+		{"construct", "struct P {\n pub x: int\n pub y: int\n}\nfn main() { print P(a(), b()).x }"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,12 +81,12 @@ func TestOrderRunsLeftToRight(t *testing.T) {
 		},
 		{
 			"construct",
-			"struct P {\n x: int\n y: int\n}\nfn main() {\n p := P(a(), b())\n print p.x + p.y\n}",
+			"struct P {\n pub x: int\n pub y: int\n}\nfn main() {\n p := P(a(), b())\n print p.x + p.y\n}",
 			"a\nb\n3\n",
 		},
 		{
 			"method",
-			"struct P {\n x: int\n}\nimpl P {\n fn add(k: int) -> int { return this.x + k }\n}\n" +
+			"struct P {\n pub x: int\n}\nimpl P {\n fn add(k: int) -> int { return this.x + k }\n}\n" +
 				"fn mk() -> P {\n print \"mk\"\n return P(1)\n}\nfn main() { print mk().add(b()) }",
 			"mk\nb\n3\n",
 		},

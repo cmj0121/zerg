@@ -32,9 +32,11 @@ type BracketRes struct {
 type NameResKind int
 
 const (
-	// NameBinding is a fresh binding: the name matched no variant in scope.
+	// NameBinding is a fresh binding, which every BARE name in pattern position is.
 	NameBinding NameResKind = iota
-	// NameVariant is a nullary variant pattern: the name resolved to a variant.
+	// NameVariant is a nullary variant pattern: the name was QUALIFIED and its enum
+	// declares it. A derived match's arms are registered as this directly (derive.go),
+	// where the variant is known because the checker chose it rather than read it.
 	NameVariant
 )
 
@@ -147,8 +149,9 @@ func (r *resolver) collectEnum(n *ast.EnumDecl) {
 		}
 	}
 	r.declareSurface(&Symbol{Name: n.Name, Kind: SymType, Pub: n.Pub, Span: n.Span(), Decl: n, TypeDef: def})
-	// Variants live in the value namespace: a callable constructor and a name
-	// usable in pattern position. A nullary variant settles a bare NamePattern.
+	// Variants live in the value namespace: a callable constructor, and the name a
+	// QUALIFIED pattern resolves through. A bare one in pattern position never reaches
+	// this table — it binds (GRAMMAR#pattern).
 	for _, v := range n.Variants {
 		vd := &types.VariantDef{Name: v.Name}
 		for range v.Payload {
@@ -244,14 +247,72 @@ func (r *resolver) collectModuleBind(n *ast.BindStmt, inUnsafe bool) {
 		kind = SymConst
 	}
 	r.declareSurface(&Symbol{
-		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const,
+		Name: n.Name, Kind: kind, Mutable: n.Mut, Const: n.Const, Pub: n.Pub,
 		Span: n.Span(), Decl: n, Type: types.Unknown,
 	})
 }
 
-// declareSurface inserts a top-level symbol, ignoring a duplicate (the Phase 0
-// checker reports duplicate functions; other duplicates are future work).
-func (r *resolver) declareSurface(sym *Symbol) { r.module.declareLocal(sym) }
+// declareSurface inserts a top-level symbol and reports two collisions the top
+// level cannot hold, in the order a reader meets them.
+//
+// The FIRST is a declaration taking the name an IMPORT already bound. GRAMMAR
+// group 10 puts the bound name in the one value namespace, so colliding with a
+// local name is an error — and collectImport catches that collision only when the
+// IMPORT comes second. The other order was silent, so a 'fn text()' beside
+// 'import "util/text"' coexisted with it and which of the two a 'text…' reached
+// depended on whether the reader wrote a '(' or a '.'.
+//
+// The SECOND is a name the top level already holds under a DIFFERENT kind of
+// declaration. The top level is one namespace. A type name is not merely beside
+// the value names — 'struct User' is what makes 'User(…)' a call — so GRAMMAR's
+// construction note states the rule outright: "The type name is SHARED with
+// functions: a type and a function cannot share a name (a duplicate is an error
+// — Zerg has no overloading)." A module constant shares it too, since every one
+// of them mangles to 'zg_<name>'. Unchecked, 'struct Foo' beside 'fn Foo' built
+// and ran here, and the shipping compiler emitted C that cc refused as
+// "redefinition of 'zg_Foo' as different kind of symbol" — an error against
+// generated code nobody wrote.
+//
+// SAME-KIND duplicates are left where they already are: two functions are
+// collectFuncItems', and two types are the type pass'. This is the one question
+// neither of them can ask, because neither sees the other's list.
+func (r *resolver) declareSurface(sym *Symbol) {
+	if prev := r.module.local(sym.Name); prev != nil && prev.Kind == SymNamespace && sym.Kind != SymNamespace {
+		r.errorf(sym.Span, "%q is already the namespace an import bound; rename the import with 'as'", sym.Name)
+	}
+	prev := r.module.declareLocal(sym)
+	if prev == nil {
+		return
+	}
+	was, now := surfaceKind(prev.Kind), surfaceKind(sym.Kind)
+	if was == "" || now == "" || was == now {
+		return
+	}
+	r.errorf(sym.Span, "%q is declared twice — once as %s, once as %s; the top level is one namespace", sym.Name, was, now)
+}
+
+// surfaceKind words the kind of top-level declaration a symbol is, for the
+// one-namespace rule, and answers "" for a symbol the rule does not reach.
+//
+// An enum VARIANT is the one deliberate omission: GRAMMAR builds a variant
+// THROUGH its enum ('Shape.Circle(3.0)'), so "a variant name is therefore never a
+// name on its own, which is what keeps two enums that both declare a 'Red' from
+// competing for it". This resolver still binds one into the module scope as a
+// Phase 0 convenience, and a rule reading that table has to say so or it would
+// refuse two enums the language allows. An imported namespace is omitted for the
+// opposite reason: collectImport already reports its own collisions, with a
+// sentence about the import rather than about the declaration.
+func surfaceKind(k SymKind) string {
+	switch k {
+	case SymType:
+		return "a type"
+	case SymFunc:
+		return "a function"
+	case SymVar, SymConst:
+		return "a module constant"
+	}
+	return ""
+}
 
 // --- stage 2: bodies ----------------------------------------------------------
 
@@ -443,8 +504,8 @@ func (r *resolver) resolveSelect(n *ast.SelectStmt) {
 // declareBindTarget declares every leaf name of a destructuring bind target as a
 // fresh binding (GRAMMAR bind-target): a tuple/struct pattern's leaves are names or
 // nested tuple/struct patterns, and a struct shorthand '{x}' binds the field name x.
-// Unlike a match pattern, a bind-target leaf is always a fresh binding (never a
-// nullary variant).
+// A bind-target leaf is a NAME and nothing else — there is no qualified form here to
+// tell apart, so it needs none of resolveNamePattern's reading.
 func (r *resolver) declareBindTarget(pat ast.Pattern, mut, konst bool) {
 	kind := SymVar
 	if konst {
@@ -769,13 +830,26 @@ func (r *resolver) resolvePattern(p ast.Pattern) {
 	}
 }
 
-// resolveNamePattern settles a bare-name pattern (DESIGN-1b §2.3, GRAMMAR group
-// 6): a name that resolves to a variant in scope is a nullary variant pattern;
-// otherwise it is a fresh binding declared in the arm scope.
+// resolveNamePattern settles a name pattern (GRAMMAR#pattern). A QUALIFIED one —
+// 'Color.Red' — names a nullary variant, and a BARE one is a fresh binding declared in
+// the arm scope, always, whatever else the name means in scope.
+//
+// The bare case used to be looked up first, and a name that happened to match a variant
+// became a variant pattern. That is the coupling GRAMMAR names and rejects: declaring a
+// variant in one file silently changed what a pattern in another file matched, and two
+// enums that each declare a 'Red' could not both have it. It also made the arm's meaning
+// a naming convention in the shipping compiler, which read the same fork off the leading
+// CAPITAL and refused a bare capitalized binding outright.
+//
+// Nothing is lost by the mistake this used to absorb: 'match c { Red => …  Green => … }'
+// now binds on its first arm, so every arm below it is unreachable and checkUnreachable
+// says so, which is a diagnostic rather than a silently different program.
 func (r *resolver) resolveNamePattern(pat *ast.NamePattern) {
-	if sym := r.scope.lookup(pat.Name); sym != nil && sym.Kind == SymVariant {
-		r.info.Patterns[pat] = NameRes{Kind: NameVariant, Variant: sym.Variant}
-		return
+	if pat.Qualified {
+		if sym := r.scope.lookup(pat.Name); sym != nil && sym.Kind == SymVariant {
+			r.info.Patterns[pat] = NameRes{Kind: NameVariant, Variant: sym.Variant}
+			return
+		}
 	}
 	sym := &Symbol{Name: pat.Name, Kind: SymVar, Span: pat.Span(), Type: types.Unknown}
 	r.declareBinding(sym)

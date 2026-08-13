@@ -194,6 +194,18 @@ jobs:
       - name: The build cache names the compiler that filled it
         run: make cache-key-check
 
+      # `make install` also teaches cloc the Zerg language, and `install-check` holds it to
+      # counting some — so cloc has to BE here. It is installed rather than checked for
+      # because the check it would replace is a skip, and a skipped assertion is green on
+      # exactly the machine where the definition was never read.
+      - name: Install cloc (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cloc
+
+      - name: Install cloc (macos)
+        if: runner.os == 'macOS'
+        run: brew install cloc
+
       # `make install` puts a toolchain on the machine and `make uninstall` takes it
       # away; this is the gate that runs both and compiles from the installed path.
       - name: The installed toolchain works, and uninstall takes it away

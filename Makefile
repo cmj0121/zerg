@@ -436,7 +436,12 @@ gates:                          # every gate is on the board, and the board is r
 # without it should still be able to run everything else.
 linux-ci:                       # run the Linux gates in a container, as CI does
 	@docker info >/dev/null 2>&1 || { echo "linux-ci: docker is not running"; exit 1; }
+	@# cloc comes first because `install-check` is on the board and needs it, the same way the
+	@# workflow installs it beside that step. The image has no reason to carry it, and a
+	@# container that reached the gate without it would fail on a missing tool rather than on
+	@# anything about this repository.
 	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
+		apt-get update >/dev/null && apt-get install -y cloc >/dev/null && \
 		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && make ci'
 
 LINUX_IMAGE ?= golang:1.26-bookworm

@@ -89,14 +89,22 @@ fi
 # `cloc` counts Zerg with nothing typed. So it is run with nothing typed, against the
 # examples, under the HOME the config was installed into.
 #
-# SKIPPED, LOUDLY, when cloc is absent: it is not a dependency of this toolchain and a
-# developer without it should still be able to run every gate. A skipped step that prints
-# nothing is the failure gates-check.sh has its own header about, one level up.
+# cloc is REQUIRED, and this used to skip when it was absent. A skip is green, and green is
+# what a gate says when it has checked something — so the one machine where the definition
+# was never read would be the one reporting that it works. The definition is a file this
+# repository owns and nothing else in the tree parses it: unread, a typo in it survives
+# every gate here and surfaces at a user's `make install`.
+#
+# It is the only tool this gate needs that the toolchain does not build, which is a real cost
+# — a developer without cloc cannot run `make install-check` — and it is paid because the
+# alternative is an assertion that quietly is not one. CI installs it in the same job.
 if [ ! -f "$CLOC_CONFIG/options.txt" ]; then
 	echo "MISSING   $CLOC_CONFIG/options.txt — the install did not tell cloc about Zerg"
 	fail=$((fail + 1))
 elif ! command -v cloc >/dev/null 2>&1; then
-	echo "install-check: cloc is not installed — the config was written, but nothing read it"
+	echo "CLOC      cloc is not installed, so nothing here reads the definition just written"
+	echo "          brew install cloc / apt-get install cloc"
+	fail=$((fail + 1))
 elif ! HOME="$CLOC_HOME" cloc --quiet examples 2>/dev/null | grep -q '^Zerg '; then
 	echo "CLOC      cloc with no arguments still does not count Zerg under examples/"
 	HOME="$CLOC_HOME" cloc --quiet examples 2>&1 | tail -5 | sed 's/^/  /'

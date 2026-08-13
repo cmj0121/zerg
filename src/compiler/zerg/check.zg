@@ -1259,6 +1259,55 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
 }
 
+# chk_conv_pair holds a WRITTEN `T(x)` to the same table, and it is the half that was never
+# asked. chk_into_builtin above decided which conversions exist, and only the ADOPTION path
+# consulted it: a written conversion went straight to the lowering, which lowers by SHAPE and
+# so had an answer for every pair of scalars. `float(b)` on a byte, `byte(3.5)`, `uint(3.5)`
+# and `rune(65.5)` are four pairs the table declares absent, and all four compiled and ran.
+#
+# One table, asked at both ends. The pairs are not re-listed here — this is chk_into_builtin
+# and nothing else — because a second list is how the two ends come to disagree.
+#
+# Two things are let through ahead of it. A conversion to the SAME scalar is not a pair in the
+# table at all: `int(i)` is the identity, which the table has no row for because there is
+# nothing to convert, and reading its absence as a refusal would refuse a no-op. And a side
+# that is not a numeric scalar — a `bool`, a `type X = Y`, a type inference could not work out
+# — is not this rule's, for the reasons chk_into_side gives.
+fn chk_conv_pair(mut &em: Emitter, want: Ty, got: Ty, nm: str) {
+	return if not chk_into_side(want) or not chk_into_side(got)
+	return if chk_conv_same(want, got)
+	return if chk_into_builtin(want, got)
+
+	# THE FLOAT SOURCE HAS ITS OWN SENTENCE, because it is the one absence that is a decision
+	# rather than a missing step. `float -> int` is not on the table for the reason the spec
+	# gives: four different answers are defensible and the language will not pick one, so the
+	# fix is a verb and not a second conversion. Sending a reader to "write the two steps"
+	# would send them to `int(x)`, which is this very refusal.
+	if c_is_float(got) {
+		chk_at(em, "E394", f"`{nm}(…)` drops the fraction of a `float`, and dropping a fraction is a decision this language spells with a VERB: `math.trunc`, `math.floor`, `math.ceil` and `math.round` each answer an `int` — write `{chk_conv_verb(want, nm)}`")
+		return
+	}
+
+	chk_at(em, "E395", f"a conversion is ONE STEP, and `{ty_name(got)}` -> `{ty_name(want)}` is `{ty_name(got)}` -> `int` -> `{ty_name(want)}` — write the two, as `{nm}(int(x))`")
+}
+
+# chk_conv_verb is the spelling E394 sends a reader to. An `int` target is the verb alone; any
+# other target is the verb and then the conversion that was written, which is the two-step rule
+# arriving at the same place from the other side.
+fn chk_conv_verb(want: Ty, nm: str) -> str {
+	return "math.trunc(x)" if c_is_int(want)
+
+	return f"{nm}(math.trunc(x))"
+}
+
+# chk_conv_same is "these are the same scalar", asked as the SHAPE rather than as a type
+# equality: a class and a width name each of the five built-in numeric types exactly once
+# (int is signed-64, rune signed-32, byte unsigned-8, uint unsigned-64, float float-64), and
+# the shape is what the conversion machinery reads everywhere else.
+fn chk_conv_same(a: Ty, b: Ty) -> bool {
+	return c_scalar_class(a) == c_scalar_class(b) and c_scalar_bits(a) == c_scalar_bits(b)
+}
+
 # chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
 # is not a type error. `b: byte = 300` type-checks — `int → byte` is a conversion this language
 # has — and what is wrong with it is the VALUE. Saying "cannot bind int to a byte binding"

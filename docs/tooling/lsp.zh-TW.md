@@ -50,6 +50,7 @@ module 擁有協定;driver 擁有檔案系統。
 | `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_conversions` |
 | `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式         |
 | `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix       |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告               |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -89,10 +90,11 @@ code unit** 計的 0-based character,以及一個 **range**。這道轉換的兩
 
 ## Neovim
 
-`make -C editors install` 會 symlink 語法檔,再加兩個:
+`make -C editors install` 會 symlink 語法檔,再加三個:
 
 - `ftplugin/zerg.lua`——為 `.zg` buffer 啟動 server;
-- `lua/zerg/lsp.lua`——`vim.lsp.start`(nvim 0.8+),不需要 plugin manager,也不需要 `nvim-lspconfig`。
+- `lua/zerg/lsp.lua`——`vim.lsp.start`(nvim 0.8+),不需要 plugin manager,也不需要 `nvim-lspconfig`;
+- `lua/zerg/health.lua`——`:checkhealth zerg` 跑的東西。
 
 ```lua
 vim.g.zerg_lsp = false            -- 不要啟動 server
@@ -105,7 +107,46 @@ vim.g.zerg_diagnostic = false     -- 診斷怎麼畫,交還給 nvim 自己的設
 是人會停用而且再也不會啟用的那種。
 
 quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己的,而 server 宣告自己是 `quickfix` provider,所以
-即使 client 只要求這一種 kind 也拿得到。
+即使 client 只要求這一種 kind 也拿得到。nvim 預設把它綁在 `gra`,把大綱綁在 `gO`。
+
+### ftplugin 做了什麼,以及每個數字為什麼都是編譯器的
+
+`ftplugin/zerg.vim` 是「在完全沒裝 toolchain 時也必須成立」的編輯行為,所以它不問任何正在跑的 `zerg`。它做的是陳述
+編譯器擁有的事實——而 `make editor-align` 把其中每一條都held 回它的來源。
+
+| 設定                       | 是什麼                                     | held 到什麼      |
+| -------------------------- | ------------------------------------------ | ---------------- |
+| `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                      | `F101`、`F403`   |
+| `colorcolumn=81`           | `F403` 換行預算之後的第一欄                | `fmt_wrap_max()` |
+| `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                 | 同一個掃描器     |
+| `makeprg` / `errorformat`  | `:make` 跑 `--emit c`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
+
+**摺疊與縮排是同一條規則,問了兩次。** 一行的層級是它觸及的最低分隔符深度——這讓一個區塊被摺起來時,包住它的兩行都
+留在畫面上(上面的 `fn f() {` 與下面的 `}`),也讓 `}` 在打出來的當下就自己 dedent。差別在分隔符:摺疊只數大括號,
+因為一個被拆行的參數列不是一個 fold;縮排數 `(`、`[`、`{` 三者,因為 `F403` 與 `F404` 在三者裡面都會縮排。
+
+兩者原本都不存在。`indentexpr` 是空的,`autoindent`、`smartindent`、`cindent` 也都是,所以 `fn f() {` 之後按 `<CR>`,
+游標停在第 1 欄,每一層都是人自己按出來的 tab——然後 formatter 在下次寫入時把它整理好,也就是說這個檔案只有在工具跑過
+之後才是對的。現在它是對的這件事,是用 `gg=G` 掃過整個 repo 檢查的:對 formatter 寫出來的每一份原始碼重新縮排,必須
+什麼都不改——而找出它真的改了的那兩種情況(一條被拆行的 `+` 鏈,與一行以 `# >>>` 結尾的 doctest 註解),就是這條規則
+被塑造出來的過程。
+
+**`:make` 是 quickfix list 裡的編譯器**,它值得跟 language server 並存,因為兩者的失敗方式不同:一個 buffer abort 時,
+server 只能在檔案頂端發佈一則 finding,而 `:make` 仍然帶著編譯器自己的句子,以及(有的話)它的位置。
+
+```vim
+:make | copen           " 編譯這個 buffer,把它說的話列出來
+:ZergFmt                " 需要時才跑 zerg fmt
+:checkhealth zerg       " 為什麼什麼都沒發生
+```
+
+`:ZergFmt` 存在,是因為 `gq` 碰不到這個 server:nvim 只會為宣告了 `textDocument/rangeFormatting` 的 server 接上
+`formatexpr`,而這一個只宣告整份文件的格式化——而且是對的,`zerg fmt` 讀的是一整份原始碼,沒有「只格式化一半」這個
+概念。
+
+`:checkhealth zerg` 是上面那份安靜的對照面。一個什麼都不啟動、也什麼都不說的 client,會讓「toolchain 沒建」、「`zerg`
+被舊的安裝蓋掉」、「幾個月前設下的 `vim.g.zerg_lsp` 還是 false」、「server 起來了又掛掉」看起來一模一樣;health check
+把它們分開,而且是去問 toolchain,不是自己抄一份關於它的說法。
 
 ### 一則不必按鍵就讀得到的 finding
 
@@ -172,6 +213,34 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 [Formatter 與 Linter](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
 最需要它的那種 buffer 裡失效。它同時也是一個意見——`1.5 + 1` 是合法程式——而 formatter 沒有意見。
 
+## 大綱是 parser 的清單,不是 server 的
+
+`textDocument/documentSymbol` 是填滿編輯器大綱、麵包屑與 `gO` 的東西。它是唯一一個**不需要名稱解析**的互動答案——一個
+宣告知道自己叫什麼、寫在哪裡——這也就是為什麼它做好了,而 `hover`、`definition`、`references` 沒有。
+
+這一頁講的那條規則決定了它的形狀。編譯器回答 `file_symbols`,它走過一個被剖析的檔案,交出名字、**以「詞」表示的
+kind**、以及位置;server 把那個詞對映到 LSP 的 `SymbolKind` 數字,除此之外什麼都不做。兩邊都不會漂進對方的工作:編譯器
+如果把函式拼成 `12`,協定改號的那天就得改編譯器;而一個自己決定「什麼算是一個宣告」的 server,就是這一個沒有的那種
+分析。
+
+**一個專用的 `Symbol`,而不是把 AST 公開。** `FnDecl` 與它的兄弟們維持 private,跨過 `pub` 邊界的是一個小型別。為了
+一串名字就把邊界擴大到每個宣告的每個欄位,等於把 parser 的形狀交到 server 手上,也給了它一個長大的理由。
+
+**只有這個 buffer,不是整個程式。** 這裡其他每一個答案都是對「這個檔案 import 的模組」一起算的,因為借來的名字沒有
+它們就是 undefined。大綱問的是相反的問題——這個檔案*裡面*有什麼——把 import 拉進來只會塞滿讀者在畫面上看不到的宣告。
+
+一個剖析不過的 buffer 得到的答案是**什麼都沒有**,而不是一個錯誤。大綱是一個檢視,不是一個判決;而「這個 buffer 壞了」
+這則診斷,每次按鍵都在跑的那個檢查早就發佈過了。
+
+`make lsp` 把它held 到 `--emit ast`:大綱必須剛好叫出 parser 讀到的那些宣告。這個比對只在「不 import 任何東西」的檔案
+上跑,因為 driver 在產生程式碼前會把整個程式併成一個 `File`——所以只有在沒有 import 時,那份 dump 才等於這個 buffer
+自己的宣告;兩個問題不同的地方,dump 就不是 oracle,也就不問它。這個 gate 會數自己比對了幾個,理由跟這裡每一個下限
+一樣。
+
+**兩件它不做的事。** 一個 struct 的欄位與一個 enum 的 variant 不是子節點——協定有樹狀結構,而這裡是一份平的清單,反正
+編輯器顯示的也是這個。以及 `range` 與 `selectionRange` 是同一個範圍(那個識別字的),因為編譯器對兩者都沒有結束位置
+——跟診斷是同一個缺口。跳過去會落在名字上;client 沒辦法把游標所在的整個宣告標起來。
+
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問
@@ -185,7 +254,9 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 - ftplugin 與 `.editorconfig` 設定的縮排**字元**,就是 `zerg fmt` 實際**寫出**的那個;
 - 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 80 欄,是把 tab
   算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 80 欄規則。一個數字、三個地方、
-  一道 gate。
+  一道 gate;
+- ftplugin 畫的那條**尺**,是 `fmt_wrap_max()` 再往後一欄——也就是一個 flat group 必須在它之前結束的那一欄。一條畫錯
+  位置的尺,看起來跟一條尺一模一樣,所以這一條是從 formatter 讀出來的,而不是再寫一次。
 
 `.editorconfig` 是給這個 repository 沒有出 plugin 的那些編輯器用的——VSCode、JetBrains、Emacs、Zed 都會讀它——而且它
 是held 到與 ftplugin 同一次探測,而不是held 到 ftplugin,這樣兩者才不會互相同意卻同時是錯的。
@@ -204,7 +275,6 @@ diff 把兩邊綁在一起。**
 | --------------------------------------------- | --------------------------------------------------- |
 | `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                      |
 | `completion`                                  | 同一套 query surface                                |
-| `documentSymbol`                              | `File` 是 `pub`,`FnDecl` 與它的兄弟們不是           |
 | `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
 | `zerg lint` 發現的 **code** 作為資料          | 那些規則回答 `list[str]`,把代碼渲染進字串裡         |
 | 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |

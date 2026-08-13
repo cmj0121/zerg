@@ -707,6 +707,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E389` | 這個名字已經被別的東西佔住了 — `import` 綁進唯一的 value 命名空間                                     |
 | `E390` | 這個位置要一個值,而給它的是 nil                                                                       |
 | `E391` | `…` 在頂層開了一個 statement,而編譯出來的程式沒有地方跑它                                             |
+| `E392` | 不能對 `…` 做 `…`:只有 `mut` 的 collection 能改動它的元素                                             |
+| `E393` | 不能 `…` `…`:collection 在自己的 `for` 迴圈裡對結構性改動是凍結的                                     |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |

@@ -196,7 +196,7 @@ report "listed in the zh-TW catalogue, missing from English" \
 # code rather than a string that happens to be there, and the only calls exempt are the
 # forwarding ones that pass a `code` they were handed.
 uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|p_diag\(|c_diag\(|c_derive_diag\(|Diag\(' "$SRC" --include='*.zg' |
-	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn ([cp]_)?(chk_(at|note)|_?diag(_at)?|derive_diag|p_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
+	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn ([cp]_)?(chk_(at|note)|_?diag(_at)?|derive_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
 report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
 
 # THE TWO RAISING STAGES REPORT THROUGH THEIR CHANNEL, and this is what keeps that true one

@@ -81,6 +81,13 @@ jobs:
       - name: Every error code is reported once, asserted, and listed
         run: make error-codes-check
 
+      # The seed's gap list is the contract a `seed-gap` case is excused against, so a
+      # reader of either language needs it. The zh-TW page had NO gap section at all while
+      # the English one had 27 entries — nobody decided that, it drifted one entry at a
+      # time, and nothing was watching.
+      - name: The seed's gap list says the same thing in both languages
+        run: make seed-gaps
+
       # And the board itself: a gate the workflow never runs is a gate that finds
       # nothing. This is the check that would have caught the nine that were green
       # only when somebody thought to type them.

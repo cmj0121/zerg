@@ -27,9 +27,9 @@
 #
 #   L402  a `mut fn` that never writes through `this` — it makes every call site hold the
 #         instance in a `mut` binding and gives nothing back
-#   L401  a variant name TWO enums declare — a bare use of it resolves to whichever was
-#         declared first, so moving an `enum` changes what the program means. The
-#         qualified `Enum.Variant` says which one is meant.
+#
+# L401 was a variant name two enums declare, and is RETIRED — see the range's own section
+# below for what the language did to its reason.
 #
 # `L3xx` is CAPTURE: what a coroutine or a deferred call actually took.
 #
@@ -83,7 +83,6 @@ pub fn lint_files(srcs: list[str]) -> list[str] {
 	lint_unread_bindings(f, out)
 	lint_captures(f, out)
 	lint_optionals(f, out)
-	lint_ambiguous_variants(f, out)
 	lint_idle_mut_fn(f, out)
 	lint_with_names(srcs, out)
 	return out
@@ -220,37 +219,17 @@ fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
 }
 
 # --- L4xx: a name that resolves to more than one thing ------------------------------
-
-# lint_ambiguous_variants reports a variant name that TWO enums declare.
 #
-# A bare name is a variant when it resolves to one (GRAMMAR#variant-pat), and resolution takes the
-# FIRST declaration — silently. Two enums that both have a `Red` make `c := Red` a coin
-# toss decided by declaration order, and moving an `enum` in the file changes what the
-# program means with nothing said.
+# L401 IS RETIRED AND NO LONGER EMITTED. It reported a variant name two enums declare, on
+# the reading that a bare use of it resolved to whichever enum was declared first — so
+# `c := Red` was a coin toss and moving an `enum` changed what a program meant.
 #
-# It is a lint and not an error because the program is well formed and the answer is
-# defined; what it is not is READABLE. The qualified form says which — `Color.Red` — and
-# the rule exists to point at it.
-fn lint_ambiguous_variants(f: File, mut &out: list[str]) {
-	for e in f.enums {
-		for v in e.variants {
-			owner := lint_first_enum_of(f, v.name)
-			if owner != e.name {
-				out.append(f"L401 `{v.name}` is a variant of both `{owner}` and `{e.name}`, so a bare `{v.name}` resolves to `{owner}` by declaration order alone — name it `{e.name}.{v.name}` where you mean this one")
-			}
-		}
-	}
-}
-
-# lint_first_enum_of is the enum a bare name resolves to: the first that declares it.
-fn lint_first_enum_of(f: File, name: str) -> str {
-	for e in f.enums {
-		for v in e.variants {
-			return e.name if v.name == name
-		}
-	}
-	return ""
-}
+# Neither half of that survives. A variant is named THROUGH its enum (E383, c_bare_variant),
+# so a bare `Red` is not a value in either enum; and a qualified `Signal.Red` is resolved
+# inside the enum it names (c_var_row_in), so two enums that both declare a `Red` declare
+# two different variants that are spelled alike and never compete. A lint whose reason has
+# been taken away by the language is noise pointing at a program that is right, and its
+# advice — write `Signal.Red` — is what the compiler now takes.
 
 # --- L2xx: null safety -------------------------------------------------------------------
 #

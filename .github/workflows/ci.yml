@@ -180,13 +180,6 @@ jobs:
       - name: No editor file states a language fact the compiler denies
         run: make editor-align
 
-      # The tree-sitter grammar is the one thing here that cannot be held to the compiler by
-      # calling it — it is a second implementation of GRAMMAR — so it is held to a corpus:
-      # every `.zg` file in the tree parses with no ERROR node. It skips where the CLI is
-      # absent, which on this runner it is not.
-      - name: The tree-sitter grammar reads every Zerg file in the tree
-        run: REQUIRE=1 make treesitter
-
       # The linter over the compiler and the stdlib — the only bodies of Zerg large
       # enough for a dead private function to hide in — and the check that every rule
       # it documents still has a program that makes it fire.
@@ -247,6 +240,24 @@ jobs:
       # `available`, because the examples half works on a fork with no corpus at all.
       - name: The seed and the shipping compiler agree
         run: make oracle
+
+      # --- 7b'''. and the second implementation of GRAMMAR reads them too ---------
+      # The tree-sitter grammar is the one thing here that cannot be held to the compiler by
+      # calling it — it is a second implementation of GRAMMAR — so it is held to a corpus:
+      # every `.zg` file in the tree parses with no ERROR and no MISSING node.
+      #
+      # AFTER the fetch, and not before it, for the third time on this board and for the
+      # same reason `oracle` and `fmt-corpus` are: the target passes `test-data/codegen`
+      # and `test-data/fmt` as globs, so up beside `editor-align` it read the 57 files that
+      # are IN this repository and silently none of the 189 that are not. That is not a
+      # quieter gate, it is a red one — the floor exists precisely to refuse a run that
+      # measured a fraction of what it names, and it did.
+      #
+      # Deliberately not gated on `available`, like `oracle`: the in-tree half is a real
+      # corpus on a fork with no credentials, and a grammar that cannot read the compiler's
+      # own sources should turn a fork's board red too.
+      - name: The tree-sitter grammar reads every Zerg file in the tree
+        run: REQUIRE=1 make treesitter
 
       # --- 7c. and the ones nobody wrote by hand ---------------------------------
       # The reject list holds the mistakes somebody thought of. This breaks the corpus's

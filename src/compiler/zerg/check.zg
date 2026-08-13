@@ -440,8 +440,9 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		return
 	}
 	if c_is_index(lhs) {
-		tn := c_ident_name(chk_store_target(lhs))
-		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, chk_store_target(lhs))) {
+		tgt := chk_store_target(lhs)
+		tn := c_ident_name(tgt)
+		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, tgt)) {
 			chk_frozen(em, tn, "assign into")
 			return
 		}

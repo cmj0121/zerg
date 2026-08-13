@@ -6745,11 +6745,22 @@ fn c_fill_lit(mut &em: Emitter, v: Expr, n: Expr, sb: Subst) -> str {
 fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	return "(zrt_list){0}" if elems.len() == 0
 
+	# COPIED, and this is the untyped twin of the rule c_elem_exprs states for a literal that
+	# HAS a declared element type to render at. A push owns what it is handed — the buffer's
+	# vtable drops every element the last holder still has — so an element rendered as a bare
+	# lvalue makes the list a second owner of storage it never took a reference to, and the
+	# first of the two drops takes it out from under the name it was read from.
+	#
+	# This is the ONE position that renders a literal with nothing to render it at: a match
+	# arm body, where `Expr.EBinary(_, a, b) => [a, b]` builds a list out of two names. Every
+	# other list literal in the language reaches c_fit_copied and is built element by element
+	# at the declared type.
+	ety := c_infer(em, elems[0])
 	mut vals: list[str] = []
 	for e in elems {
-		vals.append(c_expr(em, e, sb))
+		vals.append(c_copied(em, ety, e, sb))
 	}
-	return c_list_lit_vals(em, c_infer(em, elems[0]), vals)
+	return c_list_lit_vals(em, ety, vals)
 }
 
 # c_list_lit_vals assembles the literal from ALREADY-RENDERED elements, so that the two

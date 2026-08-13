@@ -506,6 +506,13 @@ func (l *Lexer) scanEscape(sb *strings.Builder, byteMode bool) bool {
 	case '\'':
 		sb.WriteByte('\'')
 	case '"':
+		// `\"` is not a byte escape: GRAMMAR#byte-escape lists `n t r 0 \ '` and `\x`,
+		// and no `"` — the quote a byte literal must escape is the single one that ends
+		// it. The `x` and `u` arms below already ask which literal they are in; this one
+		// did not, so `b'\"'` lexed to 34 in both compilers.
+		if byteMode {
+			return false
+		}
 		sb.WriteByte('"')
 	case 'x':
 		if byteMode {

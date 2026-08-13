@@ -362,7 +362,13 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 	return 0 if c == b'0'
 	return 92 if c == b'\\'
 	return 39 if c == b'\''
-	return 34 if c == b'"'
+
+	# `\"` IS NOT A BYTE ESCAPE. GRAMMAR#byte-escape lists `n t r 0 \ '` and `\x` — and no
+	# `"`, because the quote a byte literal has to escape is the single one that ends it.
+	# GRAMMAR#escape, the rune/str set, is where `"` belongs. The two arms below already ask
+	# which literal they are in (`\x` is byte-only, `\u` is rune/str-only); this one did not,
+	# so `b'\"'` lexed to 34 and a program GRAMMAR does not derive compiled and ran.
+	return 34 if c == b'"' and not byte_mode
 
 	if c == b'x' and byte_mode {
 		return -1 if not ascii.is_hex_digit(at(l, 0)) or not ascii.is_hex_digit(at(l, 1))

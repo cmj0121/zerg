@@ -7366,7 +7366,7 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[
 
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(em, name) {
-		chk_intrinsic_call(em, name, args.len())
+		chk_intrinsic_call(em, name, args)
 		em.used_rt = true
 		return f"{c_intrinsic(name)}({c_args(em, args, sb)})"
 	}

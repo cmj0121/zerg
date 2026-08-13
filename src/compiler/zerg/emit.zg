@@ -4286,7 +4286,7 @@ fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
 		# forms have no lowering yet, and saying so is better than emitting something that
 		# reads as an int.
-		Expr.ERange(lo, hi, inclusive) => c_range_unsupported()
+		Expr.ERange(lo, hi, inclusive) => c_range_unsupported(em)
 		Expr.ETuple(elems) => c_tuple_lit(em, elems, sb)
 		Expr.EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
@@ -5299,7 +5299,7 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	t := c_infer(em, x)
 	kind := c_err_kind(name)
 
-	raise f"NotImplemented: `is {name}` — only the built-in error kinds can be named in an `is` test" if kind == 0
+	raise f"E494 NotImplemented: `is {name}` — an `is` test names one of the built-in error kinds here, and `{name}` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes" + c_here(em) if kind == 0
 	raise f"`is {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)
 
 	# EXACTLY THIS KIND. `is` asks what a value IS, and the built-in taxonomy is not part of
@@ -10707,8 +10707,12 @@ fn c_tuple_tys(t: Ty) -> list[Ty] {
 	}
 }
 
-fn c_range_unsupported() -> str {
-	raise "NotImplemented: a range used as a value — it is a `for … in` iterable so far"
+# A code and a place. `x..y` in a value position is a form GRAMMAR#range-expr derives
+# anywhere an expression goes, and the sentence that turned it away carried neither — so a
+# gate could not pin it and a reader was told what a range is NOT good for without being
+# told where they had written one.
+fn c_range_unsupported(mut &em: Emitter) -> str {
+	raise "E493 NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return" + c_here(em)
 }
 
 fn c_is_range(e: Expr) -> bool {

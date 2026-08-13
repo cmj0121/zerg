@@ -508,6 +508,21 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# different tokens, neither of them the form.
 	raise "E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, Kind.LBrack)
 
+	# `unsafe fn(…) -> R` — a FUNCTION TYPE carrying the unsafe marker (GRAMMAR#fn-type is
+	# `'unsafe'? 'fn' '(' param-type-list? ')' ret-type?`). `unsafe` is a keyword, so it never
+	# reached the name below and every type position reported the token after it instead: a
+	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
+	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
+	#
+	# It is refused for the reason a standalone `unsafe fn` is (E264): the marker is a TRUST
+	# BOUNDARY this compiler does not enforce, so honouring it in a type would be a promise
+	# about calls it never checks. Dropping the word instead would be worse — a plain `fn`
+	# type is callable from safe code, which is the one thing the marker exists to prevent.
+	if p_at(p, Kind.Unsafe) {
+		u := cur(p)
+		raise "E488 NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E264), so the type is refused rather than spelled and never honoured" + p_place(p, u.line, u.col)
+	}
+
 	if p_at(p, Kind.LArrow) {
 		ar := cur(p)
 		p_advance(p)
@@ -1629,7 +1644,14 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
 	name := p_name(p, "a type alias")
-	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, Kind.LBrack)
+
+	# A code and a place, which this one refusal did without while its two siblings — E212
+	# for a generic `enum` and E215 for a generic `struct` — carry both. Three declarations
+	# refused for one reason, and the alias was the one a gate could not pin.
+	if p_at(p, Kind.LBrack) {
+		b := cur(p)
+		raise f"E491 NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E212 and a generic `struct` E215)" + p_place(p, b.line, b.col)
+	}
 
 	expect(p, Kind.Assign)
 
@@ -2024,6 +2046,35 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 		ttok = cur(p)
 		target = p_name(p, "an `impl … for …` target")
 		targs = parse_ty_args(p)
+	}
+
+	# A DOTTED NAME IN THE HEAD. GRAMMAR#impl-decl's target is a `type`, and GRAMMAR#base-type
+	# derives `type-name type-args? ( '.' identifier )*` — so `impl text.Pair { … }` and
+	# `impl Spec for text.Pair` are both forms the grammar has. Neither was read: the name
+	# before the `.` was taken whole and the `.` fell to the block's `expect`, which said
+	# ``expected `{`, found `.` `` — the token under the cursor, for a production derived in
+	# full, and with no place.
+	#
+	# The SPEC position is the other half and is not the same question: GRAMMAR writes it as
+	# a bare `type-name`, so a dotted name there is not derived at all and the sentence says
+	# so rather than promising it later.
+	# The suffix is READ before either refusal, because which of the two this is cannot be
+	# known at the `.`: `impl text.Pair { … }` and `impl text.Named for Bot` are the same
+	# tokens until the name after the dot is past and a `for` either follows or does not.
+	if p_at(p, Kind.Dot) {
+		d := cur(p)
+		mut tail := ""
+		for p_at(p, Kind.Dot) {
+			p_advance(p)
+			tail = p_name(p, "a name reached through an import")
+		}
+
+		# A `for` after it means the dotted name stood in the SPEC position, which GRAMMAR
+		# writes as a bare `type-name` — so this one is not a form the grammar has, and the
+		# sentence says that rather than promising it later.
+		raise f"E490 an `impl`'s spec is named by a bare `type-name` (GRAMMAR#impl-decl), and `{target}.{tail}` is a name reached through an import — import the spec's module and name the spec alone" + p_place(p, d.line, d.col) if sp == "" and p_at(p, Kind.For)
+
+		raise f"E489 NotImplemented: an `impl` on `{target}.{tail}` — GRAMMAR#impl-decl's target is a `type` and GRAMMAR#base-type derives a dotted name, but this compiler keys an implementation by the target's BARE name, which a type reached through an import does not have here. Write the `impl` in the module that declares the type" + p_place(p, d.line, d.col)
 	}
 
 	# An `impl` is keyed here by a bare NAME — `ImplDecl` holds a `str` for its target, and
@@ -3570,6 +3621,23 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			if p_at(p, Kind.LParen) {
 				p_advance(p)
 				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+					# A SUB-PATTERN IN THE PAYLOAD. GRAMMAR#variant-pat's payload is a
+					# `pattern-list`, and `pattern` derives every pattern form there is —
+					# so `E.Wrap(Inner.A(n))` and `E.One(0)` are both derived. This loop
+					# reads a NAME and nothing else, so the first reported whatever token
+					# followed the inner name (``expected `,`, found `.` ``) and the second
+					# fell to p_name's own sentence: a token complaint with no code and no
+					# place, for a form the grammar has (docs/code/patterns.md says as much,
+					# and asks for exactly this).
+					# A RESERVED WORD IS NOT A SUB-PATTERN, and p_name below owns that
+					# sentence (E245): `E.One(this)` is somebody naming a binding `this`,
+					# not writing a pattern inside a pattern, and answering it here would
+					# take a rule off a case that already had one.
+					pt := cur(p)
+					nested := p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Dot
+					if (nested or not p_at(p, Kind.Ident)) and not p_reserved_word(pt.lexeme) {
+						raise f"E492 NotImplemented: a sub-pattern inside a variant payload, beginning at `{pt.lexeme}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn" + p_place(p, pt.line, pt.col) if pt.lexeme != "_"
+					}
 					binds.append(p_name(p, "a pattern binding"))
 					p_list_sep(p, Kind.RParen, ")", "a pattern list")
 				}

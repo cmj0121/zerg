@@ -161,7 +161,17 @@ func (l *Lexer) Next() token.Token {
 	// comment becomes trivia, otherwise scanning continues.
 	for !l.eof() {
 		switch l.at(0) {
-		case ' ', '\t', '\r':
+		case ' ', '\t':
+			l.advance()
+		case '\r':
+			// The CR half of a CRLF, and nothing else: GRAMMAR#NEWLINE is `'\r'? '\n'`,
+			// so a CR belongs to the line break that follows it and the '\n' arm below
+			// does the ASI work. A CR was in the whitespace class, where GRAMMAR#WS never
+			// put it, so a lone CR was swallowed and the statements it separated lexed as
+			// one line. Out of the class, it reaches the bad-character report.
+			if l.at(1) != '\n' {
+				return l.scanToken()
+			}
 			l.advance()
 		case '\n':
 			start := l.pos()

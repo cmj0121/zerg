@@ -353,9 +353,19 @@ exception.
 > `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
 >
-> **[deviation]** Prelude names are **not reserved**. A program may declare `struct list`, `struct
-Result`, `struct Ref` or `spec Eq` and none of it is refused, so the names the operators desugar to can
-> in fact be knocked out from under the language.
+> **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
+> this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
+> — _E610 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
+> — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
+> the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
+> `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
+> there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
+> the day it is bound.
+>
+> Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
+> not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
+> constant, which are one form in the parser — may still take a prelude name; shadowing one inside a
+> scope is a loud error at its first use, which is the thing a declaration was not.
 
 ### Testing & visibility
 
@@ -375,14 +385,21 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** **No part of the convention is recognized.** There is no `zerg test` command, and a
-> `*_test.zg` file is not kept out of anything: it is compiled into an ordinary build like every other
-> file in its module, so its declarations DO reach the shipped artifact and a `pub` one DOES join the
-> module's surface — `lib.only_in_test()` resolves and runs from a program that never asked for a test.
-> A name it repeats collides with its siblings, and a syntactically broken one fails a normal build. So
-> the white-box and black-box positions above are places to put a file rather than a way to run one, and
-> the file is not inert while it waits. The `testing` module's `assert` family is callable from an
-> ordinary program in the meantime.
+> **[not yet]** There is no `zerg test` command, so a test file is a file **nothing runs**: the
+> white-box and black-box positions above are places to put one rather than a way to run one. The
+> `testing` module's `assert` family is callable from an ordinary program in the meantime.
+>
+> The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
+> module's directory is read, in both compilers — so nothing a test declares reaches the shipped
+> artifact or joins a module's surface, and a name it repeats or a file that does not parse costs a
+> normal build nothing. Naming one of its declarations is _E388 module `lib` has no `only_in_test`_,
+> and naming the file is _E512 `lib/lib_test` names a test file, and a normal build compiles none_,
+> both with a place. E388 does not go on to say that a test file declares one: that fact is the
+> loader's, and the rule that reports it is in the checker.
+>
+> A test file is not importable from anywhere, a sibling test file included — a white-box test shares
+> its module's namespace and reaches its internals with no import at all, which is what makes `zerg
+test` a matter of compiling more files rather than of relaxing a visibility rule.
 
 ### Target-conditional files
 

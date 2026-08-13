@@ -273,8 +273,16 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > `Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Ord for P` 會回報程式中沒有任何東西以那個名字
 > 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
 >
-> **[deviation]** prelude 的名字**沒有被保留**。程式可以宣告 `struct list`、`struct Result`、`struct Ref` 或
-> `spec Eq`，沒有一個會被拒絕——所以那些運算子 desugar 的目標，確實可以被從語言底下抽走。
+> **[deviation]** 被保留的是**工具鏈真正綁定的名字**，比本頁所述的 prelude 窄。`struct list`、`fn int`、
+> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E610 `list` is a prelude name — a built-in container type —
+> and cannot name a struct_，並附位置——`map`、`bytearray`、`runearray`、`Either`、`Result`、`Err`、`Right`
+> 與 `Into` 亦然。同一段承諾、但**這裡沒有任何東西宣告**的那些名字——`Ord`、`Hash`、`Error`、`Iterator`、
+> `Iterable`、`Ref` 與 `set`——沒有被保留：程式自己的 `spec Ord` 就是唯一的 `Ord`，拒絕它等於為一個不存在的
+> 功能佔住名字。每一個在被綁定的那天才加入這個集合。
+>
+> 有兩個位置在規則之外，而且不算偏離。**方法**名字屬於它的型別、不屬於程式，所以 `impl P { fn set(v: int) }`
+> 合法。**binding**——區域的，或 module 常數，在 parser 裡是同一個形式——仍然可以取 prelude 名字：在一個 scope
+> 內遮蔽它，第一次使用就是一個大聲的錯誤，而那正是宣告所不是的。
 
 ### 測試與可見性（Testing & visibility）
 
@@ -289,12 +297,17 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
 
-> **[not yet]** **這個慣例沒有任何一部分被辨識。** 沒有 `zerg test` 指令,而 `*_test.zg` 也沒有被排除在任何
-> 東西之外:它跟 module 裡其他每個檔案一樣被編進一般建置,所以它的宣告**確實**進得了出貨產物,`pub` 的那些
-> **確實**加入了 module 的表面——`lib.only_in_test()` 在一支從未要求測試的程式裡解析得到也跑得動。它重複的
-> 名字會與同 module 的兄弟撞名,語法壞掉的那一個會讓一般建置失敗。所以上面的白箱／黑箱位置目前只是「檔案該放
-> 哪」、不是「怎麼跑起來」,而那個檔案在等待期間並不是惰性的。在那之前,`testing` 模組的 `assert` 系列可以從
-> 一般程式呼叫。
+> **[not yet]** 沒有 `zerg test` 指令,所以測試檔是一個**沒有東西會跑它**的檔案:上面的白箱／黑箱位置目前
+> 只是「檔案該放哪」、不是「怎麼跑起來」。在那之前,`testing` 模組的 `assert` 系列可以從一般程式呼叫。
+>
+> **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
+> 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的
+> 檔案,對一般建置毫無代價。指名它的某個宣告會得到 _E388 module `lib` has no `only_in_test`_,指名那個檔案
+> 則是 _E512 `lib/lib_test` names a test file, and a normal build compiles none_,兩者都帶位置。E388 不會
+> 進一步說「有個測試檔宣告了它」:那個事實屬於 loader,而回報的規則在 checker 裡。
+>
+> 測試檔從任何地方都 import 不得,包含另一個測試檔——白箱測試共享它所屬 module 的命名空間、完全不需要 import
+> 就摸得到內部,這正是為什麼 `zerg test` 是「多編幾個檔案」的問題,而不是「放寬某條可見性規則」的問題。
 
 ### Target 條件式檔案
 

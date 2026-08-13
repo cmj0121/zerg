@@ -930,6 +930,8 @@ shipping compiler rather than a part of it (the line
 | `E508` | `…` is not a public type of module `…`                                                      |
 | `E509` | `…` is module-private, and … is on a `pub` declaration                                      |
 | `E510` | `…` is not a public field of `…`, which module `…` declared                                 |
+| `E511` | the module `atomic` ships and cannot be imported — **[not yet]**                            |
+| `E512` | `…` names a test file, and a normal build compiles none                                     |
 | `E601` | `…` needs a name, and `…` is not one                                                        |
 | `E602` | a `<-` prefix is a channel direction: only `<-chan[T]` is a type                            |
 | `E603` | `mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`     |
@@ -939,6 +941,7 @@ shipping compiler rather than a part of it (the line
 | `E607` | a match arm's body is an expression, and this one is a statement — **[not yet]**            |
 | `E608` | an f-string's literal text is malformed                                                     |
 | `E609` | an f-string hole holds more than one expression                                             |
+| `E610` | `…` is a prelude name — … — and cannot name …                                               |
 | `E701` | a `…` takes a … or a …, and this bare value is neither side                                 |
 | `E702` | no field `…` on … (optional chain `?.…`)                                                    |
 | `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                               |

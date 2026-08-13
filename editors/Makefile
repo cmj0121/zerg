@@ -12,7 +12,19 @@ NVIM_SRC    := $(CURDIR)/nvim
 NVIM_CONFIG := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/nvim
 NVIM_DIRS   := ftdetect ftplugin syntax
 
-.PHONY: all clean build test run install uninstall
+# The tree-sitter grammar. `TS_OUT` is where nvim looks for a compiled parser and for the
+# queries that colour, fold and indent with it — the same `~/.config/nvim` the rest of this
+# file writes to, one directory each.
+#
+# The parser is BUILT here rather than committed: `grammar.js` generates nearly seven
+# megabytes of C, which is larger than the rest of the repository put together and is derived
+# from a file already under review. That is also why this is its own target and not part of
+# `install` — it needs node, which the toolchain does not, and a `make install` that failed
+# on a missing editor tool would be a worse trade than an extra command.
+TS_DIR   := $(CURDIR)/tree-sitter-zerg
+TS_CLI   ?= npx --yes tree-sitter-cli@0.24.7
+
+.PHONY: all clean build test run install uninstall treesitter print-ts-cli
 
 all:				# default action (nothing to build)
 
@@ -33,16 +45,43 @@ install:			# install nvim syntax and the LSP client into local nvim config
 	@# The language server client. `ftplugin/zerg.lua` starts it and `lua/zerg/lsp.lua` is
 	@# what it calls — a second ftplugin rather than lines in the vim one, because nvim
 	@# sources both and only this half needs `zerg` on PATH.
+	@#
+	@# `lua/zerg/health.lua` is what `:checkhealth zerg` runs, and it is installed here rather
+	@# than being optional: it exists BECAUSE the client fails silently, so a checkout that
+	@# has the silence without the explanation is the one arrangement worth avoiding.
 	@mkdir -p "$(NVIM_CONFIG)/lua/zerg"
 	@ln -sf "$(NVIM_SRC)/ftplugin/zerg.lua" "$(NVIM_CONFIG)/ftplugin/zerg.lua"
 	@ln -sf "$(NVIM_SRC)/lua/zerg/lsp.lua" "$(NVIM_CONFIG)/lua/zerg/lsp.lua"
-	@printf '    linked ftplugin/zerg.lua and lua/zerg/lsp.lua\n'
+	@ln -sf "$(NVIM_SRC)/lua/zerg/health.lua" "$(NVIM_CONFIG)/lua/zerg/health.lua"
+	@printf '    linked ftplugin/zerg.lua, lua/zerg/lsp.lua and lua/zerg/health.lua\n'
 	@printf 'Zerg nvim support installed to %s\n' "$(NVIM_CONFIG)"
+
+# The one place the CLI version is written. `scripts/treesitter-check.sh` reads it from here
+# rather than spelling it again, so the grammar is always gated with the tree-sitter that
+# produced the parser a person loads.
+print-ts-cli:
+	@printf '%s\n' '$(TS_CLI)'
+
+treesitter:			# generate, build and install the tree-sitter parser and its queries
+	@command -v npx >/dev/null 2>&1 || { echo "treesitter: npx is not installed (node is a developer tool here, not a dependency of the language)"; exit 1; }
+	cd "$(TS_DIR)" && $(TS_CLI) generate
+	@# The shared object nvim loads. `tree-sitter build` picks the platform's extension and
+	@# the right flags, which is the whole reason it is asked rather than a cc line written
+	@# here: this is the one place in the repository that is not compiling Zerg or its runtime.
+	cd "$(TS_DIR)" && $(TS_CLI) build --output "$(NVIM_CONFIG)/parser/zerg.so"
+	@mkdir -p "$(NVIM_CONFIG)/queries/zerg"
+	@for q in highlights folds indents; do \
+		ln -sf "$(TS_DIR)/queries/$$q.scm" "$(NVIM_CONFIG)/queries/zerg/$$q.scm"; \
+	done
+	@printf 'tree-sitter parser installed to %s/parser/zerg.so\n' "$(NVIM_CONFIG)"
+	@printf 'Enable it per buffer with `:lua vim.treesitter.start()`, or for the filetype in your own config.\n'
 
 uninstall:			# remove nvim syntax and the LSP client from local nvim config
 	@for d in $(NVIM_DIRS); do \
 		rm -f "$(NVIM_CONFIG)/$$d/zerg.vim"; \
 	done
-	@rm -f "$(NVIM_CONFIG)/ftplugin/zerg.lua" "$(NVIM_CONFIG)/lua/zerg/lsp.lua"
+	@rm -f "$(NVIM_CONFIG)/ftplugin/zerg.lua" "$(NVIM_CONFIG)/lua/zerg/lsp.lua" "$(NVIM_CONFIG)/lua/zerg/health.lua"
+	@rm -f "$(NVIM_CONFIG)/parser/zerg.so"
+	@rm -rf "$(NVIM_CONFIG)/queries/zerg"
 	@rmdir "$(NVIM_CONFIG)/lua/zerg" 2>/dev/null || true
 	@printf 'Zerg nvim support removed from %s\n' "$(NVIM_CONFIG)"

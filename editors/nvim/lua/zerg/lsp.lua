@@ -9,16 +9,28 @@
 -- hold it, and a user who prefers lspconfig can ignore this file and register `zerg lsp`
 -- there instead.
 --
--- Two globals, both optional:
+-- Four globals, all optional:
 --   vim.g.zerg_lsp            set to false to not start the server at all
 --   vim.g.zerg_lsp_cmd        the command to run, default {'zerg', 'lsp'}
 --   vim.g.zerg_format_on_save set to true for `zerg fmt` on every write
+--   vim.g.zerg_diagnostic     set to false to leave diagnostic display to nvim's own config
 --
 -- Quick fixes need nothing here. The server declares itself a `quickfix` provider, and
 -- `vim.lsp.buf.code_action()` is nvim's own — so an `L502` finding offers "Write `1.0`"
 -- wherever the user has already bound that, and this file stays the twenty lines it is.
 
 local M = {}
+
+-- off is how a `vim.g.zerg_*` switch says no.
+--
+-- `false` and `0` both mean it, because a user setting these from vimscript writes `0` and a
+-- user setting them from Lua writes `false`. It is one function rather than the test spelled
+-- at each site: `health.lua` spelled it differently and reported `vim.g.zerg_diagnostic = 0`
+-- as ON — the one file whose whole job is explaining what the client is doing, disagreeing
+-- with the client.
+function M.off(v)
+	return v == false or v == 0
+end
 
 -- root_dir is the project the buffer belongs to. The server checks a buffer against the
 -- whole program it imports, and it resolves those imports relative to the FILE, so the root
@@ -45,25 +57,126 @@ function M.cmd()
 	return vim.g.zerg_lsp_cmd or { 'zerg', 'lsp' }
 end
 
+-- show_diagnostics puts the compiler's SENTENCE on the screen.
+--
+-- nvim's default `vim.diagnostic.config` has `virtual_text = false` (it changed in 0.11),
+-- and what is left — an underline and a sign in the gutter — says a line is wrong without
+-- saying what is wrong with it. The server's whole output is the sentence: `L502 the
+-- literal `2` is a float here — write `2.0` and the page shows it` is the finding, and a
+-- squiggle under the `2` is the part of it that carries no information. A person who has to
+-- press a key to find out what the underline means reads it as noise and turns it off.
+--
+-- Scoped to this server's NAMESPACE and not set globally, which is the whole reason it is
+-- acceptable for a language plugin to touch `vim.diagnostic` at all: it changes how a Zerg
+-- finding draws and says nothing about anybody else's. A user with an opinion of their own
+-- sets `vim.g.zerg_diagnostic = false` and keeps it.
+--
+-- The code travels with the text because the server sends one (`Diagnostic.code`) and it is
+-- the name of a RULE — the thing to look up in docs/tooling/fmt.md, and the thing to say
+-- when reporting the finding is wrong.
+-- Once per CLIENT, not once per buffer. `root_dir` makes one client serve a whole checkout, and
+-- `vim.diagnostic.config` re-shows the namespace across every loaded buffer — so opening the
+-- n-th `.zg` file re-drew the n-1 already open, for a configuration that had not changed.
+local configured = {}
+
+local function show_diagnostics(client_id)
+	if M.off(vim.g.zerg_diagnostic) or configured[client_id] then
+		return
+	end
+	configured[client_id] = true
+	local ok, ns = pcall(vim.lsp.diagnostic.get_namespace, client_id, false)
+	if not ok then
+		return
+	end
+	vim.diagnostic.config({
+		virtual_text = {
+			spacing = 2,
+			format = function(d)
+				return d.code and string.format('%s %s', d.code, d.message) or d.message
+			end,
+		},
+		severity_sort = true,
+	}, ns)
+end
+
+-- formatting_command is `:ZergFmt`, which is `zerg fmt` on the buffer.
+--
+-- nvim's own `gq` does NOT reach this server and cannot be made to. It sets `formatexpr` on
+-- attach only when the server declares `textDocument/rangeFormatting`, and this one declares
+-- whole-document formatting alone — correctly, since `zerg fmt` reads a whole source and has
+-- no notion of formatting half of one. So `gq` is not the door, and without a command the
+-- only way to format on demand was to type the `vim.lsp.buf.format` call by hand or to turn
+-- on format-on-save and accept it everywhere.
+--
+-- Buffer-local, because it is only an answer where the server is attached.
+local function formatting_command(buf, client_id)
+	vim.api.nvim_buf_create_user_command(buf, 'ZergFmt', function()
+		vim.lsp.buf.format({ bufnr = buf, id = client_id, timeout_ms = 2000 })
+	end, { desc = 'Format this buffer with zerg fmt' })
+end
+
+-- undo_on_ftplugin detaches the server when the filetype does.
+--
+-- `b:undo_ftplugin` is vim's contract for `:setfiletype other`: every buffer-local thing a
+-- filetype set is given back. The vimscript half gave its options back and this half gave
+-- nothing, so a buffer that stopped being Zerg went on being checked by the Zerg compiler,
+-- with its findings drawn over whatever the buffer had become.
+--
+-- Appended rather than assigned: the ftplugin has already written its own list, and one
+-- `|`-joined command line is what vim executes.
+local function undo_on_ftplugin(buf, client_id)
+	local undo = vim.b[buf].undo_ftplugin or ''
+	local detach = string.format("lua require('zerg.lsp').detach(%d, %d)", buf, client_id)
+	vim.b[buf].undo_ftplugin = undo ~= '' and (undo .. ' | ' .. detach) or detach
+end
+
+-- detach is the undo above, as a function rather than as a line of Lua inside a string.
+--
+-- It ASKS before detaching. `vim.lsp.buf_detach_client` does not fail quietly when the client
+-- is not attached — it writes "Buffer (id: 1) is not attached to client (id: 1)" to the
+-- message area — and `:edit` runs the undo on a buffer that has already been detached, so a
+-- plain reload printed an error about a state that is entirely normal. `pcall` cannot help:
+-- the message is not an exception, it is the function's report.
+function M.detach(buf, client_id)
+	if not vim.api.nvim_buf_is_valid(buf) then
+		return
+	end
+	if vim.lsp.get_clients({ bufnr = buf, id = client_id })[1] then
+		vim.lsp.buf_detach_client(buf, client_id)
+	end
+	pcall(vim.api.nvim_buf_del_user_command, buf, 'ZergFmt')
+end
+
 -- attach starts (or joins) the server for one buffer.
 --
 -- It answers quietly when the compiler is not on PATH. A language server that throws an
 -- error on every `.zg` file opened in a checkout without a built toolchain is one a person
 -- disables and never re-enables, and the editor still has syntax highlighting either way.
 function M.attach(buf)
-	if vim.g.zerg_lsp == false or vim.g.zerg_lsp == 0 then
+	if M.off(vim.g.zerg_lsp) then
 		return
 	end
+	-- The ftplugin passes 0 for "this buffer", which every nvim API accepts. The undo command
+	-- below is TEXT, executed later and possibly from another window, so it needs the real
+	-- number: a 0 written into it would detach whatever buffer happened to be current then.
+	buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf
 	local cmd = M.cmd()
 	if vim.fn.executable(cmd[1]) == 0 then
 		return
 	end
 
+	-- `vim.lsp.start` answers with a client ID, not a client.
 	local client = vim.lsp.start({
 		name = 'zerg',
 		cmd = cmd,
 		root_dir = root_dir(buf),
 	}, { bufnr = buf })
+
+	if client then
+		show_diagnostics(client)
+		formatting_command(buf, client)
+		undo_on_ftplugin(buf, client)
+	end
 
 	if client and vim.g.zerg_format_on_save then
 		vim.api.nvim_create_autocmd('BufWritePre', {

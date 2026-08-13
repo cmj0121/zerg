@@ -28,6 +28,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail=0
 ran=0
+outlined=0
 
 # A session is scripted here rather than in a fixture file so the request and the assertion
 # about its reply sit next to each other.
@@ -48,6 +49,11 @@ msgs = [
 if mode == "format":
     msgs.append({"jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting",
                  "params": {"textDocument": {"uri": uri}, "options": {}}})
+# The outline is asked for on EVERY session rather than in a mode of its own: it is a read
+# of the same buffer, it costs one more frame, and a handler that answers only when it is
+# the only thing asked is a handler nobody would catch.
+msgs.append({"jsonrpc": "2.0", "id": 4, "method": "textDocument/documentSymbol",
+             "params": {"textDocument": {"uri": uri}}})
 msgs.append({"jsonrpc": "2.0", "id": 3, "method": "shutdown"})
 msgs.append({"jsonrpc": "2.0", "method": "exit"})
 
@@ -85,7 +91,7 @@ while i < len(out):
     frames.append(json.loads(body.decode("utf-8")))
     i = j + 4 + n
 
-diags, edits, init = None, None, None
+diags, edits, init, syms = None, None, None, None
 for f in frames:
     if f.get("method") == "textDocument/publishDiagnostics":
         diags = f["params"]["diagnostics"]
@@ -93,6 +99,8 @@ for f in frames:
         init = f.get("result")
     elif f.get("id") == 2:
         edits = f.get("result")
+    elif f.get("id") == 4:
+        syms = f.get("result")
 
 if init is None:
     print("INIT the server did not answer initialize", file=sys.stderr)
@@ -122,6 +130,12 @@ result = {
 }
 if edits is not None:
     result["edits"] = edits
+
+# A DECLARATION is what an outline names, so the comparison below is against the parser's own
+# dump and only these kinds are in it. The numbers are LSP's SymbolKind: 6 method, 10 enum,
+# 11 interface (a spec), 12 function, 23 struct.
+if syms is not None:
+    result["symbols"] = [s["name"] for s in syms if s["kind"] in (6, 10, 11, 12, 23)]
 print(json.dumps(result))
 EOF
 }
@@ -184,6 +198,39 @@ PYEOF
 	then
 		echo "DISAGREE  $src — the server's information findings are not what zerg lint reports"
 		fail=$((fail + 1))
+	fi
+
+	# THE OUTLINE, against the parser's own dump.
+	#
+	# `--emit ast` prints one line per top-level declaration, and `documentSymbol` is the same
+	# list with positions on it — so if the two disagree about WHICH declarations a file has,
+	# the server has grown a view of the program, which is the one thing it may not do.
+	#
+	# Only on a file that imports NOTHING. The driver merges a whole program into one `File`
+	# before emission, so `--emit ast` on a file with imports prints the imported modules'
+	# declarations too, while the outline is the buffer alone — deliberately, since an outline
+	# full of declarations the reader cannot see on screen is not an outline. Where the two
+	# questions differ the dump is not an oracle, so it is not asked.
+	if ! grep -qE '^[[:space:]]*(pub[[:space:]]+)?import\b|^[[:space:]]*"' "$src"; then
+		# A METHOD is dumped as `fn P.get(this: P)`, so the optional `Type.` in the pattern is
+		# not decoration: without it the name read out of the dump was the RECEIVER, and the
+		# gate reported a struct declared twice and a method that did not exist.
+		"$ZERG" build --emit ast "$src" >"$tmp/ast" 2>/dev/null || true
+		grep -E '^\t(pub )?(fn|struct|enum|spec) ' "$tmp/ast" |
+			sed -E 's/^\t(pub )?(fn|struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*).*/\4/' |
+			LC_ALL=C sort >"$tmp/ast.names"
+		# LC_ALL=C, because the other side of this diff is sorted by Python and Python sorts by
+		# CODE POINT. A UTF-8 locale puts `answer` before `Cmd` and a C locale puts `Cmd` first,
+		# so without it the gate reported a disagreement about ORDER as a disagreement about
+		# which declarations a file has.
+		printf '%s' "$got" | "$PY" -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin).get("symbols", []))))' >"$tmp/sym.names"
+		if ! diff -q "$tmp/ast.names" "$tmp/sym.names" >/dev/null; then
+			echo "DISAGREE  $src — the outline is not the declarations the parser read"
+			diff "$tmp/ast.names" "$tmp/sym.names" | sed 's/^/  /'
+			fail=$((fail + 1))
+		else
+			outlined=$((outlined + 1))
+		fi
 	fi
 done
 
@@ -425,4 +472,12 @@ if [ "$ran" -lt "${MIN_SESSIONS:-4}" ]; then
 	echo "lsp-check: only $ran sessions ran — the list is empty, or the server is not starting"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, formatting is fmt's own answer, and 15 protocol cases hold"
+
+# The outline is compared on a SUBSET — the files that import nothing — so it needs a floor of
+# its own. Without one, a change that made every file look like it imports something would
+# leave this gate reporting success for having compared no outlines at all.
+if [ "$outlined" -lt "${MIN_OUTLINES:-8}" ]; then
+	echo "lsp-check: only $outlined outlines were compared — the import filter is eating the list"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, formatting is fmt's answer, and 15 protocol cases hold"

@@ -58,6 +58,7 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_conversions` |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
+| `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
 
 Every other request is answered with a **method-not-found error**, not with silence. A client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
@@ -109,15 +110,17 @@ of that conversion are the server's, and neither is optional:
 
 ## Neovim
 
-`make -C editors install` symlinks the syntax files and two more:
+`make -C editors install` symlinks the syntax files and three more:
 
 - `ftplugin/zerg.lua` — starts the server for a `.zg` buffer;
-- `lua/zerg/lsp.lua` — `vim.lsp.start` (nvim 0.8+), no plugin manager and no `nvim-lspconfig`.
+- `lua/zerg/lsp.lua` — `vim.lsp.start` (nvim 0.8+), no plugin manager and no `nvim-lspconfig`;
+- `lua/zerg/health.lua` — what `:checkhealth zerg` runs.
 
 ```lua
 vim.g.zerg_lsp = false            -- do not start the server
 vim.g.zerg_lsp_cmd = { 'zerg', 'lsp' }
 vim.g.zerg_format_on_save = true  -- zerg fmt on every write
+vim.g.zerg_diagnostic = false     -- leave diagnostic display to nvim's own config
 ```
 
 It answers **quietly** when `zerg` is not on `PATH`. A server that errors on every `.zg` file opened
@@ -125,6 +128,98 @@ in a checkout without a built toolchain is one a person disables and never re-en
 
 The quick fixes need no configuration — `vim.lsp.buf.code_action()` is nvim's own, and the server
 declares itself a `quickfix` provider so a client that asks for that kind alone still gets them.
+nvim binds them to `gra` by default, and `gO` to the outline.
+
+### What the ftplugin does, and why each number is the compiler's
+
+`ftplugin/zerg.vim` is editing behaviour that must hold with **no toolchain installed**, so none of
+it asks a running `zerg` anything. What it does instead is state facts the compiler owns — and
+[`make editor-align`](#keeping-the-editor-honest) holds every one of them to their source.
+
+| Setting                    | Is                                                       | Held to            |
+| -------------------------- | -------------------------------------------------------- | ------------------ |
+| `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                     | `F101`, `F403`     |
+| `colorcolumn=81`           | the first column past the budget `F403` wraps at         | `fmt_wrap_max()`   |
+| `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                | one shared scanner |
+| `makeprg` / `errorformat`  | `:make` runs `--emit c` and reads both diagnostic shapes | the compiler's own |
+
+**Folding and indenting are one rule, asked twice.** A line's level is the lowest delimiter depth it
+reaches, which leaves both lines that bracket a block on screen when it is folded — `fn f() {` above
+and `}` below — and makes `}` dedent itself as it is typed. What differs is the delimiters: folding
+counts braces alone, because a wrapped argument list is not a fold; indenting counts `(`, `[` and `{`,
+because `F403` and `F404` indent inside all three.
+
+Neither existed before. `indentexpr` was empty and so were `autoindent`, `smartindent` and `cindent`,
+so `<CR>` after `fn f() {` put the cursor in column 1 and every level was a tab the person pressed —
+with the formatter tidying it on the next write, which meant the file only ever looked right after a
+tool had run over it. The check that it is now right is `gg=G` over this repository: re-indenting
+every source the formatter wrote must change nothing, and finding the two cases where it did — a
+wrapped `+`-chain and a doctest comment ending in `# >>>` — is what the rule is shaped by.
+
+**`:make` is the compiler in the quickfix list**, and it is worth having beside a language server
+because the two fail differently: when a buffer aborts, the server can only publish one finding at
+the top of the file, while `:make` still carries the compiler's own sentence and, where there is one,
+its place.
+
+```vim
+:make | copen           " compile this buffer, list what it said
+:ZergFmt                " zerg fmt, on demand
+:checkhealth zerg       " why nothing is happening
+```
+
+`:ZergFmt` exists because `gq` cannot reach this server: nvim wires `formatexpr` up only for a server
+that declares `textDocument/rangeFormatting`, and this one declares whole-document formatting alone —
+correctly, since `zerg fmt` reads a whole source and has no notion of formatting half of one.
+
+`:checkhealth zerg` is the counterpart to the silence above. A client that starts nothing and says
+nothing leaves an unbuilt toolchain, a `zerg` shadowed by an older install, a `vim.g.zerg_lsp` left
+false in a config months ago, and a server that started and crashed all looking exactly alike; the
+health check tells them apart, and asks the toolchain rather than repeating anything about it.
+
+### A finding you can read without pressing a key
+
+nvim's default `vim.diagnostic.config` has **`virtual_text = false`** (it changed in 0.11), so what
+a published finding draws by default is an underline and a sign in the gutter — a mark saying a line
+is wrong, with the part that says _what_ is wrong left where nobody looks. The server's entire output
+is that sentence, so the client turns virtual text on for its own namespace and prefixes the rule's
+code:
+
+```text
+    ratio: float = 2      ■ L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+**Its own namespace, not the global config.** `vim.diagnostic.config(opts, ns)` against the namespace
+`vim.lsp.diagnostic.get_namespace()` hands back changes how a **Zerg** finding draws and says nothing
+about anybody else's — which is the only arrangement under which a language plugin has any business
+touching `vim.diagnostic` at all. A user with an opinion sets `vim.g.zerg_diagnostic = false` and
+keeps theirs.
+
+Whatever the display, nvim's own keys reach the same text, and they are worth knowing because they
+say **more** than the line ever can:
+
+| Key / call                                        | Shows                                                     |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| `<C-w>d` — `vim.diagnostic.open_float()`          | every finding on the cursor's line, in full, in a window  |
+| `]d` / `[d` — `vim.diagnostic.jump()`             | the next / previous one                                   |
+| `<C-w>d` twice                                    | enters the float, where the text can be yanked            |
+| `vim.diagnostic.setloclist()`                     | all of them in the location list, one line each           |
+| `vim.diagnostic.config({ virtual_lines = true })` | the sentence on its own line under the code, never elided |
+| `:lua =vim.diagnostic.get(0)`                     | the raw findings — `code`, `severity`, `source`, range    |
+
+A finding drawn as virtual text is **truncated by the window**, and a severity-3 sentence carrying a
+fix is exactly the one that runs long. `<C-w>d` is what to press when the line ends in `…`.
+
+**`zerg build` and `zerg lint` are the other way to read it**, and they are the authority — the
+server holds itself to them by `make lsp`:
+
+```sh
+zerg lint examples/01_bindings.zg
+# examples/01_bindings.zg:10:17: L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+A finding at **severity 3** is INFORMATION about a legal program, not an error. `examples/01` and
+`examples/03` both carry one, because both exist to show a literal adopting the type of its position
+— `ratio: float = 2` is the lesson, and `L502` is the linter naming it. They compile and run.
 
 ## A quick fix is the compiler's answer, not the server's
 
@@ -158,6 +253,92 @@ cannot compile ([Formatter & Linter](fmt.md)); knowing that `1` became a `float`
 formatter that did this would fail in exactly the buffer a person reaches for it in. It is also an
 opinion — `1.5 + 1` is a legal program — and the formatter has none.
 
+## The outline is the parser's list, not the server's
+
+`textDocument/documentSymbol` is what fills an editor's outline, its breadcrumbs and its `gO`. It is
+the one interactive answer that needs **no name resolution** — a declaration knows what it is called
+and where it was written — which is why it is built while `hover`, `definition` and `references` are
+not.
+
+The rule this page is about decides its shape. The compiler answers `file_symbols`, which walks a
+parsed file and returns a name, a **kind as a word**, and a place; the server maps the word onto
+LSP's `SymbolKind` number and nothing else. Neither half can drift into the other's job: the compiler
+would have to be edited if it spelled `12` for a function, and a server that decided what counts as a
+declaration would be the analysis this one does not have.
+
+**A purpose-built `Symbol` rather than making the AST public.** `FnDecl` and its siblings stayed
+private and one small type crosses the `pub` boundary instead. Widening that boundary to every field
+of every declaration — for a list of names — would hand the server reach over the parser's shape and
+a reason to grow.
+
+**The buffer alone, not the whole program.** Every other answer here is computed against the modules
+the file imports, because a borrowed name is undefined without them. An outline is the opposite
+question — what is _in_ this file — and pulling the imports in would fill it with declarations the
+reader cannot see on screen.
+
+A buffer that does not parse answers with **nothing** rather than with an error. An outline is a view
+and not a verdict, and the diagnostic saying the buffer is broken has already been published by the
+check that runs on every keystroke.
+
+`make lsp` holds it to `--emit ast`: the outline must name exactly the declarations the parser read.
+That comparison runs only on files that import nothing, because the driver merges a whole program
+into one `File` before emission — so the dump is the buffer's own declarations only where there are
+no imports, and where the two questions differ the dump is not an oracle and is not asked. The gate
+counts how many it compared, for the reason every floor here exists.
+
+**Two things it does not do.** A struct's fields and an enum's variants are not children — the
+protocol has a tree and this is a flat list, which is what an editor shows anyway. And `range` and
+`selectionRange` are the same range, the identifier's, because the compiler has no end position for
+either — the same gap the diagnostics have. A jump lands on the name; a client cannot highlight the
+whole declaration a cursor is inside.
+
+## A grammar written twice
+
+`editors/tree-sitter-zerg` is a **tree-sitter** grammar for Zerg — a real parser, for the
+editors that want a tree rather than a pattern.
+
+```sh
+make -C editors treesitter    # generate, build, install the parser and its queries
+:lua vim.treesitter.start()   # in a .zg buffer
+```
+
+**It breaks this page's rule and cannot help it.** Everything else here is held to the compiler
+by calling it, and where an editor file must repeat a language fact a diff holds the two
+together. A tree-sitter grammar is a **second implementation of `GRAMMAR`** — around a hundred
+productions — and nothing can diff a tree-sitter rule against a BNF production or against
+`parser.zg`.
+
+So what holds it is a **corpus**: `make treesitter` parses every `.zg` file in the tree — the
+compiler's own sources, the standard library, the examples, and the private corpus when it is
+checked out — and fails on a single `ERROR` or `MISSING` node. That is weaker than the other
+gates on the board, in exactly the way `fmt-corpus` is: it can only see a form some file
+contains. It is the strongest check available for a grammar written twice, and it is why the
+file list is everything rather than a sample. One part _is_ diffable and is diffed —
+`editor-align` holds the grammar's keyword list to `lookup_keyword`, the same fact it already
+holds the vim file's to.
+
+**What it buys.** `syntax/zerg.vim` colours by regular expression and admits its load-bearing
+guess in its own comment: `\<\u\w*\>` makes every capitalised word a type, "a highlight
+heuristic, not a grammar rule", because a highlighter that cannot parse cannot tell a type from
+a variant from a constructor call. A parser does not guess — a lowercase type name is coloured
+correctly, an f-string's holes are highlighted as the expressions they are, and folds follow
+the construct rather than the brace.
+
+**The generated parser is not committed.** `grammar.js` produces close to seven megabytes of C,
+larger than the rest of this repository put together and derived entirely from a file already
+under review. `make -C editors treesitter` writes it; `.gitignore` keeps it out. That is also
+why it is its own target rather than part of `make -C editors install`: it needs node, which
+this toolchain does not, and an install that failed on a missing editor tool would be the worse
+trade.
+
+**Two things it needed a scanner for.** A newline is a statement separator (`GRAMMAR#stmt-sep`)
+and is insignificant inside a group, which is the standard automatic-semicolon problem: the
+scanner is asked only for the tokens the parser can accept, so a newline becomes a separator
+exactly where a statement could end. And a literal's contents are not code — `comment` is an
+`extra`, so it is a candidate at every position, and `#` inside `f"{recv}#{name}"` matched
+further than any string rule and swallowed the closing quote. Neither a token precedence nor an
+`immediate` token settled that; being asked first does.
+
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
@@ -175,7 +356,10 @@ So those facts get a gate of their own — `make editor-align`:
 - the indent **width** they configure is the one `F403` measures a tab as. That is not decoration:
   F403 decides whether a line has run past column 80 by counting a tab as `fmt_wrap_tab()`, so an
   editor displaying it as anything else is applying a different 80-column rule than the formatter
-  did. One number, three places, one gate.
+  did. One number, three places, one gate;
+- the **ruler** the ftplugin draws is one past `fmt_wrap_max()` — the column a flat group must end
+  before. A ruler in the wrong place looks exactly like a ruler, which is why this one is read out of
+  the formatter rather than written down twice.
 
 `.editorconfig` is there for the editors this repository ships no plugin for — VSCode, JetBrains,
 Emacs, Zed all read it — and it is held to the same probe as the ftplugin rather than to the
@@ -197,7 +381,6 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 | --------------------------------------------- | ---------------------------------------------------------------- |
 | `hover`, `definition`, `references`, `rename` | nothing maps a position to a declaration                         |
 | `completion`                                  | the same query surface                                           |
-| `documentSymbol`                              | `File` is `pub`; `FnDecl` and its siblings are not               |
 | `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
 | a `zerg lint` finding's **code** as data      | those rules answer `list[str]` and render their code into it     |
 | a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |

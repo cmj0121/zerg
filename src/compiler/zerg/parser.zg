@@ -1823,6 +1823,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {
+	kw := cur(p)
 	p_advance(p) # 'enum'
 	name := p_name(p, "an enum")
 
@@ -1885,7 +1886,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
-	return EnumDecl(name, variants, p.path)
+	return EnumDecl(name, variants, p.path, kw.line, kw.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -1898,6 +1899,7 @@ fn is_pascal(s: str) -> bool {
 }
 
 fn parse_struct(mut &p: Parser) -> StructDecl {
+	kw := cur(p)
 	p_advance(p) # 'struct'
 	name := p_name(p, "a struct")
 
@@ -1944,7 +1946,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
-	return StructDecl(name, fields, p.path)
+	return StructDecl(name, fields, p.path, kw.line, kw.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,

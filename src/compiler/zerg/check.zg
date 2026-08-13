@@ -482,20 +482,24 @@ fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int
 # BOTH directions, like chk_call_arity. Too FEW is the quieter half and the worse one:
 # `Line(7)` against a `Line(int, int)` left `.f1` reading whatever zero-initialisation put
 # there, and `Line(n) =>` bound one of two without a word.
-fn chk_variant_arity(mut &em: Emitter, ctor: str, n: int, what: str) {
-	held := chk_variant_held(em, ctor)
+fn chk_variant_arity(mut &em: Emitter, en: str, ctor: str, n: int, what: str) {
+	held := chk_variant_held(em, en, ctor)
 	return if n == held
 	chk_at(em, "E311", f"`{ctor}` carries {chk_args(held)} and this {what} {strconv.to_string(n, 10)}")
 }
 
-# chk_variant_held is how many payload values a variant carries. The table holds one row per
-# payload field and c_build_enums appends a variant's rows CONTIGUOUSLY, so the count ends
-# where the run ends — the same early exit c_param_row makes over the parameter table.
-fn chk_variant_held(mut &em: Emitter, ctor: str) -> int {
+# chk_variant_held is how many payload values a variant of `en` carries. The table holds one
+# row per payload field and c_build_enums appends a variant's rows CONTIGUOUSLY, so the count
+# ends where the run ends — the same early exit c_param_row makes over the parameter table.
+#
+# THE ENUM IS PART OF THE KEY. Counting by the bare name alone made `Signal.Line(a, b)` an
+# arity error against `Colour`'s one-field `Line`, and a `Line()` that carries nothing in the
+# enum being written pass because another enum's carries none.
+fn chk_variant_held(mut &em: Emitter, en: str, ctor: str) -> int {
 	mut n := 0
 	mut i := 0
 	for i < em.vf_variant.len() {
-		if em.vf_variant[i] == ctor {
+		if em.vf_enum[i] == en and em.vf_variant[i] == ctor {
 			n = n + 1
 		} else if n > 0 {
 			return n

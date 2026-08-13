@@ -4666,9 +4666,39 @@ EOF
 # `type X = Y`'s underlying name too; a local's was the one that did not have to, and reported
 # "cannot bind int to a Nope binding" — a sentence about the VALUE that treats an unknown name
 # as a type the value failed to be.
-reject local-annotation-names-no-type E334 <<'EOF'
+reject local-annotation-names-no-type E707 '(the binding `x`)' <<'EOF'
 fn main() {
 	x: Nope = 5
+	print 1
+}
+EOF
+
+# AND IT IS THE WHOLE TYPE THAT IS ASKED. The rule above was written against the bare name
+# and read the annotation with `c_named_of`, which answers "" for every type that WRAPS one —
+# so `Nope` was refused and `Nope?` was emitted as `zg_Nope` for cc to report against a file
+# under .zerg-cache. These are the two wrappers a local is likeliest to spell; the walk that
+# answers them answers `chan[…]`, `map[…]`, a tuple and a fn type by the same recursion.
+reject local-optional-annotation-names-no-type E707 '(the binding `h`)' <<'EOF'
+fn main() {
+	mut h: Nope? = nil
+	print 1
+}
+EOF
+
+reject local-list-annotation-names-no-type E707 '(the binding `xs`)' <<'EOF'
+fn main() {
+	mut xs: list[Nope] = []
+	print xs.len()
+}
+EOF
+
+# `handle` IS THE FFI CHAPTER'S, and docs/runtime/ffi.md is a design rather than a description
+# — nothing in this compiler declares the type. It earned its own line here because it is the
+# spelling that found the wrapper hole above, and because a reader who follows that chapter
+# should be told the name resolves to nothing rather than be handed a cc diagnostic.
+reject an-ffi-handle-annotation E707 '(the binding `h`)' <<'EOF'
+fn main() {
+	mut h: handle? = nil
 	print 1
 }
 EOF
@@ -6776,6 +6806,34 @@ struct P {
 fn main() {
 	p := P(1)
 	spawn p.nope()
+}
+EOF
+
+# A `spawn` AND A `defer` NEVER ASKED WHETHER THE CALLEE IS A FUNCTION. Visibility and the
+# `unsafe` rule are read off a signature ROW and a missing row is deliberately quiet, so a
+# name nothing declares asked two rules with nothing to say and went straight on to spell
+# `zg_<name>()` inside the thunk — reported by cc, against a file under .zerg-cache. The
+# ordinary call has answered by name since `E425` existed; these are the two keywords that
+# reached the same emitter down a path of their own.
+reject spawn-of-a-function-nothing-declares E425 <<'EOF'
+fn main() {
+	spawn nosuchfn()
+}
+EOF
+
+reject defer-of-a-function-nothing-declares E425 <<'EOF'
+fn main() {
+	defer nosuchfn()
+}
+EOF
+
+# and the same path missed the SHADOWING half of the question, which the ordinary call
+# answers with `E369`: the innermost binding wins, so a `defer x()` under an `x := 1` is a
+# call that cannot happen rather than a call to the function of that name.
+reject defer-of-a-binding-that-holds-an-int E369 'is not callable' <<'EOF'
+fn main() {
+	x := 1
+	defer x()
 }
 EOF
 

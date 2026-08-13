@@ -1615,6 +1615,46 @@ fn c_add_var_named(mut &em: Emitter, name: str, t: Ty, cname: str, is_mut: bool,
 	em.env_cval.append(Folded(false, 0))
 }
 
+# EnvCols is those same eight columns as ONE value, for the sites that put a whole
+# environment BACK.
+#
+# The comment above says the columns are appended in one place so the count cannot drift.
+# Restoring them was the other direction of exactly that argument, and it was being done by
+# hand at two sites: a lambda's body is emitted with its own environment (c_lambda), and a
+# block's last statement is typed with a throwaway one (c_last_val_ty). c_lambda listed
+# SEVEN — `env_cval` was not among them — so a lambda that bound anything at all, a
+# parameter included, left the fold column longer than `env_names` while every other column
+# was put back. chk_fold_name indexes the one by the other, so from there on a binding read
+# a DIFFERENT row's folded value: `n := 3` then `[0; n]` after a lambda was refused as "not
+# a compile-time constant", naming the one part of the line that was fine.
+#
+# A ninth column is one edit here, not a fresh chance for a site to remember eight.
+struct EnvCols {
+	pub names: list[str]
+	pub tys: list[Ty]
+	pub cnames: list[str]
+	pub dead: list[int]
+	pub muts: list[bool]
+	pub scope: list[int]
+	pub consts: list[bool]
+	pub cval: list[Folded]
+}
+
+fn c_env_save(mut &em: Emitter) -> EnvCols {
+	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval)
+}
+
+fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
+	em.env_names = saved.names
+	em.env_tys = saved.tys
+	em.env_cnames = saved.cnames
+	em.env_dead = saved.dead
+	em.env_mut = saved.muts
+	em.env_scope = saved.scope
+	em.env_const = saved.consts
+	em.env_cval = saved.cval
+}
+
 # c_no_shadow_sub refuses a binding that takes a name an ACTIVE substitution holds.
 #
 # A substitution is text, not a scope: c_ident_val answers from it before it ever asks what
@@ -4513,14 +4553,7 @@ fn c_last_val_ty(mut &em: Emitter, body: list[Stmt], what: str) -> Ty {
 	return Ty.TNil if n == 0
 	return Ty.TNil if not c_is_expr_stmt(body[n - 1])
 
-	saved_names := em.env_names
-	saved_tys := em.env_tys
-	saved_cnames := em.env_cnames
-	saved_dead := em.env_dead
-	saved_mut := em.env_mut
-	saved_scope := em.env_scope
-	saved_const := em.env_const
-	saved_cval := em.env_cval
+	saved_env := c_env_save(em)
 	saved_open := em.open_scopes
 	saved_cur := em.scope_cur
 
@@ -4529,14 +4562,7 @@ fn c_last_val_ty(mut &em: Emitter, body: list[Stmt], what: str) -> Ty {
 	t := c_infer(em, c_expr_stmt_of(body[n - 1]))
 	c_scope_close(em, outer)
 
-	em.env_names = saved_names
-	em.env_tys = saved_tys
-	em.env_cnames = saved_cnames
-	em.env_dead = saved_dead
-	em.env_mut = saved_mut
-	em.env_scope = saved_scope
-	em.env_const = saved_const
-	em.env_cval = saved_cval
+	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
 	em.scope_cur = saved_cur
 
@@ -9700,13 +9726,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	# the lambda's body is emitted with its OWN environment; the one belonging to the
 	# function being emitted is put back afterwards, since the lambda is in the middle of
 	# one of its expressions
-	saved_names := em.env_names
-	saved_tys := em.env_tys
-	saved_cnames := em.env_cnames
-	saved_dead := em.env_dead
-	saved_mut := em.env_mut
-	saved_scope := em.env_scope
-	saved_const := em.env_const
+	saved_env := c_env_save(em)
 	saved_open := em.open_scopes
 	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
@@ -9721,13 +9741,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.sub = c_nosub()
 	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn)))
 	em.sub = saved_sub
-	em.env_names = saved_names
-	em.env_tys = saved_tys
-	em.env_cnames = saved_cnames
-	em.env_dead = saved_dead
-	em.env_mut = saved_mut
-	em.env_scope = saved_scope
-	em.env_const = saved_const
+	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
 	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames

@@ -2761,6 +2761,103 @@ fn main() {
 }
 EOF
 
+# GRAMMAR#fn-type carries an `unsafe` marker, and `unsafe` is a trust boundary this compiler
+# does not enforce — so the TYPE is refused rather than spelled and never honoured. Both type
+# positions reported the token after the keyword before this: neither named the form.
+expect "$ZERG" an-unsafe-fn-type E488 <<'EOF'
+fn f(x: int) -> int {
+	return x
+}
+
+fn main() {
+	g: unsafe fn(int) -> int = f
+	print g(1)
+}
+EOF
+
+# GRAMMAR#impl-decl's target is a `type`, which derives a dotted name — but an implementation
+# is keyed here by the target's bare name, which a type reached through an import has not got.
+expect "$ZERG" an-impl-on-a-dotted-target E489 <<'EOF'
+import "text"
+
+impl text.Pair {
+	fn sum() -> int {
+		return 0
+	}
+}
+
+fn main() {
+	print 0
+}
+EOF
+
+# The other half, and not the same question: GRAMMAR writes an `impl`'s SPEC as a bare
+# `type-name`, so a dotted name there is a form the grammar does not derive at all.
+expect "$ZERG" an-impl-spec-reached-through-an-import E490 <<'EOF'
+import "text"
+
+struct Bot {
+	pub n: int
+}
+
+impl text.Named for Bot {
+	fn label() -> str {
+		return "bot"
+	}
+}
+
+fn main() {
+	print 0
+}
+EOF
+
+# A parameterized alias is one instantiation per argument, the reason a generic `enum` is
+# E212 and a generic `struct` E215. This one had no code and no place until it had this.
+expect "$ZERG" a-generic-type-alias E491 <<'EOF'
+type Pairs[T] = list[T]
+
+fn main() {
+	print 0
+}
+EOF
+
+# GRAMMAR#variant-pat's payload is a `pattern-list`, so a pattern inside a pattern is derived.
+# This compiler takes a binding name or `_` there, and said so with a bare parser complaint.
+expect "$ZERG" a-sub-pattern-in-a-variant-payload E492 <<'EOF'
+enum Inner {
+	A(int)
+	B
+}
+
+enum Outer {
+	Wrap(Inner)
+}
+
+fn main() {
+	o := Outer.Wrap(Inner.A(3))
+	print match o {
+		Outer.Wrap(Inner.A(v)) => v
+		_                      => 0
+	}
+}
+EOF
+
+# A range is an iterable and a membership test, and not a value that can be bound.
+expect "$ZERG" a-range-bound-as-a-value E493 <<'EOF'
+fn main() {
+	r := 2..5
+	print 3 in r
+}
+EOF
+
+# `is` names one of the built-in error kinds here, where GRAMMAR#cmp-expr takes any type-name.
+expect "$ZERG" an-is-test-on-a-non-error-type E494 <<'EOF'
+fn main() {
+	x := 3
+	print x is int
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

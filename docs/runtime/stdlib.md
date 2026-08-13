@@ -188,12 +188,19 @@ libm binding). A domain error (e.g. `sqrt` of a negative) raises, demotable with
 | `max(a: int, b: int) -> int`          | the larger of two integers                        |
 | `sqrt(x: float) -> float`             | square root (Newton's method); negative raises    |
 | `pow(base: float, exp: int) -> float` | integer exponent by squaring                      |
-| `trunc(x: float) -> float`            | drop the fractional part, toward zero             |
-| `floor(x: float) -> float`            | greatest integer `<= x`                           |
-| `ceil(x: float) -> float`             | least integer `>= x`                              |
-| `round(x: float) -> float`            | nearest integer, halves away from zero            |
+| `trunc(x: float) -> int`              | drop the fractional part, toward zero             |
+| `floor(x: float) -> int`              | greatest integer `<= x`                           |
+| `ceil(x: float) -> int`               | least integer `>= x`                              |
+| `round(x: float) -> int`              | nearest integer, halves away from zero            |
 | `pi() -> float`                       | π (a function; the grammar has no value constant) |
 | `e() -> float`                        | Euler's number                                    |
+
+**The rounding four answer an `int`, and that is what they are for.** `int(x)` on a `float` is refused —
+dropping a fraction is a decision, and four answers are defensible ([Types](../core/types.md)) — so these
+are the verbs that make it. A verb that gave back a `float` would leave the caller holding the very
+conversion it called a verb to perform. A magnitude no `int` holds raises `OverflowError`, demotable with
+`guard` like any other conversion that can fail; a narrower target is the verb and then the conversion,
+`byte(math.trunc(x))`.
 
 ## `rand`
 

@@ -872,6 +872,13 @@ shipping compiler rather than a part of it (the line
 | `E485` | import cycle: `…` -> `…` -> `…`                                                             |
 | `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                     |
 | `E487` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`      |
+| `E488` | an `unsafe fn(…)` TYPE — **[not yet]**                                                      |
+| `E489` | an `impl` on `….…` — a dotted target — **[not yet]**                                        |
+| `E490` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import     |
+| `E491` | a generic `type …[…] = …` — **[not yet]**                                                   |
+| `E492` | a sub-pattern inside a variant payload — **[not yet]**                                      |
+| `E493` | a range used as a value — **[not yet]**                                                     |
+| `E494` | `is …` names one of the built-in error kinds — **[not yet]**                                |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 | `E503` | cannot receive on a send-only `…`                                                           |

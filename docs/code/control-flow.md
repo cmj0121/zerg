@@ -68,8 +68,8 @@ three-clause `for`**. The infinite form, the while form, and `for x in it` over 
 the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
 writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
-refused by name; a range exists only as the thing a `for` walks, a `match` arm contains, and an `in` tests
-against.
+refused by name and with a place (`E493`); a range exists only as the thing a `for` walks, a `match` arm
+contains, and an `in` tests against.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly

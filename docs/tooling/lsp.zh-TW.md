@@ -241,6 +241,40 @@ kind**、以及位置;server 把那個詞對映到 LSP 的 `SymbolKind` 數字,�
 編輯器顯示的也是這個。以及 `range` 與 `selectionRange` 是同一個範圍(那個識別字的),因為編譯器對兩者都沒有結束位置
 ——跟診斷是同一個缺口。跳過去會落在名字上;client 沒辦法把游標所在的整個宣告標起來。
 
+## 一份被寫了兩次的文法
+
+`editors/tree-sitter-zerg` 是 Zerg 的 **tree-sitter** 文法——一個真的 parser,給那些要的是一棵樹而不是一組樣式的編輯器。
+
+```sh
+make -C editors treesitter    # 產生、建置、安裝 parser 與它的 queries
+:lua vim.treesitter.start()   # 在一個 .zg buffer 裡
+```
+
+**它打破了這一頁的規則,而且沒辦法不打破。** 這裡其他每一樣東西都是靠呼叫編譯器來held 住的;而編輯器檔案不得不重複一
+條語言事實的地方,有一份 diff 把兩邊綁在一起。一份 tree-sitter 文法是 `GRAMMAR` 的**第二份實作**——大約一百條產生
+式——而沒有任何東西能拿一條 tree-sitter 規則去 diff 一條 BNF 產生式,或去 diff `parser.zg`。
+
+所以held 住它的是一個 **corpus**:`make treesitter` 會剖析這棵樹裡的每一個 `.zg` 檔——編譯器自己的原始碼、標準函式
+庫、examples,以及 private corpus(有 checkout 的話)——只要出現一個 `ERROR` 或 `MISSING` 節點就失敗。這比看板上其他
+gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某個檔案裡真的有的形式。對一份被寫了兩次的文法來說,這是
+拿得到的最強檢查,也是為什麼那份檔案清單是「全部」而不是抽樣。有一部分**是**可以 diff 的,而且真的 diff 了——
+`editor-align` 把這份文法的關鍵字清單held 到 `lookup_keyword`,跟它早就對 vim 檔做的是同一件事。
+
+**它換來什麼。** `syntax/zerg.vim` 是用正規表達式上色的,而且在自己的註解裡承認了那個承重的猜測:`\<\u\w*\>` 讓每
+一個大寫開頭的字都是型別,「這是一個上色的啟發式,不是文法規則」,因為一個不會剖析的上色器分不出型別、variant 與建構
+子呼叫。一個 parser 不用猜——小寫的型別名第一次被正確上色,f-string 的洞被當成它們本來就是的運算式上色,而摺疊跟著結
+構走,不是跟著大括號走。
+
+**產生出來的 parser 沒有進版控。** `grammar.js` 產出將近七 MB 的 C,比這個 repo 其餘部分加起來還大,而且完全是從一個
+已經在 review 裡的檔案導出的。`make -C editors treesitter` 會寫出它;`.gitignore` 把它擋在外面。這也是為什麼它是自己
+的一個 target,而不是 `make -C editors install` 的一部分:它需要 node,而這套 toolchain 不需要——一個因為缺了編輯器
+工具而失敗的 install,是更差的交換。
+
+**有兩件事它需要一個 scanner。** 換行是敘述分隔符(`GRAMMAR#stmt-sep`),而在一個群組裡面它又沒有意義,這就是標準的
+自動分號問題:scanner 只會被問「這裡 parser 收得下哪些 token」,所以換行剛好在一個敘述可以結束的地方變成分隔符。以及
+字面值的內容不是程式碼——`comment` 是一個 `extra`,所以它在每一個位置都是候選,而 `f"{recv}#{name}"` 裡的 `#` 比任何
+字串規則都匹配得更長,把結尾的引號一起吞掉了。token 優先權沒有解決它,`immediate` token 也沒有;「先被問到」有。
+
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問

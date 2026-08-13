@@ -292,6 +292,53 @@ protocol has a tree and this is a flat list, which is what an editor shows anywa
 either — the same gap the diagnostics have. A jump lands on the name; a client cannot highlight the
 whole declaration a cursor is inside.
 
+## A grammar written twice
+
+`editors/tree-sitter-zerg` is a **tree-sitter** grammar for Zerg — a real parser, for the
+editors that want a tree rather than a pattern.
+
+```sh
+make -C editors treesitter    # generate, build, install the parser and its queries
+:lua vim.treesitter.start()   # in a .zg buffer
+```
+
+**It breaks this page's rule and cannot help it.** Everything else here is held to the compiler
+by calling it, and where an editor file must repeat a language fact a diff holds the two
+together. A tree-sitter grammar is a **second implementation of `GRAMMAR`** — around a hundred
+productions — and nothing can diff a tree-sitter rule against a BNF production or against
+`parser.zg`.
+
+So what holds it is a **corpus**: `make treesitter` parses every `.zg` file in the tree — the
+compiler's own sources, the standard library, the examples, and the private corpus when it is
+checked out — and fails on a single `ERROR` or `MISSING` node. That is weaker than the other
+gates on the board, in exactly the way `fmt-corpus` is: it can only see a form some file
+contains. It is the strongest check available for a grammar written twice, and it is why the
+file list is everything rather than a sample. One part _is_ diffable and is diffed —
+`editor-align` holds the grammar's keyword list to `lookup_keyword`, the same fact it already
+holds the vim file's to.
+
+**What it buys.** `syntax/zerg.vim` colours by regular expression and admits its load-bearing
+guess in its own comment: `\<\u\w*\>` makes every capitalised word a type, "a highlight
+heuristic, not a grammar rule", because a highlighter that cannot parse cannot tell a type from
+a variant from a constructor call. A parser does not guess — a lowercase type name is coloured
+correctly, an f-string's holes are highlighted as the expressions they are, and folds follow
+the construct rather than the brace.
+
+**The generated parser is not committed.** `grammar.js` produces close to seven megabytes of C,
+larger than the rest of this repository put together and derived entirely from a file already
+under review. `make -C editors treesitter` writes it; `.gitignore` keeps it out. That is also
+why it is its own target rather than part of `make -C editors install`: it needs node, which
+this toolchain does not, and an install that failed on a missing editor tool would be the worse
+trade.
+
+**Two things it needed a scanner for.** A newline is a statement separator (`GRAMMAR#stmt-sep`)
+and is insignificant inside a group, which is the standard automatic-semicolon problem: the
+scanner is asked only for the tokens the parser can accept, so a newline becomes a separator
+exactly where a statement could end. And a literal's contents are not code — `comment` is an
+`extra`, so it is a candidate at every position, and `#` inside `f"{recv}#{name}"` matched
+further than any string rule and swallowed the closing quote. Neither a token precedence nor an
+`immediate` token settled that; being asked first does.
+
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,

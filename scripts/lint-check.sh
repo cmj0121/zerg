@@ -160,23 +160,10 @@ fn main() {
 EOF
 
 # --- L4xx — resolution ------------------------------------------------------------
-
-lint L401 'by declaration order alone' <<'EOF'
-enum Fruit {
-	Red
-	Green
-}
-
-enum Color {
-	Red
-	Blue
-}
-
-fn main() {
-	c := Red
-	print int(c)
-}
-EOF
+#
+# `L401` stood here, over a variant name two enums declare. Its program is not ambiguous any
+# more: a bare `Red` is E383 in either enum, and a qualified `Color.Red` resolves inside the
+# enum it names — so the case went with the rule, the same way `L501`'s did below.
 
 lint L402 'never writes through `this`' <<'EOF'
 struct P {

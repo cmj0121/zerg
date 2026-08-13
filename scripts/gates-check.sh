@@ -42,8 +42,9 @@ done
 #   all clean run help upgrade   — the ordinary verbs of a Makefile
 #   install uninstall            — they CHANGE the machine; `install-check` is the gate
 #   fmt                          — it rewrites sources; `fmt-self` is the gate
+#   cloc                         — it REPORTS a count, and a number asserts nothing
 #   ci linux-ci                  — they ARE the board, and a board on the board recurses
-NOT_A_GATE="all clean run help upgrade install uninstall fmt ci linux-ci"
+NOT_A_GATE="all clean run help upgrade install uninstall fmt cloc ci linux-ci"
 
 targets=$(grep -oE '^[a-z][a-z0-9-]*:' "$MAKEFILE" | tr -d ':' | sort -u)
 board=$(grep -oE '^LINUX_GATES \?= .*' "$MAKEFILE" | sed 's/^LINUX_GATES ?= //' | tr ' ' '\n' | grep -v '^$' | sort -u)

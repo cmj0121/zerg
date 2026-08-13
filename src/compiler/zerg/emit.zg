@@ -8217,6 +8217,7 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	return Ty.TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
 	return Ty.TInt if name == "__zrt_open_write"
 	return Ty.TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return Ty.TInt if name == "__zrt_trunc"
 	return Ty.TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
 	return Ty.TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
 	return Ty.TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"

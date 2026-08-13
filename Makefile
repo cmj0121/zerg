@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -203,6 +203,11 @@ $(SUBDIR):
 #
 # EXAMPLE_MIN is the floor a shrinking glob runs into. The guard against a mistyped pattern
 # is not that the loop fails, it is that the loop has nothing to iterate and says so happily.
+# The example sources, named once. `examples` inlined these globs and so did the tree-sitter
+# gate, which is the `SELF_SRCS` hazard again: a scope written twice goes stale on whichever
+# copy the next directory is not added to.
+EXAMPLE_SRCS := examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg
+
 EXAMPLE_MIN ?= 20
 
 # The examples that must be REFUSED, and the sentence they must be refused with. An example
@@ -217,7 +222,7 @@ EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
-	for src in examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg; do \
+	for src in $(EXAMPLE_SRCS); do \
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
@@ -408,6 +413,18 @@ editor-align:                   # no editor file states a language fact the comp
 	$(MAKE) build
 	@./scripts/editor-align.sh
 
+# The one gate here that does NOT ask the compiler. `editors/tree-sitter-zerg` is a second
+# implementation of GRAMMAR, so there is nothing to diff it against — what it is held to is a
+# corpus: every `.zg` file in the tree must parse with no ERROR and no MISSING node. The
+# script says at length why that is weaker than everything else on this board.
+#
+# It needs the tree-sitter CLI, and therefore node, which is a developer's tool and not a
+# dependency of this language. A machine without it SKIPS: the toolchain does not need the
+# parser to build, and a gate that goes red over a missing editor tool teaches people to stop
+# reading the board.
+treesitter:                     # the tree-sitter grammar reads every Zerg file in the tree
+	@./scripts/treesitter-check.sh $(SELF_SRCS) $(EXAMPLE_SRCS) $$(ls test-data/codegen/*.zg test-data/fmt/*.zg 2>/dev/null)
+
 desugar:                        # a program and the same program desugared do the same thing
 	$(MAKE) build
 	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
@@ -446,7 +463,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

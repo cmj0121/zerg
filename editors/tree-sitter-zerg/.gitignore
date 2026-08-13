@@ -1,0 +1,10 @@
+# The parser is DERIVED from grammar.js, and at nearly seven megabytes of generated C it is
+# larger than the rest of this repository put together. `make -C editors treesitter` writes
+# it; `grammar.js` and `src/scanner.c` are the sources that survive review.
+src/parser.c
+src/grammar.json
+src/node-types.json
+src/tree_sitter/
+node_modules/
+*.so
+*.dylib

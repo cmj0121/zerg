@@ -205,7 +205,42 @@ else
 	fi
 fi
 
-# --- 4. the ruler -------------------------------------------------------------------------
+# --- 4. the tree-sitter grammar's keyword list -------------------------------------------
+#
+# `editors/tree-sitter-zerg/grammar.js` is a SECOND implementation of GRAMMAR and mostly
+# cannot be held by a diff — `scripts/treesitter-check.sh` holds it to a corpus instead, and
+# says why. One part of it can be, and it is the same part the vim file's is: the reserved
+# words. A grammar that names a keyword the lexer does not reserve is claiming a word this
+# language does not have, and one that misses a keyword parses it as an identifier.
+#
+# Only what the grammar spells as a bare quoted word in a `choice` or a `seq` is read here.
+# That misses nothing that matters: every keyword in it is written that way.
+GRAMMARJS=${GRAMMARJS:-editors/tree-sitter-zerg/grammar.js}
+if [ -f "$GRAMMARJS" ]; then
+	grep -oE "'[a-z]+'" "$GRAMMARJS" | tr -d "'" | sort -u >"$tmp/ts.all"
+
+	# The same two exclusions the vim side needs: a built-in TYPE name is not a reserved word,
+	# and neither is a word that only appears as a field or a rule name.
+	comm -12 "$tmp/ts.all" "$tmp/lexer" >"$tmp/ts.kw"
+
+	# And the floor every extraction here carries, for the reason the others do: a pattern that
+	# stops matching leaves an EMPTY list, and an empty list reports every keyword as missing —
+	# which is loud, or reports nothing, which is worse.
+	tsn=$(wc -l <"$tmp/ts.all" | tr -d ' ')
+	if [ "$tsn" -lt "${MIN_TS_WORDS:-40}" ]; then
+		echo "EMPTY       only $tsn quoted words were read from $GRAMMARJS — the extraction has gone stale"
+		fail=$((fail + 1))
+	fi
+
+	ts_missing=$(comm -23 "$tmp/lexer" "$tmp/ts.kw")
+	if [ -n "$ts_missing" ]; then
+		echo "UNPARSED    the lexer reserves these and $GRAMMARJS does not spell them:"
+		echo "$ts_missing" | sed 's/^/  /'
+		fail=$((fail + 1))
+	fi
+fi
+
+# --- 5. the ruler -------------------------------------------------------------------------
 #
 # The ftplugin draws a 'colorcolumn' so a person can see where F403's budget ends, and that
 # budget is `fmt_wrap_max()` — the column a flat group must END BEFORE. So the ruler is drawn

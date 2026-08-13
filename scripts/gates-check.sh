@@ -71,8 +71,12 @@ done
 #    being single-sourced (CI running `make ci`, or its steps generated from a matrix) rather
 #    than a third copy of the list this script compares against; until then the conditional
 #    six are trusted, and that is the declared limit of clause 2.
+#    A leading `VAR=value` is allowed on the run line. A gate may need one — `treesitter`
+#    takes `REQUIRE=1` so that a runner without node FAILS rather than skipping — and the
+#    alternative was a target that reads the variable itself, which would hide from a reader
+#    of the workflow the fact that CI asks a stricter question than a developer does.
 for t in $board; do
-	grep -qE "run: make (-j[0-9]+ )?$t\$" "$WORKFLOW" ||
+	grep -qE "run: ([A-Z_]+=[^ ]+ )*make (-j[0-9]+ )?$t\$" "$WORKFLOW" ||
 		note "\`make $t\` is on the board and the workflow never runs it"
 done
 

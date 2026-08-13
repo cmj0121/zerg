@@ -6025,7 +6025,14 @@ fn c_display(t: Ty, inner: str) -> str {
 		Ty.TFloat => f"zrt_display_float((double)({inner}))"
 		Ty.TByte  => f"zrt_display_uint((uint64_t)({inner}))"
 		Ty.TUint  => f"zrt_display_uint({inner})"
-		_         => f"zrt_display_int((int64_t)({inner}))"
+
+		# an Err shows as what went wrong, the same text `print e` writes — the third
+		# spelling of one question, which fell to the integer arm and cast a `zrt_err`
+		# to `long long` for cc to report. The copy is zrt_str_dup's own reason: a msg
+		# may be a managed payload, an immortal cell or a raised literal, and the caller
+		# releases what this answers.
+		Ty.TErr => f"zrt_str_dup(({inner}).msg)"
+		_       => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
 

@@ -2615,10 +2615,14 @@ EOF
 
 # GRAMMAR#decorator is a COMMA LIST of items, and this read the brackets as one item with a
 # bag of identifiers in it: every name that was not `derive` went on as a derive argument,
-# so `#[derive(Eq), sealed]` asked to derive `sealed`. Each item now gets its own answer,
-# and `#[sealed]` alone has had one all along.
+# so `#[derive(Eq), frobnicate]` asked to derive `frobnicate`. Each item now gets its own
+# answer, and an unknown one alone has had one all along.
+#
+# The second item is an UNKNOWN name and not `sealed`, which is what it used to be: `sealed`
+# now has a code of its own (E496, a reserved decorator that is not built), so asserting E217
+# through it would have stopped testing the unknown-decorator rule the moment it got one.
 expect "$ZERG" second-decorator-in-a-comma-list E217 <<'EOF'
-#[derive(Eq), sealed]
+#[derive(Eq), frobnicate]
 struct P {
 	pub v: int
 }
@@ -2855,6 +2859,60 @@ expect "$ZERG" an-is-test-on-a-non-error-type E494 <<'EOF'
 fn main() {
 	x := 3
 	print x is int
+}
+EOF
+
+# GRAMMAR#decorator is one item or more. The loop that reads them never ran when the `]` was
+# already there, so `#[]` was read, dropped, and the declaration compiled unchanged.
+expect "$ZERG" an-empty-decorator E495 <<'EOF'
+#[]
+fn work() {
+	nop
+}
+
+fn main() {
+	work()
+}
+EOF
+
+# `#[sealed]` is RESERVED — GRAMMAR group 7 gives it a meaning — so it is not the sentence an
+# unknown decorator gets. The word is right and the behaviour is not built, which is what a
+# reader who wrote it needs to know: nothing is protecting the constructor they sealed.
+expect "$ZERG" the-reserved-sealed-decorator E496 <<'EOF'
+#[sealed]
+struct R {
+	pub x: int
+}
+
+fn main() {
+	print R(3).x
+}
+EOF
+
+# The arguments are what a derive IS. A bare `#[derive]` or `#[derive()]` was read and dropped,
+# so the type went on with no impls while the line above it said it had some.
+expect "$ZERG" a-derive-with-no-specs E497 <<'EOF'
+#[derive()]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print P(1).x
+}
+EOF
+
+# GRAMMAR#chan-type has three alternatives and `<-chan[T]<-` is none of them. The trailing
+# arrow was read after the `]` with no regard for the leading one, so a send-only signature
+# was honoured as a receive-only one.
+expect "$ZERG" a-channel-facing-both-ways E498 <<'EOF'
+fn take(c: <-chan[int]<-) {
+	nop
+}
+
+fn main() {
+	ch := chan[int](1)
+	take(ch)
 }
 EOF
 

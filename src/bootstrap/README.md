@@ -322,7 +322,7 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   every pair. So `float(b)` on a `byte`, `rune(b)`, `uint(b)`, `byte(3.5)`, `uint(3.5)`,
   `rune(65.5)` and `int(1.9)` all build here. `zerg` refuses each: a `float` source is a
   decision spelled with a verb (`E394`, `math.trunc` and its three siblings), and any other
-  absent pair is the two steps through `int` written as one (`E395`). Seven cases in
+  absent pair is the two steps through `int` written as one (`E395`). Seventeen cases in
   `reject-check.sh` carry the marker, and this is the chapter where `zerg` is the stricter
   compiler rather than the reverse. (The seed's own sources need no migration: nothing in
   `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
@@ -351,7 +351,6 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   program to reach it — the same reasoning that folds a literal in a typed position. The
   seed folds nothing here and emits the division, whose runtime check then raises. Both
   refuse the program in the end; only one of them does it before the program runs.
-
 - **A `pub` declaration may name a module-private TYPE.** `pub fn make() -> Secret` beside a
   module-private `struct Secret` is accepted, so a dependent obtains a value of a type it
   could never have spelled — "a declaration can never be more visible than the types it

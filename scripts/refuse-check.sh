@@ -993,11 +993,11 @@ fn main() {
 EOF
 
 expect "$ZERG" parameterized-bound E207 <<'EOF'
-spec Eq[T] {
-	fn eq(o: T) -> bool
+spec Same[T] {
+	fn same(o: T) -> bool
 }
 
-spec Ix[K: Eq[int]] {
+spec Ix[K: Same[int]] {
 	fn at(k: K) -> int
 }
 
@@ -2967,6 +2967,22 @@ fn main() {
 		1 => ch <- 2
 		_ => print "n"
 	}
+}
+EOF
+
+# A MODULE THAT SHIPS AND CANNOT BE IMPORTED. `atomic` declares `Atomic[T]`, and a generic
+# struct is a form this compiler has not built, so the import used to fail with `E215
+# NotImplemented: a generic struct` pointing INTO src/stdlib/atomic.zg — a real error against
+# a file the reader did not write and cannot fix, which is this script's whole subject wearing
+# a stdlib path instead of a cache one.
+#
+# It belongs HERE and not in reject-check.sh: `import "atomic"` is a program that will be
+# legal, and this case disappears the day a generic struct is built.
+expect "$ZERG" a-module-that-ships-and-cannot-be-imported E511 <<'EOF'
+import "atomic"
+
+fn main() {
+	print 1
 }
 EOF
 

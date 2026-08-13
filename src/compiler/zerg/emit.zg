@@ -2551,6 +2551,17 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for ed in es {
 			if c_deps_done(c_enum_deps(ed), done, all) {
 				out = out + c_enum_typedef(ed)
+
+				# the copy and drop PROTOTYPES, here and not with their bodies, for the
+				# reason the struct arm below gives and for one more of its own: the ref-box
+				# helpers are emitted before the bodies are, and `zg_refnew_<E>` now hands
+				# the cell a drop that runs `zg_drop_<E>`. A prototype needs only the typedef
+				# just written, which keeps that order from deciding whether the C compiles —
+				# and an enum whose payload is another enum is the same problem one level in.
+				if c_needs_copy(em, Ty.TNamed(ed.name)) {
+					out = out + f"static zg_{ed.name} zg_copy_{ed.name}(zg_{ed.name} v);\n"
+					out = out + f"static void zg_drop_{ed.name}(zg_{ed.name} *v);\n"
+				}
 				done.append(ed.name)
 			} else {
 				es2.append(ed)
@@ -3478,6 +3489,26 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 		return true if em.fld_struct[i] == nm and c_needs_copy(em, em.fld_ty[i])
 		i = i + 1
 	}
+
+	# AN ENUM OWNS ITS PAYLOAD, and it was the one composite this question never reached: a
+	# self-recursive slot is boxed behind a refcounted cell, so copying one has to RETAIN
+	# rather than duplicate — and a payload holding a str or a list owes the same walk a
+	# struct field does.
+	#
+	# A BOXED SLOT ANSWERS WITHOUT RECURSING, and that is a termination rule and not a
+	# shortcut: the type of a boxed slot IS the enum being asked about, so recursing into it
+	# never returns. It is also the only back edge there is — every other payload is by value,
+	# and a by-value cycle has no size and is refused at E452 — so declining to follow it
+	# leaves a DAG. The seed carries the same rule with the same note (emit_ref.go), written
+	# after the version without it looped forever.
+	mut j := 0
+	for j < em.vf_variant.len() {
+		if c_variant_enum(em, em.vf_variant[j]) == nm {
+			return true if em.vf_boxed[j]
+			return true if c_needs_copy(em, em.vf_ty[j])
+		}
+		j = j + 1
+	}
 	return false
 }
 
@@ -3528,6 +3559,80 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 		if c_needs_copy(em, Ty.TNamed(sd.name)) {
 			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, sd.name)
 		}
+	}
+
+	# The enums, through the same three helpers and in the same order, because they are the
+	# same pair of obligations: what the copy retains the drop releases. They come after the
+	# structs and it does not matter which way round — every name either side calls was
+	# prototyped with its typedef.
+	for ed in f.enums {
+		if c_needs_copy(em, Ty.TNamed(ed.name)) {
+			out = out + c_enum_copy_helper(em, ed) + c_enum_drop_helper(em, ed) + c_elem_vt_helper(em, ed.name)
+		}
+	}
+	return out
+}
+
+# c_enum_copy_helper is c_copy_helper for a tagged union: one `case` per variant that owns
+# anything, and a bit copy for the rest. A BOXED payload is copied by retaining the cell —
+# that is what makes a recursive value refcount-shared rather than deep-cloned, and it is
+# the sentence docs/core/memory.md writes about copying one.
+fn c_enum_copy_helper(mut &em: Emitter, ed: EnumDecl) -> str {
+	nm := "zg_" + ed.name
+	mut out := "static " + nm + " zg_copy_" + ed.name + "(" + nm + " v) {\n"
+	out = out + "    " + nm + " r = v;\n    switch (v.tag) {\n"
+	for vd in ed.variants {
+		body := c_enum_variant_copy(em, vd)
+		if body != "" {
+			out = out + "    case " + strconv.to_string(c_variant_tag(em, vd.name), 10) + ":\n" + body + "        break;\n"
+		}
+	}
+	return out + "    default: break;\n    }\n    return r;\n}\n\n"
+}
+
+fn c_enum_variant_copy(mut &em: Emitter, vd: VariantDef) -> str {
+	mut out := ""
+	mut i := 0
+	for i < vd.fields.len() {
+		slot := f".u.{vd.name}.f{i}"
+		if c_is_boxed(em, vd.name, i) {
+			em.used_rt = true
+			out = out + "        r" + slot + " = zrt_ref_copy(v" + slot + ");\n"
+		} else if c_needs_copy(em, vd.fields[i]) {
+			out = out + "        r" + slot + " = " + c_copy_of(em, vd.fields[i], "v" + slot) + ";\n"
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# c_enum_drop_helper is that helper read backwards, slot by slot, in REVERSE declaration
+# order — the order docs/core/memory.md pins for an enum payload, the same one a struct's
+# fields drop in.
+fn c_enum_drop_helper(mut &em: Emitter, ed: EnumDecl) -> str {
+	nm := "zg_" + ed.name
+	mut out := "static void zg_drop_" + ed.name + "(" + nm + " *v) {\n    switch (v->tag) {\n"
+	for vd in ed.variants {
+		body := c_enum_variant_drop(em, vd)
+		if body != "" {
+			out = out + "    case " + strconv.to_string(c_variant_tag(em, vd.name), 10) + ":\n" + body + "        break;\n"
+		}
+	}
+	return out + "    default: break;\n    }\n}\n\n"
+}
+
+fn c_enum_variant_drop(mut &em: Emitter, vd: VariantDef) -> str {
+	mut out := ""
+	mut i := vd.fields.len() - 1
+	for i >= 0 {
+		slot := f"v->u.{vd.name}.f{i}"
+		if c_is_boxed(em, vd.name, i) {
+			em.used_rt = true
+			out = out + "        zrt_release(" + slot + ");\n"
+		} else if c_needs_copy(em, vd.fields[i]) {
+			out = out + "        " + c_drop_stmt(em, vd.fields[i], slot) + "\n"
+		}
+		i = i - 1
 	}
 	return out
 }
@@ -3635,6 +3740,11 @@ fn c_drop_stmt(mut &em: Emitter, t: Ty, place: str) -> str {
 # c_drop_fn is what gives a value of this type back, or "" for one that owes nothing. A
 # TUPLE is deliberately "" — it has a copy helper and no drop, so a tuple holding a list
 # still leaks it, which is a leak and not a corruption and is named in the README table.
+#
+# A STRUCT AND AN ENUM ARE THE SAME ANSWER, `zg_drop_<name>`, because they are the same
+# question: a declared type that owns what its parts own. The enum was excluded here and
+# nowhere else, which is why a recursive chain had a boxed cell nobody released — the
+# registration points were all in place and this dispatch turned every one of them away.
 fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
@@ -3642,7 +3752,7 @@ fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
 
 	nm := c_named_of(t)
 
-	return "" if nm == "" or not c_is_struct_name(em, nm)
+	return "" if nm == "" or (not c_is_struct_name(em, nm) and not c_is_enum_name(em, nm))
 	return "" if not c_needs_copy(em, t)
 
 	return "zg_drop_" + nm
@@ -4112,8 +4222,19 @@ fn c_enum_typedef(ed: EnumDecl) -> str {
 	return out + "} zg_" + ed.name + ";\n\n"
 }
 
-# c_refbox_helpers emits, for an enum with self-recursive fields, a no-op drop and a
-# refnew that boxes a value into a leaked ref cell (never released — batch tool).
+# c_refbox_helpers emits, for an enum with self-recursive fields, the cell's drop and a
+# refnew that boxes a value into it.
+#
+# The drop used to be a NO-OP — `zg_noopdrop_<E>` — and that single function was the whole
+# of the leak docs/core/memory.md described: the cell was refcounted, every holder retained
+# and released it correctly, and when the count reached zero the runtime called something
+# that did nothing, so the boxed value's own payload was never given back and neither was
+# the next cell in the chain. Now it runs the enum's drop, which releases the next cell,
+# which drops in turn — a chain frees at its last holder's scope exit, as written.
+#
+# WHICH RECURSES, ONE C FRAME PER NODE. A chain longer than the native stack now overflows
+# where before it completed, because before, nothing was freed. That is a real regression
+# and it is written down in the marker rather than hidden; an iterative drop is a separate cut.
 fn c_refbox_helpers(ed: EnumDecl) -> str {
 	mut anybox := false
 	mut i := 0
@@ -4130,9 +4251,9 @@ fn c_refbox_helpers(ed: EnumDecl) -> str {
 	}
 	return "" if not anybox
 	nm := ed.name
-	mut out := "static void zg_noopdrop_" + nm + "(void* p) { (void)p; }\n"
+	mut out := "static void zg_dropbox_" + nm + "(void* p) { zg_drop_" + nm + "((zg_" + nm + "*)p); }\n"
 	out = out + "static void* zg_refnew_" + nm + "(zg_" + nm + " v) {\n"
-	out = out + "    void* r = zrt_ref_alloc(sizeof(zg_" + nm + "), &zg_noopdrop_" + nm + ");\n"
+	out = out + "    void* r = zrt_ref_alloc(sizeof(zg_" + nm + "), &zg_dropbox_" + nm + ");\n"
 	out = out + "    *(zg_" + nm + "*)zrt_ref_payload(r) = v;\n"
 	out = out + "    return r;\n}\n\n"
 	return out
@@ -8512,7 +8633,39 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	# have its own branch here saying the same thing a second way. c_into, not c_copied: the
 	# storage has a DECLARED type, which makes this a typed position, and `b = i` for a `byte`
 	# binding truncated rather than raising.
-	return f"{ind}{lv} = {c_into(em, lt, rhs, c_nosub())};\n"
+	val := c_into(em, lt, rhs, c_nosub())
+	return c_assign_dropping(em, lt, lv, val, ind) if c_assign_drops(em, lt)
+
+	return f"{ind}{lv} = {val};\n"
+}
+
+# c_assign_drops is whether an assignment has to give the OLD value back before it writes
+# the new one, and it is deliberately narrower than "the type owns something".
+#
+# A recursive enum has no choice: the binding's reference to the head cell is the only one
+# there is, so an assignment that does not release it loses the whole chain — the leak this
+# was written for cannot be closed at scope exit alone. Every other owning type still
+# abandons its old value here, which is a real gap and a wider cut: it reaches every `str`,
+# `list`, `map` and struct assignment in the language, it needs its own measurement, and it
+# is not what any of the three markers is about. docs/core/memory.md names it.
+fn c_assign_drops(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return nm != "" and c_is_enum_name(em, nm) and c_needs_copy(em, t)
+}
+
+# c_assign_dropping writes the assignment as materialise, release, store — IN THAT ORDER.
+#
+# `acc = L.Cons(i, acc)` builds the new value OUT OF the old one, so a release written first
+# frees what the right-hand side is still reading. This is the rule `s = s + x` is under, and
+# the shape the seed emits for the same statement.
+#
+# The destination's address is taken ONCE. `lv` may be a list index, which lowers to an
+# expression with its own subscript arithmetic in it, and naming it twice would compute it
+# twice — around a release, which is exactly where a second evaluation must not happen.
+fn c_assign_dropping(mut &em: Emitter, t: Ty, lv: str, val: str, ind: str) -> str {
+	ct := c_type(t)
+	mut out := ind + "{ " + ct + " *zgt_lp = &(" + lv + "); " + ct + " zgt_nv = " + val + "; "
+	return out + c_drop_stmt(em, t, "(*zgt_lp)") + " *zgt_lp = zgt_nv; }\n"
 }
 
 # c_elem_exprs renders a list literal's elements AT the element type the declaration gives,

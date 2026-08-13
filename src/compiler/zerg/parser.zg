@@ -415,6 +415,35 @@ fn p_name(mut &p: Parser, what: str) -> str {
 	return lx
 }
 
+# p_type_name is the name slot of a DECLARATION THAT INTRODUCES A TYPE — a struct, an enum,
+# a spec, a `type X = Y` (GRAMMAR#type-ident). It is p_name plus the one rule that separates
+# the two namespaces this language has: a type's name begins with an UPPER-CASE LETTER, and
+# a value's does not.
+#
+# THAT RULE IS LEXICAL, AND EVERYTHING DEPENDS ON IT. `name_is_type` is how a construction is
+# told from a call, how `cli.Opt` the module qualifier is told from `It.Item` the associated
+# type, and how a generic bound naming a spec is told from one naming a concrete type. The
+# last two are asked by the PARSER, which has resolved nothing and has no table to consult —
+# so a `struct _Box` or a `struct lower` cannot be made to work by teaching the constructor
+# alone. It would be legal in one position and misread in three.
+#
+# It used to be legal in NONE and said so wrongly: `_Box(1)` on a declared `struct _Box`
+# answered `E425 undefined function`, which is false about the program — the name is a type,
+# and the reader declared it eight lines up. The seed builds all of them, so this is a
+# LANGUAGE decision rather than a gap: the upper-case letter is what the declaration owes,
+# and GRAMMAR#type-ident now derives it.
+#
+# A leading `_` is refused by the same rule and not by one of its own. `_` has no case, so it
+# is neither namespace, and a name that is in neither is exactly what this asks about.
+fn p_type_name(mut &p: Parser, what: str) -> str {
+	t := cur(p)
+	lx := p_name(p, what)
+
+	raise p_diag_at(p, t.line, t.col, "E610", f"`{lx}` cannot name {what} — a declared type's name begins with an UPPER-CASE LETTER (GRAMMAR#type-ident), which is how the language tells a type from a value: `{lx}(…)` would read as a call to a function of that name, and `{lx}.X` as a module qualifier. Write it in PascalCase") if not name_is_type(lx)
+
+	return lx
+}
+
 # expect consumes the token the grammar requires, and REPORTS when it is not there.
 #
 # It used to advance on a match and say nothing otherwise, so a malformed construct was not
@@ -1619,7 +1648,7 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 fn parse_spec(mut &p: Parser, is_pub: bool) -> SpecDecl {
 	kw := cur(p)
 	p_advance(p) # 'spec'
-	name := p_name(p, "a spec")
+	name := p_type_name(p, "a spec")
 
 	# `spec Ix[K]` and `spec Ix[K: Ord]` — the spec's OWN type parameters. They are what a
 	# required signature's `K` stands for, and an `impl Ix[int]` says which type that is.
@@ -1742,7 +1771,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	# read its identifier for itself and so was the one declaration the rule never reached.
 	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
-	name := p_name(p, "a type alias")
+	name := p_type_name(p, "a type alias")
 
 	# A code and a place, which this one refusal did without while its two siblings — E212
 	# for a generic `enum` and E215 for a generic `struct` — carry both. Three declarations
@@ -1915,7 +1944,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 fn parse_enum(mut &p: Parser, is_pub: bool) -> EnumDecl {
 	kw := cur(p)
 	p_advance(p) # 'enum'
-	name := p_name(p, "an enum")
+	name := p_type_name(p, "an enum")
 
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
@@ -1991,7 +2020,7 @@ fn is_pascal(s: str) -> bool {
 fn parse_struct(mut &p: Parser, is_pub: bool) -> StructDecl {
 	kw := cur(p)
 	p_advance(p) # 'struct'
-	name := p_name(p, "a struct")
+	name := p_type_name(p, "a struct")
 
 	# `struct B[T] { … }` — READ AND DROPPED, so a field of type `T` then reported
 	# `no type named T`: a message about the consequence, from two steps away, for a form

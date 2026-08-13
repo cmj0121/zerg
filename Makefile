@@ -346,6 +346,20 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 	$(MAKE) build
 	./scripts/sanitize-conc.sh
 
+# `sanitize-conc` is the only leak gate this repository had, and it can only run where
+# LeakSanitizer exists — Linux — AND where the private corpus was fetched, which on a fork
+# is nowhere. So the whole memory contract was defended on one platform, behind a secret.
+#
+# This asks a narrower question that needs neither: the same program is run at 5 rounds and
+# at 200 against a counting allocator, and the number of allocations still live at exit must
+# be the SAME. That is exactly the shape a per-round leak has, it is an exact integer rather
+# than an RSS reading, and its programs are written inside the script — so it runs on every
+# platform, on every fork, with nothing fetched. What it cannot see is written at the top of
+# the script: a leak that is bounded per PROGRAM is invisible to a difference.
+mem-check:                      # a value that outlives its scope, counted rather than estimated
+	$(MAKE) build
+	./scripts/mem-check.sh
+
 # Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
 # and the property it pins is not that a bad program fails — it always did — but WHO says
 # so. A program the compiler emits anyway reaches cc, which reports a real error against
@@ -463,7 +477,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

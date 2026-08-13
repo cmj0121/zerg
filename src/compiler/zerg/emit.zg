@@ -3467,13 +3467,29 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	kind.append(what)
 }
 
-# c_dup_report is the one place a duplicate declaration is worded, so a declaration that
-# knows its place and one that does not say the same thing about the same rule. TWO
-# SENTENCES MEANS TWO RULES, so there are two codes: colliding with a DIFFERENT kind of
-# declaration and colliding with the same kind are separate mistakes with separate answers.
+# c_dup_report is the one place a duplicate declaration is worded, so all six kinds of
+# declaration say the same thing about the same rule. TWO SENTENCES MEANS TWO RULES, so
+# there are two codes: colliding with a DIFFERENT kind of declaration and colliding with the
+# same kind are separate mistakes with separate answers.
+#
+# BOTH RECORD, and neither raises. There used to be a c_dup_say between this and the channel,
+# to CHOOSE one — a struct and an enum were registered with no place, so those two raised and
+# the other four said where — and the choice went when its reason did: a StructDecl and an
+# EnumDecl each carry the line their keyword is on now, so all six have a place to give and
+# there is nothing left for a chooser to decide.
+#
+# A FOLLOW-ON IS THE PRICE OF RECORDING, and it is paid rather than dodged. A duplicate
+# `struct A` used to end the run; now the walk carries on, so `A(7)` against the SECOND
+# declaration also reports `E370 the field `w` … has no value`. That second sentence is true
+# of the program as the compiler must read it, and it goes away when the duplicate does.
+#
+# Suppressing it would need a list of names a rule has already condemned, consulted by every
+# later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
+# is a rule going quiet about a real mistake. Reporting every finding in one run is what the
+# specification asks for (docs/conformance.md), and a cascade is what "every" costs.
 fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int) {
 	if prev != what {
-		c_dup_say(em, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}", path, line, col)
+		chk_at_place(em, path, line, col, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}")
 		return
 	}
 
@@ -3486,31 +3502,7 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	# needs the first of each on the list to see it.
 	return if what == "a function" or what == "a module constant"
 
-	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
-}
-
-# c_dup_say records the finding. It used to CHOOSE a channel — a struct and an enum were
-# registered with no place, so those two raised and the other four said where — and the
-# choice is gone because the reason for it is: a StructDecl and an EnumDecl each carry the
-# line their keyword is on now, so every one of the six declarations has a place to give.
-#
-# The code still travels as an argument, which is what keeps one rule from wearing two
-# identities. It has to stay a LITERAL where it is REPORTED, though, which is why the two
-# callers above spell it and this one does not: scripts/error-codes-check.sh reads the source
-# for the code a diagnostic opens with, and a `code` picked into a variable is invisible to
-# it — the gate said so the moment folding the two callers into one was tried.
-#
-# A FOLLOW-ON IS THE PRICE OF RECORDING, and it is paid rather than dodged. A duplicate
-# `struct A` used to end the run; now the walk carries on, so `A(7)` against the SECOND
-# declaration also reports `E370 the field `w` … has no value`. That second sentence is true
-# of the program as the compiler must read it, and it goes away when the duplicate does.
-#
-# Suppressing it would need a list of names a rule has already condemned, consulted by every
-# later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
-# is a rule going quiet about a real mistake. Reporting every finding in one run is what the
-# specification asks for (docs/conformance.md), and a cascade is what "every" costs.
-fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: int) {
-	chk_at_place(em, path, line, col, code, msg)
+	chk_at_place(em, path, line, col, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here")
 }
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a

@@ -99,15 +99,17 @@ fn answer() -> int { return 42 }
 
 ## Group 2 — Lexical
 
-原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。lexical
+原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。換行是 LF
+或 CRLF——`\r` 屬於它後面的那個換行，而不屬於空白類，所以出現在其他位置的 `\r` 不是任何 token 的一部分，會在
+原處被拒絕（在字串或 rune 字面量內則是普通內容）。lexical
 group 界定「token 是什麼」：
 
 ```text
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
-NEWLINE    ::= '\n'
-WS         ::= ( ' ' | '\t' )+
+NEWLINE    ::= '\r'? '\n'
+WS         ::= ( ' ' | '\t' )+     # 水平空白——'\r' 不算
 COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' 後不接 '#' 或 '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment；附著於其後的宣告
 block      ::= '{' stmt-list '}'

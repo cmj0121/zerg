@@ -161,7 +161,17 @@ func (l *Lexer) Next() token.Token {
 	// comment becomes trivia, otherwise scanning continues.
 	for !l.eof() {
 		switch l.at(0) {
-		case ' ', '\t', '\r':
+		case ' ', '\t':
+			l.advance()
+		case '\r':
+			// The CR half of a CRLF, and nothing else: GRAMMAR#NEWLINE is `'\r'? '\n'`,
+			// so a CR belongs to the line break that follows it and the '\n' arm below
+			// does the ASI work. A CR was in the whitespace class, where GRAMMAR#WS never
+			// put it, so a lone CR was swallowed and the statements it separated lexed as
+			// one line. Out of the class, it reaches the bad-character report.
+			if l.at(1) != '\n' {
+				return l.scanToken()
+			}
 			l.advance()
 		case '\n':
 			start := l.pos()
@@ -506,6 +516,13 @@ func (l *Lexer) scanEscape(sb *strings.Builder, byteMode bool) bool {
 	case '\'':
 		sb.WriteByte('\'')
 	case '"':
+		// `\"` is not a byte escape: GRAMMAR#byte-escape lists `n t r 0 \ '` and `\x`,
+		// and no `"` — the quote a byte literal must escape is the single one that ends
+		// it. The `x` and `u` arms below already ask which literal they are in; this one
+		// did not, so `b'\"'` lexed to 34 in both compilers.
+		if byteMode {
+			return false
+		}
 		sb.WriteByte('"')
 	case 'x':
 		if byteMode {

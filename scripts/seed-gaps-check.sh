@@ -89,7 +89,7 @@ done
 # heading, a list that stops using `- **`, a file reorganised into subsections — each empties
 # both extractions, and `0 = 0` reports success for having compared nothing at all.
 #
-# 20 against the 27 entries there are today. Far enough below that closing a few seed gaps is
+# 20 against the 32 entries there are today. Far enough below that closing a few seed gaps is
 # not a chore — and closing them is the direction this list moves — and far enough above that a
 # section which lost most of itself, or its heading, cannot pass.
 MIN_ENTRIES=${MIN_ENTRIES:-20}

@@ -1932,8 +1932,7 @@ EOF
 # GROUP, because the failure they guard against is one position being forgotten rather than
 # the rule being lost. That is the shape this file has caught four times.
 #
-# The seed refuses all of them too, and has all along; `place` is asked of every one because
-# a refusal a reader cannot locate is half a diagnostic.
+# The seed refuses all of them too, and has all along.
 
 expect "$ZERG" position-binding-int-to-float E335 'cannot bind int to a float binding' <<'EOF'
 fn main() {

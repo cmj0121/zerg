@@ -118,6 +118,7 @@ of that conversion are the server's, and neither is optional:
 vim.g.zerg_lsp = false            -- do not start the server
 vim.g.zerg_lsp_cmd = { 'zerg', 'lsp' }
 vim.g.zerg_format_on_save = true  -- zerg fmt on every write
+vim.g.zerg_diagnostic = false     -- leave diagnostic display to nvim's own config
 ```
 
 It answers **quietly** when `zerg` is not on `PATH`. A server that errors on every `.zg` file opened
@@ -125,6 +126,51 @@ in a checkout without a built toolchain is one a person disables and never re-en
 
 The quick fixes need no configuration — `vim.lsp.buf.code_action()` is nvim's own, and the server
 declares itself a `quickfix` provider so a client that asks for that kind alone still gets them.
+
+### A finding you can read without pressing a key
+
+nvim's default `vim.diagnostic.config` has **`virtual_text = false`** (it changed in 0.11), so what
+a published finding draws by default is an underline and a sign in the gutter — a mark saying a line
+is wrong, with the part that says _what_ is wrong left where nobody looks. The server's entire output
+is that sentence, so the client turns virtual text on for its own namespace and prefixes the rule's
+code:
+
+```text
+    ratio: float = 2      ■ L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+**Its own namespace, not the global config.** `vim.diagnostic.config(opts, ns)` against the namespace
+`vim.lsp.diagnostic.get_namespace()` hands back changes how a **Zerg** finding draws and says nothing
+about anybody else's — which is the only arrangement under which a language plugin has any business
+touching `vim.diagnostic` at all. A user with an opinion sets `vim.g.zerg_diagnostic = false` and
+keeps theirs.
+
+Whatever the display, nvim's own keys reach the same text, and they are worth knowing because they
+say **more** than the line ever can:
+
+| Key / call                                        | Shows                                                     |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| `<C-w>d` — `vim.diagnostic.open_float()`          | every finding on the cursor's line, in full, in a window  |
+| `]d` / `[d` — `vim.diagnostic.jump()`             | the next / previous one                                   |
+| `<C-w>d` twice                                    | enters the float, where the text can be yanked            |
+| `vim.diagnostic.setloclist()`                     | all of them in the location list, one line each           |
+| `vim.diagnostic.config({ virtual_lines = true })` | the sentence on its own line under the code, never elided |
+| `:lua =vim.diagnostic.get(0)`                     | the raw findings — `code`, `severity`, `source`, range    |
+
+A finding drawn as virtual text is **truncated by the window**, and a severity-3 sentence carrying a
+fix is exactly the one that runs long. `<C-w>d` is what to press when the line ends in `…`.
+
+**`zerg build` and `zerg lint` are the other way to read it**, and they are the authority — the
+server holds itself to them by `make lsp`:
+
+```sh
+zerg lint examples/01_bindings.zg
+# examples/01_bindings.zg:10:17: L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+A finding at **severity 3** is INFORMATION about a legal program, not an error. `examples/01` and
+`examples/03` both carry one, because both exist to show a literal adopting the type of its position
+— `ratio: float = 2` is the lesson, and `L502` is the linter naming it. They compile and run.
 
 ## A quick fix is the compiler's answer, not the server's
 

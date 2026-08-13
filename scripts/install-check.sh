@@ -28,15 +28,28 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# `make install` also writes cloc's config, which is the ONE thing it puts outside $(PREFIX):
+# a real path, in the developer's home, shared with whatever else they have told cloc. A gate
+# that edited it would change the machine every time CI ran, so it is pointed at the throwaway
+# here — and pointing it somewhere is also what lets the round trip below look at the file.
+#
+# It is a whole fake HOME rather than a bare directory because cloc builds its config path as
+# $ENV{HOME}/.config/cloc/options.txt and reads no variable that would redirect it. Handing
+# cloc this HOME is therefore the only way to ask the question the install actually makes a
+# claim about — `cloc` with NO arguments knows what Zerg is — instead of the weaker one
+# `--config <path>` would ask, which is that the file parses.
+CLOC_HOME="$work/home"
+CLOC_CONFIG="$CLOC_HOME/.config/cloc"
+
 fail=0
 
-if ! out=$(make install PREFIX="$PREFIX" 2>&1); then
+if ! out=$(make install PREFIX="$PREFIX" CLOC_CONFIG="$CLOC_CONFIG" 2>&1); then
 	echo "INSTALL   make install failed"
 	echo "$out" | tail -5 | sed 's/^/  /'
 	exit 1
 fi
 
-for f in "$PREFIX/bin/zerg" "$PREFIX/lib/zerg/csrc/zergrt.h" "$PREFIX/lib/zerg/stdlib/io.zg"; do
+for f in "$PREFIX/bin/zerg" "$PREFIX/lib/zerg/csrc/zergrt.h" "$PREFIX/lib/zerg/stdlib/io.zg" "$PREFIX/lib/zerg/cloc.def"; do
 	if [ ! -f "$f" ]; then
 		echo "MISSING   $f — the install did not put it there"
 		fail=$((fail + 1))
@@ -70,7 +83,35 @@ else
 	fi
 fi
 
-if ! out=$(make uninstall PREFIX="$PREFIX" 2>&1); then
+# --- and the part only cloc can answer --------------------------------------------------
+#
+# The claim the cloc half of the install makes is not that a file was written, it is that
+# `cloc` counts Zerg with nothing typed. So it is run with nothing typed, against the
+# examples, under the HOME the config was installed into.
+#
+# cloc is REQUIRED, and this used to skip when it was absent. A skip is green, and green is
+# what a gate says when it has checked something — so the one machine where the definition
+# was never read would be the one reporting that it works. The definition is a file this
+# repository owns and nothing else in the tree parses it: unread, a typo in it survives
+# every gate here and surfaces at a user's `make install`.
+#
+# It is the only tool this gate needs that the toolchain does not build, which is a real cost
+# — a developer without cloc cannot run `make install-check` — and it is paid because the
+# alternative is an assertion that quietly is not one. CI installs it in the same job.
+if [ ! -f "$CLOC_CONFIG/options.txt" ]; then
+	echo "MISSING   $CLOC_CONFIG/options.txt — the install did not tell cloc about Zerg"
+	fail=$((fail + 1))
+elif ! command -v cloc >/dev/null 2>&1; then
+	echo "CLOC      cloc is not installed, so nothing here reads the definition just written"
+	echo "          brew install cloc / apt-get install cloc"
+	fail=$((fail + 1))
+elif ! HOME="$CLOC_HOME" cloc --quiet examples 2>/dev/null | grep -q '^Zerg '; then
+	echo "CLOC      cloc with no arguments still does not count Zerg under examples/"
+	HOME="$CLOC_HOME" cloc --quiet examples 2>&1 | tail -5 | sed 's/^/  /'
+	fail=$((fail + 1))
+fi
+
+if ! out=$(make uninstall PREFIX="$PREFIX" CLOC_CONFIG="$CLOC_CONFIG" 2>&1); then
 	echo "UNINSTALL make uninstall failed"
 	echo "$out" | tail -5 | sed 's/^/  /'
 	fail=$((fail + 1))
@@ -82,6 +123,15 @@ for f in "$PREFIX/bin/zerg" "$PREFIX/lib/zerg"; do
 		fail=$((fail + 1))
 	fi
 done
+
+# The config line is the leftover that MATTERS. Every other one sits in a prefix nobody looks
+# in again; this one names a path that has just been deleted, and cloc meeting it answers
+# `Unable to read` and counts nothing — in every project on the machine, not only this one.
+if [ -e "$CLOC_CONFIG/options.txt" ]; then
+	echo "LEFTOVER  $CLOC_CONFIG/options.txt survived make uninstall — cloc now points at a deleted file"
+	sed 's/^/  /' "$CLOC_CONFIG/options.txt"
+	fail=$((fail + 1))
+fi
 
 if [ $fail -ne 0 ]; then
 	echo "install-check: $fail problem(s) with the install round trip"

@@ -100,6 +100,19 @@ build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, t
 # directory has to be the current one.
 PREFIX ?= /usr/local
 
+# Where cloc looks for its own default switches, which is NOT under $(PREFIX): it is the
+# user's, one per machine, and cloc reads it from wherever it is standing.
+#
+# `$(HOME)/.config` and NOT `$(XDG_CONFIG_HOME)`, which is where the nvim install next door
+# looks and is the obvious thing to copy. cloc does not read that variable — it builds the
+# path as $ENV{HOME}/.config/cloc/options.txt and has no fallback — so honouring XDG here
+# would write a correct file to a path cloc never opens, on exactly the machines that set it,
+# and the install would report success while `cloc .` went on not knowing what Zerg is.
+#
+# Overridable for the reason `install-check` needs its own PREFIX: a gate that writes the
+# developer's real dotfiles is a gate nobody can afford to run.
+CLOC_CONFIG ?= $(HOME)/.config/cloc
+
 # `build` runs as a recipe line, not a prerequisite: as a prerequisite it would race the
 # submodule work under `make -j`, and what is installed must be the binary this run built.
 install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
@@ -126,6 +139,12 @@ install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the 
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
 	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
+	@# cloc ships no Zerg, so a count of any tree holding some reports a large unnamed
+	@# remainder. `.cloc.def` is the missing definition and cloc reads
+	@# `$(CLOC_CONFIG)/options.txt` before every run, so installing it there is what makes
+	@# plain `cloc .` count Zerg — no flag, and no target here to run instead of cloc.
+	@cp .cloc.def "$(PREFIX)/lib/zerg/cloc.def"
+	@./scripts/cloc-config.sh install "$(PREFIX)/lib/zerg/cloc.def" "$(CLOC_CONFIG)"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
 
 # `make install` is the first command a user runs and was the one command nothing ran: every
@@ -136,6 +155,11 @@ install-check:                  # the installed toolchain works, and uninstall t
 	@./scripts/install-check.sh
 
 uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
+	@# BEFORE the files go, and not after: the config line names a path under $(PREFIX), and
+	@# a cloc pointed at a deleted definition answers `Unable to read` and counts nothing —
+	@# in every project on the machine, not only this one. An uninstall that stopped halfway
+	@# would leave the machine worse than not having run it.
+	@./scripts/cloc-config.sh uninstall "$(CLOC_CONFIG)"
 	rm -f "$(PREFIX)/bin/zerg"
 	rm -rf "$(PREFIX)/lib/zerg"
 
@@ -412,7 +436,12 @@ gates:                          # every gate is on the board, and the board is r
 # without it should still be able to run everything else.
 linux-ci:                       # run the Linux gates in a container, as CI does
 	@docker info >/dev/null 2>&1 || { echo "linux-ci: docker is not running"; exit 1; }
+	@# cloc comes first because `install-check` is on the board and needs it, the same way the
+	@# workflow installs it beside that step. The image has no reason to carry it, and a
+	@# container that reached the gate without it would fail on a missing tool rather than on
+	@# anything about this repository.
 	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
+		apt-get update >/dev/null && apt-get install -y cloc >/dev/null && \
 		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && make ci'
 
 LINUX_IMAGE ?= golang:1.26-bookworm

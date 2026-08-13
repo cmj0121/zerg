@@ -9,10 +9,11 @@
 -- hold it, and a user who prefers lspconfig can ignore this file and register `zerg lsp`
 -- there instead.
 --
--- Two globals, both optional:
+-- Four globals, all optional:
 --   vim.g.zerg_lsp            set to false to not start the server at all
 --   vim.g.zerg_lsp_cmd        the command to run, default {'zerg', 'lsp'}
 --   vim.g.zerg_format_on_save set to true for `zerg fmt` on every write
+--   vim.g.zerg_diagnostic     set to false to leave diagnostic display to nvim's own config
 --
 -- Quick fixes need nothing here. The server declares itself a `quickfix` provider, and
 -- `vim.lsp.buf.code_action()` is nvim's own — so an `L502` finding offers "Write `1.0`"
@@ -45,6 +46,42 @@ function M.cmd()
 	return vim.g.zerg_lsp_cmd or { 'zerg', 'lsp' }
 end
 
+-- show_diagnostics puts the compiler's SENTENCE on the screen.
+--
+-- nvim's default `vim.diagnostic.config` has `virtual_text = false` (it changed in 0.11),
+-- and what is left — an underline and a sign in the gutter — says a line is wrong without
+-- saying what is wrong with it. The server's whole output is the sentence: `L502 the
+-- literal `2` is a float here — write `2.0` and the page shows it` is the finding, and a
+-- squiggle under the `2` is the part of it that carries no information. A person who has to
+-- press a key to find out what the underline means reads it as noise and turns it off.
+--
+-- Scoped to this server's NAMESPACE and not set globally, which is the whole reason it is
+-- acceptable for a language plugin to touch `vim.diagnostic` at all: it changes how a Zerg
+-- finding draws and says nothing about anybody else's. A user with an opinion of their own
+-- sets `vim.g.zerg_diagnostic = false` and keeps it.
+--
+-- The code travels with the text because the server sends one (`Diagnostic.code`) and it is
+-- the name of a RULE — the thing to look up in docs/tooling/fmt.md, and the thing to say
+-- when reporting the finding is wrong.
+local function show_diagnostics(client_id)
+	if vim.g.zerg_diagnostic == false or vim.g.zerg_diagnostic == 0 then
+		return
+	end
+	local ok, ns = pcall(vim.lsp.diagnostic.get_namespace, client_id, false)
+	if not ok then
+		return
+	end
+	vim.diagnostic.config({
+		virtual_text = {
+			spacing = 2,
+			format = function(d)
+				return d.code and string.format('%s %s', d.code, d.message) or d.message
+			end,
+		},
+		severity_sort = true,
+	}, ns)
+end
+
 -- attach starts (or joins) the server for one buffer.
 --
 -- It answers quietly when the compiler is not on PATH. A language server that throws an
@@ -59,11 +96,16 @@ function M.attach(buf)
 		return
 	end
 
+	-- `vim.lsp.start` answers with a client ID, not a client.
 	local client = vim.lsp.start({
 		name = 'zerg',
 		cmd = cmd,
 		root_dir = root_dir(buf),
 	}, { bufnr = buf })
+
+	if client then
+		show_diagnostics(client)
+	end
 
 	if client and vim.g.zerg_format_on_save then
 		vim.api.nvim_create_autocmd('BufWritePre', {

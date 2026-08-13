@@ -35,7 +35,9 @@ func buildConcurrent(t *testing.T, name, src string) string {
 }
 
 // buildCore is buildConcurrent without the scheduler: a driver that runs on the one thread
-// it started on links the core runtime and nothing else.
+// it started on links the core runtime and nothing else. That is the shape of a
+// non-concurrent program, whose user code runs on main's native stack through the entry.c
+// shims — which is what the stack-overflow tests need in order to fault there.
 func buildCore(t *testing.T, name, src string) string {
 	t.Helper()
 	return buildUnits(t, name, src, false)
@@ -1473,32 +1475,6 @@ func splitArgs(s string) []string {
 		}
 	}
 	return append(out, s[start:])
-}
-
-// buildCore compiles a C driver against the core runtime only — no scheduler — and
-// returns the binary: the shape of a non-concurrent program, whose user code runs on
-// main's native stack through the entry.c shims.
-func buildCore(t *testing.T, name, src string) string {
-	t.Helper()
-	cc := findCC()
-	if cc == "" {
-		t.Skip("no C compiler found")
-	}
-	dir := t.TempDir()
-	cfiles, err := Materialize(dir)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	driver := filepath.Join(dir, name+".c")
-	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
-		t.Fatalf("write driver: %v", err)
-	}
-	bin := filepath.Join(dir, name+".bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
-	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-		t.Fatalf("cc failed: %v\n%s", err, out)
-	}
-	return bin
 }
 
 // TestStackOverflowNamedOnMainStack pins the narrowed runtime-abort deviation

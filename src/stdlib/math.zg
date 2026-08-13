@@ -40,7 +40,7 @@ pub fn max(a: int, b: int) -> int {
 # quadratically. A negative x raises ValueError — the domain error, which a `guard`
 # demotes to a value.
 pub fn sqrt(x: float) -> float {
-	raise "math.sqrt: domain error (negative input)" if x < 0.0
+	raise ValueError("math.sqrt: domain error (negative input)") if x < 0.0
 	return 0.0 if x == 0.0
 
 	mut guess := x
@@ -66,7 +66,7 @@ pub fn sqrt(x: float) -> float {
 # by zero). A float-exponent pow awaits exp/ln (deferred).
 pub fn pow(base: float, exp: int) -> float {
 	if exp < 0 {
-		raise "math.pow: domain error (zero base, negative exponent)" if base == 0.0
+		raise ValueError("math.pow: domain error (zero base, negative exponent)") if base == 0.0
 		return 1.0 / pow(base, -exp)
 	}
 

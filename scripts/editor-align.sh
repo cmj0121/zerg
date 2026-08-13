@@ -130,6 +130,13 @@ fi
 # `grep -E '^\t\t'` is not the same question on two machines: BSD grep reads `\t` as a tab and
 # GNU grep reads it as an undefined escape, i.e. the letter `t` — so the probe answered "tab"
 # on macOS and "space" on Linux for the same formatter, and this gate failed in CI alone.
+# fmt_return_int reads the number an int-returning function in fmt.zg answers with. Two checks
+# below ask that question — the tab width and the wrap column — and a pipeline copied for the
+# second is a pipeline that goes stale on one of them.
+fmt_return_int() {
+	awk -v fn="^fn $1" '$0 ~ fn, /^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1
+}
+
 tab=$(printf '\t')
 printf 'fn main() {\n\tif true {\n\t\tprint 1\n\t}\n}\n' >"$tmp/indent.zg"
 "$ZERG" fmt "$tmp/indent.zg" >/dev/null 2>&1
@@ -188,7 +195,7 @@ else
 	# column 80 by counting a tab as `fmt_wrap_tab()`, so an editor displaying it as anything
 	# else is applying a different 80-column rule than the formatter did. One number, and the
 	# three places that hold it have to hold the same one.
-	want_width=$(awk '/^fn fmt_wrap_tab/,/^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1)
+	want_width=$(fmt_return_int fmt_wrap_tab)
 	if [ -z "$want_width" ]; then
 		echo "EMPTY       fmt_wrap_tab() could not be read from $FMT — this check is measuring nothing"
 		fail=$((fail + 1))
@@ -198,10 +205,16 @@ else
 			echo "WIDTH       F403 counts a tab as $want_width and $EDITORCONFIG says [*.zg] indent_size = ${got_width:-<unset>}"
 			fail=$((fail + 1))
 		fi
-		if ! grep -qE "^setlocal tabstop=$want_width\$" "$FTPLUGIN"; then
-			echo "WIDTH       F403 counts a tab as $want_width and $FTPLUGIN does not set tabstop=$want_width"
-			fail=$((fail + 1))
-		fi
+		# BOTH options, because they are load-bearing for different things. 'tabstop' is what a
+		# reader sees a tab as; 'shiftwidth' is what `ZergIndent` DIVIDES BY to turn a column
+		# count into a level and multiplies by to turn it back. The gate read only the first, so
+		# the number the indenter is built on was the one option of the three nothing held.
+		for opt in tabstop shiftwidth; do
+			if ! grep -qE "^setlocal $opt=$want_width\$" "$FTPLUGIN"; then
+				echo "WIDTH       F403 counts a tab as $want_width and $FTPLUGIN does not set $opt=$want_width"
+				fail=$((fail + 1))
+			fi
+		done
 	fi
 fi
 
@@ -216,29 +229,55 @@ fi
 # Only what the grammar spells as a bare quoted word in a `choice` or a `seq` is read here.
 # That misses nothing that matters: every keyword in it is written that way.
 GRAMMARJS=${GRAMMARJS:-editors/tree-sitter-zerg/grammar.js}
-if [ -f "$GRAMMARJS" ]; then
-	grep -oE "'[a-z]+'" "$GRAMMARJS" | tr -d "'" | sort -u >"$tmp/ts.all"
+TSQUERY=${TSQUERY:-editors/tree-sitter-zerg/queries/highlights.scm}
 
-	# The same two exclusions the vim side needs: a built-in TYPE name is not a reserved word,
-	# and neither is a word that only appears as a field or a rule name.
-	comm -12 "$tmp/ts.all" "$tmp/lexer" >"$tmp/ts.kw"
+# QUOTE-AGNOSTIC, and that is not a detail: this read `'[a-z]+'` when it was written, prettier
+# then rewrote grammar.js with double quotes on the next commit, and the extraction went to
+# ZERO — the floor below is the only reason it was noticed rather than passing green forever.
+# A gate over a file that a formatter owns may not depend on how that formatter quotes.
+ts_words() {
+	{
+		grep -oE "[\"'][a-z]+[\"']" "$1" | tr -d "\"'"
 
-	# And the floor every extraction here carries, for the reason the others do: a pattern that
+		# A rule whose whole body is one word is INLINED by tree-sitter, so no anonymous token
+		# survives for a query to name and the NAMED node is what both files use instead —
+		# `(nop_statement)`, `(boolean_literal)`, `(nil_literal)`, `(this_literal)`. They are
+		# listed for the reason `set` is listed above: a word this gate would otherwise call
+		# missing, whose absence is correct and has a name.
+		printf '%s\n' nop true false nil this
+	} | sort -u
+}
+
+# The check runs TWICE, because the tree-sitter side has two flat word lists and they fail
+# differently. `grammar.js` must SPELL every reserved word or it parses one as an identifier;
+# `highlights.scm` must NAME every reserved word or the word parses correctly and is drawn as
+# ordinary text — which is exactly the defect `zerg.vim`'s own comment records about `close`.
+for f in "$GRAMMARJS" "$TSQUERY"; do
+	[ -f "$f" ] || continue
+	ts_words "$f" >"$tmp/ts.all"
+
+	# The floor every extraction here carries, for the reason the others do: a pattern that
 	# stops matching leaves an EMPTY list, and an empty list reports every keyword as missing —
-	# which is loud, or reports nothing, which is worse.
-	tsn=$(wc -l <"$tmp/ts.all" | tr -d ' ')
+	# which is loud — or reports nothing, which is worse.
+	# The floor is on what MATCHED, not on how many words were read: an extraction that goes
+	# stale still reads plenty of words, and a raw count cannot tell that from a file which
+	# simply has other words in it.
+	tsn=$(comm -12 "$tmp/ts.all" "$tmp/lexer" | wc -l | tr -d ' ')
 	if [ "$tsn" -lt "${MIN_TS_WORDS:-40}" ]; then
-		echo "EMPTY       only $tsn quoted words were read from $GRAMMARJS — the extraction has gone stale"
+		echo "EMPTY       only $tsn reserved words were found in $f — the extraction has gone stale"
 		fail=$((fail + 1))
+		continue
 	fi
 
-	ts_missing=$(comm -23 "$tmp/lexer" "$tmp/ts.kw")
+	# `lexer - (lexer ∩ ts.all)` is `lexer - ts.all`; the intersection was a temp file and a
+	# process spent saying nothing.
+	ts_missing=$(comm -23 "$tmp/lexer" "$tmp/ts.all")
 	if [ -n "$ts_missing" ]; then
-		echo "UNPARSED    the lexer reserves these and $GRAMMARJS does not spell them:"
+		echo "UNPARSED    the lexer reserves these and $f does not spell them:"
 		echo "$ts_missing" | sed 's/^/  /'
 		fail=$((fail + 1))
 	fi
-fi
+done
 
 # --- 5. the ruler -------------------------------------------------------------------------
 #
@@ -249,7 +288,7 @@ fi
 # The same argument as the width above. A number the formatter owns, written a second time in
 # a file the formatter never reads, is a number that drifts — and this one drifts silently,
 # because a ruler in the wrong place looks exactly like a ruler.
-want_max=$(awk '/^fn fmt_wrap_max/,/^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1)
+want_max=$(fmt_return_int fmt_wrap_max)
 if [ -z "$want_max" ]; then
 	echo "EMPTY       fmt_wrap_max() could not be read from $FMT — this check is measuring nothing"
 	fail=$((fail + 1))

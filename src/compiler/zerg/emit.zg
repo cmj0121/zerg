@@ -605,6 +605,38 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> 
 
 	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
 
+	# AN `if` EXPRESSION FILLS A CARRIER BRANCH BY BRANCH, and until it did, the branch that
+	# was not the first one did not reach a carrier at all. `c_infer` answers an if-expr with
+	# its THEN branch's type, so `x: int? = if c { 1 } else { nil }` looked like a plain `int`
+	# arriving at an `int?`, and the wrap below took the WHOLE ternary as one payload: the
+	# `nil` lowered to a zero inside a PRESENT carrier, so `x ?? 99` answered 0 and the absence
+	# the reader wrote was gone with nothing reported at any stage.
+	#
+	# chk_branch_types is what says the two sides agree, and it already knew this shape — its
+	# own comment calls them "two spellings of one `int?`". They are, once each spelling is
+	# put into the carrier on its own, which is what this does. It is not a rule about `nil`:
+	# every branch is fitted, so a widening or a user conversion on one side lands the same
+	# way, and a carrier already fitted answers at the line above without being wrapped twice.
+	#
+	# The two checks c_ternary would have run are run here, because distributing the fit is
+	# what keeps it from being reached.
+	mut fitted := ""
+	match e {
+		Expr.EIf(cond, then_e, else_e) => {
+			chk_condition(em, cond, "an `if` expression")
+			chk_branch_types(em, then_e, else_e)
+
+			ct := c_expr(em, cond, sb)
+			a := c_carrier_fit(em, where, want, then_e, sb)
+			b := c_carrier_fit(em, where, want, else_e, sb)
+			fitted = f"({ct} ? {a} : {b})"
+		}
+		_ => {
+			nop
+		}
+	}
+	return fitted if fitted != ""
+
 	# THE PAYLOAD IS A SLOT OF ITS OWN, and the label has to say so or the sentence is false.
 	# A bare value entering a carrier is INJECTED as the payload, so the comparison one level
 	# down is against the payload's type — which is right, and is where the mistake is. What
@@ -4277,7 +4309,7 @@ fn c_expr_node(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
 		Expr.EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
-		Expr.EFill(v, n) => c_list_lit(em, c_fill_elems(em, v, n), sb)
+		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
@@ -6599,6 +6631,46 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 # It takes its element type from the FIRST element, which is what a literal with no
 # destination has to do. Where there IS a destination the declared type is better, and
 # c_fit_copied supplies it — see c_list_lit_vals.
+# c_fill_lit lowers `[v; N]` — the FILL form, which GRAMMAR#list-lit defines as "N copies of
+# v". Copies of the VALUE, so v is evaluated ONCE. It used to expand into a list literal of N
+# copies of the EXPRESSION, and the emitter then rendered that expression N times: `[bump(c);
+# 3]` called `bump` three times and the list held 1, 2, 3 — three different values, from a
+# form whose whole meaning is that they are the same one.
+#
+# The first push takes the value itself and every later one takes a COPY, because a push owns
+# what it is given: pushing one refcounted cell N times would leave N slots sharing a count of
+# one, and the second release of it is a free of live memory. A type that needs no copy skips
+# it and every slot reads the same bytes, which is what a copy of a POD is anyway.
+fn c_fill_lit(mut &em: Emitter, v: Expr, n: Expr, sb: Subst) -> str {
+	elems := c_fill_elems(em, v, n)
+	cnt := elems.len()
+
+	# nothing to share: zero copies is the empty list, and one is a literal of one element,
+	# which evaluates v exactly once already
+	return c_list_lit(em, elems, sb) if cnt < 2
+
+	em.used_rt = true
+
+	ety := c_infer(em, v)
+	et := c_type(ety)
+
+	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
+	out = out + " " + et + " zgt_fv = " + c_expr(em, v, sb) + ";"
+
+	mut i := 0
+	for i < cnt {
+		tmp := "zgt_fc" + strconv.to_string(i, 10)
+		mut src := "zgt_fv"
+		if i > 0 and c_needs_copy(em, ety) {
+			src = c_copy_of(em, ety, "zgt_fv")
+		}
+		out = out + " " + et + " " + tmp + " = " + src + ";"
+		out = out + " zrt_list_push(&zgt_ll, &" + tmp + ");"
+		i = i + 1
+	}
+	return out + " zgt_ll; })"
+}
+
 fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	return "(zrt_list){0}" if elems.len() == 0
 
@@ -8397,8 +8469,47 @@ fn c_pushes_strs(target: str, et: str, vals: list[str], ind: str) -> str {
 	return out
 }
 
+# c_fill_pushes writes a fill form's pushes: the value ONCE into a temp, then a push per copy
+# — the first taking that value and every later one a copy, because a push owns what it is
+# handed and N slots sharing one refcounted cell is a double free waiting for the second
+# release.
+#
+# It exists because a list literal reaches C by THREE roads — a value (c_fill_lit), a push
+# sequence (c_pushes), and a binding that renders at its DECLARED element type (c_let_list) —
+# and the fill was expanded into N copies of the EXPRESSION for all three. `xs := [bump(c); 3]`
+# called `bump` three times and held 1, 2, 3, from a form whose whole meaning is that the three
+# are one value. Fixing a road at a time is how a form comes to mean one thing bound and
+# another passed, so the rule is written once and the roads call it.
+fn c_fill_pushes(mut &em: Emitter, target: str, et: str, vty: Ty, rendered: str, cnt: int, ind: str) -> str {
+	mut out := ind + "{ " + et + " zgt_fv = " + rendered + ";\n"
+	mut i := 0
+	for i < cnt {
+		mut src := "zgt_fv"
+		if i > 0 and c_needs_copy(em, vty) {
+			src = c_copy_of(em, vty, "zgt_fv")
+		}
+		out = out + ind + "{ " + et + " zgt_le = " + src + "; zrt_list_push(&" + target + ", &zgt_le); }\n"
+		i = i + 1
+	}
+	return out + ind + "}\n"
+}
+
 # c_pushes emits a zrt_list_push per element of a list literal.
 fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
+	mut filled := ""
+	match lit {
+		Expr.EFill(v, n) => {
+			cnt := c_fill_elems(em, v, n).len()
+			if cnt > 1 {
+				filled = c_fill_pushes(em, target, et, c_infer(em, v), c_expr(em, v, c_nosub()), cnt, ind)
+			}
+		}
+		_ => {
+			nop
+		}
+	}
+	return filled if filled != ""
+
 	return c_pushes_of(em, target, et, c_listlit_elems(em, lit), ind)
 }
 
@@ -11210,6 +11321,23 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, is_const: bool
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
 		out = out + c_pend_drop(em, eff, cname, ind)
+
+		# a FILL evaluates its value once (c_fill_pushes); `vals` above already holds the N
+		# rendered copies for every other literal, and this is the one road where the count
+		# and the value have to be taken apart again
+		mut filled := ""
+		match ival {
+			Expr.EFill(v, _) => {
+				if vals.len() > 1 {
+					filled = c_fill_pushes(em, cname, et, c_list_elem(eff), vals[0], vals.len(), ind)
+				}
+			}
+			_ => {
+				nop
+			}
+		}
+		return out + filled if filled != ""
+
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
 

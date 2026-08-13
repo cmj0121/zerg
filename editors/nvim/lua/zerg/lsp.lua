@@ -21,6 +21,17 @@
 
 local M = {}
 
+-- off is how a `vim.g.zerg_*` switch says no.
+--
+-- `false` and `0` both mean it, because a user setting these from vimscript writes `0` and a
+-- user setting them from Lua writes `false`. It is one function rather than the test spelled
+-- at each site: `health.lua` spelled it differently and reported `vim.g.zerg_diagnostic = 0`
+-- as ON — the one file whose whole job is explaining what the client is doing, disagreeing
+-- with the client.
+function M.off(v)
+	return v == false or v == 0
+end
+
 -- root_dir is the project the buffer belongs to. The server checks a buffer against the
 -- whole program it imports, and it resolves those imports relative to the FILE, so the root
 -- is informational — it is what makes nvim reuse one client for a whole checkout rather
@@ -63,10 +74,16 @@ end
 -- The code travels with the text because the server sends one (`Diagnostic.code`) and it is
 -- the name of a RULE — the thing to look up in docs/tooling/fmt.md, and the thing to say
 -- when reporting the finding is wrong.
+-- Once per CLIENT, not once per buffer. `root_dir` makes one client serve a whole checkout, and
+-- `vim.diagnostic.config` re-shows the namespace across every loaded buffer — so opening the
+-- n-th `.zg` file re-drew the n-1 already open, for a configuration that had not changed.
+local configured = {}
+
 local function show_diagnostics(client_id)
-	if vim.g.zerg_diagnostic == false or vim.g.zerg_diagnostic == 0 then
+	if M.off(vim.g.zerg_diagnostic) or configured[client_id] then
 		return
 	end
+	configured[client_id] = true
 	local ok, ns = pcall(vim.lsp.diagnostic.get_namespace, client_id, false)
 	if not ok then
 		return
@@ -136,7 +153,7 @@ end
 -- error on every `.zg` file opened in a checkout without a built toolchain is one a person
 -- disables and never re-enables, and the editor still has syntax highlighting either way.
 function M.attach(buf)
-	if vim.g.zerg_lsp == false or vim.g.zerg_lsp == 0 then
+	if M.off(vim.g.zerg_lsp) then
 		return
 	end
 	-- The ftplugin passes 0 for "this buffer", which every nvim API accepts. The undo command

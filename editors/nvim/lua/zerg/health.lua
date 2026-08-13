@@ -33,19 +33,20 @@ local function run(cmd)
 	if vim.v.shell_error ~= 0 then
 		return nil
 	end
-	return (vim.split(out, '\n')[1] or ''):gsub('%s+$', '')
+	return vim.trim(vim.split(out, '\n')[1] or '')
 end
 
 function M.check()
 	report('start', 'Zerg toolchain')
 
-	if vim.g.zerg_lsp == false or vim.g.zerg_lsp == 0 then
+	local lsp = require('zerg.lsp')
+	if lsp.off(vim.g.zerg_lsp) then
 		report('warn', 'vim.g.zerg_lsp is false — the language server is not started', {
 			'Remove it, or set it to true, to get diagnostics and formatting.',
 		})
 	end
 
-	local cmd = require('zerg.lsp').cmd()
+	local cmd = lsp.cmd()
 	local exe = cmd[1]
 	if vim.fn.executable(exe) == 0 then
 		report('error', ('`%s` is not on PATH — the client starts nothing and says nothing'):format(exe), {
@@ -70,7 +71,7 @@ function M.check()
 		report('info', 'no client is running — open a .zg file, then run this again')
 	else
 		for _, c in ipairs(clients) do
-			local bufs = #vim.tbl_keys(c.attached_buffers or {})
+			local bufs = vim.tbl_count(c.attached_buffers or {})
 			report('ok', ('client %d, attached to %d buffer(s), root %s'):format(c.id, bufs, c.root_dir or '(none)'))
 		end
 	end
@@ -79,7 +80,9 @@ function M.check()
 
 	report('info', ('vim.g.zerg_lsp_cmd        = %s'):format(vim.inspect(cmd)))
 	report('info', ('vim.g.zerg_format_on_save = %s'):format(tostring(vim.g.zerg_format_on_save or false)))
-	report('info', ('vim.g.zerg_diagnostic     = %s'):format(tostring(vim.g.zerg_diagnostic ~= false)))
+	-- Asked of the client rather than re-derived, which is the bug this file exists to avoid
+	-- being: it reported `vim.g.zerg_diagnostic = 0` as on while the client read it as off.
+	report('info', ('vim.g.zerg_diagnostic     = %s'):format(tostring(not lsp.off(vim.g.zerg_diagnostic))))
 end
 
 return M

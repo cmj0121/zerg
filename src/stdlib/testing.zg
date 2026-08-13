@@ -6,6 +6,14 @@
 # enclosing `guard` recovers it as a value (or, uncaught, aborts with the message).
 # This is the library the `#[test]` discovery + `zerg test` runner (Phase 1i) builds
 # on; `#[test]` discovery itself is 1i, not this module.
+#
+# WHAT IT RAISES IS A GENERIC Err, deliberately, and it is the only stdlib module that
+# still does. The other pure-Zerg modules raise a taxonomy kind because they are refusing
+# a VALUE — `ValueError`, a value was not one this could accept (docs/code/errors.md).
+# A failed assertion is not that: it is a claim about the program that did not hold, and
+# the six built-in kinds have no member for it. Naming it `ValueError` would put it in a
+# subtree a handler catches for another reason, so it stays the untyped Err a bare
+# `raise` builds until the taxonomy has a name for a broken claim.
 
 # assert succeeds when cond holds; otherwise it raises so the failure is observable
 # (an enclosing `guard` catches it, or it aborts the program).

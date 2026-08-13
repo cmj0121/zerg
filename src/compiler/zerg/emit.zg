@@ -8781,10 +8781,19 @@ fn c_assign_drops(mut &em: Emitter, t: Ty) -> bool {
 # The destination's address is taken ONCE. `lv` may be a list index, which lowers to an
 # expression with its own subscript arithmetic in it, and naming it twice would compute it
 # twice — around a release, which is exactly where a second evaluation must not happen.
+#
+# THE TWO NAMES CARRY A TAG, like every other temporary this file mints (`zgt_ce{tag}`,
+# `zgt_se{tag}`) and unlike the first version of this function, which spelled them
+# `zgt_lp` and `zgt_nv` flat. Nothing nests an assignment inside another one TODAY, so
+# the flat names were correct — and that is exactly the kind of correctness that is a
+# property of today's lowerings rather than of this function. A future one that nests
+# would shadow silently and free the wrong storage, with nothing to report it.
 fn c_assign_dropping(mut &em: Emitter, t: Ty, lv: str, val: str, ind: str) -> str {
 	ct := c_type(t)
-	mut out := ind + "{ " + ct + " *zgt_lp = &(" + lv + "); " + ct + " zgt_nv = " + val + "; "
-	return out + c_drop_stmt(em, t, "(*zgt_lp)") + " *zgt_lp = zgt_nv; }\n"
+	lp := c_tmp(em, "zgt_lp")
+	nv := c_tmp(em, "zgt_nv")
+	mut out := ind + "{ " + ct + " *" + lp + " = &(" + lv + "); " + ct + " " + nv + " = " + val + "; "
+	return out + c_drop_stmt(em, t, f"(*{lp})") + " *" + lp + " = " + nv + "; }\n"
 }
 
 # c_elem_exprs renders a list literal's elements AT the element type the declaration gives,

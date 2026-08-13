@@ -7208,6 +7208,24 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 		return "0"
 	}
 
+	# THE RECEIVER IS THE FINDING when inference could not name its type, because the sentence
+	# below can only spell that type as `?`. `io.stdout.write("x")` reported "the method
+	# `write` on a ?" — a sentence about the method, when the mistake is that `io` has no
+	# `stdout`. The rule for that exists (chk_no_member, reached from c_fieldref) and had
+	# simply never been asked here: this path INFERS the receiver's type and never LOWERS it,
+	# so a receiver that is itself ill-formed reaches the fallback undiagnosed. The same shape
+	# is why E502's case notes "the method `thing` on a ?" for a module that does not resolve.
+	#
+	# Lowering it asks the receiver's own rule, and a rule that answers is the whole finding —
+	# nothing further is true about the method on a value that does not exist. The finding
+	# count is what says one answered, because these rules are CHECKED: they record and carry
+	# on, and the raise below would otherwise bury a precise sentence under a vague one.
+	if c_is_unknown(c_infer(em, target)) {
+		before := em.diags.len()
+		lowered := c_expr(em, target, sb)
+		return lowered if em.diags.len() > before
+	}
+
 	# `into` ON A BUILT-IN IS NOT A GAP, and the generic sentence below would call it one.
 	# `NotImplemented` says a thing the language has and this compiler does not; the language
 	# ships NO `Into` impl for any built-in type, because a conversion between them is written

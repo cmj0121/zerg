@@ -176,7 +176,7 @@ fn pad_tail(data: list[byte], at: int) -> list[byte] {
 	mut j := 0
 	for j < 8 {
 		shift := uint(56 - j * 8)
-		out.append(byte((bits >> shift) & 0xff))
+		out.append(byte(int((bits >> shift) & 0xff)))
 		j = j + 1
 	}
 	return out
@@ -189,7 +189,7 @@ fn schedule(blk: list[byte], base: int) -> list[uint] {
 	mut t := 0
 	for t < 16 {
 		o := base + t * 4
-		word := (uint(blk[o]) << 24) | (uint(blk[o + 1]) << 16) | (uint(blk[o + 2]) << 8) | uint(blk[o + 3])
+		word := (uint(int(blk[o])) << 24) | (uint(int(blk[o + 1])) << 16) | (uint(int(blk[o + 2])) << 8) | uint(int(blk[o + 3]))
 		w.append(word)
 		t = t + 1
 	}
@@ -271,7 +271,7 @@ pub fn sum(data: list[byte]) -> list[byte] {
 		mut i := 0
 		for i < 4 {
 			shift := uint(24 - i * 8)
-			out.append(byte((word >> shift) & 0xff))
+			out.append(byte(int((word >> shift) & 0xff)))
 			i = i + 1
 		}
 	}

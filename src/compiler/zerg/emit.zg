@@ -5805,6 +5805,11 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		return "0"
 	}
 
+	# WHICH PAIRS EXIST IS THE CHECKER'S QUESTION, and it is asked here rather than below,
+	# because the lowering answers by SHAPE and so has an answer for every pair of scalars —
+	# including the four docs/core/types.md declares absent.
+	chk_conv_pair(em, ty, xt, nm)
+
 	# The target's shape comes from its TYPE. It used to come from the SPELLING for `uint`
 	# alone, because the type it parsed to was TInt and the class table could not tell the
 	# two apart — a `uint` was a spelling rather than a type, and the deviation that admitted

@@ -799,6 +799,7 @@ shipping compiler rather than a part of it (the line
 | `E394` | `…(…)` on a `float` — write the verb: `math.trunc` / `floor` / `ceil` / `round`             |
 | `E395` | a conversion is one step: `…` -> `…` is `…` -> `int` -> `…`, so write the two               |
 | `E396` | `…` is not a compiler primitive — the `__zrt_…` set is closed                               |
+| `E397` | the compiler primitive `…` takes … and this gives …                                         |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

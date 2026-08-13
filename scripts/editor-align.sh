@@ -14,7 +14,8 @@
 #     every word it colours as a keyword is one the lexer reserves;
 #   * the indent CHARACTER the ftplugin and .editorconfig configure is the one `zerg fmt`
 #     actually writes;
-#   * the indent WIDTH they configure is the one `F403` measures a tab as.
+#   * the indent WIDTH they configure is the one `F403` measures a tab as;
+#   * the RULER the ftplugin draws is one past the column `F403` wraps at.
 #
 # Neither is hypothetical. `zerg.vim`'s own comment records `close` having been missing from
 # the list "entirely — the statement that ends a stream has never been coloured", found by
@@ -204,8 +205,29 @@ else
 	fi
 fi
 
+# --- 4. the ruler -------------------------------------------------------------------------
+#
+# The ftplugin draws a 'colorcolumn' so a person can see where F403's budget ends, and that
+# budget is `fmt_wrap_max()` — the column a flat group must END BEFORE. So the ruler is drawn
+# one past it: at 80 the group still fits, and 81 is the first column it does not.
+#
+# The same argument as the width above. A number the formatter owns, written a second time in
+# a file the formatter never reads, is a number that drifts — and this one drifts silently,
+# because a ruler in the wrong place looks exactly like a ruler.
+want_max=$(awk '/^fn fmt_wrap_max/,/^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1)
+if [ -z "$want_max" ]; then
+	echo "EMPTY       fmt_wrap_max() could not be read from $FMT — this check is measuring nothing"
+	fail=$((fail + 1))
+else
+	want_ruler=$((want_max + 1))
+	if ! grep -qE "^setlocal colorcolumn=$want_ruler\$" "$FTPLUGIN"; then
+		echo "RULER       F403 wraps a group that reaches column $want_max and $FTPLUGIN does not set colorcolumn=$want_ruler"
+		fail=$((fail + 1))
+	fi
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "editor-align: $fail fact(s) an editor file states that the compiler does not"
 	exit 1
 fi
-echo "editor-align: $n reserved words are coloured; the ftplugin and .editorconfig indent the way fmt writes, ${want_width:-?} wide"
+echo "editor-align: $n reserved words are coloured; the ftplugin and .editorconfig indent the way fmt writes, ${want_width:-?} wide, ruled at ${want_ruler:-?}"

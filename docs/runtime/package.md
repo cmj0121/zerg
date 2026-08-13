@@ -173,6 +173,12 @@ A **module is a directory**; the files inside it are physical slices that share 
 number of files is layout, not meaning. A module is the default privacy unit: a plain declaration is
 visible across the module's files but not outside it (see Visibility).
 
+An import path is resolved **beside the importer first** — the directory of the file that wrote the
+`import` — then beside the entry file, then in the standard library, first match winning. So a module
+carries its own dependencies with it: `api/` may hold the `api/util/` it imports, and moving the pair
+somewhere else moves both. (The seed compiler searches the entry file's directory only, and refuses a
+module reached this way.)
+
 Nesting is **flat**: a directory laid out under another only lengthens the import path — there is no
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
 between modules are rejected** — a module that comes up again while it is still on the way down has no

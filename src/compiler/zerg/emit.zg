@@ -11989,6 +11989,21 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	em.at_path = fn_d.path
 	em.at_line = fn_d.line
 	em.at_col = fn_d.col
+
+	# THE ENCLOSING FUNCTION'S BOOKS, saved BEFORE the reset wipes them. A lambda re-enters
+	# c_fn in the middle of the function being emitted — after its `return` has already
+	# rendered `zrt_unwind_to(fn_mark)` and set fn_mark_used — and c_reset_env clears that
+	# flag, so reading it after the reset saved `false` whatever it was. The function then
+	# never declared the mark its own return names, and cc reported the undeclared
+	# identifier. The loop fields are the same books kept for a jump: a lambda written
+	# between a binding and a `break` cleared loop_mark, and the break silently skipped the
+	# unwind it owed.
+	outer_fn_mark := em.fn_mark
+	outer_used := em.fn_mark_used
+	outer_loop_mark := em.loop_mark
+	outer_loop_keep := em.loop_keep
+	outer_loop_used := em.loop_mark_used
+	outer_loop_defer := em.loop_defer
 	c_reset_env(em)
 	c_check_loop_jump(fn_d.body, false)
 
@@ -12015,8 +12030,6 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	# took as well. The name is handed out before the body is walked because c_return needs
 	# it; whether it is DECLARED is answered after, by whether anything used it.
 	fmark := c_new_mark(em)
-	outer_fn_mark := em.fn_mark
-	outer_used := em.fn_mark_used
 	em.fn_mark = fmark
 	em.fn_mark_used = false
 	mut pdefer := ""
@@ -12091,6 +12104,10 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_scope_forget(em, 0)
 	em.fn_mark = outer_fn_mark
 	em.fn_mark_used = outer_used
+	em.loop_mark = outer_loop_mark
+	em.loop_keep = outer_loop_keep
+	em.loop_mark_used = outer_loop_used
+	em.loop_defer = outer_loop_defer
 	out := sig + head + pdefer + rendered + tail + "}\n\n"
 	em.fn_ret = saved_ret
 	em.in_unsafe_fn = saved_unsafe

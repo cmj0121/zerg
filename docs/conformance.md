@@ -126,53 +126,64 @@ first — `zerg` does, for the rules it checks; a refusal ends the run at the fi
 of what the two shapes are.
 
 > **[deviation]** A place and a code are owed on every diagnostic, and what decides whether one carries
-> them is the **channel**, not whether the rule checks or refuses. Two of the three stages have one. A rule
-> reported through the checking channel always has both (`chk_at`, check.zg), and so does every refusal the
-> parser makes (`p_diag`, parser.zg). The **emitter** still raises the way the parser used to: a code only
-> where the string it raises was written with one, and a place only where the site appends the trailer
-> itself — so the split this paragraph describes now runs between the emitter and everything else, and a
-> pair of genuinely CHECKED rules still falls out on the wrong side of it.
+> them is the **channel**, not whether the rule checks or refuses. All three stages that answer about a
+> PROGRAM now have one — `chk_at` in check.zg, `p_diag` in parser.zg, `c_diag` in emit.zg — and each takes
+> the code as an argument and reads the place itself, so a site cannot carry one and forget the other. What
+> is left of this deviation is the **lexer**, whose two refusals carry neither.
 >
 > ---
 >
-> Measured today. **The parser is done.** All **103** of its refusals report through one channel that takes
-> the code as an argument and reads the place itself, so a site cannot carry one and forget the other. Nine
+> Measured today. **The parser is done.** All **103** of its refusals report through its channel. Nine
 > rules that had no code at all — the catch-all _`X` is not an expression this compiler reads_ among them —
 > were given `E601`–`E609`, a gate case each and a catalogue row each. One raise is left with neither on
 > purpose: `p_impossible`, an arm no program reaches, where a code would be an identity no case could ever
-> assert. What the change is visible as: **31** `no-place` markers retired from `scripts/reject-check.sh`,
-> `place` assertions in `scripts/refuse-check.sh` up from 73 to **149** — 72 of them on cases that already
-> existed, four on the new ones — and `reject-fuzz`'s `write-immutable` ceiling, the parser's last
-> place-less refusal, down to zero.
+> assert. What the change was visible as: **31** `no-place` markers retired from `scripts/reject-check.sh`,
+> and `reject-fuzz`'s `write-immutable` ceiling, the parser's last place-less refusal, down to zero.
 >
-> **The emitter is not.** It has **126** raise statements, **76** opening with a code and **13** appending
-> a place, and that is the whole of what is left of this deviation on the refusal side. It is one change of
-> the same shape: a channel in emit.zg that takes the code and reads the place, and every site moved onto
-> it. The lexer has **two** more — _f-string: unterminated literal_ and _f-string: a bare '}' is not text_
-> — which carry neither.
+> **The emitter is done too.** It had **126** raise statements, **76** opening with a code and **13**
+> appending a place; all **125** it has now go through `c_diag` / `c_diag_at`, and the missing one is a
+> rule that stopped raising — a struct and an enum record their own position, so a duplicate declaration
+> reaches the checking channel like the other four kinds. Forty-three rules that had no code were given
+> `E701`–`E743`, a gate case each and a catalogue row each; `E4xx` closed at `E498` with `E499` retired
+> unspent, exactly as `E2xx` closed for the parser. **No raise here is exempt.** Two were briefly written
+> as an ICE on the reasoning that the parser refuses the only shape that reaches them, and both reasonings
+> were wrong — `p_builtin_type_ctor` exempts six names from `E275` and four of them are not reserved, so
+> `fn set[T](…)` and `set[int, str](1)` reach the arity rule; and `1..=nil` writes out by hand the shape a
+> bare `..=` used to leave behind. An unreachable rule has to be shown unreachable, and neither was.
+> What the change is visible as: **18** more `no-place` markers retired, and `scripts/refuse-check.sh`'s
+> `place` marker gone entirely — a place is asserted of every `zerg` case there now, because there is no
+> longer a case that may lack one.
+>
+> **The lexer is what is left**, and it is two: _f-string: unterminated literal_ and _f-string: a bare '}'
+> is not text_. Both are raised from the driver rather than from a stage with a channel.
 >
 > `scripts/error-codes-check.sh` cannot see an uncoded rule by comparing its three sets: it compares codes
 > that exist against the gates and the catalogue, and a rule with no code is absent from all three. It sees
-> the parser's now by a different question — a `raise` there that writes its own message rather than asking
-> the channel for one is reported by name — which is the assertion that keeps a channel from being
-> bypassed a site at a time, and the one the emitter's half will need too.
+> the parser's and the emitter's by a different question — a `raise` in either file that writes its own
+> message rather than asking the channel for one is reported by name — which is the assertion that keeps a
+> channel from being bypassed a site at a time. It is a ratchet and not a proof: it sees a string LITERAL,
+> so a message picked into a variable first would pass, and it must let `raise anything(…)` through
+> because every site in both files raises a call.
 >
 > ---
 >
-> **Checked rules are not exempt**, which is the part of this the older text had backwards. A constant
-> cycle (_these constants depend on each other and none can be given a value first_) reports with no place
-> and no code at all. `E382`, a name declared twice, reports with a place for some declarations and not for
-> others: a duplicate `type A = …` carries one, because the rule reaches the channel's place-taking half
-> with the typedef's own position, and a duplicate `struct` does not, because a struct and an enum are
-> registered before anything records a position to give it. One rule, two answers, decided by which
-> declaration form tripped it.
+> **Checked rules are not exempt**, which is the part of this the older text had backwards, and the two
+> that were named here have both moved. A constant cycle (`E732`) reported with no place and no code at
+> all; it opens with its code and points at the first constant that cannot be given a value. `E382`, a name
+> declared twice, reported with a place for some declarations and not for others — a duplicate `type A = …`
+> carried one and a duplicate `struct` did not, because a struct and an enum were registered before
+> anything recorded a position to give it. Both now carry the declaration's own line, and the channel that
+> chose between raising and recording is gone with the reason for it.
 >
 > Two more used to be on that list and are not: `` `x` is used after del `` and its on-some-paths sibling,
 > now `E297` and `E298`. Nothing about the rules changed — they moved from `raise` to the checking channel,
 > which is the only thing that decides the question, and the move is the whole fix.
 >
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
-> narrows to the token when the message quotes one that is on that line.
+> narrows to the token when the message quotes one that is on that line. A rule that runs over a
+> DECLARATION — a field's default, a duplicate variant name, a method declared twice — takes the
+> declaration's place instead, because it runs before any statement has been emitted for the marker to
+> point at.
 
 The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its
 own, because it is the yardstick every finding in this specification is measured against:

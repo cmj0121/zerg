@@ -6418,6 +6418,53 @@ fn main() {
 }
 EOF
 
+# A DECLARED TYPE'S NAME BEGINS WITH AN UPPER-CASE LETTER (GRAMMAR#type-ident). The case of
+# that letter is how the language separates its two namespaces, and two of the three readers
+# are in the PARSER — `cli.Opt` the module qualifier against `It.Item` the associated-type
+# projection, and a bound naming a spec against one naming a concrete type — where nothing
+# is resolved and there is no table to consult. So a lower-case type name cannot be made to
+# work by teaching the constructor alone: it would be legal in one position and misread in
+# three.
+#
+# It used to be legal in NONE and said so wrongly. `_Box(1)` on a declared `struct _Box`
+# answered `E425 undefined function`, which is false about a program that declares the type
+# eight lines up — the constructor dispatch is `name_is_type`, and `_` is not upper-case.
+# The leading underscore needs no rule of its own: `_` has no case, so a name that starts
+# with one is in neither namespace, which is exactly what this asks about.
+#
+# The seed resolves the name against its symbol table and builds all three (`seed-gap`).
+reject a-struct-named-with-a-leading-underscore E610 '`_Box` cannot name a struct' seed-gap <<'EOF'
+struct _Box {
+	pub v: int
+}
+
+fn main() {
+	b := _Box(1)
+	print b.v
+}
+EOF
+
+reject a-struct-named-in-lower-case E610 '`lower` cannot name a struct' seed-gap <<'EOF'
+struct lower {
+	pub v: int
+}
+
+fn main() {
+	b := lower(1)
+	print b.v
+}
+EOF
+
+reject an-enum-named-with-a-leading-underscore E610 '`_E` cannot name an enum' seed-gap <<'EOF'
+enum _E {
+	A
+}
+
+fn main() {
+	print int(_E.A)
+}
+EOF
+
 
 # --- the emitter's own rules, one case per code -------------------------------------------
 #

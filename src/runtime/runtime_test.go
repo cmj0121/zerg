@@ -87,8 +87,9 @@ func runBounded(t *testing.T, bin, workers string, d time.Duration) (string, int
 }
 
 // runBoundedStreams is runBounded with the abort diagnostic KEPT. The `Kind: text` line
-// the abort contract makes normative lands on stderr, so the one test that reads it needs
-// the stream every other test here deliberately drops.
+// the abort contract makes normative lands on stderr, so the tests that read it — the ones
+// asserting a kind, and the two stack-overflow ones — need the stream every other test here
+// deliberately drops.
 func runBoundedStreams(t *testing.T, bin, workers string, d time.Duration) (string, string, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
@@ -857,12 +858,14 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
-// TestBuiltinAbortsNameTheirKind pins the message shape the abort contract makes normative
-// (docs/conformance.md, "Runtime abort contract"): a built-in error's message is
-// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. Every
-// other zrt_abort_kind site was written that way from the start; the two the concurrency
-// work added were not, and a taxonomy error whose own message will not say which kind it is
-// makes the conformance claim false for the reader who only ever sees stderr.
+// TestBuiltinAbortsNameTheirKind pins the line shape the abort contract makes normative
+// (docs/conformance.md, "Runtime abort contract"): a built-in error's abort LINE is
+// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. It
+// used to be spelled into each `zrt_abort_kind` literal, and the two the concurrency work
+// added were the two that forgot — which is what this caught. `zrt_report` builds the prefix
+// now, from the kind, for every site at once; a taxonomy error whose own line will not say
+// which kind it is makes the conformance claim false for the reader who only ever sees
+// stderr, and this is the half of that contract the runtime's own aborts owe.
 func TestBuiltinAbortsNameTheirKind(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1552,9 +1555,11 @@ int main(void) { return zrt_sched_main_nil(prog); }
 `
 
 // TestGenuineSegvUndisguised is the other edge of the naming: a wild pointer is NOT a
-// stack overflow, and the handler must not dress it as one. It restores the default
-// disposition and lets the fault re-fire, so the process still dies by the genuine
-// signal — observable here as a signal death, with no StackOverflowError line.
+// stack overflow, and the handler must not dress it as one. It puts back the action that
+// was installed before it and lets the fault re-fire, so the process still dies by the
+// genuine signal — observable here as a signal death, with no StackOverflowError line.
+// Which action that is, is what TestUnclaimedFaultReachesThePreviousHandler pins below;
+// here the previous action IS the default, which is why this dies by the signal.
 func TestGenuineSegvUndisguised(t *testing.T) {
 	bin := buildCore(t, "wild", wildPointerC)
 	var stderr bytes.Buffer

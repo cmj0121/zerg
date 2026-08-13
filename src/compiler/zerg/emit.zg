@@ -5255,8 +5255,12 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		# already reported by chk_binary above, and they are the better sentence — what is
 		# wrong there is the pair, not a missing impl. Raising here as well replaced a
 		# diagnostic about the program with one about a spec the program never mentioned.
+		#
+		# `ty_eq` and not `ty_name`, which is the same correction chk_binary's equality rule
+		# took: a SPELLING is the same question only where a type has a name of its own, and
+		# the pair that reaches here is a pair of aggregates, which is exactly where it is not.
 		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
-			if ty_name(ta) == ty_name(c_infer(em, b)) {
+			if ty_eq(ta, c_infer(em, b)) {
 				c_eq_refuse(em, oper, ta)
 			}
 		}

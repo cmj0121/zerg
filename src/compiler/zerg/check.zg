@@ -2495,15 +2495,23 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 # take bools, an ordering takes two numbers or two strs, and an equality takes two things
 # of one kind.
 #
-# Only the SCALAR families are judged, and that is a LIMIT rather than a boundary. The
-# reason is `ty_name`: it is the diagnostic spelling of a type, and using it as an equality
-# relation is only safe where the spelling is unique, which is exactly the scalars — it
-# collapses TUnknown, TTuple and TMap onto one name. So `[1] and true` and a struct bound
-# to the wrong struct are still cc's to report, which is the failure this file exists to
-# remove; closing it needs a real `ty_eq` over the Ty enum, and that is owed.
+# EVERY TYPE IS JUDGED, and the equality family was the last one where that was not true.
+# It used to stop at the scalars, because the relation it asked was `ty_name(a) ==
+# ty_name(b)` — the DIAGNOSTIC SPELLING of a type, unique only where a type has a name of
+# its own. So every aggregate fell out of the branch untouched and `(1, 2) == ("a", "b")`
+# was cc's to report, against generated C in a file nobody wrote, which is the one failure
+# this file exists to remove. It asks `ty_eq` now (ast.zg), which is the identity of a type
+# rather than its spelling, so a tuple against a tuple of another shape, a map against a
+# map of other key or value, a list, a channel, a function and a carrier all answer here.
 #
-# A `nil` on either side of an equality is how an optional is tested and is never a
-# mismatch, which the same restriction gives for free.
+# What a pair being the SAME type does not settle is whether that type HAS an equality —
+# a list has none built, a struct needs an `Eq`, a channel is an identity. That question is
+# the emitter's (c_eq_refuse), and it is asked of one type rather than of a pair, which is
+# why the two rules do not overlap: this one reports a mismatch, that one a missing impl.
+#
+# `nil` is not an operand of an equality either, and it never was one in practice: an
+# optional is refused above with the binding form it should have been tested with, and a
+# `nil` beside anything else is now a mismatch like any other.
 
 # chk_binary raises when an operator's operands are not what it takes. It is given the
 # operand TYPES rather than the expressions: c_binexpr infers the left one for its own
@@ -2599,8 +2607,6 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 			return
 		}
 
-		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
-
 		# int and float compare: they are one family, and the language already mixes them
 		# in arithmetic. `int` and `uint` are NOT that family — the trap the mixing rule
 		# names is a comparison trap first (in C the signed side converts, so `-1 == 1u` is
@@ -2610,7 +2616,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 			chk_operand_pair(em, oper, ta, tb, ea, eb)
 			return
 		}
-		if ty_name(ta) != ty_name(tb) {
+		if not ty_eq(ta, tb) {
 			chk_at(em, "E348", f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
 		}
 	}

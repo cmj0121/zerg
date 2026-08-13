@@ -1359,6 +1359,15 @@ pub fn imports_of_at(src: str, path: str) -> list[str] {
 	return out
 }
 
+# import_decls_at is imports_of_at with the DECLARATION kept, and it exists for the one thing
+# the path alone cannot buy: a place. A loader that holds only `"atomic"` can say a module is
+# unavailable and cannot say which line asked for it, so its refusal is the one shape this
+# repo's gates turn away — a real error the reader has to go and find.
+pub fn import_decls_at(src: str, path: str) -> list[ImportDecl] {
+	f := parse_at(src, path)
+	return f.imports
+}
+
 # parse_fill reads the tail of `[v; N]`. The count is a CONST-EXPR (GRAMMAR group 4's
 # `list-lit`), so it is parsed as an ordinary expression and carried on the node — the parser
 # used to expand the form into N copies right here, which is why the count could only ever be

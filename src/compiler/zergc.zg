@@ -884,7 +884,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 	for si < srcs.len() {
 		for im in zerg.imports_of_at(srcs[si], paths[si]) {
 			chk_import_cycle(here, im)
-			load_unit(module_files(im, from_dir), im, from_dir, seen, here, units)
+			load_unit(module_files(im, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
@@ -1127,8 +1127,9 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # --- module resolution ------------------------------------------------------------------
 
 # module_files resolves one import path to the source files that make up that module,
-# searched in the entry program's own directory first (a user module beside the program),
-# then the standard library. A module is either a single `<path>.zg` file or a DIRECTORY
+# searched BESIDE THE IMPORTER first — the directory of the file that wrote the import —
+# then in the entry program's own directory, then the standard library. A module is either
+# a single `<path>.zg` file or a DIRECTORY
 # of them — the compiler's own `zerg` module is the second kind, and its files are read in
 # the sorted order the runtime guarantees so the emitted C never depends on the
 # filesystem.
@@ -1142,9 +1143,26 @@ fn has_suffix(s: str, suffix: str) -> bool {
 #
 # The refusal is the RESOLVER's rather than each caller's, because both callers want the same
 # answer and a third would have to remember to ask for it.
-fn module_files(path: str, from_dir: str) -> list[str] {
+# `near` is the directory of the FILE that wrote this import, and it is searched first.
+# Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
+# own imports were resolved against a directory that module knows nothing about: `api/api.zg`
+# importing `"util/text"` was refused with E502 while `api/util/text/` sat right beside it,
+# and the same import resolved once the directory was moved next to the entry file instead.
+# E502's own sentence — "a module is a directory of `.zg` files beside the importer" — was
+# describing the layout it turned away.
+#
+# The entry directory STAYS as the second root rather than being replaced: a nested module
+# reaching a module beside the program resolved before this and still does. So the change
+# only ever adds a place to look.
+fn module_files(path: str, near: str, from_dir: str) -> list[str] {
 	mut roots: list[str] = []
-	roots.append(from_dir)
+	roots.append(near)
+
+	# a plain `if` and not a trailing one: this file is compiled BY THE SEED, which does not
+	# read a postfix `if` on a call statement
+	if from_dir != near {
+		roots.append(from_dir)
+	}
 	roots.append(stdlib_dir())
 	for root in roots {
 		found := module_at(root, path)
@@ -1256,7 +1274,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)
-		for dep in module_files(im, from_dir) {
+		for dep in module_files(im, dir_of(file), from_dir) {
 			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}

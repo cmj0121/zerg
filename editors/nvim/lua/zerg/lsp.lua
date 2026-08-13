@@ -98,6 +98,38 @@ local function formatting_command(buf, client_id)
 	end, { desc = 'Format this buffer with zerg fmt' })
 end
 
+-- undo_on_ftplugin detaches the server when the filetype does.
+--
+-- `b:undo_ftplugin` is vim's contract for `:setfiletype other`: every buffer-local thing a
+-- filetype set is given back. The vimscript half gave its options back and this half gave
+-- nothing, so a buffer that stopped being Zerg went on being checked by the Zerg compiler,
+-- with its findings drawn over whatever the buffer had become.
+--
+-- Appended rather than assigned: the ftplugin has already written its own list, and one
+-- `|`-joined command line is what vim executes.
+local function undo_on_ftplugin(buf, client_id)
+	local undo = vim.b[buf].undo_ftplugin or ''
+	local detach = string.format("lua require('zerg.lsp').detach(%d, %d)", buf, client_id)
+	vim.b[buf].undo_ftplugin = undo ~= '' and (undo .. ' | ' .. detach) or detach
+end
+
+-- detach is the undo above, as a function rather than as a line of Lua inside a string.
+--
+-- It ASKS before detaching. `vim.lsp.buf_detach_client` does not fail quietly when the client
+-- is not attached — it writes "Buffer (id: 1) is not attached to client (id: 1)" to the
+-- message area — and `:edit` runs the undo on a buffer that has already been detached, so a
+-- plain reload printed an error about a state that is entirely normal. `pcall` cannot help:
+-- the message is not an exception, it is the function's report.
+function M.detach(buf, client_id)
+	if not vim.api.nvim_buf_is_valid(buf) then
+		return
+	end
+	if vim.lsp.get_clients({ bufnr = buf, id = client_id })[1] then
+		vim.lsp.buf_detach_client(buf, client_id)
+	end
+	pcall(vim.api.nvim_buf_del_user_command, buf, 'ZergFmt')
+end
+
 -- attach starts (or joins) the server for one buffer.
 --
 -- It answers quietly when the compiler is not on PATH. A language server that throws an
@@ -107,6 +139,10 @@ function M.attach(buf)
 	if vim.g.zerg_lsp == false or vim.g.zerg_lsp == 0 then
 		return
 	end
+	-- The ftplugin passes 0 for "this buffer", which every nvim API accepts. The undo command
+	-- below is TEXT, executed later and possibly from another window, so it needs the real
+	-- number: a 0 written into it would detach whatever buffer happened to be current then.
+	buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf
 	local cmd = M.cmd()
 	if vim.fn.executable(cmd[1]) == 0 then
 		return
@@ -122,6 +158,7 @@ function M.attach(buf)
 	if client then
 		show_diagnostics(client)
 		formatting_command(buf, client)
+		undo_on_ftplugin(buf, client)
 	end
 
 	if client and vim.g.zerg_format_on_save then

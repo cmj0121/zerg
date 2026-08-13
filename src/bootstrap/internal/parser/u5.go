@@ -186,6 +186,26 @@ func preludeRole(lx string) string {
 	return ""
 }
 
+// preludeCalleeRole is preludeRole at the FUNCTION slot: the prelude names a CALL can
+// spell. 'map' is the whole of the difference, and it is measured rather than argued.
+// Declare 'fn N(zz: int) -> int' and call 'N(1)': for every other name in the set the
+// declaration is unreachable, because the callee is read as the prelude's form before a
+// user symbol is looked for — a conversion for the scalars and the list aliases, a
+// construction for 'Either' / 'Result' / 'Err' / 'Eq' / 'Into', the carrier's own
+// constructor for 'Left' / 'Right'. 'list' is reachable here but costs the seed the
+// 'list[byte](s)' bridge. 'map' alone answers 2 in both compilers: 'map[...](...)' as a
+// constructor is built by neither, so the name has no value form for a declaration to
+// take, and 'fn map(xs, f)' is a function a real program wants.
+//
+// This is a NARROWER set than the type slots take, because a type slot's namespace is
+// where every one of these names is bound. The same split the method rule draws.
+func preludeCalleeRole(lx string) string {
+	if lx == "map" {
+		return ""
+	}
+	return preludeRole(lx)
+}
+
 // declName is expect(Ident) at a slot that DECLARES a top-level name. Only a
 // declaration refuses a prelude name; a local binding that shadows one is a loud type
 // error at its first use, while a top-level declaration removes the name from the
@@ -198,11 +218,15 @@ func (p *parser) funcName(free bool) token.Token {
 	if !free {
 		return p.expect(token.Ident)
 	}
-	return p.declName("a function")
+	return p.reservedName(preludeCalleeRole(p.cur().Lexeme), "a function")
 }
 
 func (p *parser) declName(what string) token.Token {
-	if role := preludeRole(p.cur().Lexeme); role != "" && p.at(token.Ident) {
+	return p.reservedName(preludeRole(p.cur().Lexeme), what)
+}
+
+func (p *parser) reservedName(role, what string) token.Token {
+	if role != "" && p.at(token.Ident) {
 		p.fail(p.cur().Span, "%q is a prelude name (%s) and cannot name %s", p.cur().Lexeme, role, what)
 	}
 	return p.expect(token.Ident)

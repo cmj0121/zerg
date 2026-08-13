@@ -465,12 +465,42 @@ fn p_prelude_role(lx: str) -> str {
 # emitter parses `spec Eq` and `spec Into` from a string (emit.zg's ZG_BUILTIN_SPECS) and it
 # is the very declaration this rule reserves the name for.
 fn p_decl_name(mut &p: Parser, what: str) -> str {
+	return p_reserved_name(p, p_prelude_role(cur(p).lexeme), what)
+}
+
+# p_reserved_name is the refusal itself, asked with the role its caller's SLOT computed. The
+# role is the argument rather than the lexeme because the two slots do not take the same set:
+# a type declaration's name lands in the namespace every one of these names is bound in, and
+# a function's lands where only some of them can be spelled.
+fn p_reserved_name(mut &p: Parser, role: str, what: str) -> str {
 	lx := cur(p).lexeme
-	role := p_prelude_role(lx)
 
 	raise p_diag(p, "E611", f"`{lx}` is a prelude name — {role} — and cannot name {what}: the prelude is bound in every module before a program is read, so the forms that desugar to it can never be knocked out from under the language") if role != "" and p.path != "<builtin>"
 
 	return p_name(p, what)
+}
+
+# p_prelude_callee_role is p_prelude_role at the FUNCTION slot: the prelude names a CALL can
+# spell. `map` IS THE WHOLE OF THE DIFFERENCE, and it is measured rather than argued. Declare
+# `fn N(zz: int) -> int` and call `N(1)`: for every other name in the set the declaration is
+# unreachable, because the callee is read as the prelude's own form before a user symbol is
+# looked for — a conversion for the scalars and the two list aliases, a construction for
+# `Either` / `Result` / `Err` / `Eq` / `Into` (E727), the carrier's constructor for `Left` /
+# `Right` (E459). `list` is reachable here, but a `fn list` costs the SEED the `list[byte](s)`
+# bridge, and a language rule holds in both compilers or it is not one.
+#
+# `map` alone answers 2 in both: `map[…](…)` as a constructor is built by neither compiler, so
+# the name has no value form for a declaration to take — and `fn map(xs, f)` is the one
+# function in this set a real program actually wants to write.
+#
+# THE SCALARS ARE THE REASON THIS RULE IS NOT MERELY TIDY. `fn byte(n: int) -> int { n + 1 }`
+# with `print byte(41)` after it compiled in both compilers and printed 41 here and 42 in the
+# seed, with nothing said by either: one program, two answers, no diagnostic. Refusing the
+# declaration is what makes that question unaskable.
+fn p_prelude_callee_role(lx: str) -> str {
+	return "" if lx == "map"
+
+	return p_prelude_role(lx)
 }
 
 # p_fn_name is the `fn` slot's half of that rule, and `recv` is the whole of the question. A
@@ -482,7 +512,7 @@ fn p_decl_name(mut &p: Parser, what: str) -> str {
 fn p_fn_name(mut &p: Parser, recv: str) -> str {
 	return p_name(p, "a function") if recv != ""
 
-	return p_decl_name(p, "a function")
+	return p_reserved_name(p, p_prelude_callee_role(cur(p).lexeme), "a function")
 }
 
 # p_type_name is the name slot of a DECLARATION THAT INTRODUCES A TYPE — a struct, an enum,

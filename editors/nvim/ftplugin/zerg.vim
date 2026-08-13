@@ -200,6 +200,37 @@ setlocal indentexpr=ZergIndent(v:lnum)
 " the middle of writing something that has nothing to do with a block.
 setlocal indentkeys=0{,0},0),0],!^F,o,O
 
+" --- :make ------------------------------------------------------------------------------
+"
+" The compiler already answers the question `:make` asks, and in two shapes:
+"
+"   error: E307 cannot assign to `x`: …        a finding WITH a place, as a block
+"     --> f.zg:3:2                             whose second line carries the position
+"   f.zg:10:17: L502 the literal `2` is …      `zerg lint`, one finding per line
+"
+" so 'errorformat' reads both. The block form is the Rust shape — the message first and the
+" position on a continuation — which is why `-->` is a `%C` and not the entry itself.
+"
+" `%Z` closes the message on the `   |` that opens the source excerpt, so the excerpt's own
+" lines fall through to the ignore rule instead of being read as more of the message. A
+" refusal that carries NO place (`NotImplemented: …`) still becomes an entry, with no file
+" and no line — which is the same answer the language server gives it, and better than a
+" position somebody invented.
+"
+" `--emit c` and not a full build: it runs everything that can report a diagnostic and stops
+" before `cc`, so `:make` costs the front end and leaves no binary beside the source.
+" `-o /dev/null` because `--emit c` writes the file it is told to.
+let &l:makeprg = 'zerg build --emit c % -o /dev/null'
+let &l:errorformat = join([
+      \ '%Eerror: %m',
+      \ '%ENotImplemented: %m',
+      \ '%EE%n NotImplemented: %m',
+      \ '%C %#--> %f:%l:%c',
+      \ '%Z %#|%.%#',
+      \ '%f:%l:%c: %m',
+      \ '%-G%.%#',
+      \ ], ',')
+
 " --- the shared scanner ------------------------------------------------------------------
 "
 " s:DelimScan reads one line and answers with two numbers, both relative to the depth the
@@ -255,4 +286,4 @@ endfunction
 " which is the half that goes stale. `:setfiletype other` on a Zerg buffer left it folding by
 " braces and building with `zerg` because the list had not grown with the file.
 let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< tabstop< shiftwidth< softtabstop<'
-      \ . ' colorcolumn< foldmethod< foldexpr< foldlevel< indentexpr< indentkeys<'
+      \ . ' colorcolumn< foldmethod< foldexpr< foldlevel< indentexpr< indentkeys< makeprg< errorformat<'

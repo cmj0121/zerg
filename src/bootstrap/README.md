@@ -336,10 +336,10 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   module; a public one reaches C as a single mangled symbol and the second definition simply
   replaces the first. One case in `reject-check.sh` carries the marker.
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
-  matches.** `GRAMMAR#range` gives `..=` a mandatory bound, and the parser reads a missing one
-  as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape (`E743`)
-  wherever it arrives. The seed reads the absent bound as 0, so the arm is false for every
-  value and the `match` falls through to its catch-all with nothing said. One case in
+  matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
+  one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
+  (`E743`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
+  every value and the `match` falls through to its catch-all with nothing said. One case in
   `reject-check.sh` carries the marker.
 - **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,
   not a value's type ([specs](../../docs/core/specs.md)), and `zerg` refuses it at every

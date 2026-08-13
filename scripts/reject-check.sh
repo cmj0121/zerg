@@ -7098,6 +7098,26 @@ fn main() {
 }
 EOF
 
+# THE FUNCTION SLOT TAKES A NARROWER SET THAN THE TYPE SLOTS, and `map` is the whole of the
+# difference. A type declaration's name lands in the namespace every prelude name is bound
+# in; a function's lands where only the ones a CALL can spell are, and `map[…](…)` as a
+# constructor is built by neither compiler — so `fn map(xs, f)` takes nothing.
+#
+# It is pinned here, in the reject list, because the claim is about WHICH rule answers: this
+# program is ill-formed for a reason six lines below the declaration, and if `map` were
+# reserved at this slot the answer would be `E611` at `1:4` and this case would never reach
+# `nope`. Swap `map` for `list` — the other container, and one a call CAN spell through
+# `list[byte](s)` — and that is exactly what happens.
+reject a-prelude-name-with-no-call-form-may-name-a-function E425 'undefined function' at=6:2 <<'EOF'
+fn map(zz: int) -> int {
+	return zz + 1
+}
+
+fn main() {
+	print nope(1)
+}
+EOF
+
 # THE CARRIER'S CONSTRUCTORS ARE IN THE SET for the same reason its type name is: the emitter
 # reads `Left` and `Right` BY NAME — an arity rule, a tag, and the match-exhaustiveness rule
 # that says which side an arm covers — so a declaration taking one leaves those rules reading

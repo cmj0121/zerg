@@ -190,9 +190,10 @@ of the rules already stated for `list`:
   error **at the fill**, not at the binding it names, because the fill is the line that wanted a
   compile-time value; so is a negative one, since a count is how many copies to make.
 
-  > **[deviation]** The list fill form currently **re-evaluates `v` on each of the `N` iterations** instead
-  > of copying one value `N` times. With a pure constant (`[0; 256]`) this is harmless, but a fill whose
-  > element expression has a side effect or observable cost is evaluated `N` times rather than once.
+  `v` is evaluated **once** and copied `N` times, which is what "N copies of v" means: a fill whose element
+  expression has a side effect or an observable cost runs it once, not `N` times. Every copy after the first
+  is a real copy, so a fill of a `str` or a `list` gives `N` independent elements rather than `N` slots
+  sharing one.
 
 - **Access** — `a[i]` by value, bounds-checked → `IndexError`, with a constant index outside `[0, N)` caught
   at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but

@@ -528,6 +528,15 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		p_advance(p)
 		inner := parse_type(p)
 		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
+
+		# BOTH ARROWS IS NEITHER DIRECTION. GRAMMAR#chan-type has three alternatives —
+		# `chan[T]`, `<-chan[T]` and `chan[T]<-` — and a channel that is at once receive-only
+		# and send-only is none of them. The trailing `<-` was read after the `]` with no
+		# regard for a leading one, so `<-chan[int]<-` became a receiver and the second arrow
+		# vanished: a signature that says it can only send, honoured as one that can only
+		# receive.
+		raise "E498 a channel is bidirectional, receive-only or send-only — GRAMMAR#chan-type gives `<-chan[T]<-` no reading, and both arrows at once name no direction" + p_place(p, ar.line, ar.col) if ty_chan_dir(inner) != 0
+
 		return ty_chan(ty_chan_elem(inner), 2, p_place(p, ar.line, ar.col))
 	}
 
@@ -1948,7 +1957,17 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # derive `sealed`: advice that makes no sense, about a decorator parse_deco_item refuses by
 # name the moment it is written alone.
 fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
+	ob := cur(p)
 	p_advance(p) # '#['
+
+	# `#[]` IS NOT A DECORATOR. GRAMMAR#decorator is `'#[' deco-item ( ',' deco-item )* ']'`
+	# — one item or more — and the loop below never runs when the `]` is already there, so
+	# an empty pair of brackets was read, dropped, and the declaration after it compiled as
+	# though nobody had written anything. A decorator changes what a declaration MEANS, which
+	# is the reason every other one here is named rather than skipped; an empty one asks for
+	# a change nobody can name, and that is worth saying rather than ignoring.
+	raise "E495 a decorator holds at least one item — GRAMMAR#decorator derives `#[ deco-item, … ]`, and `#[]` names nothing to apply" + p_place(p, ob.line, ob.col) if p_at(p, Kind.RBrack)
+
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		parse_deco_item(p, pending)
 		break if not p_at(p, Kind.Comma)
@@ -1983,21 +2002,45 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
+	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
+	# module-private — so a reader who writes it has not made a typo, and telling them the
+	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
+	# not ask. What they need to know is that the word is the right one and the behaviour is
+	# not built, so nothing is protecting the constructor they thought they had sealed.
+	nt := cur(p)
+
+	raise f"E496 NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence" + p_place(p, nt.line, nt.col) if name == "sealed"
+
 	raise f"E217 NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and `#[obj]`, and no other" if name != "derive"
 
 	p_advance(p)
-	return if not p_at(p, Kind.LParen)
+
+	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
+	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went
+	# on with no impls while the line above it said it had some. That is the shape of silence
+	# this whole pass is about, one `==` away from being noticed.
+	#
+	# The two spellings are ONE rule, so they are one raise, asked after the arguments are
+	# read rather than at each spelling: `before` is how many names were on `pending` when
+	# this item began, since a `#[derive(Eq), derive(Ord)]` shares the list with its siblings.
+	dt := cur(p)
+	before := pending.len()
 
 	# a derive ARGUMENT is a spec name; the arguments a decorator may take in general are
 	# const-exprs, and none of them opens a bracket, so the item ends at its own `)`
-	p_advance(p)
-	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
-		if p_at(p, Kind.Ident) {
-			pending.append(cur(p).lexeme)
-		}
+	if p_at(p, Kind.LParen) {
 		p_advance(p)
+		for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+			if p_at(p, Kind.Ident) {
+				pending.append(cur(p).lexeme)
+			}
+			p_advance(p)
+		}
+		expect(p, Kind.RParen)
 	}
-	expect(p, Kind.RParen)
+
+	raise "E497 a `#[derive]` names the specs to generate — GRAMMAR#deco-item takes the arguments, and a derive with none asks for nothing while reading as though it asked for something" + p_place(p, dt.line, dt.col) if pending.len() == before
 }
 
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl], in_unsafe: bool) {

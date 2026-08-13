@@ -1143,6 +1143,16 @@ fn ty_is_chan(t: Ty) -> bool {
 	}
 }
 
+# ty_chan_dir reads back the direction ty_chan wrote: 0 bidirectional, 1 send-only,
+# 2 receive-only. A type that is not a channel has no direction, and answers the
+# bidirectional 0 rather than a value a caller would have to test for separately.
+fn ty_chan_dir(t: Ty) -> int {
+	return match t {
+		Ty.TChan(_, d) => d
+		_ => 0
+	}
+}
+
 fn ty_chan_elem(t: Ty) -> Ty {
 	return match t {
 		Ty.TChan(e, _) => e

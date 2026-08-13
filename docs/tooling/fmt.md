@@ -879,6 +879,10 @@ shipping compiler rather than a part of it (the line
 | `E492` | a sub-pattern inside a variant payload — **[not yet]**                                      |
 | `E493` | a range used as a value — **[not yet]**                                                     |
 | `E494` | `is …` names one of the built-in error kinds — **[not yet]**                                |
+| `E495` | a decorator holds at least one item, and `#[]` names nothing to apply                       |
+| `E496` | the decorator `#[sealed]` — reserved — **[not yet]**                                        |
+| `E497` | a `#[derive]` names the specs to generate                                                   |
+| `E498` | a channel is bidirectional, receive-only or send-only                                       |
 | `E501` | this entry file declares no `fn main`                                                       |
 | `E502` | cannot resolve import `…` under any source root                                             |
 | `E503` | cannot receive on a send-only `…`                                                           |

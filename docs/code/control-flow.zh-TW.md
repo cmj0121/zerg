@@ -33,10 +33,10 @@ branches give int and float`,與 `match` 的並排。`nil` 分支是例外,而�
 `x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
 例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
 
-> **[deviation]** 那個 `nil` 分支被降階成**存在**。`c` 為假時,`x: int? = if c { 1 } else { nil }` 得到的是一個
-> 持有 `0` 的 carrier,所以 `x ?? 99` 印 `0`;`str?` 的寫法印 `(null)`,一個蓋在 null 指標上的存在 carrier。任何
-> 階段都沒有任何回報——程式建得起來、跑得動,然後回答了那個本該被缺席跳過的值,而那正是本專案明文禁止的錯法。在它
-> 被修好之前,請用一個 checker 會當成 carrier 的 binding 來表達缺席。
+那個 `nil` 分支降階成**缺席**:填入 carrier 的動作被分配到各個分支上,每一種拼法各自進入 carrier,所以 `c` 為假時
+`x: int? = if c { 1 } else { nil }` 是空的——`x ?? 99` 回答 `99`。過去它把整個三元式當成單一個 present payload 包
+起來,`nil` 於是變成 present carrier 裡的一個零,缺席就這樣不見了、而且任何階段都沒有回報;鏡像的寫法(`nil` 在
+**then** 分支)則是直接被拒絕——一種拼法會抱怨,另一種靜默答錯。
 
 ---
 

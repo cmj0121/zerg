@@ -6,14 +6,10 @@ rewrite your code. Because the set is closed, an **unknown or misspelled decorat
 is never silently ignored. Each decorator binds to the declaration that follows it. Part of the
 [Language Reference](../language.md). Also in [繁體中文](decorators.zh-TW.md).
 
-> **[deviation]** A `#[derive]` or `#[derive()]` with **no argument** is accepted and silently dropped, which
-> is the one outcome this page says cannot happen. The argument list is read as a loop over the spec names
-> inside the brackets, so an empty list is zero iterations and nothing is either generated or refused; and
-> because what carries a decorator to its declaration is that same list of names, the bare form is carried
-> nowhere and so meets no rule at all — `#[derive]` above a `fn` compiles, where `#[derive(Eq)]` above the
-> same `fn` is rejected with _E487 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows
-> it, and what follows is `fn`_. Nothing is miscompiled, but a directive is read and thrown away, which is
-> what the closed set is supposed to rule out.
+> **[not yet]** `#[sealed]` is refused with a code of its own — _E496 NotImplemented: the decorator
+> `#[sealed]` — it is a reserved decorator … and this compiler does not build it, so the constructor stays
+> public rather than being sealed in silence_. The word is the right one; what is missing is the behaviour,
+> which is exactly what a reader who wrote it needs to be told.
 
 ## The set
 
@@ -50,14 +46,11 @@ is a "not yet supported" **compile error**, never a silent no-op:
   controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
 
-> **[deviation]** The compiler does not distinguish a **recognized** decorator from an **unknown** one. Every
-> `#[…]` other than `#[derive]` and `#[obj]` falls into a single arm, so `#[sealed]`, `#[repr]`, `#[test]`
-> and the misspelled `#[frobnicate]` all get the same sentence — _E217 NotImplemented: the decorator `#[X]`
-> — this compiler reads `#[derive(…)]` and `#[obj]`, and no other_. Every one of them is refused, so nothing
-> is silently dropped and nothing miscompiles; what is lost is the distinction this section and **Reserved**
-> below are built on.
-> A typo is reported as though it were a reserved name awaiting implementation, and the promise that an
-> unknown decorator is an error the reader can tell apart from a not-yet-supported one is not kept.
+> **[not yet]** `#[repr]` and `#[test]` are still reserved names with no rule of their own: they fall into
+> the unknown-decorator arm and get _E217 … this compiler reads `#[derive(…)]` and `#[obj]`, and no other_,
+> the same sentence a misspelled `#[frobnicate]` gets. Both are refused, so nothing is silently dropped;
+> what is lost for those two is the distinction between a name awaiting implementation and a typo —
+> `#[sealed]`, which had the same problem, now has `E496`.
 
 ## Not a macro
 

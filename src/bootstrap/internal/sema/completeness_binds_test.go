@@ -27,7 +27,7 @@ func TestDestructuringBindTypes(t *testing.T) {
 	wantOK(t, "fn f() {\n\t(a, b) := (1, 2)\n\tprint a + b\n}\n")
 	wantOK(t, "fn f() {\n\t(a, (b, c)) := (1, (2, 3))\n\tprint a + b + c\n}\n")
 	wantErr(t, "fn f() {\n\t(a, b, c) := (1, 2)\n\tprint a\n}\n", "cannot destructure")
-	const d = "struct Div {\n\tq: int\n\tr: int\n}\n"
+	const d = "struct Div {\n\tpub q: int\n\tpub r: int\n}\n"
 	wantOK(t, d+"fn f(v: Div) {\n\tDiv{q, r} := v\n\tprint q + r\n}\n")
 	wantErr(t, d+"fn f(v: Div) {\n\tDiv{q, z} := v\n\tprint q\n}\n", "has no field")
 }

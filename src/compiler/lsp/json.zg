@@ -21,8 +21,8 @@ enum JVal {
 }
 
 struct JField {
-	key: str
-	val: JVal
+	pub key: str
+	pub val: JVal
 }
 
 # --- reading a value --------------------------------------------------------------------

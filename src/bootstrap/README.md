@@ -119,9 +119,10 @@ build.
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
 `spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,
-`Ref[T]`, struct and tuple patterns, a block as a `match` arm body, and `for c in s` over a
-str's code points. On several of those the seed is the **wider** of the two compilers, which
-is a fact about the seed and not about the language.
+`Ref[T]`, struct and tuple patterns, a block as a `match` arm body, `for c in s` over a
+str's code points, an `import … as` rename, and a `pub` module constant. On several of those
+the seed is the **wider** of the two compilers, which is a fact about the seed and not about
+the language.
 
 A form the FRONT END still parses is not thereby supported: the refusal may land in sema or
 at the emitter's door. Narrowing the parser is a separate pass, and not an urgent one — what
@@ -257,18 +258,41 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
   `[ … ]` always an index and a generic takes its type from its arguments. The
   one-argument shape (`id[int](7)`) the seed does turn away, for a reason of its own.
-- **A BARE VARIANT is accepted, in a pattern and as a value.** GRAMMAR says an enum puts
-  its own name into the value namespace and not its variants', so a variant is reached
-  through its enum — `Color.Red`. The seed reads that form and does not require it, so `Red`
-  alone still resolves here; `zerg` refuses both halves by name. The seed's own sources need
-  no migration for the same reason its gaps are its own contract: it is the oracle on
-  programs that follow the rule, not the enforcer of it.
+- **A BARE VARIANT is accepted AS A VALUE.** GRAMMAR says an enum puts its own name into the
+  value namespace and not its variants', so a variant is reached through its enum —
+  `Color.Red`. The seed reads that form and does not require it, so `Red` alone still
+  resolves here; `zerg` refuses it by name. The seed's own sources need no migration for the
+  same reason its gaps are its own contract: it is the oracle on programs that follow the
+  rule, not the enforcer of it. (In PATTERN position there is no gap and no rule to enforce:
+  a bare name binds in both compilers, which is what GRAMMAR#pattern says it is.)
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a
-  name beyond its keyword table. So `struct This`, `fn This()`, a parameter and an `enum`
-  variant all build here and `zerg` refuses each by name. (Lowercase `this` the seed does
-  refuse, because that one IS a keyword token.)
+  name beyond its keyword table. So `struct This`, `fn This()`, `type This = int`, a parameter
+  and an `enum` variant all build here and `zerg` refuses each by name. (Lowercase `this` the
+  seed does refuse, because that one IS a keyword token.)
+- **An `impl` whose TARGET carries type arguments is accepted, and implements nothing.**
+  `impl Size for list[int] { … }` and the inherent `impl Box[int] { … }` both build here: the
+  seed parses the whole of `GRAMMAR#impl-decl`, including the `impl`'s own `generics?`, and
+  then attaches the block to nothing a call can find, so `xs.size()` answers that a list has
+  no method by that name — a refusal at the USE, one step from a declaration that was never
+  turned away. `zerg` refuses the declaration itself, naming the form and its place. (The
+  parameterized `impl[T] Spec for list[T]` the seed does turn away, though for a reason of
+  its own: it drops the parameters it read, so the `T` in the target resolves to nothing and
+  the answer is `unknown type "T"` rather than a word about the form.)
+- **A SOURCE FILE THAT IS NOT UTF-8 is accepted.** `GRAMMAR#letter` says the source is UTF-8, so
+  a file holding a stray `0xFF` is not a Zerg source file; the seed is byte-oriented from the
+  read to the emit and has no str invariant to violate, so the byte travels through the lexer
+  into a string literal and out as `"\377"` in the C. `zerg` reads a file into a `str` and
+  refuses one that cannot be, naming the path — the encoding is the one place where it is the
+  stricter compiler for a reason that is not a rule it added but a type it has.
+- **A STATEMENT AT THE TOP LEVEL is accepted, and dropped.** `program ::= stmt-list`
+  (`GRAMMAR#program`) is Zerg's script mode, so a top-level `print 999`, `if …` or `for …` is
+  grammatical — and a compiled program has nowhere to run one, since outside `main` lives only
+  immutable state readied before it (docs/runtime/package.md). The seed parses each into
+  `file.Items` and neither lowers nor mentions it, so the program builds and prints nothing.
+  `zerg` refuses it by name at the line it was written on, `nop` excepted. This is a rule
+  `zerg` ADDED rather than one the seed lost, which is the ordinary direction here.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

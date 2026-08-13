@@ -54,7 +54,7 @@ func TestRefEmit(t *testing.T) {
 			// copying the struct retains the inner Ref; the scope schedules each
 			// struct's deep-drop and unwinds them at exit (reverse field order).
 			name:        "struct-with-ref-copy-drop",
-			src:         "struct Box { value: Ref[int] }\nfn main() {\n b := Box(Ref(7))\n c := b\n print deref(c.value)\n}",
+			src:         "struct Box { pub value: Ref[int] }\nfn main() {\n b := Box(Ref(7))\n c := b\n print deref(c.value)\n}",
 			wantRuntime: true,
 			wantContains: []string{
 				"static zg_Box zg_copy_zg_Box(zg_Box x)",
@@ -71,7 +71,7 @@ func TestRefEmit(t *testing.T) {
 		{
 			// a POD struct (no Ref) generates NO copy/drop helpers and no runtime refs.
 			name:        "pod-struct-no-helpers",
-			src:         "struct Point { x: int }\nfn main() {\n p := Point(3)\n q := p\n print q.x\n}",
+			src:         "struct Point { pub x: int }\nfn main() {\n p := Point(3)\n q := p\n print q.x\n}",
 			wantRuntime: false,
 			wantAbsent:  []string{"zergrt.h", "zrt_", "zg_copy_", "zg_drop_"},
 		},

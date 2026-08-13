@@ -36,7 +36,7 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 寫入失敗——磁碟滿、broken pipe——是值、以 `?` 傳播；絕不靜默丟棄（那個便利只屬於 `print`）。
 
 ```text
-fn copy_lines(src: Reader, mut dst: Writer) -> Result[nil] {
+fn copy_lines(src: Reader, mut &dst: Writer) -> Result[nil] {
     for line in src.read() {
         dst.write_str(line)?
         dst.write_str("\n")?
@@ -96,7 +96,7 @@ thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
 ## Process 與命令執行
 
-**[not yet]**——命令字面量雖被文法辨識，但此階段在**程式碼生成時被拒絕**；下方的預期模型不變，待 runtime 落地。
+**[not yet]**——命令字面量被 lex 之後由 **parser 拒絕**（`E236`，且沒有位置）；下方的預期模型不變，待 runtime 落地。
 
 子行程用**反引號命令字面量**啟動，並透過同一套串流觀察——它的 pipe 是 `Reader` 與 `Writer`、它的 handle 是一個
 `Ref[proc]`，其 `drop` 會 wait（或 kill）它、恰好回收一次。**`f` 標出危險：**

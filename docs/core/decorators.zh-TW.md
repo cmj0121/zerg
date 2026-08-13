@@ -5,12 +5,9 @@
 是編譯錯誤**——絕不會被默默忽略。每個 decorator 綁定其後的宣告。屬於
 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](decorators.md) 版本。
 
-> **[deviation]** 一個**不帶引數**的 `#[derive]` 或 `#[derive()]` 會被接受、然後默默丟掉,而那正是本頁說絕不會發生
-> 的那件事。引數清單是以「對括號內的 spec 名字做迴圈」讀進來的,所以空清單就是零次迭代,既不生成也不拒絕任何東西;
-> 而且因為「decorator 有沒有掛在對的宣告種類上」這道檢查是**逐個具名 spec** 做的,裸寫的形式連那道檢查也一併跳過
-> ——`#[derive]` 掛在一個 `fn` 上會編過,而同一個 `fn` 上的 `#[derive(Eq)]` 則正確地被拒絕、報
-> _`#[derive(Eq)]` has no declaration under it_。沒有任何東西被編錯,但一道指令被讀進來又被丟掉,而那正是封閉集合
-> 本來要排除的事。
+> **[not yet]** `#[sealed]` 有自己的碼——_E496 NotImplemented: the decorator `#[sealed]` — it is a reserved
+> decorator … and this compiler does not build it, so the constructor stays public rather than being sealed
+> in silence_。這個字是對的,缺的是行為,而那正是寫下它的讀者需要被告知的事。
 
 ## 集合
 
@@ -37,11 +34,10 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
-> **[deviation]** 編譯器並不區分一個**已識別**的 decorator 與一個**未知**的。除了 `#[derive]` 以外的每一個 `#[…]`
-> 都落進同一個分支,所以 `#[sealed]`、`#[repr]`、`#[test]`,以及拼錯的 `#[frobnicate]`,拿到的是同一句話
-> ——_NotImplemented: the decorator `#[X]` — this compiler reads `#[derive(…)]` and no other_。它們每一個都被拒絕,
-> 所以沒有任何東西被默默丟掉、也沒有任何東西被編錯;失去的是本節與下面〈保留〉賴以成立的那個區分。一個打錯的字會
-> 被報成一個「保留、等待實作」的名字,而「未知的 decorator 是一個讀者分辨得出來的錯誤」這個承諾並沒有兌現。
+> **[not yet]** `#[repr]` 與 `#[test]` 仍是沒有自己規則的保留名字:它們落進未知 decorator 的分支,拿到
+> _E217 … this compiler reads `#[derive(…)]` and `#[obj]`, and no other_——與拼錯的 `#[frobnicate]` 同一句話。
+> 兩者都被拒絕,所以沒有任何東西被默默丟掉;對這兩個名字失去的是「等待實作」與「打錯字」之間的區分——`#[sealed]`
+> 原本也有同樣的問題,現在有了 `E496`。
 
 ## 不是 macro
 

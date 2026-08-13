@@ -1,0 +1,23 @@
+# A TYPE REACHED THROUGH AN IMPORT IS ALSO ITS CONSTRUCTOR. `GRAMMAR#base-type` derives
+# `type-name type-args? ('.' identifier)*`, so `shape.Point` is a type wherever a type is
+# wanted — and group 7's CONSTRUCTION note says the type name IS the callable that builds
+# one, which has to hold on the same spelling.
+#
+# It used to hold on the left of the `=` and not on the right: `p: shape.Point =
+# shape.Point(1, 2)` was accepted as a type and refused as a value, in one line.
+#   zerg build examples/1g/modtype/main.zg
+# Expected output:
+#   3
+#   0
+#   1
+import "shape"
+
+fn main() {
+	p: shape.Point = shape.Point(1, 2)
+	print p.x + p.y # 3 — the constructor, reached through the namespace
+
+	print shape.origin().x # 0 — a `pub fn` returning the same type, as it always worked
+
+	c: shape.Colour = shape.Colour.Green
+	print int(c) # 1 — an enum's variant, through the enum, through the module
+}

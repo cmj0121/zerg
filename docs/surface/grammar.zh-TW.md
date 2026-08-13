@@ -99,15 +99,17 @@ fn answer() -> int { return 42 }
 
 ## Group 2 — Lexical
 
-原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。lexical
+原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。換行是 LF
+或 CRLF——`\r` 屬於它後面的那個換行，而不屬於空白類，所以出現在其他位置的 `\r` 不是任何 token 的一部分，會在
+原處被拒絕（在字串或 rune 字面量內則是普通內容）。lexical
 group 界定「token 是什麼」：
 
 ```text
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
-NEWLINE    ::= '\n'
-WS         ::= ( ' ' | '\t' )+
+NEWLINE    ::= '\r'? '\n'
+WS         ::= ( ' ' | '\t' )+     # 水平空白——'\r' 不算
 COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' 後不接 '#' 或 '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment；附著於其後的宣告
 block      ::= '{' stmt-list '}'
@@ -129,8 +131,11 @@ unsafe ptr   asm
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
 
-**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
-內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
+**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上，**同時它
+也是一個值**：block 是一個 **expression**（`primary`，group 4），其值是**最後一個 statement 的值**——expression
+statement 交出它的 expression，其他任何 statement、以及空的 block，都交出 `nil`。ASI 的 `;` 只**分隔**
+statement，並不像某些語言的結尾 `;` 那樣把值丟掉，所以 `guard { … }` 與 `match` 的 arm 都能裝好幾個 statement
+而照樣產出值。block 內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
 
 **換行與 ASI。** 換行由 lexer 實現為 `;` 分隔符（automatic `;` insertion）：遇行尾，若該行最後一個 token 能
 **結束一個項目**——identifier、literal、`)`、`]`、`}`、`?`、`_`、`this`，或 `return` / `break` / `continue` /
@@ -198,7 +203,10 @@ field-target  ::= identifier ( ':' assign-target )?
 正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，
 或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
-`Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。
+`Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。兩個方向都是 **[not yet]**，而且
+各自被當成自己來拒絕：編譯器一次只綁一個名字（_E238 a destructuring binding `(a, b) := …`_）、一次只賦值給一個
+目標（_E486 a destructuring assignment `(a, b) = …`_），而 struct 形狀則是它讀不懂的
+pattern（_E221 a struct pattern `Div{…}`_）。
 
 expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 
@@ -650,7 +658,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享
   可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
-  memory-ordering 參數。**[not yet]**——它需要 `Ref[T]`；**memory-ordering 引數**與泛型 **`Atomic[T]`** 亦然。
+  memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組宣告 `pub struct Atomic[T]`,而泛型 struct
+  尚未建置,所以光是 `import "atomic"` 就會回報 _E215 NotImplemented: a generic struct `Atomic[…]`_。
+  `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
+  所倚賴的 `Ref[T]` 是 `E446`。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與
@@ -664,26 +675,43 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## 已規範但未實作
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
-別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一條都有對應案例,所以一個形式若悄悄開始能動、或悄悄
-換了失敗方式,gate 就會擋下來。
+別的東西。這份清單大致上不是散文 —— `scripts/refuse-check.sh` 幾乎每一列都有對應案例，以該拒絕的 `E###` 釘住，
+所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
-| Group | 形式                                                                         |
-| ----- | ---------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                            |
-| 3     | 解構繫結 `(a, b) := …`                                                       |
-| 4     | 不是名字的 callee —— `fs[0](…)`、`p?.m(…)`                                   |
-| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                    |
-| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                       |
-| 6     | 泛型 `struct` / `enum`;泛型 METHOD;指名兩個 spec 的 bound(`T: Eq + Ord`)     |
-| 6     | 會捕獲的 closure;省略型別的 closure 參數                                     |
-| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>` |
-| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
-| 8     | associated function `Type.f(…)`                                              |
-| 8     | 對內建型別的 `impl`（`impl Tag for int`）                                    |
-| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
-| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                            |
-| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                            |
-| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
+之所以說**幾乎**，是因為下表有三個拒絕沒有碼，而沒有碼，案例就釘不住任何東西：把 range 當值、body 是
+reassignment 或 send 的 `match` arm、以及泛型別名 `type X[T] = …`。那三者只由這張表撐著、沒有別的東西撐——見
+[Conformance](../conformance.zh-TW.md) 的診斷 deviation，那個缺口屬於那裡。
+
+**Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
+
+| Group | 形式                                                                                             |
+| ----- | ------------------------------------------------------------------------------------------------ |
+| 3     | command literal `` `…` ``（其內插形式 `` f`…` `` 屬 group 5）                                    |
+| 4     | 解構，**兩個方向都算** —— `(a, b) := …` 與 `(a, b) = …`、`Div{q, r} = …`                         |
+| 4     | 不是名字的 callee —— `fs[0](…)`、`p?.m(…)`                                                       |
+| 4     | 沒有**下界**的 range —— `xs[..n]`，以及一起算的 list pattern `[a, ..rest]`                       |
+| 4     | 在需要上界處使用**開放**range —— `xs[a..]`、`for i in n..`                                       |
+| 4     | 把 range 當**值** —— `r := 0..3`；它只是 `for … in` 的 iterable，不是別的                        |
+| 4     | 後面沒有接呼叫的 postfix 型別引數 —— `map[str, int]`、`f[int]`                                   |
+| 4     | 把 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                              |
+| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                                        |
+| 5     | 具名引數 `f(b: 1)` —— 不論呼叫或建構，引數都只依位置繫結                                         |
+| 5     | **closure** 參數上的預設值；**function type** 裡的 `mut &` 參數                                  |
+| 5     | 泛型 METHOD                                                                                      |
+| 6     | struct / list / tuple / or-pattern；`pattern as name`；`if v := <enum>`；`nil` 當 pattern        |
+| 6     | body 是 reassignment 或 send 的 `match` arm —— 那兩者需要 block body                             |
+| 6     | `for mut v in …` —— 會把每個被改過的元素寫回原位的迴圈繫結                                       |
+| 6     | 帶繫結頭部的 `if` **運算式**，或某一分支超過一個敘述的 `if` 運算式                               |
+| 7     | 泛型 `struct` / `enum`；泛型別名 `type X[T] = …`                                                 |
+| 7     | array type `[T; N]`；`spec` 當型別或做分派；有 body 的 `spec` member                             |
+| 7     | associated function `Type.f(…)`                                                                  |
+| 7     | 對內建型別的 `impl`（`impl Tag for int`）、對帶型別引數的目標的 `impl`、或自己帶 `[T]` 的 `impl` |
+| 7     | 不是 method 的 `impl` item —— associated value 或 type 繫結，以及其餘任何東西                    |
+| 7     | associated type projection `It.Item`；value 泛型參數 `f[N: int]`；帶參數的 bound `Eq[int]`       |
+| 7     | 除 `#[derive(…)]` 與 `#[obj]` 以外的所有 decorator                                               |
+| 7     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                                                |
+| 7     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`，以及定寬階梯 `i8`…`f64`               |
+| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`、獨立的 `unsafe fn`、`unsafe` 的 `spec` 簽章              |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的
 介面至少該有這個意思。被強制的是**簽章**:arity,以及每個位置上參數的名字、型別、`mut &`,和它有沒有預設值,

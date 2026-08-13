@@ -24,7 +24,7 @@ func findImpl(info *Info, spec, target string) *types.ImplDef {
 // synthesizes the canonical blessed impls, marked derived, with the expected
 // methods registered in the type's one namespace.
 func TestDeriveSynthesisStruct(t *testing.T) {
-	info, msgs := checkInfo(t, "#[derive(Eq, Ord)]\nstruct Point {\n  x: int\n  y: int\n}")
+	info, msgs := checkInfo(t, "#[derive(Eq, Ord)]\nstruct Point {\n  pub x: int\n  pub y: int\n}")
 	if len(msgs) != 0 {
 		t.Fatalf("unexpected errors: %v", msgs)
 	}
@@ -70,13 +70,13 @@ func TestDeriveSynthesisEnum(t *testing.T) {
 
 // TestDeriveNonBlessed rejects a derive of a spec outside the blessed set.
 func TestDeriveNonBlessed(t *testing.T) {
-	wantErr(t, "#[derive(Frobnicate)]\nstruct P {\n  x: int\n}", "cannot derive")
+	wantErr(t, "#[derive(Frobnicate)]\nstruct P {\n  pub x: int\n}", "cannot derive")
 }
 
 // TestDeriveBoundSatisfied accepts a generic call whose Ord bound is met by a
 // derived impl — the derived impl is an ordinary impl that satisfies the bound.
 func TestDeriveBoundSatisfied(t *testing.T) {
-	wantOK(t, "#[derive(Eq, Ord)]\nstruct P {\n  x: int\n}\n"+
+	wantOK(t, "#[derive(Eq, Ord)]\nstruct P {\n  pub x: int\n}\n"+
 		"fn pick[T: Ord](a: T, b: T) -> T {\n  return a\n}\n"+
 		"fn main() {\n  p := pick(P(1), P(2))\n  print p.x\n}")
 }
@@ -84,7 +84,7 @@ func TestDeriveBoundSatisfied(t *testing.T) {
 // TestBoundUnsatisfiedWithoutDerive rejects the same call when the type has no
 // impl of the bound spec — the use-site half of bound resolution 1c adds.
 func TestBoundUnsatisfiedWithoutDerive(t *testing.T) {
-	wantErr(t, "struct P {\n  x: int\n}\n"+
+	wantErr(t, "struct P {\n  pub x: int\n}\n"+
 		"fn pick[T: Ord](a: T, b: T) -> T {\n  return a\n}\n"+
 		"fn main() {\n  p := pick(P(1), P(2))\n  print p.x\n}", "does not satisfy bound Ord")
 }

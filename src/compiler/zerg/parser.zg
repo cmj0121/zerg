@@ -12,19 +12,19 @@ import "strconv"
 # Parser holds the token list, the read cursor, and — while an `impl T { … }` block is
 # being read — the type that block is for, which is what `This` names inside it.
 struct Parser {
-	toks: list[Token]
-	pos: int
-	impl_ty: str
+	pub toks: list[Token]
+	pub pos: int
+	pub impl_ty: str
 
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
-	path: str
+	pub path: str
 
 	# depth counts how many recursion levels of nesting the parser is inside — one per
 	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
 	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
 	# the native stack, which overflows to SIGSEGV with no diagnostic, and a counted refusal
 	# is the only answer a recursive-descent parser can give before that happens.
-	depth: int
+	pub depth: int
 
 	# edepth counts how many parse_expr calls are open. It is not a second budget — it
 	# answers one question, "is the expression now finished the OUTERMOST one", so the
@@ -32,7 +32,7 @@ struct Parser {
 	# statement resets it, because a statement is where an expression tree ends: the block
 	# inside a `guard` or a closure holds statements, and each of their expressions is a
 	# root of its own.
-	edepth: int
+	pub edepth: int
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -76,6 +76,137 @@ fn p_advance(mut &p: Parser) {
 # carries its place inside the message, where a Diag has a line of its own for it.
 fn p_place(mut &p: Parser, line: int, col: int) -> str {
 	return "\n" + place_line(p.path, line, col)
+}
+
+# --- the forms GRAMMAR does not derive --------------------------------------------------
+#
+# A production says what the language HAS, and a parser that reads past one invents. The
+# three refusals below each name a form GRAMMAR states in so many words is not there, and
+# each of them used to compile and run: a language nobody can read off the grammar is one
+# whose surface is whatever the parser happened to accept.
+#
+# Each is ONE function, called from every site that can reach the form, because a code is
+# an identity and two raises would be two rules under one number (scripts/error-codes-check.sh).
+# The trailing comma in particular is reached from four separate loops.
+
+# p_one_tuple refuses `( e , )`. GRAMMAR#tuple-lit is `'(' expr ',' expr ( ',' expr )* ')'`
+# — two elements or more — and the note beside it says a single `( expr )` is just
+# grouping. There is therefore no arity-one tuple type for `(1, )` to have, and it built
+# one anyway: `x := (1, )` gave `x` the type `(int)` and `x.0` read the element back.
+fn p_one_tuple(mut &p: Parser, line: int, col: int) {
+	raise "E288 a 1-tuple `( e, )` — GRAMMAR#tuple-lit is two elements or more, and a single `( expr )` is just grouping, so drop the comma" + p_place(p, line, col)
+}
+
+# p_trailing_comma refuses the comma before a closer. No comma-separated production in
+# GRAMMAR derives one — `tuple-lit`, `list-lit`, `map-lit` and `arg-list` all write the
+# separator BETWEEN elements — and all four read one silently. `zerg fmt` already deleted
+# them, which is the tell: every other part of the toolchain knew the form was not
+# canonical, and the parser was the one place that said nothing.
+#
+# `what` names the production and `closer` the bracket, because one code covers four call
+# sites and a reader who meets it needs to be told which list they are standing in.
+fn p_trailing_comma(mut &p: Parser, what: str, closer: str, line: int, col: int) {
+	raise f"E289 a trailing comma before the closing `{closer}` of {what} — GRAMMAR writes the comma BETWEEN elements and derives none before the closer, so drop it" + p_place(p, line, col)
+}
+
+# p_list_sep is the whole separator rule, and it is ONE function because it is one rule: a
+# comma BETWEEN elements, and none before the closer. GRAMMAR states it for every
+# comma-separated production it has, and this parser used to state it once per reader —
+# twelve copies of six lines, differing only in which bracket closes the list and what to
+# call it.
+#
+# Twelve copies is not a style complaint. Every one of them was written because the reader
+# beside it had been found accepting a list with no separators at all — `(int int)` as a
+# two-element tuple type, `f(1 2)` as a two-argument call, `[1 2]` as a two-element list,
+# `map[str int]` as two type arguments — each read, accepted and lowered in silence. The
+# rule arrived at each site as its own bug was found, so the count of readers that HAD it
+# was always the count of bugs somebody had already hit; `spec Ix[K V]` was the twelfth and
+# it was still silent. `p_trailing_comma` was extracted from the middle of those copies and
+# the control flow around it was left behind, which is what let the list keep growing.
+#
+# `closer` is the closing token, `shut` its text for the message, and `what` names the
+# production — one code covers every call site, and a reader who meets it needs to be told
+# which list they are standing in.
+#
+# The separator is read wherever the caller's loop has room for it: after the element in
+# every reader that parses its own first one, and BEFORE it in the one whose first argument
+# arrives from its caller. The early return is what makes both work — at the closer there is
+# no separator to read, which is the end of the list in the first shape and an empty tail in
+# the second.
+fn p_list_sep(mut &p: Parser, closer: Kind, shut: str, what: str) {
+	return if p_at(p, closer)
+
+	ct := cur(p)
+	expect(p, Kind.Comma)
+	if p_at(p, closer) {
+		p_trailing_comma(p, what, shut, ct.line, ct.col)
+	}
+}
+
+# p_brace_head refuses a head that OPENS with `{`. GRAMMAR, group 7: "ANY '{'-opening
+# expression — a block OR a map literal — at the start of an if/for/with/match head must be
+# parenthesized", which is what follows from `{` being the block opener.
+#
+# The two heads failed in opposite ways and neither said the rule. `if {"a": 1}.len() == 1`
+# read the brace as a map literal and RAN; `for` reads a leading `{` as the loop's body, so
+# the same head was parsed as a block and the first entry inside it reported "a binding
+# needs a name, and `"a"` is not one" — a complaint about a key nobody wrote as a binding,
+# with no place on it. One rule, one sentence, both heads.
+fn p_brace_head(mut &p: Parser, kw: str, line: int, col: int) {
+	raise f"E290 a `{{`-opening expression at the start of {kw} — a `{{ … }}` is a block or a map literal (GRAMMAR#map-lit), so a head that begins with one must be parenthesized" + p_place(p, line, col)
+}
+
+# p_no_brace_head is the check every head runs, and it is one function so that the five
+# heads cannot drift into five answers. It reads `{` as a refusal outright, except under
+# `for`, where a leading `{` is the INFINITE LOOP's body (GRAMMAR#for-stmt makes the head
+# optional) — there the brace is a head only if something CONTINUES it as an expression,
+# which is what p_brace_continues answers.
+fn p_no_brace_head(mut &p: Parser, kw: str, head_optional: bool) {
+	return if not p_at(p, Kind.LBrace)
+	return if head_optional and not p_brace_continues(p)
+
+	t := cur(p)
+	p_brace_head(p, kw, t.line, t.col)
+}
+
+# p_brace_continues answers whether the `{` the parser stands on is followed, past its
+# matching `}`, by a token that can only CONTINUE an expression — a `.`, a call, an index,
+# an operator. That is the whole difference between `for { break }`, whose brace is the
+# body, and `for {"a": 1}.len() == 1 { … }`, whose brace was a head someone forgot to
+# parenthesize. Nothing else can tell them apart: both are `for` followed by `{`, and the
+# `:` inside is no signal either, since `{ x: int = 1 }` is a block holding a typed binding.
+#
+# The scan counts braces only. A `}` inside a nested `(` or `[` is still a `}` to this
+# parser's lexer, and a `{` inside one still opens a map literal or a block, so brace depth
+# alone is what pairs them.
+fn p_brace_continues(mut &p: Parser) -> bool {
+	mut depth := 0
+	mut i := 0
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+		if k == Kind.LBrace {
+			depth = depth + 1
+		} else if k == Kind.RBrace {
+			depth = depth - 1
+			break if depth == 0
+		}
+		i = i + 1
+	}
+	return p_continues_expr(peek_kind(p, i + 1))
+}
+
+# p_continues_expr names the tokens that can follow a complete expression and leave it
+# still incomplete. It is deliberately the POSTFIX and INFIX set rather than "anything that
+# is not a statement opener": a token this list does not hold ends the expression, and for
+# a `for` body that is every ordinary continuation — a `;` the lexer inserted, the `}` of
+# the enclosing block, the next statement's keyword.
+fn p_continues_expr(k: Kind) -> bool {
+	return true if k == Kind.Dot or k == Kind.OptDot or k == Kind.LParen or k == Kind.LBrack
+	return true if k == Kind.Question or k == Kind.Coalesce or k == Kind.DotDot or k == Kind.DotDotEq
+	return true if k == Kind.And or k == Kind.Or or k == Kind.In or k == Kind.As
+
+	return is_add_op(k) or is_mul_op(k) or is_cmp_op(k)
 }
 
 # ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
@@ -304,17 +435,70 @@ fn parse_paren_types(mut &p: Parser) -> list[Ty] {
 	mut out: list[Ty] = []
 	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-
-		# the comma is REQUIRED between elements and absent before the `)`. Advancing on one
-		# only when it is there made it optional, so `(int int)` parsed as a two-element
-		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
-		# GRAMMAR#tuple-type, and both said nothing.
-		if not p_at(p, Kind.RParen) {
-			expect(p, Kind.Comma)
-		}
+		p_list_sep(p, Kind.RParen, ")", "a tuple type")
 	}
 	expect(p, Kind.RParen)
 	return out
+}
+
+# parse_param_types reads a function TYPE's parameter list, `( param-type, … )`
+# (GRAMMAR#param-type-list). It is not parse_paren_types, and the one token that separates
+# them is the whole reason it exists: GRAMMAR#param-type is `( 'mut' '&' )? type`, and a
+# tuple element is a bare type. Sharing the tuple reader is what made `fn(mut &int) -> bool`
+# answer `expected `,`, found `&`` — a punctuation complaint about a type this language has,
+# and the message a typo gets rather than the named refusal docs/code/functions.md promises.
+fn parse_param_types(mut &p: Parser) -> list[Ty] {
+	expect(p, Kind.LParen)
+	mut out: list[Ty] = []
+	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+		# The prefix is READ, and the type behind it read too, before anything is refused: a
+		# sentence made at the `&` names a bracket, and a sentence made here names the type
+		# the marker is on. `mut` with no `&` is not a param-type at all — the same rule
+		# GRAMMAR#param states for a declaration — so expect answers for it.
+		mut is_ref := false
+		mt := cur(p)
+		if p_at(p, Kind.Mut) {
+			p_advance(p)
+			expect(p, Kind.Amp)
+			is_ref = true
+		}
+		t := parse_type(p)
+
+		# `mut &` in a type is real in the LANGUAGE: it is part of the type, so `fn(mut &int)`
+		# and `fn(int)` are distinct (docs/code/functions.md). It is refused here because the
+		# value side of it is refused downstream anyway — a held function is a bare pointer in
+		# this compiler and the call site reads its convention from the callee's NAME (E469) —
+		# so accepting the spelling would only mean a type nothing can ever hold.
+		raise f"E286 NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ty_name(t)})` is a distinct type from `fn({ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured" + p_place(p, mt.line, mt.col) if is_ref
+
+		out.append(t)
+		p_list_sep(p, Kind.RParen, ")", "a parameter type list")
+	}
+	expect(p, Kind.RParen)
+	return out
+}
+
+# parse_chan_elem reads the `[T]` of a channel and answers the element type.
+#
+# It is ONE function because a channel's element type has one rule on it, and this is the
+# only place either surface form reads that element: the TYPE `chan[T]` (GRAMMAR#chan-type,
+# in every position a type may be written) and the CONSTRUCTOR `chan[T](cap?)`
+# (GRAMMAR#chan-new). Both used to read it inline, and the rule was attached to neither —
+# it lived in the emitter, on the constructor's lowering path alone, so a `chan[int?]` was
+# refused where it was BUILT and accepted everywhere it was merely declared.
+#
+# The rule is asked HERE for the CONSTRUCTOR's sake: `chan[T](cap?)` builds an `EChanNew`
+# carrying the element type and never a `Ty.TChan`, so it is the one surface form that does
+# not pass through `ty_chan` (ast.zg), which every construction of the type does.
+#
+# `line`/`col` are the `chan` keyword's own, taken by the caller before that token was
+# consumed, so a refusal points at the type rather than at the statement holding it.
+fn parse_chan_elem(mut &p: Parser, line: int, col: int) -> Ty {
+	expect(p, Kind.LBrack)
+	elem := parse_type(p)
+	expect(p, Kind.RBrack)
+	ty_chan_elem_check(elem, p_place(p, line, col))
+	return elem
 }
 
 fn parse_base_type(mut &p: Parser) -> Ty {
@@ -324,11 +508,36 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# different tokens, neither of them the form.
 	raise "E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, Kind.LBrack)
 
+	# `unsafe fn(…) -> R` — a FUNCTION TYPE carrying the unsafe marker (GRAMMAR#fn-type is
+	# `'unsafe'? 'fn' '(' param-type-list? ')' ret-type?`). `unsafe` is a keyword, so it never
+	# reached the name below and every type position reported the token after it instead: a
+	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
+	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
+	#
+	# It is refused for the reason a standalone `unsafe fn` is (E264): the marker is a TRUST
+	# BOUNDARY this compiler does not enforce, so honouring it in a type would be a promise
+	# about calls it never checks. Dropping the word instead would be worse — a plain `fn`
+	# type is callable from safe code, which is the one thing the marker exists to prevent.
+	if p_at(p, Kind.Unsafe) {
+		u := cur(p)
+		raise "E488 NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E264), so the type is refused rather than spelled and never honoured" + p_place(p, u.line, u.col)
+	}
+
 	if p_at(p, Kind.LArrow) {
+		ar := cur(p)
 		p_advance(p)
 		inner := parse_type(p)
 		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
-		return Ty.TChan(ty_chan_elem(inner), 2)
+
+		# BOTH ARROWS IS NEITHER DIRECTION. GRAMMAR#chan-type has three alternatives —
+		# `chan[T]`, `<-chan[T]` and `chan[T]<-` — and a channel that is at once receive-only
+		# and send-only is none of them. The trailing `<-` was read after the `]` with no
+		# regard for a leading one, so `<-chan[int]<-` became a receiver and the second arrow
+		# vanished: a signature that says it can only send, honoured as one that can only
+		# receive.
+		raise "E498 a channel is bidirectional, receive-only or send-only — GRAMMAR#chan-type gives `<-chan[T]<-` no reading, and both arrows at once name no direction" + p_place(p, ar.line, ar.col) if ty_chan_dir(inner) != 0
+
+		return ty_chan(ty_chan_elem(inner), 2, p_place(p, ar.line, ar.col))
 	}
 
 	# `(A, B)` — a TUPLE TYPE (GRAMMAR#tuple-type), two elements or more. The value form has
@@ -347,7 +556,10 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return Ty.TTuple(elems)
 	}
 
-	mut name := cur(p).lexeme
+	# the head token is kept, not just its text: the `chan` branch below needs the keyword's
+	# own line and column to point a refusal at the type, and by then it is consumed.
+	kw := cur(p)
+	mut name := kw.lexeme
 	p_advance(p)
 
 	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
@@ -377,7 +589,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, Kind.LParen) {
-		ptys := parse_paren_types(p)
+		ptys := parse_param_types(p)
 		mut fret := Ty.TVoid
 		if p_at(p, Kind.Arrow) {
 			p_advance(p)
@@ -386,24 +598,25 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		return Ty.TFn(ptys, fret)
 	}
 	if name == "chan" and p_at(p, Kind.LBrack) {
-		p_advance(p)
-		elem := parse_type(p)
-		expect(p, Kind.RBrack)
+		elem := parse_chan_elem(p, kw.line, kw.col)
 
 		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
 		# element type, so nothing else that a `<-` may follow is ever eaten
 		if p_at(p, Kind.LArrow) {
 			p_advance(p)
-			return Ty.TChan(elem, 1)
+			return ty_chan(elem, 1, p_place(p, kw.line, kw.col))
 		}
-		return Ty.TChan(elem, 0)
+		return ty_chan(elem, 0, p_place(p, kw.line, kw.col))
 	}
 	if name == "map" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		kt := parse_type(p)
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+
+		# the comma is REQUIRED between the key type and the value type: `map` reads its two
+		# arguments here rather than through parse_ty_args, so it needs the rule stated
+		# again — advancing on a comma only when it is there made it optional, and
+		# `map[str int]` parsed with nothing said.
+		expect(p, Kind.Comma)
 		vt := parse_type(p)
 		expect(p, Kind.RBrack)
 		return Ty.TMap(kt, vt)
@@ -439,9 +652,11 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	if name == "Either" and p_at(p, Kind.LBrack) {
 		p_advance(p)
 		lt := parse_type(p)
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+
+		# the comma is REQUIRED between the two sides, for the reason `map` states above:
+		# this pair is read here rather than through parse_ty_args, so an optional comma
+		# here is `Either[int str]` accepted in silence.
+		expect(p, Kind.Comma)
 		rt := parse_type(p)
 		expect(p, Kind.RBrack)
 
@@ -496,6 +711,22 @@ fn join_bounds(specs: list[str]) -> str {
 			out = out + "+"
 		}
 		out = out + sp
+	}
+	return out
+}
+
+# join_commas spells a list of names the way the source writes one — `T, U` — for a
+# diagnostic that has to quote a list back. It is `ty_names` for names that were never
+# types: an `impl`'s type parameters are read as a name and a bound, so there is no `Ty` to
+# hand that function, and a refusal that quoted only the first of them would be describing a
+# narrower form than the one it turned away.
+fn join_commas(names: list[str]) -> str {
+	mut out := ""
+	for nm in names {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + nm
 	}
 	return out
 }
@@ -561,9 +792,7 @@ fn parse_ty_args(mut &p: Parser) -> list[Ty] {
 	p_advance(p) # '['
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		out.append(parse_type(p))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+		p_list_sep(p, Kind.RBrack, "]", "a type argument list")
 	}
 	expect(p, Kind.RBrack)
 	return out
@@ -623,7 +852,7 @@ fn conv_ty(name: str) -> Ty {
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0, "", path, 0, 0)
-	mut imports: list[str] = []
+	mut imports: list[ImportDecl] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut specs: list[SpecDecl] = []
@@ -631,11 +860,18 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[ConstDecl] = []
+	mut stmts: list[TopStmt] = []
 
 	# pending are the specs named by a `#[derive(…)]` that has been read and whose
 	# declaration has not been reached yet. A decorator is its own top-level item, so the
 	# name it applies to is one iteration away.
+	# and the place it was WRITTEN at, which the list itself cannot carry: a decorator is
+	# refused for what follows it, so the position a reader has to go to is the `#[`, not the
+	# declaration under it and not the end of the file. It follows the `unsafe` group's
+	# arrangement one arm down, for the same reason.
 	mut pending: list[str] = []
+	mut deco_line := 0
+	mut deco_col := 0
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 
@@ -679,13 +915,28 @@ pub fn parse_at(src: str, path: str) -> File {
 			is_pub = true
 			p_advance(p)
 		}
+
+		# A PENDING DECORATOR BELONGS TO THIS ITEM, and until now only three arms below took
+		# one: `struct`, `enum` and `spec` call p_take_derives, and every other arm walked
+		# past the list without touching it. So a decorator on anything else was not refused
+		# where it stood — it SURVIVED, and either landed on whichever decoratable
+		# declaration came later (`#[derive(Eq)] impl P { … }` silently derived onto the next
+		# `struct` in the file) or was reported at `Eof` as having no declaration under it,
+		# which is a false sentence about a program whose next line is a declaration.
+		#
+		# It is asked HERE, at the one point every item passes, rather than as a fourth
+		# refusal hung off the arms that do not want one — the arms are nine and the rule is
+		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
+		# and `Hash` is allowed through so decorators stack.
+		raise f"E487 `{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about" + p_place(p, deco_line, deco_col) if pending.len() > 0 and not p_deco_may_lead(p)
+
 		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
 			# `pub` has nothing it could bind to
 			raise "E247 `pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`" + p_place(p, t.line, t.col) if is_pub
 			parse_import(p, imports)
 		} else if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, "", false))
+			fns.append(parse_fn(p, is_pub, "", false, in_unsafe))
 		} else if p_at(p, Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
 			# (parse_struct), it is read and dropped — type visibility is not enforced,
@@ -718,13 +969,17 @@ pub fn parse_at(src: str, path: str) -> File {
 			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
 			raise "E249 `pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for" + p_place(p, t.line, t.col) if is_pub
-			parse_impl(p, fns, impls)
+			parse_impl(p, fns, impls, in_unsafe)
 		} else if p_at(p, Kind.Type) {
 			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, Kind.Hash) {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise "E250 a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`" + p_place(p, t.line, t.col) if is_pub
+			if pending.len() == 0 {
+				deco_line = t.line
+				deco_col = t.col
+			}
 			parse_decorator(p, pending)
 		} else if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
@@ -754,10 +1009,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
 			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — the trust
-			# boundary `unsafe` marks is not enforced (the docs/runtime/ffi.md deviation), and
-			# reading the `fn` as safe would erase the one thing the keyword says — but it
-			# must be refused AS ITSELF: the statement fallback below answered
+			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — nothing here
+			# records the marker, so reading the `fn` as safe would erase the one thing the
+			# keyword says, which is the caller rule the GROUP form now carries (E387) — but
+			# it must be refused AS ITSELF: the statement fallback below answered
 			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
 			# told it had marked a statement, about a form that is a declaration. `is_pub` is
 			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
@@ -801,14 +1056,19 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise "E254 a module-level `unsafe { … }` group holds declarations — a `fn`, a `type`, or a binding (GRAMMAR group 12); a statement runs in a function body, not in a group" + p_place(p, t.line, t.col)
 		} else {
 			# GRAMMAR#program makes `program ::= stmt-list` normative: Zerg has a SCRIPT MODE,
-			# a top-level statement is legal, and COMPILE mode treats it as a nop. What it
+			# so a top-level statement is GRAMMATICAL and is read here, whole. What it
 			# must never be is SHREDDED: this fallback used to advance ONE TOKEN, so a
 			# statement's remaining tokens were re-dispatched as items of their own —
 			# `xs.each(fn (n: int) { … })` answered "a function needs a name" about a
-			# lambda that was never a declaration. One COMPLETE statement is consumed, and
-			# what becomes of it is decided once, here: nothing.
+			# lambda that was never a declaration. One COMPLETE statement is consumed.
+			#
+			# And what becomes of it is no longer "nothing". It is RECORDED, with its place,
+			# and refused by the build (chk_top_stmts) — for the reason the missing `fn main`
+			# is refused by the build and not by the parse: the form derives, so a parse that
+			# turned it away would be saying this compiler cannot READ a production it can.
 			raise "E255 `pub` binds to a declaration, and a statement takes none — a statement is run, not exported" + p_place(p, t.line, t.col) if is_pub
-			parse_stmt(p)
+			s := parse_stmt(p)
+			p_take_top_stmt(stmts, t, s, p.path)
 		}
 
 		# The top level's end is the end of FILE, except inside a module-level `unsafe { … }`
@@ -830,7 +1090,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
 	# same contract every other unsupported form has: what is written is either implemented
 	# or named, never quietly dropped.
-	raise f"E208 `#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
+	raise f"E208 `{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the `struct`, `enum` or `spec` that follows it, and this one is the last item in the file" + p_place(p, deco_line, deco_col) if pending.len() > 0
 
 	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
 	# one this function did not look at. The loop simply ran to `Eof` with the group still
@@ -840,7 +1100,27 @@ pub fn parse_at(src: str, path: str) -> File {
 	# not the end of the file, because that is where the reader has to go.
 	raise "E256 this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
 
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
+}
+
+# p_take_top_stmt records a top-level statement for the build to refuse, and is the one
+# place the EXCEPTION is written down: `nop`.
+#
+# `nop` does nothing and yields nothing (GRAMMAR#nop), so a build that runs nothing for it
+# has run it exactly — and it is the statement GRAMMAR opens the language with, the whole of
+# the smallest well-formed program. Every other statement asks to be RUN, and the top level
+# is not a place anything runs.
+fn p_take_top_stmt(mut &stmts: list[TopStmt], t: Token, s: Stmt, path: str) {
+	return if p_is_nop(s)
+
+	stmts.append(TopStmt(t.lexeme, path, t.line, t.col))
+}
+
+fn p_is_nop(s: Stmt) -> bool {
+	return match s {
+		Stmt.SNop => true
+		_         => false
+	}
 }
 
 # p_top_binding reads one top-level binding and answers the module-constant DECLARATION it
@@ -870,6 +1150,25 @@ fn p_not_a_binding() -> ConstDecl {
 	raise "parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else"
 }
 
+# p_deco_may_lead reports whether the item starting here is one a decorator may lead. The
+# three that TAKE one are the three that call p_take_derives — `struct`, `enum` and `spec` —
+# and a second decorator is let through so they stack: `#[derive(Eq)] #[obj] spec S` puts two
+# names on one pending list and the declaration under them takes both.
+fn p_deco_may_lead(mut &p: Parser) -> bool {
+	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec) or p_at(p, Kind.Hash)
+}
+
+# p_deco_says spells a PENDING entry the way the program wrote it. The list carries derive
+# arguments and `#obj` together — under a marker no spec name can be, since a `#` is not an
+# identifier character — and every sentence about the list assumed a derive, so `#[obj] fn f()`
+# was refused as `#[derive(#obj)]`: a decorator quoted at a reader who never wrote it, in a
+# spelling the language does not have.
+fn p_deco_says(nm: str) -> str {
+	return "#[obj]" if nm == "#obj"
+
+	return f"#[derive({nm})]"
+}
+
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
 fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &specs: list[str]) {
 	for nm in pending {
@@ -890,25 +1189,25 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 # with genuinely no path" and no such caller ever appeared; what its existence did keep is
 # the one mistake this signature was introduced to make impossible.
 pub fn imports_of_at(src: str, path: str) -> list[str] {
-	return parse_at(src, path).imports
+	# the PATHS alone: the loader resolves a module to a file, and the name the import binds
+	# is a question about this file's scope, which the loader has no opinion about
+	f := parse_at(src, path)
+	mut out: list[str] = []
+	for im in f.imports {
+		out.append(im.path)
+	}
+	return out
 }
 
-# parse_fill reads the tail of `[v; N]` and expands it: the count is a const-expr, and an
-# integer literal is the whole of that this compiler evaluates, so N copies are written out
-# here rather than carried as a shape the emitter would have to understand.
+# parse_fill reads the tail of `[v; N]`. The count is a CONST-EXPR (GRAMMAR group 4's
+# `list-lit`), so it is parsed as an ordinary expression and carried on the node — the parser
+# used to expand the form into N copies right here, which is why the count could only ever be
+# an integer literal: a const-expr may name a constant, and a name is not resolvable until
+# every file of the program has been merged. c_fill_elems does the expansion, over a program.
 fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
-	n := cur(p)
-	mut out: list[Expr] = []
-	raise "NotImplemented: a fill count that is not an integer literal" if n.kind != Kind.Int
-	p_advance(p)
+	n := parse_expr(p)
 	expect(p, Kind.RBrack)
-	mut i := 0
-	count := strconv.parse_int(n.lexeme, 10)
-	for i < count {
-		out.append(v)
-		i = i + 1
-	}
-	return Expr.EListLit(out)
+	return Expr.EFill(v, n)
 }
 
 # parse_fn_expr reads `fn(p: T) -> R { … }` in expression position — the same shape a
@@ -927,6 +1226,7 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 				is_ref = true
 			}
 		}
+		nt := cur(p)
 		pname := p_name(p, "a parameter")
 
 		# A CLOSURE parameter MAY OMIT its `: type` (GRAMMAR#closure-param), and one that
@@ -940,10 +1240,26 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 			p_advance(p)
 			pty = parse_type(p)
 		}
-		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
-		if p_at(p, Kind.Comma) {
+
+		# The same production ends with `( '=' expr )?` — a DEFAULT, exactly the tail
+		# GRAMMAR#param gives a named declaration's parameter, and one a named `fn` has had
+		# since defaults were built. The closure half was never read: the loop went from the
+		# type straight to the comma, so the `=` was still sitting there when the next
+		# parameter's NAME was asked for, and the answer was `a parameter needs a name, and
+		# `=` is not one` — a complaint about the token, from a reader that had no idea a
+		# default was what it was looking at.
+		#
+		# The expression is read to its end before the refusal, so the sentence is about the
+		# form and not about wherever the reader stopped. Building it is more than parsing:
+		# a default is materialised AT THE CALL SITE out of the callee's DECLARATION, and a
+		# closure is reached through a value, which carries no declaration to read one from.
+		if p_at(p, Kind.Assign) {
 			p_advance(p)
+			parse_expr(p)
+			raise f"E285 NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call" + p_place(p, nt.line, nt.col)
 		}
+		params.append(Param(pname, pty, is_ref, false, Expr.ENil))
+		p_list_sep(p, Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, Kind.RParen)
 	mut ret := Ty.TVoid
@@ -1048,15 +1364,90 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, Kind.LBrace)
 	mut one: list[Stmt] = []
+
+	# the marker parse_block stamps, stamped here for the same reason p_else_body stamps
+	# one: a braceless body is a statement built outside that loop, so without it a
+	# diagnostic about the arm named the whole `select` rather than the arm.
+	t := cur(p)
+	one.append(Stmt.SAt(t.line, t.col))
+
 	one.append(parse_stmt(p))
 	return one
+}
+
+# p_brace_is_map decides, standing on a `{` in EXPRESSION position, whether it opens a map
+# literal or a block. Both are primaries (GRAMMAR#primary lists `map-lit` and `block`), so
+# the decision has to be made before either is read.
+#
+# GRAMMAR names the discriminator: "that ':' is exactly what distinguishes a '{ … }' map
+# from a block, so a bare-element '{ … }' is ALWAYS a block". So the scan looks for a `:`
+# among the brace's OWN tokens — depth 1 — and answers block when there is none. `{}` is a
+# block and `{:}` is the empty map, which is why the empty map was given that spelling.
+#
+# The one shape the bare rule gets wrong is the one p_brace_continues already names: a
+# TYPED BINDING carries a `:` too — `{ x: int = 1 }` is a block holding one — and it is
+# told apart by what FOLLOWS. A map entry is `expr ':' expr` and ends at the `,` or the
+# `}`; a typed binding puts an `=` between the type and the value. So a depth-1 `:` whose
+# entry also holds a depth-1 `=` is a binding, and the brace is a block.
+#
+# A `;` at depth 1 ends the scan the same way: the lexer's inserted separator means the
+# brace holds STATEMENTS, and a map's entries are separated by `,` and never by one.
+#
+# Depth counts all three bracket kinds, because a `:` belonging to something nested — a
+# named argument `f(a: 1)`, a nested map, a slice — is not this brace's.
+fn p_brace_is_map(mut &p: Parser) -> bool {
+	mut depth := 0
+	mut i := 0
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+
+		if k == Kind.LBrace or k == Kind.LParen or k == Kind.LBrack {
+			depth = depth + 1
+		} else if k == Kind.RBrace or k == Kind.RParen or k == Kind.RBrack {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and k == Kind.Semi {
+			# a statement separator: these are statements, so this is a block
+			return false
+		} else if depth == 1 and k == Kind.Colon {
+			return not p_brace_entry_assigns(p, i + 1)
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# p_brace_entry_assigns answers whether the entry that a depth-1 `:` opened runs on to an
+# `=` before it ends — which is what makes `x: int = 1` a typed binding rather than a map
+# entry whose key is `x`. The entry ends at the enclosing brace's `,` or `}`, or at a `;`.
+fn p_brace_entry_assigns(mut &p: Parser, at: int) -> bool {
+	mut depth := 1
+	mut i := at
+	for {
+		k := peek_kind(p, i)
+		return false if k == Kind.Eof
+
+		if k == Kind.LBrace or k == Kind.LParen or k == Kind.LBrack {
+			depth = depth + 1
+		} else if k == Kind.RBrace or k == Kind.RParen or k == Kind.RBrack {
+			depth = depth - 1
+			return false if depth == 0
+		} else if depth == 1 and (k == Kind.Comma or k == Kind.Semi) {
+			return false
+		} else if depth == 1 and k == Kind.Assign {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
 #
 # The `:` is what makes a map literal unambiguous: GRAMMAR gives the empty map the
 # spelling `{:}` rather than `{}` precisely so that a brace with no colon in it is ALWAYS
-# a block. Nothing here has to guess.
+# a block. Nothing here has to guess — p_brace_is_map above has already asked.
 fn parse_map_lit(mut &p: Parser) -> Expr {
 	p_advance(p) # '{'
 	mut ks: list[Expr] = []
@@ -1082,19 +1473,27 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		return Expr.EMapLit(ks, vs)
 	}
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		et := cur(p)
 		ks.append(parse_expr(p))
 
-		# no colon, so by the rule above this brace was a BLOCK, and this parser has no
-		# block expression. It used to read on regardless and build a map out of whatever
-		# the block's statements happened to parse as — a match arm written
-		# `Right(e) => { report(e); stop() }` came out as a one-entry map and ran neither.
-		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Kind.Colon)
+		# THIS ENTRY HAS NO `:`. The brace as a whole reached here because one of its entries
+		# had one, so a later entry without one is a map literal missing a value — `{a, "b": 1}`
+		# — and not the block/map ambiguity, which p_brace_is_map settled before this ran.
+		#
+		# It used to read on regardless and build a map out of whatever parsed, which is how a
+		# match arm written `Right(e) => { report(e); stop() }` came out as a one-entry map that
+		# ran neither call. That form is a BLOCK now and never reaches this function.
+		raise "E479 a map entry is `key: value`, and this one has no `:` — GRAMMAR#map-entry" + p_place(p, et.line, et.col) if not p_at(p, Kind.Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
 		skip_semis(p)
 		break if not p_at(p, Kind.Comma)
+		ct := cur(p)
 		p_advance(p)
 		skip_semis(p)
+		if p_at(p, Kind.RBrace) {
+			p_trailing_comma(p, "a map literal", "}", ct.line, ct.col)
+		}
 	}
 	expect(p, Kind.RBrace)
 	return Expr.EMapLit(ks, vs)
@@ -1147,9 +1546,8 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 				p_advance(p)
 				parse_bound(p, "a type parameter's bound", false)
 			}
-			if p_at(p, Kind.Comma) {
-				p_advance(p)
-			}
+
+			p_list_sep(p, Kind.RBrack, "]", "a spec's type parameter list")
 		}
 		expect(p, Kind.RBrack)
 	}
@@ -1170,6 +1568,35 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	skip_semis(p)
 	mut reqs: list[FnDecl] = []
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		# `unsafe` opens a fn-sig too — GRAMMAR#fn-sig is `'unsafe'? 'mut'? 'fn' …` — so
+		# `unsafe fn peek()` in a spec IS a member, and it used to fall to the catch-all at
+		# the bottom of this loop, whose sentence says the token starts no member AT ALL and
+		# cites GRAMMAR#spec-member while saying it. That denied a derivation the grammar
+		# plainly has, which is worse than not building the form: a reader is told the
+		# language is smaller than it is, by the document that defines it.
+		#
+		# The signature is READ to its end and then refused as itself, with the place a
+		# declaration owes — the same answer a top-level `unsafe fn` gets (E264) for the same
+		# reason, so one unenforced trust boundary now has one story in both positions. The
+		# lookahead is what keeps the catch-all honest for everything else: `unsafe { … }`
+		# inside a spec really does start no member, and still gets E276.
+		if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
+			u := cur(p)
+			p_advance(p)
+			mut u_mut := false
+			if p_at(p, Kind.Mut) {
+				p_advance(p)
+				u_mut = true
+			}
+
+			# `in_unsafe` is FALSE even though the word being read is `unsafe`: that parameter
+			# tracks whether the declaration sits inside a module-level `unsafe { … }` GROUP
+			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
+			# discarded by the raise below in any case.
+			sig := parse_fn_head(p, false, "This", u_mut, false)
+			raise f"E287 NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped" + p_place(p, u.line, u.col)
+		}
+
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
 		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
 		# the requirement silent in both directions — a spec asking for `mut fn` was
@@ -1183,7 +1610,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 			# The receiver is `This` — the implementing type, which is not known here. Giving
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
-			sig := parse_fn_head(p, false, "This", recv_mut)
+			sig := parse_fn_head(p, false, "This", recv_mut, false)
 			raise f"E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, Kind.LBrace)
 
 			reqs.append(sig)
@@ -1219,9 +1646,21 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	kw := cur(p)
 	p_advance(p)
 
-	name := cur(p).lexeme
-	expect(p, Kind.Ident)
-	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, Kind.LBrack)
+	# p_name, and not a bare `expect(p, Kind.Ident)`. Every other declaration in this file
+	# takes its name through p_name, which is where the reserved-word rule is asked
+	# (GRAMMAR group 7: `This` is the self type and no declaration may take it); an alias
+	# read its identifier for itself and so was the one declaration the rule never reached.
+	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
+	# `impl` still meant the implementing type — one word, two meanings, in one program.
+	name := p_name(p, "a type alias")
+
+	# A code and a place, which this one refusal did without while its two siblings — E212
+	# for a generic `enum` and E215 for a generic `struct` — carry both. Three declarations
+	# refused for one reason, and the alias was the one a gate could not pin.
+	if p_at(p, Kind.LBrack) {
+		b := cur(p)
+		raise f"E491 NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E212 and a generic `struct` E215)" + p_place(p, b.line, b.col)
+	}
 
 	expect(p, Kind.Assign)
 
@@ -1242,7 +1681,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, Kind.RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [])
+	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false)
 }
 
 pub fn init_name(at: int) -> str {
@@ -1272,12 +1711,12 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 # hand the driver an EMPTY import list for a file that imports things. Nothing would fail
 # at the parse — the module loader would simply not load `io`, and the failure would
 # surface later and elsewhere as an unknown name.
-fn parse_import(mut &p: Parser, mut &imports: list[str]) {
+fn parse_import(mut &p: Parser, mut &imports: list[ImportDecl]) {
 	p_advance(p) # 'import'
 	if not p_at(p, Kind.LParen) {
-		path := parse_import_spec(p)
-		if path != "" {
-			imports.append(path)
+		im := parse_import_spec(p)
+		if im.path != "" {
+			imports.append(im)
 		}
 		return
 	}
@@ -1285,9 +1724,9 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	skip_semis(p)
 	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 		at := p.pos
-		path := parse_import_spec(p)
-		if path != "" {
-			imports.append(path)
+		im := parse_import_spec(p)
+		if im.path != "" {
+			imports.append(im)
 		}
 
 		# a spec that read nothing would leave the position where it was: step over the
@@ -1302,14 +1741,19 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 	}
 }
 
-# parse_import_spec reads `pub? "path" (as name)?` and yields the path. Anything that is
-# not a string literal is refused below, so the only "" it can answer is the empty literal.
+# parse_import_spec reads `pub? "path" (as name)?` and yields the DECLARATION it is — the
+# path, the name it binds, and the place, which is everything a later pass needs to resolve
+# a qualified name against it. Anything that is not a string literal is refused below, so
+# the only empty path it can answer is the empty literal.
 #
 # `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
 # module is part of the program — so the marker is consumed and the path read as usual.
-# `as` renames the namespace, which is a binding this parser does not track, so the name
-# is consumed and the path is what comes back.
-fn parse_import_spec(mut &p: Parser) -> str {
+#
+# `as` RENAMES THE NAMESPACE, and the alias used to be read and thrown away: the binding was
+# recomputed downstream as the path's last segment, so `import "a/text" as at` bound `text`
+# and every `at.…` in the file was a name nothing declared. The alias is the binding when it
+# is there, which is a fact about the surface and so the parser's to record.
+fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 	if p_at(p, Kind.Pub) {
 		p_advance(p)
 	}
@@ -1320,31 +1764,60 @@ fn parse_import_spec(mut &p: Parser) -> str {
 	# statement loop as a top-level expression, which compile mode treats as a nop. The
 	# program built, printed, exited 0, and had imported nothing; the first sign of it was a
 	# member access on a namespace that was never bound.
-	raise f"E267 an import path is a string — write `import \"{p_import_path_guess(p)}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has" + p_place(p, cur(p).line, cur(p).col) if not p_at(p, Kind.Str)
+	# THE GUESS IS A PATH OR IT IS NOTHING, which is the other half of the same rule: a
+	# suggestion quotes the reader's own line back at them, so one assembled out of whatever
+	# followed is worse than none. It ran to the next `;` — and ASI inserts none after
+	# `import`, a keyword that cannot END an item (GRAMMAR group 2) — so a bare `import` with
+	# no path swept up the declarations under it and offered `import "structQ{puba:int"`.
+	if not p_at(p, Kind.Str) {
+		guess := p_import_path_guess(p)
+
+		# ONE RAISE, because it is one rule: a code answers to a rule, and reporting the same
+		# one from two sites is two rules wearing one identity (scripts/error-codes-check.sh).
+		# What differs between the two lines is the ADVICE, so that is the part that varies.
+		mut says := "there is no path here to quote back: GRAMMAR#import-path derives a str-lit and nothing else, so a module is named `import \"util/text\"`"
+		if guess != "" {
+			says = f"write `import \"{guess}\"` (GRAMMAR#import-path); the bare form is not the spelling this language has"
+		}
+
+		raise f"E267 an import path is a string — {says}" + p_place(p, cur(p).line, cur(p).col)
+	}
 
 	t := cur(p)
 	p_advance(p) # the path
 	if p_at(p, Kind.As) {
 		p_advance(p) # 'as'
 		if p_at(p, Kind.Ident) {
+			alias := cur(p).lexeme
 			p_advance(p)
+			return ImportDecl(t.value, alias, true, p.path, t.line, t.col)
 		}
 	}
-	return t.value # the decoded path, without its quotes
+
+	# `t.value` is the decoded path, without its quotes
+	return ImportDecl(t.value, last_segment(t.value), false, p.path, t.line, t.col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
 # quote their own line back at them rather than a placeholder. It reads through the peek
 # pair, WITHOUT consuming: that raise ends the parse anyway, and a reader of this function
 # should not have to know it.
+#
+# It reads the SHAPE OF A PATH — `identifier ( '/' identifier )*`, which is what the string
+# in GRAMMAR#import-path holds — and stops at the first token that is not part of one. It
+# used to read to the next `;` instead, which is a terminator this position never meets: ASI
+# inserts one after a token that can END an item (GRAMMAR group 2) and `import` is not one,
+# so a bare `import` ran on through the declarations below it and the suggestion was
+# assembled out of a struct. Answering "" for a line that holds no path is what lets the
+# caller offer no suggestion rather than an invented one.
 fn p_import_path_guess(mut &p: Parser) -> str {
-	mut out := ""
-	mut n := 0
-	for true {
-		k := peek_kind(p, n)
-		break if k == Kind.Semi or k == Kind.Eof or k == Kind.RParen
-		out = out + peek_lexeme(p, n)
-		n = n + 1
+	return "" if peek_kind(p, 0) != Kind.Ident
+
+	mut out := peek_lexeme(p, 0)
+	mut n := 1
+	for peek_kind(p, n) == Kind.Slash and peek_kind(p, n + 1) == Kind.Ident {
+		out = out + "/" + peek_lexeme(p, n + 1)
+		n = n + 2
 	}
 	return out
 }
@@ -1362,18 +1835,16 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 
 	mut variants: list[VariantDef] = []
 	mut spelled: list[str] = []
-	mut next := 0
 	mut payload := false
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
+		vt := cur(p)
 		vname := p_name(p, "an enum variant")
 		mut fields: list[Ty] = []
 		if p_at(p, Kind.LParen) {
 			p_advance(p)
 			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
 				fields.append(parse_type(p))
-				if p_at(p, Kind.Comma) {
-					p_advance(p)
-				}
+				p_list_sep(p, Kind.RParen, ")", "a variant payload")
 			}
 			expect(p, Kind.RParen)
 			payload = true
@@ -1383,16 +1854,28 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 		# to be read as the next variant's name — `A = 3` declared three variants, one of
 		# them called "=" — so an enum that spelled its own values compiled to nonsense with
 		# nothing said about it.
-		mut tag := next
+		#
+		# What is READ here and not decided here is the VALUE: the expression is a const-expr,
+		# so it may name a constant, and the numbering it feeds — this variant's value, and
+		# the next variant's default of one past it — is c_build_enums' to work out once the
+		# program is whole. That is also where E213's "distinct across variants" moved to,
+		# because two variants only collide once both have numbers.
+		mut has_discr := false
+		mut discr := Expr.ENil
 		if p_at(p, Kind.Assign) {
 			p_advance(p)
-			tag = parse_discriminant(p)
+			has_discr = true
+			discr = parse_expr(p)
 			spelled.append(vname)
 		}
-		raise f"E213 an enum discriminant is distinct across variants, and `{vname} = {tag}` repeats one already given" if tag_taken(variants, tag)
-		next = tag + 1
-		variants.append(VariantDef(vname, fields, tag))
-		skip_semis(p)
+		variants.append(VariantDef(vname, fields, has_discr, discr, vt.line, vt.col))
+
+		# GRAMMAR#variant-list is `variant ( stmt-sep+ variant )*` — the same shape as a
+		# statement list, so the separator is REQUIRED and p_stmt_sep is the rule that says
+		# so. skip_semis skipped one when there was one and said nothing when there was not,
+		# which made `enum Shape { Dot Line }` two variants written as though they were one
+		# thing, accepted in silence.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 
@@ -1403,30 +1886,6 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
 	return EnumDecl(name, variants, p.path)
-}
-
-fn tag_taken(variants: list[VariantDef], tag: int) -> bool {
-	for v in variants {
-		return true if v.tag == tag
-	}
-	return false
-}
-
-# parse_discriminant reads the integer a variant is declared to be. GRAMMAR calls for a
-# const-expr; an integer literal, optionally negated, is the whole of that this compiler
-# folds — anything else is refused here rather than read as a variant name.
-fn parse_discriminant(mut &p: Parser) -> int {
-	mut neg := false
-	if p_at(p, Kind.Minus) {
-		p_advance(p)
-		neg = true
-	}
-	t := cur(p)
-	raise f"an enum discriminant is a constant integer, not `{t.lexeme}`" if t.kind != Kind.Int
-	p_advance(p)
-	v := int_value(t.lexeme)
-	return 0 - v if neg
-	return v
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -1451,21 +1910,38 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
-		# a field may be declared `pub`; visibility does not reach the emitted C, which is
-		# one flat struct either way, so the marker is read and dropped
+		# where the field BEGINS, read before `pub` is consumed, so a diagnostic about the
+		# field points at the whole declaration rather than at the type halfway along it
+		at := cur(p)
+
+		# a field may be declared `pub`, which marks it for external instance access. It does
+		# not reach the emitted C — one flat struct either way — and it is carried because it
+		# decides whether the field is allowed to have no default (GRAMMAR#field).
+		mut is_pub := false
 		if p_at(p, Kind.Pub) {
 			p_advance(p)
+			is_pub = true
 		}
 		fname := p_name(p, "a struct field")
 		expect(p, Kind.Colon)
 		fty := parse_type(p)
 
-		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor. It was
-		# not read here, so the `=` began the next field: the struct gained a field named `=`
-		# of type `7`, and the error named those instead of the form that was written.
-		raise f"E216 NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Kind.Assign)
-		fields.append(FieldDef(fname, fty))
-		skip_semis(p)
+		# `x: int = 7` — a field DEFAULT (GRAMMAR#field), which feeds the constructor: it is
+		# what lets the field's argument be omitted, exactly as a parameter default lets a
+		# trailing call argument be omitted. It is one expression and it is kept whole, so it
+		# can be backfilled at each construction and evaluated there.
+		mut has_def := false
+		mut def := Expr.ENil
+		if p_at(p, Kind.Assign) {
+			p_advance(p)
+			def = parse_expr(p)
+			has_def = true
+		}
+		fields.append(FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col))
+
+		# GRAMMAR#field-list is `field ( stmt-sep+ field )*` — the separator is REQUIRED,
+		# the same rule the variant list states above and for the same reason.
+		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
 	return StructDecl(name, fields, p.path)
@@ -1481,11 +1957,28 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # derive `sealed`: advice that makes no sense, about a decorator parse_deco_item refuses by
 # name the moment it is written alone.
 fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
+	ob := cur(p)
 	p_advance(p) # '#['
+
+	# `#[]` IS NOT A DECORATOR. GRAMMAR#decorator is `'#[' deco-item ( ',' deco-item )* ']'`
+	# — one item or more — and the loop below never runs when the `]` is already there, so
+	# an empty pair of brackets was read, dropped, and the declaration after it compiled as
+	# though nobody had written anything. A decorator changes what a declaration MEANS, which
+	# is the reason every other one here is named rather than skipped; an empty one asks for
+	# a change nobody can name, and that is worth saying rather than ignoring.
+	raise "E495 a decorator holds at least one item — GRAMMAR#decorator derives `#[ deco-item, … ]`, and `#[]` names nothing to apply" + p_place(p, ob.line, ob.col) if p_at(p, Kind.RBrack)
+
 	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
 		parse_deco_item(p, pending)
 		break if not p_at(p, Kind.Comma)
+		ct := cur(p)
 		p_advance(p)
+
+		# GRAMMAR#decorator writes the comma BETWEEN items and derives none before the `]`,
+		# the same rule every other comma list here states.
+		if p_at(p, Kind.RBrack) {
+			p_trailing_comma(p, "a decorator", "]", ct.line, ct.col)
+		}
 	}
 	expect(p, Kind.RBrack)
 }
@@ -1509,26 +2002,66 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
+	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
+	# module-private — so a reader who writes it has not made a typo, and telling them the
+	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
+	# not ask. What they need to know is that the word is the right one and the behaviour is
+	# not built, so nothing is protecting the constructor they thought they had sealed.
+	nt := cur(p)
+
+	raise f"E496 NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence" + p_place(p, nt.line, nt.col) if name == "sealed"
+
 	raise f"E217 NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and `#[obj]`, and no other" if name != "derive"
 
 	p_advance(p)
-	return if not p_at(p, Kind.LParen)
+
+	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
+	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went
+	# on with no impls while the line above it said it had some. That is the shape of silence
+	# this whole pass is about, one `==` away from being noticed.
+	#
+	# The two spellings are ONE rule, so they are one raise, asked after the arguments are
+	# read rather than at each spelling: `before` is how many names were on `pending` when
+	# this item began, since a `#[derive(Eq), derive(Ord)]` shares the list with its siblings.
+	dt := cur(p)
+	before := pending.len()
 
 	# a derive ARGUMENT is a spec name; the arguments a decorator may take in general are
 	# const-exprs, and none of them opens a bracket, so the item ends at its own `)`
-	p_advance(p)
-	for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
-		if p_at(p, Kind.Ident) {
-			pending.append(cur(p).lexeme)
-		}
+	if p_at(p, Kind.LParen) {
 		p_advance(p)
+		for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+			if p_at(p, Kind.Ident) {
+				pending.append(cur(p).lexeme)
+			}
+			p_advance(p)
+		}
+		expect(p, Kind.RParen)
 	}
-	expect(p, Kind.RParen)
+
+	raise "E497 a `#[derive]` names the specs to generate — GRAMMAR#deco-item takes the arguments, and a derive with none asks for nothing while reading as though it asked for something" + p_place(p, dt.line, dt.col) if pending.len() == before
 }
 
-fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
+fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl], in_unsafe: bool) {
 	kw := cur(p)
 	p_advance(p) # 'impl'
+
+	# `impl[T] Spec for list[T]` — GRAMMAR#impl-decl derives type parameters on the `impl`
+	# ITSELF, and its comment says why they sit at that position: a `T` introduced here is
+	# what the TARGET is then allowed to spell. Nothing read them, so the head began at a
+	# `[` where a name was expected and the answer was "an `impl` needs a name, and `[` is
+	# not one" — a complaint about the token under the cursor for a production the grammar
+	# derives in full, which is the one shape of message this project does not allow.
+	#
+	# They are READ, by the same reader `fn`, `struct` and `spec` already share, and the
+	# form is then refused BY NAME. A second reader here would be a second answer to one
+	# production; and reading them is what makes the refusal able to say which parameters
+	# it is turning away rather than which bracket it tripped over.
+	mut tp_names: list[str] = []
+	mut tp_bounds: list[str] = []
+	p_type_params(p, tp_names, tp_bounds)
+	raise f"E291 NotImplemented: an `impl` carrying its own type parameters `[{join_commas(tp_names)}]` — GRAMMAR#impl-decl puts them there so the target may spell them (`impl[T] Spec for list[T]`), and one impl standing for every instantiation of its target needs those instantiations monomorphized, which this compiler does only for a generic `fn`. Write the `impl` for one concrete target" + p_place(p, kw.line, kw.col) if tp_names.len() > 0
 
 	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
 	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
@@ -1537,18 +2070,66 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	#
 	# `impl Spec[args] for Target` and `impl Target` are the same three steps: a name, an
 	# optional type-argument list, and then `for` deciding which of the two the name was.
+	ftok := cur(p)
 	mut first := p_name(p, "an `impl`")
 	mut args := parse_ty_args(p)
 	mut sp := ""
 	mut target := first
+
+	# the TARGET's arguments, which until this change were the one thing in the head that
+	# was skipped rather than read. `ttok` follows them, so the refusal below points at the
+	# target rather than at the `impl` keyword. Before the `for` is seen the two are the
+	# same token and the same list — an inherent `impl Box[int] { … }` has no spec to carry
+	# arguments, so the ones already read belong to its target.
+	mut ttok := ftok
+	mut targs := args
 	if p_at(p, Kind.For) {
 		p_advance(p)
 		sp = first
-
-		# the TARGET's own arguments are erased, as every type's are here
+		ttok = cur(p)
 		target = p_name(p, "an `impl … for …` target")
-		skip_ty_args(p)
+		targs = parse_ty_args(p)
 	}
+
+	# A DOTTED NAME IN THE HEAD. GRAMMAR#impl-decl's target is a `type`, and GRAMMAR#base-type
+	# derives `type-name type-args? ( '.' identifier )*` — so `impl text.Pair { … }` and
+	# `impl Spec for text.Pair` are both forms the grammar has. Neither was read: the name
+	# before the `.` was taken whole and the `.` fell to the block's `expect`, which said
+	# ``expected `{`, found `.` `` — the token under the cursor, for a production derived in
+	# full, and with no place.
+	#
+	# The SPEC position is the other half and is not the same question: GRAMMAR writes it as
+	# a bare `type-name`, so a dotted name there is not derived at all and the sentence says
+	# so rather than promising it later.
+	# The suffix is READ before either refusal, because which of the two this is cannot be
+	# known at the `.`: `impl text.Pair { … }` and `impl text.Named for Bot` are the same
+	# tokens until the name after the dot is past and a `for` either follows or does not.
+	if p_at(p, Kind.Dot) {
+		d := cur(p)
+		mut tail := ""
+		for p_at(p, Kind.Dot) {
+			p_advance(p)
+			tail = p_name(p, "a name reached through an import")
+		}
+
+		# A `for` after it means the dotted name stood in the SPEC position, which GRAMMAR
+		# writes as a bare `type-name` — so this one is not a form the grammar has, and the
+		# sentence says that rather than promising it later.
+		raise f"E490 an `impl`'s spec is named by a bare `type-name` (GRAMMAR#impl-decl), and `{target}.{tail}` is a name reached through an import — import the spec's module and name the spec alone" + p_place(p, d.line, d.col) if sp == "" and p_at(p, Kind.For)
+
+		raise f"E489 NotImplemented: an `impl` on `{target}.{tail}` — GRAMMAR#impl-decl's target is a `type` and GRAMMAR#base-type derives a dotted name, but this compiler keys an implementation by the target's BARE name, which a type reached through an import does not have here. Write the `impl` in the module that declares the type" + p_place(p, d.line, d.col)
+	}
+
+	# An `impl` is keyed here by a bare NAME — `ImplDecl` holds a `str` for its target, and
+	# a method's receiver is that same string — so `list[int]` and `list[str]` are one key
+	# and `list` is a name no declaration in the program introduces. Skipping the arguments
+	# made both of those invisible: `impl Size for list[int]` reached the emitter as an
+	# `impl` on a type called `list`, and answered "no type named `list`" — a sentence that
+	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
+	# one. Reading the arguments is what lets the refusal be about the form that was
+	# written, at the place it was written.
+	raise f"E292 NotImplemented: an `impl` on `{target}[{ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares" + p_place(p, ttok.line, ttok.col) if targs.len() > 0
+
 	if sp != "" {
 		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))
 	}
@@ -1578,7 +2159,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 			recv_mut = true
 		}
 		if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut))
+			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe))
 		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
@@ -1594,11 +2175,11 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	p.impl_ty = outer
 }
 
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
-	head := parse_fn_head(p, is_pub, recv, recv_mut)
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> FnDecl {
+	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
 	body := parse_block(p)
 
-	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds)
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe)
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -1638,8 +2219,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 		}
 		names.append(nm)
 		bounds.append(bound)
-		break if not p_at(p, Kind.Comma)
-		p_advance(p)
+		p_list_sep(p, Kind.RBrack, "]", "a type parameter list")
 	}
 	expect(p, Kind.RBrack)
 }
@@ -1648,7 +2228,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 # whose body is empty. That is exactly a `fn-sig`, which is what a `spec` member is — so a
 # spec's requirement and an impl's supply are read by one piece of code, and a comparison
 # between them is a comparison of like with like rather than of two parsers' opinions.
-fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
+fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -1699,9 +2279,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 			has_def = true
 		}
 		params.append(Param(pname, pty, is_ref, has_def, def))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+		p_list_sep(p, Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, Kind.RParen)
 	mut has_ret := false
@@ -1712,7 +2290,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 		has_ret = true
 	}
 	mut none: list[Stmt] = []
-	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds)
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -1738,6 +2316,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnD
 fn parse_with(mut &p: Parser) -> Stmt {
 	line := cur(p).line
 	p_advance(p)
+	p_no_brace_head(p, "a `with` head", false)
 	value := parse_expr(p)
 
 	mut name := f"_with_{strconv.to_string(line, 10)}"
@@ -1778,12 +2357,22 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 # form: a `(` — optionally after `mut` or `const` — whose group is followed by `:=` or `=`.
 # A parenthesised EXPRESSION statement looks the same up to the closing paren, so the
 # separator is what tells them apart.
-fn p_starts_destructure(mut &p: Parser) -> bool {
+#
+# It answers WHICH of the two, and not merely "one of them", because they are two forms:
+# `bind-target` (GRAMMAR#binding) and `assign-target` (GRAMMAR#assign-target) are separate
+# productions, so each is a separate thing this compiler has not built and each owes its own
+# sentence. One answer for both meant the `=` spelling was turned away with the `:=` one's
+# words — advice to write a binding, at a reader who had written an assignment.
+#
+#   0  not a destructuring statement
+#   1  a destructuring BINDING, `(a, b) := e` / `mut (a, b) := e`
+#   2  a destructuring ASSIGNMENT, `(a, b) = e`
+fn p_starts_destructure(mut &p: Parser) -> int {
 	mut i := p.pos
 	if p.toks[i].kind == Kind.Mut or p.toks[i].kind == Kind.Const {
 		i = i + 1
 	}
-	return false if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
+	return 0 if i >= p.toks.len() or p.toks[i].kind != Kind.LParen
 
 	mut depth := 0
 	for i < p.toks.len() {
@@ -1794,14 +2383,18 @@ fn p_starts_destructure(mut &p: Parser) -> bool {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
-				return nxt == Kind.Walrus or nxt == Kind.Assign
+
+				return 1 if nxt == Kind.Walrus
+				return 2 if nxt == Kind.Assign
+
+				return 0
 			}
 		} else if k == Kind.Semi or k == Kind.Eof {
-			return false
+			return 0
 		}
 		i = i + 1
 	}
-	return false
+	return 0
 }
 
 # parse_stmt reads one statement, and it is a wrapper because a statement is where an
@@ -1859,7 +2452,14 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 	# reached the expression fallback and was named after its walrus, the `mut` one reported
 	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
 	# evaluated, assigned to no one, and the program printed the values it started with.
-	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
+	# THE `=` SPELLING IS ITS OWN FORM, and it used to borrow this sentence — so a reader who
+	# wrote `(a, b) = (1, 2)` was told about `(a, b) := …`, a form they had not written and a
+	# `:=` their source does not contain. GRAMMAR derives them as two productions and each is
+	# separately unbuilt; the place is the statement's own token, which neither carried.
+	dtor := p_starts_destructure(p)
+
+	raise "E238 NotImplemented: a destructuring binding `(a, b) := …` — GRAMMAR#bind-target derives the tuple form, and this compiler binds one name at a time" + p_place(p, cur(p).line, cur(p).col) if dtor == 1
+	raise "E486 NotImplemented: a destructuring assignment `(a, b) = …` — GRAMMAR#assign-target derives the tuple form, and this compiler assigns to one target at a time; write the two assignments out, reading the tuple with `.0` and `.1`" + p_place(p, cur(p).line, cur(p).col) if dtor == 2
 
 	if k == Kind.Nop {
 		p_advance(p)
@@ -2063,6 +2663,7 @@ fn parse_return(mut &p: Parser) -> Stmt {
 
 fn parse_if(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'if'
+	p_no_brace_head(p, "an `if` head", false)
 
 	# `if v := e { … }` — the binding form. It is told from an ordinary condition by the
 	# `:=` alone, one token of lookahead, because no condition may contain one. Without
@@ -2107,6 +2708,16 @@ fn p_else_body(mut &p: Parser) -> list[Stmt] {
 
 	mut body: list[Stmt] = []
 	p_deeper(p)
+
+	# the marker parse_block would have stamped, stamped here for the same reason: this
+	# recursion opens no block, so the nested `if` is the ONE statement in the program that
+	# reached the emitter with no position of its own, and a diagnostic about its HEAD —
+	# `else if zzz > 0`, `else if x > 0` naming an if-let binding that has just gone out of
+	# scope — was reported against whatever statement spoke last, which is the closing line
+	# of the branch above it.
+	t := cur(p)
+	body.append(Stmt.SAt(t.line, t.col))
+
 	body.append(parse_if(p))
 	p_shallower(p)
 	return body
@@ -2114,6 +2725,12 @@ fn p_else_body(mut &p: Parser) -> list[Stmt] {
 
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
+
+	# The head is OPTIONAL here, so a leading `{` is the infinite loop's BODY — unless
+	# something past its matching `}` continues it as an expression, which is the one
+	# reading under which it was a head. That check goes first: taken as a body, the head
+	# `{"a": 1}.len() == 1` was parsed as a block and complained about its first entry.
+	p_no_brace_head(p, "a `for` head", true)
 	return Stmt.SFor(false, Expr.ENil, parse_block(p)) if p_at(p, Kind.LBrace)
 
 	# `for select { … }` — one ready arm per round, until every watched channel has ended.
@@ -2197,7 +2814,22 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 	p_advance(p)
 	mut jump: list[Stmt] = []
 	if is_divergent(cur_kind(p)) {
-		jump.append(parse_stmt(p))
+		# What GRAMMAR#coalesce-rhs takes here is the bare DIVERGE, and the postfix `if`
+		# guard belongs to the statement form beside it (GRAMMAR#raise-stmt). parse_stmt
+		# reads the statement form — one reader for `raise e from c`, and for the `return`
+		# whose leading `if` may be an if-expression — so what it comes back with has to be
+		# asked whether a guard was folded in, and refused when one was.
+		#
+		# UNDEFINED BEHAVIOUR FROM SAFE CODE is what accepting it produced. c_coalesce
+		# emits the divergent form as a temp assigned on the present branch and a statement
+		# on the other, because a diverge LEAVES and so needs no value; under a guard it
+		# does not leave, the `else` assigns nothing, and `q := p ?? raise Err("x") if
+		# false` read the temp uninitialised. There is no lowering to reach for — the form
+		# has no meaning to lower — so it is named here, before a tree exists to miscompile.
+		t := cur(p)
+		s := parse_stmt(p)
+		raise f"E284 a `??` right-hand `{t.lexeme}` takes no trailing `if` — the postfix guard belongs to the STATEMENT form of a diverge (GRAMMAR#raise-stmt), and written here it reads as the coalesce's condition rather than the `{t.lexeme}`'s: when it is false nothing diverges, and the `??` still owes the value it never produced. Guard the whole statement instead, or bind the coalesce first and guard what follows it" + p_place(p, t.line, t.col) if p_jump_is_guarded(s)
+		jump.append(s)
 		return Expr.ECoalesce(left, Expr.ENil, jump)
 	}
 
@@ -2212,6 +2844,29 @@ fn parse_coalesce(mut &p: Parser) -> Expr {
 # are allowed where an expression is otherwise required.
 fn is_divergent(k: Kind) -> bool {
 	return k == Kind.Break or k == Kind.Continue or k == Kind.Return or k == Kind.Raise
+}
+
+# p_jump_is_guarded reports whether the statement parse_coalesce just read for a `??`'s
+# right side came back WRAPPED IN A GUARD.
+#
+# It asks the SHAPE rather than looking ahead for an `if` token, because the token alone
+# cannot tell the two readings apart: `?? return if c { 1 } else { 2 }` returns an
+# if-EXPRESSION and is well-formed, while `?? return 7 if c` is the guard, and both put an
+# `if` in the same place. parse_return has already made that decision (p_if_has_block), so
+# reading its answer is what keeps the disambiguation in ONE place.
+#
+# ONE RULE, THREE SLOTS. The guard is folded in at three points and this covers all of
+# them: parse_jump_guard wraps `break`/`continue`/`raise` in an SIf, parse_return desugars
+# a bare `return if c` into the same, and `return e if c` becomes an SReturnIf. Entering
+# with one of the four diverge keywords, neither shape can be reached any other way — so
+# either one back from that call is a guard, and a rule written against parse_jump_guard
+# alone would have left the two return branches compiling.
+fn p_jump_is_guarded(s: Stmt) -> bool {
+	return match s {
+		Stmt.SIf(_, _, _, _) => true
+		Stmt.SReturnIf(_, _) => true
+		_ => false
+	}
 }
 
 fn parse_or(mut &p: Parser) -> Expr {
@@ -2344,8 +2999,7 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 	for p_at(p, Kind.Dot) or p_at(p, Kind.LBrack) or p_at(p, Kind.OptDot) {
 		if p_at(p, Kind.OptDot) {
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, "?.", false)
 			e = Expr.EOptChain(e, fld)
 		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
@@ -2354,8 +3008,7 @@ fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 			e = Expr.EIndex(e, idx)
 		} else {
 			p_advance(p) # '.'
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, ".", true)
 			if p_at(p, Kind.LParen) {
 				e = Expr.EMethod(e, fld, parse_call_args(p))
 			} else {
@@ -2426,6 +3079,49 @@ fn p_ty_of_name(nm: str) -> Ty {
 	return Ty.TNamed(nm)
 }
 
+# p_field_name reads the selector a postfix `.` or `?.` takes, and it is ONE function for
+# the same reason p_one_tuple above is: four sites read one — `.` and `?.`, each of them in
+# parse_postfix and again in parse_chain_tail — and a rule written at one of four slots is
+# the shape of bug that keeps being found here.
+#
+# All four used to take `cur(p).lexeme` and advance, whatever token was sitting there, so
+# GRAMMAR#postfix — `'.' identifier`, `'.' dec-int`, `'?.' identifier` — described a surface
+# the parser did not have. What happened to the rest was NOT a parse error: `x.if` became a
+# field access whose field is named `if`, and the CHECKER answered it, ``E376 no field `if`
+# on int`` — a sentence about a field somebody might plausibly have declared, for a word
+# GRAMMAR#keyword says in so many words can never be an identifier. Every declaring position
+# already refuses one (E245, E257); this is the selecting position saying the same thing.
+#
+# The line-eating is the case that shows why it has to be caught HERE rather than downstream.
+# A `.` suppresses ASI, so in
+#
+#     print 1.
+#     print 2
+#
+# the second line's `print` was read as the field name of `1.`, the statement vanished, and
+# what got reported was `2` — under E205, on a line with nothing wrong with it. By the time
+# a field name is a string in an AST node, the token that was really the error is gone.
+#
+# `tuple_ok` is the difference between the two dots and it is GRAMMAR's: a tuple is read back
+# by static index off `.` alone, and `?.` derives an identifier and nothing else.
+fn p_field_name(mut &p: Parser, dot: str, tuple_ok: bool) -> str {
+	t := cur(p)
+	lx := t.lexeme
+
+	raise f"E293 `{lx}` is a reserved word and cannot name a field" + p_place(p, t.line, t.col) if p_reserved_word(lx)
+
+	if not p_at(p, Kind.Ident) and not (tuple_ok and p_at(p, Kind.Int)) {
+		mut want := "a field name"
+		if tuple_ok {
+			want = "a field name or a tuple index"
+		}
+		raise f"E294 expected {want} after `{dot}`, found `{lx}`" + p_place(p, t.line, t.col)
+	}
+
+	p_advance(p)
+	return lx
+}
+
 # parse_postfix parses a primary then a chain of calls. In the subset the callee is
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
@@ -2435,8 +3131,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			# `a?.b` — the lexer has produced this token since it existed and no parser ever
 			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, "?.", false)
 			e = Expr.EOptChain(e, fld)
 		} else if p_at(p, Kind.LBrack) {
 			p_advance(p) # '['
@@ -2463,8 +3158,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			}
 		} else if p_at(p, Kind.Dot) {
 			p_advance(p)
-			fld := cur(p).lexeme
-			p_advance(p)
+			fld := p_field_name(p, ".", true)
 			if p_at(p, Kind.LParen) {
 				# method call: target.method(args)
 				e = Expr.EMethod(e, fld, parse_call_args(p))
@@ -2540,9 +3234,12 @@ fn p_type_arg_call(mut &p: Parser, base: Expr, first: Expr) -> Expr {
 		p_written_type_args(name, tn + ", …")
 	}
 
+	# THE SEPARATOR AT THE TOP OF THE LOOP, because the first argument arrived as `first` and
+	# there is no element below it to follow. It is the same rule and the same reader of it
+	# (p_list_sep); this is the one call site with nowhere else to put the call.
 	mut tyargs: list[Ty] = [p_ty_of_name(tn)]
-	for p_at(p, Kind.Comma) {
-		p_advance(p)
+	for not p_at(p, Kind.RBrack) and not p_at(p, Kind.Eof) {
+		p_list_sep(p, Kind.RBrack, "]", "a type argument list")
 		tyargs.append(parse_type(p))
 	}
 	expect(p, Kind.RBrack)
@@ -2577,9 +3274,7 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 		raise f"E223 NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Colon
 
 		args.append(parse_expr(p))
-		if p_at(p, Kind.Comma) {
-			p_advance(p)
-		}
+		p_list_sep(p, Kind.RParen, ")", "an argument list")
 	}
 	expect(p, Kind.RParen)
 	return args
@@ -2693,9 +3388,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
 		# rendezvous, which is what a bare `chan[T]()` means
 		p_advance(p)
-		expect(p, Kind.LBrack)
-		elem := parse_type(p)
-		expect(p, Kind.RBrack)
+		elem := parse_chan_elem(p, t.line, t.col)
 		expect(p, Kind.LParen)
 		mut cap: Expr = Expr.EInt("0", 0, 0)
 		if not p_at(p, Kind.RParen) {
@@ -2740,14 +3433,36 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		mut elems: list[Expr] = []
 		elems.append(inner)
 		for p_at(p, Kind.Comma) {
+			ct := cur(p)
 			p_advance(p)
-			break if p_at(p, Kind.RParen)
+
+			# A COMMA WITH NOTHING AFTER IT is two different ill-formed programs, and which
+			# one it is depends on how many elements are already in hand: after one it is
+			# the 1-tuple `(1, )`, after two or more it is a trailing comma. The loop used
+			# to `break` here, which built a tuple out of either and said nothing.
+			if p_at(p, Kind.RParen) {
+				if elems.len() == 1 {
+					p_one_tuple(p, ct.line, ct.col)
+				}
+				p_trailing_comma(p, "a tuple literal", ")", ct.line, ct.col)
+			}
 			elems.append(parse_expr(p))
 		}
 		expect(p, Kind.RParen)
 		return Expr.ETuple(elems)
 	}
-	return parse_map_lit(p) if k == Kind.LBrace
+	if k == Kind.LBrace {
+		# A `{` IN EXPRESSION POSITION IS A MAP LITERAL OR A BLOCK, and GRAMMAR gives both
+		# to `primary`. p_brace_is_map decides on the `:` — the discriminator the grammar
+		# names — and a brace without one is the block EXPRESSION whose value is its last
+		# statement's (GRAMMAR, group 2).
+		#
+		# The same braces at a STATEMENT's start are a block statement (parse_stmt reads
+		# that one, as Stmt.SScope) and their value is discarded; a head that opens with `{`
+		# is E290. Position decides, and this function is only ever the expression position.
+		return parse_map_lit(p) if p_brace_is_map(p)
+		return Expr.EBlock(parse_block(p))
+	}
 	if k == Kind.LBrack {
 		# list literal: [] or [a, b, ...], or the FILL form [v; N]
 		p_advance(p)
@@ -2762,9 +3477,8 @@ fn parse_primary(mut &p: Parser) -> Expr {
 				p_advance(p)
 				return parse_fill(p, elems[0])
 			}
-			if p_at(p, Kind.Comma) {
-				p_advance(p)
-			}
+
+			p_list_sep(p, Kind.RBrack, "]", "a list literal")
 		}
 		expect(p, Kind.RBrack)
 		return Expr.EListLit(elems)
@@ -2831,6 +3545,7 @@ fn is_stmt_kw(k: Kind) -> bool {
 # unchanged.
 fn parse_if_expr(mut &p: Parser) -> Expr {
 	p_advance(p) # 'if'
+	p_no_brace_head(p, "an `if` head", false)
 	t := cur(p)
 
 	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head), which runs the branch only when
@@ -2868,6 +3583,7 @@ fn parse_if_branch(mut &p: Parser) -> Expr {
 
 fn parse_match(mut &p: Parser) -> Expr {
 	p_advance(p) # 'match'
+	p_no_brace_head(p, "a `match` head", false)
 	scrut := parse_expr(p)
 	expect(p, Kind.LBrace)
 	skip_semis(p)
@@ -2880,9 +3596,29 @@ fn parse_match(mut &p: Parser) -> Expr {
 	return Expr.EMatch(scrut, arms)
 }
 
+# at_named_range_arm reports whether the arm head is a RANGE ARM whose lower bound is a name —
+# an identifier immediately followed by `..` or `..=` (GRAMMAR#range-bound, whose second
+# alternative is a bare `identifier`).
+#
+# It exists because a range arm is recognized BY ITS `..` and that recognition only ever ran on
+# a literal head: a non-identifier head falls to `parse_expr` below, which reads `200..300` as
+# the range it is, while an identifier head was claimed by the binding branch, which reads the
+# name and then demands the `=>` a range arm has not reached yet. So `LO..HI =>` came back as
+# `expected `=>`, found `..`` — a token-level complaint about a form GRAMMAR derives.
+#
+# ONE TOKEN OF LOOKAHEAD IS THE WHOLE DECISION, and deliberately so: GRAMMAR#pattern makes the
+# pattern grammar context-free — "nothing here has to be resolved to be parsed" — so the parser
+# may not ask what the name MEANS, and knows of no constants to ask about. Whether the name is
+# worth a compile-time value is a later question, put to `chk_const_eval` at the use site, where
+# a name that is not one is reported against the line that wanted a constant.
+fn at_named_range_arm(mut &p: Parser) -> bool {
+	k := peek_kind(p, 1)
+	return k == Kind.DotDot or k == Kind.DotDotEq
+}
+
 # parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
-# scrutinee (or is the `_` wildcard); anything else is a literal pattern matched by
-# equality.
+# scrutinee (or is the `_` wildcard) unless a `..` follows it, which makes it a range bound;
+# anything else is a literal pattern matched by equality.
 fn parse_arm(mut &p: Parser) -> Arm {
 	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
@@ -2895,7 +3631,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	mut bind := ""
 	mut ctor := ""
 	mut binds: list[str] = []
-	if p_at(p, Kind.Ident) {
+	if p_at(p, Kind.Ident) and not at_named_range_arm(p) {
 		mut name := cur(p).lexeme
 		p_advance(p)
 
@@ -2918,29 +3654,56 @@ fn parse_arm(mut &p: Parser) -> Arm {
 
 		if name == "_" {
 			pat = 2
-		} else if is_pascal(name) {
-			# A VARIANT IS NAMED BY ITS ENUM, always (GRAMMAR#variant-pat). A bare name here
-			# was read as a constructor pattern because it started with a capital, which made
-			# the arm's meaning a NAMING CONVENTION: rename the binding `Value` to `value` and
-			# the same arm stops matching a variant and starts binding the subject. The other
-			# direction is worse — an enum that gains a variant silently turns an existing
-			# binding arm into a constructor one, and nothing about the program changed.
-			raise f"E274 `{name}` is a variant of some enum, and a pattern names one through its enum — write `Enum.{name}`" if not qualified
-
-			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`
+		} else if qualified or p_at(p, Kind.LParen) {
+			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`. What makes it
+			# one is the SHAPE — a qualifier, or a payload list — and not the capital the name
+			# happens to start with. Which enum it belongs to is the emitter's question, and
+			# `c_check_arm_pats` already asks it of every constructor pattern.
 			pat = 3
 			ctor = name
 			if p_at(p, Kind.LParen) {
 				p_advance(p)
 				for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
-					binds.append(p_name(p, "a pattern binding"))
-					if p_at(p, Kind.Comma) {
-						p_advance(p)
+					# A SUB-PATTERN IN THE PAYLOAD. GRAMMAR#variant-pat's payload is a
+					# `pattern-list`, and `pattern` derives every pattern form there is —
+					# so `E.Wrap(Inner.A(n))` and `E.One(0)` are both derived. This loop
+					# reads a NAME and nothing else, so the first reported whatever token
+					# followed the inner name (``expected `,`, found `.` ``) and the second
+					# fell to p_name's own sentence: a token complaint with no code and no
+					# place, for a form the grammar has (docs/code/patterns.md says as much,
+					# and asks for exactly this).
+					# A RESERVED WORD IS NOT A SUB-PATTERN, and p_name below owns that
+					# sentence (E245): `E.One(this)` is somebody naming a binding `this`,
+					# not writing a pattern inside a pattern, and answering it here would
+					# take a rule off a case that already had one.
+					pt := cur(p)
+					nested := p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Dot
+					if (nested or not p_at(p, Kind.Ident)) and not p_reserved_word(pt.lexeme) {
+						raise f"E492 NotImplemented: a sub-pattern inside a variant payload, beginning at `{pt.lexeme}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn" + p_place(p, pt.line, pt.col) if pt.lexeme != "_"
 					}
+					binds.append(p_name(p, "a pattern binding"))
+					p_list_sep(p, Kind.RParen, ")", "a pattern list")
 				}
 				expect(p, Kind.RParen)
 			}
 		} else {
+			# A BARE NAME IN PATTERN POSITION IS ALWAYS A FRESH BINDING (GRAMMAR#pattern), and
+			# nothing here has to be resolved to be parsed. It used to be a constructor pattern
+			# when it started with a capital, which made an arm's meaning a NAMING CONVENTION:
+			# rename the binding `Value` to `value` and the same arm stopped matching a variant
+			# and started binding the subject.
+			#
+			# The rule that stood here — E274, "`{name}` is a variant of some enum" — could not
+			# be true, because the parser has resolved nothing and knows of no enum: it fired
+			# on a program that declared none, and named an enum that did not exist. It is
+			# retired rather than moved, because moving it to where the enums ARE known would
+			# put a program's legality back under an unrelated declaration — an enum gaining a
+			# variant would turn a working binding arm elsewhere into an error, which is the
+			# same file-order coupling GRAMMAR retired the bare-variant form to be rid of.
+			#
+			# What guards the mistake it was aimed at — `match c { Red => …  Green => … }`,
+			# meaning two variants and getting one catch-all — is E458 in the emitter: a
+			# binding arm covers everything, so any arm after it is unreachable and said so.
 			pat = 1
 			bind = name
 		}

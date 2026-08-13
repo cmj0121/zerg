@@ -79,7 +79,11 @@ nop            ::= 'nop'
 # ==================================================================================
 # Source is UTF-8. Horizontal whitespace (space, tab) separates tokens and is
 # otherwise insignificant. A line break is significant: the lexer turns it into a
-# ';' separator (ASI, below). Comments are not tokens.
+# ';' separator (ASI, below). A line break is an LF, or a CRLF — the '\r' belongs to the
+# break that follows it and is not whitespace of its own, so a '\r' anywhere ELSE is not
+# part of any token and is refused where it stands. (Inside a string or a rune literal a
+# '\r' is ordinary content, like any other character the literal spans.) Comments are not
+# tokens.
 #
 # Newlines & ASI (automatic ';' insertion). At a line break the lexer inserts a ';'
 # when the last token on the line can END an item — an identifier, a literal, ')',
@@ -105,8 +109,8 @@ digit      ::= [0-9]
 # never an identifier.
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 
-NEWLINE    ::= '\n'                # a line break; terminates a statement (group 1)
-WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens
+NEWLINE    ::= '\r'? '\n'          # a line break, LF or CRLF; terminates a statement (group 1)
+WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens — a '\r' is NOT one
 COMMENT     ::= '#' [^#[\n] [^\n]*  # a '#' NOT followed by '#' or '[' → line comment to EOL
               | '#' NEWLINE          # a bare '#' at end of line is also a comment
 DOC-COMMENT ::= '##' [^\n]*         # a doc comment; attaches to the following declaration
@@ -718,8 +722,9 @@ chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional cap
 #
 # An arm's body is a STATEMENT, not an expression: 'select' is a statement and yields
 # nothing, so an arm RUNS rather than yields — which is what lets 'break' and
-# 'v := <-ch => print v!' mean what they read as. A block is a statement like any other,
-# so '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
+# 'v := <-ch => print v' mean what they read as — 'v' is the plain T the paragraph above
+# binds, so it is printed, not unwrapped. A block is a statement like any other, and
+# '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
 # whose body must YIELD the match's value and is therefore an expression.
 select-stmt  ::= 'select' '{' select-arm+ '}'          # picks one ready arm
 for-select   ::= 'for' 'select' '{' select-arm+ '}'   # one per round, until every recv arm has ended

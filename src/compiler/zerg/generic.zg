@@ -156,7 +156,7 @@ fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list
 # it an ordinary function, and what stops it being instantiated again.
 fn subst_fn(tpl: FnDecl, args: list[Ty]) -> FnDecl {
 	names := tpl.tparams
-	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [])
+	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
@@ -173,13 +173,29 @@ fn subst_ty(names: list[str], args: list[Ty], t: Ty) -> Ty {
 	return match t {
 		Ty.TList(e) => Ty.TList(subst_ty(names, args, e))
 		Ty.TOpt(e) => Ty.TOpt(subst_ty(names, args, e))
-		Ty.TChan(e, d) => Ty.TChan(subst_ty(names, args, e), d)
+		Ty.TChan(e, d) => ty_chan(subst_ty(names, args, e), d, "")
 		Ty.TMap(k, v) => Ty.TMap(subst_ty(names, args, k), subst_ty(names, args, v))
 		Ty.TTuple(es) => Ty.TTuple(subst_tys(names, args, es))
 		Ty.TEither(x, y) => Ty.TEither(subst_ty(names, args, x), subst_ty(names, args, y))
 		Ty.TFn(ps, r) => Ty.TFn(subst_tys(names, args, ps), subst_ty(names, args, r))
 		_ => t
 	}
+}
+
+# subst_chan_elem is a channel CONSTRUCTOR's element type after substitution, and it is the
+# door the parser cannot cover: a template writes `chan[T](1)`, which is well-formed, and
+# specializing it for `T = int?` builds a `chan[int?]`, which is not. Nothing in the source
+# spells that type, so there is no position to report — which is the one difference from the
+# written form; the rule itself is the same function, because it is the same rule.
+#
+# The channel TYPE needs nothing here: `subst_ty` builds its result through `ty_chan`
+# (ast.zg), which asks the rule at construction. A constructor's node carries the ELEMENT
+# rather than the channel type, so it never reaches that constructor — which is exactly why
+# this one stays, and why covering only the `Ty.TChan` arm once left `chan[T](1)` unchecked.
+fn subst_chan_elem(names: list[str], args: list[Ty], e: Ty) -> Ty {
+	el := subst_ty(names, args, e)
+	ty_chan_elem_check(el, "")
+	return el
 }
 
 fn subst_tys(names: list[str], args: list[Ty], ts: list[Ty]) -> list[Ty] {
@@ -247,11 +263,12 @@ fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
 		Expr.ETuple(xs) => Expr.ETuple(subst_exprs(names, args, xs))
 		Expr.EMapLit(ks, vs) => Expr.EMapLit(subst_exprs(names, args, ks), subst_exprs(names, args, vs))
 		Expr.EFn(ps, hr, r, b) => Expr.EFn(subst_params(names, args, ps), hr, subst_ty(names, args, r), subst_block(names, args, b))
-		Expr.EChanNew(ty, cap) => Expr.EChanNew(subst_ty(names, args, ty), subst_expr(names, args, cap))
+		Expr.EChanNew(ty, cap) => Expr.EChanNew(subst_chan_elem(names, args, ty), subst_expr(names, args, cap))
 		Expr.ERecv(x) => Expr.ERecv(subst_expr(names, args, x))
 		Expr.EForce(x) => Expr.EForce(subst_expr(names, args, x))
 		Expr.ECoalesce(a, b, jump) => Expr.ECoalesce(subst_expr(names, args, a), subst_expr(names, args, b), subst_block(names, args, jump))
 		Expr.EGuard(b) => Expr.EGuard(subst_block(names, args, b))
+		Expr.EBlock(b) => Expr.EBlock(subst_block(names, args, b))
 		Expr.EIs(x, nm) => Expr.EIs(subst_expr(names, args, x), nm)
 		Expr.EIn(x, s) => Expr.EIn(subst_expr(names, args, x), subst_expr(names, args, s))
 		_ => e

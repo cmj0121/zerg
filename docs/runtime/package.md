@@ -22,11 +22,14 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > declaration, no resolver and no dependency fetch: a build is an entry file and the modules its imports
 > reach on disk. Everything below that names a package — versioning, the package DAG, one-version
 > selection, package-public as a position, and the orphan rule that rests on the graph being acyclic —
-> describes a layer nothing implements yet. `import "name"` that resolves to nothing on disk is accepted
-> silently and only `zerg lint` mentions it (`L101 unused import`).
+> describes a layer nothing implements yet. An `import "name"` that resolves to nothing on disk is a hard
+> build error, not a silence — _E502 cannot resolve import `name` under any source root_ — reported before
+> a byte of it is lexed.
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
-> module is flattened into one namespace and no visibility is checked. See Visibility below.
+> module is flattened into one namespace, and visibility is checked on some of what a module holds and not
+> all — a function and a module constant are (_E301 `helper` is not a public member of module `lib`_, with
+> a place), a struct's fields are not. See Visibility below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
@@ -76,7 +79,18 @@ coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](../code/coroutine.md)).
 
 Outside `main` lives only **immutable top-level state** — constants, functions, types, and specs —
-readied before `main` runs. Top-level constants are initialized in **dependency order** — a
+readied before `main` runs.
+
+That is a statement about **what runs where**, so it settles a form the grammar allows and this section
+never spoke to: a **statement written at the top level**. `GRAMMAR#program` derives one — `program ::=
+stmt-list` is Zerg's **script mode**, and the grammar opens the language with the `nop` program — so it is
+well-formed syntax and a compiler reads it whole. A **compiled** program has no moment at which to run it:
+execution begins at `main`, and everything above is state readied before that. It is therefore **refused by
+name, with a place**, by the build rather than by the parse — the same split a program with no `fn main`
+takes ([Conformance](../conformance.md)). `nop` is the one exception, and not really an exception: it does
+nothing and yields nothing, so running nothing for it is running it.
+
+Top-level constants are initialized in **dependency order** — a
 constant is ready before any constant whose initializer reads it — a topological order of the reads-from
 graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
 (neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
@@ -95,7 +109,8 @@ before `main`: each one runs **exactly once, in FIFO order, before `main`**.
 `init()` carries multi-step or effectful startup (open a resource, register, seed) rather than hiding it in
 a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
 shared mutable state travels by value or through channels, never a module-level variable — a top-level
-binding may not be `mut` outside a module-level `unsafe { … }` group.
+binding may not be `mut` outside a module-level `unsafe { … }` group, and one that is inside a group is
+**module-private**, never `pub` (see [Visibility](#visibility--exposing-a-declaration)).
 
 If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
 there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
@@ -104,13 +119,10 @@ failure, so no side effect repeats), and every later use **re-aborts with the sa
 half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
 
 > **[deviation]** Initialization is **eager, not lazy**. Every `init()` in the program runs before
-> `main`'s first statement, in declaration order over the whole program, rather than at the first use of
-> the module that owns it. Exactly-once and FIFO-within-a-module hold; "the first time the module is
-> used" does not, so an `init()` in a module a run never touches still runs.
->
-> **[not yet]** Two modules that each declare an `init()` are refused by name — the flattened namespace
-> cannot tell `init__0` from `init__0`. So cross-module initialization **order** has no program that can
-> observe it yet.
+> `main`'s first statement, rather than at the first use of the module that owns it. Exactly-once holds,
+> and so does the order: a module's imports are readied before it is, and its own blocks run FIFO. What
+> does not hold is "the first time the module is used" — an `init()` in a module a run never touches
+> still runs.
 >
 > **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
 > cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
@@ -149,9 +161,11 @@ third package can name both without owning either. So the implementation, if it 
 construction. Single-version selection is what makes "one type, one implementation"
 well-defined.
 
-> **[not yet]** The **orphan rule is not enforced**. A third module may write `impl Spec for T` owning
-> neither the spec nor the type, and it compiles. What IS checked is the narrower thing the flattened
-> namespace can see: two `impl`s giving one type the same method name in one build are refused.
+The orphan rule is enforced, and by the module rather than by the package the paragraph above reasons
+from: a third module writing `impl Spec for T` while owning neither is refused with _E277 `impl Speak for
+Dog` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with
+one of the two_, with a place. Two `impl`s giving one type the same method name in one build are refused
+too, which is the narrower thing the flattened namespace can see on its own.
 
 ### Modules
 
@@ -159,9 +173,18 @@ A **module is a directory**; the files inside it are physical slices that share 
 number of files is layout, not meaning. A module is the default privacy unit: a plain declaration is
 visible across the module's files but not outside it (see Visibility).
 
+An import path is resolved **beside the importer first** — the directory of the file that wrote the
+`import` — then beside the entry file, then in the standard library, first match winning. So a module
+carries its own dependencies with it: `api/` may hold the `api/util/` it imports, and moving the pair
+somewhere else moves both. (The seed compiler searches the entry file's directory only, and refuses a
+module reached this way.)
+
 Nesting is **flat**: a directory laid out under another only lengthens the import path — there is no
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
-between modules are rejected.**
+between modules are rejected** — a module that comes up again while it is still on the way down has no
+order for its `init()` blocks and module constants to be readied in, and the refusal names the loop
+rather than the walk that reached it. A module two others import is not a cycle, and a module importing
+**itself** is the one-node case of the same rule.
 
 So mutually recursive types and functions live in **one module** — which costs nothing, since a
 module is a directory of many files sharing a namespace: an `ast` module can spread `Expr` and `Stmt`
@@ -181,8 +204,13 @@ its own value.
 > `undefined function`. Files share one namespace in every module that is reached by an `import`; the
 > module rooted at the entry file is the exception.
 >
-> **[deviation]** **Import cycles are not rejected.** Two modules that import each other compile and run.
-> Nothing detects the cycle, at either layer.
+> ---
+>
+> **[deviation]** A **single file** is importable as a module. `import "sib"` beside a `sib.zg` resolves
+> to that one file and its `pub` names, though a module is a directory here and `E502`'s own sentence says
+> so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
+> import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
+> denies the second exists.
 
 ### Visibility — exposing a declaration
 
@@ -218,6 +246,12 @@ its `pub` methods are callable by dependents too — visibility reads on a metho
 > boundary and not the package one; **package-internal** and **package-public** above still need a package
 > to exist.
 
+The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
+module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
+group 12). A group is one module's bargain with its own author, and `pub` on it would offer that bargain
+to everyone who imports the module; it is refused at the declaration, with a place. Expose a `pub fn`
+that reads the binding instead.
+
 ### Importing & referencing
 
 Referencing another declaration is always **explicit** — no wildcard, no transitivity (importing a
@@ -236,14 +270,31 @@ Because every dependency is written down, the import graph is explicit — which
 package **cycles be rejected**.
 
 > **Status.** The surface these sections describe is wired today: **string-path imports**
-> (`import "util/text"`), **parenthesized import groups** (`import ( … )`), and **one-level `import pub`
-> re-export** onto the root module's public surface. (The re-export is one level: `import pub` exposes the
-> named module on this module's surface; it does not transitively re-export what that module itself
-> re-exports.)
+> (`import "util/text"`), **parenthesized import groups** (`import ( … )`), **`as` renames**
+> (`import "a/text" as at` binds the whole namespace — its functions and its module constants alike), and
+> **one-level `import pub` re-export** onto the root module's public surface. (The re-export is one level:
+> `import pub` exposes the named module on this module's surface; it does not transitively re-export what
+> that module itself re-exports.)
 >
-> **[deviation]** **No transitivity is not enforced.** Because every module flattens into one namespace,
-> a module a build reaches at all is a module every other one can name, whether it imported it or not.
-> The import graph decides what is COMPILED into the build, not what is visible inside it.
+> The **binding** an import introduces is enforced: the prefix of a qualified name must be a namespace
+> some `import` in the build actually bound, so an invented `bogus.f()` or a path segment used as a name
+> (`util.f()` under `import "util/text"`) is rejected as an undefined name, with a place; two imports
+> whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
+> is how both are resolved.
+>
+> **[deviation]** **The binding is the BUILD's, and so is the member.** Two halves of one flatten, and
+> both are visible to a program:
+>
+> - **No transitivity is not enforced.** The namespaces in scope are every namespace every module of the
+>   build bound — including another module's `as` alias — so a module this one never imported is one it
+>   can still name. The import graph decides what is COMPILED into the build, not what is nameable inside
+>   it.
+> - **The member is looked up program-wide.** Once the prefix resolves, the name after the `.` is found in
+>   the one flattened namespace rather than in the module the prefix named, so with `a` and `b` both
+>   imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked against the
+>   module that DECLARED the member, which is why a private one is refused naming its real owner rather
+>   than the module the program wrote. The seed compiler resolves this half correctly, and answers
+>   `module "b" has no public member "helper"`.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section
@@ -300,10 +351,14 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** There is **no test build**. `*_test.zg` is kept out of an ordinary build, which is the
-> half of the convention that works; the command that would include it — `zerg test` — does not exist,
-> so the white-box and black-box positions above are places to put a file rather than a way to run one.
-> The `testing` module's `assert` family is callable from an ordinary program in the meantime.
+> **[not yet]** **No part of the convention is recognized.** There is no `zerg test` command, and a
+> `*_test.zg` file is not kept out of anything: it is compiled into an ordinary build like every other
+> file in its module, so its declarations DO reach the shipped artifact and a `pub` one DOES join the
+> module's surface — `lib.only_in_test()` resolves and runs from a program that never asked for a test.
+> A name it repeats collides with its siblings, and a syntactically broken one fails a normal build. So
+> the white-box and black-box positions above are places to put a file rather than a way to run one, and
+> the file is not inert while it waits. The `testing` module's `assert` family is callable from an
+> ordinary program in the meantime.
 
 ### Target-conditional files
 

@@ -17,20 +17,20 @@ import (
 # Lex holds the scan state. `stack` + `sp` implement the brace-depth stack over an
 # append-only list (list has no pop): push writes at sp and bumps it, pop just drops sp.
 struct Lex {
-	src: list[byte]
-	n: int
-	offs: int
-	line: int
-	col: int
-	depth: int
-	stack: list[int]
-	sp: int
-	prev: Kind
+	pub src: list[byte]
+	pub n: int
+	pub offs: int
+	pub line: int
+	pub col: int
+	pub depth: int
+	pub stack: list[int]
+	pub sp: int
+	pub prev: Kind
 
 	# keep_trivia makes a comment a TOKEN instead of nothing. The compiler never sets it —
 	# it would only have to skip them again — but the formatter cannot do its job without
 	# them, and a formatter that eats comments is not one anybody would run twice.
-	keep_trivia: bool
+	pub keep_trivia: bool
 }
 
 # --- character helpers ---------------------------------------------------------
@@ -119,7 +119,18 @@ fn lex_code_end(b: list[byte]) -> int {
 fn next(mut &l: Lex) -> Token {
 	for not eof(l) {
 		c := at(l, 0)
-		if c == b' ' or c == byte(9) or c == byte(13) {
+		if c == b' ' or c == byte(9) {
+			advance(l)
+		} else if c == byte(13) and at(l, 1) == byte(10) {
+			# THE CR HALF OF A CRLF, and nothing else. GRAMMAR#NEWLINE is `'\r'? '\n'`, so a
+			# CR belongs to the line break that follows it — consumed here, and the LF arm
+			# below does the ASI work, which keeps one rule for what ends a statement.
+			#
+			# A CR was in the whitespace class beside space and tab, where GRAMMAR#WS never
+			# put it. That silently swallowed a LONE CR — a classic-Mac line ending, or one
+			# left by an editor mid-line — so a file whose statements were separated by CR
+			# alone lexed as ONE line and the ASI `;` was never inserted. Out of the class,
+			# a lone CR reaches bad_char like any other character no token claims (E104).
 			advance(l)
 		} else if c == byte(10) {
 			sline := l.line
@@ -182,7 +193,35 @@ fn scan_token(mut &l: Lex) -> Token {
 		l.depth = l.depth + 1
 		return emit(l, Kind.Hash, sline, scol, "#[")
 	}
+	return scan_nonascii(l, sline, scol, soff) if int(c) >= 0x80
+
 	return scan_operator(l, sline, scol, soff)
+}
+
+# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR#letter makes the source
+# UTF-8 — which is what lets a comment, a string and a rune hold any character at all —
+# and GRAMMAR#identifier derives ASCII letters, digits and `_`, so a character reaching
+# here spells nothing: the same lexical error `@` is, under the same code.
+#
+# IT IS CAUGHT BEFORE scan_operator RATHER THAN IN ITS FALLBACK, and the whole reason is
+# the lexeme. `lexeme_from` cuts the source between two offsets and reads the bytes back
+# as a `str`, scan_operator having consumed exactly ONE — so the diagnostic about `值`
+# asked for one third of a character, and the str constructor answered by KILLING the
+# compiler: `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught abort with
+# no code, no place and no form named, for a program the ASCII path reports cleanly.
+#
+# Consuming the whole character instead makes the lexeme what the reader wrote, which is
+# both a legal `str` and ONE error where a byte at a time would be three. The lead byte
+# always begins a well-formed sequence here, because the driver reads the file as a `str`
+# before this ever sees it, so `rune_len` is the whole of the answer.
+fn scan_nonascii(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	n := rune_len(at(l, 0))
+	mut i := 0
+	for i < n and not eof(l) {
+		advance(l)
+		i = i + 1
+	}
+	return bad_char(l, sline, scol, soff)
 }
 
 fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -241,13 +280,26 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		advance(l) # 0
 		advance(l) # x/o/b
 
-		# a based literal needs at least one DIGIT. `0x` on its own consumed nothing, was
-		# emitted as an Int, and lowered to a C `0x` — which cc read as the number zero, so
-		# a malformed literal compiled and answered 0. The prefix without digits is not a
-		# number, and saying so is the only way anyone finds out.
-		digits := l.offs
+		# a based literal needs a digit IMMEDIATELY after its prefix, which is what GRAMMAR
+		# group 3 writes as `'0x' hex-digit ( '_'? hex-digit )*`: the first digit is part of
+		# the prefix's own production, and only the ones after it may be grouped. `0x` on
+		# its own consumed nothing, was emitted as an Int, and lowered to a C `0x` — which
+		# cc read as the number zero, so a malformed literal compiled and answered 0.
+		#
+		# The question is put to the FIRST byte, not to how much `consume_based` swallowed,
+		# because those two are not the same question and `0x_1F` is the difference.
+		# `consume_based` takes a `_` whenever a valid digit follows it, which is the right
+		# rule everywhere it is asked EXCEPT at the first position: a grouping `_` sits
+		# between two digits, and here there is no digit to its left. A run LENGTH cannot
+		# see that — `0x_1F` consumed four bytes, passed, and meant 31.
+		lead := based_valid(at(l, 0), base)
+
+		# the malformed run is consumed before it is reported so the whole of it lands in
+		# ONE Illegal token. Reporting from where the bad byte was found would leave the
+		# lexer standing inside the literal, and `_1F` would come back as an identifier —
+		# one mistake, two messages, the second of them about a name nobody wrote.
 		consume_based(l, base)
-		return bad(l, "E108", "a based number needs at least one digit after its prefix", sline, scol, lexeme_from(l, soff)) if l.offs == digits
+		return bad(l, "E108", "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
 		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 
@@ -321,7 +373,13 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 	return 0 if c == b'0'
 	return 92 if c == b'\\'
 	return 39 if c == b'\''
-	return 34 if c == b'"'
+
+	# `\"` IS NOT A BYTE ESCAPE. GRAMMAR#byte-escape lists `n t r 0 \ '` and `\x` — and no
+	# `"`, because the quote a byte literal has to escape is the single one that ends it.
+	# GRAMMAR#escape, the rune/str set, is where `"` belongs. The two arms below already ask
+	# which literal they are in (`\x` is byte-only, `\u` is rune/str-only); this one did not,
+	# so `b'\"'` lexed to 34 and a program GRAMMAR does not derive compiled and ran.
+	return 34 if c == b'"' and not byte_mode
 
 	if c == b'x' and byte_mode {
 		return -1 if not ascii.is_hex_digit(at(l, 0)) or not ascii.is_hex_digit(at(l, 1))
@@ -758,6 +816,15 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		return op(l, Kind.RBrace, sline, scol, soff, 0)
 	}
 	return op(l, Kind.Semi, sline, scol, soff, 0) if c == b';'
+
+	return bad_char(l, sline, scol, soff)
+}
+
+# bad_char is E104's ONE reporting site. Two characters reach it — an ASCII one no operator
+# claims, and a non-ASCII one scan_nonascii has consumed whole — and they are one rule, so
+# they are one code and therefore one raise (scripts/error-codes-check.sh counts a code
+# reported twice as two rules sharing an identity).
+fn bad_char(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, "E104", "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 
@@ -939,8 +1006,8 @@ fn int_scan(lex: str) -> int {
 # this file and a struct is the plainer thing for it to carry.
 
 pub struct UintLit {
-	ok: bool
-	value: uint
+	pub ok: bool
+	pub value: uint
 }
 
 pub fn uint_fits(lex: str) -> bool {

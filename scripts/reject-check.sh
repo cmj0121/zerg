@@ -52,6 +52,17 @@ set -u
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
 
+# ABSOLUTE, because the `bare-entry` marker below runs the compiler from the case's OWN
+# directory — and a `./bin/zerg` resolved from there names nothing. Computed once, from
+# whatever the two variables above ended up holding, so an overridden $ZERG travels too.
+abspath() {
+	case $1 in
+	/*) printf '%s\n' "$1" ;;
+	*) printf '%s/%s\n' "$(pwd)" "${1#./}" ;;
+	esac
+}
+ZERG_ABS=$(abspath "$ZERG")
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -117,7 +128,15 @@ reject() {
 	rm -rf "$dir"
 	mkdir -p "$dir"
 	local src="$dir/$name.zg"
-	awk -v dir="$dir" -v entry="$src" '
+
+	# LC_ALL=C, because this is a byte pipe and not a text one. A case is a PROGRAM, and one
+	# class of ill-formed program is ill-formed exactly because its bytes are not text: under
+	# the ambient UTF-8 locale macOS awk stops on `towc: multibyte conversion failure` and
+	# writes a TRUNCATED file, so the case that reaches the compiler is not the case that was
+	# written and the gate reports a mismatch on a rule it never exercised. In the C locale a
+	# record is bytes, `/^--- /` matches bytes, and every case — UTF-8, ASCII or neither —
+	# arrives as it was typed.
+	LC_ALL=C awk -v dir="$dir" -v entry="$src" '
 		/^--- / {
 			out = dir "/" $2
 			d = out
@@ -136,14 +155,27 @@ reject() {
 		case $fl in at=*) at=${fl#at=} ;; esac
 	done
 
-	local out status first
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
 	# only cc would reject looks accepted and assertions 3 and 4 can never fire. Linking
 	# for real is what makes "the compiler said so, not cc" a claim this gate can check —
 	# and it costs nothing while the gate is green, because a program the compiler rejects
 	# never reaches cc anyway.
-	out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
-	status=$?
+	#
+	# THE ENTRY PATH'S SPELLING IS PART OF THE PROGRAM, for one class of rule: a module is a
+	# directory, so a rule that asks "which module is this declaration in" answers from the
+	# path a file was read at — and a BARE filename has no directory component to answer
+	# with. Every case above hands the compiler `$tmp/<name>.d/<name>.zg`, which always has
+	# one, so the whole class was invisible here. `bare-entry` runs the build from the case's
+	# own directory and names the entry with no directory at all, which is what a reader
+	# standing in their own source tree types.
+	local out status first
+	if has_flag "$flags" bare-entry; then
+		out=$(cd "$dir" && "$ZERG_ABS" build --emit bin -o "$tmp/$name.bin" "$name.zg" 2>&1 >/dev/null)
+		status=$?
+	else
+		out=$("$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
+		status=$?
+	fi
 	first=${out%%$'\n'*}
 
 	if [ $status -eq 0 ]; then
@@ -171,21 +203,12 @@ reject() {
 			;;
 		esac
 	fi
-	case $out in
-	*.zerg-cache*)
-		echo "VIA CC    $name — cc reported it against generated C, not the compiler against the source"
-		fail=$((fail + 1))
-		return
-		;;
-	esac
-	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
-	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
-	# the programmer wrote — which is better for a user and blinds the older test, since
-	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
-	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
-	# the place on an indented `-->` line beneath it.
-	if is_cc_diag "$out"; then
-		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
+	# CC MUST NOT BE THE ONE ANSWERING. Both tells — the message's SHAPE and a path into the
+	# build cache — are one predicate in diag.sh, asked the same way by the three gates that
+	# judge a refusal. They used to be two `case`/`if` pairs written out per script, which
+	# is exactly how one of them came to be asked in two places and not in the third.
+	if cc_answered "$out"; then
+		echo "VIA CC    $name — cc answered this, not the compiler against the source"
 		fail=$((fail + 1))
 		return
 	fi
@@ -294,7 +317,7 @@ EOF
 
 reject assign-to-field-of-immutable E308 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -422,34 +445,24 @@ fn main() {
 }
 EOF
 
-# --- a module constant may not take a function's name --------------------------------
-#
-# The top level is ONE namespace: a module constant and a free function both mangle to
-# `zg_<name>`, so `const f := 1` beside `fn f()` reached cc as "redefinition of 'zg_f'"
-# against generated code — in either source order, which is why both are here. A LOCAL
-# named after a function is not this (it shadows, and stays legal); the corpus pins that
-# half. The seed emits the collision too (its gap, src/bootstrap/README.md).
-reject const-taking-a-function-name E373 at=1:1 seed-gap <<'EOF'
-const f := 1
-
-fn f() {
-	print "x"
+# a `select` ARM's receive binding is a binding too, and it was the one name-introducing
+# site in the language that did not go through c_add_var: it wrote the environment's
+# columns out by hand, so it asked neither this rule nor the substitution rule beside it.
+# Its real cost was worse than a missed refusal — one of the eight columns was left off
+# and every later binding read the wrong row of it — but this is the half a gate can see.
+reject const-rebound-by-a-select-arm E356 <<'EOF'
+fn gen(out: chan[int]<-) {
+	out <- 1
 }
 
 fn main() {
-	print "ok"
-}
-EOF
-
-reject function-taking-a-const-name E373 at=5:1 seed-gap <<'EOF'
-fn f() {
-	print "x"
-}
-
-const f := 1
-
-fn main() {
-	print "ok"
+	const v := 9
+	a := chan[int](1)
+	spawn gen(a)
+	select {
+		v := <-a => print v
+	}
+	print v
 }
 EOF
 
@@ -543,6 +556,44 @@ fn main() {
 }
 EOF
 
+# A `fn` DECLARED IN THE GROUP IS AN UNSAFE FN, and GRAMMAR group 12 says what that buys:
+# "a `fn` is an unsafe fn (unsafe throughout its body, callable only from unsafe)". The
+# group was built for its `mut` bindings — the language's only mutable global — and the
+# `fn` beside them came along accepted and callable from anywhere, so a safe `main` could
+# reach straight into the one context the compiler makes no guarantee about, with no
+# diagnostic. That is the trust boundary the keyword exists to draw, erased silently.
+#
+# The seed refuses both of these by not parsing a module-level group at all, which is its
+# own contract (src/bootstrap/README.md) and not a gap in this rule.
+reject unsafe-group-fn-called-from-safe E387 'this call is in safe code' <<'EOF'
+unsafe {
+	fn poke() -> int {
+		return 7
+	}
+}
+
+fn main() {
+	print poke()
+}
+EOF
+
+# THE SAME RULE AT THE NAME, not only at the call. A bare function name where a value is
+# wanted IS that function, so binding it and calling the binding would be the identical
+# call one line later — a rule that only watched call sites would be one `f := poke` away
+# from meaning nothing.
+reject unsafe-group-fn-as-a-value E387 'hand safe code the same call' <<'EOF'
+unsafe {
+	fn poke() -> int {
+		return 7
+	}
+}
+
+fn main() {
+	f := poke
+	print f()
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently
@@ -592,7 +643,7 @@ spec S {
 }
 
 struct A {
-	x: int
+	pub x: int
 }
 
 pub impl S for A {
@@ -635,7 +686,7 @@ EOF
 reject pub-before-a-decorator E250 at=1:1 <<'EOF'
 pub #[derive(Eq)]
 struct A {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -650,6 +701,164 @@ pub unsafe {
 
 fn main() {
 	print "ok"
+}
+EOF
+
+# --- an import binds a namespace, and the prefix is real -----------------------------
+#
+# GRAMMAR#import-stmt: an `import` BINDS A NAMESPACE — the `as` alias, else the path's last
+# segment — and the bound name lives in the one value namespace, "so colliding with a local
+# name is an error". Neither half was checked.
+#
+# The prefix was not read AT ALL. A qualified name flattened to its last identifier and that
+# identifier was looked up in the one program-wide function space, so with `util/text`
+# imported, `bogus.text.shout(…)` and `util.shout(…)` compiled, linked and ran — the first
+# naming nothing whatever, the second naming a directory. Every case below built a working
+# binary before this branch, which is why they are here and not next door: none of them is a
+# form this compiler had not got to, and no future feature makes any of them legal.
+#
+# The seed has said `undefined name` to all four of them since it was written. That is the
+# reason reject-check makes it the oracle, said once more.
+
+reject an-invented-namespace-prefix E372 'undefined name `bogus`' <<'EOF'
+import "util/text"
+
+fn main() {
+	print bogus.text.shout("x")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject a-path-segment-is-not-a-namespace E372 'undefined name `util`' <<'EOF'
+import "util/text"
+
+fn main() {
+	print util.shout("z")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# THE NAMING HOLE IS NOT THE VISIBILITY HOLE, and this is the case that tells them apart.
+# `hidden` is module-private, and the visibility rule caught it — through the invented
+# prefix, reporting "`hidden` is not a public member of module `text`" about a module the
+# program never named here. The right answer is about `bogus`, and it is now the only one.
+reject an-invented-prefix-onto-a-private-member E372 'undefined name `bogus`' <<'EOF'
+import "caller"
+
+fn main() {
+	print caller.go()
+}
+--- caller/caller.zg
+import "util/text"
+
+pub fn go() -> str {
+	return bogus.hidden()
+}
+--- util/text/text.zg
+fn hidden() -> str {
+	return "private"
+}
+EOF
+
+# `spawn` and `defer` resolve a callee down their own path, so a rule the ordinary call
+# enforces is one they get only by asking the same question — which is why this asks it
+# once (c_ns_kind) and all three read the answer.
+reject an-invented-prefix-in-a-defer E372 'undefined name `bogus`' <<'EOF'
+import "util/text"
+
+fn main() {
+	defer bogus.shout("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# A REAL namespace and a member no module declares. It is the other half of the same
+# resolution — the prefix resolved, the member did not — and it used to be three different
+# answers depending on which shape asked: a placeless raise from a member read, "the method
+# `nosuch` on a ?" from a call, and a not-built refusal from a `spawn`.
+reject a-namespace-without-that-member E388 <<'EOF'
+import "util/text"
+
+fn main() {
+	print text.nosuch("a")
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# TWO IMPORTS SHARING A LAST SEGMENT both bound `text`, and both answered through it: one
+# namespace holding the union of two modules' members, with no diagnostic. GRAMMAR says
+# `as` is "how two imports sharing a last segment coexist", which is only true if not
+# renaming them is an error.
+reject two-imports-sharing-a-last-segment E389 'is already the namespace of' at=3:2 <<'EOF'
+import (
+	"alt/text"
+	"util/text"
+)
+
+fn main() {
+	print text.shout("a")
+}
+--- alt/text/text.zg
+pub fn whisper(s: str) -> str {
+	return s + "..."
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# AND THE COLLISION WITH A LOCAL NAME, which is the one GRAMMAR states outright. `text()`
+# and `text.shout()` both worked, and which of the two a reader reached depended on whether
+# they wrote a `(` or a `.`.
+reject an-import-colliding-with-a-function E389 'is already a function in this program' at=1:8 <<'EOF'
+import "util/text"
+
+fn text() -> str {
+	return "local"
+}
+
+fn main() {
+	print text()
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# A TEMPLATE IS A NAME AT THE TOP LEVEL even though it is not a function to lower, and this
+# is the case that says which walk the rule reads. The import rule used to ask what a name
+# is by re-walking the top-level lists of the program with its TEMPLATES ALREADY REMOVED, so
+# a generic took an import's name in silence — while the identical non-generic pair above
+# was refused. It reads the table c_build_top_names records now, and that walk runs over the
+# whole program, templates and all, for exactly this reason.
+reject an-import-colliding-with-a-generic-function E389 'is already a function in this program' at=1:8 <<'EOF'
+import "util/text"
+
+fn text[T](v: T) -> T {
+	return v
+}
+
+fn main() {
+	print text(1)
+}
+--- util/text/text.zg
+pub fn shout(s: str) -> str {
+	return s + "!"
 }
 EOF
 
@@ -760,7 +969,7 @@ spec Show {
 }
 
 struct C {
-	r: int
+	pub r: int
 }
 
 impl Show for C {
@@ -789,7 +998,7 @@ spec Show {
 }
 
 struct C {
-	r: int
+	pub r: int
 }
 
 impl Show for C {
@@ -818,7 +1027,7 @@ spec Show {
 
 #[derive(Show)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -855,7 +1064,7 @@ EOF
 reject obj-on-something-that-is-not-a-spec E280 no-place <<'EOF'
 #[obj]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1008,7 +1217,7 @@ EOF
 reject order-a-struct-that-has-eq E346 'and these are P and P' <<'EOF'
 #[derive(Eq)]
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1241,9 +1450,9 @@ fn main() {
 }
 EOF
 
-reject str-into-an-int-struct-field E338 'field 1 of `P` is int, and this gives str' <<'EOF'
+reject str-into-an-int-struct-field E338 'the field `x` of `P` is int, and this gives str' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1254,7 +1463,7 @@ EOF
 
 reject oversized-literal-into-a-byte-struct-field E330 '`300` is not a value a byte holds' <<'EOF'
 struct P {
-	x: byte
+	pub x: byte
 }
 
 fn main() {
@@ -1354,7 +1563,7 @@ EOF
 
 reject method-with-too-many-arguments E327 '`P.add` takes 2 arguments and this gives 3' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1398,7 +1607,7 @@ EOF
 
 reject str-argument-into-a-method E340 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1449,7 +1658,7 @@ EOF
 
 reject assign-str-to-an-int-field E339 'cannot assign str to that part of `p`, which holds int' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -1470,11 +1679,11 @@ EOF
 
 reject bind-a-struct-to-another-struct E335 'cannot bind B to a A binding' <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn main() {
@@ -1485,11 +1694,11 @@ EOF
 
 reject pass-a-struct-where-another-goes E340 'argument 1 of `take` is A, and this gives B' <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn take(v: A) -> int {
@@ -1503,11 +1712,11 @@ EOF
 
 reject return-a-struct-the-signature-does-not-name E333 "this function's answer is A, and this gives B" <<'EOF'
 struct A {
-	x: int
+	pub x: int
 }
 
 struct B {
-	y: int
+	pub y: int
 }
 
 fn f() -> A {
@@ -1564,9 +1773,65 @@ fn main() {
 }
 EOF
 
+# THE SAME RULE, WRITTEN IN A CHARACTER THAT IS NOT ASCII. `GRAMMAR#identifier` derives ASCII
+# letters, digits and `_` and nothing else, so a character outside a string, a rune or a
+# comment is the same lexical error `@` is — and this used to KILL the compiler instead:
+# `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught runtime abort with no
+# code, no place and no form named. The lexer had reached its own E104 and then built the
+# diagnostic's lexeme out of ONE byte of a three-byte character.
+#
+# It is in the reject list rather than the refuse list because no future feature makes it
+# legal: `GRAMMAR#letter` says the source is UTF-8, which is what lets this character be WRITTEN
+# in a comment or a literal, and identifier says which characters can spell a name.
+reject a-character-that-is-not-ascii E104 <<'EOF'
+fn main() {
+	x := 1
+	print 值
+}
+EOF
+
+# A FILE THAT IS NOT UTF-8 AT ALL, which is the same abort one stage earlier: the driver turns
+# the bytes it read into a `str` before the lexer sees a character, and `str(bytes)` checks the
+# invariant and KILLS the process on a violation. `zerg build`, `zerg fmt`, `zerg desugar`,
+# `zerg lint` and the language server all died the same way, on `EncodingError: bytes are not
+# valid UTF-8 for a str` — no code, no place, and not even the name of the file it was reading.
+#
+# `GRAMMAR#letter` says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# WHICH FILE is the whole of the answer — there is no line to name, the thing that would read
+# one being what refused. Hence `no-place`.
+#
+# The byte is spelled through the shell rather than written here, because a script holding an
+# invalid sequence is a script no editor, formatter or diff opens twice.
+#
+# `seed-gap`: the seed is byte-oriented and has no str invariant to violate, so it emits
+# `"\377"` into the C and answers nothing at all — the one direction where zerg is the
+# stricter compiler on an encoding.
+reject a-source-file-that-is-not-utf8 E111 no-place seed-gap <<EOF
+fn main() {
+	print "$(printf '\377')"
+}
+EOF
+
 reject based-number-with-no-digits E108 <<'EOF'
 fn main() {
 	n := 0x
+	print(f"{n}")
+}
+EOF
+
+# GRAMMAR group 3 spells the prefix and its first digit as one thing — `'0x' hex-digit ( '_'?
+# hex-digit )*` — so the `_` that groups digits has a digit on BOTH sides, and there is no
+# digit to its left when it comes first. `0x_1F` used to lex as an Int, and the digits it did
+# have were worth 31, so a literal the grammar has no production for compiled and answered a
+# number: the one shape of this mistake that never reaches a reader.
+#
+# The other two prefixes and the DOUBLED underscore ride on this one. `0o_7`, `0b_1` and
+# `0x__1F` are all the same question asked at the same place — is the byte after the prefix a
+# digit — and differ only in which `based_valid` they ask it with; the seed has answered no to
+# all four since it was written, and it is the oracle here.
+reject based-number-with-a-leading-underscore E108 <<'EOF'
+fn main() {
+	n := 0x_1F
 	print(f"{n}")
 }
 EOF
@@ -1926,7 +2191,7 @@ EOF
 
 reject this-as-a-method-parameter E245 'is a reserved word and cannot name a parameter' no-place <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -1942,7 +2207,7 @@ EOF
 
 reject this-as-a-field E245 'is a reserved word and cannot name a struct field' no-place <<'EOF'
 struct P {
-	this: int
+	pub this: int
 }
 
 fn main() {
@@ -1963,7 +2228,7 @@ EOF
 
 reject this-as-a-type E245 'is a reserved word and cannot name a struct' no-place <<'EOF'
 struct this {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -2018,7 +2283,7 @@ EOF
 
 reject capital-this-as-a-type E245 'cannot name a struct' no-place seed-gap <<'EOF'
 struct This {
-	x: int
+	pub x: int
 }
 
 fn main() {
@@ -2043,6 +2308,20 @@ fn f(This: int) {
 
 fn main() {
 	f(1)
+}
+EOF
+
+# A TYPE ALIAS is a declaration like any other, and it was the one that never asked. Every
+# naming position above reaches p_name and is answered there; `type X = Y` read its own
+# identifier with a bare `expect`, so `type This = int` declared the self type as a synonym
+# for `int` at module level while `This` inside an `impl` went on meaning the implementing
+# type — the same word with two meanings in one program, which is exactly what reserving it
+# is for.
+reject capital-this-as-a-type-alias E245 'cannot name a type alias' no-place seed-gap <<'EOF'
+type This = int
+
+fn main() {
+	print 1
 }
 EOF
 
@@ -2100,7 +2379,7 @@ EOF
 
 reject mut-fn-on-an-immutable-receiver E325 'which is a `mut fn`, writes back to `p`' <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 
 impl P {
@@ -2255,7 +2534,7 @@ EOF
 # what it emits.
 reject convert-a-struct-to-an-int E455 no-place <<'EOF'
 struct P {
-	v: int
+	pub v: int
 }
 
 fn main() {
@@ -2371,7 +2650,7 @@ EOF
 
 reject impl-misses-a-required-member E318 'does not implement `show`' seed-gap <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 spec Show {
@@ -2388,7 +2667,7 @@ EOF
 
 reject impl-misses-one-of-two E318 'does not implement `tag`' seed-gap <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 spec Show {
@@ -2425,7 +2704,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2445,7 +2724,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2465,7 +2744,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2485,7 +2764,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2506,7 +2785,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2526,7 +2805,7 @@ spec Bump {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Bump for A {
@@ -2547,7 +2826,7 @@ spec Bump {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Bump for A {
@@ -2568,7 +2847,7 @@ spec Eq {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Eq for A {
@@ -2588,7 +2867,7 @@ spec Ix[K] {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ix[int] for A {
@@ -2612,7 +2891,7 @@ spec Ord: Eq {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ord for A {
@@ -2628,7 +2907,7 @@ EOF
 
 reject impl-of-a-spec-that-does-not-exist E314 <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Nope for A {
@@ -2648,7 +2927,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2674,7 +2953,7 @@ spec Ix[K] {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Ix for A {
@@ -2688,21 +2967,31 @@ fn main() {
 }
 EOF
 
-# --- a type name is one name -----------------------------------------------------
+# --- the top level is one namespace ----------------------------------------------
 #
-# A struct, an enum and a spec share one namespace — every module flattens into one scope
-# here, which is the argument that already refuses a duplicate function and a duplicate
-# module constant. Nothing checked it, and the shapes failed four different ways: two
-# structs MERGED into one of both their fields, two of the same reached cc as a "typedef
-# redefinition" against .zerg-cache, and two specs were simply accepted.
+# A struct, an enum, a type declaration, a spec, a free function and a module constant all
+# live in it — every module flattens into one scope here, and GRAMMAR's construction note
+# puts a type name into the VALUE namespace besides ("a type and a function cannot share a
+# name (a duplicate is an error — Zerg has no overloading)"), since `struct User` is what
+# makes `User(…)` a call. Nothing checked most of it, and the shapes failed several
+# different ways: two structs MERGED into one of both their fields, two of the same reached
+# cc as a "typedef redefinition" against .zerg-cache, two specs were simply accepted, and a
+# type beside a function reached cc as "redefinition of 'zg_Foo' as different kind of
+# symbol" — after `Foo(3)` had already been read as the CONSTRUCTOR rather than the call
+# the program wrote.
+#
+# One walk answers all of it (c_build_top_names), which is why the constant-versus-function
+# pair is here rather than in a section of its own: it used to be a second check, in the
+# constant walk, and a second check had a second extent — it knew about functions and not
+# about types, so `const A := 1` beside `struct A` went straight to cc.
 
 reject a-struct-declared-twice E382 no-place <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 struct A {
-	w: str
+	pub w: str
 }
 
 fn main() {
@@ -2734,7 +3023,7 @@ spec Tag {
 }
 
 struct A {
-	v: int
+	pub v: int
 }
 
 impl Tag for A {
@@ -2748,9 +3037,9 @@ fn main() {
 }
 EOF
 
-reject a-struct-and-a-spec-share-a-name E381 seed-gap <<'EOF'
+reject a-struct-and-a-spec-share-a-name E381 'once as a struct, once as a spec' seed-gap <<'EOF'
 struct A {
-	v: int
+	pub v: int
 }
 
 spec A {
@@ -2762,6 +3051,138 @@ fn main() {
 }
 EOF
 
+# and the pairings a TYPE makes with a FUNCTION, which is the half GRAMMAR states outright
+# and nothing enforced. All four kinds of type are here because all four spell a different
+# C declaration and each failed cc its own way, and both source orders are here because the
+# finding must land on the `fn` either way: a FnDecl knows its place and a struct does not,
+# so walking the types first is what makes this whole family a rule that says WHERE.
+
+reject a-struct-and-a-function-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+struct A {
+	pub v: int
+}
+
+fn A(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=1:1 <<'EOF'
+fn A(n: int) -> int {
+	return n
+}
+
+struct A {
+	pub v: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject an-enum-and-a-function-share-a-name E381 'once as an enum, once as a function' at=5:1 <<'EOF'
+enum E {
+	X
+}
+
+fn E(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-typedef-and-a-function-share-a-name E381 'once as a type declaration, once as a function' at=3:1 <<'EOF'
+type Celsius = int
+
+fn Celsius(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject a-spec-and-a-function-share-a-name E381 'once as a spec, once as a function' at=5:1 <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+fn Tag(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# A TEMPLATE IS A NAME TOO. `fn Box[T](…)` is removed from the program before the passes
+# that lower it, on the grounds that a template is not a function — but it still claims
+# `Box` at the top level, and `Box(3)` beside `struct Box` quietly meant the constructor.
+# This case is what holds the name walk to the list that still has the templates in it.
+reject a-generic-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+struct Box {
+	pub v: int
+}
+
+fn Box[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# and the pairings a MODULE CONSTANT makes. The constant-versus-function pair was already
+# refused; the constant-versus-type pair is what the separate check could not see, and it
+# is the case that would go quiet again the day this rule is asked in two places. Every one
+# of them is reported at the CONSTANT, which is where the old check reported it from.
+reject a-struct-and-a-module-constant-share-a-name E381 'once as a struct, once as a module constant' at=1:1 <<'EOF'
+const A := 1
+
+struct A {
+	pub v: int
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject const-taking-a-function-name E381 'once as a function, once as a module constant' at=1:1 <<'EOF'
+const f := 1
+
+fn f() {
+	print "x"
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+reject function-taking-a-const-name E381 'once as a function, once as a module constant' at=5:1 <<'EOF'
+fn f() {
+	print "x"
+}
+
+const f := 1
+
+fn main() {
+	print "ok"
+}
+EOF
+
 # and one level down, where the same question has the same answer and three more ways of
 # going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C redefinition
 # against .zerg-cache, and a repeated VARIANT was accepted — the second took the next
@@ -2770,8 +3191,8 @@ EOF
 
 reject a-field-declared-twice E453 'declares a field named `v` twice' no-place seed-gap <<'EOF'
 struct A {
-	v: int
-	v: str
+	pub v: int
+	pub v: str
 }
 
 fn main() {
@@ -2858,6 +3279,57 @@ fn main() {
 }
 EOF
 
+# --- the SELECTOR half of the same rule -------------------------------------------------
+#
+# `GRAMMAR#keyword` says outright that none of them can be an identifier, and `GRAMMAR#postfix`
+# derives `'.' identifier` and `'.' dec-int`. Every DECLARING position above already answers
+# that way; the postfix did not — it read whatever token followed the `.` as a field name and
+# handed it downstream, so `x.if` was answered by the CHECKER as ``E376 no field `if` on int``:
+# a sentence that treats a reserved word as a field somebody might plausibly have declared.
+#
+# The four sites that read a selector — `.` and `?.`, in `parse_postfix` and in
+# `parse_chain_tail` — now share one function, because a rule written at one of four slots is
+# the shape of bug this repo keeps finding.
+reject a-reserved-word-as-a-field E293 '`if` is a reserved word' <<'EOF'
+fn main() {
+	x := 1
+	print x.if
+}
+EOF
+
+# THE SWALLOWED LINE, and it is why this belongs at the postfix rather than at the checker.
+# A `.` suppresses ASI, so the `print` on the NEXT line was read as the field name of `1.` and
+# the line vanished from the program — what got reported was `2`, on a line that is correct,
+# under E205. Two statements in, three lines down, about the wrong one.
+reject a-dot-that-eats-the-next-line E293 '`print` is a reserved word' <<'EOF'
+fn main() {
+	print 1.
+	print 2
+}
+EOF
+
+# NOT A NAME AT ALL is the rest of the production, and it went the same way: an operator or a
+# literal after the `.` became a "field" whose name is `+` or `"a"`, and E376 said no int has
+# one. The seed has asked for "a field name or tuple index" since it was written and is the
+# oracle for all four of these.
+reject a-field-name-that-is-not-a-name E294 'found `+`' <<'EOF'
+fn main() {
+	x := 1
+	print x.+
+}
+EOF
+
+# `?.` derives ONLY an identifier — a tuple index is on `.` alone (GRAMMAR#postfix) — and this
+# read the `0` as a field, reaching the checker as ``no field `0` on (int, int)``, with no code
+# and no place on it at all.
+reject a-tuple-index-through-an-optional-chain E294 'after `?.`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	p: (int, int)? = t
+	print p?.0
+}
+EOF
+
 # --- a byte converts; a LIST of them does not ------------------------------------
 #
 # `Into` carries a `byte` into an `int` slot one value at a time. A `list[byte]` does not
@@ -2900,6 +3372,18 @@ EOF
 # a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
 # carrier, is where the declared type lives.
 
+# AND THE SENTENCE MUST NOT DROP THE `?`. The payload is where the declared type lives, so
+# the comparison is right to be against the `int`; what was wrong is that the label went on
+# saying "the binding `x`", so the message read `the binding `x` is int` about a binding the
+# reader had declared `int?` two words earlier. The slot the value is entering is the
+# carrier's payload, and the label now says which carrier.
+reject str-into-an-optional-binding E338 'the int? payload of the binding `x`' <<'EOF'
+fn main() {
+	x: int? = "s"
+	print x ?? 0
+}
+EOF
+
 reject str-into-an-optional-list-element E338 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]
@@ -2907,9 +3391,9 @@ fn main() {
 }
 EOF
 
-reject str-into-an-optional-struct-field E338 'field 1 of `Box` is int' <<'EOF'
+reject str-into-an-optional-struct-field E338 'the field `v` of `Box`' <<'EOF'
 struct Box {
-	v: int?
+	pub v: int?
 }
 
 fn main() {
@@ -2950,6 +3434,345 @@ EOF
 # legal C, so neither cc nor any gate had anything to say — the program simply answered
 # something other than what it was written to answer.
 
+# --- a channel does not carry an optional ------------------------------------------
+#
+# `chan[T?]` is refused by the LANGUAGE (GRAMMAR#chan-type, docs/code/coroutine.md), and
+# the reason is the one fact the whole receive story rests on: a receive answers `T?`, and
+# a clean close IS nil, so on a channel of optionals "a nil was sent" and "the stream is
+# over" are the same observation and no operator can tell them apart.
+#
+# It used to be checked at the CONSTRUCTOR alone — `chan[int?](1)`, one call in the
+# emitter — so every other position carrying the same type was accepted in silence: a
+# parameter, a result, a struct field, a typed binding, a typedef, a chan nested inside
+# another type. The rule now sits where a channel's element type is READ, which is one
+# place per compiler, so each case below is the same rule arriving through a position
+# rather than a rule written out per position. That is what makes this list a list of
+# POSITIONS and not a list of copies.
+#
+# The one case that does not come through the parser is the last: a template's `chan[T]`
+# becomes a `chan[int?]` by SUBSTITUTION, with nothing written in the source to point at.
+
+reject a-channel-of-optionals-constructed E404 <<'EOF'
+fn main() {
+	ch := chan[int?](1)
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-as-a-parameter E404 <<'EOF'
+fn f(ch: <-chan[int?]) {
+	print 1
+}
+
+fn main() {
+	print 2
+}
+EOF
+
+reject a-channel-of-optionals-as-a-result E404 <<'EOF'
+fn f() -> chan[int?] {
+	return chan[int](1)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# the place is PINNED on this one, because a struct field is the position that carries no
+# statement and no declaration position of its own: the finding has to come from the type
+# as it is written, and nothing else here would notice it drifting to the file's first line.
+reject a-channel-of-optionals-as-a-field E404 at=2:10 <<'EOF'
+struct Box {
+	pub ch: chan[int?]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-in-a-typed-binding E404 <<'EOF'
+fn main() {
+	ch: chan[int?] = chan[int](1)
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-under-a-typedef E404 <<'EOF'
+type C = chan[int?]
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-channel-of-optionals-inside-a-list E404 <<'EOF'
+struct Box {
+	pub xs: list[chan[int?]]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# by SUBSTITUTION: nothing in this source spells `chan[int?]`, and the specialization of
+# `mk` for `int?` is one. The parser never sees that type, so the rule has to be on the
+# substitution too — and there is no source position to report, because the type is not
+# written anywhere.
+reject a-channel-of-optionals-by-substitution E404 no-place <<'EOF'
+fn mk[T](v: T) {
+	ch := chan[T](1)
+	ch <- v
+	print 1
+}
+
+fn main() {
+	mut x: int? = nil
+	mk(x)
+}
+EOF
+
+# by SPEC SUBSTITUTION, which was the FOURTH door and the one that proved a list of doors
+# is the wrong shape for this rule. A spec's required signature writes `chan[K]`, and
+# `impl Ix[int?]` says `K` is `int?` — so the type the impl is being held to is a
+# `chan[int?]`. The checker rebuilt it by hand and asked nothing, so this position quietly
+# accepted what the parser and the specializer both refuse, and named the type back in a
+# mismatch message as though it were a type. The rule sits on CONSTRUCTION now (ty_chan),
+# which is the one door that cannot be walked around.
+#
+# No place, for the same reason as the case above: nothing in this source spells the type.
+reject a-channel-of-optionals-by-spec-substitution E404 no-place <<'EOF'
+spec Ix[K] {
+	fn c() -> chan[K]
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int?] for A {
+	fn c() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print(A(1).v)
+}
+EOF
+
+# --- and a channel, a map and a carrier are COMPARED like everything else ------------
+#
+# `chk_fits` opened with one line — "a carrier, a channel or a map is never a mismatch" —
+# and that line answered yes for every pairing whose WANTED side was one of the three,
+# whatever stood on the other. It was written to protect three real reshapes: a bare value
+# wrapping into a `T?` or a `Result[T]`, a bidirectional channel narrowing to one end, and
+# a map literal taking its key and value types from the declaration. All three are still
+# reshapes, and each now has its own clause — what they never licensed is the five below.
+#
+# The seed refuses every one of them, and has all along: this is a rule `zerg` lost on the
+# way to self-hosting, which `make oracle` cannot see because oracle compares the two
+# compilers on programs the seed ACCEPTS.
+
+reject a-channel-of-another-element E335 'cannot bind chan[int] to a chan[str] binding' <<'EOF'
+fn main() {
+	ch: chan[str] = chan[int](1)
+	print 1
+}
+EOF
+
+# it compiled to `zrt_chan *zg_ch = 7;`, which cc reported as an integer-to-pointer
+# conversion against a line nobody wrote
+reject an-int-into-a-channel E335 'cannot bind int to a chan[int] binding' <<'EOF'
+fn main() {
+	ch: chan[int] = 7
+	print 1
+}
+EOF
+
+# --- a channel's DIRECTION, which is the other half of its type -------------------------
+#
+# Four rules, and until now none of them carried a code or a place — so a reader was told a
+# direction was wrong and left to find which of their sends it was, and no gate could pin
+# any of the four without pinning its prose. The SEED reports all four with a place, and
+# numbers a call's arguments from 1 the way `E340` does; these numbered from 0, so a reader
+# following one of them looked at the wrong parameter.
+#
+# Two rules and not one: what a NAME MAY DO with an end (E503-E505) is a different question
+# from where an end MAY GO (E506), which is why the narrowing rule has a code of its own.
+
+reject receive-on-a-send-only-channel E503 <<'EOF'
+fn take(ch: chan[int]<-) {
+	print <-ch!
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject send-on-a-receive-only-channel E504 <<'EOF'
+fn take(ch: <-chan[int]) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+reject close-a-receive-only-channel E505 <<'EOF'
+fn take(ch: <-chan[int]) {
+	close(ch)
+}
+
+fn main() {
+	c := chan[int]()
+	take(c)
+}
+EOF
+
+# THE ARGUMENT IS NUMBERED FROM 1, which is what the sentence is asserted for: `take` has
+# one parameter, and this used to call it argument 0.
+reject a-direction-that-does-not-narrow-at-an-argument E506 'argument 1 of `take`' <<'EOF'
+fn take(ch: chan[int]<-) {
+	ch <- 1
+}
+
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	take(r)
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-binding E506 'binding `s`' <<'EOF'
+fn main() {
+	c := chan[int]()
+	r: <-chan[int] = c
+	s: chan[int]<- = r
+	print 1
+}
+EOF
+
+reject a-direction-that-does-not-narrow-at-a-return E506 "this function's answer" <<'EOF'
+fn f(c: <-chan[int]) -> chan[int]<- {
+	return c
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject an-int-into-a-map E335 'cannot bind int to a map[str, int] binding' <<'EOF'
+fn main() {
+	m: map[str, int] = 7
+	print 1
+}
+EOF
+
+# a map against a map is the pairing the literal escape does NOT cover: both sides are
+# maps and neither is a literal, so nothing here is taking its shape from the declaration
+reject a-map-of-another-value-type E335 'cannot bind map[str, int] to a map[str, str] binding' <<'EOF'
+fn main() {
+	a: map[str, int] = {"a": 1}
+	b: map[str, str] = a
+	print b.len()
+}
+EOF
+
+# A CARRIER PASSES THROUGH OR IS INJECTED, and a carrier of another shape does neither: an
+# `int?` cannot pass through into a `str?` — they are different C types — and cannot be the
+# `str` payload either. It reached cc as an incompatible-pointer argument to `zrt_str_retain`.
+reject an-optional-of-another-element E335 'cannot bind int? to a str? binding' <<'EOF'
+fn main() {
+	y: int? = 5
+	x: str? = y
+	print y ?? 0
+}
+EOF
+
+# --- a channel operation needs a channel --------------------------------------------
+#
+# `<-x`, `x <- v`, `close(x)` and a `select` arm all name an END of a channel, and the
+# question of whether `x` IS one had an answer at exactly one of those six sites: `close`.
+# Everywhere else the emitter asked for the element type of whatever it had been given and
+# took the `TUnknown` it got back for a type, so a receive on a non-channel came out as
+# `TOpt(TUnknown)` — an optional of nothing, printed `?` — and the program went on being
+# compiled around it. What the reader was told about afterwards was the `?`: `` `??` on a
+# ? ``, `E434 … over a ?`, sentences about a type nothing in the source had written. Where
+# the walk did not touch the broken type at all, the C came out with a carrier struct in a
+# `zrt_chan *` slot and cc rejected generated code nobody wrote.
+#
+# The rule is one sentence in `c_chan_op_check` now, which is the place all six operations
+# already went through to be told whether a DIRECTION permits them; "it is not a channel
+# end at all" is the first thing that same question asks. So the cases below are again a
+# list of POSITIONS, not a list of copies.
+#
+# The nested receive is the case that motivated the rest, and it is worth reading twice:
+# `<-(<-cc)` is what the self-recursive GRAMMAR#recv-base derives, and it is ill-typed
+# for a reason that has nothing to do with nesting — a receive answers `T?` (group 9), and
+# `chan[int]?` is not a channel. The well-formed spelling unwraps in between, `<-((<-cc)!)`,
+# and it lives in the corpus as `chan_of_chan`.
+
+reject a-receive-of-a-receive E478 "chan[int]? is not one" at=6:2 <<'EOF'
+fn main() {
+	cc := chan[chan[int]](1)
+	inner := chan[int](1)
+	inner <- 7
+	cc <- inner
+	x := <-(<-cc)
+	print x ?? -1
+}
+EOF
+
+reject a-receive-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	x := <-n
+	print x ?? -1
+}
+EOF
+
+reject a-send-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	mut n := 3
+	n <- 7
+	print n
+}
+EOF
+
+reject a-close-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	close(n)
+	print n
+}
+EOF
+
+reject a-select-receive-arm-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	select {
+		v := <-n => print v
+	}
+}
+EOF
+
+reject a-select-send-arm-on-an-int E478 "and int is not one" <<'EOF'
+fn main() {
+	n := 3
+	select {
+		n <- 7 => print "sent"
+	}
+}
+EOF
+
 # --- what only the driver can reject ------------------------------------------------
 #
 # A program build needs an entry point. `program ::= stmt-list` makes a main-less source
@@ -2970,11 +3793,56 @@ EOF
 # regression this catches is the entry-point check drifting somewhere every emit stage
 # passes through.
 printf 'x := 1\n' >"$tmp/module-without-main.zg"
-if "$ZERG" build --emit lib -o "$tmp/module-without-main" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
+if "$ZERG" build --emit lib -o "$tmp/module-without-main.o" "$tmp/module-without-main.zg" >/dev/null 2>&1 &&
 	[ -f "$tmp/module-without-main.o" ]; then
 	pass=$((pass + 1))
 else
 	echo "LIB       module-without-main — a main-less module no longer builds with --emit lib"
+	fail=$((fail + 1))
+fi
+
+# --- `-o` NAMES THE FILE WRITTEN, AT EVERY STAGE -----------------------------------
+#
+# It is asserted here for the reason the case above is: this file already owns the repo's
+# only `-o` assertion, and no other gate runs the DRIVER rather than the language. What it
+# catches is the flag meaning a different thing per stage — which is what it meant, in both
+# directions. `--emit lib` appended `.o` to a path the user had spelled in full, so `-o
+# out.o` wrote `out.o.o` and `out.o.o.c`; and `--emit c`, `--emit tokens` and `--emit ast`
+# discarded the flag and wrote stdout, so a build that asked for a file got none, said
+# nothing, and exited 0.
+printf 'fn main() {\n\tprint 1\n}\n' >"$tmp/oflag.zg"
+
+o_case() {
+	local name=$1
+	shift
+	if "$@" >/dev/null 2>&1 && [ -s "$tmp/$name" ]; then
+		pass=$((pass + 1))
+	else
+		echo "OUTPUT    $name — \`-o\` did not write the file it was given"
+		fail=$((fail + 1))
+	fi
+}
+
+o_case o-lib.o "$ZERG" build --emit lib -o "$tmp/o-lib.o" "$tmp/oflag.zg"
+o_case o-emit.c "$ZERG" build --emit c -o "$tmp/o-emit.c" "$tmp/oflag.zg"
+o_case o-tokens.txt "$ZERG" build --emit tokens -o "$tmp/o-tokens.txt" "$tmp/oflag.zg"
+o_case o-ast.txt "$ZERG" build --emit ast -o "$tmp/o-ast.txt" "$tmp/oflag.zg"
+o_case o-bin "$ZERG" build --emit bin -o "$tmp/o-bin" "$tmp/oflag.zg"
+
+# and the suffix is NOT appended twice: `out.o.o` is what the old rule left behind.
+if [ ! -e "$tmp/o-lib.o.o" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    o-lib-double-suffix — \`--emit lib -o out.o\` wrote out.o.o"
+	fail=$((fail + 1))
+fi
+
+# WITH NO `-o` the three reading stages stay on stdout, which is the pipe every other gate
+# here uses: only the DEFAULT differs per stage, never what an explicit `-o` means.
+if [ -n "$("$ZERG" build --emit c "$tmp/oflag.zg" 2>/dev/null)" ]; then
+	pass=$((pass + 1))
+else
+	echo "OUTPUT    c-without-o — \`--emit c\` with no \`-o\` wrote nothing to stdout"
 	fail=$((fail + 1))
 fi
 
@@ -2990,7 +3858,7 @@ fi
 
 reject display-override-with-arguments E359 seed-gap <<'EOF'
 struct Point {
-	x: int
+	pub x: int
 }
 
 impl Point {
@@ -3006,7 +3874,7 @@ EOF
 
 reject display-override-wrong-answer E361 seed-gap <<'EOF'
 struct Point {
-	x: int
+	pub x: int
 }
 
 impl Point {
@@ -3198,7 +4066,7 @@ EOF
 # answer, and it is permanent.
 reject field-the-struct-does-not-have E376 <<'EOF'
 struct P {
-	n: int
+	pub n: int
 }
 
 fn main() {
@@ -3251,7 +4119,7 @@ EOF
 # the stack ran out. A compiler that dies says nothing at all, about anything.
 reject struct-holding-itself-by-value E452 no-place <<'EOF'
 struct P {
-	p: P
+	pub p: P
 }
 
 fn main() {
@@ -3283,7 +4151,7 @@ EOF
 
 reject raise-a-struct E380 <<'EOF'
 struct P {
-	a: int
+	pub a: int
 }
 
 fn main() {
@@ -3449,9 +4317,204 @@ fn main() {
 }
 EOF
 
+# THE SAME NAME, ONE KEYWORD EARLIER. `spawn` and `defer` resolve their callee down a path
+# of their own (c_callee_raw), and that path asked neither of the two rules the ordinary
+# call asks about the function it found — so a module-private name and an `unsafe { … }`
+# group's function were both reachable by writing `spawn` in front of the call that is
+# refused without it. Three cases, because they are the two shapes the path resolves (a
+# plain name and a namespaced one) and the two rules it skipped.
+reject a-module-private-name-spawned E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	spawn text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+reject a-module-private-name-deferred E301 <<'EOF'
+import "util/text"
+
+fn main() {
+	defer text.hidden("a")
+	print text.shout("b")
+}
+--- util/text/text.zg
+fn hidden(s: str) {
+	print s
+}
+
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+EOF
+
+# THE SAME NAME, AND THE ENTRY NAMED WITH NO DIRECTORY. Every case above hands the compiler a
+# path that has one, and a module is a directory — so the rule asks a file's path which
+# module it is in, and for `zerg build m.zg` the answer was the empty string, which is also
+# the value that means "generated, no module a reader could have written". The entry module
+# collapsed into the sentinel and every visibility question went quiet: this exact program,
+# spelled `./m.zg`, was refused, and spelled `m.zg`, printed 42.
+reject a-module-private-name-from-a-bare-entry-path E301 bare-entry <<'EOF'
+import "text"
+
+fn main() {
+	print text.helper()
+}
+--- text/text.zg
+fn helper() -> int {
+	return 42
+}
+EOF
+
+# --- module-level `unsafe { … }`, on its `mut` binding ------------------------------------
+#
+# A module-level `unsafe { … }` group holds two kinds of item, and only one of them had a rule
+# about who may reach it. Its `fn` is an unsafe fn and a safe caller is refused (E387); its
+# `mut` binding — the language's ONLY mutable global (GRAMMAR group 12) — could be written
+# `pub`, and was then genuinely exported: another module's SAFE `main` both read `glob.shared`
+# and assigned it, with no `unsafe` anywhere in that file.
+#
+# The grammar makes the binding module-PRIVATE, which is what these cases pin, and it is the
+# whole of the crossing: without the `pub` a reader outside is refused by the ordinary
+# visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
+# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
+# `unsafe { … }` as an expression still E224 no function body can open an unsafe context, so
+# a rule there would make the group unreachable from anything a program can write.
+
+reject a-pub-mutable-global E484 at=2:2 <<'EOF'
+unsafe {
+	pub mut shared := 5
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AND WITHOUT THE `pub` THE EXPORT IS GONE, which is the other half of the same claim: the
+# binding is module-private, so a reader outside is refused by the ordinary visibility rule
+# and there is no second rule owed for a mutable global in particular. Both directions, since
+# a write is what the hole was really about.
+reject a-mutable-global-read-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+reject a-mutable-global-assigned-from-another-module E301 'module `glob`' <<'EOF'
+import "glob"
+
+fn main() {
+	glob.shared = 11
+	print glob.read()
+}
+--- glob/glob.zg
+unsafe {
+	mut shared := 5
+}
+
+pub fn read() -> int {
+	return shared
+}
+EOF
+
+# ACROSS THE MODULE BOUNDARY, which is the shape the hole was found in: the group was in
+# another module and a safe `main` both read `glob.shared` and assigned it, with no `unsafe`
+# anywhere in the file. The finding lands on the DECLARATION and not on either use — the
+# export is what made the uses possible, and the module that wrote `pub` is the one with a
+# line to change. It is here because the rule walks the unit being emitted, so an imported
+# module has to be spoken about while ITS unit is compiled, not the entry's.
+reject a-pub-mutable-global-in-an-imported-module E484 'may not be `pub`' <<'EOF'
+import "glob"
+
+fn main() {
+	print glob.shared
+	glob.shared = 11
+}
+--- glob/glob.zg
+unsafe {
+	pub mut shared := 5
+}
+EOF
+
+# --- import cycles ------------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
+# one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
+# initialization order no chapter defines.
+reject an-import-cycle-between-two-modules E485 no-place <<'EOF'
+import "ca"
+
+fn main() {
+	print ca.a_one()
+}
+--- ca/ca.zg
+import "cb"
+
+pub fn a_one() -> int {
+	return cb.b_one() + 1
+}
+--- cb/cb.zg
+import "ca"
+
+pub fn b_one() -> int {
+	return 10
+}
+EOF
+
+# A MODULE THAT IMPORTS ITSELF is the one-node cycle, and it is worth its own case because a
+# detector written as "have I seen this on the way down" answers it by a different branch
+# than the two-node one — the `seen` list a loader already keeps for deduplication makes the
+# self-edge look exactly like a module two files import.
+reject a-module-that-imports-itself E485 no-place <<'EOF'
+import "solo"
+
+fn main() {
+	print solo.one()
+}
+--- solo/solo.zg
+import "solo"
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
+unsafe {
+	fn poke() {
+		print 7
+	}
+}
+
+fn main() {
+	spawn poke()
+	print 1
+}
+EOF
+
 reject assign-to-the-receiver E306 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 impl P {
 	fn set() {
@@ -3469,7 +4532,7 @@ spec A: Nope {
 	fn f()
 }
 struct P {
-	x: int
+	pub x: int
 }
 impl A for P {
 	fn f() {
@@ -3493,7 +4556,7 @@ EOF
 # saying `mut fn` — the half of the rule that is not about the argument at all.
 reject a-borrow-of-a-field-of-an-immutable-receiver E324 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 fn bump(mut &n: int) {
 	n = n + 1
@@ -3531,6 +4594,114 @@ fn main() {
 }
 EOF
 
+# --- nil is not a value ------------------------------------------------------------
+#
+# Two forms ANSWER nil and neither says so on its face: a `fn` with no `-> type`
+# (GRAMMAR#fn-decl) and a block whose last statement is not an expression (GRAMMAR#block).
+# A TYPED position already judged both; the inference path had no rule at all, so all of
+# these reached cc — as `variable has incomplete type 'void'`, as `initializing 'int64_t'
+# with an expression of incompatible type 'void'`, and as a `void` list element and struct
+# field. The sentence tells the pair apart from the container pair.
+
+reject a-binding-inferred-from-a-void-call E390 'and this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	x := f()
+	print 1
+}
+EOF
+
+reject a-binding-inferred-from-a-valueless-block E390 'and this one is nil' <<'EOF'
+fn main() {
+	z := {
+		nop
+	}
+	print 1
+}
+EOF
+
+reject printing-a-void-call E390 '`print` needs a value' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+reject an-f-string-hole-holding-nil E390 'this rendering needs a value' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	print(f"{f()}")
+}
+EOF
+
+reject a-list-of-a-void-call E390 'a part of this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	xs := [f()]
+	print xs.len()
+}
+EOF
+
+reject a-tuple-holding-a-void-call E390 'a part of this one is nil' <<'EOF'
+fn f() {
+	print "f"
+}
+
+fn main() {
+	t := (f(), 1)
+	print t.1
+}
+EOF
+
+# --- the top level runs nothing ----------------------------------------------------
+#
+# `program ::= stmt-list` (GRAMMAR#program) is script mode, and a compiled program has no
+# moment at which to run a statement — outside `main` lives only immutable state readied
+# before it (docs/runtime/package.md). All three used to be parsed and then DROPPED: the
+# program built, and printed nothing.
+#
+# The seed drops them too, which is the narrower compiler being narrower; its README says so.
+
+reject a-print-at-the-top-level E391 '`print` opens a statement' at=1:1 seed-gap <<'EOF'
+print 999
+
+fn main() {
+	print 1
+}
+EOF
+
+reject an-if-at-the-top-level E391 '`if` opens a statement' at=1:1 seed-gap <<'EOF'
+if true {
+	print 1
+}
+
+fn main() {
+	print 2
+}
+EOF
+
+reject a-loop-at-the-top-level E391 '`for` opens a statement' at=1:1 seed-gap <<'EOF'
+for {
+	break
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 reject an-if-on-an-optional E354 <<'EOF'
 fn main() {
 	x: int? = 1
@@ -3542,7 +4713,7 @@ EOF
 
 reject a-display-that-mutates E360 <<'EOF'
 struct P {
-	x: int
+	pub x: int
 }
 impl P {
 	mut fn display() -> str {
@@ -3557,12 +4728,66 @@ EOF
 
 reject a-struct-literal-missing-a-field E370 <<'EOF'
 struct P {
-	a: int
-	b: int
+	pub a: int
+	pub b: int
 }
 fn main() {
 	p := P(1)
 	print p.a
+}
+EOF
+
+# A DEFAULT MAKES ONE FIELD OPTIONAL, NOT THE ONES BEFORE IT. Backfilling runs from the end
+# of the written arguments forward, so a construction that stops short of a field with no
+# default is still short — the same rule a `fn` parameter default follows, and the one that
+# would go quiet if a defaulted field anywhere in the type were read as "this may be empty".
+reject a-required-field-before-a-defaulted-one E370 'the field `w` of `Box`' <<'EOF'
+struct Box {
+	pub w: int
+	pub h: int = 4
+}
+
+fn main() {
+	b := Box()
+	print b.h
+}
+EOF
+
+# --- a private field must carry a default -----------------------------------------------
+#
+# GRAMMAR's FIELD VISIBILITY & DEFAULTS note: a non-`pub` field is module-private, and MUST
+# carry a default. The field-wise `T(...)` constructor is public and there are no zero
+# values, so a field with no default is one every construction has to supply — and outside
+# the module a private field cannot even be read, which makes the type unbuildable from
+# where it is used.
+#
+# The rule was UNENFORCEABLE until field defaults existed, so the compiler accepted this and
+# the MUST was dead in both directions: no program could obey it, and none was asked to.
+reject a-private-field-with-no-default E482 '`m` of `Q`' <<'EOF'
+struct Q {
+	pub n: int
+	m: int
+}
+
+fn main() {
+	q := Q(9, 4)
+	print q.m
+}
+EOF
+
+# A `T?` IS THE EXCEPTION THE NOTE NAMES — its implicit default is `nil` — so the rule has to
+# be written against a field that is NOT one, and this pins that it still fires when the
+# struct has an optional beside it.
+reject a-private-field-beside-an-optional E482 '`m` of `R`' <<'EOF'
+struct R {
+	pub n: int
+	o: int?
+	m: str
+}
+
+fn main() {
+	r := R(9, 1, "x")
+	print r.m
 }
 EOF
 
@@ -3589,12 +4814,16 @@ fn main() {
 }
 EOF
 
-# A BARE VARIANT IN A PATTERN was read as a constructor because it started with a capital,
-# which made an arm's meaning a naming convention: rename a binding `Value` to `value` and
-# the arm stops matching a variant and starts binding the subject. The other direction is the
-# one that keeps a person up — an enum that GAINS a variant silently turns an existing
-# binding arm into a constructor one, and nothing about the program changed.
-reject a-bare-variant-pattern E274 no-place seed-gap <<'EOF'
+# A VARIANT PATTERN WRITTEN WITHOUT ITS ENUM, which is the mistake the pattern rule is really
+# about — the author meant two variants and wrote two BARE names, and a bare name in pattern
+# position is always a fresh binding (GRAMMAR#pattern). So `Red` binds the subject and covers
+# everything, and `Green` below it can never run.
+#
+# It is E458 rather than a rule of its own, and that is the point: this is refused for what
+# the arms DO and not for how the first letter is typed. The rule that used to stand here
+# read the capital instead, so `n := 3; match n { 1 => …  Zzz => … }` was refused with
+# "`Zzz` is a variant of some enum" in a program that declared no enum at all.
+reject a-bare-name-pattern-covers-the-arms-below E458 no-place <<'EOF'
 enum Color {
 	Red
 	Green
@@ -3688,6 +4917,615 @@ fn main() {
 	if a == b {
 		print 1
 	}
+}
+EOF
+
+# --- a diverge on a `??`'s right takes no postfix guard ---------------------------------
+#
+# GRAMMAR#coalesce-rhs takes the bare DIVERGE, and GRAMMAR#raise-stmt is where the postfix
+# `if` guard lives: "'p ?? raise Err' takes no trailing 'if': the guard would read as the
+# coalesce's, not the raise's."
+#
+# The parser read it anyway, and what came out was UNDEFINED BEHAVIOUR FROM SAFE CODE —
+# the only such case the audit that found this turned up. The emitter lowers a `??` whose
+# right side diverges on the assumption that the diverge is unconditional, so it writes no
+# `else` for the temp the coalesce answers with: `q := p ?? raise ValueError("x") if false`
+# compiled clean and printed whatever the stack happened to hold. Every one of the five
+# shapes below did.
+#
+# Five cases and not one, because the guard is folded in at three different places —
+# parse_jump_guard for `break`/`continue`/`raise`, and two branches of parse_return for a
+# `return` with a value and one without — and a rule written against only the first would
+# have left the other two silently compiling.
+
+for kw in break continue; do
+	reject "a-coalesce-${kw}-with-a-guard" E284 "a \`??\` right-hand \`${kw}\` takes no trailing \`if\`" <<EOF
+fn main() {
+	mut total := 0
+	for i in 0..3 {
+		p: int? = nil
+		v := p ?? ${kw} if false
+		total = total + v
+	}
+	print total
+}
+EOF
+done
+
+reject a-coalesce-raise-with-a-guard E284 'a `??` right-hand `raise` takes no trailing `if`' <<'EOF'
+fn get() -> int? {
+	return nil
+}
+
+fn main() {
+	p := get()
+	q := p ?? raise ValueError("x") if false
+	print q
+}
+EOF
+
+reject a-coalesce-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+fn f() -> int {
+	p: int? = nil
+	q := p ?? return 7 if false
+	return q
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+# the same rule reached through parse_return's OTHER branch: a bare `return` under a guard
+# is desugared into `if c { return }`, so it comes back as an `if` statement where the one
+# above comes back as a conditional return. Both are the guard, and neither is the form.
+reject a-coalesce-bare-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+fn f() {
+	p: int? = nil
+	q := p ?? return if false
+	print q
+}
+
+fn main() {
+	f()
+}
+EOF
+
+# --- a compile-time position takes a CONST-EXPR, and only a const-expr -------------------
+#
+# GRAMMAR group 7: a const-expr is an ordinary expression "RESTRICTED to what the compiler
+# folds with no evaluation engine: literals, other const-foldable names, an enum's
+# discriminant, and the arithmetic / bitwise / comparison / logical operators. There are NO
+# function calls and no runtime values". The two positions below are the ones it names by
+# hand — an enum discriminant and a fill count — and each is rejected two ways, because the
+# two failures are different: a name whose binding is not constant, and a call, which no
+# binding can make constant.
+#
+# A MATCH ARM'S RANGE BOUND is the third position, and it fails the same two ways. Its call
+# form is turned away one step earlier than the other two: `range-bound ::= '-'? literal |
+# identifier` derives no call at all, so `f()..300` is not a range arm and never reaches a
+# fold — which is why that one is a parse rejection and its siblings are not.
+#
+# The fill count's runtime form is the one worth having a case for: the SEED used to accept
+# it. It lowers `[v; N]` to a loop bounded by N, so `[0; n]` for an n read at run time built
+# a list of whatever n happened to be — a form the language does not have, compiled in
+# silence, and one the shipping compiler always refused.
+
+reject a-discriminant-that-names-a-non-constant E474 'the discriminant of `E.A`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+n := size()
+
+enum E {
+	A = n
+	B
+}
+
+fn main() {
+	print int(E.A)
+}
+EOF
+
+reject a-discriminant-that-calls E474 'the discriminant of `E.B`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+enum E {
+	A
+	B = size()
+}
+
+fn main() {
+	print int(E.B)
+}
+EOF
+
+reject a-fill-count-read-at-run-time E475 <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	n := size()
+	xs := [0; n]
+	print xs.len()
+}
+EOF
+
+reject a-fill-count-that-calls E475 <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	xs := [0; size()]
+	print xs.len()
+}
+EOF
+
+# A COUNT IS A COUNT. The parser read one integer token here, so `-1` was refused as "not an
+# integer literal" and the case never reached a rule; the fold reaches it, and a negative
+# count that quietly built the empty list is not what `[0; -1]` asks for.
+reject a-negative-fill-count E476 <<'EOF'
+fn main() {
+	xs := [0; -1]
+	print xs.len()
+}
+EOF
+
+reject a-range-bound-read-at-run-time E477 '`lo`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+fn main() {
+	lo := size()
+	n := 5
+	print match n {
+		lo..10 => "in"
+		_      => "out"
+	}
+}
+EOF
+
+# --- the forms GRAMMAR does not derive --------------------------------------------------
+#
+# A production is a contract about what the language HAS, and a parser that reads past it
+# is one that silently invents. The three below are each a form `GRAMMAR` states in so many
+# words is not there, and each one compiled and ran.
+#
+# GRAMMAR#tuple-lit is `'(' expr ',' expr ( ',' expr )* ')'` — two or more elements, with
+# the prose beside it saying that "a single `( expr )` is just grouping". So `(1, )` is not
+# a tuple; it built one, of arity one, whose `.0` read back the element.
+reject a-one-tuple E288 <<'EOF'
+fn main() {
+	x := (1, )
+	print x.0
+}
+EOF
+
+# NO comma-separated list in GRAMMAR derives a trailing comma — not `tuple-lit`, not
+# `list-lit`, not `map-lit`, not `arg-list` — and all four read one silently. `zerg fmt`
+# already removed them, which is the tell: the toolchain knew the form was not canonical
+# and the parser was the one place that did not.
+#
+# Four cases and not one, because the four are four separate loops: the tuple's is the
+# comma loop in parse_primary, the list's is that primary's `[` branch, the map's is
+# parse_map_lit, and the argument list's is parse_call_args. A rule written against one of
+# them leaves the other three accepting.
+reject a-trailing-comma-in-a-tuple E289 'the closing `)` of a tuple literal' <<'EOF'
+fn main() {
+	t := (1, 2,)
+	print t.0
+}
+EOF
+
+reject a-trailing-comma-in-a-list E289 'the closing `]` of a list literal' <<'EOF'
+fn main() {
+	xs := [1, 2, ]
+	print xs.len()
+}
+EOF
+
+reject a-trailing-comma-in-a-map E289 'the closing `}` of a map literal' <<'EOF'
+fn main() {
+	m := {"a": 1,}
+	print m.len()
+}
+EOF
+
+reject a-trailing-comma-in-an-argument-list E289 'the closing `)` of an argument list' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	print add(1, 2,)
+}
+EOF
+
+# THE THREE LIST READERS THAT WERE STILL SPELLING THE RULE THEIR OWN WAY. Twelve readers
+# were brought to "the comma is required between elements and absent before the closer" and
+# these three were not, which is the N+1 that a rule stated per site always has: a spec's
+# own type parameters, a function's, and a call's type arguments.
+#
+# The spec's list was the SILENT one — `spec Ix[K V]` read as two parameters and said
+# nothing, so a correct `impl Ix[int]` was then told the spec is "parameterized by K, V"
+# about a list nobody wrote. The other two were not silent, but the `]` below the loop was
+# what complained, so a missing separator was reported as a missing bracket.
+reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+spec Ix[K V] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int, int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-trailing-comma-in-a-spec-type-parameter-list E289 "the closing \`]\` of a spec's type parameter list" <<'EOF'
+spec Ix[K,] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	pub v: int
+}
+
+impl Ix[int] for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+reject a-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+fn f[T U](a: T, b: U) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1, 2))
+}
+EOF
+
+reject a-trailing-comma-in-a-type-parameter-list E289 'the closing `]` of a type parameter list' <<'EOF'
+fn f[T,](a: T) -> int {
+	return 1
+}
+
+fn main() {
+	print(f(1))
+}
+EOF
+
+# The type ARGUMENT list, which is reached only through a built-in type's own arguments:
+# a program's own `f[int, str](…)` is refused as a form before the list is read (E275), so
+# `map[K, V]` is where this loop still runs.
+reject a-trailing-comma-in-a-type-argument-list E289 'the closing `]` of a type argument list' <<'EOF'
+fn main() {
+	m := map[str, int,]()
+	print m.len()
+}
+EOF
+
+# GRAMMAR, group 7: "ANY '{'-opening expression — a block OR a map literal — at the start
+# of an if/for/with/match head must be parenthesized", which follows from `{` being the
+# block opener. The `if` head read the brace as a map literal and ran the program; the
+# `for` head read it as the loop's BODY and reported a misparse from inside it — "a binding
+# needs a name, and `"a"` is not one", about a key nobody wrote as a binding.
+#
+# Both say the same thing now, because it is the same rule: a head that begins with `{`
+# needs parentheses. The `for` case is the one with something to decide, since `for { … }`
+# with no head IS the infinite loop — what separates them is whether the brace is CONTINUED
+# as an expression, which is the only reading under which it was a head at all.
+reject a-brace-opening-if-head E290 'the start of an `if` head' <<'EOF'
+fn main() {
+	if {"a": 1}.len() == 1 {
+		print "yes"
+	}
+}
+EOF
+
+# THE INNERMOST BINDING ANSWERS, and it answers even when the answer is "not a constant".
+# A module binding named `lo` is a perfectly good bound everywhere else in the program; here a
+# local of the same name shadows it, and a fold that reached past the shadow to the module
+# would compile this arm against a number the reader cannot see on any line in scope.
+reject a-range-bound-shadowed-by-a-local E477 '`lo`' <<'EOF'
+fn size() -> int {
+	return 3
+}
+
+lo := 1
+
+fn main() {
+	lo := size()
+	n := 5
+	print match n {
+		lo..10 => "in"
+		_      => "out"
+	}
+}
+EOF
+
+# A CALL IS NOT A BOUND, and it is refused by the parser rather than by the fold: the arm head
+# `f()` is read as an ordinary pattern, and the `..` after it is then a token no arm can hold.
+# The other two positions parse their const-expr and reject it on its value; this one has no
+# const-expr to parse.
+reject a-range-bound-that-calls E204 'found `..`' no-place <<'EOF'
+fn lo() -> int {
+	return 3
+}
+
+fn main() {
+	n := 5
+	print match n {
+		lo()..10 => "in"
+		_        => "out"
+	}
+}
+EOF
+
+reject a-brace-opening-for-head E290 'the start of a `for` head' <<'EOF'
+fn main() {
+	for {"a": 1}.len() == 1 {
+		break
+	}
+}
+EOF
+
+# --- a block is an expression, and what is left over -------------------------------------
+#
+# A `{ … }` where an expression is wanted is a BLOCK (GRAMMAR, group 2, and `block` is in
+# `primary`), and only a `:` makes it a map instead. Settling that in the parser leaves one
+# ill-formed program behind that used to be reported as something else.
+#
+# THE MAP ENTRY WITHOUT A `:`. It used to be where the block/map ambiguity was
+# reported — `a block used as an expression`, which is what a match arm's block body got —
+# and with that ambiguity gone what reaches it is a genuine map literal missing a value.
+reject a-map-entry-with-no-colon E479 'a map entry is `key: value`' at=2:30 <<'EOF'
+fn main() {
+	m: map[str, int] = {"a": 1, "b"}
+	print m.len()
+}
+EOF
+
+# --- a binding belongs to the construct that made it -------------------------------------
+#
+# docs/code/control-flow.md gives the if-let binding one scope: "`x` is not in scope in the
+# `else`, nor after the `if`". Only the second half was enforced, and the first half's failure
+# was worse than an ordinary miss — the name resolved to a C local declared inside the `if`
+# body, so `else { print x }` escaped to cc as `use of undeclared identifier 'zg_x'`, an error
+# against generated code nobody wrote, wearing the `.zg` filename the `#line` directives give
+# it. Assertions 4 and 5 are what these cases are here for.
+#
+# A `select` arm's receive binding is the same rule at the other binding site, and it was the
+# one construct that opened no scope at all: the name stayed live in every LATER arm and after
+# the whole `select`. The later arm is the case worth having twice over, because it was not an
+# escape but a silent ACCEPT — it compiled, and read the slot another arm's receive would fill.
+
+reject an-if-let-bind-in-the-else E372 'undefined name `x`' at=9:3 <<'EOF'
+fn find() -> int? {
+	return nil
+}
+
+fn main() {
+	if x := find() {
+		print x
+	} else {
+		print x
+	}
+}
+EOF
+
+# the `else if` HEAD, which is a distinct place rather than a distinct rule: a chain is a
+# nested if STATEMENT in the else BODY, so the one removal covers it — and the head is where
+# the place assertion has teeth, since that statement is built outside parse_block.
+reject an-if-let-bind-in-an-else-if-head E372 'undefined name `x`' at=8:9 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else if x > 0 {
+		print 2
+	} else {
+		print 3
+	}
+}
+EOF
+
+# and the far end of a chain — past a second if-let, whose own binding must not be what puts
+# the first one back within reach
+reject an-if-let-bind-in-the-final-else-of-a-chain E372 'undefined name `x`' at=15:3 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn b() -> int? {
+	return 2
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else if y := b() {
+		print y
+	} else {
+		print x
+	}
+}
+EOF
+
+# the same name bound again INSIDE the outer else. Both bindings are out of scope at the read,
+# and the inner one is what makes this more than a repeat: it took a C name of its own
+# (`zg_x__1`) precisely because the outer one was still in the environment, so a fix that only
+# hid the outer name would leave this reading the inner one.
+reject an-if-let-bind-shadowed-in-a-nested-else E372 'undefined name `x`' at=16:4 <<'EOF'
+fn a() -> int? {
+	return 1
+}
+
+fn b() -> int? {
+	return 2
+}
+
+fn main() {
+	if x := a() {
+		print x
+	} else {
+		if x := b() {
+			print x
+		} else {
+			print x
+		}
+	}
+}
+EOF
+
+reject a-select-arm-bind-after-the-select E372 'undefined name `v`' at=12:2 <<'EOF'
+fn feed(ch: chan[int]) {
+	ch <- 1
+	close(ch)
+}
+
+fn main() {
+	ch := chan[int]()
+	spawn feed(ch)
+	for select {
+		v := <-ch => print v
+	}
+	print v
+}
+EOF
+
+reject a-select-arm-bind-in-a-later-arm E372 'undefined name `v`' at=13:15 <<'EOF'
+fn feed(ch: chan[int]) {
+	ch <- 1
+	close(ch)
+}
+
+fn main() {
+	a := chan[int]()
+	b := chan[int]()
+	spawn feed(a)
+	spawn feed(b)
+	for select {
+		v := <-a => print v
+		w := <-b => print v
+	}
+}
+EOF
+
+# --- `del` revokes a NAME, and it has to have one to revoke ------------------------------
+#
+# GRAMMAR#del-stmt is `'del' identifier`, and docs/core/memory.md says what the statement
+# means: it revokes THAT NAME's access to its storage. Both halves of that sentence are a
+# rule, and neither was checked.
+#
+# The name half: `del` looked the name up, and where nothing answered it revoked nothing and
+# said nothing — so `del totally_undefined` compiled and ran. The same spelling one line
+# further down, in a `print`, is `E372`; the difference was that the read path asks and the
+# `del` path did not. A function name is the same finding with a different reason: `g` names
+# something, and what it names has no storage a name can be revoked from.
+#
+# The storage half is the `mut &` parameter, which is the one binding whose reads never went
+# past the liveness check — a mutable reference is a pointer and is dereferenced on use, and
+# that dereference returned BEFORE the check every other read funnels through. So `del x` on
+# one revoked nothing observable: the parameter carried on reading and, worse, carried on
+# WRITING THROUGH to the caller's variable.
+#
+# The two `used after del` findings are here for a second reason as well. Both are rules the
+# compiler genuinely CHECKS, and both reported with neither a code nor a place — two of the
+# code-less sites docs/conformance.md counts — so nothing could pin either, and a case
+# asserting the sentence alone would have gone green against a message that says where
+# nothing.
+
+reject a-del-of-an-undefined-name E295 <<'EOF'
+fn main() {
+	del totally_undefined
+	print "unreached"
+}
+EOF
+
+reject a-del-of-a-function-name E296 <<'EOF'
+fn g() {
+	print "g"
+}
+
+fn main() {
+	del g
+}
+EOF
+
+reject a-read-after-del E297 '`x` is used after del' <<'EOF'
+fn main() {
+	x := 1
+	del x
+	print x
+}
+EOF
+
+reject a-write-after-del E297 '`x` is used after del' <<'EOF'
+fn main() {
+	mut x := 1
+	del x
+	x = 9
+	print "unreached"
+}
+EOF
+
+reject a-read-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+fn f(mut &x: int) -> int {
+	del x
+	return x
+}
+
+fn main() {
+	mut a := 1
+	print f(a)
+}
+EOF
+
+reject a-write-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+fn f(mut &x: int) {
+	del x
+	x = 9
+}
+
+fn main() {
+	mut a := 1
+	f(a)
+	print a
+}
+EOF
+
+reject a-read-after-del-on-some-paths E298 'used after del on some paths' <<'EOF'
+fn main() {
+	x := 1
+	if x == 1 {
+		del x
+	}
+	print x
 }
 EOF
 

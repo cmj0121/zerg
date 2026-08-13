@@ -42,17 +42,12 @@ if [ ! -d "$DIR" ]; then
 	exit 0
 fi
 
-# A TYPO'S MESSAGE. These are the shapes a diagnostic takes when the compiler did not
-# recognise the form and reported the token it was standing on instead. Every one of them
-# was the real answer to a real GRAMMAR form at some point in this corpus's life:
-# `expected `=>`, found `|`` was the or-pattern, and `no type named `ptr`` was ptr-type.
-#
-# It is a NEGATIVE test, so it fails open, which is the risk the list is worth taking: the
-# alternative is a per-file expected-message inventory, and a case name in this corpus is
-# private content that may not be written down in this repo.
-is_typo_msg() {
-	printf '%s\n' "$1" | grep -qE "^(error: )?(expected |undefined |no type named |no field |unexpected )"
-}
+# `is_typo_msg` — the message a form gets when the compiler did not recognise it — comes
+# from diag.sh, where it belongs: every one of its shapes was the real answer to a real
+# GRAMMAR form at some point in this corpus's life (`expected `=>`, found `|`` was the
+# or-pattern, `no type named `ptr`` was ptr-type), and productions-check.sh asserts against
+# the identical list for the identical reason. It was written out in both and "kept in step
+# by hand", which is how it came to miss the `E204 ` prefix in both at once.
 
 # TWO PROFILES, and the split is not a convenience. Everything in the core is answerable by
 # an implementation targeting anything at all; the SYSTEM profile is inline assembly, raw

@@ -98,9 +98,9 @@ cc 對著產生的 C。
 
 其餘語言有的，種子都有：`defer`、`del`、`with`、tuple 與 `t.0`、range 當值與當可迭代對象、optional
 與整組 group-8 運算子、`init()`、`spec` / `impl`（含 provided method）、泛型函式定義、
-`#[derive(Eq, Ord)]`、`Ref[T]`、struct 與 tuple pattern、block 當 `match` arm body，以及
-`for c in s` 走訪一個 str 的 code point。在其中幾項上種子是兩個編譯器中**較寬**的那個——那是關於
-種子的事實，不是關於語言的。
+`#[derive(Eq, Ord)]`、`Ref[T]`、struct 與 tuple pattern、block 當 `match` arm body、
+`for c in s` 走訪一個 str 的 code point、`import … as` 改名，以及 `pub` module 常數。在其中幾項
+上種子是兩個編譯器中**較寬**的那個——那是關於種子的事實，不是關於語言的。
 
 **前端還剖析得動**不等於支援：拒絕可能落在 sema，也可能落在 emitter 門口。收窄 parser 是另一趟
 獨立的工作，而且不急——真正重要的是第一層以外的東西不會抵達 C。

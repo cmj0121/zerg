@@ -112,7 +112,7 @@ func TestStrReassignBalanced(t *testing.T) {
 // (with owned producer/literal field values), copying, and dropping balances.
 func TestStrStructBalanced(t *testing.T) {
 	got := runProgramRTBalanced(t,
-		"struct Pair {\n\ta: str\n\tb: str\n}\n"+
+		"struct Pair {\n\tpub a: str\n\tpub b: str\n}\n"+
 			"fn main() -> Result[nil] {\n"+
 			"\tp := Pair(\"x\" + \"y\", \"z\")\n"+ // a: heap cell, b: immortal literal
 			"\tq := p\n"+ // struct copy: fields retained

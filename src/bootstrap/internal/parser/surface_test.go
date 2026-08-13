@@ -19,7 +19,7 @@ func TestTopLevelStatements(t *testing.T) {
 		"if x > 0 {\n\tnop\n}\n" +
 		"for i in items {\n\tnop\n}\n" +
 		"fn main() {\n\tnop\n}\n" +
-		"struct S {\n\tv: int\n}\n"
+		"struct S {\n\tpub v: int\n}\n"
 	file, diags := Parse(src)
 	if len(diags) != 0 {
 		t.Fatalf("top-level statements should parse cleanly, got: %v", diags)

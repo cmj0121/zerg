@@ -33,10 +33,11 @@ _the closure parameter `x` has no type, and this position gives it none_。
 > postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕。型別引數從引數型別
 > 推論,是今天實例化一個 generic 的唯一途徑。
 >
-> **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被 parser 拒絕：
-> `f: fn(mut &int) = bump` 報 _expected `,`, found `&`_，而 `GRAMMAR` 明明推導出
-> `param-type ::= ( 'mut' '&' )? type`。參數型別的 parser 只讀一個純型別，從不讀那條產生式允許的 `mut &`
-> 前綴，所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的相異只留在紙上。
+> **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被讀完、然後被指名拒絕：
+> `f: fn(mut &int) = bump` 報 _E286 NotImplemented: a `mut &` parameter in a function type_，並帶上那個前綴
+> 所在的位置。拒絕的理由就是值那一側早已說過的同一條：在這個編譯器裡，被持有的函式是一個裸指標，而呼叫端是從
+> 被呼叫者的**名字**讀出 `mut &` 的，值沒有名字（`E469`）——所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的
+> 相異只留在紙上。
 
 **一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
 可變參考——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做
@@ -67,6 +68,12 @@ greet("Sam", "Hi", true)     # 全 positional
   > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _error: undefined name `a`_，
   > 而不是求值 `a * 2`。其餘每種預設值都如規格 lower，純常數與計算出來的運算式一樣：`b: int = 1 + 2`、
   > `b: int = side()` 與 `greeting: str = "a" + "b"` 都在呼叫處、每次求值。
+  >
+  > **[not yet]** **匿名**函式參數上的預設值沒做。`GRAMMAR` 推導得出它——
+  > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`，尾巴的 `( '=' expr )?` 與宣告
+  > 裡的參數同一條——而 `f := fn (x: int = 5) -> int { … }` 報 _E285 NotImplemented: a default on the closure
+  > parameter `x`_，並帶上位置。理由就是上面那一條：預設值是在**呼叫端**、從被呼叫者的**宣告**展開出來的，而
+  > 閉包是透過一個**值**取得的，那個值沒有帶著任何宣告可讀。每次呼叫都把引數傳進去。
 
 - 一個**具名引數**以參數名字傳入（`loud: true`）——這正是讓你能**跳過中間的預設參數**的關鍵。規則就是慣例那套：
   positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
@@ -93,9 +100,11 @@ variadic。
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
 而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
 
-> **[not yet]** 那個環境**永遠不會被釋放**。這個實作配置的其他每一個值都在造出它的 scope 被釋放,而閉包的不能——
-> 因為閉包可能活得比那個 scope 久,那正是「把值關進去」的意義。要正確釋放,fn value 必須自己帶 copy 與 drop
-> 函式,那是**型別**的改動而不是 lambda 的。在迴圈裡不斷造閉包的程式會長大。
+> **[deviation]** 那個環境**永遠不會被釋放**。這不是一個被編譯器擋下的形式——閉包編得過也跑得動,而發出的 C 裡
+> 每一次建構都有一個 `zrt_alloc`、整個翻譯單元裡沒有相對應的 free——所以它是一支行為與這裡所寫不同的程式,而不是
+> 一筆有名字的債。這個實作配置的其他每一個值都在造出它的 scope 被釋放,而閉包的照那條規則不能——因為閉包可能活得
+> 比那個 scope 久,那正是「把值關進去」的意義。要正確釋放,fn value 必須自己帶 copy 與 drop 函式,那是**型別**的
+> 改動而不是 lambda 的。在迴圈裡不斷造閉包的程式會長大。
 
 因為每個捕獲都是 immutable,retain 或 clone 都不可觀察。等價地說:
 
@@ -122,9 +131,16 @@ apply := fn(req: Request) -> Reply {
 
 ```text
 for x in xs {
-    spawn fn() { handle(x) }       # 每個 coroutine 拿到自己這一輪的值
+    work := fn () { handle(x) }    # 每個 closure 持有自己這一輪的值
+    work()
 }
 ```
+
+> **[not yet]** 這個迴圈的 coroutine 寫法用不了。closure **literal** 不在 `spawn` 的三種 callee 形式之列——
+> `spawn fn () { … }()` 是 _E222 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫 `spawn
+work()` 更糟:它會發出一個沒有人宣告的 C 函式呼叫,建置死在 `cc` 裡(**[deviation]**,因為那正是總則明文禁止的
+> 結局)。行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
+> [Coroutines 與 Channels](coroutine.zh-TW.md)。
 
 而且因為捕獲永遠是 immutable copy，「捕獲的是變數還是值？」根本沒有可觀察的答案——被捕獲的值永不改變，這個
 問題自然消失。

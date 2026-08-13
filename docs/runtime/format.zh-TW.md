@@ -17,8 +17,9 @@
 method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用 override，而只寫了 `debug` 的型別在每個渲染點
 都透過它渲染，因為 `display` 預設就是它。
 
-> **狀態。** 渲染一個**純量**或一個 **`str`**——透過純 `{x}` 洞、`print`，或 f-string——可用，而且任何宣告了
-> override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。**沒有 override 的複合值**
+> **狀態。** 渲染一個**純量**、一個 **`str`**，或一個 **`Err`**——透過純 `{x}` 洞、`print`，或 f-string——可
+> 用，而且任何宣告了 override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。一個 `Err`
+> 渲染為它的**訊息**；它的 kind 是拿來比較的（`e is IOError`），不是拿來讀出的。**沒有 override 的複合值**
 > （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日格式洞裡這樣的複合值會在**編譯期被拒
 > 絕**，所以「每個值都能渲染」對純量、字串與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構
 > 化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
@@ -30,7 +31,7 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
   ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕。
 - **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04d}"`）。**[not yet]**
-  ——已被解析，但此階段在**程式碼生成時被拒絕**。
+  ——被辨識之後由 **parser 拒絕**（`E227`）。
 - **`{x:spec}`** 把 spec 字串交給型別的 **`Format`** 協定——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。這是
   **per-type 協定**、非 `display` 參數：語言只固定 `:spec` 的**語法**（到 `}` 為止的不透明文字）；一個 spec 的**意義**
   由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。對

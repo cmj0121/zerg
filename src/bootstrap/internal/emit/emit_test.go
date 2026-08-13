@@ -199,7 +199,7 @@ func TestGenericsCompileAndRun(t *testing.T) {
 		{
 			// a generic struct -> one specialized C struct per type argument.
 			name: "generic-struct",
-			src: "struct Box[T] { value: T }\n" +
+			src: "struct Box[T] { pub value: T }\n" +
 				"fn main() {\n bi := Box(5)\n bb := Box(true)\n print bi.value\n print bb.value\n}",
 			want: "5\ntrue\n",
 		},

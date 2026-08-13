@@ -68,14 +68,27 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
-（`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
-解析可判定。**沒有「所有型別都有」的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式
-的 blanket impl。
+——`list[T]` 可以實作 `Iterator`。
+
+> **[not yet]** 目標**帶著型別引數**的 `impl` 會被指名拒絕,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
+> `impl[T] Spec for list[T]`——參數就坐在 `impl` 上,正是為了讓目標能拼出它們——以及完全具體的
+> `impl Spec for list[int]`。所以沒有任何實作能掛到容器型別上,上一行說的「`list[T]` 可以實作 `Iterator`」是規範,
+> 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
+> monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
+
+以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定。**沒有「所有型別都有」
+的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式的 blanket impl。
 
 > **[deviation]** 意圖中的 coherence 規則是**全程式每組 `(spec, 型別)` 唯一一個 impl**、以每個具體實例化為鍵——所以
-> `impl X for list[int]` 與 `impl X for list[str]` 是**不同**、各自可解析——並跨 package 強制 orphan rule。bootstrap 是
-> **單一模組**,其 coherence 鍵**過度近似**:它不區分泛型引數,所以 `list[int]` 與 `list[str]` 相撞、第二個實例化會被
-> 誤判為重複 impl 而拒絕。per-instantiation 規則如所規範成立;bootstrap 尚未精確強制它。
+> `impl X for list[int]` 與 `impl X for list[str]` 會是**不同**、各自可解析——並跨 package 強制 orphan rule。其中兩半
+> 沒有做到,而第三半根本不是 deviation。
+>
+> orphan 那一半往內落了一層:一個 `impl` 屬於 spec 的模組或型別的模組,因為模組是這個實作唯一有的範圍,而且沒有
+> package 層可供這條規則伸到。**唯一性**根本沒有以 `(spec, 型別)` 這組鍵來判:讓第二個 `impl X for A` 成為錯誤的,
+> 是它的方法在「一個型別的方法共用的那一個命名空間」裡相撞,而那是比規則所問更窄的問題。至於鍵的**實例化**那一半,
+> 是 **[not yet]** 而非 deviation:帶型別引數的目標在上面就被拒絕了,所以從來沒有任何實例化會走到鍵那裡,鍵也就無從
+> 不精確。這一段從前宣稱鍵**過度近似**——說 `list[int]` 與 `list[str]` 會相撞、第二個被誤判為重複 impl。實測下來那是
+> 假的:兩者中的**第一個**就已被拒絕,而兩者都不曾被當成鍵。
 
 ## `#[obj]`——把一個 spec 的方法當成值持有
 
@@ -86,13 +99,19 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 ```zerg
 #[obj]
 spec Draw { fn draw() -> str }
+```
 
-# 就是:
-struct DrawObj { draw: fn () -> str }
+就是:
+
+```zerg
+struct DrawObj { pub draw: fn () -> str }
 fn draw_obj[T: Draw](v: T) -> DrawObj {
     return DrawObj(fn () -> str { return v.draw() })
 }
 ```
+
+分成兩段 fence 而不是一段,因為它們是同一組宣告的兩種寫法、不是一支同時裝著兩者的程式:寫在一起是
+_E382 `DrawObj` is declared twice_。
 
 **開放性來自包裝點**,不是來自執行期的任何東西:`draw_obj` 針對每個實作者 monomorphize,回來的東西只有一個
 型別。所以 `list[DrawObj]` 是異質的,而且**沒有 vtable、沒有任何值帶 header、也沒有 downcast**——你可以呼叫
@@ -103,6 +122,11 @@ spec 宣告的東西,不能問裡面裝的是什麼。需要問的時候,答案�
 - **`mut fn`**:被包起來的值是複本,寫穿它會改到沒有人讀得到的東西。這裡的 object 是不可變的;
 - 收 **`This`** 的方法:它需要 object 已經忘掉的那個型別——那個形狀是 `enum` 上的 `#[derive(S)]` 在做的;
 - **不是 spec** 的東西:沒有方法可以持有。
+
+> **[not yet]** 型別同時實作兩者是做不到的。當兩個 spec 各自宣告 `go` 時,`impl A for P` 與 `impl B for P` 會在
+> **第二個宣告**處被拒絕——_E451 `P` declares `go` twice — every method on a type shares one namespace, spec or
+> inherent alike_——所以下面那個「把靜態脈絡收窄到單一 spec」的解法沒有程式可以套用。這條拒絕就是讓 derived 與
+> 手寫 `Eq` 不能並存的同一條,只是多管了一格。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
@@ -190,6 +214,13 @@ spec 的 method 分兩種：
 > 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
 > method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
 > 的那一點就指名了它,所以沒有任何程式走到 dispatch 這個問題。
+>
+> **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
+> `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
+> 拒絕：_E287 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
+> （`E264`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
+> 來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
+> 在其中——仍然拿到 `E276`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
@@ -256,13 +287,14 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 > **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
 > （見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
-> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: no spec named `Ord`_,也就是「沒有人
-> 寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。其中好幾個所描述的**行為**是內建的、不經那個
+> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: E314 no spec named `Ord`_,也就是
+> 「沒有人寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。**使用**那一側則是被運算子、而不是被
+> spec 擋下:`P(1) < P(2)` 報的是 _E346 operator `<` orders two numbers or two strs, and these are P and P_,
+> 它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個所描述的**行為**是內建的、不經那個
 > spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
 > `chan` 的 refcounted 關閉——但它們由編譯器
-> 擁有,使用者型別加入不了:一個 `struct` 上的 `<` 報的是 _NotImplemented: `<` on a P — an ordering comes from
-> `Ord`, which this compiler does not generate_,不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都
-> 是對著這個缺口所寫的規範。
+> 擁有,使用者型別加入不了——不論那個型別上有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都是對著這個缺口
+> 所寫的規範。
 
 其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 

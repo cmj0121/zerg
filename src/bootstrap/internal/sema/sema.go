@@ -165,7 +165,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
-	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}}
+	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}, folding: map[*ast.BindStmt]bool{}}
 	// Validate every declaration's decorators first (GRAMMAR group 7 is a fixed,
 	// compiler-owned set): an unknown or not-yet-supported decorator is a clean error
 	// rather than a silent no-op.
@@ -186,6 +186,12 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 type symbol struct {
 	typ     Type
 	mutable bool
+	// cval is what this binding's initializer folded to, when the binding is
+	// immutable and the initializer is a const-expr (GRAMMAR group 7). It is what
+	// makes a LOCAL usable where a compile-time value is required — a fill count
+	// '[v; n]' — and it is carried on the symbol so that the scope chain decides
+	// which 'n' a name means, which a table keyed by name alone cannot.
+	cval types.ConstVal
 	// byref marks a 'mut &x' parameter — a mutable reference to the CALLER's
 	// variable rather than storage this body owns (GRAMMAR group 5). It is mutable
 	// inside the callee, and the backend gives it pointer storage.
@@ -226,6 +232,11 @@ type checker struct {
 	// of a non-live name is rejected, turning a would-be use-after-free into a clean
 	// compile error.
 	dead map[*symbol]liveness
+
+	// folding marks the module-constant declarations whose initializers are being
+	// folded right now, so 'const A := A' — or any longer ring — answers "not a
+	// constant" instead of recursing until the stack gives out.
+	folding map[*ast.BindStmt]bool
 
 	// frozenLists counts, per list-binding symbol, the number of enclosing `for x in
 	// xs` loops iterating it: a list is frozen against structural change (append or
@@ -372,13 +383,25 @@ func (c *checker) fillStruct(n *ast.StructDecl) {
 		own[f.Name] = true
 	}
 	for _, f := range n.Fields {
+		ft := c.resolveType(f.Type)
 		sym.TypeDef.Struct.Fields = append(sym.TypeDef.Struct.Fields, types.FieldDef{
-			Name: f.Name, Type: c.resolveType(f.Type), Pub: f.Pub, HasDefault: f.Default != nil,
+			Name: f.Name, Type: ft, Pub: f.Pub, HasDefault: f.Default != nil,
 		})
 		// FORK-A5: a field default is backfilled verbatim at the construct site, so it
 		// must be a self-contained constant that references no field of this struct.
 		if f.Default != nil {
 			c.checkConstDefault(f.Default, own)
+		}
+		// GRAMMAR#field: a non-`pub` field is module-private and MUST carry a default.
+		// The field-wise `T(...)` constructor is public and there are no zero values, so
+		// a field with no default is one every construction has to supply — and outside
+		// the module a private field cannot even be read, which makes such a type
+		// unbuildable from where it is used. A `T?` is the exception the note names: its
+		// implicit default is `nil`.
+		if !f.Pub && f.Default == nil {
+			if _, opt := ft.(*types.Opt); !opt {
+				c.errorf(f.Span(), "the field %q of %q is module-private, so it must carry a default; write `pub` to expose the field instead", f.Name, n.Name)
+			}
 		}
 	}
 	c.typeParams = saved

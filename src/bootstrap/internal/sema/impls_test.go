@@ -70,7 +70,7 @@ func TestSpecCollection(t *testing.T) {
 // TestImplCollection collects both an inherent impl and a spec impl, and builds
 // the target type's shared method namespace (DESIGN-1c §1.2/§1.3, U1).
 func TestImplCollection(t *testing.T) {
-	src := "struct Point {\n  x: int\n}\n" +
+	src := "struct Point {\n  pub x: int\n}\n" +
 		"spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
 		"impl Point {\n  fn get() -> int { return this.x }\n}\n" +
 		"impl Eq for Point {\n  fn eq(o: This) -> bool { return this.x == o.x }\n}"
@@ -123,7 +123,7 @@ func TestImplDiagnostics(t *testing.T) {
 	}{
 		{
 			name: "duplicate method across spec and inherent impls",
-			src: "struct Point {\n  x: int\n}\n" +
+			src: "struct Point {\n  pub x: int\n}\n" +
 				"spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
 				"impl Point {\n  fn eq() -> bool { return true }\n}\n" +
 				"impl Eq for Point {\n  fn eq(o: This) -> bool { return true }\n}",
@@ -132,20 +132,20 @@ func TestImplDiagnostics(t *testing.T) {
 		{
 			name: "impl missing a required associated type",
 			src: "spec Container {\n  type Item\n  fn get() -> This\n}\n" +
-				"struct Box {\n  v: int\n}\n" +
+				"struct Box {\n  pub v: int\n}\n" +
 				"impl Container for Box {\n  fn get() -> This { return this }\n}",
 			substr: "missing associated type \"Item\"",
 		},
 		{
 			name: "impl missing a required associated value",
 			src: "spec Sized {\n  BITS: int\n}\n" +
-				"struct Box {\n  v: int\n}\n" +
+				"struct Box {\n  pub v: int\n}\n" +
 				"impl Sized for Box {\n}",
 			substr: "missing associated value \"BITS\"",
 		},
 		{
 			name: "spec-impl body type error",
-			src: "struct Point {\n  x: int\n}\n" +
+			src: "struct Point {\n  pub x: int\n}\n" +
 				"spec Show {\n  fn show() -> int\n}\n" +
 				"impl Show for Point {\n  fn show() -> int { return \"hello\" }\n}",
 			substr: "cannot return str from a function returning int",
@@ -161,7 +161,7 @@ func TestImplDiagnostics(t *testing.T) {
 // TestSpecImplBodyOK confirms a well-typed spec-impl body raises no diagnostic:
 // 1c checks spec-impl bodies, so a correct one must stay clean.
 func TestSpecImplBodyOK(t *testing.T) {
-	wantOK(t, "struct Point {\n  x: int\n}\n"+
+	wantOK(t, "struct Point {\n  pub x: int\n}\n"+
 		"spec Show {\n  fn show() -> int\n}\n"+
 		"impl Show for Point {\n  fn show() -> int { return this.x }\n}")
 }

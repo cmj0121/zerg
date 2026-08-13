@@ -794,6 +794,8 @@ shipping compiler rather than a part of it (the line
 | `E389` | `…` is already … — an import binds a name into the one value namespace                      |
 | `E390` | this position needs a value, and nil is what it was given                                   |
 | `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
+| `E392` | cannot `…` to `…`: only a `mut` collection can modify its elements                          |
+| `E393` | cannot `…` `…`: a collection is frozen against structural change inside its own `for` loop  |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

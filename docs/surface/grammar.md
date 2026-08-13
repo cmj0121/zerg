@@ -104,14 +104,16 @@ fn answer() -> int { return 42 }
 ## Group 2 — Lexical
 
 Source is UTF-8. Horizontal whitespace (space, tab) separates tokens; a line break is significant only as a
-statement separator (group 1). The lexical group fixes what a token is:
+statement separator (group 1). A line break is an LF or a CRLF — the `\r` belongs to the break that follows it,
+not to the whitespace class, so a `\r` anywhere else is part of no token and is refused where it stands (inside
+a string or rune literal it is ordinary content). The lexical group fixes what a token is:
 
 ```text
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
-NEWLINE    ::= '\n'
-WS         ::= ( ' ' | '\t' )+
+NEWLINE    ::= '\r'? '\n'
+WS         ::= ( ' ' | '\t' )+     # horizontal whitespace — a '\r' is not one
 COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' not before '#' or '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment; attaches to the following declaration
 block      ::= '{' stmt-list '}'

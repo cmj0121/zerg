@@ -225,6 +225,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   type 'void'" against generated C. It is refused by name now — a plain `(A, B)` return
   works, and `zerg` builds both. This is why the STDLIB may not use an optional tuple: it
   is compiled by the seed as well, which is the same reason nothing there uses slicing.
+- **A tuple that OWNS something cannot be COPIED.** `t := (1, s)` where `s` is a `str`, and
+  any tuple holding a `list` or a `map`, is refused by name — "copying a (int, str) is not
+  supported in Phase 1d iteration 2 (only Ref[T] and structs holding Refs)". A tuple of
+  scalars copies fine, and so does a struct holding the same things, so this is the tuple
+  alone. `zerg` copies either: a tuple gets a per-shape `_copy` with a `_drop` beside it,
+  which is what makes `(int, str)` give its `str` back at scope exit.
 - **A TYPE NAME declared twice is accepted.** A `struct`, an `enum` and a `spec` share one
   namespace, and every module of a program flattens into one scope in both compilers — so
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for

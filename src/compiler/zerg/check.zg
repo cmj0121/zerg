@@ -2369,20 +2369,20 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	# but `x: Nope = 5` reported "cannot bind int to a Nope binding", a sentence about the VALUE
 	# that treats the unknown name as though it were a type the value failed to be. It also hid
 	# the fixed-width ladder's own sentence behind it, which is what sent anybody looking.
-	nm := c_named_of(declared)
-	if nm != "" and not c_is_type_name(em, nm) {
-		c_builtin_check(em, nm)
-		chk_at(em, "E334", f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
-		return
-	}
-
-	# and the annotation has to name a type THIS MODULE MAY WRITE. It is asked here, off the
-	# name the sentence above already resolved, rather than by a second walk of the type: an
-	# annotation is a value-position type name, which c_decl_sites does not list, and this is
-	# where the one that exists is already in hand.
-	if nm != "" {
-		chk_ty_visible(em, nm)
-	}
+	#
+	# IT IS THE WHOLE TYPE THAT IS ASKED, not the bare name it sometimes is. This used to be
+	# `c_named_of(declared)`, which answers "" for every type that WRAPS a name — so a local
+	# annotated `Nope` was refused and `Nope?`, `list[Nope]`, `chan[Nope]` and the rest were
+	# not: they were emitted as `zg_Nope` and reported by cc against a file under .zerg-cache.
+	# `mut h: handle? = nil` is the spelling that found it, and the `handle` in it is a red
+	# herring — `bogus?` did the same, and so did every other wrapper.
+	#
+	# c_check_named_ty is the walk a DECLARATION's types already get (c_check_named_types),
+	# with a site of this binding's own. That is one rule for four sites rather than two rules
+	# for four sites: a parameter, a result, a field and now a local all answer `E707`, and
+	# the module-visibility question the block below used to ask separately is one of the two
+	# the walk asks of every leaf it reaches.
+	c_check_named_ty(em, declared, Site(declared, f"the binding `{name}`", [], em.at_path, em.at_line, em.at_col, false))
 
 	got := c_infer(em, ival)
 

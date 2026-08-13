@@ -243,6 +243,8 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		params := jget(msg, "params")
 		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
 		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
+	} else if method == "textDocument/documentSymbol" {
+		ls_reply(id, ls_document_symbol_result(s, jstr(jat3(msg, "params", "textDocument", "uri"))))
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -296,6 +298,11 @@ fn ls_initialize_result() -> JVal {
 	mut ca := jfields()
 	jput(ca, "codeActionKinds", jarr_of([jstr_of("quickfix")]))
 	jput(caps, "codeActionProvider", jobj_of(ca))
+
+	# The outline. It is the one answer that needs NO name resolution — a declaration knows
+	# what it is called and where it was written — which is why it is here while `hover`,
+	# `definition` and `references` are not.
+	jput_bool(caps, "documentSymbolProvider", true)
 
 	mut info := jfields()
 	jput_str(info, "name", "zerg")
@@ -694,6 +701,94 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
 	jput(fs, "diagnostics", jarr_of([jobj_of(diag)]))
 	jput(fs, "edit", jobj_of(wsp))
 	return jobj_of(fs)
+}
+
+# ls_document_symbol_result answers `textDocument/documentSymbol`: the outline of one buffer.
+#
+# The compiler decides WHAT a symbol is — `zerg.file_symbols` walks the parsed file and answers
+# with a name, a kind and a place — and this decides how it travels. That split is the same one
+# the quick fix is built on, and it is what keeps the rule this file exists for: the server may
+# not know a language fact the compiler could tell it.
+#
+# THE BUFFER ALONE, not the whole program. Every other answer here is computed against the
+# modules the file imports, because a name borrowed from one of them is undefined without it.
+# An outline is the opposite question — what is IN this file — and pulling in the imports would
+# fill it with declarations the reader cannot see on screen.
+#
+# A parse that ABORTS answers with nothing rather than with an error. A buffer mid-edit does not
+# parse, an outline is a view and not a verdict, and the diagnostic that says the buffer is
+# broken has already been published by the check that runs on every keystroke.
+fn ls_document_symbol_result(s: Server, uri: str) -> JVal {
+	mut out: list[JVal] = []
+	return jarr_of(out) if not ls_has_doc(s, uri)
+
+	text := ls_doc_text(s, uri)
+	path := ls_uri_path(uri)
+	syms := match guard {
+		zerg.file_symbols(zerg.parse_at(text, path))
+	} {
+		Either.Left(ss) => ss
+		Either.Right(_) => []
+	}
+	for sym in syms {
+		out.append(ls_document_symbol(text, sym))
+	}
+	return jarr_of(out)
+}
+
+# ls_document_symbol is one entry, as LSP's `DocumentSymbol`.
+#
+# `range` and `selectionRange` are the SAME range, and it is the identifier's. The protocol
+# wants the first to span the whole declaration and the second to span just the name it is
+# selected by, and the compiler has no end position for either — the same gap the diagnostics
+# have, for the same reason. Equal ranges satisfy the one rule that matters (the selection is
+# inside the range) and mean a jump lands on the name, which is where a reader of an outline
+# wants to be. What they do not do is let a client highlight the declaration a cursor is in.
+#
+# `detail` is what the outline shows beside the name: the receiver of a method, the underlying
+# type of a `type`, the module path of an import. `pub` rides in front of it, because the one
+# thing a reader scanning a module's outline is looking for is what other modules can reach.
+fn ls_document_symbol(text: str, sym: zerg.Symbol) -> JVal {
+	mut detail := sym.detail
+	if sym.is_pub {
+		if detail == "" {
+			detail = "pub"
+		} else {
+			detail = "pub " + detail
+		}
+	}
+
+	r := ls_word_range(text, sym.line, sym.col)
+	mut fs := jfields()
+	jput_str(fs, "name", sym.name)
+	jput_int(fs, "kind", ls_symbol_kind(sym.kind))
+	if detail != "" {
+		jput_str(fs, "detail", detail)
+	}
+	jput(fs, "range", r)
+	jput(fs, "selectionRange", r)
+	return jobj_of(fs)
+}
+
+# ls_symbol_kind maps the compiler's WORD onto LSP's number (SymbolKind, §Document Symbols).
+#
+# The mapping lives here because the number is protocol and the protocol is this module's. The
+# compiler says "enum" and would go on saying it if LSP renumbered tomorrow.
+#
+# An unknown word answers 13 — `Variable` — rather than aborting: a kind this file has not
+# learned yet is a new declaration form, and an outline missing one entry's icon is a better
+# answer than an outline that is not sent.
+fn ls_symbol_kind(kind: str) -> int {
+	return 2 if kind == "import"  # Module
+	return 23 if kind == "struct" # Struct
+	return 10 if kind == "enum"   # Enum
+	return 11 if kind == "spec"   # Interface
+	return 5 if kind == "impl"    # Class
+	return 26 if kind == "type"   # TypeParameter
+	return 14 if kind == "const"  # Constant
+	return 12 if kind == "fn"     # Function
+	return 6 if kind == "method"  # Method
+	return 13
 }
 
 # ls_req_span reads the range a codeAction request asks about.

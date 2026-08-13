@@ -477,6 +477,13 @@ struct StructDecl {
 	# the file it was declared in, so the module it belongs to can be asked. A type belongs
 	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
 	pub path: str
+
+	# where the `struct` keyword is. Every other declaration in this file carried a place and
+	# this one carried only its file, because nothing had needed to point AT a struct — the
+	# diagnostics about one point at a field, which has its own. An outline does need it: a
+	# symbol a reader cannot jump to is a name in a list.
+	pub line: int
+	pub col: int
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -526,6 +533,10 @@ struct EnumDecl {
 
 	# the file it was declared in — see StructDecl.path
 	pub path: str
+
+	# where the `enum` keyword is — see StructDecl.line
+	pub line: int
+	pub col: int
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -732,6 +743,111 @@ pub fn last_segment(path: str) -> str {
 		j = j + 1
 	}
 	return str(out)
+}
+
+# --- the outline --------------------------------------------------------------------------
+
+# Symbol is one declaration as an OUTLINE reads it: what it is called, what kind of thing it
+# is, and where to jump to. It exists so the language server can answer
+# `textDocument/documentSymbol` without holding an AST.
+#
+# A purpose-built type rather than making `FnDecl` and its siblings `pub`. The server imports
+# this module across the `pub` boundary like any other consumer, and widening that boundary to
+# the whole AST — every field of every declaration, for one list of names — would give it
+# reach over the parser's shape and a reason to grow analysis of its own. What it needs is a
+# name, a kind and a place, so that is what crosses.
+#
+# `kind` is a WORD and not an LSP number. The number is protocol, the server owns protocol,
+# and a compiler that spelled `12` here would be a compiler that had to be edited when the
+# protocol changed.
+pub struct Symbol {
+	pub name: str
+	pub kind: str
+	pub detail: str
+	pub is_pub: bool
+	pub line: int
+	pub col: int
+}
+
+# file_symbols is every top-level declaration of one parsed file, in SOURCE order.
+#
+# Source order is not the order `File` holds them in: a file is parsed into one list per kind,
+# so reading them out gives every struct, then every enum, then every function — an outline in
+# which nothing is where the reader left it. They are collected and then sorted by position,
+# which is a handful of items per file and an insertion sort.
+#
+# Only declarations. A top-level statement is in `f.stmts` and is not a declaration of
+# anything, so it is not a symbol; an import IS one, because a reader looking for where a
+# borrowed name comes from is asking exactly the question an outline answers.
+pub fn file_symbols(f: File) -> list[Symbol] {
+	mut out: list[Symbol] = []
+	for im in f.imports {
+		# the BINDING is the symbol, since that is the name written in the code below it; the
+		# path it resolves to is the detail
+		out.append(Symbol(im.name, "import", im.path, false, im.line, im.col))
+	}
+	for s in f.structs {
+		out.append(Symbol(s.name, "struct", "", false, s.line, s.col))
+	}
+	for e in f.enums {
+		out.append(Symbol(e.name, "enum", "", false, e.line, e.col))
+	}
+	for sp in f.specs {
+		out.append(Symbol(sp.name, "spec", "", false, sp.line, sp.col))
+	}
+	for ip in f.impls {
+		# an impl has no name of its own — it is a PAIRING, and the pairing is what a reader
+		# scans an outline for. An inherent `impl T { … }` is not here at all: the parser
+		# flattens it into ordinary functions carrying a receiver, and each of those is a
+		# symbol below.
+		out.append(Symbol(f"{ip.on} for {ip.target}", "impl", "", false, ip.line, ip.col))
+	}
+	for t in f.types {
+		out.append(Symbol(t.name, "type", ty_name(t.under), t.is_pub, t.line, t.col))
+	}
+	for c in f.consts {
+		mut detail := ""
+		if c.has_ty {
+			detail = ty_name(c.ty)
+		}
+		out.append(Symbol(c.name, "const", detail, c.is_pub, c.line, c.col))
+	}
+	for fd in f.fns {
+		# a method and a free function are different things to a reader scanning a list of
+		# them, and the receiver is the difference
+		mut kind := "fn"
+		if fd.recv != "" {
+			kind = "method"
+		}
+		out.append(Symbol(fd.name, kind, fd.recv, fd.is_pub, fd.line, fd.col))
+	}
+	return sym_sorted(out)
+}
+
+# sym_sorted puts the symbols in source order.
+#
+# Insertion sort by adjacent swaps: a file's top level is tens of declarations, not thousands,
+# and what matters about the algorithm is that it is STABLE — two declarations reported at
+# the same position keep the order they were collected in rather than trading places between
+# runs, which an outline would show as a list that reshuffles itself.
+fn sym_sorted(syms: list[Symbol]) -> list[Symbol] {
+	mut out: list[Symbol] = []
+	for s in syms {
+		out.append(s)
+		mut j := out.len() - 1
+		for j > 0 {
+			break if not sym_before(out[j], out[j - 1])
+			tmp := out[j - 1]
+			out[j - 1] = out[j]
+			out[j] = tmp
+			j = j - 1
+		}
+	}
+	return out
+}
+
+fn sym_before(a: Symbol, b: Symbol) -> bool {
+	return a.line < b.line or (a.line == b.line and a.col < b.col)
 }
 
 # --- rendering ---------------------------------------------------------------------------

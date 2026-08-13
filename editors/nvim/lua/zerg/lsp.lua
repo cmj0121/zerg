@@ -82,6 +82,22 @@ local function show_diagnostics(client_id)
 	}, ns)
 end
 
+-- formatting_command is `:ZergFmt`, which is `zerg fmt` on the buffer.
+--
+-- nvim's own `gq` does NOT reach this server and cannot be made to. It sets `formatexpr` on
+-- attach only when the server declares `textDocument/rangeFormatting`, and this one declares
+-- whole-document formatting alone — correctly, since `zerg fmt` reads a whole source and has
+-- no notion of formatting half of one. So `gq` is not the door, and without a command the
+-- only way to format on demand was to type the `vim.lsp.buf.format` call by hand or to turn
+-- on format-on-save and accept it everywhere.
+--
+-- Buffer-local, because it is only an answer where the server is attached.
+local function formatting_command(buf, client_id)
+	vim.api.nvim_buf_create_user_command(buf, 'ZergFmt', function()
+		vim.lsp.buf.format({ bufnr = buf, id = client_id, timeout_ms = 2000 })
+	end, { desc = 'Format this buffer with zerg fmt' })
+end
+
 -- attach starts (or joins) the server for one buffer.
 --
 -- It answers quietly when the compiler is not on PATH. A language server that throws an
@@ -105,6 +121,7 @@ function M.attach(buf)
 
 	if client then
 		show_diagnostics(client)
+		formatting_command(buf, client)
 	end
 
 	if client and vim.g.zerg_format_on_save then

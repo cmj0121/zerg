@@ -27,7 +27,19 @@ set -u
 # tree-sitter than the one that produces the parser a person actually loads.
 TS=${TS:-$(make -s -C editors print-ts-cli 2>/dev/null || echo 'npx --yes tree-sitter-cli@0.24.7')}
 DIR=${DIR:-editors/tree-sitter-zerg}
-MIN_FILES=${MIN_FILES:-60}
+
+# The floor is measured against what this repository GUARANTEES, not against what a
+# developer's checkout happens to hold. `SELF_SRCS` and `EXAMPLE_SRCS` are 57 files and are
+# always here; test-data is a private submodule and is not. The first number written here
+# was 60 — the count on a machine with the corpus checked out — and it failed every CI run
+# on the day it landed, because the gate ran before the fetch and could therefore never see
+# more than 57. A floor that nothing without credentials can clear is not a floor, it is an
+# outage.
+#
+# So: below the in-tree count, with room for an example to be renamed, and far enough above
+# zero to catch the failure this exists for — a glob in the Makefile going stale and handing
+# this script a handful of files, or none, while it reports success.
+MIN_FILES=${MIN_FILES:-50}
 
 # REQUIRE=1 turns the skip into a failure, for a caller that knows the tool is meant to be
 # there. Without it a runner that lost node would leave the only gate over a second

@@ -137,6 +137,10 @@ belong to whoever declared them, and an impl belongs with one of the two_ 拒絕
 **一個 module 就是一個目錄**；裡面的檔案是共享同一命名空間的實體切片——檔案數量是排版、不是語意。module 是預設的
 私有單位：一個未加標記的宣告在該 module 的各檔案間可見，但不越出 module（見可見性）。
 
+import path 的解析**先看 importer 旁邊**——也就是寫下該 `import` 的那個檔案所在的目錄——接著才是 entry 檔旁邊，
+再來是標準函式庫，先命中者勝。因此一個 module 可以把自己的相依帶著走：`api/` 底下可以放它所 import 的 `api/util/`，
+整組搬到別處時兩者一起搬。（seed 編譯器只搜尋 entry 檔的目錄，會拒絕以這種方式抵達的 module。）
+
 巢狀是**扁平的**：把一個目錄放在另一個底下，只是讓 import path 變長——**沒有階層式私有**，內層 module 對外層並無
 特殊存取權。**module 之間的 import 循環會被拒絕**——一個在還走在下去的路上就又出現的 module，它的 `init()`
 區塊與 module 常數沒有任何順序可以被備妥，而那個拒絕指名的是這個環、不是走到它的那段路。被兩個 module 各自

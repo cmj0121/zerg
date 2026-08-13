@@ -362,6 +362,14 @@ exception.
 > there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
 > the day it is bound.
 >
+> The **function slot takes a narrower set than the type slots**, and `map` is the whole of the
+> difference: `fn map(xs, f)` is legal, every other name in the set is not. A type declaration's name
+> lands in the namespace all of them are bound in, while a function's lands where only the ones a
+> **call can spell** are — and `map[…](…)` as a constructor is built by neither compiler, so the name
+> has no value form to take. The rest do: a callee spelling `int`, `byte`, `bytearray` or `list` is read
+> as a conversion, and one spelling `Either`, `Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a
+> construction, before any user symbol is looked for.
+>
 > Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
 > not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
 > constant, which are one form in the parser — may still take a prelude name; shadowing one inside a

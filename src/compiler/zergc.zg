@@ -882,7 +882,9 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 	# `paths` rides beside `srcs` row for row
 	mut si := 0
 	for si < srcs.len() {
-		for im in zerg.imports_of_at(srcs[si], paths[si]) {
+		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
+			im := imd.path
+			chk_unbuilt_module(imd)
 			chk_import_cycle(here, im)
 			load_unit(module_files(im, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
 		}
@@ -928,6 +930,32 @@ fn chk_import_cycle(stack: list[str], im: str) {
 		j = j + 1
 	}
 	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
+}
+
+# chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
+# the line that asked for it.
+#
+# `atomic` is the whole list, and it earns the entry the hard way: the module is written, it
+# is formatted and checked with the rest of the stdlib, and it declares `Atomic[T]`, a generic
+# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E215
+# NotImplemented: a generic struct` pointing INTO `src/stdlib/atomic.zg`, a file the reader
+# did not write and cannot fix. That is the same shape as a cc error against generated C, and
+# it is the shape this repo's gates exist to turn away.
+#
+# THE MODULE STAYS SHIPPED rather than being taken out of the stdlib directory. Unshipping it
+# means moving the source out of `src/stdlib/`, because this compiler resolves the stdlib by
+# LISTING that directory — and the moment it leaves, `zerg fmt --check` and the rest of
+# SELF_SRCS stop reading it, so a hundred lines of Zerg rot quietly until generics land. What
+# is left behind would be `E502 cannot resolve import`, which is a sentence about a module
+# that is right there. Between a listing that needs a marker and a diagnostic that is false,
+# the marker is the honest one, and docs/runtime/stdlib.md carries it.
+#
+# This function deletes itself the day a generic struct is built.
+fn chk_unbuilt_module(im: zerg.ImportDecl) {
+	return if path_tail(im.path) != "atomic"
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -1270,7 +1298,9 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
-	for im in zerg.imports_of_at(src, file) {
+	for imd in zerg.import_decls_at(src, file) {
+		im := imd.path
+		chk_unbuilt_module(imd)
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)

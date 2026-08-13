@@ -98,6 +98,7 @@ code unit** 計的 0-based character,以及一個 **range**。這道轉換的兩
 vim.g.zerg_lsp = false            -- 不要啟動 server
 vim.g.zerg_lsp_cmd = { 'zerg', 'lsp' }
 vim.g.zerg_format_on_save = true  -- 每次寫入都跑 zerg fmt
+vim.g.zerg_diagnostic = false     -- 診斷怎麼畫,交還給 nvim 自己的設定
 ```
 
 當 `zerg` 不在 `PATH` 上時它**安靜地**回答。在一個沒有建好 toolchain 的 checkout 裡,每開一個 `.zg` 就報錯的 server,
@@ -105,6 +106,45 @@ vim.g.zerg_format_on_save = true  -- 每次寫入都跑 zerg fmt
 
 quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己的,而 server 宣告自己是 `quickfix` provider,所以
 即使 client 只要求這一種 kind 也拿得到。
+
+### 一則不必按鍵就讀得到的 finding
+
+nvim 預設的 `vim.diagnostic.config` 裡 **`virtual_text = false`**(0.11 起改的),所以一則發佈出來的 finding 預設畫出
+來的,只有底線與 gutter 上的一個 sign——一個「這行有問題」的記號,而說出**是什麼**問題的那一半,被留在沒有人會看的
+地方。而 server 的全部產出就是那句話,所以 client 為自己的 namespace 打開 virtual text,並在前面補上規則的代碼:
+
+```text
+    ratio: float = 2      ■ L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+**是它自己的 namespace,不是全域設定。** 對 `vim.lsp.diagnostic.get_namespace()` 交回來的 namespace 呼叫
+`vim.diagnostic.config(opts, ns)`,改的是一則 **Zerg** finding 怎麼畫,對別人的一句話也沒說——而那是一個語言 plugin
+有資格碰 `vim.diagnostic` 的唯一前提。有自己意見的使用者設 `vim.g.zerg_diagnostic = false`,然後留著他自己的。
+
+不管畫成什麼樣,nvim 自己的按鍵都能拿到同一段文字,而且值得知道,因為它們說得比那一行**更多**:
+
+| 按鍵 / 呼叫                                       | 顯示                                             |
+| ------------------------------------------------- | ------------------------------------------------ |
+| `<C-w>d`——`vim.diagnostic.open_float()`           | 游標所在行的每一則 finding,完整地開在一個視窗裡  |
+| `]d` / `[d`——`vim.diagnostic.jump()`              | 下一則 / 上一則                                  |
+| `<C-w>d` 按兩次                                   | 進到那個浮動視窗裡,文字可以 yank                 |
+| `vim.diagnostic.setloclist()`                     | 全部列進 location list,一則一行                  |
+| `vim.diagnostic.config({ virtual_lines = true })` | 那句話自己佔一行、畫在程式碼下面,不會被截斷      |
+| `:lua =vim.diagnostic.get(0)`                     | 原始 finding——`code`、`severity`、`source`、範圍 |
+
+畫成 virtual text 的 finding 會被視窗**截斷**,而一則 severity 3、帶著修法的句子,正好就是會寫得很長的那種。行尾出現
+`…` 的時候,要按的就是 `<C-w>d`。
+
+**`zerg build` 與 `zerg lint` 是另一條讀它的路**,而且它們才是權威——server 由 `make lsp` held 住去對齊它們:
+
+```sh
+zerg lint examples/01_bindings.zg
+# examples/01_bindings.zg:10:17: L502 the literal `2` is a float here — write `2.0` and the page shows it
+```
+
+**severity 3** 的 finding 是關於一個合法程式的「資訊」,不是錯誤。`examples/01` 與 `examples/03` 各帶著一則,因為兩者
+存在的目的就是示範一個 literal 採用它所在位置的型別——`ratio: float = 2` 就是那一課,而 `L502` 是 linter 把它叫出名
+字。它們編得過,也跑得動。
 
 ## quick fix 是編譯器的答案,不是 server 的
 

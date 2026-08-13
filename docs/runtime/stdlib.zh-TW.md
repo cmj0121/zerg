@@ -180,12 +180,18 @@ primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算
 | `max(a: int, b: int) -> int`          | 兩整數的較大者                             |
 | `sqrt(x: float) -> float`             | 平方根（Newton's method）；負數 raise      |
 | `pow(base: float, exp: int) -> float` | 整數指數（by squaring）                    |
-| `trunc(x: float) -> float`            | 去掉小數部分，朝零                         |
-| `floor(x: float) -> float`            | 不大於 `x` 的最大整數                      |
-| `ceil(x: float) -> float`             | 不小於 `x` 的最小整數                      |
-| `round(x: float) -> float`            | 最近整數，逢半朝遠離零                     |
+| `trunc(x: float) -> int`              | 去掉小數部分，朝零                         |
+| `floor(x: float) -> int`              | 不大於 `x` 的最大整數                      |
+| `ceil(x: float) -> int`               | 不小於 `x` 的最小整數                      |
+| `round(x: float) -> int`              | 最近整數，逢半朝遠離零                     |
 | `pi() -> float`                       | π（以函式提供；grammar 無 value constant） |
 | `e() -> float`                        | 尤拉數                                     |
+
+**取整的那四個回答一個 `int`，而那正是它們存在的理由。** `float` 上的 `int(x)` 被拒絕——丟掉小數是一個決定，而
+且有四個都說得通的答案（見[型別](../core/types.zh-TW.md)）——所以這四個就是做出那個決定的動詞。一個回傳
+`float` 的動詞，會讓呼叫端手上仍握著那個它本來就是為了完成而呼叫動詞的轉換。一個 `int` 裝不下的量會 raise
+`OverflowError`，和其他每一個會失敗的轉換一樣可以用 `guard` 降級；目標更窄時就是動詞再加上轉換，
+`byte(math.trunc(x))`。
 
 ## `rand`
 

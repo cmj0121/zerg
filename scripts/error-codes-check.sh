@@ -137,7 +137,7 @@ doc_zh=$(codes_in_doc_zh)
 # A FLOOR, and it is on the catalogue rather than on the compiler. Every comparison below is
 # a set difference, and a difference against an empty set is empty: a renamed heading, a
 # reformatted table, a `sed` range that stops matching, and all four `report` calls go quiet
-# while the range walk finds no marks to walk to. 150 against the 258 rows there are today.
+# while the range walk finds no marks to walk to. 150 against the 348 live rows there are today.
 MIN_CODES=${MIN_CODES:-150}
 n_doc=$(printf '%s\n' "$doc" | grep -c .)
 if [ "$n_doc" -lt "$MIN_CODES" ]; then
@@ -156,8 +156,8 @@ fi
 # they list the same SET: two independently tunable water lines for one set is two knobs that
 # can contradict each other. It is compared against a count that includes the retired rows
 # (codes_in_doc_zh does not split them, deliberately), so it is measured against a larger
-# base than the English one — 150 against the 310 rows there are today, where the English
-# floor is 150 against 292 live ones. Both are far enough below to survive ordinary growth
+# base than the English one — 150 against the 368 rows there are today, where the English
+# floor is 150 against 348 live ones. Both are far enough below to survive ordinary growth
 # and far enough above that a table which lost most of itself cannot pass.
 n_doc_zh=$(printf '%s\n' "$doc_zh" | grep -c .)
 if [ "$n_doc_zh" -lt "$MIN_CODES" ]; then
@@ -210,8 +210,8 @@ report "reported without a code — a rule with no identity is one no gate can p
 # So one shape is asserted instead: no raise in either file takes a string LITERAL. That is
 # exactly what the pattern below sees and it is worth saying what it does NOT — `raise m`
 # after `m := "…"` passes, and so does `raise anything(…)`. The second one MUST pass: every
-# site in both files raises a call — `p_diag`, `c_diag`, `c_diag_at`, the two `impossible`
-# functions and the handful of shared wordings alike — so a rule against calls would be a rule
+# site in both files raises a call — `p_diag`, `c_diag`, `c_diag_at`, `p_impossible` and the
+# handful of shared wordings alike — so a rule against calls would be a rule
 # against the channel. What is left is a hole one deliberate variable wide, and the
 # alternative — a list of the channel's entry points — is worse: it needs adding to every
 # time a rule earns a helper of its own, and the day it is not, the site it names is the one

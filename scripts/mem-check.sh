@@ -93,7 +93,7 @@ cases=0
 
 # Every case reads its round count from the environment, so ONE binary answers both
 # questions and the two runs differ in nothing else. A `rounds()` written per case would
-# be five copies of the same six lines; this is the preamble each case is built with.
+# be one copy of the same six lines per case; this is the preamble each case is built with.
 preamble='import "os"
 
 fn rounds() -> int {

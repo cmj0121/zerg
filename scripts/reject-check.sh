@@ -85,9 +85,10 @@ fail=0
 #   contains both          rephrase the assertion to a substring that has only one.
 # has_flag <flags> <marker> — one BOOLEAN marker is present. The flags arrive as a
 # space-padded list, so a marker is matched as a whole word: `no-place` must not answer
-# true for a hypothetical `no-place-yet`. It exists because the three boolean markers were
-# each asked for in a different way — a `case`, and two spellings of `${flags#* … }` — and
-# the fourth would have picked a fourth.
+# true for a hypothetical `no-place-yet`. It exists because the three boolean markers there
+# were then were each asked for in a different way — a `case`, and two spellings of
+# `${flags#* … }` — and the fourth would have picked a fourth. There are five now, and all
+# five ask through here, which is the whole of what this bought.
 has_flag() {
 	case $1 in *" $2 "*) return 0 ;; esac
 	return 1
@@ -227,17 +228,20 @@ reject() {
 	# so a case that comes back without one is a rule that lost it, and nothing else here
 	# would notice: the sentence would still match.
 	#
-	# A rule the EMITTER enforces is the exception, and it is marked. It raises, and a place
-	# is whatever each site remembered to append; that is one gap, owed once, and
-	# `reject-fuzz` counts the whole class. Marking the case keeps a permanent LANGUAGE rule
-	# in this file, where its lifetime says it belongs, instead of filing it with the
-	# not-yet-built forms next door to dodge one assertion.
+	# The EMITTER's refusals were the exception, and the PARSER's before them; both report
+	# through a channel of their own now (p_diag in parser.zg, c_diag in emit.zg), which takes
+	# the code and reads the place, so every one of them says where. Thirty-one of these
+	# markers came off with the parser's channel and the rest with the emitter's. That is what
+	# the marker is for — it retires itself, because a case that gains a place while still
+	# carrying one is a failure by name rather than a quiet pass.
 	#
-	# The PARSER's refusals were marked here too, and 31 of these markers came off in one
-	# change: it reports through a channel of its own now (p_diag in parser.zg), which takes
-	# the code and reads the place, so every one of them says where. That is what the marker
-	# is for — it retires itself, because a case that gains a place while still carrying one
-	# is a failure by name rather than a quiet pass.
+	# WHAT IS LEFT CARRIES THE MARKER, and it is no longer one class: the DRIVER refuses
+	# before a source is a tree at all — an unreadable file, an import that resolves to
+	# nothing, a cycle between modules (zergc.zg) — and ast.zg refuses a `chan[T?]` that a
+	# substitution built, where the type is written nowhere for a place to point at. Each of
+	# those cases says so at itself. Marking them keeps a permanent LANGUAGE rule in this file,
+	# where its lifetime says it belongs, instead of filing it with the not-yet-built forms
+	# next door to dodge one assertion.
 	if has_flag "$flags" no-place; then
 		if has_place "$out"; then
 			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"

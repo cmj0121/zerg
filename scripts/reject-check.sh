@@ -217,11 +217,17 @@ reject() {
 	# so a case that comes back without one is a rule that lost it, and nothing else here
 	# would notice: the sentence would still match.
 	#
-	# A rule the PARSER enforces is the exception, and it is marked. The parser has no diag
-	# channel — it raises — so none of its refusals carries a place; that is one gap, owed
-	# once, and `reject-fuzz` counts the whole class. Marking the case keeps a permanent
-	# LANGUAGE rule in this file, where its lifetime says it belongs, instead of filing it
-	# with the not-yet-built forms next door to dodge one assertion.
+	# A rule the EMITTER enforces is the exception, and it is marked. It raises, and a place
+	# is whatever each site remembered to append; that is one gap, owed once, and
+	# `reject-fuzz` counts the whole class. Marking the case keeps a permanent LANGUAGE rule
+	# in this file, where its lifetime says it belongs, instead of filing it with the
+	# not-yet-built forms next door to dodge one assertion.
+	#
+	# The PARSER's refusals were marked here too, and 31 of these markers came off in one
+	# change: it reports through a channel of its own now (p_diag in parser.zg), which takes
+	# the code and reads the place, so every one of them says where. That is what the marker
+	# is for — it retires itself, because a case that gains a place while still carrying one
+	# is a failure by name rather than a quiet pass.
 	if has_flag "$flags" no-place; then
 		if has_place "$out"; then
 			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
@@ -868,7 +874,7 @@ EOF
 # a form arrives is not nothing: it is the PROGRAM's own mistake, which is permanent and
 # belongs here.
 
-reject explicit-type-args-on-a-plain-fn E275 no-place <<'EOF'
+reject explicit-type-args-on-a-plain-fn E275 <<'EOF'
 fn id(x: int) -> int {
 	return x
 }
@@ -880,7 +886,7 @@ EOF
 
 # THE MULTI-ARGUMENT SHAPE, which never looked like an index at all — a comma is what
 # settles the bracket. It is the same rule and it is refused in the same place.
-reject explicit-type-args-multi E275 no-place seed-gap <<'EOF'
+reject explicit-type-args-multi E275 seed-gap <<'EOF'
 fn pairup[A, B](a: A, b: B) -> A {
 	return a
 }
@@ -897,7 +903,7 @@ EOF
 #
 # The third is the one that was not refused at all. `spec Buf { SIZE := 4096 }` was accepted
 # in silence and the member vanished: no impl had to supply it, and nothing said so.
-reject associated-type-in-a-spec E230 no-place seed-gap <<'EOF'
+reject associated-type-in-a-spec E230 seed-gap <<'EOF'
 spec It {
 	type Item
 
@@ -909,7 +915,7 @@ fn main() {
 }
 EOF
 
-reject associated-value-in-a-spec E211 no-place seed-gap <<'EOF'
+reject associated-value-in-a-spec E211 seed-gap <<'EOF'
 spec Bits {
 	BITS: int
 }
@@ -919,7 +925,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-member-that-is-not-one E276 no-place <<'EOF'
+reject a-spec-member-that-is-not-one E276 <<'EOF'
 spec Buf {
 	SIZE := 4096
 	fn f()
@@ -2179,7 +2185,7 @@ EOF
 # parameter, a field, a function, a type, a variant, a pattern binding. In a METHOD it
 # reached cc, because the parser has already put a `this` at parameter 0.
 
-reject this-as-a-parameter E245 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+reject this-as-a-parameter E245 'is a reserved word and cannot name a parameter' <<'EOF'
 fn f(this: int) -> int {
 	return this
 }
@@ -2189,7 +2195,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-method-parameter E245 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+reject this-as-a-method-parameter E245 'is a reserved word and cannot name a parameter' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2205,7 +2211,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-field E245 'is a reserved word and cannot name a struct field' no-place <<'EOF'
+reject this-as-a-field E245 'is a reserved word and cannot name a struct field' <<'EOF'
 struct P {
 	pub this: int
 }
@@ -2216,7 +2222,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-function E245 'is a reserved word and cannot name a function' no-place <<'EOF'
+reject this-as-a-function E245 'is a reserved word and cannot name a function' <<'EOF'
 fn this() -> int {
 	return 1
 }
@@ -2226,7 +2232,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-type E245 'is a reserved word and cannot name a struct' no-place <<'EOF'
+reject this-as-a-type E245 'is a reserved word and cannot name a struct' <<'EOF'
 struct this {
 	pub x: int
 }
@@ -2236,7 +2242,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-variant E245 'is a reserved word and cannot name an enum variant' no-place <<'EOF'
+reject this-as-a-variant E245 'is a reserved word and cannot name an enum variant' <<'EOF'
 enum E {
 	this
 	B
@@ -2247,7 +2253,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-pattern-binding E245 'is a reserved word and cannot name a pattern binding' no-place <<'EOF'
+reject this-as-a-pattern-binding E245 'is a reserved word and cannot name a pattern binding' <<'EOF'
 enum E {
 	A(int)
 	B
@@ -2270,7 +2276,7 @@ EOF
 #
 # The seed has no reserved-name rule at all for it, which is why these four are marked: it
 # refuses `this` only because its lexer makes that a keyword token, and `This` is not one.
-reject capital-this-as-a-variant E245 'cannot name an enum variant' no-place seed-gap <<'EOF'
+reject capital-this-as-a-variant E245 'cannot name an enum variant' seed-gap <<'EOF'
 enum E {
 	This
 	B
@@ -2281,7 +2287,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-type E245 'cannot name a struct' no-place seed-gap <<'EOF'
+reject capital-this-as-a-type E245 'cannot name a struct' seed-gap <<'EOF'
 struct This {
 	pub x: int
 }
@@ -2291,7 +2297,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-function E245 'cannot name a function' no-place seed-gap <<'EOF'
+reject capital-this-as-a-function E245 'cannot name a function' seed-gap <<'EOF'
 fn This() {
 	print 1
 }
@@ -2301,7 +2307,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-parameter E245 'cannot name a parameter' no-place seed-gap <<'EOF'
+reject capital-this-as-a-parameter E245 'cannot name a parameter' seed-gap <<'EOF'
 fn f(This: int) {
 	print This
 }
@@ -2317,7 +2323,7 @@ EOF
 # for `int` at module level while `This` inside an `impl` went on meaning the implementing
 # type — the same word with two meanings in one program, which is exactly what reserving it
 # is for.
-reject capital-this-as-a-type-alias E245 'cannot name a type alias' no-place seed-gap <<'EOF'
+reject capital-this-as-a-type-alias E245 'cannot name a type alias' seed-gap <<'EOF'
 type This = int
 
 fn main() {
@@ -2474,20 +2480,20 @@ EOF
 # `list[int]()` was worse — the parser indexed an empty argument list, so the COMPILER
 # aborted with its own IndexError, no place and no form named.
 
-reject convert-nothing-to-a-list E260 no-place <<'EOF'
+reject convert-nothing-to-a-list E260 <<'EOF'
 fn main() {
 	xs := list[int]()
 	print(f"{xs.len()}")
 }
 EOF
 
-reject convert-nothing-to-an-int E258 no-place <<'EOF'
+reject convert-nothing-to-an-int E258 <<'EOF'
 fn main() {
 	print(f"{int()}")
 }
 EOF
 
-reject convert-two-values E259 no-place <<'EOF'
+reject convert-two-values E259 <<'EOF'
 fn main() {
 	print(f"{int(1, 2)}")
 }
@@ -3228,7 +3234,7 @@ EOF
 # being absent. The whole tuple TYPE was unparsed until this branch, so every position that
 # wanted one reported whatever token came next instead: five positions, five messages.
 
-reject a-one-element-tuple-type E246 no-place <<'EOF'
+reject a-one-element-tuple-type E246 <<'EOF'
 fn f() -> (int) {
 	return 1
 }
@@ -3246,14 +3252,14 @@ EOF
 # the name rather than the reserved word in it. `print := 1` never even got that far: the
 # `print` statement arm answered first and read `:= 1` as the thing to print.
 
-reject reserved-word-as-a-binding E257 no-place <<'EOF'
+reject reserved-word-as-a-binding E257 <<'EOF'
 fn main() {
 	this := 1
 	print(f"{this}")
 }
 EOF
 
-reject reserved-word-as-a-loop-binding E245 'cannot name a loop binding' no-place <<'EOF'
+reject reserved-word-as-a-loop-binding E245 'cannot name a loop binding' <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2]
 	for this in xs {
@@ -3262,7 +3268,7 @@ fn main() {
 }
 EOF
 
-reject reserved-word-as-an-if-let-binding E245 'cannot name an `if let` binding' no-place <<'EOF'
+reject reserved-word-as-an-if-let-binding E245 'cannot name an `if let` binding' <<'EOF'
 fn main() {
 	o: int? = 5
 	if this := o {
@@ -3272,7 +3278,7 @@ fn main() {
 }
 EOF
 
-reject statement-keyword-as-a-binding E257 no-place <<'EOF'
+reject statement-keyword-as-a-binding E257 <<'EOF'
 fn main() {
 	print := 1
 	print(f"{print}")
@@ -4302,7 +4308,7 @@ EOF
 # They are gathered here rather than filed beside their neighbours because what they have in
 # common is how they were found, and that is worth being able to see.
 
-reject a-list-conversion-of-two-values E261 no-place <<'EOF'
+reject a-list-conversion-of-two-values E261 <<'EOF'
 fn main() {
 	b := list[byte]("a", "b")
 	print b.len()
@@ -4800,14 +4806,14 @@ EOF
 # THE STR BRIDGES UNDER THEIR OWN NAMES. `bytearray` is `list[byte]` and `runearray` is
 # `list[rune]`, so each converts exactly one value — a name that IS a type is a conversion,
 # not a constructor, and `[]` is what builds an empty list.
-reject a-bytearray-of-nothing E272 no-place <<'EOF'
+reject a-bytearray-of-nothing E272 <<'EOF'
 fn main() {
 	b := bytearray()
 	print b.len()
 }
 EOF
 
-reject a-bytearray-of-two-values E273 no-place <<'EOF'
+reject a-bytearray-of-two-values E273 <<'EOF'
 fn main() {
 	b := bytearray("a", "b")
 	print b.len()
@@ -5156,7 +5162,7 @@ EOF
 # nothing, so a correct `impl Ix[int]` was then told the spec is "parameterized by K, V"
 # about a list nobody wrote. The other two were not silent, but the `]` below the loop was
 # what complained, so a missing separator was reported as a missing bracket.
-reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' <<'EOF'
 spec Ix[K V] {
 	fn at(k: K) -> int
 }
@@ -5196,7 +5202,7 @@ fn main() {
 }
 EOF
 
-reject a-type-parameter-list-without-a-comma E204 'expected `,`' no-place <<'EOF'
+reject a-type-parameter-list-without-a-comma E204 'expected `,`' <<'EOF'
 fn f[T U](a: T, b: U) -> int {
 	return 1
 }
@@ -5269,7 +5275,7 @@ EOF
 # `f()` is read as an ordinary pattern, and the `..` after it is then a token no arm can hold.
 # The other two positions parse their const-expr and reject it on its value; this one has no
 # const-expr to parse.
-reject a-range-bound-that-calls E204 'found `..`' no-place <<'EOF'
+reject a-range-bound-that-calls E204 'found `..`' <<'EOF'
 fn lo() -> int {
 	return 3
 }
@@ -5526,6 +5532,72 @@ fn main() {
 		del x
 	}
 	print x
+}
+EOF
+
+# --- the parser's channel: the rules that used to raise with no code ------------------
+#
+# Every one of these was refused before this list existed, and every one said only a
+# sentence: no code, so no case here could pin it, and no place, so the reader was told what
+# and never where. They are the rules that fell out of the split docs/conformance.md names —
+# a refusal carried a code only where its author had written one into the string — and they
+# are cases now because the parser reports through one channel that carries both.
+
+reject a-function-name-that-is-not-a-name E601 'a function needs a name' <<'EOF'
+fn 1() {
+	print "a"
+}
+EOF
+
+reject a-binding-name-that-is-not-a-name E601 'a binding needs a name' <<'EOF'
+fn main() {
+	5 := 1
+	print 5
+}
+EOF
+
+reject a-receive-arrow-on-something-that-is-not-a-channel E602 <<'EOF'
+fn f(c: <-int) {
+	print "a"
+}
+
+fn main() {
+	f(1)
+}
+EOF
+
+reject mut-before-something-that-is-not-a-method E603 <<'EOF'
+struct S {
+	pub a: int
+}
+
+impl S {
+	mut a := 1
+}
+
+fn main() {
+	print S(1).a
+}
+EOF
+
+reject is-against-something-that-is-not-a-type E604 <<'EOF'
+fn main() {
+	e := Err("x")
+	if e is 3 {
+		print "y"
+	}
+}
+EOF
+
+reject an-f-string-whose-literal-text-is-malformed E608 <<'EOF'
+fn main() {
+	print f"\q"
+}
+EOF
+
+reject an-f-string-hole-holding-two-expressions E609 <<'EOF'
+fn main() {
+	print f"{1 2}"
 }
 EOF
 

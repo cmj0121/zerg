@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test run build install uninstall upgrade cloc examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -100,6 +100,19 @@ build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, t
 # directory has to be the current one.
 PREFIX ?= /usr/local
 
+# Where cloc looks for its own default switches, which is NOT under $(PREFIX): it is the
+# user's, one per machine, and cloc reads it from wherever it is standing.
+#
+# `$(HOME)/.config` and NOT `$(XDG_CONFIG_HOME)`, which is where the nvim install next door
+# looks and is the obvious thing to copy. cloc does not read that variable — it builds the
+# path as $ENV{HOME}/.config/cloc/options.txt and has no fallback — so honouring XDG here
+# would write a correct file to a path cloc never opens, on exactly the machines that set it,
+# and the install would report success while `cloc .` went on not knowing what Zerg is.
+#
+# Overridable for the reason `install-check` needs its own PREFIX: a gate that writes the
+# developer's real dotfiles is a gate nobody can afford to run.
+CLOC_CONFIG ?= $(HOME)/.config/cloc
+
 # `build` runs as a recipe line, not a prerequisite: as a prerequisite it would race the
 # submodule work under `make -j`, and what is installed must be the binary this run built.
 install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
@@ -126,6 +139,12 @@ install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the 
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
 	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
+	@# cloc ships no Zerg, so a count of any tree holding some reports a large unnamed
+	@# remainder. `.cloc.def` is the missing definition and cloc reads
+	@# `$(CLOC_CONFIG)/options.txt` before every run, so installing it there is what makes
+	@# plain `cloc .` count Zerg — no flag, and no target here to run instead of cloc.
+	@cp .cloc.def "$(PREFIX)/lib/zerg/cloc.def"
+	@./scripts/cloc-config.sh install "$(PREFIX)/lib/zerg/cloc.def" "$(CLOC_CONFIG)"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
 
 # `make install` is the first command a user runs and was the one command nothing ran: every
@@ -136,28 +155,16 @@ install-check:                  # the installed toolchain works, and uninstall t
 	@./scripts/install-check.sh
 
 uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
+	@# BEFORE the files go, and not after: the config line names a path under $(PREFIX), and
+	@# a cloc pointed at a deleted definition answers `Unable to read` and counts nothing —
+	@# in every project on the machine, not only this one. An uninstall that stopped halfway
+	@# would leave the machine worse than not having run it.
+	@./scripts/cloc-config.sh uninstall "$(CLOC_CONFIG)"
 	rm -f "$(PREFIX)/bin/zerg"
 	rm -rf "$(PREFIX)/lib/zerg"
 
 upgrade:			            # upgrade all the necessary packages
 	pre-commit autoupdate
-
-# cloc ships no Zerg, so counting this tree reported a Go project with a large unnamed
-# remainder — the language the repository exists FOR was the one thing the count could not
-# see. `.cloc.def` names the extension and the comment rule, and `--read-lang-def` MERGES it
-# with cloc's own languages; `--force-lang-def`, the neighbouring flag, would replace them
-# and take Go and C with it.
-#
-# The comment rule is not `#`. GRAMMAR group 2 splits that byte three ways: `#[` opens a
-# DECORATOR, which is code; `##` opens a doc comment, which is not; and any other `#` runs to
-# end of line. So the filter is a `#` NOT followed by `[`, which is the same sentence GRAMMAR
-# states for COMMENT — written twice, in two languages, because cloc cannot read the first.
-#
-# It REPORTS. Nothing here asserts anything, which is why `gates-check.sh` carries it on the
-# not-a-gate list rather than the board.
-cloc:                           # count the source code; CLOC_ARGS passes flags through
-	@command -v cloc >/dev/null || { echo "cloc: not installed (brew install cloc)"; exit 1; }
-	@cloc --read-lang-def=.cloc.def --vcs=git $(CLOC_ARGS) .
 
 help:				            # show this message
 	@printf "Usage: make [OPTION]\n"

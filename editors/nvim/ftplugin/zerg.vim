@@ -24,6 +24,19 @@ setlocal tabstop=4
 setlocal shiftwidth=4
 setlocal softtabstop=0
 
+" The column `F403` measures against.
+"
+" The formatter keeps a flat group on one line only while it ends before column 80, counting
+" a tab as `fmt_wrap_tab()` — which is the same 4 the width above is. So 80 is not a taste:
+" it is the number that decides whether an argument list stays on one line or becomes one
+" element per line, and a person typing has no other signal about it.
+"
+" A ruler and NOT 'textwidth', which would wrap the line being typed. Code is not prose and
+" the formatter owns where a break goes; this only draws where the budget ends. It is set for
+" the filetype because a global ruler is somebody else's number — a checkout configured for
+" 120 or 128 columns shows a Zerg buffer a line that means nothing here.
+setlocal colorcolumn=81
+
 " --- folding ----------------------------------------------------------------------------
 "
 " Fold a block's BODY and leave the lines that BRACKET it visible, so a folded function
@@ -242,4 +255,4 @@ endfunction
 " which is the half that goes stale. `:setfiletype other` on a Zerg buffer left it folding by
 " braces and building with `zerg` because the list had not grown with the file.
 let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< tabstop< shiftwidth< softtabstop<'
-      \ . ' foldmethod< foldexpr< foldlevel< indentexpr< indentkeys<'
+      \ . ' colorcolumn< foldmethod< foldexpr< foldlevel< indentexpr< indentkeys<'

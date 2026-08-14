@@ -796,6 +796,9 @@ shipping compiler rather than a part of it (the line
 | `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
 | `E392` | cannot `…` to `…`: only a `mut` collection can modify its elements                          |
 | `E393` | cannot `…` `…`: a collection is frozen against structural change inside its own `for` loop  |
+| `E508` | `…` is not a public type of module `…`                                                      |
+| `E509` | `…` is module-private, and … is on a `pub` declaration                                      |
+| `E510` | `…` is not a public field of `…`, which module `…` declared                                 |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |
@@ -891,6 +894,7 @@ shipping compiler rather than a part of it (the line
 | `E504` | cannot send on a receive-only `…`                                                           |
 | `E505` | cannot close a receive-only channel `…`                                                     |
 | `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
+| `E507` | `…` is a module this build compiles and this module did not import                          |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

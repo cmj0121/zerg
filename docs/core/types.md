@@ -476,26 +476,43 @@ promoted, and no target is ever pushed down into an expression.
 **The conversions `T(x)` accepts** are these, and no others. They are not `Into` impls and never were
 one: `T(x)` is a built-in form, and this is the list of pairs it has an answer for.
 
-| from   | to      | can raise | note                                      |
-| ------ | ------- | --------- | ----------------------------------------- |
-| `byte` | `int`   | no        | every byte is an int                      |
-| `rune` | `int`   | no        | every code point is an int                |
-| `int`  | `float` | no        | never fails; may lose precision past 2^53 |
-| `int`  | `byte`  | yes       | out of range → `OverflowError`            |
-| `int`  | `rune`  | yes       | not a code point → `OverflowError`        |
-| `int`  | `uint`  | yes       | negative → `OverflowError`                |
-| `uint` | `int`   | yes       | past the signed maximum → `OverflowError` |
+| from    | to                               | can raise   | note                                                   |
+| ------- | -------------------------------- | ----------- | ------------------------------------------------------ |
+| `byte`  | `int`                            | no          | every byte is an int                                   |
+| `rune`  | `int`                            | no          | every code point is an int                             |
+| `int`   | `float`                          | no          | never fails; may lose precision past 2^53              |
+| `int`   | `byte`                           | yes         | out of range → `OverflowError`                         |
+| `int`   | `rune`                           | yes         | not a code point → `OverflowError`                     |
+| `int`   | `uint`                           | yes         | negative → `OverflowError`                             |
+| `uint`  | `int`                            | yes         | past the signed maximum → `OverflowError`              |
+| `str`   | `int` / `uint` / `float`         | yes         | **parses** the text — `ValueError` / `OverflowError`   |
+| `float` | `int` / `byte` / `uint` / `rune` | **refused** | `E394` — dropping a fraction is a decision; use a verb |
 
-`float → int` is absent: dropping a fraction is a decision, so it has its own spellings — `int(x)`,
-or `//` for the division that lands there. `byte → float` is absent too: that would be
-`byte → int → float`, and one step is what a conversion is — write the two.
+**The table's shape is a hub, and the hub is `int`.** Every accepted pair has `int` on one side, which
+is the one-step rule stated as a picture. So a pair that is not on it is not a conversion this language
+has, and there are exactly two ways to be off it.
 
-> **[deviation]** The table is not closed. Four pairs it declares absent are accepted and lower silently:
-> `float(b)` on a `byte` gives `65`, `byte(3.5)` gives `3`, `uint(3.5)` gives `3`, `rune(65.5)` gives `65`,
-> and `int(1.9)` / `int(-1.9)` truncate toward zero with nothing said. So `float → int` is not absent, it
-> is unwritten: the decision this paragraph says a spelling must make is made for the program instead.
-> (`int("42")` is the one extra pair that is intended — it **parses** a decimal string rather than
-> converting a number; see [Built-in Functions](../runtime/builtins.md) — and this table should name it.)
+**`byte → float` is absent** because it would be `byte → int → float`, and one step is what a conversion
+is: write the two, `float(int(b))`. Every missing pair between two numbers is that same sentence with
+other names in it — `byte → rune`, `byte → uint`, `rune → uint` — and each is `E395`, which prints the
+two steps it wants.
+
+**A `float` SOURCE is absent for a different reason**, and it is the only asymmetry here: dropping a
+fraction is not a missing step but a **decision**, and four answers are defensible. So the language
+declines to make it and the program spells it with a verb — `math.trunc`, `math.floor`, `math.ceil` or
+`math.round`, each of which answers an `int` and is therefore the whole conversion rather than half of
+one — or takes it with `//`, the division that lands in an `int` already. `int(x)` on a float is `E394`,
+and it names the verb to write; a narrower target is the verb and then the conversion,
+`byte(math.trunc(x))`. A magnitude no `int` holds raises `OverflowError`, like every other conversion
+that can fail (see [Standard Library](../runtime/stdlib.md)).
+
+**`bool(x)` and `str(x)` are not on this table**, which is why the row above names four targets and not
+every one. Neither is a conversion in this sense: `bool(3.5)` is the zero test above, answering `true`,
+and `str(3.5)` is a rendering. A fraction is not dropped by either, so neither has a decision to make.
+
+`int("42")` is on the table as its own row because it is a different operation wearing the same
+spelling: it **parses** the number's text rather than re-constructing a value, and only `int`, `uint`
+and `float` do it (see [Built-in Functions](../runtime/builtins.md)).
 
 **Any type to text is not in the table**, because it is not a conversion between types in this sense:
 `str(x)` renders a value through `display`, which every type has.
@@ -505,10 +522,25 @@ as a **constant**: the value is known, the conversion is known to raise, and it 
 time rather than left to run. Reachability does not enter into it; `if false { b := byte(300) }` is the
 same error.
 
-> **[deviation]** It does **not** hold through a generic call. `byte(id(300))` for `fn id[T](x: T) -> T` is
-> the same known constant once monomorphized, and it compiles: the program builds and dies at run time with
-> _OverflowError: integer conversion out of range_. The constant-folding runs before substitution, so the
-> value the specialization makes known arrives after the only pass that would have refused it.
+**"Known" is one notion, and it is the const-expr.** A literal, a binding whose initializer is one, a
+`const`, and the operators over any of them: `300`, `200 + 100`, `big` for `big := 300`, `N` and `N * 3`
+for `const N := 100`. It is the same notion a fill count `[v; N]` requires, and deliberately so — one
+sentence in this document with two readings is how a language grows two answers to one question.
+
+**It stops at a call, and at a `mut` binding.** `byte(f(300))` raises where it runs, for an ordinary `f`
+and a generic one alike: a call is not a constant form, which the enum-discriminant rule says in the same
+words — `A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1` are the form, and a call is not. A `mut` binding is
+excluded for a reason of its own: it can be written between the binding and the conversion, so what it
+holds there is not what it holds here.
+
+**The two positions differ in what they DO with an unknown value, not in what counts as one.** A fill
+count must have a number, so it is refused (`E475`); a conversion of a value is an ordinary conversion, so
+it is checked where it runs.
+
+**It survives monomorphization.** A generic body is checked as its **specialization** — `y: T = 300` in
+`fn hold[T](v: T)` called with a `byte` is refused, naming the byte — because substitution happens before
+the constant rule runs, not after it. The type argument is what makes the range question askable, and it
+is known by then.
 
 **An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
 `1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different

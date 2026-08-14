@@ -406,8 +406,8 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** `zerg test` is a **scaffold**. It walks a path for `*_test.zg`, compiles each
-> package — its sources, its test files and a generated driver, so a white-box test reaches the
+> **[not yet]** `zerg test` is a **scaffold**. It walks a path for the packages under it, compiles
+> each — its sources, its test files and a generated driver, so a white-box test reaches the
 > module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
 > `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
 > from passes and failures, and exiting non-zero if any did not hold. A run that finds nothing
@@ -418,6 +418,12 @@ does.
 > there is one, and the driver), and a test file naming no such sibling makes the directory the
 > package. One directory may therefore hold several packages, each with its own driver and its own
 > process.
+>
+> **The path may be one `.zg` file**, and then it is the **package that file is in** that runs —
+> `zerg test src/stdlib/strings_test.zg` runs `strings.zg` + `strings_test.zg`, and not the other
+> packages of that directory. Ancestors are counted from the file's directory, exactly as they
+> would be for the directory itself. A build of the test file **alone** is a build of nothing, so
+> the file selects a package rather than a file list; `--only` is the tool for one test.
 >
 > **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
 > test, a stem selects the family. It is applied before anything is generated, so a test it did not

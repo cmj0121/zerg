@@ -34,14 +34,14 @@ ZG
 `make` 會建出兩個編譯器，你用的是第二個。`zerg0` 是以 Go 實作的種子，已被裁減到只剩一個工作：建出編譯器。
 `zerg` 就是那個編譯器——以 Zerg 寫成、位於 [`src/compiler/`](src/compiler)，並且由它自己編譯。
 
-| 指令                  | 作用                                                     |
-| --------------------- | -------------------------------------------------------- |
-| `zerg build <file>`   | 編譯——entry 宣告 `main` 時產生執行檔，否則產生 object    |
-| `zerg test [path]`    | 建置並執行一條路徑底下每個 `*_test.zg` 的 `#[test]` 函式 |
-| `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                             |
-| `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                     |
-| `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式              |
-| `zerg lsp`            | language server，走 stdio（JSON-RPC）                    |
+| 指令                  | 作用                                                   |
+| --------------------- | ------------------------------------------------------ |
+| `zerg build <file>`   | 編譯——entry 宣告 `main` 時產生執行檔，否則產生 object  |
+| `zerg test [path]`    | 執行一條路徑、或單一檔案所屬 package 的 `#[test]` 函式 |
+| `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                           |
+| `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                   |
+| `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
+| `zerg lsp`            | language server，走 stdio（JSON-RPC）                  |
 
 `--emit` 則是停在某個階段：`tokens`、`ast`、`c`、`lib`（object）、`bin`（執行檔）。程式是逐模組建置的——`-j`
 可同時編譯多個單元，結果以內容為鍵快取在 `.zerg-cache/`，所以只改一個模組的重建就只重編那一個模組。

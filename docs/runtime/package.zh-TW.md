@@ -313,7 +313,7 @@ package 是用哪些檔案建起來的。
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
 
-> **[not yet]** `zerg test` 目前是一個**骨架**。它會走訪一條路徑找出 `*_test.zg`,把每個 package 編譯
+> **[not yet]** `zerg test` 目前是一個**骨架**。它會走訪一條路徑找出底下的 package,把每個都編譯
 > ——它自己的原始碼、它的測試檔,加上一個產生出來的 driver,所以白箱測試不需要 import 也不需要 `pub`
 > 就摸得到 module 的內部——然後把找到的每個 `#[test]` 跑起來,以檔案分組回報
 > `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH`,skip 與 timeout 都跟 pass、fail 分開計數,只要有一個
@@ -323,6 +323,11 @@ package 是用哪些檔案建起來的。
 > `strings.zg`,package 就是這一對(再加上該目錄自己的 `fixtures_test.zg`,如果有的話,以及 driver);
 > 指不到這種鄰居的測試檔,則以目錄為 package。因此一個目錄可能同時有好幾個 package,各有自己的 driver
 > 與自己的 process。
+>
+> **路徑可以是單一個 `.zg` 檔**,這時跑起來的是**那個檔所屬的 package**。指著
+> `src/stdlib/strings_test.zg` 跑的是 `strings.zg` + `strings_test.zg`,而不是那個目錄的其他 package;
+> 祖先是從該檔案的目錄算起,和直接指那個目錄時完全一樣。只用測試檔**自己**做一次 build 是在 build 空氣,
+> 所以一個檔案選的是一個 package 而不是一份檔案清單;要指定單一測試請用 `--only`。
 >
 > **`--only <name>`** 只跑名字**以 `<name>` 開頭**的測試——寫完整名字就選一個,寫字首就選一整族。它在
 > 任何東西被產生之前就先套用,所以沒被選上的測試不會被編譯,它的 fixture 也不會被建起來。一個什麼都沒

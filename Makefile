@@ -109,8 +109,16 @@ test-runner:                    # the test runner can see a test that fails
 # having asked nothing — the one failure a test gate must not have.
 STDLIB_TEST_MIN ?= 60
 
+# The modules whose comments carry runnable examples. An example nobody executes is an
+# unverified claim, which is the shape this repository has spent a span removing, so the
+# ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
+# against what came out. The list is a variable so that adding a module's examples is one
+# name here rather than a second copy of the rule.
+DOC_EXAMPLE_SRCS := src/stdlib/strings.zg
+
 stdlib-test:                    # the standard library's own suites, and a floor under them
 	$(MAKE) build
+	./scripts/doc-examples-check.sh $(DOC_EXAMPLE_SRCS)
 	@out=$$(./bin/zerg test tests/stdlib); status=$$?; \
 	printf '%s\n' "$$out"; \
 	[ $$status -eq 0 ] || exit 1; \

@@ -232,6 +232,13 @@ jobs:
       - name: Unit suites, seed and runtime
         run: make test
 
+      # And the runner those suites will eventually be written in. A test runner that
+      # cannot detect a failing test is the ultimate gate that measures nothing, so this
+      # asks it about the four ways a test fails to hold — a broken assertion, a crash, an
+      # early `os.exit`, and a tree with no tests at all.
+      - name: The test runner can see a test that fails
+        run: make test-runner
+
       # The digest that names every cached object, held to FIPS 180-4's vectors and to the
       # system tool. It needs a built compiler, which is why it is here and not in the
       # text-only job.

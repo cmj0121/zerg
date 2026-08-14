@@ -453,21 +453,41 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] 
 		}
 	}
 
-	# The L5xx conversion findings are about LEGAL programs — a value that changed type
-	# where the source does not say so — so they are INFORMATION and must not draw as
-	# errors. A server that paints a working program red teaches its user to ignore red.
+	# EVERY LINT FINDING, THROUGH THE FUNCTION `zerg lint` CALLS. It used to be
+	# `lint_conversions` — the L5xx family alone — which meant the server had a private
+	# answer to "what does the linter say about this file": the eight tree rules were
+	# missing, and so was `#[allow(…)]`, which lives inside `lint_program` and would
+	# otherwise have had to be applied a second time here. `lint_program` also asks
+	# `lint_conversions` itself, so this is one call where there were nearly two.
+	#
+	# GUARDED, because loading a program is the one thing here that can refuse, and a
+	# server that dies on a half-typed file is a server the editor stops talking to.
 	lints := match guard {
-		zerg.lint_conversions(prog.srcs, prog.paths)
+		zerg.lint_program(prog.srcs, prog.paths)
 	} {
 		Either.Left(ls) => ls
 		Either.Right(_) => []
 	}
-	for d in lints {
-		if d.path == path {
-			out.append(ls_diagnostic(text, d, 3))
+	for f in lints {
+		if f.path == path {
+			out.append(ls_diagnostic_at(text, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))
 		}
 	}
 	return out
+}
+
+# ls_severity maps the linter's severity onto LSP's. A lint finding is never an ERROR:
+# severity 1 is what `zerg build` refuses over, and every one of these is a legal program
+# that builds — a server that paints a working program red teaches its user to ignore red.
+# So the linter's three levels land on the three that remain, IN ORDER, because they are
+# ordered: a finding fails `zerg lint`, a warning is printed and exits 0, an info never
+# gates anything (docs/tooling/fmt.md, "A finding carries a severity").
+fn ls_severity(sev: str) -> int {
+	return 3 if sev == "warning"
+
+	return 4 if sev == "info"
+
+	return 2
 }
 
 # ls_whole_file_diag is the abort's sentence, with a range of NOTHING at the top of the

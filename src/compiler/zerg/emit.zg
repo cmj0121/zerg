@@ -10054,6 +10054,12 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 # only WHEN it runs — a coroutine's env is consumed once, a closure's every time it is
 # called — which is why this one is not freed by its thunk.
 #
+# THE THUNK HANDS THE LIFTED FUNCTION COPIES. This is the half a spawn does not need. The
+# lifted function's captured parameters are BY VALUE, so it releases each of them when it
+# returns (c_fn) — and a spawn is fine with that, because its env is giving up its own
+# reference and never runs again. A closure runs again: passing `e->f0` uncopied made the
+# SECOND call read a string the first had freed.
+#
 # THE ENVIRONMENT IS NOT FREED. Every other value this emitter allocates is registered for
 # release at the scope that made it; a closure's cannot be, because the closure may outlive
 # that scope — that is what closing over a value is for. Freeing it correctly needs the fn
@@ -10074,7 +10080,13 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has
 		if i > 0 {
 			unpack = unpack + ", "
 		}
-		unpack = unpack + f"e->{fi}"
+		# a COPY per call, for the reason in the header: the callee gives every by-value
+		# parameter back, and this environment is read again the next time it is called
+		mut arg := f"e->{fi}"
+		if c_needs_copy(em, cps[i].ty) {
+			arg = c_copy_of(em, cps[i].ty, arg)
+		}
+		unpack = unpack + arg
 		i = i + 1
 	}
 	em.lam_defs.append(f"typedef struct {{{fields} }} {envty};\n")

@@ -562,7 +562,7 @@ goes; `F403` is a rewrite for the same reason in reverse — it inserts line bre
 wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
 wrote at all.
 
-## E1xx–E6xx — compile errors
+## E1xx–E7xx — compile errors
 
 These are not advisory. A program that hits one does not build, so each is a **compile
 error** the build stops on. They carry codes because a code is a **stable identity for a
@@ -578,30 +578,33 @@ order a build meets them:
 | `E4xx` | emitting | a form this compiler will not lower, including a `[not yet]`       |
 | `E5xx` | building | the program as a set of files, which no single file's text answers |
 | `E6xx` | parser   | the parser again: `E2xx` is full, and a range is a hundred numbers |
+| `E7xx` | emitting | the emitter again: `E4xx` is full, for the same reason             |
 
 `E5xx` is the one range that is not a point in that order. A build resolves imports before
 it lexes what they name and looks for `fn main` after everything is emitted, so the driver's
 own findings bracket the other four rather than sitting between two of them.
 
-`E6xx` is not a stage at all — it is **`E2xx` continued**. A range is a hundred numbers and
-the parser used ninety-eight of them; the rules that arrived when the parser's refusals were
-moved onto one reporting channel had nowhere in `E2xx` to go. Continuing in a fresh range is
-the only move that keeps the two properties the scheme is for: a number is never reused, and
-a reader who meets one can tell which stage is speaking.
+`E6xx` is not a stage at all — it is **`E2xx` continued**, and `E7xx` is **`E4xx` continued**
+for the same reason twice over. A range is a hundred numbers and the parser used ninety-eight
+of them; the rules that arrived when the parser's refusals were moved onto one reporting
+channel had nowhere in `E2xx` to go. The emitter followed one change later — 50 of its 126
+refusals carried no code at all, and `E4xx` had one number left — so the same move was made
+again. Continuing in a fresh range is what keeps the two properties the scheme is for: a
+number is never reused, and a reader who meets one can tell which stage is speaking.
 
 **When a range fills, open a continuation range for that stage and close the old one.** Two
 open ranges for one stage means two places to allocate from, and that is the exact condition
 the three collisions in one week came out of. Closing is what `E299` is doing in the retired
 table below: it was never issued, and retiring it is how a number is taken out of circulation
 without being spent, so `E2xx` reads as **full** rather than as one slot somebody may still
-take. `E4xx` is one number from the same position, and the emitting stage's continuation is
-the same documented cost as this one — a row here, and nothing else.
+take. `E499` is the same move one range over, made the day the emitter's numbers ran past
+`E498`: it was never issued either, and `E4xx` reads as full because of it.
 
 That is why the table above names a **stage** rather than a range, and why `make
 error-codes-check` answers per stage:
 
 ```text
-error-codes-check: next free code per stage — building E507, checking E392, emitting E499,
+error-codes-check: next free code per stage — building E511, checking E398, emitting E744,
                                               lexical E112, parser E610
 ```
 
@@ -936,6 +939,49 @@ shipping compiler rather than a part of it (the line
 | `E607` | a match arm's body is an expression, and this one is a statement — **[not yet]**            |
 | `E608` | an f-string's literal text is malformed                                                     |
 | `E609` | an f-string hole holds more than one expression                                             |
+| `E701` | a `…` takes a … or a …, and this bare value is neither side                                 |
+| `E702` | no field `…` on … (optional chain `?.…`)                                                    |
+| `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                               |
+| `E704` | `?` propagates a right the enclosing function does not answer                               |
+| `E705` | two modules both define `…` and at least one is `pub` — **[not yet]**                       |
+| `E706` | two modules both define `…` — one flat namespace — **[not yet]**                            |
+| `E707` | no type named `…` (…)                                                                       |
+| `E708` | `!` on a … — it forces a Result[T] or a T? — **[not yet]**                                  |
+| `E709` | `??` on a … — its left side is a Result[T] or a T? — **[not yet]**                          |
+| `E710` | `is …` wants an Err on its left, found a …                                                  |
+| `E711` | `in …` wants an Err on its left, found a …                                                  |
+| `E712` | `list[…](…)` converts a `str` to its bytes, and this is …                                   |
+| `E713` | `list[…](…)` — a `str` bridges to its bytes or its code points                              |
+| `E714` | rendering a … as text — an enum has no name for its variant — **[not yet]**                 |
+| `E715` | `[…]` indexes a list or a map, and this is …                                                |
+| `E716` | the method `…` on an Err takes no argument — **[not yet]**                                  |
+| `E717` | the method `…` on a Err — the `Error` interface is three names — **[not yet]**              |
+| `E718` | `ok_or` takes the error to answer an absence with, and none was given — **[not yet]**       |
+| `E719` | `ok_or` takes ONE error to answer an absence with — **[not yet]**                           |
+| `E720` | `ok_or` answers an absence with an `Err`, and this is a … — **[not yet]**                   |
+| `E721` | `ok` forgets the Right and takes no argument — **[not yet]**                                |
+| `E722` | the method `…` on a … — a carrier answers `ok_or` and `ok` — **[not yet]**                  |
+| `E723` | `….…(…)` — an enum type answers `of(n)` and its own variants — **[not yet]**                |
+| `E724` | `….of(n)` takes one integer — the discriminant to reverse                                   |
+| `E725` | the method `…` on a … — **[not yet]**                                                       |
+| `E726` | `…` is testable but not constructible                                                       |
+| `E727` | no type named `…` to construct                                                              |
+| `E728` | no variant named `…` — a constructor pattern names one of the subject's                     |
+| `E729` | non-exhaustive match: missing the Left or the Right case                                    |
+| `E730` | non-exhaustive match: missing the `true` or the `false` case                                |
+| `E731` | the pattern `…` on a Result[T] — it has Left and Right — **[not yet]**                      |
+| `E732` | these constants depend on each other and none can be given a value first                    |
+| `E733` | `fn main() -> …` — the entry answers nothing, an int or a Result[nil] — **[not yet]**       |
+| `E734` | main(args) in a program that uses concurrency — **[not yet]**                               |
+| `E735` | a closure captures `…`, and this compiler cannot work out what it holds                     |
+| `E736` | … of anything but a function, a method, or a namespaced function — **[not yet]**            |
+| `E737` | … of `…` — not a function, a method, or a namespaced function — **[not yet]**               |
+| `E738` | `len` takes no argument, and this gives …                                                   |
+| `E739` | `has` asks about one key, and this gives …                                                  |
+| `E740` | the map method `…` — **[not yet]**                                                          |
+| `E741` | the field `…` on an Err — it has `msg` and `kind` — **[not yet]**                           |
+| `E742` | `…` has … type parameters and this gives …                                                  |
+| `E743` | `..=` with no upper bound is not a range — **[not yet]**                                    |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -993,6 +1039,7 @@ holds each range to exactly that: a number that is neither listed above nor list
 | `E448` | an ordering that comes from `Ord` — the rule it named is the checker's, and always was     |
 | `E450` | no field `…` on a type — the same rule as the row that kept the number below it            |
 | `E299` | never issued: `E2xx` closed at `E298`, and the parser's numbers continue in `E6xx`         |
+| `E499` | never issued: `E4xx` closed at `E498`, and the emitter's numbers continue in `E7xx`        |
 
 ## `zerg lint`
 

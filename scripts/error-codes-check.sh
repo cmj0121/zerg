@@ -195,26 +195,34 @@ report "listed in the zh-TW catalogue, missing from English" \
 # rule already refuses a call that omits it — what is left to check is that the argument is a
 # code rather than a string that happens to be there, and the only calls exempt are the
 # forwarding ones that pass a `code` they were handed.
-uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|p_diag\(|Diag\(' "$SRC" --include='*.zg' |
-	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn (chk_(at|note)|p?_?diag_at|p_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
+uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|p_diag\(|c_diag\(|c_derive_diag\(|Diag\(' "$SRC" --include='*.zg' |
+	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn ([cp]_)?(chk_(at|note)|_?diag(_at)?|derive_diag|p_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
 report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
 
-# THE PARSER REPORTS THROUGH ITS CHANNEL, and this is what keeps that true one site at a
-# time. The rule above holds a channel CALL to a literal code; it cannot see a refusal that
-# never calls one, and the parser's refusals are raises — which is precisely how they drifted
-# in the first place, each site free to spell a code and a place or to spell neither.
+# THE TWO RAISING STAGES REPORT THROUGH THEIR CHANNEL, and this is what keeps that true one
+# site at a time. The rule above holds a channel CALL to a literal code; it cannot see a
+# refusal that never calls one, and the parser's and the emitter's refusals are raises — which
+# is precisely how they drifted in the first place, each site free to spell a code and a place
+# or to spell neither. The emitter drifted furthest: 50 of its 126 raises carried no code and
+# 113 carried no place, and every one of them was somebody writing the sentence where they
+# stood.
 #
-# So one shape is asserted instead: no raise there takes a string LITERAL. That is exactly
-# what the pattern below sees and it is worth saying what it does NOT — `raise m` after
-# `m := "…"` passes, and so does `raise anything(…)`. The second one MUST pass: every site
-# here raises a call, `p_diag` and `p_impossible` alike, so a rule against calls would be a
-# rule against the channel. What is left is a hole one deliberate variable wide, and the
+# So one shape is asserted instead: no raise in either file takes a string LITERAL. That is
+# exactly what the pattern below sees and it is worth saying what it does NOT — `raise m`
+# after `m := "…"` passes, and so does `raise anything(…)`. The second one MUST pass: every
+# site in both files raises a call — `p_diag`, `c_diag`, `c_diag_at`, the two `impossible`
+# functions and the handful of shared wordings alike — so a rule against calls would be a rule
+# against the channel. What is left is a hole one deliberate variable wide, and the
 # alternative — a list of the channel's entry points — is worse: it needs adding to every
 # time a rule earns a helper of its own, and the day it is not, the site it names is the one
-# going unchecked. This catches the way the drift actually happened, which is somebody
-# writing the sentence where they stood.
-bypass=$(grep -nE '(^|[^A-Za-z_])raise f?"' "$SRC/zerg/parser.zg" | grep -vE ':[[:space:]]*#')
-report "a parser refusal raising a string literal — it owes a code and a place, and a hand-written message carries whatever its author remembered" "$bypass"
+# going unchecked. This catches the way the drift actually happened.
+#
+# check.zg is not here because it does not raise: a checked rule RECORDS a Diag and the rule
+# above already holds every one of those to a literal code.
+for chan_src in "$SRC/zerg/parser.zg" "$SRC/zerg/emit.zg"; do
+	bypass=$(grep -nE '(^|[^A-Za-z_])raise f?"' "$chan_src" | grep -vE ':[[:space:]]*#')
+	report "a refusal in $chan_src raising a string literal — it owes a code and a place, and a hand-written message carries whatever its author remembered" "$bypass"
+done
 
 # A code used twice is two rules under one identity, which is the thing a code exists to
 # prevent — and it cannot be seen by comparing the three sets, because a duplicate is

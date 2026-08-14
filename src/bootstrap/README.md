@@ -327,6 +327,25 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   compiler rather than the reverse. (The seed's own sources need no migration: nothing in
   `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
   the same standard library.)
+- **TWO MODULES EACH DECLARING ONE `pub` FUNCTION OF THE SAME NAME are accepted, and one of
+  them wins.** A public name has no package to be unique within
+  ([package](../../docs/runtime/package.md)), so `zerg` refuses the pair by name (`E705`) and
+  says what would be needed to keep both — the link-name override
+  [ffi](../../docs/runtime/ffi.md) specifies. The seed flattens every module into one
+  namespace as `zerg` does, but asks the question only of the PRIVATE pair, which it tags by
+  module; a public one reaches C as a single mangled symbol and the second definition simply
+  replaces the first. One case in `reject-check.sh` carries the marker.
+- **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
+  matches.** `GRAMMAR#range` gives `..=` a mandatory bound, and the parser reads a missing one
+  as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape (`E743`)
+  wherever it arrives. The seed reads the absent bound as 0, so the arm is false for every
+  value and the `match` falls through to its catch-all with nothing said. One case in
+  `reject-check.sh` carries the marker.
+- **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,
+  not a value's type ([specs](../../docs/core/specs.md)), and `zerg` refuses it at every
+  position a type is written (`E416`). The seed asks the question of a parameter and a result
+  and not of a field, so `pub v: Tag` declares a field whose type nothing gives a
+  representation and the program builds. One case in `reject-check.sh` carries the marker.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

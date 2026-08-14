@@ -1335,6 +1335,57 @@ fn main() {
 }
 EOF
 
+# AN AGGREGATE IS A PAIR TOO, and equality was the last family that only judged the scalars.
+# The relation it asked was `ty_name(a) == ty_name(b)` — a type's diagnostic SPELLING, which
+# is unique only where a type has a name of its own — so every composite fell out of the rule
+# and was left to cc, which reported `invalid operands to binary expression
+# ('zgt_tup_int64_t_int64_t' and 'zgt_tup_constcharp_constcharp')` against generated C.
+#
+# FOUR SHAPES, because ty_eq answers structurally and a mismatch can be at any depth: a tuple
+# against a tuple of other components, a map against a map of other values, a list against a
+# list of other elements, a function against a function of another signature. The seed has
+# refused all four since it had a semantic pass, with the same words minus the code.
+
+reject compare-two-different-tuples E348 'cannot compare (int, int) and (str, str)' <<'EOF'
+fn main() {
+	t := (1, 2)
+	u := ("a", "b")
+	print t == u
+}
+EOF
+
+reject compare-two-different-maps E348 'cannot compare map[str, int] and map[str, str]' <<'EOF'
+fn main() {
+	a: map[str, int] = {"x": 1}
+	b: map[str, str] = {"x": "y"}
+	print a == b
+}
+EOF
+
+reject compare-two-different-lists E348 'cannot compare list[int] and list[str]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	ys := ["a"]
+	print xs == ys
+}
+EOF
+
+reject compare-two-different-fns E348 'cannot compare fn(int) -> int and fn(str) -> str' <<'EOF'
+fn takes_int(x: int) -> int {
+	return x
+}
+
+fn takes_str(s: str) -> str {
+	return s
+}
+
+fn main() {
+	a := takes_int
+	b := takes_str
+	print a == b
+}
+EOF
+
 reject add-an-int-to-a-uint E353 <<'EOF'
 fn main() {
 	i: int = 3

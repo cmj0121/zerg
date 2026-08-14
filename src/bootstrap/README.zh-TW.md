@@ -107,6 +107,19 @@ docs/code/errors.zh-TW.md），而只有其中一個在這裡——這件事值�
 對這個運算子什麼也沒說。第二層說的是**指名拒絕**，而這不是；記在這裡而不修掉，是因為自舉源碼從來
 不問這個問題。
 
+同樣是**用錯句子的拒絕**，而且是寫 stdlib 的人真的會碰到的那一個：**`str(x)` 的 `x` 是一個型別參數**。
+種子把 `fn show[T](x: T) -> str { return str(x) }` 擋下來，說的是
+`cannot build a str from T; str(x) takes a scalar or a list[byte]/list[rune]`——一句在講轉換定義域的
+話，講得像是程式遞了一個壞引數，但真正發生的事情是這個問題問得早了一步。
+`internal/sema/strbridge.go` 檢查 `str(x)` 的方式是對引數問 `ScalarOf`，而在泛型函式體裡，引數的型別
+還是 `T`；種子是**抽象地**檢查那個函式體，所以拒絕落在宣告處，不管那支函式有沒有被呼叫過。同一個
+rendering 換成 `f"{x}"`，兩個編譯器都建得起來：`inferFStr` 只 synth 洞裡的運算式並回傳 `str`，把
+rendering 留給 lowering，而 lowering 是在代入之後才跑的。`zerg` 兩種拼法都在代入之後才問——`show(7)`
+建得起來，`show(p)` 傳一個 struct 則是指名 `P` 的 `E449`，那才是讀者能據以行動的診斷。這個落差的代價，
+是每個由種子編譯的模組都得遵守的一條規矩：`src/stdlib/testing.zg` 用插值而不用轉換
+（`raise f"assert_eq failed: {a} != {b}"`），而 stdlib 裡任何一個泛型函式體只要伸手去用 `str(x)`，
+壞掉的就不是一支程式，是整條自舉鏈。
+
 其餘語言有的，種子都有：`defer`、`del`、`with`、tuple 與 `t.0`、range 當值與當可迭代對象、optional
 與整組 group-8 運算子、`init()`、`spec` / `impl`（含 provided method）、泛型函式定義、
 `#[derive(Eq, Ord)]`、`Ref[T]`、struct 與 tuple pattern、block 當 `match` arm body、

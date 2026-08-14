@@ -130,6 +130,21 @@ seed could not build it if it did), so the rule costs the chain nothing, and rew
 seed's scope tracking to lift it would move emitted C for no program the seed exists to
 build.
 
+A THIRD is the one a stdlib author meets: **`str(x)` where `x` is a type PARAMETER**. The
+seed turns `fn show[T](x: T) -> str { return str(x) }` away with `cannot build a str from T;
+str(x) takes a scalar or a list[byte]/list[rune]` — a sentence about the conversion's domain,
+said as though the program had handed it a bad argument, when what happened is that the
+question was asked one step too early. `internal/sema/strbridge.go` types `str(x)` by asking
+`ScalarOf` of the argument, and inside a generic body the argument's type is still `T`; the
+seed checks that body ABSTRACTLY, so the refusal lands at the declaration whether or not the
+function is ever called. The SAME rendering spelled `f"{x}"` both compilers build: `inferFStr`
+synthesizes the hole and yields `str`, leaving the rendering to lowering, which runs after
+substitution. `zerg` asks after substitution for both spellings — `show(7)` builds, and
+`show(p)` on a struct is `E449` naming `P`, which is the diagnostic a reader can act on. What
+the gap costs is a rule for every module the seed compiles: `src/stdlib/testing.zg`
+interpolates rather than converts (`raise f"assert_eq failed: {a} != {b}"`), and a generic
+body in the stdlib that reaches for `str(x)` breaks the chain rather than one program.
+
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
 `spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,

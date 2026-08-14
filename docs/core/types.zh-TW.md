@@ -319,8 +319,9 @@ decorator 的職責——**[not yet]**，所以今天只要型別可及，litera
 > 預設值是在**建構處**才被具體化的，而欄位在那裡不是作用域中的名字，所以 `a` 會解析到別的同名東西。它會報
 > _NotImplemented: the default on field `b` of `P` reads the field `a`_，並附上該欄位的位置。
 
-欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否
-（**[deviation]**——跨 module 邊界的存取尚未被檢查，見 [Module、Package 與程式](../runtime/package.zh-TW.md)）。
+欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否，
+而從另一個 module 指名一個 private 欄位在兩個方向上都是編譯錯誤，並附上位置（見
+[Module、Package 與程式](../runtime/package.zh-TW.md)）。
 **沒有「對外可讀、對外不可寫」的獨立軸**；更細的控制以 method 表達。
 
 copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會動到持有者**自己那份 copy**，永遠影響不到別人的值

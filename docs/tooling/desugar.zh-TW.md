@@ -41,14 +41,18 @@ counter。每一條定義都是「這兩個程式是同一個程式」的主張�
 | `D101` | postfix guard 變回它所是的 `if` block | 是     |
 | `D102` | while-`for` 變回它所是的無限 `for`    | 否     |
 | `D103` | range-`for` 變回它所是的無限 `for`    | 否     |
+| `D104` | `assert` 變回它所是的 guarded raise   | 是     |
 
 **C 相同**是個真實的區別,而且 gate 有在量。`D101` 產出的程式,其 emit 出來的 C 與 sugar 版**逐位元組相同**:五種
-postfix guard 有四種是在 **parser** 裡就 desugar 掉的,第五種(`c_return_if`)產出的也是同一個 `if` block。`D102`
-與 `D103` 產出的是 `for (;;)`,而 sugar 產出的是 `while` 或計數 `for`——同一個程式,不是同一段文字。所以這個工具主張
-的等價是**行為上的**,而更強的主張只對成立的檔案主張:`make desugar` 會問「這次是不是只有 `D101` 觸發」,是的話才比
-對 C。
+postfix guard 有四種是在 **parser** 裡就 desugar 掉的,第五種(`c_return_if`)產出的也是同一個 `if` block。`D104`
+逐位元組相同的理由再往下一層:`assert` 同樣是在 parser 裡 desugar 的,而這條規則寫出來的正是它建出來的那些敘述。
+`D102` 與 `D103` 產出的是 `for (;;)`,而 sugar 產出的是 `while` 或計數 `for`——同一個程式,不是同一段文字。所以這個
+工具主張的等價是**行為上的**,而更強的主張只對成立的檔案主張:`make desugar` 會問「這次是不是只有 `D101` 觸發」,
+是的話才比對 C。
 
-規則依編號順序執行,而 `D101` 跑在最前面是關鍵——見 `D103`。
+**編號不是執行順序。** `D104` 跑在**最前面**,因為它產出的是 `raise … if c`——那正是 `D101` 的 sugar。放到最後跑,
+這個 pass 就會留下自己下一輪還要再改寫的輸出,而「答案取決於跑了幾次」正是 gate 的 fixpoint 那一半要抓的東西。
+之後才依編號順序執行,而 `D101` 跑在 `D103` 前面是關鍵——見 `D103`。
 
 ### `D101`——postfix guard 變回它的 block
 
@@ -147,6 +151,31 @@ step 是 body 的最後一個 statement,而跳過它的 `continue` 會讓 induct
 這就是 `D101` 先跑的原因:`continue if c` 必須先變成 `if c { continue }`,這條規則才能在 `continue` 的位置放兩個
 statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 guard 的 `continue`,或寫成 match arm body 的那種、放不下
 兩個 statement 的位置——整個迴圈 decline,而不是讓規則自己發明一個地方放。
+
+### `D104`——`assert` 變回它的 guarded raise
+
+```zerg
+assert count(xs) == 3    →    zga_l7c9 := count(xs)
+                              if not (zga_l7c9 == 3) {
+                                  raise AssertionError(f"a.zg:7  assert count(xs) == 3\n  count(xs) = {zga_l7c9}")
+                              }
+```
+
+**訊息是定義的一部分。** 一條只改寫測試、卻把訊息丟掉的規則,等於只 desugar 了一半——而那正是行為 gate 看不到的
+一半:成立的主張永遠不會產出訊息。`test-data/desugar/assert_claim.zg` 就是用文字把它釘住的案例。
+
+運算元會**先綁**,這是整個形式賴以成立的規則:訊息會點名它們,若從條件再求值一次,`assert next(it) == 3` 就會讓
+iterator 前進兩次。字面值運算元留在原地(`3 = 3` 什麼也沒說),`and` 拆成每個 conjunct 一條主張,而在 `or` / `??`
+底下只綁第一個 conjunct——運算元絕不跨過短路運算子被提出來。
+
+它寫進訊息的位置是檔案的**basename**,那是一個 source-to-source 轉換所能誠實說出的極限:這段文字在檔案被複製到
+別處建置之後仍必須是同一個意思,basename 撐得住,路徑撐不住。
+
+**拆成哪些 conjunct、運算子在哪、哪些是運算元**都不是在這裡決定的。這條規則直接呼叫 parser 對這串 token 做的
+分析,因為那些是關於語言的事實,而第二套掃描器正是同一個形式的兩種寫法開始互相矛盾的起點。寫在這裡的只是另一半:
+parser 建的是樹,而這裡建的是文字。
+
+和 `D101` 一樣,敘述裡任何位置有註解就 decline——改寫會變成好幾條敘述,而註解會延伸到它落在的那一行結尾。
 
 ## 它 decline 什麼,以及為什麼
 

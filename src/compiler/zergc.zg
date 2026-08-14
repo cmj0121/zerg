@@ -96,7 +96,7 @@ fn test_cmd() -> cli.Command {
 		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
 		.opt("k", "only", "run only the tests whose name begins with this", "")
 		.opt("t", "timeout", "seconds one test may take before it is reported STUCK", "60")
-		.add(cli.positional("path", "the directory to search (default: the current one)"))
+		.add(cli.positional("path", "the directory to search, or one `.zg` file — its package runs (default: the current directory)"))
 		.run(do_test)
 	)
 }
@@ -1006,8 +1006,28 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 		return 2
 	}
 
+	# A FILE PATH NAMES THE PACKAGE IT IS IN. Iterating on one file is the commonest thing
+	# anybody does with a test runner, and a walk that only knows directories answered it with
+	# "no tests" — a wrong answer delivered calmly, which is the one thing this project's
+	# standing rule forbids of any form. There is nothing to invent for it: the package model
+	# already answers "which build is this file compiled in" (docs/runtime/package.md), so a
+	# file is resolved to its package and that package is what runs.
+	#
+	# THE PACKAGE, NOT THE FILE'S TESTS. `strings_test.zg` names the package `strings.zg` +
+	# `strings_test.zg`, and running that pair is what a white-box test of `strings` IS — a run
+	# of the test file alone is not a build of anything. `--only` is the tool for one test.
+	#
+	# A `.zg` NAME IS WHAT MARKS A FILE, which is the convention this walk already uses one
+	# function down: `test_pkgs` does not descend into a `.zg` name either. There is no `isdir`
+	# under this runtime, and inventing one for this would put a second answer to "is this a
+	# source file" in the tree.
+	base := search_root(root)
 	mut pkgs: list[Pkg] = []
-	test_pkgs(root, pkgs)
+	if base == root {
+		test_pkgs(root, pkgs)
+	} else {
+		file_pkgs(root, pkgs)
+	}
 
 	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
 	# parameter whose type is not what the fixture produces, and a circle among fixtures are
@@ -1020,7 +1040,7 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	for p in pkgs {
 		mut fixts: list[Fixt] = []
 		mut tests: list[Tst] = []
-		plan_pkg(root, p, only, fixts, tests, errs)
+		plan_pkg(base, p, only, fixts, tests, errs)
 		chosen = chosen + tests.len()
 	}
 	if errs.len() > 0 {
@@ -1044,7 +1064,7 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	mut skipped := 0
 	mut stuck := 0
 	for p in pkgs {
-		run_pkg(root, p, only, secs, passed, failed, skipped, stuck)
+		run_pkg(base, p, only, secs, passed, failed, skipped, stuck)
 	}
 
 	if passed + failed + skipped + stuck == 0 {
@@ -1107,24 +1127,60 @@ struct Pkg {
 # looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
 # `opendir` per source file otherwise.
 fn test_pkgs(root: str, mut &out: list[Pkg]) {
-	names := __zrt_listdir(root)
+	dir_pkgs(root, out)
+	for name in __zrt_listdir(root) {
+		if not is_hidden(name) and not has_suffix(name, ".zg") {
+			test_pkgs(join_path(root, name), out)
+		}
+	}
+}
+
+# dir_pkgs is the packages of ONE directory, and it is separate from the walk above because
+# the walk is not the only caller: a run pointed at a file asks the same question of that
+# file's directory alone.
+fn dir_pkgs(dir: str, mut &out: list[Pkg]) {
+	names := __zrt_listdir(dir)
 	mut whole := false
 	for name in names {
 		if zerg.is_test_file(name) and not is_own_file(name) {
-			m := test_module(root, name)
+			m := test_module(dir, name)
 			if m == "" {
 				whole = true
 			} else {
-				out.append(Pkg(root, m))
+				out.append(Pkg(dir, m))
 			}
 		}
 	}
 	if whole {
-		out.append(Pkg(root, ""))
+		out.append(Pkg(dir, ""))
 	}
-	for name in names {
-		if not is_hidden(name) and not has_suffix(name, ".zg") {
-			test_pkgs(join_path(root, name), out)
+}
+
+# search_root is the directory a run searches from: the path itself, or its directory when the
+# path names a `.zg` file. Ancestors — the `fixtures_test.zg` of each level — are counted from
+# it, which keeps the rule the one docs/runtime/package.md already states: they are counted
+# from the path `zerg test` was GIVEN, and the directory a named file sits in is that path.
+fn search_root(path: str) -> str {
+	return dir_of(path) if has_suffix(path, ".zg")
+
+	return path
+}
+
+# file_pkgs is the packages that COMPILE `path`. It is the package model's own answer read
+# backwards — `pkg_sources` says which files a package is built from, and this asks which
+# package a file is in — so the two can never disagree about a file.
+#
+# The directory is `search_root`'s answer and is derived here rather than passed: two arguments
+# that have to agree are one argument, and the caller had nothing else to give.
+#
+# There may be no package, which is a run that found nothing and is reported as one: a `.zg`
+# file with no `#[test]` in it and no test file naming it is in none.
+fn file_pkgs(path: str, mut &out: list[Pkg]) {
+	mut all: list[Pkg] = []
+	dir_pkgs(search_root(path), all)
+	for p in all {
+		if has_str(pkg_sources(p), path) {
+			out.append(p)
 		}
 	}
 }

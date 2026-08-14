@@ -1583,6 +1583,120 @@ fn main() {
 }
 EOF
 
+# The same rule reached through a GENERIC. `y: T = 300` says nothing about a range until T is
+# known, and it is known only in the specialization — so this is what "the constant rule survives
+# monomorphization" means, and nothing pinned it.
+#
+# WHAT IS PINNED HERE IS `zerg`'s CONTRACT, and only `zerg`'s. It needs no `seed-gap` because the
+# seed refuses the program too — but for a different reason, and the difference is worth writing
+# down rather than letting the shared exit status imply agreement. `zerg` substitutes and then
+# reports `E330` against the `byte` it substituted; the seed says `cannot bind int to a T binding`,
+# which is the whole FORM turned away with no substitution having happened. The harness only asks
+# the seed to say no, so the case is honest; the seed is not evidence for the rule.
+reject oversized-literal-in-a-specialization E330 '`300` is not a value a byte holds' <<'EOF'
+fn hold[T](v: T) -> T {
+	y: T = 300
+	return v
+}
+
+fn main() {
+	b: byte = 1
+	print(f"{int(hold(b))}")
+}
+EOF
+
+# --- the conversion table, closed --------------------------------------------------
+#
+# docs/core/types.md lists the pairs `T(x)` accepts "and no others", and `int` is the hub
+# every one of them has on a side. A pair that is not on it is not a conversion this
+# language has, and the two ways to be off the table read differently:
+#
+#   E394  the source is a FLOAT. Dropping a fraction is a decision, not a step, so it is
+#         spelled with a verb — `math.trunc` / `floor` / `ceil` / `round`, each answering
+#         an `int` — and there is no second conversion to send a reader to.
+#   E395  any other absent pair, which is the two steps through `int` written as one.
+#
+# Every case here is `seed-gap`. The seed lowers a conversion by SHAPE, and a shape has an
+# answer for every pair of scalars; this is a chapter where `zerg` is the stricter compiler.
+
+reject int-of-a-float E394 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	print(f"{int(1.9)}")
+}
+EOF
+
+reject byte-of-a-float E394 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	print(f"{int(byte(3.5))}")
+}
+EOF
+
+reject uint-of-a-float E394 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	print(f"{int(uint(3.5))}")
+}
+EOF
+
+reject rune-of-a-float E394 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	print(f"{int(rune(65.5))}")
+}
+EOF
+
+reject float-of-a-byte E395 '`byte` -> `float`' seed-gap <<'EOF'
+fn main() {
+	b: byte = 65
+	print(f"{float(b)}")
+}
+EOF
+
+reject rune-of-a-byte E395 '`byte` -> `rune`' seed-gap <<'EOF'
+fn main() {
+	b: byte = 65
+	print(f"{int(rune(b))}")
+}
+EOF
+
+reject uint-of-a-byte E395 '`byte` -> `uint`' seed-gap <<'EOF'
+fn main() {
+	b: byte = 65
+	print(f"{int(uint(b))}")
+}
+EOF
+
+# A COMPILER PRIMITIVE IS NOT A NAME A PROGRAM INVENTS. The `__zrt_…` set is closed — it is the
+# standard library's way down to the runtime — and the emitter used to lower ANY name spelled with
+# two leading underscores by stripping them, so a typo reached cc as a call to a symbol nothing
+# declares. The seed turns the same program away (as an undefined function, which is its own
+# sentence rather than this rule), so there is no gap to mark.
+#
+# THE PREFIX IS `__zrt_` AND NOT `__`. GRAMMAR#identifier reserves no prefix at all, so
+# `fn __my_helper()` is an ordinary declaration; the first cut of this rule refused it, which is a
+# legal program turned away and exactly what this list must not grow. There is a codegen case for
+# that spelling, because a narrowing nobody exercises is a narrowing nobody checks.
+reject an-unknown-compiler-primitive E396 <<'EOF'
+fn main() {
+	__zrt_trunk(1.5)
+}
+EOF
+
+# The NAME being in the set does not make the CALL one. Arity was the half still escaping: the
+# emitter wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no
+# argument, against generated C, with no code and no place. (Operand TYPES still do —
+# `__zrt_trunc("hello")` is the gap named in check.zg, and the seed is the stricter compiler on
+# that one.)
+reject a-compiler-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
+fn main() {
+	print __zrt_trunc()
+}
+EOF
+
+reject a-compiler-primitive-with-too-many-arguments E397 'takes 1 argument and this gives 2' <<'EOF'
+fn main() {
+	print __zrt_trunc(1.5, 2.5)
+}
+EOF
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise. The conditional `return` is here on its own because it takes a

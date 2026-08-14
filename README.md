@@ -37,14 +37,14 @@ ZG
 down to a single job: building the compiler. `zerg` is that compiler — written in Zerg, in
 [`src/compiler/`](src/compiler), and compiled by itself.
 
-| Command               | What it does                                                            |
-| --------------------- | ----------------------------------------------------------------------- |
-| `zerg build <file>`   | compile — an executable when the entry declares `main`, else object     |
-| `zerg test [path]`    | build and run the `#[test]` functions in every `*_test.zg` under a path |
-| `zerg fmt <file>`     | rewrite source in the one canonical style                               |
-| `zerg lint <file>`    | report unused imports and dead private declarations                     |
-| `zerg desugar <file>` | rewrite source into the core forms its sugar stands for                 |
-| `zerg lsp`            | the language server, over stdio (JSON-RPC)                              |
+| Command               | What it does                                                        |
+| --------------------- | ------------------------------------------------------------------- |
+| `zerg build <file>`   | compile — an executable when the entry declares `main`, else object |
+| `zerg test [path]`    | run the `#[test]` functions under a path, or in one file's package  |
+| `zerg fmt <file>`     | rewrite source in the one canonical style                           |
+| `zerg lint <file>`    | report unused imports and dead private declarations                 |
+| `zerg desugar <file>` | rewrite source into the core forms its sugar stands for             |
+| `zerg lsp`            | the language server, over stdio (JSON-RPC)                          |
 
 `--emit` stops at a stage instead: `tokens`, `ast`, `c`, `lib` (an object), `bin` (an executable). A
 program builds module by module — `-j` compiles several units at once, and results are cached by

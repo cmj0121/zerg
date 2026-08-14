@@ -203,17 +203,36 @@ since both compilers would be running this same source.
 
 ## `time`
 
-Clocks and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed time) and
-never runs backwards. **A timer is a channel** — `after` and `ticker` answer receive-only channels, so a
-`select` arm on one is a timeout or a tick with no new syntax (see [Coroutines](../code/coroutine.md)).
-Durations are **nanoseconds**, the unit `monotonic` reads; a duration `<= 0` fires at once.
+Clocks, calendars and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed
+time) and never runs backwards. **A timer is a channel** — `after` and `ticker` answer receive-only
+channels, so a `select` arm on one is a timeout or a tick with no new syntax (see
+[Coroutines](../code/coroutine.md)). Durations are **nanoseconds**, the unit `monotonic` reads; a duration
+`<= 0` fires at once.
 
 | Function                   | Summary                                                       |
 | -------------------------- | ------------------------------------------------------------- |
 | `now() -> int`             | wall-clock time, whole seconds since the Unix epoch           |
 | `monotonic() -> int`       | a monotonic reading in nanoseconds (use differences)          |
+| `utc(t: int) -> Date`      | a Unix second count broken into its UTC calendar fields       |
+| `rfc3339(t: int) -> str`   | the same instant as `2025-08-15T10:22:31Z`                    |
+| `duration(ns: int) -> str` | a nanosecond count a person can read — `1.5s`, `250ms`        |
 | `after(d) -> <-chan[int]`  | one value once `d` nanoseconds have passed                    |
 | `ticker(d) -> <-chan[int]` | a value every `d` nanoseconds; the channel holds **one** tick |
+
+**`Date` is UTC and nothing else**, and that is a decision rather than a gap: local time needs the zone
+database, a host file a zero-external-dependency stdlib will not read. Its fields are `year`, `month`
+(1..12), `day` (1..31), `hour`, `minute`, `second`. The conversion is the civil-from-days algorithm — exact,
+no month table, no leap-year branch — and it is correct **before 1970 too**, because Zerg divides toward
+negative infinity (`-1 / 86400` is `-1`, not `0`) and takes the modulo's sign from the divisor.
+
+`rfc3339` renders seconds of precision, which is all `now()` has. A year outside `0000`–`9999` keeps the
+digits it has, with a leading `-` if negative — that is **no longer RFC 3339**, and it is preferred to
+truncation because a clock that far out is a bug the reader has to be able to see.
+
+`duration` picks the largest unit that leaves a whole part (`s`, `ms`, `µs`, `ns`), then up to three
+fraction digits with trailing zeros dropped and **truncated, not rounded**, so a duration that reads under
+a threshold really was under it. Seconds are the largest unit: there are no minutes, because `1.5m` invites
+being read as milli-anything.
 
 The value delivered is the **monotonic reading at the moment the timer fired**, not a placeholder: a tick
 may arrive arbitrarily later than it fired, and the reading is how a receiver that cares tells how late it

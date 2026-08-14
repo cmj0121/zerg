@@ -104,7 +104,14 @@ unchanged. An empty `split` separator, or a negative `repeat` count, raises `Val
 
 `count` and `replace` raise `ValueError` on an empty needle, like `split`. `pad_start` / `pad_end` raise
 `ValueError` on a `fill` that is not exactly one byte — a multi-byte fill cannot land on a byte width
-without cutting a code point in half — and return `s` unchanged when it is already that wide.
+without cutting a code point in half — and return `s` unchanged when it is already that wide. The fill is
+validated **before** the width is consulted, so a bad one is refused even on a call that would have padded
+nothing.
+
+An **empty needle is found**, not missing, at the end each function searches from: `index_of` answers `0`,
+`contains` answers `true`, and `last_index_of` answers the string's byte length, since the last empty
+needle is the one past the final byte. `split`, `count` and `replace` are the three that refuse it, and
+they refuse it because a zero-width match would never advance them.
 
 ## `ascii`
 

@@ -299,6 +299,11 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 - **黑箱**——要驗某個 API，就 import 它：sibling module 看得到 package-internal（`pub`）表面，而一個依賴此 package
   的獨立 package 看到的正是 package-public 表面——真正的外部視角。
 
+白箱擺法要求該 module **獨佔一個目錄**，因為 test build 是把一個目錄當成一個編譯單元。當一個目錄裡放了好幾個彼此獨立
+的 module——`src/stdlib` 就是十六個、一個檔案一個——把測試檔擺在被測 module 旁邊，會讓該目錄裡其他每一個 module 都變成
+同一個單元的原始碼，於是建置卡在那些鄰居彼此談不攏的地方，而不是卡在測試主張的任何事情上。這種 module 用黑箱測、從
+它自己的一個 package 出發；標準函式庫自己的測試就是為了這個理由放在 `tests/stdlib/<module>/` 底下。
+
 測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除。因此測試的
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
@@ -326,6 +331,10 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、**fixture**
 > ——setup 與 teardown、benchmark,以及同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制
 > 流,所以它自己就會從測試本體解開出去。
+>
+> **斷言**那一側也一樣還沒建:失敗的 `assert_eq` 只說兩個值不相等、不說它們是什麼;沒有「這個呼叫有 raise」
+> 的斷言——想要的測試套件得自己寫一個吃 `guard` 的 `Result[T]` 的泛型 helper;而 `assert_eq` 收不了
+> `list[T]`,它沒有實作 `Eq`(`E412`),所以回傳 list 的函式只能透過某個把它縮成純量的東西去斷言。
 >
 > **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
 > 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的

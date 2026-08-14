@@ -17,9 +17,14 @@
 #     pass      a test that holds                 reported `ok`
 #     fail      an assertion that does not hold   reported FAIL with the message
 #     skip      `ctx.skip(reason)`                reported SKIP with the reason, counted apart
-#     abort     an uncaught `IndexError`          reported FAIL — and the tests after it run,
+#     abort     an uncaught `IndexError`          reported CRASH — and the tests after it run,
 #                                                 in the SAME process, which is the whole
 #                                                 claim: no NOTE line for that file
+#
+# FAIL AND CRASH ARE TWO VERDICTS, and which one a test gets is the ERROR'S KIND: `assert`
+# raises AssertionError and nothing else does, so a claim that did not hold is a FAIL and
+# anything else that reached the top of the body is a program that fell over. Reporting the
+# second as a failed assertion sends the reader looking for an assertion that is not there.
 #
 #   the fallback path — the process itself went, so a process each is the only way back
 #     crash     a test that overflows its stack   reported CRASH, attributed to that test
@@ -106,24 +111,24 @@ import (
 #[test]
 fn test_twice_holds(ctx: testing.Context) {
 	ctx.log("a note from a test that passes")
-	testing.assert_eq(twice(21), 42)
+	assert twice(21) == 42
 }
 
 #[test]
 fn test_knows_its_name(ctx: testing.Context) {
-	testing.assert_eq(ctx.name(), "test_knows_its_name")
+	assert ctx.name() == "test_knows_its_name"
 }
 
 #[test]
 fn test_thrice_does_not(ctx: testing.Context) {
 	ctx.log("thrice(2) is twice(2) + 2")
-	testing.assert_eq(thrice(2), 7)
+	assert thrice(2) == 7
 }
 
 #[test]
 fn test_not_on_this_platform(ctx: testing.Context) {
 	ctx.skip("not on this platform")
-	testing.assert(false)
+	assert false
 }
 
 #[test]
@@ -134,7 +139,7 @@ fn test_reads_off_the_end() {
 
 #[test]
 fn test_after_the_abort() {
-	testing.assert(true)
+	assert true
 }
 EOF
 
@@ -173,7 +178,7 @@ fn test_b_exits_early() {
 
 #[test]
 fn test_c_after_the_end() {
-	testing.assert(true)
+	assert true
 }
 EOF
 
@@ -194,7 +199,7 @@ import (
 
 #[test]
 fn test_holds() {
-	testing.assert(true)
+	assert true
 }
 
 #[test]
@@ -235,8 +240,15 @@ say "\`ctx.name()\` did not answer the test's own name" $?
 grep -qE '^  FAIL  test_thrice_does_not$' "$tmp/out"
 say "the failing assertion is not reported FAIL" $?
 
-grep -qF 'assert_eq failed' "$tmp/out"
-say "the failure does not carry the assertion's message" $?
+# the message the KEYWORD writes, and all three of the things it says: where the claim was
+# written, the claim as it was written, and the value of the operand that made it false. A
+# function could say none of them — `assert_eq` reported `2 != 3` and no position at all —
+# so each is asserted rather than the line as a whole.
+grep -qE '^        lib_test\.zg:[0-9]+  assert thrice\(2\) == 7$' "$tmp/out"
+say "the failure does not say where the claim was written, or what it was" $?
+
+grep -qE '^          thrice\(2\) = 6$' "$tmp/out"
+say "the failure does not say what the operand actually was" $?
 
 # 4. a note is shown for the test that FAILED and for no other. Both halves are the rule —
 #    `ctx.log` that always prints is a debug print with a longer name.
@@ -258,8 +270,17 @@ say "a skipped test was reported as a failure" $?
 # 6. an uncaught abort IN THE COROUTINE: contained, reported, and the tests after it run in
 #    the same process. The NOTE line is what the fallback prints when it has to take over, so
 #    its ABSENCE for this file is the claim that no process died here.
+#
+#    IT IS A CRASH AND NOT A FAIL, which is the other half of the verdict rule: nothing here
+#    made a claim, so there is no failed assertion to send a reader looking for. Asserted as
+#    the ABSENCE of a FAIL line too, since a runner that reported both would satisfy the
+#    positive half on its own.
+grep -qE '^  CRASH test_reads_off_the_end$' "$tmp/out"
+say "an uncaught abort inside a test is not reported as that test crashing" $?
+
 grep -qE '^  FAIL  test_reads_off_the_end$' "$tmp/out"
-say "an uncaught abort inside a test is not reported as that test failing" $?
+[ $? -ne 0 ]
+say "an abort that made no claim was reported as a failed assertion" $?
 
 # the message must be a REPORT line — indented under the verdict — and not merely present
 # in the captured output: the runtime prints an uncaught abort on stderr on its way past, so
@@ -416,33 +437,33 @@ fn counted(use: fn (Serial)) {
 
 #[test]
 fn test_a_first_sees_the_first_build(counted: Serial) {
-	testing.assert_eq(counted.n, 1)
+	assert counted.n == 1
 }
 
 #[test]
 fn test_b_second_sees_the_same_one(counted: Serial) {
-	testing.assert_eq(counted.n, 1)
+	assert counted.n == 1
 }
 
 #[test]
 fn test_c_gets_the_whole_chain(schema: Schema) {
-	testing.assert_eq(schema.tag, "from db 7")
+	assert schema.tag == "from db 7"
 }
 
 #[test]
 fn test_d_fails_under_a_fixture(db: Conn) {
-	testing.assert_eq(db.id, 99)
+	assert db.id == 99
 }
 
 #[test]
 fn test_e_still_ran_after_it(db: Conn, ctx: testing.Context) {
-	testing.assert_eq(ctx.name(), "test_e_still_ran_after_it")
-	testing.assert_eq(db.id, 7)
+	assert ctx.name() == "test_e_still_ran_after_it"
+	assert db.id == 7
 }
 
 #[test]
 fn test_f_needs_nothing() {
-	testing.assert(true)
+	assert true
 }
 EOF
 
@@ -454,7 +475,7 @@ import (
 
 #[test]
 fn test_g_two_levels_down(schema: Schema) {
-	testing.assert_eq(schema.tag, "from db 7")
+	assert schema.tag == "from db 7"
 }
 EOF
 
@@ -476,12 +497,12 @@ fn sock(use: fn (Sock)) {
 
 #[test]
 fn test_h_needs_the_broken_one(sock: Sock) {
-	testing.assert_eq(sock.fd, 1)
+	assert sock.fd == 1
 }
 
 #[test]
 fn test_i_also_needs_it(sock: Sock) {
-	testing.assert_eq(sock.fd, 1)
+	assert sock.fd == 1
 }
 EOF
 
@@ -512,7 +533,7 @@ fn test_j_ends_the_process(res: Res) {
 
 #[test]
 fn test_k_after_it(res: Res) {
-	testing.assert_eq(res.n, 5)
+	assert res.n == 5
 }
 EOF
 
@@ -533,12 +554,12 @@ fn db(use: fn (Conn)) {
 
 #[test]
 fn test_asks_for_nobody(conn: Conn) {
-	testing.assert_eq(conn.id, 1)
+	assert conn.id == 1
 }
 
 #[test]
 fn test_would_have_passed() {
-	testing.assert(true)
+	assert true
 }
 EOF
 
@@ -567,7 +588,7 @@ fn two(one: A, use: fn (B)) {
 
 #[test]
 fn test_round(one: A) {
-	testing.assert_eq(one.n, 0)
+	assert one.n == 0
 }
 EOF
 
@@ -587,7 +608,7 @@ fn db(use: fn (Conn)) {
 
 #[test]
 fn test_declares_the_wrong_type(db: int) {
-	testing.assert_eq(db, 1)
+	assert db == 1
 }
 EOF
 
@@ -609,7 +630,7 @@ fn local(use: fn (Local)) {
 
 #[test]
 fn test_here_can_have_it(local: Local) {
-	testing.assert_eq(local.n, 1)
+	assert local.n == 1
 }
 EOF
 
@@ -620,7 +641,7 @@ import (
 
 #[test]
 fn test_below_cannot(local: Local) {
-	testing.assert_eq(local.n, 1)
+	assert local.n == 1
 }
 EOF
 
@@ -821,12 +842,12 @@ import (
 
 #[test]
 fn test_reaches_the_modules_private_name() {
-	testing.assert_eq(doubled(3), 6)
+	assert doubled(3) == 6
 }
 
 #[test]
 fn test_reaches_its_public_one_too() {
-	testing.assert_eq(shared(), 42)
+	assert shared() == 42
 }
 EOF
 
@@ -891,7 +912,7 @@ import (
 
 #[test]
 fn test_never_gets_to_run() {
-	testing.assert_eq(no_such_module_anywhere.value(), 1)
+	assert no_such_module_anywhere.value() == 1
 }
 EOF
 
@@ -904,7 +925,7 @@ import (
 fn test_writes_to_an_immutable() {
 	n := 1
 	n = 2
-	testing.assert_eq(n, 2)
+	assert n == 2
 }
 EOF
 
@@ -1001,12 +1022,12 @@ import (
 #[test]
 fn test_a_hangs() {
 	__zrt_sleep_ns(30000000000)
-	testing.assert(true)
+	assert true
 }
 
 #[test]
 fn test_b_after_it() {
-	testing.assert(true)
+	assert true
 }
 EOF
 

@@ -51,6 +51,12 @@
 #                                              and 3 is told from the 2 a bad path gets
 #   skips   a package that only passes and skips   exit 0: a skip is not a failure
 #
+#   the path it is GIVEN, and what a declaration is found by
+#     file      `zerg test <file.zg>`             runs the package that file is in, and only
+#                                                 that one — the commonest thing anybody asks
+#                                                 a runner for, and it used to answer "no
+#                                                 tests" about a file holding three
+#
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
 # package checked into the repository is a package every other gate then has to know about —
 # `fmt-self` would format it, `treesitter` would parse it, `examples` would try to run it —
@@ -1078,6 +1084,73 @@ say "a run holding a test that never finished exited 0" $?
 grep -qE '^  ok    test_b_after_it$' "$tmp/slow.out"
 say "the tests after a hung one did not run" $?
 
+# --- a run pointed at one file --------------------------------------------------------------
+#
+# ITERATING ON ONE FILE IS THE COMMONEST THING ANYBODY DOES WITH A TEST RUNNER, and a walk that
+# knew only directories answered it with "no tests" and exited 0 — a wrong answer delivered
+# calmly, about a file holding three of them. What a file path names is the PACKAGE it is in,
+# which the package model already answers, so both halves are measured here: the package runs,
+# and only that package does.
+
+mkdir -p "$tmp/one"
+
+cat >"$tmp/one/mod.zg" <<'EOF'
+fn secret() -> int {
+	return 4
+}
+
+pub fn twice_secret() -> int {
+	return secret() * 2
+}
+EOF
+
+cat >"$tmp/one/mod_test.zg" <<'EOF'
+#[test]
+fn test_mod_sees_its_private_name() {
+	assert secret() == 4
+}
+EOF
+
+cat >"$tmp/one/loose_test.zg" <<'EOF'
+#[test]
+fn test_the_other_package() {
+	assert true
+}
+EOF
+
+file_out=$("$ZERG" test "$tmp/one/mod_test.zg" 2>&1)
+status=$?
+
+[ "$status" -eq 0 ]
+say "a run pointed at one file did not exit 0" $?
+
+printf '%s\n' "$file_out" | grep -qE '^  ok    test_mod_sees_its_private_name$'
+say "a run pointed at a test file did not run the test in it" $?
+
+# and it is the PACKAGE that runs, not the file: `mod_test.zg` names the module `mod.zg`, so
+# the private name it reaches has to have been compiled beside it. A driver built from the test
+# file alone would not compile at all.
+printf '%s\n' "$file_out" | grep -qF 'no tests'
+[ $? -ne 0 ]
+say "a run pointed at a file that holds a test still reported an empty search" $?
+
+# the OTHER package of that directory is not swept in. A file names one package, and a runner
+# that ran the whole directory would make `--only` the only way to narrow anything.
+printf '%s\n' "$file_out" | grep -qF 'test_the_other_package'
+[ $? -ne 0 ]
+say "a run pointed at one file ran another package of the same directory" $?
+
+# pointed at the MODULE file rather than at the test file, which is the same package read from
+# its other end
+"$ZERG" test "$tmp/one/mod.zg" 2>&1 | grep -qE '^  ok    test_mod_sees_its_private_name$'
+say "a run pointed at a module's own file did not run that module's tests" $?
+
+# a `.zg` file whose directory holds no test package at all is an EMPTY SEARCH, not a green
+# run. `none/quiet/quiet.zg` is that file: no `#[test]` in it, and no test file beside it.
+"$ZERG" test "$tmp/none/quiet/quiet.zg" >/dev/null 2>&1
+[ $? -eq 3 ]
+say "a file that is in no test package did not report an empty search" $?
+
 # 42. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
 #     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
@@ -1089,9 +1162,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 82 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 88 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-82}
+MIN_ASSERTS=${MIN_ASSERTS:-88}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

@@ -94,6 +94,7 @@ fn build_cmd() -> cli.Command {
 fn test_cmd() -> cli.Command {
 	return (
 		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
+		.opt("k", "only", "run only the tests whose name begins with this", "")
 		.add(cli.positional("path", "the directory to search (default: the current one)"))
 		.run(do_test)
 	)
@@ -169,9 +170,10 @@ fn do_build(c: cli.Ctx) -> int {
 
 fn do_test(c: cli.Ctx) -> int {
 	args := c.args()
-	return run_tests(args[0]) if args.len() > 0
+	only := c.get("only")
+	return run_tests(args[0], only) if args.len() > 0
 
-	return run_tests(".")
+	return run_tests(".", only)
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
@@ -991,7 +993,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # A RUN THAT FOUND NOTHING SAYS SO. Discovering no test and printing nothing is
 # indistinguishable from a run where everything passed, which is the one failure a test runner
 # must not have — every gate in this repository is written against it.
-fn run_tests(root: str) -> int {
+fn run_tests(root: str, only: str) -> int {
 	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
 	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
 	# because its other caller is probing a search path — so `zerg test tset/` would report "no
@@ -1012,10 +1014,12 @@ fn run_tests(root: str) -> int {
 	# a report whose green half means nothing. So they are asked for the whole tree first,
 	# reported together the way a compiler reports diagnostics, and nothing is executed.
 	mut errs: list[str] = []
+	mut chosen := 0
 	for p in pkgs {
 		mut fixts: list[Fixt] = []
 		mut tests: list[Tst] = []
-		plan_pkg(root, p, fixts, tests, errs)
+		plan_pkg(root, p, only, fixts, tests, errs)
+		chosen = chosen + tests.len()
 	}
 	if errs.len() > 0 {
 		for e in errs {
@@ -1024,11 +1028,20 @@ fn run_tests(root: str) -> int {
 		return 2
 	}
 
+	# A FILTER THAT SELECTED NOTHING IS A TYPO, not a green run. `--only` is asked for while
+	# somebody is iterating on one test, which is exactly when a misspelling would be read as
+	# "it passes now" — so it is refused with the same status an unresolvable parameter gets,
+	# and the tree it looked in is named because the walk may simply not have reached it.
+	if only != "" and chosen == 0 {
+		io.ewrite(f"zerg: no `#[test]` under `{root}` has a name beginning with `{only}`\n")
+		return 2
+	}
+
 	mut passed := 0
 	mut failed := 0
 	mut skipped := 0
 	for p in pkgs {
-		run_pkg(root, p, passed, failed, skipped)
+		run_pkg(root, p, only, passed, failed, skipped)
 	}
 
 	if passed + failed + skipped == 0 {
@@ -1341,10 +1354,11 @@ struct Tst {
 # fixture produces, and every circle. It is called twice per run — once for the whole tree
 # before anything executes, and once by run_pkg with the answers it needs — because a plan is
 # cheap and a second copy of the resolution would be a second place the rule is written down.
-fn plan_pkg(root: str, p: Pkg, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+fn plan_pkg(root: str, p: Pkg, only: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
 	mut own: list[bool] = []
 	files := pkg_files(root, p, own)
 	pkg_decls(files, own, fixts, tests, errs)
+	keep_only(only, tests)
 
 	mut order: list[str] = []
 	fix_order(fixts, order, errs)
@@ -1374,6 +1388,28 @@ fn pkg_files(root: str, p: Pkg, mut &own: list[bool]) -> list[str] {
 		own.append(true)
 	}
 	return out
+}
+
+# keep_only drops the tests `--only` did not name, and it is done HERE — before resolution,
+# before the driver is written, before anything is compiled — which is what makes the claim
+# about fixtures exact rather than approximate: the nesting is generated from the tests that
+# REMAIN, so a level nobody left needs is never written, and a fixture only a filtered-out
+# test asked for is never built. A filter applied at run time would have stood every one of
+# them up and then skipped past the tests.
+#
+# THE MATCH IS A PREFIX, which is one rule and not two: a whole name selects one test, and the
+# stem a suite shares selects the suite. A filter that selected nothing is refused by
+# run_tests rather than passed over in silence.
+fn keep_only(only: str, mut &tests: list[Tst]) {
+	return if only == ""
+
+	mut kept: list[Tst] = []
+	for t in tests {
+		if has_prefix(t.name, only) {
+			kept.append(t)
+		}
+	}
+	tests = kept
 }
 
 # ancestors_of is the directories strictly between `root` and `dir`, `root` included and `dir`
@@ -1652,14 +1688,14 @@ fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(root: str, p: Pkg, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn run_pkg(root: str, p: Pkg, only: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
 	# findings somewhere: run_tests planned every package before it ran any of them, and a run
 	# holding one unresolved parameter never reaches here at all.
 	mut fixts: list[Fixt] = []
 	mut tests: list[Tst] = []
 	mut errs: list[str] = []
-	plan_pkg(root, p, fixts, tests, errs)
+	plan_pkg(root, p, only, fixts, tests, errs)
 	return if tests.len() == 0
 
 	mut names: list[str] = []

@@ -609,12 +609,18 @@ fn dsg_step_continues(mut &body: list[Token], step: list[Token]) -> list[Token] 
 # claim was written, the claim as it was written, and each operand a comparison came apart
 # into. A rule that rewrote the test and dropped the message would be undoing half a sugar.
 #
-# THE ANALYSIS IS THE PARSER'S OWN. Which conjuncts an `and` splits into, where a comparison's
-# operator is, and whether an operand is a literal are facts about the LANGUAGE, and asking
-# them here with a second scanner is how the two spellings of one form come to disagree — so
-# p_assert_claims and p_assert_is_lit are called, over a Parser sitting on this token stream.
-# What is written HERE is only the other half, which cannot be shared: the parser builds a
-# tree and this builds text.
+# THE ANALYSIS AND THE MESSAGE ARE THE PARSER'S OWN. Which conjuncts an `and` splits into,
+# where a comparison's operator is, whether an operand is a literal, and every word of the
+# failure message are facts about the LANGUAGE, and spelling them again here is how the two
+# spellings of one form come to disagree — so p_assert_claims, p_assert_is_lit, assert_head,
+# assert_note, assert_tmp and assert_fstr are called. What is written HERE is only the half
+# that cannot be shared: the parser builds a tree and this builds text.
+#
+# NONE OF THEM RESOLVES A NAME, which is what keeps this a token pass. `p_assert_claims` drives
+# the expression ladder over a Parser sitting on this stream and asks it only where things
+# END; the rest are string work. The invariant this file opens with — formatting and
+# desugaring need no name resolution — is untouched, and `make layering` still holds it by
+# measuring what this file reaches in the checker and the emitter, which is nothing.
 #
 # It declines on a comment anywhere in the statement, for D101's reason: the rewrite becomes
 # several statements and a comment runs to the end of whichever line it lands on.
@@ -665,17 +671,21 @@ fn dsg_assert_at(mut &toks: list[Token], at: int, base: str, mut &out: list[Toke
 # dsg_emit_assert writes the statements one claim IS. Every synthesized token takes the
 # `assert`'s own line, which is what the printer reads to decide that no blank line belongs
 # between them; the `;`s are what break them onto lines of their own.
+#
+# The message is `assert_head` plus one `assert_note` per bound operand, wrapped by
+# `assert_fstr` — the same four functions the parser's own lowering calls, so the two spellings
+# of this form cannot say different things. What is written HERE is only the token shape.
 fn dsg_emit_assert(mut &toks: list[Token], at: int, c: AClaim, base: str, mut &out: list[Token]) {
 	ln := toks[at].line
 	col := toks[at].col
 	h := toks[c.lo]
 	mut cond: list[Token] = []
-	mut msg := dsg_escape(f"{base}:{ln}  assert {fmt_fstr_span(toks, c.lo, c.hi - 1)}")
+	mut msg := assert_head(toks, base, ln, c.lo, c.hi)
 
 	if c.op >= 0 {
-		dsg_assert_side(toks, c.lo, c.op, f"zga_l{h.line}c{h.col}", ln, cond, msg, out)
+		dsg_assert_side(toks, c.lo, c.op, assert_tmp("l", h), ln, cond, msg, out)
 		cond.append(fmt_on_line(toks[c.op], ln))
-		dsg_assert_side(toks, c.op + 1, c.end, f"zga_r{h.line}c{h.col}", ln, cond, msg, out)
+		dsg_assert_side(toks, c.op + 1, c.end, assert_tmp("r", h), ln, cond, msg, out)
 		dsg_copy(toks, c.end, c.hi, ln, cond)
 	} else {
 		dsg_copy(toks, c.lo, c.hi, ln, cond)
@@ -684,7 +694,7 @@ fn dsg_emit_assert(mut &toks: list[Token], at: int, c: AClaim, base: str, mut &o
 	out.append(Token(Kind.Raise, "raise", "", ln, col))
 	out.append(Token(Kind.Ident, "AssertionError", "", ln, col))
 	out.append(Token(Kind.LParen, "(", "", ln, col))
-	out.append(dsg_fstr(msg, ln, col))
+	out.append(fmt_on_line(assert_fstr(msg, toks[at]), ln))
 	out.append(Token(Kind.RParen, ")", "", ln, col))
 	out.append(Token(Kind.If, "if", "", ln, col))
 	out.append(Token(Kind.Not, "not", "", ln, col))
@@ -712,32 +722,7 @@ fn dsg_assert_side(mut &toks: list[Token], lo: int, hi: int, name: str, ln: int,
 	out.append(Token(Kind.Semi, ";", "", ln, col))
 
 	cond.append(Token(Kind.Ident, name, "", ln, col))
-	msg = f"{msg}\\n  {dsg_escape(fmt_fstr_span(toks, lo, hi - 1))} = {{{name}}}"
-}
-
-# dsg_fstr is the message as ONE f-string token, and one is what makes this rule's output the
-# same PROGRAM as the sugar rather than merely one that prints the same thing: the parser
-# builds a literal run and an EConv per hole, and `f"a{x}"` is exactly that pair — where
-# `"a" + f"{x}"` would be that pair with an empty literal wedged in front of it.
-fn dsg_fstr(body: str, ln: int, col: int) -> Token {
-	return Token(Kind.FStr, f"f\"{body}\"", body, ln, col)
-}
-
-# dsg_escape puts a run of SOURCE TEXT inside an f-string literal. A condition's own text may
-# hold any of the four characters that mean something in there — a string literal brings
-# quotes and backslashes, a map literal brings braces — and each is escaped the way the
-# lexer will read back.
-fn dsg_escape(s: str) -> str {
-	mut out: list[byte] = []
-	for c in bytearray(s) {
-		if c == b'\\' or c == b'"' {
-			out.append(b'\\')
-		} else if c == b'{' or c == b'}' {
-			out.append(c)
-		}
-		out.append(c)
-	}
-	return str(out)
+	msg = msg + assert_note(toks, lo, hi, name)
 }
 
 # --- token plumbing ---------------------------------------------------------------------

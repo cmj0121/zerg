@@ -289,6 +289,14 @@ fn test_trim_left_and_right_take_one_side_each() {
 	testing.assert_eq(strings.trim_right("  hi  "), "  hi")
 	testing.assert_eq(strings.trim_left("hi  "), "hi  ")
 	testing.assert_eq(strings.trim_right("  hi"), "  hi")
+
+	# THE SAME TWO FACTS WITH THE SURVIVING SPACE MADE VISIBLE, and the reason is the
+	# example in the module's own comment: an `output` block ending in whitespace is a
+	# block this repository's pre-commit hook silently trims, which turns a true example
+	# into a false one. A terminator the eye can see is what lets the example be written
+	# at all, and this is the assertion that backs it.
+	testing.assert_eq(strings.trim_left("  hi  ") + "|", "hi  |")
+	testing.assert_eq(strings.trim_right("  hi  ") + "|", "  hi|")
 }
 
 #[test]

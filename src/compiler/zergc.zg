@@ -1002,7 +1002,7 @@ fn run_tests(root: str) -> int {
 		return 2
 	}
 
-	mut pkgs: list[str] = []
+	mut pkgs: list[Pkg] = []
 	test_pkgs(root, pkgs)
 
 	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
@@ -1012,10 +1012,10 @@ fn run_tests(root: str) -> int {
 	# a report whose green half means nothing. So they are asked for the whole tree first,
 	# reported together the way a compiler reports diagnostics, and nothing is executed.
 	mut errs: list[str] = []
-	for d in pkgs {
+	for p in pkgs {
 		mut fixts: list[Fixt] = []
 		mut tests: list[Tst] = []
-		plan_pkg(root, d, fixts, tests, errs)
+		plan_pkg(root, p, fixts, tests, errs)
 	}
 	if errs.len() > 0 {
 		for e in errs {
@@ -1027,8 +1027,8 @@ fn run_tests(root: str) -> int {
 	mut passed := 0
 	mut failed := 0
 	mut skipped := 0
-	for d in pkgs {
-		run_pkg(root, d, passed, failed, skipped)
+	for p in pkgs {
+		run_pkg(root, p, passed, failed, skipped)
 	}
 
 	if passed + failed + skipped == 0 {
@@ -1047,30 +1047,123 @@ fn run_tests(root: str) -> int {
 	return 0
 }
 
-# test_pkgs collects the directories under `root` holding at least one `*_test.zg`, outermost
-# first, in the sorted order the runtime's directory read guarantees — so two runs of the same
-# tree report in the same order.
+# --- what a package is ------------------------------------------------------------------
+#
+# Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE
+# module rather than the directory itself — the name of that module. `mod` is `""` for the
+# directory.
+#
+# THERE ARE TWO SHAPES BECAUSE THE LANGUAGE HAS TWO. `module_at` resolves an import to a
+# single `<name>.zg` file BEFORE it resolves one to a directory, so a `.zg` file beside its
+# neighbours is a module in its own right — which is what `src/stdlib` is: sixteen
+# independent one-file modules in one flat directory, not one module of sixteen files.
+#
+# A test build used to know only the second shape, and that made a white-box test of a
+# stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other
+# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E215`, a
+# generic struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii`
+# and `strconv`) — pointing at files the author did not write, before one test had run.
+#
+# So a test file is now resolved the way an import is, MOST SPECIFIC FIRST: `strings_test.zg`
+# belongs to `strings.zg` if that file is beside it, and to the directory otherwise.
+#
+# WHAT IT COSTS: in a directory that IS one module, a `*_test.zg` whose name matches one of
+# the module's files takes that file alone — so `a_test.zg` in a directory of `a.zg` and
+# `b.zg` no longer sees `b.zg`. That is a loud failure (an undeclared name at the line that
+# used it) and never a silent one, and the way out is to name the file for the module rather
+# than for one of its parts. In exchange the rule is MONOTONE: adding a test file never
+# changes what another package is built from.
+struct Pkg {
+	pub dir: str
+	pub mod: str
+}
+
+# test_pkgs collects the packages under `root`, outermost first, in the sorted order the
+# runtime's directory read guarantees — so two runs of the same tree report in the same order.
+# One directory may hold several: one per one-file module that has a test file, and one for
+# the directory itself when a test file names no module.
 #
 # A DOT-NAME IS NOT DESCENDED INTO. `.git` alone is more files than the tree it sits in, and
 # `.zerg-cache` is where this command writes; a walk that read either would spend the run
 # looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
 # `opendir` per source file otherwise.
-fn test_pkgs(root: str, mut &out: list[str]) {
+fn test_pkgs(root: str, mut &out: list[Pkg]) {
 	names := __zrt_listdir(root)
-	mut has := false
+	mut whole := false
 	for name in names {
-		if zerg.is_test_file(name) {
-			has = true
+		if zerg.is_test_file(name) and not is_own_file(name) {
+			m := test_module(root, name)
+			if m == "" {
+				whole = true
+			} else {
+				out.append(Pkg(root, m))
+			}
 		}
 	}
-	if has {
-		out.append(root)
+	if whole {
+		out.append(Pkg(root, ""))
 	}
 	for name in names {
 		if not is_hidden(name) and not has_suffix(name, ".zg") {
 			test_pkgs(join_path(root, name), out)
 		}
 	}
+}
+
+# test_module is the one-file module a test file names, or `""` when it names none.
+#
+# `fixtures_test.zg` names none WHATEVER is beside it: it is the file a directory contributes
+# to the directories below (FIXTURES_NAME), so it belongs to the directory and to every
+# package in it, and a `fixtures.zg` that happened to sit there would otherwise carry it off
+# into a package of its own.
+fn test_module(dir: str, name: str) -> str {
+	return "" if name == FIXTURES_NAME
+
+	base := drop_suffix(name, "_test.zg")
+
+	return "" if base == ""
+
+	return base if __zrt_exists(join_path(dir, base + ".zg"))
+
+	return ""
+}
+
+# claimed says whether a file belongs to a one-file module of this directory rather than to
+# the directory itself — `strings.zg` and `strings_test.zg` both do, once `strings_test.zg`
+# is there to claim them, and neither is then compiled into the directory's own package.
+fn claimed(dir: str, name: str) -> bool {
+	return true if test_module(dir, name) != ""
+
+	base := drop_suffix(name, ".zg")
+	return false if base == ""
+
+	t := base + "_test.zg"
+	return false if not __zrt_exists(join_path(dir, t))
+
+	return test_module(dir, t) != ""
+}
+
+# drop_suffix is `s` without `suffix`, or `""` when `s` does not end in one — and `""` also
+# when the two are equal, since a file named `_test.zg` names no module either.
+fn drop_suffix(s: str, suffix: str) -> str {
+	return "" if not has_suffix(s, suffix)
+
+	b := bytearray(s)
+	n := b.len() - bytearray(suffix).len()
+	mut out: list[byte] = []
+	mut i := 0
+	for i < n {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# is_own_file says whether a name is one THIS COMMAND writes — a generated driver or the copy
+# of an inherited fixture file. Neither is a source, and neither makes a directory a package:
+# a leftover from an interrupted run would otherwise be discovered as a test file of its own.
+fn is_own_file(name: str) -> bool {
+	return has_prefix(name, DRIVER_PREFIX) or has_prefix(name, INHERITED_PREFIX)
 }
 
 fn is_hidden(name: str) -> bool {
@@ -1080,33 +1173,60 @@ fn is_hidden(name: str) -> bool {
 	return b[0] == b'.'
 }
 
-# pkg_sources is every `.zg` file in a directory, the `*_test.zg` files INCLUDED — and that
-# inclusion is the one line where a test build differs from every other one. `module_at` filters
-# them out where a module's directory is read; this is the reading that does not.
+# pkg_sources is every file one package is compiled from, the `*_test.zg` files INCLUDED — and
+# that inclusion is the one line where a test build differs from every other one. `module_at`
+# filters them out where a module's directory is read; this is the reading that does not.
+#
+# A ONE-FILE MODULE takes three names and no listing: the file, the directory's own
+# `fixtures_test.zg` if there is one — a fixture serves every package of its directory, not
+# only the directory's own — and the test file that named it.
 #
 # A LEFTOVER DRIVER IS NOT A SOURCE. The name is this command's own, and one is there only when
 # a previous run was interrupted between writing it and taking it away; reading it back would
 # compile the last run's driver beside this one's — two `fn main`, and a list of tests from
 # whatever the file declared then.
-fn pkg_sources(dir: str) -> list[str] {
+fn pkg_sources(p: Pkg) -> list[str] {
 	mut out: list[str] = []
-	for name in __zrt_listdir(dir) {
-		if has_suffix(name, ".zg") and name != DRIVER_NAME and not has_prefix(name, INHERITED_PREFIX) {
-			out.append(join_path(dir, name))
+	if p.mod == "" {
+		for name in __zrt_listdir(p.dir) {
+			if has_suffix(name, ".zg") and not is_own_file(name) and not claimed(p.dir, name) {
+				out.append(join_path(p.dir, name))
+			}
 		}
+		return out
 	}
+	out.append(join_path(p.dir, p.mod + ".zg"))
+	fx := join_path(p.dir, FIXTURES_NAME)
+	if __zrt_exists(fx) {
+		out.append(fx)
+	}
+	out.append(join_path(p.dir, p.mod + "_test.zg"))
 	return out
 }
 
-# DRIVER_NAME is what the generated driver is called, and it ends in `_test.zg` for the reason
-# that is the whole of why it may sit in a source directory at all: a `*_test.zg` is compiled by
-# no normal build, in either compiler, so a driver left behind by an interrupted run is a file
-# `zerg build` does not read. The next `zerg test` on that package overwrites it before it is
-# used and removes it after, so a leftover heals itself rather than accumulating.
+# DRIVER_PREFIX opens what a generated driver is called, and the name ends in `_test.zg` for
+# the reason that is the whole of why it may sit in a source directory at all: a `*_test.zg` is
+# compiled by no normal build, in either compiler, so a driver left behind by an interrupted
+# run is a file `zerg build` does not read. The next `zerg test` on that package overwrites it
+# before it is used and removes it after, so a leftover heals itself rather than accumulating.
 #
-# It is one name per package rather than one per run, and a fixed name is what makes that
-# healing possible: a run interrupted twice leaves one file, not two.
-const DRIVER_NAME := "zerg_test_driver_test.zg"
+# It is one name per PACKAGE rather than one per run, and a fixed name is what makes that
+# healing possible: a run interrupted twice leaves one file, not two. The module's name is in
+# it because one directory may hold several packages, and two drivers of one name in one
+# directory would be one driver.
+const DRIVER_PREFIX := "zerg_test_driver_"
+
+fn driver_name(p: Pkg) -> str {
+	return DRIVER_PREFIX + "test.zg" if p.mod == ""
+
+	return f"{DRIVER_PREFIX}{p.mod}_test.zg"
+}
+
+# pkg_key is what a package's binary and report are filed under, and it names BOTH halves of
+# the package: two packages of one directory would otherwise share a binary.
+fn pkg_key(p: Pkg) -> str {
+	return sha256.hex(bytearray(f"{p.dir}|{p.mod}"))
+}
 
 # INHERITED_PREFIX names the copy of an ancestor's fixture file that a package's driver is
 # built with.
@@ -1221,9 +1341,9 @@ struct Tst {
 # fixture produces, and every circle. It is called twice per run — once for the whole tree
 # before anything executes, and once by run_pkg with the answers it needs — because a plan is
 # cheap and a second copy of the resolution would be a second place the rule is written down.
-fn plan_pkg(root: str, dir: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+fn plan_pkg(root: str, p: Pkg, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
 	mut own: list[bool] = []
-	files := pkg_files(root, dir, own)
+	files := pkg_files(root, p, own)
 	pkg_decls(files, own, fixts, tests, errs)
 
 	mut order: list[str] = []
@@ -1240,16 +1360,16 @@ fn plan_pkg(root: str, dir: str, mut &fixts: list[Fixt], mut &tests: list[Tst], 
 # directory between the path `zerg test` was given and this one, then the package's own
 # sources. `own` says, for each, whether its `#[test]` functions belong to this package —
 # an inherited file contributes its fixtures and nothing else.
-fn pkg_files(root: str, dir: str, mut &own: list[bool]) -> list[str] {
+fn pkg_files(root: str, p: Pkg, mut &own: list[bool]) -> list[str] {
 	mut out: list[str] = []
-	for a in ancestors_of(root, dir) {
+	for a in ancestors_of(root, p.dir) {
 		f := join_path(a, FIXTURES_NAME)
 		if __zrt_exists(f) {
 			out.append(f)
 			own.append(false)
 		}
 	}
-	for f in pkg_sources(dir) {
+	for f in pkg_sources(p) {
 		out.append(f)
 		own.append(true)
 	}
@@ -1532,14 +1652,14 @@ fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn run_pkg(root: str, p: Pkg, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
 	# findings somewhere: run_tests planned every package before it ran any of them, and a run
 	# holding one unresolved parameter never reaches here at all.
 	mut fixts: list[Fixt] = []
 	mut tests: list[Tst] = []
 	mut errs: list[str] = []
-	plan_pkg(root, dir, fixts, tests, errs)
+	plan_pkg(root, p, fixts, tests, errs)
 	return if tests.len() == 0
 
 	mut names: list[str] = []
@@ -1550,7 +1670,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 	}
 
 	mut own: list[bool] = []
-	srcs := pkg_files(root, dir, own)
+	srcs := pkg_files(root, p, own)
 
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
 	# module is a directory and that is the only thing that puts its declarations in the same
@@ -1561,8 +1681,8 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 	#
 	# Only the BINARY and the report go under the build cache, which is where a build already
 	# puts what it made.
-	key := sha256.hex(bytearray(dir))
-	drv := join_path(dir, DRIVER_NAME)
+	key := pkg_key(p)
+	drv := join_path(p.dir, driver_name(p))
 	bin := join_path(test_dir(), key + ".bin")
 	rep := join_path(test_dir(), key + ".rep")
 	sel := join_path(test_dir(), key + ".sel")
@@ -1583,7 +1703,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 		if own[k] {
 			files.append(srcs[k])
 		} else {
-			c := join_path(dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			c := join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
 			guard {
 				io.write_file(c, bytearray(read_source(srcs[k])))
 			}
@@ -1593,7 +1713,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 		k = k + 1
 	}
 	files.append(drv)
-	link_units(load_units_of(files, dir, dir), drv, bin, TEST_JOBS)
+	link_units(load_units_of(files, p.dir, p.dir), drv, bin, TEST_JOBS)
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []

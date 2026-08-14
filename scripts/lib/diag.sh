@@ -75,6 +75,35 @@ has_place() {
 	printf '%s\n' "$1" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'
 }
 
+# names_a_temp <text> — the diagnostic names something the COMPILER invented rather than
+# something the reader wrote. A message may only speak of names that are in the file: told
+# about a binding they cannot find, a reader has nowhere to go and nothing to fix.
+#
+# Every name this compiler mints for itself is spelled `zg…_` — `zg_` for a mangled user
+# name, `zgt_` for an expression temporary, `zga_` for the operands `assert` hoists so that
+# a failure can report their values, `zgd_` for what `zerg desugar` writes out. None of
+# those is source, and no rule has any business quoting one.
+#
+# It is here rather than in one gate because it is the same kind of fact as `cc_answered`:
+# a statement about whose vocabulary a diagnostic is allowed to use. `assert` is what made
+# it worth writing down — its temporaries are bindings in the ordinary environment, so any
+# rule that reports a NAME could reach one, and two already had: a closure capturing an
+# assert was refused as _E735 a closure captures `zga_l3c10`_, and an operand the checker
+# turned away left _E372 undefined name `zga_l3c9`_ behind it, one per conjunct of an `and`.
+# Both were found by hand. This is what finds the third.
+#
+# `temp_named` answers WHICH one, so the gate that catches it can put the name in its own
+# message rather than leaving a reader to search the output for it, and the two are one
+# function and a test of it: a second copy of the pattern is the failure this file's header
+# recounts, and a negative assertion is where that failure is invisible.
+temp_named() {
+	printf '%s\n' "$1" | grep -oE '`zg[a-z]*_[A-Za-z0-9_]*' | head -1 | tr -d '`'
+}
+
+names_a_temp() {
+	[ -n "$(temp_named "$1")" ]
+}
+
 # opens_with_code <text> <code> — the diagnostic's FIRST line starts with the code. Where a
 # rule reports a place the renderer's `error:` opens the line ahead of it (`error: E307 …`),
 # and a rule that raises before there is a place to report prints the message alone — so the

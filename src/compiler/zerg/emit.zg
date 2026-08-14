@@ -1419,6 +1419,34 @@ fn c_fnptr_typedef() -> str {
 	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
 }
 
+# c_fnptr_helpers is the (copy, drop) pair for a held function — ONE pair for the whole
+# program, not one per lambda, and that is the whole of why a fn value can be owned at all.
+#
+# Every other type in this file picks its drop by its STATIC type. A function type cannot:
+# `fn(int) -> int` is the type of every lambda with that shape, and each has a different
+# environment to tear down. So the per-site part goes into the CELL — zrt_ref_hdr carries a
+# drop, and zrt_release runs it at zero — and the type layer is left with one release that
+# knows nothing about what it is releasing.
+#
+# `env` holds the PAYLOAD pointer and the header is recovered as `- 1`, which is what a
+# managed `str` already does (fmt.c). The alternative, storing the header, would need every
+# thunk and every cast to change with it, and any site that was missed would be a silent
+# release at the wrong address — nothing here would see it.
+#
+# BOTH ARE NULL-GUARDED, so a NAMED function held as a value — `{thunk, NULL}` — costs a
+# branch and nothing else. That is why one pair serves both and the type never has to ask
+# which kind of fn value it is holding.
+fn c_fnptr_helpers() -> str {
+	mut out := "static zg_fnptr zg_copy_fnptr(zg_fnptr v) {\n"
+	out = out + "    if (v.env != NULL) { zrt_retain((zrt_ref_hdr *)v.env - 1); }\n    return v;\n}\n"
+	out = out + "static void zg_drop_fnptr(zg_fnptr *v) {\n"
+	out = out + "    if (v->env != NULL) { zrt_release((zrt_ref_hdr *)v->env - 1); v->env = NULL; }\n}\n"
+	out = out + "static void zg_elemcopy_fnptr(void *dst, const void *src) {\n"
+	out = out + "    *(zg_fnptr*)dst = zg_copy_fnptr(*(const zg_fnptr*)src);\n}\n"
+	out = out + "static void zg_elemdrop_fnptr(void *elem) { zg_drop_fnptr((zg_fnptr*)elem); }\n"
+	return out + "static const zrt_elem_vt zg_listvt_fnptr = {zg_elemcopy_fnptr, zg_elemdrop_fnptr};\n"
+}
+
 # c_fnptr_cast is the cast back to a real signature, `(R (*)(const void *, P, ...))`.
 #
 # THE ENVIRONMENT IS ALWAYS THE FIRST PARAMETER, whether or not there is one to pass. A
@@ -3507,6 +3535,13 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	# nothing back.
 	return c_needs_copy(em, c_carrier_elem(t)) if c_is_carrier(t)
 
+	# A HELD FUNCTION owns its environment, whatever it captured — the question cannot be
+	# asked of what is in there, because a `fn(int) -> int` is the type of every lambda with
+	# that shape and each closed over something different. A named function's environment is
+	# NULL and the copy no-ops on it, so answering `true` for every function type costs a
+	# branch and buys one rule.
+	return true if c_is_fn(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -3588,6 +3623,9 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 	# declared name — so it is spelled here rather than falling into the line below, which
 	# would render `zg_copy_(x)` and leave cc to explain it
 	return f"zg_copy_{c_carrier_of(em, t)}({x})" if c_is_carrier(t)
+
+	# and a function's is the one global pair, for the reason c_fnptr_helpers gives
+	return f"zg_copy_fnptr({x})" if c_is_fn(t)
 
 	return f"zg_copy_{c_named_of(t)}({x})"
 }
@@ -3735,6 +3773,9 @@ fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 	# vtable and a named carrier had no drop thunk to defer.
 	return c_carrier_of(em, t) if c_is_carrier(t)
 
+	# and a function's is the one kind every function type shares
+	return "fnptr" if c_is_fn(t)
+
 	return c_named_of(t)
 }
 
@@ -3808,6 +3849,10 @@ fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
 	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
 	# the payload owns nothing
 	return c_carrier_drop_fn(em, t) if c_is_carrier(t)
+
+	# and the one release every held function shares, which reaches the per-site teardown
+	# through the environment cell's own drop rather than through this name
+	return "zg_drop_fnptr" if c_is_fn(t)
 
 	nm := c_named_of(t)
 
@@ -10051,20 +10096,23 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 #
 # The shape is `spawn`'s, one construct over: a per-site struct of the captured values, a
 # static function that reads them back out, and a heap block holding one. What differs is
-# only WHEN it runs — a coroutine's env is consumed once, a closure's every time it is
-# called — which is why this one is not freed by its thunk.
+# WHEN it runs — a coroutine's env is consumed once, a closure's every time it is called —
+# and both consequences of that difference are written down here.
 #
-# THE THUNK HANDS THE LIFTED FUNCTION COPIES. This is the half a spawn does not need. The
-# lifted function's captured parameters are BY VALUE, so it releases each of them when it
-# returns (c_fn) — and a spawn is fine with that, because its env is giving up its own
+# THE ENVIRONMENT IS REFCOUNTED, not scope-owned. Every other value this emitter allocates
+# is released at the scope that made it, and a closure's cannot be: the closure may outlive
+# that scope, which is what closing over a value is for. So it is a zrt_ref_alloc cell whose
+# own drop tears the captures down, the fn value counts as a holder, and the last one to go
+# frees it. `env` keeps the PAYLOAD pointer so the call thunk and the signature cast are
+# untouched by any of this.
+#
+# AND THE THUNK HANDS THE LIFTED FUNCTION COPIES. This is the half a spawn does not need.
+# The lifted function's captured parameters are BY VALUE, so it releases each of them when
+# it returns (c_fn) — and a spawn is fine with that, because its env is giving up its own
 # reference and never runs again. A closure runs again: passing `e->f0` uncopied made the
-# SECOND call read a string the first had freed.
-#
-# THE ENVIRONMENT IS NOT FREED. Every other value this emitter allocates is registered for
-# release at the scope that made it; a closure's cannot be, because the closure may outlive
-# that scope — that is what closing over a value is for. Freeing it correctly needs the fn
-# value to carry copy and drop functions, which is a change to the type rather than to this
-# function, and it is written down rather than half-done (docs/core/memory.md).
+# SECOND call read a string the first had freed. That is a use-after-free this compiler has
+# had for as long as it has had closures, and no gate could see it because the corpus only
+# ever called one once.
 fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has_ret: bool, ret: Ty, vals: list[str]) -> str {
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
@@ -10073,6 +10121,7 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has
 
 	mut fields := ""
 	mut unpack := ""
+	mut teardown := ""
 	mut i := 0
 	for i < cps.len() {
 		fi := f"f{strconv.to_string(i, 10)}"
@@ -10080,6 +10129,7 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has
 		if i > 0 {
 			unpack = unpack + ", "
 		}
+
 		# a COPY per call, for the reason in the header: the callee gives every by-value
 		# parameter back, and this environment is read again the next time it is called
 		mut arg := f"e->{fi}"
@@ -10087,9 +10137,17 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has
 			arg = c_copy_of(em, cps[i].ty, arg)
 		}
 		unpack = unpack + arg
+
+		# and the teardown, in reverse declaration order, the order every aggregate drops in
+		teardown = c_drop_stmt(em, cps[i].ty, f"e->{fi}") + " " + teardown
 		i = i + 1
 	}
 	em.lam_defs.append(f"typedef struct {{{fields} }} {envty};\n")
+
+	# the cell's own drop, which zrt_release runs at zero. It does NOT free the block —
+	# zrt_release does that, and a zrt_free here would be the second one.
+	dropfn := f"lamdrop_{tag}"
+	em.lam_defs.append(f"static void zg_{dropfn}(void *zg_envp) {{ {envty} *e = ({envty} *)zg_envp; (void)e; {teardown}}}\n")
 
 	mut sig := ""
 	mut call := unpack
@@ -10114,7 +10172,8 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[Param], ps: list[Param], has
 		fill = fill + f" zgt_ce{tag}->f{strconv.to_string(k, 10)} = {vals[k]};"
 		k = k + 1
 	}
-	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_alloc(sizeof({envty}));{fill} (zg_fnptr){{(void (*)(void))zg_{thunk}, zgt_ce{tag}}}; }})"
+	em.used_rt = true
+	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_ref_payload(zrt_ref_alloc(sizeof({envty}), &zg_{dropfn}));{fill} (zg_fnptr){{(void (*)(void))zg_{thunk}, zgt_ce{tag}}}; }})"
 }
 
 fn c_ret_of(has_ret: bool, ret: Ty) -> str {
@@ -13240,7 +13299,11 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# may name a runtime type, so it needs the runtime header even when its own bodies
 	# touch nothing from it. A whole-program build still decides from use, which keeps a
 	# value-only program's C free of the include.
-	rt := c_needs_runtime(em) or em.used_rt or not whole
+	# A HELD FUNCTION NEEDS THE RUNTIME, because holding one is now a refcount operation:
+	# zg_copy_fnptr and zg_drop_fnptr are zrt_retain and zrt_release over the environment's
+	# cell. A program whose fn values are all named functions pays nothing at run time — the
+	# environment is NULL and both no-op — but it still has to see the declarations.
+	rt := c_needs_runtime(em) or em.used_rt or em.used_fnptr or not whole
 	mut hdr := "// Generated by zergc (self-host). Do not edit.\n"
 	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
 	if em.used_fnptr {
@@ -13250,6 +13313,12 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		hdr = hdr + "#include \"zergrt.h\"\n"
 	}
 	hdr = hdr + "\n"
+
+	# after the include, because the pair is zrt_retain and zrt_release — the typedef above
+	# goes before it so that a prototype naming `zg_fnptr` has a type to name
+	if em.used_fnptr {
+		hdr = hdr + c_fnptr_helpers()
+	}
 	if em.used_rt {
 		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
 		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"

@@ -125,6 +125,13 @@ An ill-formed program SHOULD report every diagnostic it can find in one run rath
 first — `zerg` does, for the rules it checks; a refusal ends the run at the first, which is the other half
 of what the two shapes are.
 
+A diagnostic names only what is in the **source**. An implementation may bind names of its own — `zerg`
+does, for the operands `assert` holds on to so that a failure can report the values the condition actually
+saw — and no rule may quote one: a reader told about a binding that is in no file they can open has been
+handed a name and nowhere to take it. It is the standing rule below about generated code nobody wrote, one
+level in — a place nobody can open, and a name nobody can find. `scripts/reject-check.sh` and
+`scripts/refuse-check.sh` assert it of every case they hold.
+
 > **[deviation]** A place and a code are owed on every diagnostic, and what decides whether one carries
 > them is the **channel**, not whether the rule checks or refuses. All three stages that answer about a
 > PROGRAM now have one — `chk_at` in check.zg, `p_diag` in parser.zg, `c_diag` in emit.zg — and each takes

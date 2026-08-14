@@ -16,7 +16,7 @@
 # The gate is not that these fail. Every one of them failed before this script existed —
 # what differed is WHO said so. A program the compiler emits anyway reaches cc, which
 # rejects generated C at a line in a file nobody wrote, and before and after a fix the
-# case still "fails", so no build gate can tell them apart. Hence six assertions per
+# case still "fails", so no build gate can tell them apart. Hence seven assertions per
 # case:
 #
 #   1. a non-zero exit
@@ -24,20 +24,26 @@
 #      has to be told from another
 #   3. no mention of .zerg-cache
 #   4. nothing shaped like a cc diagnostic (`<file>:LINE:COL: error:` opening a line)
-#   5. a `--> file:line:col` line, so the reader is told WHERE
-#   6. the SEED refuses it too — unless the case says `seed-gap`, naming a rule the seed
+#   5. no name the COMPILER minted — a message may quote what is in the file and nothing else
+#   6. a `--> file:line:col` line, so the reader is told WHERE
+#   7. the SEED refuses it too — unless the case says `seed-gap`, naming a rule the seed
 #      does not enforce (its gaps are its own contract, in src/bootstrap/README.md)
 #
 # The fourth is not redundant with the third. A build given `-o` puts its intermediate C
 # beside the output rather than in the cache, so a cc error can carry no cache path at all
 # and still be a cc error — which is exactly the failure this gate exists to catch.
 #
-# The fifth is what this branch's diagnostics work bought: every rule in check.zg reports
+# The fifth is the one a reader can act on, and it is the one no other gate can see: a
+# message that names a compiler temporary is still a refusal, still carries its code and
+# still says where, so every other assertion here goes green while the reader is told about
+# a binding that is in no file they can open.
+#
+# The sixth is what this branch's diagnostics work bought: every rule in check.zg reports
 # through one place that knows the statement's file, line and column, so a rule that loses
 # its position is caught here rather than noticed by a user. Nothing else would see it —
 # the sentence still matches.
 #
-# The sixth makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
+# The seventh makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
 # and diagnoses every rule here; a rule it enforces and `zerg` does not is a rule `zerg`
 # LOST on the way to self-hosting, which is how this whole class went unnoticed. Only what
 # `zerg` prints is normative — the seed merely has to say no — because the two word their
@@ -220,6 +226,15 @@ reject() {
 	# is exactly how one of them came to be asked in two places and not in the third.
 	if cc_answered "$out"; then
 		echo "VIA CC    $name — cc answered this, not the compiler against the source"
+		fail=$((fail + 1))
+		return
+	fi
+
+	# AND IT MUST SPEAK THE READER'S VOCABULARY. A rule may quote any name in the file and no
+	# name that is not — see `names_a_temp` in diag.sh for what the compiler mints and why
+	# `assert` is the form that made this reachable from rules with nothing to do with it.
+	if names_a_temp "$out"; then
+		echo "NAMES TEMP  $name — the message quotes \`$(temp_named "$out")\`, which is in no file the reader can open"
 		fail=$((fail + 1))
 		return
 	fi
@@ -3073,6 +3088,36 @@ reject slice-a-str E320 <<'EOF'
 fn main() {
 	s := "hello"
 	print(s[1..3])
+}
+EOF
+
+# THE SAME RULE, SEEN THROUGH `assert` — and the reason the two below are here is not E320
+# at all. `assert` hoists each operand of its condition into a temporary of its own so that
+# the failure message can report the value without running the condition twice, and a
+# temporary is a binding in the ordinary environment: a rejected operand left it there with
+# no type, every read of it came back _E372 undefined name `zga_l3c9`_, and the reader was
+# told about a name that appears nowhere in their file. One per conjunct, so an `and` with
+# two bad operands answered with three messages for two mistakes.
+#
+# `one-finding` is the whole claim, and the assertion above about minted names is the other
+# half of it: the count catches the cascade and the vocabulary catches what it said.
+#
+# The SEED refuses both for a reason of its own — `assert` is not a word it knows
+# (src/bootstrap/README.md) — so its half of this gate is honest about the program and says
+# nothing about the rule. Only `zerg`'s answer is normative here, which is what that split
+# is for.
+reject assert-on-a-str-index E320 one-finding <<'EOF'
+fn main() {
+	s := "hello"
+	assert s[0] == 104
+}
+EOF
+
+reject assert-and-on-two-str-indexes E320 one-finding <<'EOF'
+fn main() {
+	s := "hello"
+	t := "world"
+	assert s[0] == 104 and t[1] == 111
 }
 EOF
 

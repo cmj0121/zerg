@@ -724,6 +724,29 @@ pub struct File {
 	# What is kept is the PLACE and the word the statement starts with, not the tree: no pass
 	# will ever walk one, and carrying a Stmt that nothing lowers is an invitation to lower it.
 	pub stmts: list[TopStmt]
+
+	# ty_quals are the MODULE QUALIFIERS this file wrote in a TYPE position — the `lib` of
+	# `c: lib.Counter`, one entry per occurrence, with the place it was written.
+	#
+	# They are a list beside the declarations rather than part of the type, because
+	# parse_base_type resolves `lib.Counter` to `Counter` and always has: every module of a
+	# program flattens into one scope, so the qualifier says where the type came from and the
+	# LAST SEGMENT is the name. That is the right reading for resolution and it throws away
+	# the one thing the no-transitivity rule needs to see, so the fact is recorded on the side
+	# instead of changing what a `Ty` is.
+	#
+	# It stays inside the parser's contract: what is written down is that a qualifier was
+	# TYPED, which is a fact about the text. Whether the name it wrote is a namespace this
+	# module may write is the checker's question, asked later, over the whole program.
+	pub ty_quals: list[TyQual]
+}
+
+# TyQual is one such occurrence: the qualifier as written, and where.
+pub struct TyQual {
+	pub ns: str
+	pub path: str
+	pub line: int
+	pub col: int
 }
 
 # TopStmt is one top-level statement, as much of it as a refusal needs: where it was written

@@ -33,6 +33,12 @@ struct Parser {
 	# inside a `guard` or a closure holds statements, and each of their expressions is a
 	# root of its own.
 	pub edepth: int
+
+	# ty_quals collects the MODULE QUALIFIERS written in a type position, which parse_base_type
+	# resolves away (File.ty_quals says why the fact is kept on the side). It rides on the
+	# parser rather than being threaded through parse_type's dozen returns: a type is parsed
+	# from six positions and each would otherwise have to hand a list down and collect it back.
+	pub ty_quals: list[TyQual]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -578,6 +584,13 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# and `It.Item` is a projection.
 		raise f"E265 NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all" if name_is_type(name)
 
+		# THE QUALIFIER IS RESOLVED AWAY AND WRITTEN DOWN. Dropping it is right for
+		# resolution — the last segment IS the name here — and it is also the moment the
+		# only evidence of `lib.` in `c: lib.Counter` disappears, which is the evidence the
+		# no-transitivity rule reads. So the fact that one was typed, and where, is recorded
+		# before the name moves on.
+		p.ty_quals.append(TyQual(name, p.path, kw.line, kw.col))
+
 		p_advance(p)
 		name = cur(p).lexeme
 		p_advance(p)
@@ -851,7 +864,7 @@ fn conv_ty(name: str) -> Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path, 0, 0)
+	mut p := Parser(toks, 0, "", path, 0, 0, [])
 	mut imports: list[ImportDecl] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -1100,7 +1113,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# not the end of the file, because that is where the reader has to go.
 	raise "E256 this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside" + p_place(p, unsafe_line, unsafe_col) if in_unsafe
 
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -3924,7 +3937,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
 	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
 	# enclosing tree, which is measured as one whole, so the hole is not a root.
-	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth)
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

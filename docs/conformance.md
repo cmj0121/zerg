@@ -164,6 +164,16 @@ own, because it is the yardstick every finding in this specification is measured
 **A form is either lowered correctly or refused by name.** It is never a crash, never a silently wrong answer,
 and never an error reported by the C compiler or the linker against generated code nobody wrote.
 
+> **[deviation]** A form inside a **template nobody instantiates** is neither. Every rule this compiler
+> enforces is driven by the walk that LOWERS a body, and a template is removed before that walk — only the
+> specializations a call asks for are lowered — so `fn f[T](xs: list[T], v: T) { xs.append(v) }` that no call
+> reaches compiles in silence, and so does the same body assigning to an immutable binding, which is `E307`,
+> a rule enforced everywhere else. The seed diagnoses both, because its semantic pass walks a **declaration**
+> rather than a lowering. It is one gap owed once and not a property of any one rule. Closing it needs a body
+> checked against a type parameter's **bounds** rather than against a concrete type — `x.show()` on a
+> `T: Show` has no method to resolve until `T` is one, and lowering is defined only over concrete types —
+> which is a checker this compiler does not have.
+
 One consequence is worth writing down here, because no single chapter owns it: a program with no `fn main` is
 grammatical — `program ::= stmt-list`, the `nop` program the grammar opens with — so what rejects it is the
 **build**. `--emit bin` reports that the entry file declares no `fn main`, with a place, before anything

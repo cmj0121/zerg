@@ -53,13 +53,6 @@ mut ys := [1, 2, 3]
 ys.append(4)               # grow  ·  ys[0] = 9  # edit  ·  ys = [2, 4]  # rebind
 ```
 
-> **[deviation]** The frozen guarantee holds for **element assignment** and not for the **growing
-> methods**. `xs[0] = 9` on a plain `xs` is rejected exactly as the comment above says, but `xs.append(4)`
-> on that same frozen `xs` compiles and really grows the list. The mutability check is written on the
-> assignment forms; a method call was never asked whether its receiver is `mut`, so every `mut this` method
-> passes through a plain binding unchallenged. The program compiles, the frozen half of the model is not
-> enforced, and nothing on the way says so.
-
 ## Keys — `Eq` free, `Hash` explicit
 
 `list[T]` takes **any** `T` (only the structural ops every value has). A `map` key / `set` element needs
@@ -140,12 +133,14 @@ the collection it walks — so it needs no borrow checker and costs you nothing 
 **element** in place (`for mut x`) stays fine: it never moves the cursor — though that binding is itself
 **[not yet]** (see [Order & equality](#order--equality)).
 
-> **[deviation]** None of the freeze is implemented. `for x in xs { xs.append(x) }` compiles and runs, and
-> so does `for x in xs { xs = [9] }`, which rebinds the very buffer the loop is walking while the cursor
-> still points into the old one. That is reachable undefined behaviour from safe code — precisely the thing
-> this section says cannot happen — and it is silent: no compile error, no runtime fail-fast, and a short
-> loop usually finishes looking correct, which is why nothing measured it. The rule is as local and as
-> cheap as described; it was simply never written.
+> **[deviation]** The freeze sees only a **bare name**. `for x in xs { xs.append(x) }` and
+> `for x in xs { xs = [9] }` are compile errors (`E393`), but the same structural change reached through a
+> **path** is not: `for x in p.xs { p.xs.append(v) }`, `for x in p.xs { p.xs = [9] }`,
+> `for x in xs[0] { xs[0].append(v) }`, and a function taking `mut &xs` and appending inside the loop all
+> compile today and really grow or rebind the collection being walked. No iterator is invalidated — the
+> loop walks a copy-on-write copy taken at its head, so the program stays memory-safe — but the **compile
+> error this section promises does not arrive**: the loop silently walks the collection as it was, rather
+> than saying so. Only the bare-name spelling is enforced.
 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a

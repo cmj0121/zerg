@@ -49,11 +49,6 @@ mut ys := [1, 2, 3]
 ys.append(4)               # 增長 · ys[0] = 9  # 改 · ys = [2, 4]  # 重指
 ```
 
-> **[deviation]** 凍結這項保證對**改元素**成立、對**增長 method** 不成立。plain `xs` 上的 `xs[0] = 9` 確實如上面
-> 註解所說被拒絕，但同一個凍結的 `xs` 上 `xs.append(4)` 編得過，而且真的把 list 長大了。可變性檢查寫在賦值那幾
-> 個形式上；method 呼叫從來沒有被問過它的 receiver 是不是 `mut`，所以每一個 `mut this` method 都能毫無阻攔地穿過
-> 一個 plain binding。程式編得過、模型凍結的那一半沒有被強制，而且一路上沒有任何東西說出來。
-
 ## key——`Eq` 免費、`Hash` 顯式
 
 `list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素同時需要**相等性**與 **`Hash`**
@@ -123,10 +118,12 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 某個 **元素**（`for mut x`）還是可以：它不會移動 cursor——不過那個綁定本身是 **[not yet]**（見
 [順序與相等性](#順序與相等性)）。
 
-> **[deviation]** 這道凍結一點都沒有實作。`for x in xs { xs.append(x) }` 編得過也跑得動，`for x in xs { xs = [9] }`
-> 也是——後者在 cursor 還指著舊 buffer 時，就把迴圈正在走的那個 buffer 重指掉了。那是從安全程式碼可達的 undefined
-> behaviour，正是本節說不可能發生的那件事；而且它是無聲的：沒有 compile error、沒有 runtime fail-fast，短迴圈通常
-> 還會跑完並看起來正確，這也是為什麼沒有任何東西量到它。規則確實如所述那樣 local 又便宜；只是從來沒有被寫下來。
+> **[deviation]** 這道凍結只看得見**裸名**。`for x in xs { xs.append(x) }` 與 `for x in xs { xs = [9] }` 是
+> compile error（`E393`），但同一個結構性改動只要透過**路徑**抵達就不是：`for x in p.xs { p.xs.append(v) }`、
+> `for x in p.xs { p.xs = [9] }`、`for x in xs[0] { xs[0].append(v) }`，以及一個收 `mut &xs` 並在迴圈裡 append
+> 的 function，今天全都編得過，而且真的把正在被走訪的 collection 長大或重指掉。沒有任何 iterator 失效——迴圈走的
+> 是它在開頭取的那份 copy-on-write 複本，所以程式仍然是記憶體安全的——但**本節承諾的那個 compile error 沒有出
+> 現**：迴圈只是安靜地走訪那個當初的 collection，而不是把話說出來。只有裸名那個拼法被強制。
 
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。

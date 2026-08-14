@@ -367,6 +367,103 @@ fn main() {
 }
 EOF
 
+# --- the frozen half of the collection model ---------------------------------------
+#
+# docs/code/collections.md, in two halves. Only a `mut` collection can modify its
+# elements — and that must hold for a METHOD's receiver, not only for the assignment
+# forms above: `xs.append(4)` on a plain `xs` compiled and really grew the list, because
+# a method call was never asked whether its receiver is `mut`. And within `for … in xs`,
+# `xs` is frozen against STRUCTURAL change — growing, shrinking or rebinding — for the
+# loop's whole extent, `mut` or not, so an iterator can never be invalidated;
+# `for x in xs { xs = [9] }` rebound the very buffer the cursor was walking, which is
+# reachable undefined behaviour from safe code. The receiver rule already held for a
+# user-declared `mut fn` (mut-fn-on-an-immutable-receiver, below) — what these pin is the
+# built-in method and the freeze.
+
+reject append-on-a-plain-binding E392 <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	xs.append(4)
+	print(f"{xs.len()}")
+}
+EOF
+
+reject append-inside-its-own-for E393 'cannot `append` to' <<'EOF'
+fn main() {
+	mut xs := [1, 2, 3]
+	for x in xs {
+		xs.append(x)
+	}
+	print(f"{xs.len()}")
+}
+EOF
+
+reject rebind-inside-its-own-for E393 'cannot rebind' <<'EOF'
+fn main() {
+	mut xs := [1, 2, 3]
+	for x in xs {
+		xs = [9]
+	}
+	print(f"{xs.len()}")
+}
+EOF
+
+# `m[k] = v` INSERTS when `k` is new, and whether it is new is a runtime fact — so inside
+# the map's own loop the whole form is refused. The LIST spelling of the same syntax stays
+# legal there (`xs[0] = 9` moves no cursor), which is why the case pins the map.
+reject map-index-assign-inside-its-own-for E393 'cannot assign into' <<'EOF'
+fn main() {
+	mut m := {"a": 1}
+	for k in m {
+		m["b"] = 2
+	}
+	print(f"{m.len()}")
+}
+EOF
+
+# The freeze is the loop's OWN collection and nothing wider: appending to a DIFFERENT
+# collection while reading `xs` is the accumulation idiom the spec itself recommends, so
+# it is asserted to stay accepted right beside the rules that could over-reach into it.
+cat >"$tmp/append-to-a-different-collection.zg" <<'EOF'
+fn main() {
+	mut xs := [1, 2, 3]
+	mut out: list[int] = []
+	for x in xs {
+		out.append(x)
+	}
+	print(f"{out.len()}")
+}
+EOF
+if "$ZERG" build --emit bin -o "$tmp/append-to-a-different-collection.bin" "$tmp/append-to-a-different-collection.zg" >/dev/null 2>&1; then
+	pass=$((pass + 1))
+else
+	echo "FROZEN    append-to-a-different-collection — the freeze over-reached into the accumulation idiom the spec blesses"
+	fail=$((fail + 1))
+fi
+
+# And the same edge one step in: a DIFFERENT collection may wear the SAME NAME. A plain `:=`
+# is shadowable (GRAMMAR group 4 exempts only `const`), so a body declaring its own `xs`
+# inside `for x in xs` names a second collection — and a freeze keyed on the spelling
+# refused an append to it, in a sentence that was not true of that `xs`. The case above
+# could not see it, because it only ever appends to another NAME. The seed accepts this and
+# prints 2 2 2.
+cat >"$tmp/append-to-a-shadowing-binding.zg" <<'EOF'
+fn main() {
+	mut xs: list[int] = [1, 2, 3]
+	for x in xs {
+		mut xs: list[str] = ["a"]
+		xs.append("b")
+		print(f"{xs.len()}")
+	}
+}
+EOF
+if "$ZERG" build --emit bin -o "$tmp/append-to-a-shadowing-binding.bin" "$tmp/append-to-a-shadowing-binding.zg" >/dev/null 2>&1; then
+	pass=$((pass + 1))
+else
+	echo "FROZEN    append-to-a-shadowing-binding — the freeze matched a NAME, not the loop's binding"
+	fail=$((fail + 1))
+fi
+
 # --- `const` is shadow-proof, in BOTH directions ----------------------------------
 #
 # GRAMMAR group 4: a `const` binding is immutable and SHADOW-PROOF — no later binding may

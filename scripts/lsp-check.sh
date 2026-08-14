@@ -8,7 +8,7 @@
 # the same compiler one question, held to the same answer.
 #
 # It matters because the invariant is only structurally true while nobody adds a rule. The
-# server calls `emit_files_diag`, `lex_diags`, `lint_conversions` and `fmt_src_off` and
+# server calls `emit_files_diag`, `lex_diags`, `lint_program` and `fmt_src_off` and
 # owns none of them; the day one handler grows a shortcut — a special case for an empty
 # buffer, a filter that drops a finding the author thought was noise — an editor starts
 # reporting a language that the compiler does not implement, and no other gate here can
@@ -114,11 +114,11 @@ if diags is None:
     print("DIAG the server published no diagnostics for the buffer", file=sys.stderr)
     sys.exit(2)
 
-# The two severities are counted apart, because they answer to two different commands:
-# an ERROR is what `zerg build` refuses over, and an INFORMATION is an L5xx conversion
-# finding about a program that builds — which `zerg lint` reports and `zerg build` does
-# not. Comparing the total against the build was this gate's own first bug, and it read
-# as the server inventing findings.
+# The compiler's diagnostics and the linter's are counted apart, because they answer to
+# two different commands: an ERROR (severity 1) is what `zerg build` refuses over, and
+# everything else is a lint finding about a program that BUILDS — which `zerg lint`
+# reports and `zerg build` does not. Comparing the total against the build was this
+# gate's own first bug, and it read as the server inventing findings.
 #
 # A finding is put back together as `code message` before it is compared, because that is
 # how the COMMANDS print one and the server is what has them apart. Comparing the sentence
@@ -128,9 +128,18 @@ def said(d):
     c = d.get("code", "")
     return "%s %s" % (c, d["message"]) if c else d["message"]
 
+# THE SEVERITY IS PART OF WHAT IS SAID, so it is put back too. The linter has three levels
+# and `zerg lint` prints the two that do not gate the build with an adjective in front of
+# the code; the server sends them as LSP severities, in the same order. This table is the
+# one place the two spellings meet, and it exists so a server that quietly flattened all
+# three into one severity would be caught rather than agreeing about every count. An
+# UNKNOWN severity renders as itself, so it fails the comparison instead of the script.
+SEV = {2: "", 3: "warning: ", 4: "info: "}
+
 result = {
     "errors": [said(d) for d in diags if d["severity"] == 1],
-    "infos": [said(d) for d in diags if d["severity"] == 3],
+    "lints": [SEV.get(d["severity"], "severity-%s " % d["severity"]) + said(d)
+              for d in diags if d["severity"] != 1],
     "ranges": [(d["range"]["start"]["line"], d["range"]["start"]["character"]) for d in diags],
 }
 if edits is not None:
@@ -180,11 +189,12 @@ for src in "$@"; do
 		fail=$((fail + 1))
 	fi
 
-	# the INFORMATION half, against the command that reports one. `zerg lint` prints a
-	# conversion finding as `path:line:col: message`; the tree-only rules it also prints
-	# carry no position and are not the server's to place, so only the positioned lines are
-	# compared. This is the assertion that keeps the two families from swapping severity —
-	# a server that painted L5xx red would still agree about every count.
+	# the LINT half, against the command that reports one. `zerg lint` prints every finding
+	# as `path:line:col: [severity: ]code message`, so the whole line after the place is
+	# what the server has to have said — severity included. Only this file's lines are
+	# compared, because a program is linted whole and the server publishes per document.
+	# This is the assertion that keeps the two families from swapping severity — a server
+	# that painted a lint finding red would still agree about every count.
 	"$ZERG" lint "$src" >"$tmp/lint" 2>/dev/null || true
 	if ! "$PY" - "$src" "$tmp/lint" "$got" <<'PYEOF'
 import json, sys, re
@@ -195,13 +205,13 @@ for line in open(lintfile, encoding="utf-8"):
     m = re.match(r"^(.*?):(\d+):(\d+): (.*)$", line.rstrip("\n"))
     if m and m.group(1) == src:
         want.append(m.group(4))
-if sorted(got["infos"]) != sorted(want):
-    print("  server: %s" % sorted(got["infos"]))
+if sorted(got["lints"]) != sorted(want):
+    print("  server: %s" % sorted(got["lints"]))
     print("  lint:   %s" % sorted(want))
     sys.exit(1)
 PYEOF
 	then
-		echo "DISAGREE  $src — the server's information findings are not what zerg lint reports"
+		echo "DISAGREE  $src — the server's lint findings are not what zerg lint reports"
 		fail=$((fail + 1))
 	fi
 

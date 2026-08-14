@@ -41,14 +41,18 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
   都會被指名拒絕。見 **[Specs & Generics](specs.zh-TW.md)**。
 - **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。它不回傳東西,
   參數可以是一個 **`testing.Context`**（以型別辨識）、它需要的 **fixture**（以名字比對）,或是完全不帶參數;其中的
-  斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。放在
-  `*_test.zg` **之外**的 `#[test]` 是合法的,而且會**被打包出去**——它和其他函式一樣被編進 binary,卻沒有任何東西
-  呼叫它——所以 `zerg lint` 會對它發出警告（**L601**,見 [fmt 與 lint](../tooling/fmt.zh-TW.md)）。
-- **`#[fixture]`** — 掛在 `*_test.zg` 裡的 `fn`。把該函式標記為 `zerg test` 會**為指名它的測試建置**的東西。它把
-  自己的測試當作 **continuation** 收下:一個型別為 `fn (T)` 的參數,以型別辨識,它同時是那些測試執行的所在,也是這個
-  fixture **產出什麼**的宣告。其餘每個參數都**指名另一個 fixture**。teardown 就是 `defer`,runner 不為它多提供
-  任何東西。同一條 **L601** 也適用——`*_test.zg` 之外的 `#[fixture]` 和 `#[test]` 一樣會被打包出去。見
-  [模組、套件與程式](../runtime/package.zh-TW.md)。
+  斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。它可以寫在
+  **任何地方**,而 `zerg test` 會**在它被寫下的地方找到它**——一個目錄裡唯一的 `#[test]` 就算寫在普通的模組檔裡,
+  那個目錄仍然是一個 test package。寫在 `*_test.zg` **之外**是合法的,而且會**被打包出去**:它和其他函式一樣被編進
+  binary,而**程式**裡沒有任何東西呼叫它,所以 `zerg lint` 會對它發出警告（**L601**,見
+  [fmt 與 lint](../tooling/fmt.zh-TW.md)）。兩者都要,不是二選一——linter 說測試該住在哪裡,runner 執行寫下來的
+  東西。
+- **`#[fixture]`** — 掛在 `fn`,而它該住在 `*_test.zg` 裡。把該函式標記為 `zerg test` 會**為指名它的測試建置**的
+  東西。它把自己的測試當作 **continuation** 收下:一個型別為 `fn (T)` 的參數,以型別辨識,它同時是那些測試執行的
+  所在,也是這個 fixture **產出什麼**的宣告。其餘每個參數都**指名另一個 fixture**。teardown 就是 `defer`,runner
+  不為它多提供任何東西。它和 `#[test]` 一樣,**寫在哪裡就在哪裡被讀到**——寫在普通模組檔裡、和一個測試相鄰的
+  fixture 會服務那個測試,而不是對它悄悄不存在——同一條 **L601** 也適用,因為 `*_test.zg` 之外的 `#[fixture]` 和
+  `#[test]` 一樣會被打包出去。見 [模組、套件與程式](../runtime/package.zh-TW.md)。
 - **`#[allow(Lxxx, …)]`** — 掛在任何 **statement**,宣告也在內。壓下該 statement 上所列的 **lint** finding;若該
   statement 帶一個區塊,區塊也在涵蓋範圍內:範圍就是它所領的 statement 的大小,這是**一條**規則,而不是在「一行」與
   「一個 scope」之間二選一。它不會延伸到下一個 statement,也到不了另一個檔案——刻意**沒有檔案層級的範圍**。

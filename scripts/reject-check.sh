@@ -1759,6 +1759,82 @@ fn main() {
 }
 EOF
 
+reject byte-of-a-uint E395 '`uint` -> `byte`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{int(byte(u))}")
+}
+EOF
+
+reject rune-of-a-uint E395 '`uint` -> `rune`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{int(rune(u))}")
+}
+EOF
+
+reject float-of-a-uint E395 '`uint` -> `float`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{float(u)}")
+}
+EOF
+
+reject byte-of-a-rune E395 '`rune` -> `byte`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{int(byte(r))}")
+}
+EOF
+
+reject uint-of-a-rune E395 '`rune` -> `uint`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{int(uint(r))}")
+}
+EOF
+
+reject float-of-a-rune E395 '`rune` -> `float`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{float(r)}")
+}
+EOF
+
+# THE SOURCE IS A BINDING and not a literal, which is the same rule reached down the other
+# path. A written `1.9` is a literal tree, and the folding rule types it from the position it
+# stands in before this rule ever looks; a `float` binding arrives already typed. The four
+# cases above are all literals, so the whole of E394 rested on one of its two approaches —
+# and the half nobody wrote a case for is the half a change to constant folding moves.
+
+reject int-of-a-float-binding E394 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 1.9
+	print(f"{int(f)}")
+}
+EOF
+
+reject byte-of-a-float-binding E394 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 3.5
+	print(f"{int(byte(f))}")
+}
+EOF
+
+reject uint-of-a-float-binding E394 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 3.5
+	print(f"{int(uint(f))}")
+}
+EOF
+
+reject rune-of-a-float-binding E394 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 65.5
+	print(f"{int(rune(f))}")
+}
+EOF
+
 # A COMPILER PRIMITIVE IS NOT A NAME A PROGRAM INVENTS. The `__zrt_…` set is closed — it is the
 # standard library's way down to the runtime — and the emitter used to lower ANY name spelled with
 # two leading underscores by stripping them, so a typo reached cc as a call to a symbol nothing

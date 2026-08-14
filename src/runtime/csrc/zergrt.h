@@ -803,6 +803,32 @@ zrt_list zrt_listdir(const char *path);
  * abort-message output; the stream primitives below are the io module's leaves. */
 void zrt_report(const char *msg);
 
+/* --- stack-overflow naming (sys.c) -----------------------------------------------
+ *
+ * A stack overflow is the one abort that cannot go through zrt_abort: by the time it
+ * is observable the faulting stack is exhausted, so nothing on it can run — no unwind,
+ * no `defer`s (docs/conformance.md keeps that half of the deviation). What these give
+ * the fault is its NAME and its STATUS: a SIGSEGV/SIGBUS handler on a sigaltstack
+ * decides overflow-or-not from the fault address, writes
+ * `StackOverflowError: stack overflow` to stderr with write(2) only, and _exit(1)s —
+ * the same message-then-status-1 shape every other abort has. A fault that is NOT a
+ * stack overflow is re-raised undisguised. */
+
+/* zrt_fault_init installs the fault handler (process-wide), gives the calling thread
+ * its sigaltstack, and records the calling thread's native stack bounds as main's.
+ * Every program-entry shim calls it, on the real main thread, before user code. */
+void zrt_fault_init(void);
+
+/* zrt_fault_thread_init gives one more OS thread its sigaltstack (the handler itself
+ * is already process-wide). Each scheduler worker calls it as it starts. */
+void zrt_fault_thread_init(void);
+
+/* zrt_fault_stack_set names the stack the calling thread is about to run user code
+ * on: base is a coroutine stack mapping whose first guard_len bytes are its PROT_NONE
+ * guard page, or NULL when the thread is back on its own native stack. The scheduler
+ * brackets every switch into a coroutine with the pair. */
+void zrt_fault_stack_set(void *base, size_t guard_len);
+
 /* --- io streams (sys.c, Phase 1f) ---------------------------------------------
  *
  * The minimal byte-level standard-stream surface the stdlib `io` module lowers

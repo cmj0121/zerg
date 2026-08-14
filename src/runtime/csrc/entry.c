@@ -11,6 +11,7 @@
 
 int zrt_run(zrt_main_fn fn) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		zrt_result_nil r = fn();
@@ -29,6 +30,7 @@ int zrt_run(zrt_main_fn fn) {
  * unwind that already ran cleanups down to frame.mark has freed it too. */
 int zrt_run_args(zrt_main_args_fn fn, zrt_list args) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		zrt_result_nil r = fn(args);
@@ -56,6 +58,7 @@ int zrt_run_args(zrt_main_args_fn fn, zrt_list args) {
  * concurrent, and by nothing else. */
 int zrt_main_run_nil(void (*fn)(void)) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		fn();
@@ -71,6 +74,7 @@ int zrt_main_run_nil(void (*fn)(void)) {
  * which is the status that path already had. */
 int zrt_main_run_int(int64_t (*fn)(void)) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		int64_t rc = fn();
@@ -86,6 +90,7 @@ int zrt_main_run_int(int64_t (*fn)(void)) {
  * the list as its own parameter, so the unwind frees it on either path. */
 int zrt_main_run_args(void (*fn)(zrt_list), zrt_list args) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		fn(args);
@@ -103,6 +108,7 @@ int zrt_main_run_args(void (*fn)(zrt_list), zrt_list args) {
  * the shape; it was simply the corner neither of them had a spelling for. */
 int zrt_main_run_args_int(int64_t (*fn)(zrt_list), zrt_list args) {
 	zrt_frame frame;
+	zrt_fault_init(); /* a stack overflow from here on dies with its name */
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		int64_t rc = fn(args);

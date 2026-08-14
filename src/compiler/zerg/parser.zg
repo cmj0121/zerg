@@ -2290,6 +2290,38 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[allow(L…)]` IS THE ONE DECORATOR THIS COMPILER READS AND NEVER USES. It names lint
+	# codes to suppress over the statement it leads, and what a code MEANS is the linter's to
+	# know — so the whole of the parser's job is to accept the name and attribute no meaning to
+	# it. A copy of the L-code catalogue here would be a second place a language fact is
+	# written down, and the copy that goes stale is always the one no tool reads.
+	#
+	# NOTHING GOES ON `pending`, which is the other half of the arrangement: the list is what
+	# tells the arms below which DECLARATION a decorator is about, and this one is about none.
+	# An empty list after it is therefore exactly true, and it is what lets `#[allow(…)]` lead
+	# a statement while `#[derive(…)]` may not.
+	if name == "allow" {
+		at := cur(p)
+		p_advance(p)
+
+		# `#[allow]` and `#[allow()]` SUPPRESS NOTHING while reading as though they suppressed
+		# something — E497's argument one decorator over, and the same answer.
+		mut named := 0
+		if p_at(p, Kind.LParen) {
+			p_advance(p)
+			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+				if p_at(p, Kind.Ident) {
+					named = named + 1
+				}
+				p_advance(p)
+			}
+			expect(p, Kind.RParen)
+		}
+
+		raise p_diag_at(p, at.line, at.col, "E614", "an `#[allow]` names the lint codes it suppresses — GRAMMAR#deco-item takes the arguments, and an allow with none suppresses nothing while reading as though it did") if named == 0
+		return
+	}
+
 	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
 	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
 	# module-private — so a reader who writes it has not made a typo, and telling them the
@@ -2300,7 +2332,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 
 	raise p_diag_at(p, nt.line, nt.col, "E496", f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
-	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no other") if name != "derive"
+	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`, and no other") if name != "derive"
 
 	p_advance(p)
 

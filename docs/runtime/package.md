@@ -387,6 +387,13 @@ privacy. That decides where a test lives:
   surface, and a separate package that depends on this one sees exactly the package-public surface — a
   true external view.
 
+White-box placement needs the module to have the directory **to itself**, because a test build compiles a
+directory as one unit. Where one directory holds several independent modules — `src/stdlib` is sixteen of
+them, one per file — a test file beside the module it tests makes every _other_ module of that directory a
+source of the same unit, and the build stops on whatever those neighbours cannot agree on rather than on
+anything the test asserts. Such a module is tested black-box, from a package of its own; the standard
+library's own suites are under `tests/stdlib/<module>/` for exactly that reason.
+
 Test files are recognized **by the build tool's convention** (e.g. a `*_test.zg` name) and included
 only in a test build, never in a normal one. So a test's declarations never reach the shipped artifact
 or a package's public surface — even a `pub` declaration in a test file in the root module stays out of
@@ -423,6 +430,12 @@ does.
 > test, selecting tests by pattern, **fixtures** — setup and teardown — benchmarks, and running
 > two tests at once. A failing `testing.assert*` `raise`s, and a raise is control flow, so it
 > unwinds out of the test body on its own.
+>
+> Nor is any of it on the **assertion** side: a failed `assert_eq` says the values differ and not
+> what they were, there is no assertion that a call **raised** — a suite that wants one writes a
+> generic helper over `guard`'s `Result[T]` itself — and `assert_eq` cannot take a `list[T]`,
+> which implements no `Eq` (`E412`), so a function answering a list is asserted through
+> something that reduces it to a scalar.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

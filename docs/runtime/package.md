@@ -422,9 +422,11 @@ does.
 > channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,
 > `ctx.log(msg)` (shown only if the test fails), `ctx.skip(reason)` and `ctx.fatal(msg)`. The
 > last two `raise` to unwind and leave the reason on the context, so nothing has to read a
-> message string to tell a skip from a failure. Assertions stay **free functions**
-> (`testing.assert_eq`) because a generic **method** is `E409 NotImplemented` while a generic
-> free function is not.
+> message string to tell a skip from a failure. It also carries the `str` / `int` / `bool`
+> builders that accumulate **failure context**, and `ctx.assert(cond, msg)` as their terminal.
+> The **generic** assertions stay free functions (`testing.assert_eq`, `assert_ne`,
+> `assert_raises`) because a generic **method** is `E409 NotImplemented` while a generic free
+> function is not.
 >
 > **Fixtures.** A test **declares what it needs**, the framework builds it once, hands it over and
 > tears it down. A `#[fixture]` is a function that takes its tests as a **continuation**:
@@ -516,11 +518,13 @@ does.
 > `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
 > its own.
 >
-> Nor is any of it on the **assertion** side: a failed `assert_eq` says the values differ and not
-> what they were, there is no assertion that a call **raised** — a suite that wants one writes a
-> generic helper over `guard`'s `Result[T]` itself — and `assert_eq` cannot take a `list[T]`,
-> which implements no `Eq` (`E412`), so a function answering a list is asserted through
-> something that reduces it to a scalar.
+> The **assertion** side has since been filled in and is documented with the module
+> ([Standard Library](stdlib.md#testing)): a failed `assert_eq` names both values, `assert` takes a
+> message, `assert_raises` answers the `Err` a `guard`ed call raised, and a `Context` chain carries
+> named values into an assertion that is its terminal. What is still not there is a **method** form of
+> the generic assertions — `ctx.str("file", p).assert_eq(got, want)` is `E409`, a generic method — and
+> `assert_eq` still cannot take a `list[T]`, which implements no `Eq` (`E412`), so a function answering
+> a list is asserted through something that reduces it to a scalar.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

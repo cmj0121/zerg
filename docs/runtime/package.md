@@ -410,8 +410,7 @@ does.
 > each — its sources, its test files and a generated driver, so a white-box test reaches the
 > module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
 > `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
-> from passes and failures, and exiting non-zero if any did not hold. A run that finds nothing
-> says so.
+> from passes and failures, and exiting non-zero if any did not hold.
 >
 > **A package is the module the test file names**, resolved most specific first: `strings_test.zg`
 > beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if
@@ -425,10 +424,18 @@ does.
 > would be for the directory itself. A build of the test file **alone** is a build of nothing, so
 > the file selects a package rather than a file list; `--only` is the tool for one test.
 >
+> **The exit status distinguishes a search that found nothing.** `0` every test that ran passed or
+> skipped, `1` a test failed or timed out, `2` the command could not be carried out (no such path,
+> a `--only` that matched nothing, a fixture parameter that resolves to nothing), and `3` the
+> search ran and there was no test in what it searched. `3` is not folded into `2` because the
+> reader's next move differs: a `2` is fixed by editing the command line and a `3` by looking at
+> the tree. A run that found nothing says so on stderr as well, but a sentence alone leaves a CI
+> line green forever, and the reader of a CI line is a shell.
+>
 > **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
 > test, a stem selects the family. It is applied before anything is generated, so a test it did not
 > select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
-> rather than reporting a green run of nothing.
+> rather than reporting a green run of nothing: the command named a test that is not there.
 >
 > **`--timeout <seconds>`** is how long one test may take before the run stops waiting on it;
 > the default is `60`. A test that goes over is reported `STUCK` and counted apart, and the run

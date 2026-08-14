@@ -967,6 +967,16 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # indistinguishable from a run where everything passed, which is the one failure a test runner
 # must not have — every gate in this repository is written against it.
 fn run_tests(root: str) -> int {
+	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
+	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
+	# because its other caller is probing a search path — so `zerg test tset/` would report "no
+	# tests", exit 0, and leave a typo looking exactly like a package nobody has written tests
+	# for. The two are told apart HERE, where the path is the one the user typed.
+	if not __zrt_exists(root) {
+		io.ewrite(f"zerg: no such path `{root}`\n")
+		return 2
+	}
+
 	mut pkgs: list[str] = []
 	test_pkgs(root, pkgs)
 

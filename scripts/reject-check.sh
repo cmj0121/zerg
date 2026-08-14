@@ -1075,7 +1075,7 @@ EOF
 # THE REWRITE DOES NOT EXIST — which is the whole test a decorator has to pass here. A method
 # taking `This` would have to match the other argument too, and nothing says the two arms
 # agree; a variant with no payload has nothing to delegate to.
-reject derive-delegation-with-a-self-parameter E278 no-place <<'EOF'
+reject derive-delegation-with-a-self-parameter E278 <<'EOF'
 spec Show {
 	fn show() -> str
 	fn same(o: This) -> bool
@@ -1105,7 +1105,7 @@ fn main() {
 }
 EOF
 
-reject derive-delegation-over-a-bare-variant E279 no-place <<'EOF'
+reject derive-delegation-over-a-bare-variant E279 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1133,7 +1133,7 @@ EOF
 
 # and the OTHER half of derive is unchanged: on a struct the generated code is read out of
 # the type's STRUCTURE, which only compiler-owned code may do.
-reject derive-a-user-spec-on-a-struct E437 no-place <<'EOF'
+reject derive-a-user-spec-on-a-struct E437 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1152,7 +1152,7 @@ EOF
 # `mut fn` would write through a COPY, so the write reaches nothing anybody can read; a
 # method taking `This` needs the type an object has forgotten, which is what the enum
 # delegation is for; and a `spec` is the only thing with methods to hold as values.
-reject obj-on-a-mut-method E281 no-place <<'EOF'
+reject obj-on-a-mut-method E281 <<'EOF'
 #[obj]
 spec Draw {
 	mut fn bump()
@@ -1163,7 +1163,7 @@ fn main() {
 }
 EOF
 
-reject obj-with-a-self-parameter E282 no-place <<'EOF'
+reject obj-with-a-self-parameter E282 <<'EOF'
 #[obj]
 spec Draw {
 	fn same(o: This) -> bool
@@ -1174,7 +1174,7 @@ fn main() {
 }
 EOF
 
-reject obj-on-something-that-is-not-a-spec E280 no-place <<'EOF'
+reject obj-on-something-that-is-not-a-spec E280 <<'EOF'
 #[obj]
 struct P {
 	pub x: int
@@ -1186,7 +1186,7 @@ fn main() {
 EOF
 
 # and its mirror: a `spec` has no structure for a derive to read.
-reject derive-on-a-spec E283 no-place seed-gap <<'EOF'
+reject derive-on-a-spec E283 seed-gap <<'EOF'
 #[derive(Eq)]
 spec Draw {
 	fn draw() -> str
@@ -2928,7 +2928,7 @@ fn main() {
 }
 EOF
 
-reject convert-a-list-to-an-int E455 no-place <<'EOF'
+reject convert-a-list-to-an-int E455 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print(f"{int(xs)}")
@@ -2946,7 +2946,7 @@ EOF
 # No emitted byte moved. A valid program never converts a struct, so the differential that
 # accepted that refactor could not have seen it: what a compiler REFUSES is not visible in
 # what it emits.
-reject convert-a-struct-to-an-int E455 no-place <<'EOF'
+reject convert-a-struct-to-an-int E455 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -3335,7 +3335,7 @@ fn main() {
 }
 EOF
 
-reject a-type-declares-a-method-twice E451 no-place <<'EOF'
+reject a-type-declares-a-method-twice E451 <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -3399,7 +3399,12 @@ EOF
 # constant walk, and a second check had a second extent — it knew about functions and not
 # about types, so `const A := 1` beside `struct A` went straight to cc.
 
-reject a-struct-declared-twice E382 no-place <<'EOF'
+# The construction below reports E370 as well, because this rule RECORDS now rather than
+# ending the run: `A(7)` is read against the second declaration, whose `w` it leaves unset.
+# The follow-on is deliberate and c_dup_say's comment says why, so this case does not pin a
+# count — a later change that suppressed it would be a decision, and one this file should be
+# made to state rather than absorb.
+reject a-struct-declared-twice E382 <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3413,7 +3418,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-declared-twice E382 no-place seed-gap <<'EOF'
+reject an-enum-declared-twice E382 seed-gap <<'EOF'
 enum E {
 	X
 }
@@ -3603,7 +3608,7 @@ EOF
 # discriminant, so it was unreachable, and a `match` naming the first was "exhaustive" over
 # an enum that had two.
 
-reject a-field-declared-twice E453 'declares a field named `v` twice' no-place seed-gap <<'EOF'
+reject a-field-declared-twice E453 'declares a field named `v` twice' seed-gap <<'EOF'
 struct A {
 	pub v: int
 	pub v: str
@@ -3614,7 +3619,7 @@ fn main() {
 }
 EOF
 
-reject a-variant-declared-twice E453 'declares a variant named `X` twice' no-place seed-gap <<'EOF'
+reject a-variant-declared-twice E453 'declares a variant named `X` twice' seed-gap <<'EOF'
 enum E {
 	X
 	X
@@ -4531,7 +4536,7 @@ EOF
 # cycle (`A` holding `B` holding `A`) and one through a carrier (`p: P?`), and skipped the
 # simplest case of all — a field of the struct's own type — so the copy helper recursed until
 # the stack ran out. A compiler that dies says nothing at all, about anything.
-reject struct-holding-itself-by-value E452 no-place <<'EOF'
+reject struct-holding-itself-by-value E452 <<'EOF'
 struct P {
 	pub p: P
 }
@@ -5611,7 +5616,7 @@ EOF
 # the arms DO and not for how the first letter is typed. The rule that used to stand here
 # read the capital instead, so `n := 3; match n { 1 => …  Zzz => … }` was refused with
 # "`Zzz` is a variant of some enum" in a program that declared no enum at all.
-reject a-bare-name-pattern-covers-the-arms-below E458 no-place <<'EOF'
+reject a-bare-name-pattern-covers-the-arms-below E458 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -6380,6 +6385,512 @@ EOF
 reject an-f-string-hole-holding-two-expressions E609 <<'EOF'
 fn main() {
 	print f"{1 2}"
+}
+EOF
+
+
+# --- the emitter's own rules, one case per code -------------------------------------------
+#
+# Every refusal emit.zg makes reports through c_diag now, which takes the code as an argument
+# and reads the place off the walk, so each of these asserts the rule's IDENTITY rather than
+# its wording. Half of them had no code at all before that change and were pinned, where they
+# were pinned at all, by a sentence.
+
+reject a-bare-value-that-is-neither-side-of-an-either E701 <<'EOF'
+fn g(r: Either[int, str]) -> int {
+	return 1
+}
+
+fn main() {
+	print g(true)
+}
+EOF
+
+reject an-optional-chain-reading-a-field-that-is-not-there E702 <<'EOF'
+struct P {
+	pub v: int
+}
+
+fn main() {
+	p: P? = P(1)
+	print p?.zz
+}
+EOF
+
+reject unwrap-a-value-that-carries-nothing E703 <<'EOF'
+fn f() -> int? {
+	x := 1
+	return x?
+}
+
+fn main() {
+	print f() ?? 0
+}
+EOF
+
+reject propagate-a-right-the-enclosing-function-does-not-answer E704 <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn f() -> Result[int] {
+	v := g()?
+	return Left(v)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject two-modules-defining-one-public-function E705 seed-gap <<'EOF'
+import (
+	"ma"
+	"mb"
+)
+
+fn main() {
+	print ma.work() + mb.work()
+}
+--- ma/ma.zg
+pub fn work() -> int {
+	return 1
+}
+--- mb/mb.zg
+pub fn work() -> int {
+	return 2
+}
+EOF
+
+# ONE module declaring a name twice, in two files. Two DIFFERENT modules each declaring a
+# private one is legal — they take a module tag in C — so what this pins is the collision
+# no tag can separate.
+reject one-module-declaring-a-function-twice E706 <<'EOF'
+import "one"
+
+fn main() {
+	print one.first()
+}
+--- one/a.zg
+fn work() -> int {
+	return 1
+}
+
+pub fn first() -> int {
+	return work()
+}
+--- one/b.zg
+fn work() -> int {
+	return 2
+}
+EOF
+
+reject a-parameter-typed-by-a-name-no-declaration-carries E707 <<'EOF'
+fn f(x: Zork) -> int {
+	return 1
+}
+
+fn main() {
+	print f(1)
+}
+EOF
+
+reject force-a-value-that-carries-nothing E708 <<'EOF'
+fn main() {
+	x := 1
+	print x!
+}
+EOF
+
+reject coalesce-a-value-that-carries-nothing E709 <<'EOF'
+fn main() {
+	x := 1
+	print x ?? 2
+}
+EOF
+
+reject an-is-test-on-something-that-is-not-an-err E710 <<'EOF'
+fn main() {
+	x := 1
+	b := x is IOError
+	print b
+}
+EOF
+
+reject an-in-test-on-something-that-is-not-an-err E711 <<'EOF'
+fn main() {
+	x := 1
+	b := x in IOError
+	print b
+}
+EOF
+
+reject convert-a-list-into-a-list E712 <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print list[byte](xs).len()
+}
+EOF
+
+reject bridge-a-str-to-a-list-of-something-that-is-not-a-byte E713 <<'EOF'
+fn main() {
+	s := "ab"
+	print list[int](s).len()
+}
+EOF
+
+reject render-an-enum-as-text E714 <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.Red
+	print str(c)
+}
+EOF
+
+reject index-something-that-is-neither-a-list-nor-a-map E715 <<'EOF'
+fn main() {
+	x := 1
+	print x[0]
+}
+EOF
+
+reject an-err-method-given-an-argument E716 <<'EOF'
+fn main() {
+	r := guard {
+		raise "boom"
+	}
+	match r {
+		Right(e) => { print e.message(1) }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject a-method-the-error-interface-does-not-declare E717 <<'EOF'
+fn main() {
+	r := guard {
+		raise "boom"
+	}
+	match r {
+		Right(e) => { print e.reason() }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject ok-or-with-no-error-to-answer-with E718 <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	r := g().ok_or()
+	print 1
+}
+EOF
+
+reject ok-or-with-two-errors-to-answer-with E719 <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	r := g().ok_or(IOError("a"), IOError("b"))
+	print 1
+}
+EOF
+
+reject ok-or-answering-an-absence-with-something-that-is-not-an-err E720 <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	r := g().ok_or(1)
+	print 1
+}
+EOF
+
+reject ok-given-an-argument E721 <<'EOF'
+fn g() -> Result[int] {
+	return Left(1)
+}
+
+fn main() {
+	r := g().ok(1)
+	print 1
+}
+EOF
+
+reject a-carrier-method-neither-carrier-answers E722 <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	print g().unwrap_or(1)
+}
+EOF
+
+reject an-enum-type-method-that-is-not-of E723 <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.pick(1)
+	print 1
+}
+EOF
+
+reject reverse-a-discriminant-with-two-arguments E724 <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.of(1, 2)
+	print 1
+}
+EOF
+
+reject a-method-on-a-value-whose-type-declares-none E725 <<'EOF'
+fn main() {
+	x := 1
+	print x.wobble()
+}
+EOF
+
+reject construct-the-end-of-stream-sentinel E726 <<'EOF'
+fn main() {
+	e := StopIteration("x")
+	print 1
+}
+EOF
+
+reject construct-a-name-no-declaration-carries E727 <<'EOF'
+fn main() {
+	print Zork(1)
+}
+EOF
+
+reject a-constructor-pattern-naming-no-variant-of-the-subject E728 <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Color.Red
+	match c {
+		Nope(v) => { print 1 }
+		_ => { print 2 }
+	}
+}
+EOF
+
+reject a-match-over-an-either-naming-one-side E729 <<'EOF'
+fn g() -> Result[int] {
+	return Left(1)
+}
+
+fn main() {
+	match g() {
+		Left(v) => { print v }
+	}
+}
+EOF
+
+reject a-match-over-a-bool-naming-one-value E730 <<'EOF'
+fn main() {
+	b := true
+	match b {
+		true => { print 1 }
+	}
+}
+EOF
+
+reject a-constructor-pattern-on-an-either-that-is-neither-side E731 <<'EOF'
+fn g() -> Result[int] {
+	return Left(1)
+}
+
+fn main() {
+	match g() {
+		Nope(v) => { print 1 }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject two-constants-that-name-each-other E732 <<'EOF'
+const A := B + 1
+const B := A + 1
+
+fn main() {
+	print A
+}
+EOF
+
+reject an-entry-answering-something-that-is-neither-int-nor-result E733 <<'EOF'
+fn main() -> str {
+	return "a"
+}
+EOF
+
+reject main-with-args-in-a-program-that-uses-concurrency E734 <<'EOF'
+fn main(args: list[str]) {
+	ch := chan[int](1)
+	ch <- 1
+	print <-ch ?? 0
+}
+EOF
+
+reject a-closure-capturing-a-name-with-no-type E735 <<'EOF'
+fn main() {
+	f := fn () -> int {
+		return zz
+	}
+	print f()
+}
+EOF
+
+reject spawn-of-something-that-is-not-a-call E736 <<'EOF'
+fn main() {
+	x := 1
+	spawn x
+}
+EOF
+
+reject spawn-of-a-method-the-receiver-does-not-declare E737 <<'EOF'
+struct P {
+	pub v: int
+}
+
+fn main() {
+	p := P(1)
+	spawn p.nope()
+}
+EOF
+
+reject map-len-given-an-argument E738 <<'EOF'
+fn main() {
+	m := {1: 2}
+	print m.len(1)
+}
+EOF
+
+reject map-has-given-no-key E739 <<'EOF'
+fn main() {
+	m := {1: 2}
+	print m.has()
+}
+EOF
+
+reject a-map-method-this-compiler-does-not-have E740 <<'EOF'
+fn main() {
+	m := {1: 2}
+	print m.drop(1)
+}
+EOF
+
+reject a-field-an-err-does-not-carry E741 <<'EOF'
+fn main() {
+	r := guard {
+		raise "boom"
+	}
+	match r {
+		Right(e) => { print e.reason }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject a-list-method-this-compiler-does-not-have E444 <<'EOF'
+fn main() {
+	xs := [1, 2]
+	xs.pop()
+	print xs.len()
+}
+EOF
+
+
+# --- the shapes a declaration's TYPE is written in -----------------------------------------
+#
+# Each of the four rules below already had a case, and every one of them stood in a position
+# whose place the emitter reads from a FnDecl: a parameter, a result, an impl receiver. The
+# two positions with no function behind them — a struct field and an enum payload — reported
+# at `--> 0:0`, and no case here was in a shape that could see it. The rule is one rule; the
+# case list is what decides which of its positions is exercised.
+
+reject a-generic-whose-written-type-arguments-outnumber-its-parameters E742 seed-gap <<'EOF'
+fn set[T](a: T) -> int {
+	return 1
+}
+
+fn main() {
+	print set[int, str](1)
+}
+EOF
+
+reject an-inclusive-range-arm-whose-upper-bound-is-nil E743 seed-gap <<'EOF'
+fn main() {
+	x := 3
+	match x {
+		1..=nil => { print 1 }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject a-struct-field-typed-by-a-name-no-declaration-carries E707 '(field `A.v`)' <<'EOF'
+struct A {
+	pub v: Zork
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject an-enum-payload-typed-by-a-name-no-declaration-carries E707 '(payload 0 of `E.A`)' <<'EOF'
+enum E {
+	A(Zork)
+	B
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-spec-used-as-a-struct-field-type E416 '(field `A.v`)' seed-gap <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+struct A {
+	pub v: Tag
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject the-self-type-as-a-struct-field E364 'field `A.v` is outside an `impl`' <<'EOF'
+struct A {
+	pub v: This
+}
+
+fn main() {
+	print 1
 }
 EOF
 

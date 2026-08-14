@@ -109,11 +109,13 @@ pub fn contains(s: str, sub: str) -> bool {
 # strings.join(strings.split("a,b,c", ","), "|")
 # strings.join(strings.split("a,,b", ","), "|")
 # strings.split("a,b,c", ",").len()
+# guard { strings.split("a,b", "").len() } ?? -1
 # ```
 # ```output
 # a|b|c
 # a||b
 # 3
+# -1
 # ```
 pub fn split(s: str, sep: str) -> list[str] {
 	hay := bytearray(s)
@@ -534,12 +536,14 @@ pub fn equal_fold(a: str, b: str) -> bool {
 # strings.pad_end("ab", 5, ".")
 # strings.pad_start("日", 5, "-")
 # strings.pad_start("hello", 3, "-")
+# guard { strings.pad_start("x", 4, "ab") } ?? "refused"
 # ```
 # ```output
 # 007
 # ab...
 # --日
 # hello
+# refused
 # ```
 pub fn pad_start(s: str, width: int, fill: str) -> str {
 	n := pad_count(s, width, fill)

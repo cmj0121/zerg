@@ -2747,7 +2747,7 @@ fn main() {
 }
 EOF
 
-reject qualify-with-the-wrong-enum E457 no-place <<'EOF'
+reject qualify-with-the-wrong-enum E457 <<'EOF'
 enum Color {
 	Red
 }
@@ -2762,13 +2762,35 @@ fn main() {
 }
 EOF
 
-reject qualify-a-name-that-is-not-a-variant E456 no-place <<'EOF'
+reject qualify-a-name-that-is-not-a-variant E456 <<'EOF'
 enum Color {
 	Red
 }
 
 fn main() {
 	c := Color.Purple
+	print(f"{int(c)}")
+}
+EOF
+
+# AND THE SENTENCE HAS TO BE TRUE ABOUT THE PROGRAM. E457 used to read the FLAT variant
+# table — which enum declares this bare name, program-wide, first — so with two enums that
+# both declare a `Red` it said "`Red` is a variant of `Color`, not of `Fruit`" about a `Fruit`
+# that has one, and the second enum's variant was unreachable. The shared name is in this case
+# on purpose: it is what the rule used to answer from, and the finding is about `Apple`.
+reject qualify-with-the-wrong-enum-of-two-that-share-a-name E457 '`Apple` is a variant of `Fruit`, not of `Color`' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+enum Fruit {
+	Red
+	Apple
+}
+
+fn main() {
+	c := Color.Apple
 	print(f"{int(c)}")
 }
 EOF

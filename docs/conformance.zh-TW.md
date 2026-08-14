@@ -181,8 +181,14 @@ module 的用途。
 一個內建錯誤的訊息形式為 `Kind: text`（例如 `IndexError: list index out of range`）。確切的 `text` 非 normative；
 taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
-> **[deviation]** runtime 無法攔截的硬體 fault——今天是 coroutine stack 溢出越過其 guard page，或 `main` 未受保護
-> 的原生 stack——會以 signal 終止行程、不執行 `defer`，而非乾淨的 `StackOverflowError` abort。見 [Errors](code/errors.zh-TW.md)。
+> **[deviation]** stack 溢位——coroutine 越過其 guard page，或 `main` 越過其原生 stack——如今會帶著名字死去：
+> runtime 的 fault handler 將 `StackOverflowError: stack overflow` 寫到標準錯誤、並以 exit 狀態 **1** 終止，
+> 即上述契約的第 1、3 步。仍偏離的是第 2 步：出錯的 stack 已耗盡、無法從 signal handler 展開，所以待決的
+> `defer` 被**跳過**、不執行；而且與一般 abort（coroutine 會把它包住）不同，溢位無論發生在哪裡都結束整個行程。
+> handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action（sanitizer 的 handler，或預設處置），
+> 因此它仍以其本來的 signal 死去、該 handler 的診斷完整保留。它真正宣稱的兩個窗口**各為一頁**——coroutine 的
+> guard page 恰好一頁，以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍：落在 `main`
+> 下方那一頁的存取會被讀成溢位。見 [Errors](code/errors.zh-TW.md)。
 
 ## 參考實作 emit 出來的 C
 
@@ -203,8 +209,8 @@ object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 obje
 
 - **Undefined behavior（UB）**——規格對結果不作任何要求。conforming 程式必須避免它；conforming implementation 則
   可做任何事，包含崩潰。Zerg 的設計目標是**從 safe code 無法觸及任何 UB**；凡 bootstrap 目前仍容許 UB 之處，該章
-  會標為 **[deviation]**（例如 coroutine 的 stack overflow 今天是一次硬體 fault、而非乾淨的
-  `StackOverflowError`——見 [Errors](code/errors.zh-TW.md)）。
+  會標為 **[deviation]**（例如 stack overflow 是一次硬體 fault，runtime 將其命名為 `StackOverflowError`
+  並以 exit 1 結束，而非一次會跑待決 `defer` 的乾淨 unwind——見 [Errors](code/errors.zh-TW.md)）。
 - **Implementation-defined**——結果是實作所記錄的一組選項之一，但規格不釘死。conforming 程式不應依賴特定選擇。
   目前的 implementation-defined 點（各於其章節詳述）包含：`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](code/coroutine.zh-TW.md)）；
   浮點渲染的精度與拼法（[Format](runtime/format.zh-TW.md)）；以及超出「送出→接收 happens-before」保證之外的任何 coroutine 排序

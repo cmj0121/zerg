@@ -130,9 +130,13 @@ coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 st
 unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack
 就夠——因此無界遞迴是一個確定的 `StackOverflowError`、絕不是無聲的卡死。
 
-> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;stack 溢位是一次無法回復的 `SIGSEGV` / stack-smash、會終止
-> 行程而**不跑** `defer`,而非乾淨的 `StackOverflowError` unwind（見 [Conformance](../conformance.zh-TW.md) 的
-> runtime-abort deviation）。意圖中的安全網成立;這個階段尚未建置。
+> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;溢位仍是 guard page 使它成為的那次硬體 fault。但這個
+> fault 如今帶著它的名字：runtime 的 signal handler 在 stderr 回報 `StackOverflowError: stack overflow`、
+> 行程以狀態 **1** 結束,與其他每個 abort 相同——今天程式能溢出的兩條 stack（coroutine 的 guard page 與
+> `main` 的原生 stack）皆然。但出錯的 stack 已耗盡、無法從 signal handler 展開,所以待決的 `defer` 被**跳過**、
+> 沒有 `guard` 能把它降級,`err is StackOverflowError` 也仍不可寫。它也是 coroutine **無法**包住的那一個 abort:
+> 一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程（見 [Conformance](../conformance.zh-TW.md)
+> 的 runtime-abort deviation）。意圖中的深度檢查安全網——一次會跑 `defer` 的乾淨 unwind——成立;這個階段尚未建置。
 
 一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
 pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有

@@ -156,10 +156,16 @@ runs `defer`s) the instant a call would exceed the stack, so runaway recursion *
 stack smash. Zerg does **not** optimize tail calls — `for` is the loop, so a bounded stack is enough —
 which makes an unbounded recursion a definite `StackOverflowError`, never a silent hang.
 
-> **[deviation]** The bootstrap does **not** yet own or depth-check the stack: a stack overflow is an
-> unrecoverable `SIGSEGV` / stack-smash that terminates the process **without** running `defer`s, not a
-> clean `StackOverflowError` unwind (see [Conformance](../conformance.md), the runtime-abort deviation). The
-> intended safety net stands; it is not built this phase.
+> **[deviation]** The bootstrap does **not** yet own or depth-check the stack; the overflow is still the
+> hardware fault the guard page turns it into. The fault now carries its name: the runtime's signal
+> handler reports `StackOverflowError: stack overflow` on stderr and the process exits with status **1**,
+> like every other abort — on both stacks a program can overflow today, a coroutine's guard page and
+> `main`'s native stack. But the faulting stack is exhausted and cannot be unwound from a signal handler,
+> so the pending `defer`s are **skipped**, no `guard` can demote it, and `err is StackOverflowError` stays
+> unwritable. It is also the one abort a coroutine does **not** contain: an ordinary abort with no handler
+> ends only that coroutine, while an overflow ends the process (see [Conformance](../conformance.md), the
+> runtime-abort deviation). The intended depth-checked safety net — a clean unwind that runs `defer`s —
+> stands; it is not built this phase.
 
 A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
 asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s

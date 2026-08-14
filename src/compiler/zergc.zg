@@ -112,6 +112,7 @@ fn fmt_cmd() -> cli.Command {
 fn lint_cmd() -> cli.Command {
 	return (
 		cli.command("lint", "report unused imports and dead private code")
+		.flag("s", "strict", "fail on a warning too, not only on a finding")
 		.add(cli.positional("file.zg", "the sources to check").required().repeated())
 		.run(do_lint)
 	)
@@ -203,7 +204,7 @@ fn do_desugar(c: cli.Ctx) -> int {
 }
 
 fn do_lint(c: cli.Ctx) -> int {
-	return run_lint(c.args())
+	return run_lint(c.args(), c.has("strict"))
 }
 
 # job_count reads -j, falling back to one job rather than none when it is not a number —
@@ -1967,24 +1968,37 @@ fn run_desugar_check(files: list[str], off: list[str]) -> int {
 # there is one, so `zerg lint` can gate a build rather than merely inform. It returns the
 # status rather than exiting on it because a sub-command's function is what decides the
 # process's exit, and it is the only thing that knows what the finding meant.
-fn run_lint(files: list[str]) -> int {
+#
+# THE SEVERITIES DECIDE THE STATUS, and there are two answers rather than one. A FINDING
+# fails, always: a rule fired on the program. A WARNING prints and does not, because what it
+# reports is legal — a `#[test]` that ships is a decision somebody may have made on purpose —
+# and `strict` is what turns those into failures for a caller that has decided otherwise.
+# `make lint`, over this project's own source, is that caller. INFO never fails anything.
+fn run_lint(files: list[str], strict: bool) -> int {
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
 
-	findings := zerg.lint_files(srcs)
-	for f in findings {
-		io.write(f + "\n")
+	mut bad := 0
+	mut warned := 0
+	for f in zerg.lint_program(srcs, paths) {
+		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
+		if f.sev == "" {
+			bad = bad + 1
+		} else if f.sev == "warning" {
+			warned = warned + 1
+		}
 	}
 
-	# THE L5xx FAMILY IS ASKED SEPARATELY, because it is the one that needs types: the
-	# lowering walk answers it and the C is thrown away. It carries a place, which the
-	# tree-only rules above do not, so it is printed like a diagnostic rather than like a
-	# bare sentence.
-	convs := zerg.lint_conversions(srcs, paths)
-	for d in convs {
-		io.write(f"{d.path}:{d.line}:{d.col}: {diag_code_prefix(d)}{d.msg}\n")
-	}
+	return 1 if bad > 0
+	return 1 if strict and warned > 0
 
-	return 1 if findings.len() + convs.len() > 0
 	return 0
+}
+
+# lint_sev is the adjective a finding's line opens with, and the empty string for the default
+# — see lint.zg's header for why only two of the three are named out loud.
+fn lint_sev(f: zerg.Finding) -> str {
+	return "" if f.sev == ""
+
+	return f"{f.sev}: "
 }

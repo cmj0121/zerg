@@ -11,7 +11,7 @@
 # A protocol that is debugged by reading a transcript wants that.
 import "strconv"
 
-enum JVal {
+pub enum JVal {
 	JNull
 	JBool(bool)
 	JInt(int)
@@ -20,7 +20,7 @@ enum JVal {
 	JObj(list[JField])
 }
 
-struct JField {
+pub struct JField {
 	pub key: str
 	pub val: JVal
 }

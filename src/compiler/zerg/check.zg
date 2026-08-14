@@ -194,6 +194,62 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
 
+# chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
+# third caller of the first because what it reads is a different table: a function's row
+# carries its module and its marker (sig_mod / sig_pub), and a type's carries them in the
+# type registry (tk_mod / tk_pub). Everything else is the same rule, and is deliberately
+# spelled the same way — `pub` is quiet, own module is quiet, an unknown module on either
+# side is quiet.
+#
+# The SEED IS THE ORACLE for this one. It has refused `lib.Secret` from outside since it was
+# written (`resolveTypeRef`, src/bootstrap/internal/sema/typeref.go) with the sentence this
+# borrows, and only the shipping compiler lost the rule on the way to self-hosting — the
+# fourth time that has happened. What is NOT borrowed is the seed's scope: it refuses only
+# the qualified spelling, because it never flattens a type into the importer's namespace at
+# all, so a BARE `Secret` there is an unknown type rather than a private one. This compiler
+# does flatten, so the bare spelling is exactly the hole and is what this covers.
+fn chk_ty_visible(mut &em: Emitter, nm: str) {
+	return if c_ty_pub(em, nm)
+
+	decl_mod := c_ty_mod(em, nm)
+	return if decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+
+	return if here == decl_mod
+	return if here == ""
+
+	chk_at(em, "E508", f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
+}
+
+# chk_ty_exported is the OTHER sentence, and it is not the same rule read backwards: "a
+# declaration can never be more visible than the types it names" (docs/runtime/package.md).
+# It fires on the DECLARATION, in the declaring module, where chk_ty_visible fires on a
+# reader outside it — so `pub fn make() -> Secret` beside a module-private `Secret` is a
+# finding even in a program no other module has yet been written for.
+#
+# WHY THE EXPORT AND NOT THE READ IS THE PRIMARY FINDING. Both are reported where both are
+# true, because they are two mistakes in two files and one message cannot point at two
+# places. But the export is the one with a fix available: the module that wrote `pub`
+# decided to hand the type out, and it is the only party that can mark the type `pub` or
+# stop returning it. A dependent reading `s.hidden` can do neither — telling it alone would
+# be reporting a mistake to the one person who cannot correct it. That is the same call
+# `E484` already makes about a `pub mut` global ("the finding lands on the DECLARATION and
+# not on either use").
+#
+# A TYPE PARAMETER never reaches here: the walk asks c_is_type_name first, and a bound name
+# is not a declared type.
+fn chk_ty_exported(mut &em: Emitter, nm: str, site: str, decl_pub: bool) {
+	return if not decl_pub
+	return if c_ty_pub(em, nm)
+
+	# a generated declaration names whatever the expansion put there, and its author wrote
+	# neither half — the same silence chk_visible keeps for one
+	return if c_ty_mod(em, nm) == ""
+
+	chk_at(em, "E509", f"`{nm}` is module-private, and {site} is on a `pub` declaration — a declaration can never be more visible than the types it names, so a dependent could not name this one")
+}
+
 # chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
 # is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
 # unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust
@@ -1623,7 +1679,7 @@ fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 # for a division by zero and for a fold that leaves i64 — neither is a value, and neither is
 # this function's to report: an expression that cannot be folded is simply not one that adopts,
 # and the position then says what it always said about a value of the wrong type.
-struct Folded {
+pub struct Folded {
 	pub ok: bool
 	pub value: int
 }
@@ -2015,6 +2071,14 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 		c_builtin_check(em, nm)
 		chk_at(em, "E334", f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
 		return
+	}
+
+	# and the annotation has to name a type THIS MODULE MAY WRITE. It is asked here, off the
+	# name the sentence above already resolved, rather than by a second walk of the type: an
+	# annotation is a value-position type name, which c_decl_sites does not list, and this is
+	# where the one that exists is already in hand.
+	if nm != "" {
+		chk_ty_visible(em, nm)
 	}
 
 	got := c_infer(em, ival)

@@ -19,7 +19,7 @@
 # the language says a function type is. It exists so a function can be held: bound to a
 # name, stored in a field, passed as an argument. Only a NAMED top-level function can be
 # held that way here; a closure literal captures, and capture is not in the subset.
-enum Ty {
+pub enum Ty {
 	TInt
 	TFloat
 	TStr
@@ -72,7 +72,7 @@ enum Ty {
 }
 
 # Expr is an expression node.
-enum Expr {
+pub enum Expr {
 	EInt(str, int, int)
 	EFloat(str)
 	EStr(str)
@@ -201,7 +201,7 @@ enum Expr {
 # equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`, 3 = enum
 # constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
-struct Arm {
+pub struct Arm {
 	pub pat: int
 	pub lit: Expr
 	pub bind: str
@@ -214,7 +214,7 @@ struct Arm {
 
 # Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
 # the optional parts the subset's flat enums cannot express as optionals.
-enum Stmt {
+pub enum Stmt {
 	# SLet is a binding: the name, its declared type, whether one was WRITTEN, whether it
 	# is `mut`, whether it is `const`, and the initializer. The three bools are in that
 	# order — has_type, then is_mut, then is_const — which is worth saying because they
@@ -321,7 +321,7 @@ pub struct SelArm {
 # where the flexibility comes from. Only a self-contained constant is carried, which is
 # also all the seed lowers correctly (docs/code/functions.md) — a default built from an
 # operator or a call is specified to be evaluated per call and is not honoured here.
-struct Param {
+pub struct Param {
 	pub name: str
 	pub ty: Ty
 	pub is_ref: bool
@@ -341,7 +341,7 @@ struct Param {
 # the C NAME differs: a free function is one flat `zg_<name>`, a method is
 # `zg_<T>_<name>`, which is also what keeps a method off the flat name space a program
 # shares with every module it imports.
-struct FnDecl {
+pub struct FnDecl {
 	pub name: str
 	pub recv: str
 	pub params: list[Param]
@@ -454,7 +454,7 @@ pub fn place_line(path: str, line: int, col: int) -> str {
 # A default lets the field's constructor argument be omitted, and it is backfilled at each
 # CONSTRUCTION — so an expression in it is evaluated per construction, as a parameter
 # default is evaluated per call.
-struct FieldDef {
+pub struct FieldDef {
 	pub name: str
 	pub ty: Ty
 	pub is_pub: bool
@@ -470,9 +470,16 @@ struct FieldDef {
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.
-struct StructDecl {
+pub struct StructDecl {
 	pub name: str
 	pub fields: list[FieldDef]
+
+	# `pub` on the declaration (GRAMMAR#struct-decl). It was read and DROPPED for as long as
+	# type visibility went unenforced, and a flag nothing reads is worse than no flag — so
+	# the marker existed in the grammar, was accepted by the parser, and meant nothing. It
+	# means what it says now: a type not marked here is module-private, and chk_ty_visible
+	# refuses naming it from another module.
+	pub is_pub: bool
 
 	# the file it was declared in, so the module it belongs to can be asked. A type belongs
 	# to whoever declared it, which is half of the orphan rule (docs/core/specs.md).
@@ -517,7 +524,7 @@ pub struct TypeDecl {
 # survives the parse is the tree; `has_discr` is what tells `A = 0` from an `A` that merely
 # sits at position 0, a distinction E214 rests on. `line` / `col` are the variant's own name
 # token, so a discriminant that does not fold is reported at the variant and not at the enum.
-struct VariantDef {
+pub struct VariantDef {
 	pub name: str
 	pub fields: list[Ty]
 	pub has_discr: bool
@@ -527,9 +534,12 @@ struct VariantDef {
 }
 
 # EnumDecl is an enum type declaration: its name and variants in source (tag) order.
-struct EnumDecl {
+pub struct EnumDecl {
 	pub name: str
 	pub variants: list[VariantDef]
+
+	# `pub` on the declaration — see StructDecl.is_pub
+	pub is_pub: bool
 
 	# the file it was declared in — see StructDecl.path
 	pub path: str
@@ -554,7 +564,7 @@ struct EnumDecl {
 # has to carry.
 #
 # `reqs` are FnDecls with an empty body, because that is exactly what a `fn-sig` is.
-struct SpecDecl {
+pub struct SpecDecl {
 	pub name: str
 	pub params: list[str]
 	pub supers: list[str]
@@ -570,6 +580,10 @@ struct SpecDecl {
 	# the spec declares T".
 	pub super_args: list[list[Ty]]
 	pub reqs: list[FnDecl]
+
+	# `pub` on the declaration — see StructDecl.is_pub. A spec is a type name like any other
+	# in the registry, so it answers the visibility question the same way.
+	pub is_pub: bool
 
 	pub path: str
 	pub line: int
@@ -601,7 +615,7 @@ pub fn spec_key(name: str, args: list[Ty]) -> str {
 # spec counts its parameters into the (spec, type) pair (docs/core/specs.md), so they are
 # both what the coherence key needs and what says which type the spec's `K` stands for
 # when a required signature is compared against what the impl supplies.
-struct ImplDecl {
+pub struct ImplDecl {
 	# `spec` is a keyword, so the field cannot be called that
 	pub on: str
 	pub args: list[Ty]

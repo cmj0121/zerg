@@ -938,21 +938,21 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Kind.Fn) {
 			fns.append(parse_fn(p, is_pub, "", false, in_unsafe))
 		} else if p_at(p, Kind.Struct) {
-			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
-			# (parse_struct), it is read and dropped — type visibility is not enforced,
-			# the deviation docs/runtime/package.md owns ("enforced on functions, and on
-			# nothing else"), so recording it here would be a flag nothing reads
-			sd := parse_struct(p)
+			# a struct may be declared `pub` (GRAMMAR#struct-decl), and the marker is CARRIED.
+			# It used to be read and dropped, because type visibility was not enforced and a
+			# flag nothing reads is a lie the next reader believes; now the type registry
+			# records it and chk_ty_visible asks it.
+			sd := parse_struct(p, is_pub)
 			p_take_derives(sd.name, pending, derive_on, derive_spec)
 			structs.append(sd)
 		} else if p_at(p, Kind.Enum) {
-			# `pub enum` — read and dropped, the struct arm's reason
-			ed := parse_enum(p)
+			# `pub enum` — carried, the struct arm's reason
+			ed := parse_enum(p, is_pub)
 			p_take_derives(ed.name, pending, derive_on, derive_spec)
 			enums.append(ed)
 		} else if p_at(p, Kind.Spec) {
-			# `pub spec` — read and dropped, the struct arm's reason
-			sp := parse_spec(p)
+			# `pub spec` — carried, the struct arm's reason
+			sp := parse_spec(p, is_pub)
 			p_take_derives(sp.name, pending, derive_on, derive_spec)
 			specs.append(sp)
 		} else if p_at(p, Kind.Const) {
@@ -1526,7 +1526,7 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 # compiled, so nothing in it is checked — a `this.x` naming a field no implementor has, a
 # call to a function that does not exist, a type error. It reads like the method that will
 # run and is not, which is the shape this compiler turns away by name everywhere else.
-fn parse_spec(mut &p: Parser) -> SpecDecl {
+fn parse_spec(mut &p: Parser, is_pub: bool) -> SpecDecl {
 	kw := cur(p)
 	p_advance(p) # 'spec'
 	name := p_name(p, "a spec")
@@ -1629,7 +1629,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)
-	return SpecDecl(name, params, supers, super_args, reqs, p.path, kw.line, kw.col)
+	return SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -1822,7 +1822,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 	return out
 }
 
-fn parse_enum(mut &p: Parser) -> EnumDecl {
+fn parse_enum(mut &p: Parser, is_pub: bool) -> EnumDecl {
 	kw := cur(p)
 	p_advance(p) # 'enum'
 	name := p_name(p, "an enum")
@@ -1886,7 +1886,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise f"E214 enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
-	return EnumDecl(name, variants, p.path, kw.line, kw.col)
+	return EnumDecl(name, variants, is_pub, p.path, kw.line, kw.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -1898,7 +1898,7 @@ fn is_pascal(s: str) -> bool {
 	return v >= 65 and v <= 90
 }
 
-fn parse_struct(mut &p: Parser) -> StructDecl {
+fn parse_struct(mut &p: Parser, is_pub: bool) -> StructDecl {
 	kw := cur(p)
 	p_advance(p) # 'struct'
 	name := p_name(p, "a struct")
@@ -1946,7 +1946,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
-	return StructDecl(name, fields, p.path, kw.line, kw.col)
+	return StructDecl(name, fields, is_pub, p.path, kw.line, kw.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,

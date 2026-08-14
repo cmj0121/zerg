@@ -14,7 +14,7 @@ import "ascii"
 # GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
 # lexer does not yet emit every kind (f-strings, decorators).
 #[derive(Eq)]
-enum Kind {
+pub enum Kind {
 	Eof
 	Illegal
 	Semi
@@ -142,7 +142,7 @@ enum Kind {
 
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
 # value for string-like literals, and the 1-based line/column where it starts.
-struct Token {
+pub struct Token {
 	pub kind: Kind
 	pub lexeme: str
 	pub value: str

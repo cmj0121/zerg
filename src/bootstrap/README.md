@@ -431,6 +431,17 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   under `zerg test`. The seed's stripping is not wrong for the seed — it keeps a normal build's
   emitted C byte-identical whether or not a `#[test]` is present — but it means the one
   compiler that runs tests is the only one that ever looks at them.
+- **`assert` IS NOT A WORD THE SEED KNOWS, and what it says instead names the wrong token.**
+  `assert cond` is a statement of the shipped language (`GRAMMAR#assert-stmt`) and a keyword of
+  `zerg` alone. The seed's lexer reads `assert` as an ordinary identifier, so the statement is
+  two expressions in a row and what comes back is _expected a newline or ';' to separate
+  statements, found an identifier_, pointing at the CONDITION rather than at the word — a
+  sentence that reads as a missing semicolon, which is the one thing it is not. Worth
+  recognising by that shape: the column is off by the width of the word and the space after it.
+  Nothing in
+  `src/stdlib` writes one, deliberately, since the seed compiles that tree; the ERROR KIND it
+  raises (`AssertionError`, 11) is mirrored here all the same, because the kind numbering is an
+  ABI shared with the runtime and a table that stopped at 10 would let a later kind take 11.
 
 ## Changing the seed
 

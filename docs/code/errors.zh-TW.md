@@ -99,10 +99,13 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 > `unwrap()` 已經建了。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天有十個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
-`EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，再加上並行那章指名的三個——`SendOnClosedError`、
-`DeadlockError` 與 `StopIteration`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
-是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十個之
+用到的 fault 名稱裡,今天有十一個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+`EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，加上並行那章指名的三個——`SendOnClosedError`、
+`DeadlockError` 與 `StopIteration`——以及 `AssertionError`:那是失敗的 `assert`（見
+[Grammar](../surface/grammar.zh-TW.md) group 8）raise 出來的東西,而且沒有別的東西會 raise 它。這份獨佔性正是
+給它一個種類、而不是一句訊息的理由:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端的東西報成
+**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
+是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十一個之
 列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
 
 **`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:

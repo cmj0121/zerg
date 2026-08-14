@@ -2158,7 +2158,14 @@ fn gen_test(t: Tst, i: int) -> str {
 	out = out + "\tzt_r := guard {\n\t\t" + test_call(t) + "\n\t}\n"
 	out = out + "\tzt_ok := match zt_r {\n\t\tEither.Left(_)  => true\n\t\tEither.Right(_) => false\n\t}\n"
 	out = out + "\tzt_why := match zt_r {\n\t\tEither.Left(_)  => \"\"\n\t\tEither.Right(e) => e.message()\n\t}\n"
-	out = out + "\ttesting.finished(zt_ctx, zt_ok, zt_why)\n}\n\n"
+
+	# WHETHER THE BODY ENDED ON A CLAIM OR ON A CRASH, asked HERE because here is where the
+	# Err still exists. `assert` raises AssertionError and nothing else does, so `is` answers
+	# it exactly; one line further on there is only a message, and a runner that told a
+	# failed test from a fallen-over one by matching text would be reading prose as a
+	# protocol — which is the whole reason the kind was added.
+	out = out + "\tzt_claim := match zt_r {\n\t\tEither.Left(_)  => false\n\t\tEither.Right(e) => e is AssertionError\n\t}\n"
+	out = out + "\ttesting.finished(zt_ctx, zt_ok, zt_why, zt_claim)\n}\n\n"
 
 	out = out + "fn zt_start" + n + "(" + ps + ") -> <-chan[testing.Event] {\n"
 	out = out + "\tzt_ch := chan[testing.Event]()\n\tspawn zt_body" + n + "(" + arc + "zt_ch)\n\n\treturn zt_ch\n}\n\n"
@@ -3108,7 +3115,7 @@ fn run_desugar(files: list[str], off: list[str]) {
 		src := read_source(f)
 		raise f"`{f}` has unbalanced brackets, so it cannot be desugared — the file is left as it is" if not zerg.fmt_balanced(src)
 
-		out := zerg.desugar_src_off(src, off)
+		out := zerg.desugar_src_off(src, off, f)
 		if out != src {
 			guard {
 				io.write_file(f, bytearray(out))
@@ -3129,7 +3136,7 @@ fn run_desugar_check(files: list[str], off: list[str]) -> int {
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be desugared\n")
 			bad = bad + 1
-		} else if zerg.desugar_src_off(src, off) != src {
+		} else if zerg.desugar_src_off(src, off, f) != src {
 			io.ewrite(f"{f}: still holds sugar (run `zerg desugar`)\n")
 			bad = bad + 1
 		}

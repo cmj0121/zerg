@@ -49,21 +49,21 @@ the form they will take.)
 
 ## Packages
 
-| Package               | Import             | Provides                                         |
-| --------------------- | ------------------ | ------------------------------------------------ |
-| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write |
-| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal        |
-| [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch  |
-| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
-| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser |
-| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base     |
-| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                   |
-| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
-| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
-| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity  |
-| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders |
-| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                |
-| [`testing`](#testing) | `import "testing"` | assertion helpers for `#[test]` functions        |
+| Package               | Import             | Provides                                          |
+| --------------------- | ------------------ | ------------------------------------------------- |
+| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write  |
+| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal         |
+| [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch   |
+| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`            |
+| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
+| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
+| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
+| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
+| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
+| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity   |
+| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders  |
+| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                 |
+| [`testing`](#testing) | `import "testing"` | what a `#[test]` needs that the language does not |
 
 ## `io`
 
@@ -317,30 +317,31 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 ## `testing`
 
-Assertion helpers for `#[test]` functions, which `zerg test` builds and runs — see
-[Modules, Packages & Programs](package.md) for how far that command goes. A satisfied assertion is `nil`; a
-violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message. What it raises is
-an **untyped** `Err` — the only stdlib module of which that is true, and deliberately: a failed assertion is
-a claim about the program that did not hold, not a value a function could not accept, and the built-in
-taxonomy has no kind for it.
+What a `#[test]` function needs that the LANGUAGE does not give it, for the tests `zerg test` builds and
+runs — see [Modules, Packages & Programs](package.md) for how far that command goes.
 
-| Function                                           | Summary                                            |
-| -------------------------------------------------- | -------------------------------------------------- |
-| `assert(cond: bool, msg: str = "") -> Result[nil]` | succeed when `cond` holds; `msg` names the claim   |
-| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]`      | succeed when `a == b`; a failure names both values |
-| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]`      | succeed when `a != b`; a failure names the value   |
-| `assert_raises[T](r: Result[T]) -> Err`            | answer the `Err` a `guard`ed call raised           |
+**The assertion is not here.** `assert cond` is a keyword (see [Grammar](../surface/grammar.md), group 8):
+the compiler writes the failure message, and it says three things a function never could — the file and
+line the claim was written at, the claim's own source text, and the value of each operand a comparison
+came apart into. Zerg has no `__FILE__` and no caller attribution, and a condition reaches a helper as a
+`bool` with its shape already compiled away, so `assert_eq` bought back two of those values by taking the
+operands apart at the call. That is why it existed and why it no longer has to.
 
-A failure says what the values **were**: `assert_eq failed: 2 != 3`, and `assert_ne failed: both values
-are 7`. `assert(cond, msg)` has only the message, because a condition is compiled away before it fails.
+A failed claim raises `AssertionError`, and nothing else does — which is how `zerg test` reports it as a
+**failure** while anything else that reaches the top of a test body is a **crash**.
 
-`assert_raises` takes the **`guard` written at the point of the call** and hands back the error, so the
-kind is asked with the language's own `is` rather than passed in — a type is not a value in Zerg, so
+| Function                                | Summary                                  |
+| --------------------------------------- | ---------------------------------------- |
+| `assert_raises[T](r: Result[T]) -> Err` | answer the `Err` a `guard`ed call raised |
+
+`assert_raises` is not an assertion and stays a function: it asks what an already-finished call raised. It
+takes the **`guard` written at the point of the call** and hands back the error, so the kind is asked with
+the language's own `is` rather than passed in — a type is not a value in Zerg, so
 `assert_raises(f, ValueError)` cannot be spelled at all:
 
 ```text
 e := testing.assert_raises(guard { strings.split("a,b", "") })
-testing.assert(e is ValueError, "split refused with the wrong kind")
+assert e is ValueError
 ```
 
 > A **closure** — `assert_raises(fn () { strings.split("a,b", "") })` — reads better and does not compile:
@@ -348,33 +349,26 @@ testing.assert(e is ValueError, "split refused with the wrong kind")
 > free name that a capture would have to give a type. Every test that reaches its module through `import`
 > is that shape, so the `guard` is the form that serves them.
 
-### Structured failure context
+### What a running test says
 
-`Context` accumulates named values through a chain, and **the assertion is the terminal** — deliberately
-the opposite end from a logger's `log.str(…).msg(…)`. An assertion in the middle would let a forgotten
-terminal assert nothing, and Zerg has no `impl Drop` to notice.
+`Context` is the channel a test speaks to its runner over, and every method on it is a message rather than
+a claim.
 
-| Method                                             | Summary                                    |
-| -------------------------------------------------- | ------------------------------------------ |
-| `str(key: str, value: str) -> This`                | add one named `str` to the next assertion  |
-| `int(key: str, value: int) -> This`                | add one named `int`                        |
-| `bool(key: str, value: bool) -> This`              | add one named `bool`                       |
-| `assert(cond: bool, msg: str = "") -> Result[nil]` | the terminal: assert, carrying the context |
+| Method                             | Summary                                           |
+| ---------------------------------- | ------------------------------------------------- |
+| `name() -> str`                    | this test's own name, as the report prints it     |
+| `log(msg: str)`                    | a note shown **only if** this test fails          |
+| `skip(reason: str) -> Result[nil]` | this test does not apply here; not a failure      |
+| `fatal(msg: str) -> Result[nil]`   | stop now, failed — going on would only make noise |
 
 ```text
-ctx.str("file", path).int("row", i).assert(ok, "the row did not round-trip")
-# FAIL … assertion failed: the row did not round-trip [file=a.zg row=3]
+ctx.log("row 42")
+assert row.id == 42
 ```
 
-Each builder answers a **copy**, so what a chain accumulated reaches its own terminal and nothing after
-it, while the channel inside a `Context` stays shared and `log` / `skip` / `fatal` still reach the runner
-from a copy. The cost of that is a copy of the accumulated text per call — an N-field chain moves O(N²)
-bytes, which for the two or three a failure wants is a few dozen.
-
-The builders are **per type** because Zerg has no varargs, no `any`, and no generic struct to hold a
-rendered list.
-
-> **[not yet]** `assert_eq`, `assert_ne` and `assert_raises` have **no method form**, so
-> `ctx.str("file", p).assert_eq(got, want)` cannot be written: all three are generic, and a generic
-> method is _E409 NotImplemented: a generic METHOD_ in this compiler. This is most of why `assert_eq`
-> names both values itself. Put the values in the chain and end on `assert` when the context matters.
+**The chain is gone.** `ctx.str("file", p).int("row", i).assert(ok, "…")` existed because an assertion
+that said only `assertion failed` needed somewhere to hang the facts that would make it readable — and
+its terminal cannot be spelled now that `assert` is a keyword. What a chain was genuinely for beyond the
+values is a **domain note**, a thing about the fixture rather than about the expression, and `log` is
+already that and better at it: shown only on failure, attached to the test rather than to one assertion,
+and needing no terminal to be complete.

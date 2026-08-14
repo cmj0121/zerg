@@ -189,6 +189,16 @@ value is built **before** the old one is released — `s = s + x` reads `s` to m
 > of one pair rather than a rule of its own, and none of them has a case in `make mem-check` yet — which is
 > what a gate not finding something looks like.
 
+A **`spawn`'s captured values are the coroutine's**, not the spawning scope's: the environment takes a
+reference of its own for each one and HANDS IT OVER to the coroutine, whose by-value parameters give it
+back when the body returns. That is one give-back per capture on every exit, the abort-unwind one included.
+
+> **[deviation]** A coroutine that never runs never gives them back. The environment is filled at the
+> `spawn` and released only by the body, so a spawn whose coroutine the scheduler never gets to — a program
+> that ends first — leaks a reference per captured value and the environment block with them. It is the one
+> leak class in this neighbourhood that has no case anywhere: `make sanitize-conc` runs programs whose
+> coroutines all complete, and `make mem-check` has no concurrency case beyond a drained channel.
+
 ## `Ref[T]` — a resource that outlives its scope
 
 > **[not yet]** There is no `Ref[T]` in this compiler. `Ref(5)` is refused by name —

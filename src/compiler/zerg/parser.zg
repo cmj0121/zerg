@@ -2669,6 +2669,16 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 		# the marker carries where the statement STARTS, read before it is parsed, so a
 		# diagnostic about anything in it has a line and a column to name
 		t := cur(p)
+
+		# A DECORATOR MAY LEAD A STATEMENT (GRAMMAR#statement), and it is read here rather
+		# than in parse_stmt because a decorator is not a statement: it is the item BEFORE
+		# one, separated from it by the same `;` every pair of items is.
+		if p_at(p, Kind.Hash) {
+			p_stmt_decorator(p)
+			p_stmt_sep(p, Kind.RBrace)
+			continue
+		}
+
 		body.append(Stmt.SAt(t.line, t.col))
 		body.append(parse_stmt(p))
 		p_stmt_sep(p, Kind.RBrace)
@@ -2676,6 +2686,26 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 	expect(p, Kind.RBrace)
 	p_shallower(p)
 	return body
+}
+
+# p_stmt_decorator reads the one decorator leading a statement and turns away every decorator
+# that is not about one.
+#
+# The compiler KEEPS NOTHING: the only decorator a statement takes is `#[allow(…)]`, which is
+# the linter's and means nothing here (parse_deco_item). So a decorator that put a name on
+# `pending` is one about a DECLARATION, and there is no declaration inside a body for it to be
+# about.
+#
+# The sentence is its own rather than E487's, and the difference is what the reader is standing
+# in front of. E487 is raised where declarations live and can say which declaration the
+# decorator wanted; here there are none, so the useful thing to say is which decorator a
+# statement DOES take.
+fn p_stmt_decorator(mut &p: Parser) {
+	t := cur(p)
+	mut pending: list[str] = []
+	parse_decorator(p, pending)
+
+	raise p_diag_at(p, t.line, t.col, "E612", f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and a statement is not one — the decorator a STATEMENT takes is `#[allow(…)]`, which suppresses a lint finding over it") if pending.len() > 0
 }
 
 # --- statements ----------------------------------------------------------------

@@ -887,7 +887,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
 			chk_import_cycle(here, im)
-			load_unit(module_files(im, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
+			load_unit(module_files(imd, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
@@ -1197,7 +1197,14 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # The entry directory STAYS as the second root rather than being replaced: a nested module
 # reaching a module beside the program resolved before this and still does. So the change
 # only ever adds a place to look.
-fn module_files(path: str, near: str, from_dir: str) -> list[str] {
+#
+# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E502 was the last
+# import rule with no place: the two beside it (E511, E512) are handed the `ImportDecl` and
+# spell `place_line` from it, and this one was handed the path alone — a string that knows
+# what was written and not which line wrote it. A reader told an import resolves nowhere and
+# not which import is left grepping their own program for the quoted path.
+fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
+	path := im.path
 	mut roots: list[str] = []
 	roots.append(near)
 
@@ -1227,7 +1234,8 @@ fn module_files(path: str, near: str, from_dir: str) -> list[str] {
 		}
 	}
 
-	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
 }
 
 # is_test_file reports whether a source is a TEST FILE by the build tool's convention, which
@@ -1335,7 +1343,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)
-		for dep in module_files(im, dir_of(file), from_dir) {
+		for dep in module_files(imd, dir_of(file), from_dir) {
 			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}

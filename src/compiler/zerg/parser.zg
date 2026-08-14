@@ -1126,6 +1126,11 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut in_unsafe := false
 	mut unsafe_line := 0
 	mut unsafe_col := 0
+
+	# deco_seen is whether the item BEFORE this one was a decorator, and it is what makes one
+	# decorator per item enforceable. `pending` cannot answer it: `#[allow(…)]` puts nothing on
+	# the list, so a stack that began with one would have read as no decorator at all.
+	mut deco_seen := false
 	skip_semis(p)
 	for not p_at(p, Kind.Eof) {
 		# `pub` is a VISIBILITY FLAG on the declaration that follows, not a dispatch of its
@@ -1141,6 +1146,20 @@ pub fn parse_at(src: str, path: str) -> File {
 		# than the token under the cursor: by the time an arm answers, the cursor has moved
 		# past the `pub` or the `#[…]` the reader has to go and delete.
 		t := cur(p)
+
+		# ONE DECORATOR PER ITEM (GRAMMAR#decorated-decl). Stacking used to parse, so `#[a]`
+		# on one line and `#[b]` on the next said the same thing as `#[a, b]` — two spellings
+		# for one thing, which is what `zerg fmt` exists to remove and what it cannot remove
+		# once both are legal. The comma form is the spelling; a stack is turned away here.
+		#
+		# The flag is cleared by any item that is NOT a decorator, which is the whole of the
+		# rule: what may not follow a decorator is another decorator.
+		if t.kind != Kind.Hash {
+			deco_seen = false
+		}
+
+		raise p_deco_stacked(p, t.line, t.col) if deco_seen
+
 		mut is_pub := false
 		if p_at(p, Kind.Pub) {
 			is_pub = true
@@ -1212,10 +1231,9 @@ pub fn parse_at(src: str, path: str) -> File {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
 			raise p_diag_at(p, t.line, t.col, "E250", "a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not `pub #[…]`") if is_pub
-			if pending.len() == 0 {
-				deco_line = t.line
-				deco_col = t.col
-			}
+			deco_seen = true
+			deco_line = t.line
+			deco_col = t.col
 			parse_decorator(p, pending)
 		} else if p_at(p, Kind.Mut) and peek_kind(p, 1) == Kind.Fn {
 			# GRAMMAR#fn-decl — `mut fn` marks a METHOD that mutates its receiver, and "a
@@ -1389,17 +1407,27 @@ fn p_not_a_binding() -> ConstDecl {
 # p_deco_may_lead reports whether the item starting here is one THIS pending list may lead.
 # The three that take a derive or an `#[obj]` are the three that call p_take_derives —
 # `struct`, `enum` and `spec` — and `#[test]` goes on the one declaration none of those is, a
-# `fn`. A second decorator is let through either way so they stack: `#[derive(Eq)] #[obj] spec
-# S` puts two names on one pending list and the declaration under them takes both.
+# `fn`.
+#
+# A SECOND DECORATOR IS NOT ASKED ABOUT HERE ANY MORE. It used to be let through so that
+# decorators could stack; stacking is E613 now, raised before this is reached, so a `#[` can
+# no longer be the token under the cursor while anything is pending.
 #
 # It reads the LIST and not just the token, because the two sets are disjoint: without that,
 # `#[test]` on a struct would be accepted and dropped, which is the silence the whole rule
 # exists to end.
 fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
-	return true if p_at(p, Kind.Hash)
 	return p_at(p, Kind.Fn) if p_deco_is_test(pending)
 
 	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec)
+}
+
+# p_deco_stacked is the ONE decorator-per-item refusal, written once and raised from the two
+# places a decorator can lead something: the top level, and a block's statement list. Two
+# raises of one code would be two rules under one identity, which the error-code gate refuses
+# and a reader would have to diff to tell apart.
+fn p_deco_stacked(mut &p: Parser, line: int, col: int) -> str {
+	return p_diag_at(p, line, col, "E613", "a second decorator on one item — an item takes ONE decorator, so merge them into its comma list: `#[a(x), b(y)]`")
 }
 
 # p_deco_is_test reports whether a pending list holds a `#[test]`.
@@ -1976,6 +2004,23 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 	return true
 }
 
+# strings_has_suffix is its other end, and it is written here rather than taken from the
+# `strings` module for the reason its neighbour is: this module may not IMPORT one, because
+# `strings.has_suffix` is `pub` and the driver has a private function of that name, which is
+# E705 (docs/runtime/package.md). Two small readers, module-private, beside each other.
+fn strings_has_suffix(s: str, suf: str) -> bool {
+	b := bytearray(s)
+	q := bytearray(suf)
+	return false if b.len() < q.len()
+	off := b.len() - q.len()
+	mut i := 0
+	for i < q.len() {
+		return false if b[off + i] != q[i]
+		i = i + 1
+	}
+	return true
+}
+
 # parse_import reads both forms GRAMMAR gives an import — one spec, or a parenthesized
 # group of them — and appends every path it binds.
 #
@@ -2290,6 +2335,38 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[allow(L…)]` IS THE ONE DECORATOR THIS COMPILER READS AND NEVER USES. It names lint
+	# codes to suppress over the statement it leads, and what a code MEANS is the linter's to
+	# know — so the whole of the parser's job is to accept the name and attribute no meaning to
+	# it. A copy of the L-code catalogue here would be a second place a language fact is
+	# written down, and the copy that goes stale is always the one no tool reads.
+	#
+	# NOTHING GOES ON `pending`, which is the other half of the arrangement: the list is what
+	# tells the arms below which DECLARATION a decorator is about, and this one is about none.
+	# An empty list after it is therefore exactly true, and it is what lets `#[allow(…)]` lead
+	# a statement while `#[derive(…)]` may not.
+	if name == "allow" {
+		at := cur(p)
+		p_advance(p)
+
+		# `#[allow]` and `#[allow()]` SUPPRESS NOTHING while reading as though they suppressed
+		# something — E497's argument one decorator over, and the same answer.
+		mut named := 0
+		if p_at(p, Kind.LParen) {
+			p_advance(p)
+			for not p_at(p, Kind.RParen) and not p_at(p, Kind.Eof) {
+				if p_at(p, Kind.Ident) {
+					named = named + 1
+				}
+				p_advance(p)
+			}
+			expect(p, Kind.RParen)
+		}
+
+		raise p_diag_at(p, at.line, at.col, "E614", "an `#[allow]` names the lint codes it suppresses — GRAMMAR#deco-item takes the arguments, and an allow with none suppresses nothing while reading as though it did") if named == 0
+		return
+	}
+
 	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
 	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
 	# module-private — so a reader who writes it has not made a typo, and telling them the
@@ -2300,7 +2377,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 
 	raise p_diag_at(p, nt.line, nt.col, "E496", f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
-	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no other") if name != "derive"
+	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`, and no other") if name != "derive"
 
 	p_advance(p)
 
@@ -2632,11 +2709,28 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 	p_deeper(p)
 	expect(p, Kind.LBrace)
 	mut body: list[Stmt] = []
+	mut deco_seen := false
 	skip_semis(p)
 	for not p_at(p, Kind.RBrace) and not p_at(p, Kind.Eof) {
 		# the marker carries where the statement STARTS, read before it is parsed, so a
 		# diagnostic about anything in it has a line and a column to name
 		t := cur(p)
+
+		# A DECORATOR MAY LEAD A STATEMENT (GRAMMAR#statement), and it is read here rather
+		# than in parse_stmt because a decorator is not a statement: it is the item BEFORE
+		# one, separated from it by the same `;` every pair of items is, and the thing that
+		# has to be asked about it — is another decorator stacked on top — is a question
+		# about this LIST rather than about any statement in it.
+		if p_at(p, Kind.Hash) {
+			raise p_deco_stacked(p, t.line, t.col) if deco_seen
+
+			deco_seen = true
+			p_stmt_decorator(p)
+			p_stmt_sep(p, Kind.RBrace)
+			continue
+		}
+
+		deco_seen = false
 		body.append(Stmt.SAt(t.line, t.col))
 		body.append(parse_stmt(p))
 		p_stmt_sep(p, Kind.RBrace)
@@ -2644,6 +2738,26 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 	expect(p, Kind.RBrace)
 	p_shallower(p)
 	return body
+}
+
+# p_stmt_decorator reads the one decorator leading a statement and turns away every decorator
+# that is not about one.
+#
+# The compiler KEEPS NOTHING: the only decorator a statement takes is `#[allow(…)]`, which is
+# the linter's and means nothing here (parse_deco_item). So a decorator that put a name on
+# `pending` is one about a DECLARATION, and there is no declaration inside a body for it to be
+# about.
+#
+# The sentence is its own rather than E487's, and the difference is what the reader is standing
+# in front of. E487 is raised where declarations live and can say which declaration the
+# decorator wanted; here there are none, so the useful thing to say is which decorator a
+# statement DOES take.
+fn p_stmt_decorator(mut &p: Parser) {
+	t := cur(p)
+	mut pending: list[str] = []
+	parse_decorator(p, pending)
+
+	raise p_diag_at(p, t.line, t.col, "E612", f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and a statement is not one — the decorator a STATEMENT takes is `#[allow(…)]`, which suppresses a lint finding over it") if pending.len() > 0
 }
 
 # --- statements ----------------------------------------------------------------

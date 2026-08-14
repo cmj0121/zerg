@@ -56,6 +56,9 @@
 #                                                 that one — the commonest thing anybody asks
 #                                                 a runner for, and it used to answer "no
 #                                                 tests" about a file holding three
+#     anywhere  a `#[test]` in an ordinary file   runs, wherever it is written, while `zerg
+#                                                 lint` goes on warning (L601) that it SHIPS.
+#                                                 Both, not one
 #
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
 # package checked into the repository is a package every other gate then has to know about —
@@ -1151,6 +1154,84 @@ say "a run pointed at a module's own file did not run that module's tests" $?
 [ $? -eq 3 ]
 say "a file that is in no test package did not report an empty search" $?
 
+# --- a `#[test]` outside a `*_test.zg` --------------------------------------------------------
+#
+# THE DECORATOR MAY BE WRITTEN ANYWHERE, so discovery finds one wherever it is — and `zerg
+# lint` goes on warning (L601) that a `#[test]` in an ordinary file SHIPS. BOTH, not one: the
+# linter says where a test ought to live and the runner runs what is written, and a runner that
+# skipped a `#[test]` because of its file's NAME reported a green suite it had not run.
+
+mkdir -p "$tmp/anywhere/mixed" "$tmp/anywhere/bare"
+
+cat >"$tmp/anywhere/mixed/ships.zg" <<'EOF'
+#[test]
+fn test_written_in_an_ordinary_file() {
+	assert helper() == 3
+}
+
+fn helper() -> int {
+	return 3
+}
+EOF
+
+cat >"$tmp/anywhere/mixed/ships_test.zg" <<'EOF'
+#[test]
+fn test_written_where_it_belongs() {
+	assert helper() == 3
+}
+EOF
+
+# bare — a directory with NO `*_test.zg` at all, which is the strongest form of the claim: the
+# only thing making this a test package is a declaration inside an ordinary module file.
+#
+# AND ITS FIXTURE IS READ THERE TOO, which is not a second feature but the same one: a package's
+# declarations are collected from the files it is built from, so a `#[fixture]` beside a
+# `#[test]` in one ordinary file serves it. Reading one decorator and not the other would leave
+# the test refused for a fixture that is written three lines above it.
+cat >"$tmp/anywhere/bare/only.zg" <<'EOF'
+struct Bag {
+	n: int = 0
+}
+
+#[fixture]
+fn bag(use: fn (Bag)) {
+	use(Bag(5))
+}
+
+#[test]
+fn test_no_test_file_in_this_directory(bag: Bag) {
+	assert bag.n == 5
+}
+EOF
+
+any_out=$("$ZERG" test "$tmp/anywhere" 2>&1)
+status=$?
+
+[ "$status" -eq 0 ]
+say "a run over a tree whose tests are outside a \`*_test.zg\` did not exit 0" $?
+
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_written_in_an_ordinary_file$'
+say "a \`#[test]\` in an ordinary file beside a test file was not run" $?
+
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_written_where_it_belongs$'
+say 'the test in the `*_test.zg` beside it stopped running' $?
+
+# it PASSES, which is two claims in one line: the directory formed a package on the strength of
+# a declaration in an ordinary file, and the `#[fixture]` written beside it was read from there
+# too — an unresolved parameter would have ended the whole run with status 2 before this.
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_no_test_file_in_this_directory$'
+say "a directory whose only \`#[test]\` is in an ordinary file did not form a test package, or the \`#[fixture]\` beside it was not read" $?
+
+# the report names the file the test came from, which for these is not a `*_test.zg`
+printf '%s\n' "$any_out" | grep -qF 'mixed/ships.zg'
+say "the report did not name the ordinary file a test was written in" $?
+
+# AND THE LINTER STILL WARNS. This is the half a runner change could silently take away: if
+# running it were taken as blessing it, the rule that says such a test SHIPS would be the next
+# thing deleted.
+"$ZERG" lint "$tmp/anywhere/mixed/ships.zg" 2>&1 | grep -qF 'L601'
+say "L601 stopped warning that a \`#[test]\` outside a \`*_test.zg\` ships" $?
+
 # 42. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
 #     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
@@ -1162,9 +1243,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 88 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 94 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-88}
+MIN_ASSERTS=${MIN_ASSERTS:-94}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

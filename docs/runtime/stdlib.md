@@ -74,13 +74,6 @@ self-synchronises, so a valid needle only matches at a code-point boundary); `in
 offset, like Go's `strings.Index`. Case folding is **ASCII-only** — a non-ASCII byte is passed through
 unchanged. An empty `split` separator, or a negative `repeat` count, raises `ValueError`.
 
-> **[deviation]** The error a standard-library function raises is **not a taxonomy kind**. `strings`,
-> `strconv` and `math` raise with a message rather than with one of the built-in kinds, so a caught error
-> answers `false` to `e is ValueError` and an uncaught one aborts with a bare `strings.repeat: negative count`
-> instead of the `Kind: message` shape the [abort contract](../conformance.md) specifies. The `io` and `fs`
-> functions do raise a real `IOError`, which is what makes this a gap in the pure-Zerg modules rather than in
-> the runtime.
-
 | Function                               | Summary                                             |
 | -------------------------------------- | --------------------------------------------------- |
 | `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)        |
@@ -178,7 +171,7 @@ consumer slows the ticker instead of building a backlog.
 ## `math`
 
 Numeric helpers over the primitives, plus **pure-Zerg** transcendentals (numerical algorithms, never a
-libm binding). A domain error (e.g. `sqrt` of a negative) raises, demotable with `guard`.
+libm binding). A domain error (e.g. `sqrt` of a negative) raises `ValueError`, demotable with `guard`.
 
 | Function                              | Summary                                           |
 | ------------------------------------- | ------------------------------------------------- |
@@ -256,7 +249,10 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 Assertion helpers for `#[test]` functions. **[not yet]** — no compiler builds a test binary
 today. A satisfied assertion is `nil`; a
-violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message.
+violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message. What it raises is
+an **untyped** `Err` — the only stdlib module of which that is true, and deliberately: a failed assertion is
+a claim about the program that did not hold, not a value a function could not accept, and the built-in
+taxonomy has no kind for it.
 
 | Function                                      | Summary                   |
 | --------------------------------------------- | ------------------------- |

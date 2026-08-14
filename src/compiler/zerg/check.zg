@@ -250,6 +250,30 @@ fn chk_ty_exported(mut &em: Emitter, nm: str, site: str, decl_pub: bool) {
 	chk_at(em, "E509", f"`{nm}` is module-private, and {site} is on a `pub` declaration — a declaration can never be more visible than the types it names, so a dependent could not name this one")
 }
 
+# chk_fld_visible is the field half, and the reason a field needs its own rule is that the
+# type may be perfectly public while the field is not: GRAMMAR#field makes a non-`pub` field
+# module-private and requires it to carry a DEFAULT, precisely so external code can
+# construct the type without naming a value it may not read. `E482` enforced the default and
+# nothing enforced the "may not read" it exists for, so the default was a courtesy and the
+# field was public in every way that mattered.
+#
+# It asks the OWNING TYPE's module, not the reader's guess: a field is declared inside a
+# struct declaration, so the struct's module is the field's, and there is no separate row to
+# get out of step with it.
+fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
+	return if c_fld_pub(em, sname, fname)
+
+	decl_mod := c_ty_mod(em, sname)
+	return if decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+
+	return if here == decl_mod
+	return if here == ""
+
+	chk_at(em, "E510", f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
+}
+
 # chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
 # is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
 # unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust

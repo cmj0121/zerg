@@ -943,6 +943,9 @@ shipping compiler rather than a part of it (the line
 | `E609` | an f-string hole holds more than one expression                                                         |
 | `E610` | `…` cannot name a struct/enum/spec/type alias — a declared type's name begins with an UPPER-CASE LETTER |
 | `E611` | `…` is a prelude name — … — and cannot name …                                                           |
+| `E612` | `…` applies to the … that follows it, and a statement is not one                                        |
+| `E613` | a second decorator on one item — merge them into its comma list                                         |
+| `E614` | an `#[allow]` names the lint codes it suppresses, and this one names none                               |
 | `E701` | a `…` takes a … or a …, and this bare value is neither side                                             |
 | `E702` | no field `…` on … (optional chain `?.…`)                                                                |
 | `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                                           |
@@ -1054,8 +1057,48 @@ zerg lint <file.zg>...   # prints findings; exits nonzero when there is one
 ```
 
 Every check is answered from the parsed file alone — no types, no flow analysis — which
-keeps it honest about what it can claim. Findings come back in source order, and a nonzero
-exit makes `zerg lint` usable as a gate rather than as decoration.
+keeps it honest about what it can claim. Findings come back in source order, each with the
+place it is about (`path:line:col`).
+
+### Severity, and the two exit codes
+
+A finding carries a **severity**, and there are three:
+
+| Severity      | Printed as              | `zerg lint` | `zerg lint --strict` |
+| ------------- | ----------------------- | ----------- | -------------------- |
+| **a finding** | `path:line:col: L101 …` | **fails**   | **fails**            |
+| **warning**   | `… warning: L601 …`     | exits 0     | **fails**            |
+| **info**      | `… info: L106 …`        | exits 0     | exits 0              |
+
+A **finding** is a rule firing on the program, which is what the tool is for. A **warning** is
+what a rule says about a program that is not wrong — a `#[test]` that ships is a decision
+somebody is allowed to have made — so it prints and does not fail. An **info** never changes an
+exit status at all.
+
+Only the default prints no adjective: it is what `zerg lint` is for and needs no word in front
+of it, while a line that does **not** change the exit status has to say so or it reads as one
+that did.
+
+`--strict` is what `make lint` runs, over this project's own source, where neither a shipping
+test nor a suppression that will never apply is acceptable. A gate board stricter than the tool
+has precedent here — `refuse-check` asserts more about a refusal than `zerg build` requires.
+
+### Suppressing a finding — `#[allow(…)]`
+
+`#[allow(L103)]` on a statement suppresses that code over the statement it leads, and over its
+block when it has one — the scope is the size of the statement, which is one rule and not a
+choice between a line and a scope. It does not reach the next statement and cannot reach
+another file; there is deliberately **no file-level scope**. It names **`L` codes only**: an `E`
+code is a compiler diagnostic and suppressing one would make bypassing a compiler check an
+official feature. See [Decorators](../core/decorators.md).
+
+Two codes are about a suppression itself. `L106` matters more than it looks: a stale allow
+silences a rule that has stopped firing, and nobody learns when the real problem returns.
+
+| Code   | Severity    | Finding                                                    |
+| ------ | ----------- | ---------------------------------------------------------- |
+| `L106` | **info**    | the allow had nothing to suppress                          |
+| `L107` | **warning** | the allow names a code no rule has, so it will never apply |
 
 ### L1xx — dead code
 
@@ -1183,6 +1226,21 @@ This one is the only rule the linter does not answer from the parsed tree. A lit
 type is a fact about **types**, so the lowering walk records it and `zerg lint` asks the walk —
 the C it produces is thrown away. A program that does not compile reports none of them, which
 is right: there is nothing to advise about the types of a program whose types are wrong.
+
+### `L6xx` — what the binary carries
+
+| Code   | Rule                                                 |
+| ------ | ---------------------------------------------------- |
+| `L601` | a `#[test]` outside a `*_test.zg` file — **warning** |
+
+Such a function is **legal** and it **ships**: it is compiled into the binary like any other,
+it appears twice in the emitted C, nothing calls it, and its `import "testing"` travels with
+it — which is how a test-only dependency reaches a shipped program. So the message states that
+**consequence** rather than the preference. A warning that only says "move it" is style advice
+and gets scrolled past; what the reader has to weigh is dead code in the artifact.
+
+`#[allow(L601)]` silences it for a `#[test]` that is meant to ship. One decorator per item, so
+the two are written as one: `#[allow(L601), test]`.
 
 ## Adding a rule
 

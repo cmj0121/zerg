@@ -166,6 +166,15 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # --- 7b''. the values that outlive their scope -----------------------------
+      # The leak gate that needs neither LeakSanitizer nor the private corpus, which is
+      # why it is HERE — on both platforms, on every fork — rather than beside
+      # `sanitize-conc` in the Linux-only job that has been this repository's single
+      # source of leak signal. Its programs are written in the script, the way `refuse`
+      # and `reject` above write theirs.
+      - name: No value outlives the scope that made it
+        run: make mem-check
+
       # --- 7b'. the compiler's own sources are canonical -------------------------
       # fmt-corpus and fmt-tokens both need the private corpus, so the formatter's rules
       # were never checked against the largest body of Zerg that exists — the compiler.

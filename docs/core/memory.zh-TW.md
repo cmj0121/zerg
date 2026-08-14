@@ -15,15 +15,17 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
 深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。
 
-> **[deviation]** 那條鏈**永遠不會被釋放**。cell 是配著一個 **no-op drop** 配出來的,而持有它的 binding 在
-> scope 結束時沒有登記任何 release,所以一個遞迴值在離開 scope 時會漏掉整條鏈——而且不需要循環就看得到,因為
-> 無環的情況也一樣沒人釋放。實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,常駐記憶體
-> 到 **20.8 MB**,而 5 輪是 1.9 MB——那是鏈在累積,不是高水位。
+> **[deviation]** 釋放一條鏈會**每個節點吃掉一個 C stack frame**,所以長度超過原生 stack 的鏈根本釋放不掉。
+> 在預設 8 MiB 主 stack 上實測:**6 萬個節點跑得完,7 萬個不行**,約每個節點 128 bytes 的 stack。它是帶著名字
+> 死的——`StackOverflowError: stack overflow`、狀態碼 1,來自 runtime 的 fault handler——而不是一個裸的
+> SIGSEGV;但那是一份診斷,不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,在那裡 raise 並不安全,
+> 所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。這裡欠的是**迭代式**的鏈拆解,而它還沒有被建出來。
 >
-> 這取代了本段原本點名的兩個注意事項,兩個都比實情窄。透過 `mut` binding 重新指派遞迴欄位而建出的 runtime
-> **循環**確實會洩漏,但其他每一個遞迴值也會,所以「還沒有循環收集器」不是讀者最先遇到的東西。而釋放一條長鏈會在
-> 原生 C stack 上**遞迴 O(depth)** 並溢位,則根本到不了:八百萬節點的鏈跑完也沒有溢位任何東西,因為那個會遞迴的
-> 釋放從來沒有發生。
+> 本段原本說的——那條鏈根本不會被釋放、cell 帶著一個 no-op drop、持有它的 binding 沒有登記任何 release——已經
+> 關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在**具現化新值之後**才把舊值
+> 還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
+> 配置數與 5 輪完全相同(`make mem-check`)。上面那句 stack 溢位就是這個修正的代價:在沒有東西被釋放的時候,
+> 它根本到不了。
 
 ---
 
@@ -105,12 +107,16 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
-> **[deviation]** 進入 **carrier** 的 reference-counted 值——channel 接收回傳的 `T?`、`Result[T]`——只有在
-> carrier 被**就地解包**的地方才會釋放。`if v := <-c { … }` 在保留它所綁的值之後就發出 drop;而被給了一個
-> **名字**的 carrier,`got := <-c`,一個都沒登記,於是永遠不會被釋放。drop 是有的,只是第二條路不呼叫它:carrier
-> 沒有 copy helper,所以在那裡登記 drop 會讓「同一個值的兩個名字」各還一次。因此以那種方式綁定、跨越 `chan[T]`
-> 的 refcount 值,每個值會漏掉一個 reference——`chan[int]` 看不出來,`chan[str]` 是真的——由
-> `test-data/codegen/chan_str_shared.zg`(這棵樹裡第一支送 `str` 的程式)在 LeakSanitizer 下量到。
+> **[deviation]** carrier 擁有它的 **Left**,不擁有它的 **Right**。「這個 carrier 到底有沒有擁有東西」這個問題
+> 只問 Left 的型別,所以 `Either[int, str]` 被判定為什麼都不擁有,於是**完全不會產生 copy helper、也完全沒有
+> drop**——而建構 Right 的那個 wrap 卻會 retain 它的 payload。因此每建構一個 Right 就漏掉一個 reference;而複製
+> 這種 carrier 是一次什麼都不計數的 bit copy:是洩漏,不是 double free,這也是它在 ASan 底下看不見的原因。
+> `Result[T]` 不受影響:它的 Right 是一個 `Err`,那份儲存屬於 runtime。這裡欠的是同一組配對套到另一側。
+>
+> 本段的 **Left** 那一半已經關掉了。carrier 現在有 copy helper,所以 binding 可以像其他每一個擁有型別那樣登記
+> drop:`got := <-c` 在 scope 結束時釋放它的 payload;被當成引數傳遞、被 return 出去、放在 struct 欄位或
+> `list[T?]` 元素裡的 carrier 也一樣;還有 `if v := <-c { … }` retain 進 binding 的那個值——那是第二個漏,而且
+> 根本不需要 carrier 被命名就會發生。以計數 allocator、200 輪對 5 輪實測(`make mem-check`)。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
@@ -133,6 +139,24 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 **聚合體內部**也被釘住：一個 `struct` 的欄位與一個 `enum` payload 的槽依**宣告的逆序**釋放。一個
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
 **後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
+
+**指派**也是一次釋放：寫過一個擁有東西的 binding 會釋放它原本持有的值，而新值一定在舊值被釋放**之前**就先建好
+——`s = s + x` 要讀 `s` 才做得出自己的右手邊。
+
+> **[deviation]** 只有遞迴 `enum` 與 carrier 這麼做。指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或
+> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;一個 `tuple` 在 scope 結束時也一樣——它有 copy helper
+> 而完全沒有 drop——`for … in` 走訪一個 **map** 時複製出來的那份集合也是。fn value 的部分實測過:迴圈裡
+> `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包的環境,以及它捕獲的那個值。每一個都是同一組配對缺了
+> 一半,而不是各自的規則;而且 `make mem-check` 裡目前一個案例都沒有——這正是「一道量不到東西的 gate」長的樣子。
+
+**`spawn` 捕獲的值屬於那個 coroutine**,不屬於發起它的 scope:環境為每一個捕獲值取得自己的一份 reference,並把它
+**交給** coroutine,由後者的 by-value 參數在函式體返回時還回去。那是每個捕獲值、在每一條退出路徑上各還一次,
+包含 abort-unwind 那條。
+
+> **[deviation]** 一個從來沒跑過的 coroutine 就從來不會還。環境在 `spawn` 當下就填好,而只有函式體會釋放它,
+> 所以一個 scheduler 始終沒輪到的 spawn——例如程式先結束了——會漏掉每個捕獲值各一個 reference,連同那塊環境。
+> 這是這一帶唯一一個哪裡都沒有案例的洩漏類別:`make sanitize-conc` 跑的程式,它們的 coroutine 全都會跑完,
+> 而 `make mem-check` 除了一個被排空的 channel 之外沒有任何併發案例。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 

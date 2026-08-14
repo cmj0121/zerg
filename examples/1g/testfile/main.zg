@@ -1,0 +1,24 @@
+# test files (positive): what a NORMAL build compiles, and what it leaves on the floor.
+#
+# A test file is recognized by its name — `*_test.zg` — and included only in a test build
+# (docs/runtime/package.md), so nothing it declares reaches a shipped artifact or joins a
+# module's public surface.
+#
+#   zerg build examples/1g/testfile/main.zg
+# Expected output:
+#   shipped
+#
+# `lib/` holds two files. `lib.zg` declares `greeting`, and `lib_test.zg` declares `greeting`
+# AGAIN plus a `pub fn only_in_test`. A build that compiled the test file could not get this
+# far — `greeting` would be defined twice and refused by name — so the program below building
+# at all is the assertion, and printing `shipped` rather than `under test` is the second half
+# of it: the surviving `greeting` is the module's, not the test's.
+#
+# The other direction is refused rather than demonstrated, because there is nothing to
+# demonstrate: `lib.only_in_test()` is `E388 module `lib` has no `only_in_test``, and
+# `import "lib/lib_test"` is `E512`. Both live in scripts/reject-check.sh.
+import "lib"
+
+fn main() {
+	print lib.greeting()
+}

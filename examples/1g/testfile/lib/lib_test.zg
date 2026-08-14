@@ -1,0 +1,19 @@
+# The white-box test beside the module it exercises (docs/runtime/package.md): a test is
+# ordinary code in a file of the SAME module, sharing its namespace and needing no import.
+#
+# THIS FILE IS WHAT PROVES THE EXCLUSION, and it does it by being a file the build cannot
+# survive. It declares `greeting` a second time, so a build that compiled it would be turned
+# away by name — rename it off the `_test` suffix and the example beside it stops building
+# with `E705`, which is the control that says this gate measures something. An exclusion that
+# quietly stopped working looks exactly like one that works, and the only way to tell them
+# apart is to make the included case fail.
+#
+# It also declares a `pub` name of its own, which is the half the shipped artifact used to
+# carry: `lib.only_in_test()` resolved and ran from a program that never asked for a test.
+pub fn greeting() -> str {
+	return "under test"
+}
+
+pub fn only_in_test() -> int {
+	return 42
+}

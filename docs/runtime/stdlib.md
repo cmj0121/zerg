@@ -238,10 +238,17 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**. `Atomic[T]` is a generic struct and a
-> generic struct is a form this compiler refuses, so `import "atomic"` itself reports
-> `NotImplemented: a generic struct`Atomic[…]``. The signatures below also name `Ref[T]`, which does not
-> exist either. It is the one module of the twelve that does not import cleanly.
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the thirteen that
+> does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
+> so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
+> ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
+> exist either. Share state across coroutines with a channel until this lands.
+>
+> It stays in the table rather than being taken out of the shipped set, because this compiler resolves
+> the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
+> `zerg fmt --check` and the rest of the self-source set, and rots unread until generics arrive. What
+> would be left at the import is _E502 cannot resolve import `atomic`_ — a sentence about a module
+> that is right there.
 
 | Function                                                       | Summary                                   |
 | -------------------------------------------------------------- | ----------------------------------------- |

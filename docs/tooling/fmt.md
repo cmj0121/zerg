@@ -796,6 +796,9 @@ shipping compiler rather than a part of it (the line
 | `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
 | `E392` | cannot `…` to `…`: only a `mut` collection can modify its elements                          |
 | `E393` | cannot `…` `…`: a collection is frozen against structural change inside its own `for` loop  |
+| `E394` | `…(…)` on a `float` — write the verb: `math.trunc` / `floor` / `ceil` / `round`             |
+| `E395` | a conversion is one step: `…` -> `…` is `…` -> `int` -> `…`, so write the two               |
+| `E396` | `…` is not a compiler primitive — the `__zrt_…` set is closed                               |
 | `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
 | `E402` | a `from` cause is an `Err`, and … is not one                                                |
 | `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |

@@ -445,11 +445,11 @@ does.
 > channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,
 > `ctx.log(msg)` (shown only if the test fails), `ctx.skip(reason)` and `ctx.fatal(msg)`. The
 > last two `raise` to unwind and leave the reason on the context, so nothing has to read a
-> message string to tell a skip from a failure. It also carries the `str` / `int` / `bool`
-> builders that accumulate **failure context**, and `ctx.assert(cond, msg)` as their terminal.
-> The **generic** assertions stay free functions (`testing.assert_eq`, `assert_ne`,
-> `assert_raises`) because a generic **method** is `E409 NotImplemented` while a generic free
-> function is not.
+> message string to tell a skip from a failure. A claim is `assert cond`, the keyword
+> ([Grammar](../surface/grammar.md), group 8), which writes its own message and needs nothing from
+> the context; what is left for `ctx.log` is a **domain note**, a thing about the fixture rather
+> than about the expression. `testing.assert_raises` stays a free function because it is not an
+> assertion: it asks what an already-finished call raised.
 >
 > **Fixtures.** A test **declares what it needs**, the framework builds it once, hands it over and
 > tears it down. A `#[fixture]` is a function that takes its tests as a **continuation**:
@@ -543,17 +543,15 @@ does.
 > left behind there is a file every later build reads.
 >
 > What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
-> test, benchmarks, and running two tests at once. A failing
-> `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
-> its own.
+> test, benchmarks, and running two tests at once. A failing assertion `raise`s, and a raise is
+> control flow, so it unwinds out of the test body on its own.
 >
-> The **assertion** side has since been filled in and is documented with the module
-> ([Standard Library](stdlib.md#testing)): a failed `assert_eq` names both values, `assert` takes a
-> message, `assert_raises` answers the `Err` a `guard`ed call raised, and a `Context` chain carries
-> named values into an assertion that is its terminal. What is still not there is a **method** form of
-> the generic assertions — `ctx.str("file", p).assert_eq(got, want)` is `E409`, a generic method — and
-> `assert_eq` still cannot take a `list[T]`, which implements no `Eq` (`E412`), so a function answering
-> a list is asserted through something that reduces it to a scalar.
+> The **assertion** side has since been filled in, and it is a KEYWORD rather than a library.
+> `assert cond` raises `AssertionError` with the file, the line, the claim's own source text and
+> the value of each operand a comparison came apart into. `testing.assert_raises` answers the
+> `Err` a `guard`ed call raised and is the one helper left. What is still not there is a rendering for a **composite**,
+> so `assert xs == ys` over two lists is `E445` and a claim about a list is made through something
+> that reduces it to a scalar.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

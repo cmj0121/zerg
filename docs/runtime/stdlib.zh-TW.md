@@ -297,57 +297,51 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 
 ## `testing`
 
-`#[test]` 函式用的斷言輔助，由 `zerg test` 建置並執行——那個指令走到哪裡，見
-[模組、套件與程式](package.zh-TW.md)。滿足的斷言是 `nil`；違反的會 `raise`，讓外圍
-`guard` 接住，或帶訊息 abort。它 raise 的是**沒有種類**的 `Err`——標準函式庫中唯一如此的模組，而且是刻意的：一次失敗的斷言是
-一個不成立的程式主張，不是函式無法接受的值，內建 taxonomy 沒有對應的種類。
+一個 `#[test]` 函式所需要、而**語言本身不給**的東西,供 `zerg test` 建置並執行——那個指令走到哪裡,見
+[模組、套件與程式](package.zh-TW.md)。
 
-| 函式                                               | 摘要                                         |
-| -------------------------------------------------- | -------------------------------------------- |
-| `assert(cond: bool, msg: str = "") -> Result[nil]` | `cond` 成立時通過；`msg` 說明是什麼          |
-| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]`      | `a == b` 時通過；失敗時報出兩個值            |
-| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]`      | `a != b` 時通過；失敗時報出那個值            |
-| `assert_raises[T](r: Result[T]) -> Err`            | 交回一次 `guard` 包住的呼叫所 raise 的 `Err` |
+**斷言不在這裡。** `assert cond` 是關鍵字（見 [Grammar](../surface/grammar.zh-TW.md) group 8）:訊息由編譯器寫,
+而它說得出三件函式永遠說不出的事——主張寫在哪個檔案哪一行、主張本身的原始文字、以及比較拆開後每個運算元當時的
+值。Zerg 沒有 `__FILE__`、也沒有呼叫端歸屬,而條件抵達輔助函式時已經是一個形狀被編譯掉的 `bool`;`assert_eq`
+是靠在呼叫端把運算元拆開才買回其中兩個值的。那就是它存在過的理由,也是它不必再存在的理由。
 
-失敗會說出值**當時是什麼**：`assert_eq failed: 2 != 3`、`assert_ne failed: both values are 7`。
-`assert(cond, msg)` 只有訊息可說，因為條件在失敗之前就已經被編譯掉了。
+失敗的主張 raise 的是 `AssertionError`,而且沒有別的東西會 raise 它——這正是 `zerg test` 能把它報成**失敗**、
+而把其他抵達測試本體頂端的東西報成**崩潰**的原因。
 
-`assert_raises` 拿的是**呼叫當下寫的那個 `guard`**，並把錯誤交回來，所以種類是用語言自己的 `is` 去問，而不是傳進去
-——在 Zerg 裡型別不是值，`assert_raises(f, ValueError)` 根本寫不出來：
+| 函式                                    | 摘要                                         |
+| --------------------------------------- | -------------------------------------------- |
+| `assert_raises[T](r: Result[T]) -> Err` | 交回一次 `guard` 包住的呼叫所 raise 的 `Err` |
+
+`assert_raises` 不是斷言,所以它仍是函式:它問的是一個**已經結束**的呼叫 raise 了什麼。它拿的是**呼叫當下寫的那個
+`guard`**,並把錯誤交回來,所以種類是用語言自己的 `is` 去問,而不是傳進去——在 Zerg 裡型別不是值,
+`assert_raises(f, ValueError)` 根本寫不出來:
 
 ```text
 e := testing.assert_raises(guard { strings.split("a,b", "") })
-testing.assert(e is ValueError, "split refused with the wrong kind")
+assert e is ValueError
 ```
 
 > 用 **closure**——`assert_raises(fn () { strings.split("a,b", "") })`——讀起來更好，但編不過：closure 主體
 > 只要提到被 import 的模組就是 _E735 a closure captures `strings`_，因為 namespace 是自由名稱，而 capture 得給它
 > 一個型別。每一個透過 `import` 取用自己模組的測試都是這個形狀，所以能服務它們的是 `guard`。
 
-### 帶結構的失敗脈絡
+### 執行中的測試說了什麼
 
-`Context` 用鏈式呼叫累積具名的值，而**斷言是終端**——刻意與 logger 的 `log.str(…).msg(…)` 相反：如果斷言在中間，
-忘了寫終端的那一次就會什麼都沒斷言，而 Zerg 沒有 `impl Drop` 可以察覺。
+`Context` 是測試對 runner 說話的那條 channel,它上面的每個方法都是一則訊息、而不是一項主張。
 
-| 方法                                               | 摘要                         |
-| -------------------------------------------------- | ---------------------------- |
-| `str(key: str, value: str) -> This`                | 為下一次斷言加一個具名 `str` |
-| `int(key: str, value: int) -> This`                | 加一個具名 `int`             |
-| `bool(key: str, value: bool) -> This`              | 加一個具名 `bool`            |
-| `assert(cond: bool, msg: str = "") -> Result[nil]` | 終端：帶著脈絡做斷言         |
+| 方法                               | 摘要                                    |
+| ---------------------------------- | --------------------------------------- |
+| `name() -> str`                    | 這個測試自己的名字,報告就是這樣印它     |
+| `log(msg: str)`                    | **只在**這個測試失敗時才顯示的一則註記  |
+| `skip(reason: str) -> Result[nil]` | 這個測試在這裡不適用;它不是失敗         |
+| `fatal(msg: str) -> Result[nil]`   | 現在就停,判定失敗——再走下去只會製造雜訊 |
 
 ```text
-ctx.str("file", path).int("row", i).assert(ok, "the row did not round-trip")
-# FAIL … assertion failed: the row did not round-trip [file=a.zg row=3]
+ctx.log("row 42")
+assert row.id == 42
 ```
 
-每個 builder 交回的是一份**複本**，所以一條鏈累積的東西只會到它自己的終端、不會流到下一個斷言；同時 `Context`
-內的 channel 仍是共用的，`log` / `skip` / `fatal` 從複本一樣送得到 runner。代價是每次呼叫都複製一次已累積的文字
-——N 個欄位的鏈搬動 O(N²) bytes，而一次失敗要的兩三個欄位只有幾十 bytes。
-
-builder **依型別分開**，因為 Zerg 沒有 varargs、沒有 `any`，也沒有泛型 struct 可以裝一串已渲染的值。
-
-> **[not yet]** `assert_eq`、`assert_ne` 與 `assert_raises` **沒有方法形式**，所以
-> `ctx.str("file", p).assert_eq(got, want)` 寫不出來：三者都是泛型，而泛型**方法**在這個編譯器是
-> _E409 NotImplemented: a generic METHOD_。這也正是 `assert_eq` 自己報出兩個值的主因。需要脈絡時，把值放進鏈裡、
-> 以 `assert` 收尾。
+**鏈式脈絡沒了。** `ctx.str("file", p).int("row", i).assert(ok, "…")` 之所以存在,是因為一個只會說
+`assertion failed` 的斷言需要一個地方掛上那些能讓它可讀的事實——而現在 `assert` 是關鍵字,它的終端根本寫不出來。
+除了那些值以外,一條鏈真正的用途是一則**領域註記**:關於 fixture、而不是關於運算式的事。`log` 本來就是那個,而且
+做得更好:只在失敗時顯示、掛在測試上而不是掛在單一斷言上,而且不需要終端就已經是完整的。

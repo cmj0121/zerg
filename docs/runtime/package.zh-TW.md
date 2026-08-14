@@ -316,16 +316,85 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > 因為結果只在本體返回之後才寫下——這才把「死掉」歸到造成它的那個測試身上。這件事發生時,報告會用一行
 > `NOTE` 說出來;一次悄悄換了策略的執行,是一次沒有人能解讀結果的執行。
 >
-> 一個 `#[test]` 不回傳,參數則是**沒有**或**一個 `testing.Context`**,以型別辨識而非以參數名字辨識;driver
-> 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
+> 一個 `#[test]` 不回傳,參數則是**沒有**、**一個 `testing.Context`**(以型別辨識而非以參數名字辨識),或是它
+> 需要的 **fixture**(以名字比對);driver 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
 > `Ref` 值,複製即共享——上頭有 `ctx.name()`、`ctx.log(msg)`(只在測試失敗時顯示)、`ctx.skip(reason)` 與
 > `ctx.fatal(msg)`。後兩者以 `raise` 解開、把理由留在 context 上,所以沒有任何一方需要比對訊息字串才能分辨
 > skip 與 fail。斷言維持**自由函式**(`testing.assert_eq`),因為泛型**方法**是 `E409 NotImplemented`,泛型
 > 自由函式則不是。
 >
-> **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、**fixture**
-> ——setup 與 teardown、benchmark,以及同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制
-> 流,所以它自己就會從測試本體解開出去。
+> **Fixture。** 一個測試**宣告它需要什麼**,框架建置一次、交給它,再拆掉。`#[fixture]` 是一個把自己的測試當作
+> **continuation** 收下的函式:
+>
+> ```zerg
+> #[fixture]
+> fn db(use: fn (Conn)) {
+>     c := connect("postgres://tmp/test")
+>     defer c.close()
+>     use(c)
+> }
+>
+> #[fixture]
+> fn schema(db: Conn, use: fn (Schema)) {
+>     s := make_schema(db)
+>     defer drop_schema(s)
+>     use(s)
+> }
+> ```
+>
+> `use: fn (T)` **以型別辨識**,而且一次是兩件事:測試執行所在的 continuation,以及這個 fixture **產出什麼**的宣告。
+> 其餘每個參數都是**以名字比對**到另一個 fixture 的相依——測試對 fixture、fixture 對 fixture,都是同一條規則。
+> teardown 就是 `defer`,語言自己的慣用法,不需要 runner 提供任何東西。
+>
+> 測試用同樣的方式解析自己的參數:`testing.Context` **以型別**,fixture **以名字**,沒有參數則直接呼叫。
+>
+> ```zerg
+> #[test]
+> fn test_insert(schema: Schema) { … }
+>
+> #[test]
+> fn test_query(db: Conn, ctx: testing.Context) { … }
+>
+> #[test]
+> fn test_pure() { … }
+> ```
+>
+> 框架**以巢狀組合**——`db(fn (c) { … schema(c, fn (s) { … }) })`——所以相依順序、teardown 順序（內層的 `defer`
+> 先觸發）與「只在需要時才建」,全都是「呼叫寫在哪裡」的結果。執行期沒有拓撲排序,也沒有 teardown 登記表;沒有任何
+> 測試經過的那一層,根本不會被生成。
+>
+> **一切都在任何東西執行之前先解析完。** 指名不到 fixture 的參數、型別不是該 fixture 產出物的參數,以及 fixture
+> 之間的**環**,都會**帶位置**、對整棵樹一次報完,然後這次執行以 `2` 結束,什麼都沒跑。
+>
+> **建不起來的 fixture 會讓每個需要它的測試 FAIL**——`FAIL test_query`,底下寫著
+> _fixture `db` could not be built: …_,而整次執行以非零結束:跑不成的測試絕不可以看起來像通過的測試。若 raise
+> 是在它底下每個測試都已經各自有交代之後才到,壞掉的是 **teardown**,這個失敗就記在 fixture 身上,而不是記在誰的
+> 測試上。
+>
+> **fixture 住在哪裡,以及誰繼承它。** fixture 宣告在 `*_test.zg` 裡,所以到不了任何出貨建置,而它服務**自己這個
+> 目錄**的測試。要連**底下**的目錄一起服務的,就寫進 **`fixtures_test.zg`**——祖先目錄唯一會往下傳的檔案,傳給它
+> 底下的**每一層**,而不只是下一層。這是 pytest 的 `conftest.py` 模型,而固定的檔名承擔了兩件事:一般的
+> `*_test.zg` 是它所屬模組的**一個檔案**,會讀該模組的私有名字,把它帶進底下的目錄等於放進一個那些名字不存在的
+> scope;而祖先自己的測試否則會在每個後代目錄各跑一次。寫在 `fixtures_test.zg` 裡的 `#[test]` 只在它自己的目錄
+> 跑一次,和其他測試一樣。祖先是從 `zerg test` **被給定的**那個路徑算起。
+>
+> 被繼承的檔案在這次執行期間會被**複製進該套件**,因為模組就是**目錄**——生成的 driver 寫在那裡也是同一個理由。
+> 複製是逐位元組的,所以裡面的診斷仍指向正確的**行**,而它會隨執行結束一起被移除。因此套件無法**遮蔽**一個被繼承
+> 的 fixture:同一個 scope 裡兩個同名宣告,就以它本來的樣子——衝突——被拒絕。
+>
+> **範圍是套件,不是 session。** `pkg/sub` 與 `pkg/sub2` 各自建置一份被繼承 fixture 的**自己的**實例,因為各自是
+> 一個 driver、一個行程。這是 pytest 的 `scope="package"`。session 範圍是刻意不要的,而且本來也到不了:`E705`
+> 會拒絕兩個模組同時定義一個 `pub` 名字,所以整棵樹一個 driver 蓋不出來,而活著的值也跨不過行程邊界。
+>
+> fixture 的值抵達測試的方式,和任何值抵達一次呼叫的方式一樣——**傳值**——而測試主體跑在 `spawn` 的另一側,所以
+> 裡面的 `Ref`（channel、盒裝 handle）是共享的,其餘是複製的。測試是**序列**執行的;`ctx.parallel()` 是
+> **[not yet]**,等它落地之後,共用同一個 fixture 的測試會共用它的同一個實例。
+>
+> **fallback 會重建它需要的東西。** 當一個測試把行程結束掉、剩下的以一個行程一個測試重跑時,那些行程只會進入
+> 「它被要求的那個測試所在」的層——所以它會把那個測試的 fixture 重新立起來,而且不會多立別的。
+>
+> **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、benchmark,以及
+> 同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制流,所以它自己就會從測試本體解開出去。
 >
 > **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
 > 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的

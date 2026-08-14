@@ -46,9 +46,23 @@ func TestFStrFormatSpec(t *testing.T) {
 	}
 }
 
-// TestTestingAssertPasses checks the bundled `testing` module: a satisfied
-// assert_eq/assert is `nil` (Ok), so `!` unwraps it and the program runs on.
-func TestTestingAssertPasses(t *testing.T) {
+// The two below are `AssertionError` end to end through the SEED — build it, link it, run it.
+//
+// THREE TESTS OF THE `testing` MODULE STOOD HERE and could not be kept. They exercised
+// `assert_eq`, `assert` and `assert_ne`, which are gone: the assertion is the `assert`
+// KEYWORD now, and a keyword is exactly what the seed does not have. What is left of the
+// module is `assert_raises`, which the seed cannot call either — its argument is a generic
+// `Result[T]` and the seed answers _cannot use Either[int, Err] as Either[T, Err]_ at every
+// call site, which was true before this change too.
+//
+// So what a SEED test can still reach of the same subject is the ERROR KIND. That is the one
+// piece of `assert` the seed carries, deliberately: the numbering is an ABI shared with the
+// runtime, and these two are what hold the seed's table, the emitter's constant and
+// `zrt_err_kindname` to each other on a running program rather than by reading three files.
+
+// TestAssertionErrorKindRoundTrips checks that a raised AssertionError comes back as one:
+// the kind survives the raise, the guard and the reification, and it is not some other kind.
+func TestAssertionErrorKindRoundTrips(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		t.Skip("no C compiler")
@@ -56,26 +70,35 @@ func TestTestingAssertPasses(t *testing.T) {
 	if !asanAvailable(t, cc) {
 		t.Skip("toolchain cannot link the sanitizer runtime")
 	}
-	const src = "import \"testing\"\n" +
+	const src = "fn boom() -> Result[int] {\n" +
+		"  raise AssertionError(\"a claim that did not hold\")\n" +
+		"}\n" +
 		"fn main() -> Result[nil] {\n" +
-		"  testing.assert_eq(2 + 2, 4)!\n" +
-		"  testing.assert(2 < 3)!\n" +
-		"  testing.assert_ne(1, 2)!\n" +
-		"  print \"all passed\"\n" +
+		"  match guard { boom()! } {\n" +
+		"    Either.Left(v) => { print v }\n" +
+		"    Either.Right(e) => {\n" +
+		"      print e is AssertionError\n" +
+		"      print e is ValueError\n" +
+		"      print e.message()\n" +
+		"    }\n" +
+		"  }\n" +
 		"}"
 	bin := buildASan(t, cc, src)
 	stdout, stderr, err := run(t, bin)
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr)
 	}
-	if stdout != "all passed\n" {
-		t.Fatalf("assert pass = %q, want %q", stdout, "all passed\n")
+	want := "true\nfalse\na claim that did not hold\n"
+	if stdout != want {
+		t.Fatalf("AssertionError round-trip = %q, want %q", stdout, want)
 	}
 }
 
-// TestTestingAssertFailAborts checks a violated assertion is observable: an uncaught
-// failing assert_eq raises, so the program exits non-zero and reports the message.
-func TestTestingAssertFailAborts(t *testing.T) {
+// TestAssertionErrorAbortsWithItsName checks the other end of the mirror: an uncaught one
+// exits non-zero and the RUNTIME names it. That name is built in zrt_err_kindname, from the
+// number this package's table hands out — so a kind added here and not there would print
+// nothing in front of its message, silently, which is the failure this asserts against.
+func TestAssertionErrorAbortsWithItsName(t *testing.T) {
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		t.Skip("no C compiler")
@@ -83,49 +106,19 @@ func TestTestingAssertFailAborts(t *testing.T) {
 	if !asanAvailable(t, cc) {
 		t.Skip("toolchain cannot link the sanitizer runtime")
 	}
-	const src = "import \"testing\"\n" +
-		"fn main() -> Result[nil] {\n" +
-		"  testing.assert_eq(1, 2)!\n" +
+	const src = "fn main() -> Result[nil] {\n" +
+		"  raise AssertionError(\"a claim that did not hold\")\n" +
 		"  print \"unreached\"\n" +
 		"}"
 	bin := buildASan(t, cc, src)
 	stdout, stderr, err := run(t, bin)
 	if err == nil {
-		t.Fatalf("a failing assert must exit non-zero; stdout=%q", stdout)
+		t.Fatalf("an uncaught AssertionError must exit non-zero; stdout=%q", stdout)
 	}
 	if strings.Contains(stdout, "unreached") {
-		t.Fatalf("the statement after a failing assert must not run; stdout=%q", stdout)
+		t.Fatalf("the statement after the raise must not run; stdout=%q", stdout)
 	}
-	if !strings.Contains(stderr, "assert_eq failed") {
-		t.Fatalf("stderr = %q, want the assert_eq failure message", stderr)
-	}
-}
-
-// TestTestingAssertGuardCatches checks a failing assertion is recoverable as a value:
-// wrapped in a `guard`, its raise is demoted to a Right, so the program continues.
-func TestTestingAssertGuardCatches(t *testing.T) {
-	cc, err := exec.LookPath("cc")
-	if err != nil {
-		t.Skip("no C compiler")
-	}
-	if !asanAvailable(t, cc) {
-		t.Skip("toolchain cannot link the sanitizer runtime")
-	}
-	const src = "import \"testing\"\n" +
-		"fn checked() -> Result[int] {\n" +
-		"  testing.assert_eq(1, 2)!\n" + // raises
-		"  return 1\n" +
-		"}\n" +
-		"fn main() -> Result[nil] {\n" +
-		"  g := guard { checked()! }\n" + // guard catches the raise
-		"  print (g ?? -1)\n" + // -1: the caught failure
-		"}"
-	bin := buildASan(t, cc, src)
-	stdout, stderr, err := run(t, bin)
-	if err != nil {
-		t.Fatalf("run: %v\n%s", err, stderr)
-	}
-	if stdout != "-1\n" {
-		t.Fatalf("guard-caught assert = %q, want %q", stdout, "-1\n")
+	if !strings.Contains(stderr, "AssertionError: a claim that did not hold") {
+		t.Fatalf("stderr = %q, want the kind's own name in front of the message", stderr)
 	}
 }

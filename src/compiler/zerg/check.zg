@@ -1259,6 +1259,205 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
 }
 
+# chk_intrinsic_arity IS THE SET of compiler primitives, and it answers both questions asked of
+# that set: whether a `__zrt_…` name is one at all, and how many operands it takes. `-1` is "not
+# a primitive", which is what lets one function do both — two lists of the same 28 names is the
+# drift this file refuses everywhere else.
+#
+# A primitive is not a function anyone declares. The emitter lowers the name directly, by
+# stripping the prefix, so before this the set was whatever the emitter would strip:
+# `__zrt_trunk(x)` emitted `zrt_trunk(x)` into C and was reported by cc against a file in
+# .zerg-cache that nobody wrote — the one report this compiler exists to get in front of — and
+# `__zrt_trunc()` with no argument still did, which is what the arity half closes.
+#
+# The names and the arities are the seed's switch (src/bootstrap/internal/sema/infer.go), entry
+# for entry. Both compilers build the same `src/stdlib/*.zg`, so a leaf one knows and the other
+# does not is a standard library that builds under only one of them.
+#
+# OPERAND TYPES ARE CHECKED BY NEITHER, and that is measured rather than assumed. The seed HAS
+# the machinery — `unaryIntrinsic(n, Float, Int)` checks its argument against `Float` — and it
+# does not fire: `__zrt_trunc("hello")` reaches cc under both compilers, and `__zrt_trunc(true)`
+# builds under both and prints `1`, a silent miscompile they share. So it is a gap of the SET
+# rather than a place this compiler is behind the seed — and where the two do differ it runs the
+# other way, `zerg` reporting the cc failure against the `.zg` line and the seed against a temp C
+# file nobody wrote. Named here as the gap it is, rather than left looking like coverage.
+#
+# It says nothing about WHO may call one. A primitive is the standard library's way down to the
+# machine and a program has no business writing one, but this compiler's own driver reaches for
+# `__zrt_exec`, `__zrt_exit` and `__zrt_listdir` in thirty places, several of which no stdlib
+# function wraps — so a stdlib-only rule is a refusal that would first have to be given somewhere
+# to point.
+fn chk_intrinsic_arity(name: str) -> int {
+	return 0 if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return 0 if name == "__zrt_platform" or name == "__zrt_arch" or name == "__zrt_exe_path"
+
+	return 1 if name == "__zrt_open" or name == "__zrt_open_write" or name == "__zrt_read" or name == "__zrt_close"
+	return 1 if name == "__zrt_sleep_ns" or name == "__zrt_trunc"
+	return 1 if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_exit"
+	return 1 if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
+	return 1 if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
+	return 1 if name == "__zrt_atomic_load"
+
+	return 2 if name == "__zrt_write" or name == "__zrt_write_bytes"
+	return 2 if name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
+
+	return 3 if name == "__zrt_atomic_cas"
+
+	return 0 - 1
+}
+
+# chk_is_intrinsic is that set as a predicate. The emitter asks it before it decides a leaf's
+# RESULT TYPE, so a name the set does not hold answers TUnknown rather than nil — which is what
+# earns an unknown primitive one diagnostic instead of two. The second one said `print` had been
+# handed a nil: a true sentence about a type this compiler invented for a name it had, in the
+# line above, already said it does not have.
+pub fn chk_is_intrinsic(name: str) -> bool {
+	return chk_intrinsic_arity(name) >= 0
+}
+
+# chk_intrinsic_call holds one CALL to that set — the name first, and then the count, because a
+# name that is not a primitive has no arity to be wrong about.
+fn chk_intrinsic_call(mut &em: Emitter, name: str, argc: int) {
+	n := chk_intrinsic_arity(name)
+
+	if n < 0 {
+		chk_at(em, "E396", f"`{name}` is not a compiler primitive — the `__zrt_…` set is closed and belongs to the standard library, which reaches the runtime through it")
+		return
+	}
+
+	return if argc == n
+
+	chk_at(em, "E397", f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
+}
+
+# chk_conv_pair holds a WRITTEN `T(x)` to the same table, and it is the half that was never
+# asked. chk_into_builtin above decided which conversions exist, and only the ADOPTION path
+# consulted it: a written conversion went straight to the lowering, which lowers by SHAPE and
+# so had an answer for every pair of scalars. `float(b)` on a byte, `byte(3.5)`, `uint(3.5)`
+# and `rune(65.5)` are four pairs the table declares absent, and all four compiled and ran.
+#
+# One table, asked at both ends. The pairs are not re-listed here — this is chk_into_builtin
+# and nothing else — because a second list is how the two ends come to disagree.
+#
+# Two things are let through ahead of it. A conversion to the SAME scalar is not a pair in the
+# table at all: `int(i)` is the identity, which the table has no row for because there is
+# nothing to convert, and reading its absence as a refusal would refuse a no-op. And a side
+# that is not a numeric scalar — a `bool`, a `type X = Y`, a type inference could not work out
+# — is not this rule's, for the reasons chk_into_side gives.
+fn chk_conv_pair(mut &em: Emitter, want: Ty, got: Ty, nm: str) {
+	return if not chk_into_side(want) or not chk_into_side(got)
+	return if chk_conv_same(want, got)
+	return if chk_into_builtin(want, got)
+
+	# THE FLOAT SOURCE HAS ITS OWN SENTENCE, because it is the one absence that is a decision
+	# rather than a missing step. `float -> int` is not on the table for the reason the spec
+	# gives: four different answers are defensible and the language will not pick one, so the
+	# fix is a verb and not a second conversion. Sending a reader to "write the two steps"
+	# would send them to `int(x)`, which is this very refusal.
+	if c_is_float(got) {
+		chk_at(em, "E394", f"`{nm}(…)` drops the fraction of a `float`, and dropping a fraction is a decision this language spells with a VERB: `math.trunc`, `math.floor`, `math.ceil` and `math.round` each answer an `int` — write `{chk_conv_verb(want, nm)}`")
+		return
+	}
+
+	chk_at(em, "E395", f"a conversion is ONE STEP, and `{ty_name(got)}` -> `{ty_name(want)}` is `{ty_name(got)}` -> `int` -> `{ty_name(want)}` — write the two, as `{nm}(int(x))`")
+}
+
+# chk_conv_verb is the spelling E394 sends a reader to. An `int` target is the verb alone; any
+# other target is the verb and then the conversion that was written, which is the two-step rule
+# arriving at the same place from the other side.
+fn chk_conv_verb(want: Ty, nm: str) -> str {
+	return "math.trunc(x)" if c_is_int(want)
+
+	return f"{nm}(math.trunc(x))"
+}
+
+# chk_conv_same is "these are the same scalar", asked as the SHAPE rather than as a type
+# equality: a class and a width name each of the five built-in numeric types exactly once
+# (int is signed-64, rune signed-32, byte unsigned-8, uint unsigned-64, float float-64), and
+# the shape is what the conversion machinery reads everywhere else.
+fn chk_conv_same(a: Ty, b: Ty) -> bool {
+	return c_scalar_class(a) == c_scalar_class(b) and c_scalar_bits(a) == c_scalar_bits(b)
+}
+
+# chk_conv_const is the CONSTANT layer of a written `T(x)`, and the whole of it is which entry to
+# the fold it asks.
+#
+# docs/core/types.md states the criterion as "THE VALUE IS KNOWN", and the language already had a
+# second, broader reading of that phrase: `[0; N]` reaches through a plain binding, through a
+# `const`, and through constant arithmetic over either, because a fill count asks `chk_const_eval`
+# — the fold WITH the name leaf, reading the `env_cval` column every binder fills. The conversion
+# asked `chk_int_lit`, the fold with names switched off, so `big := 300; byte(big)` died at run
+# time while `[0; big]` folded. One sentence, two answers, which is the thing this project forbids.
+#
+# It is not two folders and never was: `chk_lit_eval` and `chk_const_eval` are one recursion with
+# one operator set and one checked arithmetic, entered with `names` false or true. So this is a
+# change of ENTRY and not a new mechanism, and the notion a reader has to hold is still one.
+#
+# THE LINE FALLS AT A CALL. `byte(idi(300))` and `byte(id(300))` still raise where they run, for
+# an ordinary function and a generic one alike — a call is not a constant form, which the spec
+# says of enum discriminants in the same words: "`A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1`
+# are all the form and a call is not."
+#
+# A WRITTEN LITERAL TREE KEEPS ITS OWN SENTENCES, and that is a refinement rather than a second
+# rule: it can be told which LEAF is wrong (`byte(300 - 100)` is about the `300`, not about the
+# 200 it folds to), whether a divisor is zero, and that `uint`'s upper half is a literal too.
+# None of those questions can be asked of a value arriving through a name, so a name gets the
+# range test and the sentence that names it.
+fn chk_conv_const(mut &em: Emitter, want: Ty, e: Expr) {
+	return if not chk_into_side(want)
+
+	if chk_int_lit(e) {
+		chk_const_into_at(em, want, e, false)
+		return
+	}
+
+	f := chk_const_eval(em, e)
+
+	return if not f.ok or c_is_float(want)
+	return if chk_fold_in_range(em, want, f)
+
+	chk_out_of_range(em, want, chk_fold_offender(e, f))
+}
+
+# chk_fold_in_range is chk_int_in_range given a FOLDED value rather than a written literal. That
+# function takes a magnitude and a sign, because a literal's minus is a separate node; a fold has
+# already done the subtraction, so the sign is taken off the number here.
+fn chk_fold_in_range(mut &em: Emitter, want: Ty, f: Folded) -> bool {
+	return chk_int_in_range(em, want, f.value, false) if f.value >= 0
+
+	# THE COMPILER'S OWN ARITHMETIC IS CHECKED, so INT_MIN's magnitude is not a number this can
+	# compute — `0 - f.value` would raise inside the compiler about a value in the program. It is
+	# also the one value with nothing to compute: no target narrower than a signed 64 holds it,
+	# and a signed 64 is the type it already has.
+	mag := guard { 0 - f.value } ?? 0
+
+	return chk_int_in_range(em, want, mag, true) if mag > 0
+
+	return c_scalar_class(want) == SC_SIGNED and c_scalar_bits(want) >= 64
+}
+
+# chk_fold_offender names what the reader has to change, and the rule is the same one twice: DO
+# NOT QUOTE A NUMBER THE READER DID NOT WRITE. `300` in backticks reads as a thing on the line,
+# so a reader shown it goes looking for it — and everything reaching here got its value from
+# somewhere else, which is what made the fold necessary in the first place.
+#
+# A NAME is said together with what it holds, "`big`, which is 300", because the name IS on the
+# line and the number is what the name is hiding. Anything else is a tree the fold computed —
+# `N * 3`, `big - 0` — where no single fragment is the offender and quoting the product would
+# name none of the three things actually written; "this expression" is the phrase E332 already
+# uses next door for the same situation, so the two read alike.
+#
+# A literal tree never arrives here at all: chk_conv_const gives it to chk_const_into_at, which
+# can name the offending LEAF and says so.
+fn chk_fold_offender(e: Expr, f: Folded) -> str {
+	v := strconv.to_string(f.value, 10)
+
+	return match e {
+		Expr.EIdent(n) => f"`{n}`, which is {v},"
+		_ => f"this expression, whose value is {v},"
+	}
+}
+
 # chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
 # is not a type error. `b: byte = 300` type-checks — `int → byte` is a conversion this language
 # has — and what is wrong with it is the VALUE. Saying "cannot bind int to a byte binding"
@@ -1298,7 +1497,20 @@ fn chk_const_into_at(mut &em: Emitter, want: Ty, e: Expr, noted: bool) {
 	return if chk_lit_fits_noted(em, want, e, noted)
 	return if chk_const_unfoldable(em, want, e)
 
-	chk_at(em, "E330", f"`{chk_lit_offender(em, want, e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+	chk_out_of_range(em, want, f"`{chk_lit_offender(em, want, e, false)}`")
+}
+
+# chk_out_of_range is E330's ONE report site, and it is one because a code is an IDENTITY. Two
+# callers reach it — a written literal tree, which can be told which leaf is wrong, and a value
+# arriving through a name, which is named together with what it holds — and they are one rule
+# said two ways: the value is known, and the conversion is known to fail. A second `chk_at`
+# wearing this code would be two rules under one name, which is what `error-codes-check` refuses
+# and what a reader chasing a code would find no single answer for.
+#
+# The sentence says "the value is known" rather than "the conversion is known", which is the
+# criterion docs/core/types.md states and the one both callers actually apply.
+fn chk_out_of_range(mut &em: Emitter, want: Ty, says: str) {
+	chk_at(em, "E330", f"{says} is not a value a {ty_name(want)} holds — the value is known here, so it is reported now rather than raised")
 }
 
 fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool {

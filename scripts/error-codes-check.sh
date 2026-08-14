@@ -49,6 +49,19 @@ set -uo pipefail
 
 SRC=${SRC:-src/compiler}
 DOC=${DOC:-docs/tooling/fmt.md}
+
+# THE MIRROR IS A SECOND COPY OF THE CATALOGUE, and a second copy owes a gate. Everything
+# above compared three sets and every one of them was read from $DOC alone, so a code could be
+# reported, gate-asserted and listed in English while the zh-TW table beside it said the rule
+# does not exist — which it did, for eleven codes, silently.
+#
+# The retired heading is a PARAMETER rather than a shared string because it is prose: the
+# mirror translates it, so a range keyed on the English spelling matches nothing there and
+# swallows the retired rows into the live set. One knob per file is what keeps the two tables
+# read the same way rather than approximately.
+DOC_MIRROR=${DOC_MIRROR:-docs/tooling/fmt.zh-TW.md}
+DOC_RETIRED=${DOC_RETIRED:-'^### Retired codes'}
+DOC_MIRROR_RETIRED=${DOC_MIRROR_RETIRED:-'^### 已退場的代碼'}
 GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
 fail=0
@@ -89,13 +102,21 @@ codes_in_gates() {
 # `### Retired codes` heading a row is on rather than by the row itself. A heading is what
 # a reader already uses to tell them apart, and giving the retired rows a different column
 # layout would be a second spelling of a code for the sake of a grep.
-codes_in_doc() {
-	sed -n "1,/^### Retired codes/p" "$DOC" |
+codes_listed() {
+	sed -n "1,/$2/p" "$1" |
 		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
 }
 
+codes_in_doc() {
+	codes_listed "$DOC" "$DOC_RETIRED"
+}
+
+codes_in_mirror() {
+	codes_listed "$DOC_MIRROR" "$DOC_MIRROR_RETIRED"
+}
+
 codes_retired() {
-	sed -n "/^### Retired codes/,\$p" "$DOC" |
+	sed -n "/$DOC_RETIRED/,\$p" "$DOC" |
 		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
 }
 
@@ -116,6 +137,7 @@ stages_in_doc() {
 src=$(codes_in_source)
 gates=$(codes_in_gates)
 doc=$(codes_in_doc)
+mirror=$(codes_in_mirror)
 retired=$(codes_retired)
 
 # A FLOOR, and it is on the catalogue rather than on the compiler. Every comparison below is
@@ -144,6 +166,8 @@ report "reported by the compiler, asserted by no gate" "$(comm -23 <(printf '%s\
 report "asserted by a gate, reported by no source" "$(comm -13 <(printf '%s\n' "$src") <(printf '%s\n' "$gates"))"
 report "reported by the compiler, missing from the catalogue" "$(comm -23 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
 report "in the catalogue, reported by no source" "$(comm -13 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
+report "in the catalogue, missing from $DOC_MIRROR" "$(comm -23 <(printf '%s\n' "$doc") <(printf '%s\n' "$mirror"))"
+report "in $DOC_MIRROR, missing from the catalogue" "$(comm -13 <(printf '%s\n' "$doc") <(printf '%s\n' "$mirror"))"
 
 # EVERY RULE HAS ONE, which is the half the three sets cannot see: they compare codes that
 # already exist, so a rule reported with no code at all is absent from all three and nothing

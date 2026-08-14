@@ -787,6 +787,17 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E486` | 解構賦值 `(a, b) = …` — **[not yet]**                                                                 |
 | `E487` | `…` 只能用在後面的 `struct`、`enum` 或 `spec` 上,而後面是 `…`                                         |
+| `E488` | `unsafe fn(…)` 型別 — **[not yet]**                                                                   |
+| `E489` | 在 `….…`(帶點的目標)上的 `impl` — **[not yet]**                                                       |
+| `E490` | `impl` 的 spec 以裸 `type-name` 指名,而 `….…` 是透過 import 取得的                                    |
+| `E491` | 泛型的 `type …[…] = …` — **[not yet]**                                                                |
+| `E492` | variant payload 裡的子 pattern — **[not yet]**                                                        |
+| `E493` | 把 range 當成值使用 — **[not yet]**                                                                   |
+| `E494` | `is …` 指名了內建錯誤種類之一 — **[not yet]**                                                         |
+| `E495` | decorator 至少要持有一個項目,而 `#[]` 沒有指名任何要套用的東西                                        |
+| `E496` | decorator `#[sealed]` — 保留 — **[not yet]**                                                          |
+| `E497` | `#[derive]` 要指名要產生的 spec                                                                       |
+| `E498` | channel 是雙向、只收或只送                                                                            |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 | `E503` | 不能在 send-only 的 `…` 上接收                                                                        |

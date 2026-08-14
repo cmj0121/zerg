@@ -379,6 +379,21 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `zerg` now records which module WROTE each binding and refuses a namespace this one did not
   import — while still telling that apart from an invented prefix, which stays an undefined
   name in both compilers.
+- **A DECLARED TYPE NAME NEED NOT BEGIN WITH AN UPPER-CASE LETTER.** `struct _Box`,
+  `struct __Box` and `struct lower` all build and run here. `zerg` refuses each at the
+  declaration (`E610`): the case of the first letter is how it tells a construction from a
+  call and a module qualifier from an associated type, and the last two are decided by the
+  PARSER, which has resolved nothing and has no table to consult — so a lower-case type
+  would be legal in one position and misread in three. GRAMMAR#type-ident derives the rule.
+  The seed resolves the name against its symbol table instead, so the letter never matters
+  to it. Three cases in `reject-check.sh` carry the marker.
+- **A COMPILER PRIMITIVE'S OPERAND TYPES are not checked.** The machinery is there —
+  `unaryIntrinsic(n, Float, Int)` in `internal/sema/infer.go` names the argument type — and it
+  does not fire, so `__zrt_trunc(true)` builds and prints `1`, and `__zrt_trunc("hello")` is
+  emitted for cc to reject against a temp C file nobody wrote. `zerg` answers both at the call
+  (`E398`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
+  operand is either a cc diagnostic or an answer that is quietly wrong where C converts it.
+  Two cases in `reject-check.sh` carry the marker.
 
 ## Changing the seed
 

@@ -274,7 +274,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
 >
 > **[deviation]** 被保留的是**工具鏈真正綁定的名字**，比本頁所述的 prelude 窄。`struct list`、`fn int`、
-> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E610 `list` is a prelude name — a built-in container type —
+> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E611 `list` is a prelude name — a built-in container type —
 > and cannot name a struct_，並附位置——`map`、`bytearray`、`runearray`、`Either`、`Result`、`Err`、`Right`
 > 與 `Into` 亦然。同一段承諾、但**這裡沒有任何東西宣告**的那些名字——`Ord`、`Hash`、`Error`、`Iterator`、
 > `Iterable`、`Ref` 與 `set`——沒有被保留：程式自己的 `spec Ord` 就是唯一的 `Ord`，拒絕它等於為一個不存在的

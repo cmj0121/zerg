@@ -355,7 +355,7 @@ exception.
 >
 > **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
 > this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
-> — _E610 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
+> — _E611 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
 > — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
 > the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
 > `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`

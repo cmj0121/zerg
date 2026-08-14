@@ -6816,7 +6816,8 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[
 }
 
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
-	if c_is_intrinsic(name) {
+	if c_is_intrinsic(em, name) {
+		chk_intrinsic_call(em, name, args.len())
 		em.used_rt = true
 		return f"{c_intrinsic(name)}({c_args(em, args, sb)})"
 	}
@@ -8159,7 +8160,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 	# asking here costs the first ask and nothing after it.
 	return c_lookup_sig_ret(em, c_instantiate(em, name, args)) if c_is_generic(em, name)
 
-	return c_intrinsic_ret(name) if c_is_intrinsic(name)
+	return c_intrinsic_ret(name) if c_is_intrinsic(em, name)
 	return Ty.TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
 
 	# a BUILT-IN ERROR constructor answers an `Err`, not a type of its own name. It reads as
@@ -8182,11 +8183,23 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
 	return c_lookup_sig_ret(em, name)
 }
 
-# c_is_intrinsic reports whether a name is a runtime intrinsic (a __zrt_ primitive).
-fn c_is_intrinsic(name: str) -> bool {
-	b := bytearray(name)
-	return false if b.len() < 2
-	return b[0] == b'_' and b[1] == b'_'
+# c_is_intrinsic reports whether a name is lowered as a runtime primitive.
+#
+# THE PREFIX IS `__zrt_`, NOT TWO UNDERSCORES. GRAMMAR#identifier admits `_` anywhere in a name
+# and reserves no prefix at all, so `fn __my_helper(x: int) -> int` is an ordinary declaration —
+# and this claimed it, lowering the call to `my_helper(…)` for cc to report against generated C.
+# Closing the primitive set turned that silent miscompile into a refusal of a legal program,
+# which is worse: the seed builds it and prints 2. The family the standard library actually
+# reaches through is `__zrt_`, and that is the whole of what this may take.
+#
+# A DECLARATION STILL WINS. A program that declares `__zrt_foo` and calls it means its own
+# function, the same way `c_err_kind` and the conversions defer to a name a program shadows —
+# so a primitive is what a program does NOT declare, which is also why one can never be a typo
+# for something the program wrote.
+fn c_is_intrinsic(mut &em: Emitter, name: str) -> bool {
+	return false if not strings_has_prefix(name, "__zrt_")
+
+	return not c_is_free_fn(em, name)
 }
 
 # c_intrinsic maps a __zrt_ intrinsic to its runtime C symbol.
@@ -8217,6 +8230,13 @@ fn c_intrinsic(name: str) -> str {
 # reads it as such; a leaf that answers something and is missing is a bug in this table,
 # which is now a bug that a binding will report.
 fn c_intrinsic_ret(name: str) -> Ty {
+	# A NAME THE SET DOES NOT HOLD HAS NO RESULT TYPE, and TNil is not "no type" — it is a
+	# type, and every rule downstream believed it. `print __zrt_trunk(1.5)` therefore earned
+	# E390 as well, a true sentence about a nil this compiler had invented for a name it had
+	# just said it does not have. TUnknown is what inference answers when it does not know,
+	# and the rules that matter already tolerate it, so the refusal by name stands alone.
+	return Ty.TUnknown if not chk_is_intrinsic(name)
+
 	return Ty.TList(Ty.TByte) if name == "__zrt_read"
 	return Ty.TList(Ty.TStr) if name == "__zrt_listdir"
 	return Ty.TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"

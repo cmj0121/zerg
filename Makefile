@@ -586,9 +586,14 @@ error-codes-check:              # every error code is reported once, asserted, a
 seed-gaps:                      # the seed's gap list says the same thing in both languages
 	./scripts/seed-gaps-check.sh
 
+# `--strict`, and the tool without it exits 0 on a warning. That is not two answers to one
+# question: `zerg lint` reports on somebody else's program, where a `#[test]` that ships and a
+# suppression that will never apply are decisions they are allowed to have made. This board is
+# over THIS project's own source, where neither is. A gate stricter than the tool has
+# precedent next door — refuse-check asserts more about a refusal than `zerg build` requires.
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build
-	./bin/zerg lint $(ZERG_ENTRY)
+	./bin/zerg lint --strict $(ZERG_ENTRY)
 
 # `lint` asks whether the compiler is clean, and it is — which is exactly why it cannot tell a
 # rule that finds nothing from a rule that is gone. This one makes every rule fire.

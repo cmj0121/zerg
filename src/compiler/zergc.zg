@@ -94,6 +94,8 @@ fn build_cmd() -> cli.Command {
 fn test_cmd() -> cli.Command {
 	return (
 		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
+		.opt("k", "only", "run only the tests whose name begins with this", "")
+		.opt("t", "timeout", "seconds one test may take before it is reported STUCK", "60")
 		.add(cli.positional("path", "the directory to search (default: the current one)"))
 		.run(do_test)
 	)
@@ -169,9 +171,11 @@ fn do_build(c: cli.Ctx) -> int {
 
 fn do_test(c: cli.Ctx) -> int {
 	args := c.args()
-	return run_tests(args[0]) if args.len() > 0
+	only := c.get("only")
+	secs := c.int_of("timeout", TEST_TIMEOUT)
+	return run_tests(args[0], only, secs) if args.len() > 0
 
-	return run_tests(".")
+	return run_tests(".", only, secs)
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
@@ -991,7 +995,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # A RUN THAT FOUND NOTHING SAYS SO. Discovering no test and printing nothing is
 # indistinguishable from a run where everything passed, which is the one failure a test runner
 # must not have — every gate in this repository is written against it.
-fn run_tests(root: str) -> int {
+fn run_tests(root: str, only: str, secs: int) -> int {
 	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
 	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
 	# because its other caller is probing a search path — so `zerg test tset/` would report "no
@@ -1002,7 +1006,7 @@ fn run_tests(root: str) -> int {
 		return 2
 	}
 
-	mut pkgs: list[str] = []
+	mut pkgs: list[Pkg] = []
 	test_pkgs(root, pkgs)
 
 	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
@@ -1012,10 +1016,12 @@ fn run_tests(root: str) -> int {
 	# a report whose green half means nothing. So they are asked for the whole tree first,
 	# reported together the way a compiler reports diagnostics, and nothing is executed.
 	mut errs: list[str] = []
-	for d in pkgs {
+	mut chosen := 0
+	for p in pkgs {
 		mut fixts: list[Fixt] = []
 		mut tests: list[Tst] = []
-		plan_pkg(root, d, fixts, tests, errs)
+		plan_pkg(root, p, only, fixts, tests, errs)
+		chosen = chosen + tests.len()
 	}
 	if errs.len() > 0 {
 		for e in errs {
@@ -1024,14 +1030,24 @@ fn run_tests(root: str) -> int {
 		return 2
 	}
 
+	# A FILTER THAT SELECTED NOTHING IS A TYPO, not a green run. `--only` is asked for while
+	# somebody is iterating on one test, which is exactly when a misspelling would be read as
+	# "it passes now" — so it is refused with the same status an unresolvable parameter gets,
+	# and the tree it looked in is named because the walk may simply not have reached it.
+	if only != "" and chosen == 0 {
+		io.ewrite(f"zerg: no `#[test]` under `{root}` has a name beginning with `{only}`\n")
+		return 2
+	}
+
 	mut passed := 0
 	mut failed := 0
 	mut skipped := 0
-	for d in pkgs {
-		run_pkg(root, d, passed, failed, skipped)
+	mut stuck := 0
+	for p in pkgs {
+		run_pkg(root, p, only, secs, passed, failed, skipped, stuck)
 	}
 
-	if passed + failed + skipped == 0 {
+	if passed + failed + skipped + stuck == 0 {
 		io.println(f"no tests: nothing under `{root}` declares a `#[test]` in a `*_test.zg`")
 		return 0
 	}
@@ -1041,36 +1057,132 @@ fn run_tests(root: str) -> int {
 	# not a failure — nothing was claimed. Folding it into either makes the number that
 	# matters the one nobody can read: a suite whose skips are counted as passes goes green
 	# on a platform where none of it ran.
-	io.println(f"{passed} passed, {failed} failed, {skipped} skipped")
-	return 1 if failed > 0
+	# A TIMEOUT IS COUNTED APART TOO, for the same reason a skip is: it is not a failed
+	# assertion — nothing was decided — and folding it into the failures would make a hung test
+	# and a broken one the same number.
+	io.println(f"{passed} passed, {failed} failed, {skipped} skipped, {stuck} timed out")
+	return 1 if failed > 0 or stuck > 0
 
 	return 0
 }
 
-# test_pkgs collects the directories under `root` holding at least one `*_test.zg`, outermost
-# first, in the sorted order the runtime's directory read guarantees — so two runs of the same
-# tree report in the same order.
+# --- what a package is ------------------------------------------------------------------
+#
+# Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE
+# module rather than the directory itself — the name of that module. `mod` is `""` for the
+# directory.
+#
+# THERE ARE TWO SHAPES BECAUSE THE LANGUAGE HAS TWO. `module_at` resolves an import to a
+# single `<name>.zg` file BEFORE it resolves one to a directory, so a `.zg` file beside its
+# neighbours is a module in its own right — which is what `src/stdlib` is: sixteen
+# independent one-file modules in one flat directory, not one module of sixteen files.
+#
+# A test build used to know only the second shape, and that made a white-box test of a
+# stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other
+# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E215`, a
+# generic struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii`
+# and `strconv`) — pointing at files the author did not write, before one test had run.
+#
+# So a test file is now resolved the way an import is, MOST SPECIFIC FIRST: `strings_test.zg`
+# belongs to `strings.zg` if that file is beside it, and to the directory otherwise.
+#
+# WHAT IT COSTS: in a directory that IS one module, a `*_test.zg` whose name matches one of
+# the module's files takes that file alone — so `a_test.zg` in a directory of `a.zg` and
+# `b.zg` no longer sees `b.zg`. That is a loud failure (an undeclared name at the line that
+# used it) and never a silent one, and the way out is to name the file for the module rather
+# than for one of its parts. In exchange the rule is MONOTONE: adding a test file never
+# changes what another package is built from.
+struct Pkg {
+	pub dir: str
+	pub mod: str
+}
+
+# test_pkgs collects the packages under `root`, outermost first, in the sorted order the
+# runtime's directory read guarantees — so two runs of the same tree report in the same order.
+# One directory may hold several: one per one-file module that has a test file, and one for
+# the directory itself when a test file names no module.
 #
 # A DOT-NAME IS NOT DESCENDED INTO. `.git` alone is more files than the tree it sits in, and
 # `.zerg-cache` is where this command writes; a walk that read either would spend the run
 # looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
 # `opendir` per source file otherwise.
-fn test_pkgs(root: str, mut &out: list[str]) {
+fn test_pkgs(root: str, mut &out: list[Pkg]) {
 	names := __zrt_listdir(root)
-	mut has := false
+	mut whole := false
 	for name in names {
-		if zerg.is_test_file(name) {
-			has = true
+		if zerg.is_test_file(name) and not is_own_file(name) {
+			m := test_module(root, name)
+			if m == "" {
+				whole = true
+			} else {
+				out.append(Pkg(root, m))
+			}
 		}
 	}
-	if has {
-		out.append(root)
+	if whole {
+		out.append(Pkg(root, ""))
 	}
 	for name in names {
 		if not is_hidden(name) and not has_suffix(name, ".zg") {
 			test_pkgs(join_path(root, name), out)
 		}
 	}
+}
+
+# test_module is the one-file module a test file names, or `""` when it names none.
+#
+# `fixtures_test.zg` names none WHATEVER is beside it: it is the file a directory contributes
+# to the directories below (FIXTURES_NAME), so it belongs to the directory and to every
+# package in it, and a `fixtures.zg` that happened to sit there would otherwise carry it off
+# into a package of its own.
+fn test_module(dir: str, name: str) -> str {
+	return "" if name == FIXTURES_NAME
+
+	base := drop_suffix(name, "_test.zg")
+
+	return "" if base == ""
+
+	return base if __zrt_exists(join_path(dir, base + ".zg"))
+
+	return ""
+}
+
+# claimed says whether a file belongs to a one-file module of this directory rather than to
+# the directory itself — `strings.zg` and `strings_test.zg` both do, once `strings_test.zg`
+# is there to claim them, and neither is then compiled into the directory's own package.
+fn claimed(dir: str, name: str) -> bool {
+	return true if test_module(dir, name) != ""
+
+	base := drop_suffix(name, ".zg")
+	return false if base == ""
+
+	t := base + "_test.zg"
+	return false if not __zrt_exists(join_path(dir, t))
+
+	return test_module(dir, t) != ""
+}
+
+# drop_suffix is `s` without `suffix`, or `""` when `s` does not end in one — and `""` also
+# when the two are equal, since a file named `_test.zg` names no module either.
+fn drop_suffix(s: str, suffix: str) -> str {
+	return "" if not has_suffix(s, suffix)
+
+	b := bytearray(s)
+	n := b.len() - bytearray(suffix).len()
+	mut out: list[byte] = []
+	mut i := 0
+	for i < n {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# is_own_file says whether a name is one THIS COMMAND writes — a generated driver or the copy
+# of an inherited fixture file. Neither is a source, and neither makes a directory a package:
+# a leftover from an interrupted run would otherwise be discovered as a test file of its own.
+fn is_own_file(name: str) -> bool {
+	return has_prefix(name, DRIVER_PREFIX) or has_prefix(name, INHERITED_PREFIX)
 }
 
 fn is_hidden(name: str) -> bool {
@@ -1080,33 +1192,60 @@ fn is_hidden(name: str) -> bool {
 	return b[0] == b'.'
 }
 
-# pkg_sources is every `.zg` file in a directory, the `*_test.zg` files INCLUDED — and that
-# inclusion is the one line where a test build differs from every other one. `module_at` filters
-# them out where a module's directory is read; this is the reading that does not.
+# pkg_sources is every file one package is compiled from, the `*_test.zg` files INCLUDED — and
+# that inclusion is the one line where a test build differs from every other one. `module_at`
+# filters them out where a module's directory is read; this is the reading that does not.
+#
+# A ONE-FILE MODULE takes three names and no listing: the file, the directory's own
+# `fixtures_test.zg` if there is one — a fixture serves every package of its directory, not
+# only the directory's own — and the test file that named it.
 #
 # A LEFTOVER DRIVER IS NOT A SOURCE. The name is this command's own, and one is there only when
 # a previous run was interrupted between writing it and taking it away; reading it back would
 # compile the last run's driver beside this one's — two `fn main`, and a list of tests from
 # whatever the file declared then.
-fn pkg_sources(dir: str) -> list[str] {
+fn pkg_sources(p: Pkg) -> list[str] {
 	mut out: list[str] = []
-	for name in __zrt_listdir(dir) {
-		if has_suffix(name, ".zg") and name != DRIVER_NAME and not has_prefix(name, INHERITED_PREFIX) {
-			out.append(join_path(dir, name))
+	if p.mod == "" {
+		for name in __zrt_listdir(p.dir) {
+			if has_suffix(name, ".zg") and not is_own_file(name) and not claimed(p.dir, name) {
+				out.append(join_path(p.dir, name))
+			}
 		}
+		return out
 	}
+	out.append(join_path(p.dir, p.mod + ".zg"))
+	fx := join_path(p.dir, FIXTURES_NAME)
+	if __zrt_exists(fx) {
+		out.append(fx)
+	}
+	out.append(join_path(p.dir, p.mod + "_test.zg"))
 	return out
 }
 
-# DRIVER_NAME is what the generated driver is called, and it ends in `_test.zg` for the reason
-# that is the whole of why it may sit in a source directory at all: a `*_test.zg` is compiled by
-# no normal build, in either compiler, so a driver left behind by an interrupted run is a file
-# `zerg build` does not read. The next `zerg test` on that package overwrites it before it is
-# used and removes it after, so a leftover heals itself rather than accumulating.
+# DRIVER_PREFIX opens what a generated driver is called, and the name ends in `_test.zg` for
+# the reason that is the whole of why it may sit in a source directory at all: a `*_test.zg` is
+# compiled by no normal build, in either compiler, so a driver left behind by an interrupted
+# run is a file `zerg build` does not read. The next `zerg test` on that package overwrites it
+# before it is used and removes it after, so a leftover heals itself rather than accumulating.
 #
-# It is one name per package rather than one per run, and a fixed name is what makes that
-# healing possible: a run interrupted twice leaves one file, not two.
-const DRIVER_NAME := "zerg_test_driver_test.zg"
+# It is one name per PACKAGE rather than one per run, and a fixed name is what makes that
+# healing possible: a run interrupted twice leaves one file, not two. The module's name is in
+# it because one directory may hold several packages, and two drivers of one name in one
+# directory would be one driver.
+const DRIVER_PREFIX := "zerg_test_driver_"
+
+fn driver_name(p: Pkg) -> str {
+	return DRIVER_PREFIX + "test.zg" if p.mod == ""
+
+	return f"{DRIVER_PREFIX}{p.mod}_test.zg"
+}
+
+# pkg_key is what a package's binary and report are filed under, and it names BOTH halves of
+# the package: two packages of one directory would otherwise share a binary.
+fn pkg_key(p: Pkg) -> str {
+	return sha256.hex(bytearray(f"{p.dir}|{p.mod}"))
+}
 
 # INHERITED_PREFIX names the copy of an ancestor's fixture file that a package's driver is
 # built with.
@@ -1221,10 +1360,11 @@ struct Tst {
 # fixture produces, and every circle. It is called twice per run — once for the whole tree
 # before anything executes, and once by run_pkg with the answers it needs — because a plan is
 # cheap and a second copy of the resolution would be a second place the rule is written down.
-fn plan_pkg(root: str, dir: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+fn plan_pkg(root: str, p: Pkg, only: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
 	mut own: list[bool] = []
-	files := pkg_files(root, dir, own)
+	files := pkg_files(root, p, own)
 	pkg_decls(files, own, fixts, tests, errs)
+	keep_only(only, tests)
 
 	mut order: list[str] = []
 	fix_order(fixts, order, errs)
@@ -1240,20 +1380,42 @@ fn plan_pkg(root: str, dir: str, mut &fixts: list[Fixt], mut &tests: list[Tst], 
 # directory between the path `zerg test` was given and this one, then the package's own
 # sources. `own` says, for each, whether its `#[test]` functions belong to this package —
 # an inherited file contributes its fixtures and nothing else.
-fn pkg_files(root: str, dir: str, mut &own: list[bool]) -> list[str] {
+fn pkg_files(root: str, p: Pkg, mut &own: list[bool]) -> list[str] {
 	mut out: list[str] = []
-	for a in ancestors_of(root, dir) {
+	for a in ancestors_of(root, p.dir) {
 		f := join_path(a, FIXTURES_NAME)
 		if __zrt_exists(f) {
 			out.append(f)
 			own.append(false)
 		}
 	}
-	for f in pkg_sources(dir) {
+	for f in pkg_sources(p) {
 		out.append(f)
 		own.append(true)
 	}
 	return out
+}
+
+# keep_only drops the tests `--only` did not name, and it is done HERE — before resolution,
+# before the driver is written, before anything is compiled — which is what makes the claim
+# about fixtures exact rather than approximate: the nesting is generated from the tests that
+# REMAIN, so a level nobody left needs is never written, and a fixture only a filtered-out
+# test asked for is never built. A filter applied at run time would have stood every one of
+# them up and then skipped past the tests.
+#
+# THE MATCH IS A PREFIX, which is one rule and not two: a whole name selects one test, and the
+# stem a suite shares selects the suite. A filter that selected nothing is refused by
+# run_tests rather than passed over in silence.
+fn keep_only(only: str, mut &tests: list[Tst]) {
+	return if only == ""
+
+	mut kept: list[Tst] = []
+	for t in tests {
+		if has_prefix(t.name, only) {
+			kept.append(t)
+		}
+	}
+	tests = kept
 }
 
 # ancestors_of is the directories strictly between `root` and `dir`, `root` included and `dir`
@@ -1532,14 +1694,14 @@ fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
 	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
 	# findings somewhere: run_tests planned every package before it ran any of them, and a run
 	# holding one unresolved parameter never reaches here at all.
 	mut fixts: list[Fixt] = []
 	mut tests: list[Tst] = []
 	mut errs: list[str] = []
-	plan_pkg(root, dir, fixts, tests, errs)
+	plan_pkg(root, p, only, fixts, tests, errs)
 	return if tests.len() == 0
 
 	mut names: list[str] = []
@@ -1550,7 +1712,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 	}
 
 	mut own: list[bool] = []
-	srcs := pkg_files(root, dir, own)
+	srcs := pkg_files(root, p, own)
 
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
 	# module is a directory and that is the only thing that puts its declarations in the same
@@ -1561,8 +1723,8 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 	#
 	# Only the BINARY and the report go under the build cache, which is where a build already
 	# puts what it made.
-	key := sha256.hex(bytearray(dir))
-	drv := join_path(dir, DRIVER_NAME)
+	key := pkg_key(p)
+	drv := join_path(p.dir, driver_name(p))
 	bin := join_path(test_dir(), key + ".bin")
 	rep := join_path(test_dir(), key + ".rep")
 	sel := join_path(test_dir(), key + ".sel")
@@ -1573,7 +1735,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 	# compiler, and the driver now has both. A generated file has no need of an argument
 	# anyway: whatever a run would have passed, the run also wrote the file.
 	guard {
-		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel)))
+		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel, secs)))
 	}
 
 	mut files: list[str] = []
@@ -1583,7 +1745,7 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 		if own[k] {
 			files.append(srcs[k])
 		} else {
-			c := join_path(dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			c := join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
 			guard {
 				io.write_file(c, bytearray(read_source(srcs[k])))
 			}
@@ -1593,7 +1755,39 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 		k = k + 1
 	}
 	files.append(drv)
-	link_units(load_units_of(files, dir, dir), drv, bin, TEST_JOBS)
+
+	# THE FILES THIS COMMAND WROTE COME OFF DISK THE MOMENT THEY HAVE BEEN READ, and that one
+	# line is what makes the cleanup total rather than best-effort. `load_units_of` reads every
+	# source into a `Unit`; everything after it — emit, cc, link, and every diagnostic any of
+	# them reports — works from those values and never opens a source again. So the window in
+	# which a driver exists on disk is exactly this call, and the only way out of it that is
+	# not a return is a raise, which the guard has.
+	#
+	# It used to be the last thing run_pkg did, which meant every path that did NOT reach the
+	# end left the driver behind: `zerg test src/stdlib` stopped at an `E215` inside
+	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
+	# standard library — a directory the compiler resolves imports by LISTING.
+	res := guard {
+		load_units_of(files, p.dir, p.dir)
+	}
+	rm_file(drv)
+	for c in copies {
+		rm_file(c)
+	}
+
+	lerr := match res {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	if lerr != "" {
+		io.ewrite(lerr + "\n")
+		__zrt_exit(1)
+	}
+	units := match res {
+		Either.Left(u)  => u
+		Either.Right(_) => []
+	}
+	link_units(units, drv, bin, TEST_JOBS)
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []
@@ -1631,18 +1825,15 @@ fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped
 		i = i + 1
 	}
 
-	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped)
+	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped, stuck)
 
-	# the driver and its binary belong to THIS run: the next one writes them again from whatever
+	# the binary and the report belong to THIS run: the next one writes them again from whatever
 	# the test files then declare, and a stale one left behind is a test binary that answers for
-	# a program nobody has any more
+	# a program nobody has any more. The driver and the inherited copies went above, as soon as
+	# they had been read.
 	rm_file(rep)
 	rm_file(sel)
-	rm_file(drv)
 	rm_file(bin)
-	for c in copies {
-		rm_file(c)
-	}
 }
 
 # run_one runs a single named test in a process of its own — the isolated path, which is the
@@ -1678,6 +1869,17 @@ fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict:
 # TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather
 # than a flag: `zerg test --jobs` is a knob for the part of the command nobody is waiting on.
 const TEST_JOBS := 4
+
+# TEST_TIMEOUT is how many seconds one test may take before the run stops waiting on it, and
+# it is a DEFAULT rather than a constant: `--timeout` moves it, and a suite whose slowest test
+# is genuinely slower than this says so on its own command line.
+#
+# A HUNG TEST AND A SLOW TEST LOOK IDENTICAL until something decides which is which, and with
+# nothing deciding, the one that hangs takes the whole run with it — until CI's own timeout
+# kills the job, at which point the log says the job was killed and nothing says which test
+# did it. Sixty seconds is far above anything a unit test should take and far below any CI
+# job limit, which is the whole of what a default here has to be.
+const TEST_TIMEOUT := 60
 
 # test_dir is where a test binary and its report are written: a `test` directory under the build
 # cache, which is already the place a build puts what it made and which `make clean` already
@@ -1780,7 +1982,7 @@ fn lines_of(text: str) -> list[str] {
 # paths: the in-process run and the fallback processes write the same records, and a reader
 # cannot tell from a line which way it was produced — except where it is told, which is the
 # one line that says the strategy changed.
-fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
 	mut seen := ""
 	mut i := 0
 	for i < names.len() {
@@ -1805,7 +2007,16 @@ fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[st
 			for ln in lines_of(text[i]) {
 				io.println("        " + ln)
 			}
-			failed = failed + 1
+
+			# A TIMEOUT IS ITS OWN VERDICT and is counted apart, because it is not a failed
+			# assertion: nothing was checked and nothing was claimed, the test simply never
+			# came back. A runner that reported it FAIL would send the reader looking for an
+			# assertion that does not exist.
+			if v == "timeout" {
+				stuck = stuck + 1
+			} else {
+				failed = failed + 1
+			}
 		}
 		i = i + 1
 	}
@@ -1823,6 +2034,7 @@ fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[st
 # whatever happened to the test above.
 fn verdict_word(v: str) -> str {
 	return "CRASH" if v == "crash"
+	return "STUCK" if v == "timeout"
 
 	return "FAIL "
 }
@@ -1889,13 +2101,15 @@ fn rm_file(path: str) {
 # `io`, and this compiler cannot work out what it holds` — a lambda may not reach a module
 # namespace, so anything a level does that touches `io` or `testing` has to be in a top-level
 # function. Each level is one, and the closure passed to a fixture only ever calls it.
-fn gen_driver(fixts: list[Fixt], tests: list[Tst], report: str, chosen: str) -> str {
+fn gen_driver(fixts: list[Fixt], tests: list[Tst], report: str, chosen: str, secs: int) -> str {
 	mut out := "# Generated by `zerg test` for one run, and removed when that run ends. Not a source to\n"
 	out = out + "# edit: the next run writes it again from whatever the test files then declare.\n"
 	out = out + "import (\n\t\"io\"\n\t\"testing\"\n)\n\n"
 
 	out = out + "const ZT_REPORT := \"" + report + "\"\n"
-	out = out + "const ZT_SELECT := \"" + chosen + "\"\n\n"
+	out = out + "const ZT_SELECT := \"" + chosen + "\"\n"
+	out = out + "const ZT_TIMEOUT := " + f"{secs}" + " * 1000000000\n"
+	out = out + "const ZT_STUCK := \"the test did not finish within " + f"{secs}" + "s — nothing was decided, so this is not a failed assertion; raise the limit with `zerg test --timeout`\"\n\n"
 
 	out = out + driver_body()
 
@@ -1951,7 +2165,7 @@ fn gen_test(t: Tst, i: int) -> str {
 
 	out = out + "fn zt_run" + n + "(" + ps + ") {\n"
 	out = out + "\treturn if not zt_want(\"" + t.name + "\")\n\n"
-	out = out + "\tzt_emit(\"" + t.name + "\", testing.collect(zt_start" + n + "(" + ar + ")))\n}\n\n"
+	out = out + "\tzt_emit(\"" + t.name + "\", zt_await(zt_start" + n + "(" + ar + ")))\n}\n\n"
 	return out
 }
 
@@ -2191,8 +2405,32 @@ fn gen_blame(id: str, name: str, tests: list[Tst], sub: list[int]) -> str {
 # captures by value. So each record is a read of the file and a write of it with one record
 # more — which keeps the property the fallback runs on, that a run cut short leaves exactly
 # the records of the tests that finished.
+#
+# THE DEADLINE IS A TIMER AND A `select`, which is the whole of the mechanism: a test runs in
+# a coroutine already, so waiting for it with a limit is one more receive arm. `testing.collect`
+# is the function that drains a test's channel, and it is moved onto a coroutine of its own so
+# that the arm can race it — rather than a second copy of the event folding written here with a
+# deadline in it, which would be the same rule in two places.
+#
+# THE TIMER IS WRITTEN HERE AND NOT IMPORTED from `time`, even though `time.after` is exactly
+# this. A driver's imports land in the package's namespace, and `E705` refuses two modules
+# defining one `pub` name — so importing `time` would make a package that declares its own
+# `after`, `now` or `ticker` stop compiling the moment it grew a test. Everything the driver
+# declares is `zt_`-prefixed for that reason, and the timer is four lines over the same runtime
+# leaf `time.after` is written over.
+#
+# THE COST IS A COROUTINE PER TEST, and it outlives the test: nothing cancels a sleep, so a
+# timer for a test that finished at once still holds its stack until its deadline passes. That
+# is the same cost `time.after` carries and the reason it is one timer per test rather than one
+# per assertion.
 fn driver_body() -> str {
-	return "fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
+	return "fn zt_timer(zt_out: chan[int]<-, zt_d: int) {\n\t__zrt_sleep_ns(zt_d)\n\tzt_out <- 1\n}\n\n" +
+		"fn zt_after(zt_d: int) -> <-chan[int] {\n\tzt_ch := chan[int](1)\n\tspawn zt_timer(zt_ch, zt_d)\n\n\treturn zt_ch\n}\n\n" +
+		"fn zt_collect(zt_rx: <-chan[testing.Event], zt_out: chan[testing.Outcome]<-) {\n\tzt_out <- testing.collect(zt_rx)\n}\n\n" +
+		"fn zt_await(zt_rx: <-chan[testing.Event]) -> testing.Outcome {\n\tzt_oc := chan[testing.Outcome](1)\n\tspawn zt_collect(zt_rx, zt_oc)\n\n" +
+		"\tfor select {\n\t\tzt_v := <-zt_oc => return zt_v\n\n\t\t<-zt_after(ZT_TIMEOUT) => return testing.Outcome(\"timeout\", ZT_STUCK)\n\t}\n\n" +
+		"\treturn testing.Outcome(\"timeout\", ZT_STUCK)\n}\n\n" +
+		"fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
 		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
 		"fn zt_append(rec: str) {\n\tzt_put(ZT_REPORT, zt_get(ZT_REPORT) + rec)\n}\n\n" +
 		"fn zt_want(name: str) -> bool {\n\tone := zt_get(ZT_SELECT)\n\treturn true if one == \"\"\n\n\treturn one == name\n}\n\n" +

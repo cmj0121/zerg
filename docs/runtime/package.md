@@ -387,12 +387,18 @@ privacy. That decides where a test lives:
   surface, and a separate package that depends on this one sees exactly the package-public surface — a
   true external view.
 
-White-box placement needs the module to have the directory **to itself**, because a test build compiles a
-directory as one unit. Where one directory holds several independent modules — `src/stdlib` is sixteen of
-them, one per file — a test file beside the module it tests makes every _other_ module of that directory a
-source of the same unit, and the build stops on whatever those neighbours cannot agree on rather than on
-anything the test asserts. Such a module is tested black-box, from a package of its own; the standard
-library's own suites are under `tests/stdlib/<module>/` for exactly that reason.
+White-box placement works in **either** shape a directory can have, because a test build resolves a test
+file's package the way an import is resolved: **most specific first**. `module_at` answers a single
+`<name>.zg` file before it answers a directory, so a `.zg` file beside its neighbours is a module in its
+own right — which is what `src/stdlib` is, sixteen independent modules in one flat directory. A
+`strings_test.zg` there is therefore the test of `strings.zg` alone, and its package is that pair; a test
+file that names no such sibling belongs to the **directory**, as before.
+
+What that costs: in a directory that _is_ one module, a `*_test.zg` whose name matches one of the module's
+files takes that file alone — `a_test.zg` in a directory of `a.zg` and `b.zg` no longer sees `b.zg`. It is
+a loud failure (an undeclared name, at the line that used it) and never a silent one, and the way out is to
+name the test file for the module rather than for one of its parts. In exchange the rule is **monotone**:
+adding a test file never changes what another package is built from.
 
 Test files are recognized **by the build tool's convention** (e.g. a `*_test.zg` name) and included
 only in a test build, never in a normal one. So a test's declarations never reach the shipped artifact
@@ -401,11 +407,28 @@ the external API. As with the entry file, the language itself ascribes no meanin
 does.
 
 > **[not yet]** `zerg test` is a **scaffold**. It walks a path for `*_test.zg`, compiles each
-> holding directory as one package — its sources, its test files and a generated driver, so a
-> white-box test reaches the module's internals with no import and no `pub` — and runs every
-> `#[test]` it finds, reporting `ok` / `FAIL` / `SKIP` / `CRASH` grouped by file, counting skips
-> apart from passes and failures, and exiting non-zero if any did not hold. A run that finds
-> nothing says so.
+> package — its sources, its test files and a generated driver, so a white-box test reaches the
+> module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
+> `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
+> from passes and failures, and exiting non-zero if any did not hold. A run that finds nothing
+> says so.
+>
+> **A package is the module the test file names**, resolved most specific first: `strings_test.zg`
+> beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if
+> there is one, and the driver), and a test file naming no such sibling makes the directory the
+> package. One directory may therefore hold several packages, each with its own driver and its own
+> process.
+>
+> **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
+> test, a stem selects the family. It is applied before anything is generated, so a test it did not
+> select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
+> rather than reporting a green run of nothing.
+>
+> **`--timeout <seconds>`** is how long one test may take before the run stops waiting on it;
+> the default is `60`. A test that goes over is reported `STUCK` and counted apart, and the run
+> goes on to the tests after it: a timeout is not a failed assertion, because nothing was decided.
+> Without it a hung test and a slow test are indistinguishable, and the hung one takes the whole
+> run with it until CI's own timeout kills the job with nothing saying which test did it.
 >
 > **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in
 > one process — which contains an assertion that does not hold and an uncaught abort alike, since
@@ -513,8 +536,14 @@ does.
 > one process each, each of those processes enters only the levels the test it was asked for is
 > under — so it stands that test's fixtures up again, and no others.
 >
+> The generated driver and the copy of an inherited fixture file come **off disk as soon as they
+> have been read**, before the build can emit, compile, link or report anything — so a run that
+> fails leaves a source directory exactly as it found it. That matters most where it is least
+> visible: the compiler resolves the standard library by **listing** `src/stdlib`, and a driver
+> left behind there is a file every later build reads.
+>
 > What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
-> test, selecting tests by pattern, benchmarks, and running two tests at once. A failing
+> test, benchmarks, and running two tests at once. A failing
 > `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
 > its own.
 >

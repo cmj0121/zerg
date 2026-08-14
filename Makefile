@@ -94,14 +94,13 @@ test-runner:                    # the test runner can see a test that fails
 # failure; this asks the standard library the questions, and it is a separate target because
 # a red board should say which of the two broke.
 #
-# THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md
-# puts a white-box test, and the reason is a property of the stdlib rather than a preference:
-# `zerg test` compiles a DIRECTORY as one package, and `src/stdlib` is a flat directory of
-# sixteen INDEPENDENT modules. A `strings_test.zg` dropped beside `strings.zg` makes every
-# other stdlib source a source of the same unit, which stops at `atomic.zg` (`E215`, a generic
-# struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii` and
-# `strconv`) — before one test has run. So each module's suite is a package of its own under
-# `tests/stdlib/` that reaches its module the way a user does, through `import`.
+# THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md puts
+# a white-box test. They no longer HAVE to be out here — a test build resolves a test file's
+# package the way an import is resolved, so a `strings_test.zg` beside `strings.zg` is a package
+# of that pair and none of `src/stdlib`'s other fifteen modules is compiled with it — but moving
+# a suite is a change of its own, and this one stays where it was written until somebody makes
+# it. What it costs meanwhile is the white-box position: a suite here reaches its module the way
+# a user does, through `import`, so a module-private name is out of its reach.
 #
 # A FLOOR, of the kind `corpus` and `test-runner` carry, and here it is not a formality: a
 # `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that

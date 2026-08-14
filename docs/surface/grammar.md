@@ -130,7 +130,7 @@ chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
-unsafe ptr   asm
+unsafe ptr   asm     assert
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -602,7 +602,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
 
 Failure comes in **two tiers**. A **recoverable** failure is an ordinary value of a sum type —
 `Either[X, Y]`, `Result[T]` = `Either[T, Err]`, and `T?` = `Either[T, nil]` with the placeholder `nil`. A
-**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers:
+**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers,
+and one statement states a claim across them:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
@@ -610,6 +611,7 @@ coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
 raise         ::= 'raise' expr ( 'from' expr )?
 guard-expr    ::= 'guard' block
+assert-stmt   ::= 'assert' expr
 postfix       += '?' | '!' | '?.' identifier
 ```
 
@@ -625,6 +627,14 @@ postfix       += '?' | '!' | '?.' identifier
 - **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
   (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
   handled by the same `?` / `??` / `match`.
+- **`assert cond`** — state a claim and **raise `AssertionError`** when it does not hold. It takes a
+  condition and **nothing else**: the compiler writes the message, from the position the claim was written
+  at, the claim's own source text, and the value of each operand a comparison came apart into. A claim that
+  needs explaining rather than showing is `raise ValueError("why") if not cond`, which is the production
+  form. It is sugar for exactly that raise, with the operands bound to temporaries FIRST so the message
+  cannot evaluate them a second time; `assert a and b` is two asserts, and no operand is ever lifted across
+  a short-circuiting operator. It is **always compiled in** — there is no flag that strips it — and the
+  linter's `L602` says what one costs outside a `*_test.zg` file.
 
 ## Group 9 — Concurrency
 

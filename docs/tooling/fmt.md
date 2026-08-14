@@ -1232,6 +1232,7 @@ is right: there is nothing to advise about the types of a program whose types ar
 | Code   | Rule                                                                 |
 | ------ | -------------------------------------------------------------------- |
 | `L601` | a `#[test]` or `#[fixture]` outside a `*_test.zg` file — **warning** |
+| `L602` | an `assert` outside a `*_test.zg` file — **warning**                 |
 
 Such a function is **legal** and it **ships**: it is compiled into the binary like any other,
 it appears twice in the emitted C, nothing calls it, and its `import "testing"` travels with
@@ -1241,6 +1242,19 @@ and gets scrolled past; what the reader has to weigh is dead code in the artifac
 
 `#[allow(L601)]` silences it for a `#[test]` that is meant to ship. One decorator per item, so
 the two are written as one: `#[allow(L601), test]`.
+
+`L602` is the same argument about a **live** claim rather than dead weight. `assert` is always
+compiled in — there is no flag that strips it, deliberately, because a program with its
+assertions and the same program without them are two programs, and nobody writes anything
+load-bearing into a check that may not run. So an `assert` outside a test file is a check that
+ships and can abort a running process, and the message names the **replacement**, which is what
+makes the warning earned: `assert` in production is not _weaker_ than the check somebody meant
+to write, it is _less specific_ — it says the claim was false, and never what it meant.
+`raise ValueError("xs must be non-empty") if xs.len() == 0` says both.
+
+`#[allow(L602)]` silences it, on a `fn` for the whole body or on a single statement for that
+statement. Move the code into a `*_test.zg` file afterwards and `L106` tells you to drop the
+allow, which is what keeps the suppression from outliving its reason.
 
 ## Adding a rule
 

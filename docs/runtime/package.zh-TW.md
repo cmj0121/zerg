@@ -344,9 +344,9 @@ package 是用哪些檔案建起來的。
 > 需要的 **fixture**(以名字比對);driver 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
 > `Ref` 值,複製即共享——上頭有 `ctx.name()`、`ctx.log(msg)`(只在測試失敗時顯示)、`ctx.skip(reason)` 與
 > `ctx.fatal(msg)`。後兩者以 `raise` 解開、把理由留在 context 上,所以沒有任何一方需要比對訊息字串才能分辨
-> skip 與 fail。它同時帶有累積**失敗脈絡**的 `str` / `int` / `bool` builder,以及作為終端的
-> `ctx.assert(cond, msg)`。**泛型**斷言維持自由函式(`testing.assert_eq`、`assert_ne`、`assert_raises`),
-> 因為泛型**方法**是 `E409 NotImplemented`,泛型自由函式則不是。
+> skip 與 fail。一項主張是 `assert cond`,那個關鍵字(見 [Grammar](../surface/grammar.zh-TW.md) group 8),
+> 它自己寫訊息、不需要 context 給任何東西;留給 `ctx.log` 的是一則**領域註記**——關於 fixture、而不是關於運算式
+> 的事。`testing.assert_raises` 維持自由函式,因為它不是斷言:它問的是一個**已經結束**的呼叫 raise 了什麼。
 >
 > **Fixture。** 一個測試**宣告它需要什麼**,框架建置一次、交給它,再拆掉。`#[fixture]` 是一個把自己的測試當作
 > **continuation** 收下的函式:
@@ -424,13 +424,12 @@ package 是用哪些檔案建起來的。
 > 之後每一次建置都會讀到它。
 >
 > **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、benchmark,以及
-> 同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制流,所以它自己就會從測試本體解開出去。
+> 同時跑兩個測試。失敗的斷言會 `raise`,而 raise 是控制流,所以它自己就會從測試本體解開出去。
 >
-> **斷言**那一側已經補上,並隨模組一起記錄([標準函式庫](stdlib.zh-TW.md#testing)):失敗的 `assert_eq` 會報出
-> 兩個值、`assert` 收得下一個訊息、`assert_raises` 交回一次 `guard` 包住的呼叫所 raise 的 `Err`,而 `Context`
-> 的鏈式呼叫把具名的值帶進一個以斷言為終端的形式。仍然沒有的是泛型斷言的**方法**形式——
-> `ctx.str("file", p).assert_eq(got, want)` 是 `E409`,泛型方法——以及 `assert_eq` 依然收不了
-> `list[T]`,它沒有實作 `Eq`(`E412`),所以回傳 list 的函式只能透過某個把它縮成純量的東西去斷言。
+> **斷言**那一側已經補上,而且它是一個**關鍵字**、不是函式庫:`assert cond` raise 出 `AssertionError`,帶著
+> 檔案、行號、主張本身的原始文字,以及比較拆開後每個運算元當時的值。`testing.assert_raises` 交回一次 `guard`
+> 包住的呼叫所 raise 的 `Err`,是唯一留下的輔助函式。仍然沒有的是**複合值**的渲染,所以兩個 list 的
+> `assert xs == ys` 是 `E445`,關於 list 的主張只能透過某個把它縮成純量的東西去做。
 >
 > **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
 > 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的

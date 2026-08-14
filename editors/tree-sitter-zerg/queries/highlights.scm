@@ -89,7 +89,7 @@
 
 ["pub" "mut" "const"] @keyword.modifier
 ["import" "as" "from"] @keyword.import
-["return" "break" "continue" "raise" "guard" "defer" "del"] @keyword.return
+["return" "break" "continue" "raise" "assert" "guard" "defer" "del"] @keyword.return
 ["if" "else" "match" "with"] @keyword.conditional
 ["for" "in"] @keyword.repeat
 ["spawn" "select" "close" "chan"] @keyword.coroutine

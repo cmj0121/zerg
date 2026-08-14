@@ -311,6 +311,69 @@ else
 	pass=$((pass + 1))
 fi
 
+# L601's sibling: an `assert` outside a `*_test.zg` file. Also legal, also a warning, and the
+# consequence is the sharper one — the claim is compiled in and can abort a running program.
+# What is asserted is the half of the sentence that names the REPLACEMENT, since a warning
+# that only says "don't" is the style advice L601's comment is about.
+lint_warn L602 'raise ValueError("xs must be non-empty") if xs.len() == 0' <<'EOF'
+fn head(xs: list[int]) -> int {
+	assert xs.len() > 0
+	return xs[0]
+}
+
+fn main() {
+	print head([1])
+}
+EOF
+
+# and the same `assert` in a file whose name says where it belongs is silent — the half that
+# shows the rule is about the FILE and not about the word
+cat >"$tmp/claim_test.zg" <<'EOF'
+fn head(xs: list[int]) -> int {
+	assert xs.len() > 0
+	return xs[0]
+}
+
+fn main() {
+	print head([1])
+}
+EOF
+out=$("$ZERG" lint "$tmp/claim_test.zg" 2>&1)
+status=$?
+if [ $status -ne 0 ] || [ -n "$out" ]; then
+	echo "L602      fired inside a *_test.zg file, where a claim BELONGS: $(echo "$out" | head -1)"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+
+# the suppression, on the two scopes a reader reaches for: a whole function, and one
+# statement. Both must be silent AND must not leave an L106 behind saying they suppressed
+# nothing — a stale-allow report here would mean the rule and the allow disagree about where
+# the finding is.
+cat >"$tmp/allowed.zg" <<'EOF'
+#[allow(L602)]
+fn head(xs: list[int]) -> int {
+	assert xs.len() > 0
+	return xs[0]
+}
+
+fn main() {
+	print head([1])
+
+	#[allow(L602)]
+	assert head([2]) == 2
+}
+EOF
+out=$("$ZERG" lint --strict "$tmp/allowed.zg" 2>&1)
+status=$?
+if [ $status -ne 0 ] || [ -n "$out" ]; then
+	echo "L602      \`#[allow(L602)]\` did not suppress: $(echo "$out" | head -1)"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+
 # --- --strict, which is what `make lint` runs ---------------------------------------
 #
 # The two exit codes are one rule each and neither can be read off the other: a warning that

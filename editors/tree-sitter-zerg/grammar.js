@@ -133,6 +133,7 @@ module.exports = grammar({
 				$.print_statement,
 				$.return_statement,
 				$.raise_statement,
+				$.assert_statement,
 				$.break_statement,
 				$.continue_statement,
 				$.spawn_statement,
@@ -194,6 +195,11 @@ module.exports = grammar({
 			seq($.raise_expression, optional(seq("if", $._expression))),
 		raise_expression: ($) =>
 			seq("raise", $._expression, optional(seq("from", $._expression))),
+
+		// `assert cond` — a claim, and no message operand: the compiler writes the message.
+		// It takes no postfix `if` of its own, unlike the four diverges: it IS one already,
+		// and a guard on it would be a claim that is only sometimes a claim.
+		assert_statement: ($) => seq("assert", $._expression),
 
 		break_statement: ($) =>
 			seq("break", optional(seq("if", $._expression))),

@@ -65,7 +65,7 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 statement      ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt    ::= nop | binding | reassign | print | return | raise-stmt | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
-                 | del-stmt | close-stmt | expr-stmt
+                 | del-stmt | close-stmt | assert-stmt | expr-stmt
 compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-select
 
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
@@ -153,6 +153,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'chan'  | 'type'  | 'impl'   | 'init'
              | 'defer' | 'del'   | 'close'  | 'raise'   | 'guard' | 'is'
+             | 'assert'
              | 'not'   | 'and'   | 'or'     | 'print'   | 'this'  | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
              | 'unsafe'| 'ptr'   | 'asm'   | 'const'
@@ -693,6 +694,33 @@ diverge       ::= 'break' | 'continue' | return | raise
 raise-stmt    ::= raise ( 'if' expr )?               # the postfix guard, as on every other diverge
 raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's cause
 guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
+
+# 'assert' states a claim about the program and raises AssertionError when it does not
+# hold. It takes a CONDITION AND NOTHING ELSE — no message operand — because the compiler
+# writes the message: the source text of the condition, the position it was written at, and
+# the value of each operand a comparison came apart into. A claim that needs explaining
+# rather than showing is 'raise ValueError("why") if not cond', which is the production
+# form; 'assert' is for the claim whose own text is the explanation.
+#
+# It is DEFINED AS a raise, and the definition is what the leaves have to be bound for: the
+# message names the operands, so evaluating them a second time to render them would make
+# 'assert next(it) == 3' advance the iterator twice and print a value the test never saw.
+# So the operands are bound to temporaries ONCE, before the condition is tested, which is
+# why this is a statement-level sugar and not an expression rewrite:
+#
+#     assert a == b   ==   t0 := a
+#                          t1 := b
+#                          raise AssertionError(<message>) if not (t0 == t1)
+#
+# 'assert a and b' is two asserts, one per conjunct — which preserves short-circuit and
+# evaluation count exactly, and says which half failed. A leaf may NOT be lifted across a
+# short-circuiting operator, so under 'or' / '??' only the left operand is bound.
+#
+# It is COMPILED IN ALWAYS. There is no flag that strips it, because a program with and
+# without its assertions would be two programs, and an assertion nobody can rely on running
+# is one nobody writes anything load-bearing into. Outside a '*_test.zg' file it is legal
+# and the linter says what it costs (L602).
+assert-stmt   ::= 'assert' expr
 
 # ==================================================================================
 # 9. Concurrency — coroutines & channels

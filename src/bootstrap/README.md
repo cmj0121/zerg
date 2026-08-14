@@ -200,6 +200,20 @@ the program, which is what the assertion exists to catch.
   it at the callsite.
 - **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is
   emitted as written and cc reports the type. `zerg` judges a default at the declaration.
+- **A default that CALLS anything is refused, in a sentence that claims the language forbids
+  it.** `struct C { c: chan[int] = chan[int]() }` — or any default that is not a literal, a
+  module constant, or arithmetic over those — is turned away with _a default value must be a
+  constant expression that does not reference a parameter/field_. The language says the
+  opposite: a default "is evaluated **per construction** rather than once at the declaration
+  — an expression in it (a call, a sum over module constants) runs again for every
+  construction that omits the field" (`docs/core/types.md`, "Field defaults"), and `zerg`
+  takes it. The seed backfills a default VERBATIM at every call and construct site and never
+  TYPES the expression at all — `checkConstDefault` validates its shape, so a default carries
+  no recorded `ExprType` and a call would reach cc as bad C. The refusal is therefore right
+  about the seed and wrong about Zerg: a `NotImplemented` wearing a language rule's clothes.
+  It is also why `Context.events` in `src/stdlib/testing.zg` is `pub` and carries no default —
+  a module-private field must carry one, and the only default a fresh channel could have is
+  a call.
 - **A TOP-LEVEL binding's annotation is not checked against its value.** `answer: bool =
 42` builds and the global is whatever the seed makes of it; the same mismatch on a LOCAL
   binding the seed does refuse. `zerg` honours a top-level annotation the way it honours a

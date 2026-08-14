@@ -94,15 +94,22 @@ pub struct Event {
 	text: str = ""
 }
 
-# The kinds an Event carries. LOG / SKIP / FATAL are what the test itself says; DONE and
-# RAISE are what the driver says about the body afterwards, over the same channel, so
+# The kinds an Event carries. LOG / SKIP / FATAL are what the test itself says; DONE, RAISE
+# and CRASH are what the driver says about the body afterwards, over the same channel, so
 # that one receive loop sees the whole of a test's life and there is no second route for
 # a runner to get wrong.
+#
+# RAISE AND CRASH ARE THE SAME EVENT ASKED A DIFFERENT QUESTION, and the question is the
+# error's KIND. A claim that did not hold is `AssertionError` and is a FAILED TEST; anything
+# else that reached the top of the body is a program that fell over, and calling that a
+# failed assertion sends the reader looking for an assertion that does not exist. The driver
+# asks with the language's own `is`, which is why this needs a kind rather than a message.
 const EV_LOG := 0
 const EV_SKIP := 1
 const EV_FATAL := 2
 const EV_DONE := 3
 const EV_RAISE := 4
+const EV_CRASH := 5
 
 # Outcome is what one test came to, as the runner reports it: `ok`, `fail` or `skip`, and
 # the text that goes under it — a skip's reason, or a failure's notes and message.
@@ -177,11 +184,19 @@ impl Context {
 
 # finished is what the driver says after the body is out of its hands: `ok` when it
 # returned, and otherwise the message it raised. It is the last event on the channel.
-pub fn finished(ctx: Context, ok: bool, msg: str) {
+#
+# `claim` is whether what came out was an `AssertionError` — a claim the test made that did
+# not hold — as against any other Err, which is the program falling over. The driver asks it
+# with `e is AssertionError` at the point it holds the Err, because that is the only place
+# the Err exists: by here there is a message, and telling the two apart from a message is
+# reading prose as a protocol.
+pub fn finished(ctx: Context, ok: bool, msg: str, claim: bool) {
 	if ok {
 		ctx.events <- Event(EV_DONE, "")
-	} else {
+	} else if claim {
 		ctx.events <- Event(EV_RAISE, msg)
+	} else {
+		ctx.events <- Event(EV_CRASH, msg)
 	}
 }
 
@@ -189,7 +204,7 @@ pub fn finished(ctx: Context, ok: bool, msg: str) {
 #
 # A MISSING TERMINAL EVENT IS A CRASH, and it is the default rather than a branch: the
 # loop ends either because the sender finished — which it does only after `finished` —
-# or because the coroutine died, and only the first can have said DONE or RAISE. A death
+# or because the coroutine died, and only the first can have said DONE, RAISE or CRASH. A death
 # also raises out of the receive (the channel closes carrying the producer's Err, or the
 # runtime finds nothing left to run), which is what the `guard` is for; both routes land
 # on the same verdict.
@@ -214,18 +229,22 @@ pub fn collect(rx: <-chan[Event]) -> Outcome {
 			} else if ev.kind == EV_RAISE {
 				verdict = "fail"
 				text = ev.text
+			} else if ev.kind == EV_CRASH {
+				verdict = "crash"
+				text = ev.text
 			}
 		}
 	}
 
-	if verdict == "fail" {
-		# `skip` and `fatal` both arrive as a raise, and the context is what tells them
-		# from each other and from an assertion nobody wrote a reason for
+	if verdict != "ok" {
+		# `skip` and `fatal` both arrive as a raise that is NOT a claim, so both land on
+		# CRASH — and the context is what tells them from each other and from a program that
+		# really did fall over. Neither is a crash, and `fatal` is a failure the test itself
+		# declared, so each takes its own verdict back here.
 		return Outcome("skip", why) if skipped
-		if why != "" {
-			text = why
-		}
-		return Outcome("fail", notes + text)
+		return Outcome("fail", notes + why) if why != ""
+
+		return Outcome(verdict, notes + text)
 	}
 	return Outcome(verdict, text)
 }

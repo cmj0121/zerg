@@ -56,6 +56,7 @@ fn root() -> cli.Command {
 		.version(banner())
 		.epilog(env_help())
 		.sub(build_cmd())
+		.sub(test_cmd())
 		.sub(fmt_cmd())
 		.sub(lint_cmd())
 		.sub(desugar_cmd())
@@ -75,6 +76,20 @@ fn build_cmd() -> cli.Command {
 		.opt("j", "jobs", "how many units to compile at once", "4")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
 		.run(do_build)
+	)
+}
+
+# test is `build` pointed at the files a build leaves out. A `*_test.zg` is compiled by no
+# normal build (docs/runtime/package.md) — the exclusion is what keeps a test out of the
+# shipped artifact — so the INCLUSION has to live somewhere, and it lives here rather than as
+# a `--test` flag on `build`. `zerg build` keeps one meaning: it compiles what ships, and what
+# ships never contains a test. A flag would have made the same command mean both, and the day
+# somebody scripts `zerg build --test` into a release step there is nothing left to say no.
+fn test_cmd() -> cli.Command {
+	return (
+		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
+		.add(cli.positional("path", "the directory to search (default: the current one)"))
+		.run(do_test)
 	)
 }
 
@@ -143,6 +158,13 @@ fn env_help() -> str {
 fn do_build(c: cli.Ctx) -> int {
 	build_stage(c.args(), default_stage(c.get("emit"), c.args()), c.get("output"), job_count(c.get("jobs")))
 	return 0
+}
+
+fn do_test(c: cli.Ctx) -> int {
+	args := c.args()
+	return run_tests(args[0]) if args.len() > 0
+
+	return run_tests(".")
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
@@ -559,8 +581,18 @@ fn diag_source(path: str, srcs: list[str], paths: list[str]) -> str {
 # again — which is the whole point of splitting the build up, since most rebuilds change
 # one module and leave the rest exactly as they were.
 fn link_program(entry: str, output: str, jobs: int) {
-	units := load_units(entry)
+	link_units(load_units(entry), entry, output, jobs)
+}
 
+# link_units is link_program with the units already in hand, and it is split out for the ONE
+# caller that does not get them from an entry file: a test build's entry unit is a directory's
+# files plus a generated driver, which no import path names. Everything after the load is the
+# same work on the same values, so it is the same function rather than a second copy of the
+# emit-cache-link sequence that would drift the moment one of them changed.
+#
+# `entry` is still passed, because the no-`fn main` finding below is about a FILE and has to
+# name one.
+fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	# BEFORE anything is parsed: a token the lexer could not read is an error about text,
 	# and a parser handed the wreckage can only say something untrue about it
 	mut lex: list[zerg.Diag] = []
@@ -838,12 +870,20 @@ struct Unit {
 # load_units returns every unit of the program, dependencies before dependents, the entry
 # last. A unit is loaded once however many modules import it.
 fn load_units(entry: str) -> list[Unit] {
+	mut one: list[str] = []
+	one.append(entry)
+	return load_units_of(one, entry, dir_of(entry))
+}
+
+# load_units_of is load_units for an entry unit whose FILES are named directly rather than
+# resolved from one path. A test build is the only caller: its entry unit is a directory's
+# sources — the `*_test.zg` included, which is the whole of what a test build is — plus the
+# driver `zerg test` generated, and no import path names that set.
+fn load_units_of(files: list[str], name: str, from_dir: str) -> list[Unit] {
 	mut seen: list[str] = []
 	mut units: list[Unit] = []
-	mut one: list[str] = []
 	mut root: list[str] = []
-	one.append(entry)
-	load_unit(one, entry, dir_of(entry), seen, root, units)
+	load_unit(files, name, from_dir, seen, root, units)
 	return units
 }
 
@@ -892,6 +932,326 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 		si = si + 1
 	}
 	units.append(Unit(name, srcs, paths))
+}
+
+# --- the test runner ------------------------------------------------------------------------
+#
+# A TEST BUILD IS A BUILD OF MORE FILES, not of a relaxed language. A `*_test.zg` sits in the
+# module it tests and shares its namespace, so compiling it beside that module's other sources
+# is the whole of what the white-box position means (docs/runtime/package.md): nothing about
+# visibility moves, and there is no test-only way into a private name.
+#
+# So the unit of work is a DIRECTORY. A module is a directory whose files share a scope, and a
+# directory holding a `*_test.zg` becomes one test binary — its own sources, its test files,
+# and one generated driver that calls the `#[test]` functions by name.
+#
+# ONE PROCESS PER TEST, always. A test that overflows its stack or calls `os.exit` ends the
+# process it is running in, and with every test in one process that would end all the tests
+# after it too: the first crash would decide what the rest of the run reports. So the driver
+# RE-EXECUTES ITSELF once per test — `__zrt_exe_path` names the running binary and `os.run`
+# starts it — and the child runs exactly one test and stops. It is the slow arrangement and it
+# is the correct one; a faster one is worth building on the day there is a measurement asking
+# for it, and not before.
+#
+# A CHILD ANSWERS IN A FILE, not in its exit status. A status is one small integer: it cannot
+# carry which assertion failed or what the values were, and — the part that decides the shape —
+# `os.exit(0)` inside a test produces exactly the status a passing test does. So the child
+# writes its verdict AFTER the body has returned, and a MISSING file is the fact that the body
+# never did. Finishing is observed, never inferred from a number that cannot tell the two
+# apart.
+
+# run_tests is the whole command: find the packages, run each one's tests, and say what
+# happened. It answers 0 only when nothing failed.
+#
+# A RUN THAT FOUND NOTHING SAYS SO. Discovering no test and printing nothing is
+# indistinguishable from a run where everything passed, which is the one failure a test runner
+# must not have — every gate in this repository is written against it.
+fn run_tests(root: str) -> int {
+	mut pkgs: list[str] = []
+	test_pkgs(root, pkgs)
+
+	mut passed := 0
+	mut failed := 0
+	for d in pkgs {
+		run_pkg(d, passed, failed)
+	}
+
+	if passed + failed == 0 {
+		io.println(f"no tests: nothing under `{root}` declares a `#[test]` in a `*_test.zg`")
+		return 0
+	}
+	io.println("")
+	io.println(f"{passed} passed, {failed} failed")
+	return 1 if failed > 0
+
+	return 0
+}
+
+# test_pkgs collects the directories under `root` holding at least one `*_test.zg`, outermost
+# first, in the sorted order the runtime's directory read guarantees — so two runs of the same
+# tree report in the same order.
+#
+# A DOT-NAME IS NOT DESCENDED INTO. `.git` alone is more files than the tree it sits in, and
+# `.zerg-cache` is where this command writes; a walk that read either would spend the run
+# looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
+# `opendir` per source file otherwise.
+fn test_pkgs(root: str, mut &out: list[str]) {
+	names := __zrt_listdir(root)
+	mut has := false
+	for name in names {
+		if is_test_file(name) {
+			has = true
+		}
+	}
+	if has {
+		out.append(root)
+	}
+	for name in names {
+		if not is_hidden(name) and not has_suffix(name, ".zg") {
+			test_pkgs(join_path(root, name), out)
+		}
+	}
+}
+
+fn is_hidden(name: str) -> bool {
+	b := bytearray(name)
+	return false if b.len() == 0
+
+	return b[0] == b'.'
+}
+
+# pkg_sources is every `.zg` file in a directory, the `*_test.zg` files INCLUDED — and that
+# inclusion is the one line where a test build differs from every other one. `module_at` filters
+# them out where a module's directory is read; this is the reading that does not.
+#
+# A LEFTOVER DRIVER IS NOT A SOURCE. The name is this command's own, and one is there only when
+# a previous run was interrupted between writing it and taking it away; reading it back would
+# compile the last run's driver beside this one's — two `fn main`, and a list of tests from
+# whatever the file declared then.
+fn pkg_sources(dir: str) -> list[str] {
+	mut out: list[str] = []
+	for name in __zrt_listdir(dir) {
+		if has_suffix(name, ".zg") and name != DRIVER_NAME {
+			out.append(join_path(dir, name))
+		}
+	}
+	return out
+}
+
+# DRIVER_NAME is what the generated driver is called, and it ends in `_test.zg` for the reason
+# that is the whole of why it may sit in a source directory at all: a `*_test.zg` is compiled by
+# no normal build, in either compiler, so a driver left behind by an interrupted run is a file
+# `zerg build` does not read. The next `zerg test` on that package overwrites it before it is
+# used and removes it after, so a leftover heals itself rather than accumulating.
+#
+# It is one name per package rather than one per run, and a fixed name is what makes that
+# healing possible: a run interrupted twice leaves one file, not two.
+const DRIVER_NAME := "zerg_test_driver_test.zg"
+
+# pkg_tests collects a package's tests as two parallel lists: each `#[test]` function's name,
+# and the file it was written in, in the order they will run.
+#
+# ONLY A `*_test.zg` IS READ FOR ONE. A `#[test]` elsewhere in the package is compiled like any
+# other function and nothing calls it — the file's NAME is what makes a source a test file
+# (docs/runtime/package.md), and a second answer here would mean a function that runs under
+# `zerg test` from a file `zerg build` also ships.
+fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
+	for f in files {
+		if is_test_file(path_tail(f)) {
+			tree := zerg.parse_at(read_source(f), f)
+			for fd in tree.fns {
+				if fd.is_test {
+					names.append(fd.name)
+					at.append(f)
+				}
+			}
+		}
+	}
+}
+
+# run_pkg builds one package's test binary and runs it, adding its counts to the run's.
+#
+# The driver is the LAST file of the entry unit, so the whole package is one scope and a test
+# function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
+# already has with the module it tests, applied one file further.
+fn run_pkg(dir: str, mut &passed: int, mut &failed: int) {
+	srcs := pkg_sources(dir)
+	mut names: list[str] = []
+	mut at: list[str] = []
+	pkg_tests(srcs, names, at)
+	return if names.len() == 0
+
+	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
+	# module is a directory and that is the only thing that puts its declarations in the same
+	# scope. A driver in a temp directory is a module of its own, and every test function it
+	# calls is then `E301 … is not a public member of module lib` — which would make a `pub` on
+	# each test the price of running it, i.e. exactly the test-only backdoor into visibility
+	# that docs/runtime/package.md says there is not.
+	#
+	# Only the BINARY and the report go under the build cache, which is where a build already
+	# puts what it made.
+	key := sha256.hex(bytearray(dir))
+	drv := join_path(dir, DRIVER_NAME)
+	bin := join_path(test_dir(), key + ".bin")
+	sum := join_path(test_dir(), key + ".sum")
+
+	guard {
+		io.write_file(drv, bytearray(gen_driver(names, at)))
+	}
+	mut files := srcs
+	files.append(drv)
+	link_units(load_units_of(files, dir, dir), drv, bin, TEST_JOBS)
+
+	rm_file(sum)
+	mut argv: list[str] = []
+	argv.append(bin)
+	argv.append(sum)
+	code := __zrt_exec(argv)
+	take_summary(sum, code, passed, failed)
+
+	# the driver and its binary belong to THIS run: the next one writes them again from whatever
+	# the test files then declare, and a stale one left behind is a test binary that answers for
+	# a program nobody has any more
+	rm_file(sum)
+	rm_file(drv)
+	rm_file(bin)
+}
+
+# TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather
+# than a flag: `zerg test --jobs` is a knob for the part of the command nobody is waiting on.
+const TEST_JOBS := 4
+
+# test_dir is where a test binary and its report are written: a `test` directory under the build
+# cache, which is already the place a build puts what it made and which `make clean` already
+# takes away. The driver source is the one thing that cannot live here — see run_pkg.
+fn test_dir() -> str {
+	dir := join_path(cache_dir(), "test")
+	__zrt_mkdir(dir)
+	return dir
+}
+
+# take_summary adds one driver's counts to the run's. The driver writes them as two lines
+# AFTER its last child has answered, so a summary that is not there is the driver itself not
+# having finished — which is a failure of the package, not a package with nothing in it. A gate
+# that reads an absent report as "nothing to report" is the gate that measures nothing.
+fn take_summary(path: str, code: int, mut &passed: int, mut &failed: int) {
+	text := read_or_empty(path)
+	mut p := 0
+	mut f := 0
+	mut ok := false
+	guard {
+		p = strconv.parse_int(source_line(text, 1), 10)
+		f = strconv.parse_int(source_line(text, 2), 10)
+		ok = true
+	}
+	if not ok {
+		io.println(f"  ERROR the test driver ended without a report (status {code})")
+		failed = failed + 1
+		return
+	}
+	passed = passed + p
+	failed = failed + f
+}
+
+fn read_or_empty(path: str) -> str {
+	mut out := ""
+	guard {
+		out = str(io.read_file(path))
+	}
+	return out
+}
+
+# rm_file removes a path this command made, and says nothing when it was not there — every
+# caller wants "make sure this is gone" rather than "delete exactly this".
+fn rm_file(path: str) {
+	guard {
+		__zrt_remove(path)
+	}
+}
+
+# gen_driver writes the driver source for one package: the two lists the parent walks, the
+# dispatch that turns a name back into a call, and the parent/child halves of the process
+# arrangement above.
+#
+# It is GENERATED rather than fixed because the only part that varies is the list of names, and
+# a fixed driver reading them from somewhere would need the names to exist as data at runtime —
+# which means a table the compiler emits, which is this file written by another route. Written
+# out, the calls are ordinary calls in the package's own scope and the compiler checks every one
+# of them: a `#[test]` with a parameter is a compile error naming the function, not a runner
+# that skips it.
+fn gen_driver(names: list[str], at: list[str]) -> str {
+	mut out := "# Generated by `zerg test` for one run, and removed when that run ends. Not a source to\n"
+	out = out + "# edit: the next run writes it again from whatever the test files then declare.\n"
+	out = out + "import (\n\t\"fs\"\n\t\"io\"\n\t\"os\"\n)\n\n"
+
+	out = out + "fn zt_names() -> list[str] {\n\tmut out: list[str] = []\n"
+	for n in names {
+		out = out + "\tout.append(\"" + n + "\")\n"
+	}
+	out = out + "\treturn out\n}\n\n"
+
+	out = out + "fn zt_files() -> list[str] {\n\tmut out: list[str] = []\n"
+	for f in at {
+		out = out + "\tout.append(\"" + f + "\")\n"
+	}
+	out = out + "\treturn out\n}\n\n"
+
+	out = out + "fn zt_call(name: str) -> int {\n\tmut found := false\n"
+	for n in names {
+		out = out + "\tif name == \"" + n + "\" {\n\t\t" + n + "()\n\t\tfound = true\n\t}\n"
+	}
+	out = out + "\traise \"zerg test: this driver has no such test\" if not found\n\treturn 0\n}\n\n"
+
+	return out + driver_body()
+}
+
+# driver_body is the half of the driver that does not vary. It is a text constant and not a
+# module of the standard library, because a test driver is not something a program imports: it
+# exists for the length of one run, in the package's own scope, and the only reader it ever has
+# is the compiler that was handed it a moment earlier.
+fn driver_body() -> str {
+	return "fn zt_child(name: str, out: str) -> int {\n" +
+		"\tr := guard {\n\t\tzt_call(name)\n\t}\n" +
+		"\tok := match r {\n\t\tEither.Left(_)  => true\n\t\tEither.Right(_) => false\n\t}\n" +
+		"\tif ok {\n\t\tzt_put(out, \"ok\\n\")\n\t\treturn 0\n\t}\n" +
+		"\tmsg := match r {\n\t\tEither.Left(_)  => \"\"\n\t\tEither.Right(e) => e.message()\n\t}\n" +
+		"\tzt_put(out, \"fail\\n\" + msg + \"\\n\")\n\treturn 1\n}\n\n" +
+		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
+		"fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
+		"fn zt_rm(path: str) {\n\tguard {\n\t\tfs.remove(path)\n\t}\n}\n\n" +
+		"fn zt_head(text: str) -> str {\n\tb := bytearray(text)\n\tmut out: list[byte] = []\n\tmut i := 0\n" +
+		"\tfor i < b.len() {\n\t\tbreak if b[i] == b'\\n'\n\t\tout.append(b[i])\n\t\ti = i + 1\n\t}\n\treturn str(out)\n}\n\n" +
+		"fn zt_tail(text: str) -> str {\n\tb := bytearray(text)\n\tmut i := 0\n" +
+		"\tfor i < b.len() and b[i] != b'\\n' {\n\t\ti = i + 1\n\t}\n" +
+		"\tmut out: list[byte] = []\n\tmut j := i + 1\n" +
+		"\tfor j < b.len() {\n\t\tbreak if b[j] == b'\\n'\n\t\tout.append(b[j])\n\t\tj = j + 1\n\t}\n\treturn str(out)\n}\n\n" +
+		"fn zt_parent(summary: str) -> int {\n" +
+		"\texe := __zrt_exe_path()\n\tnames := zt_names()\n\tfiles := zt_files()\n" +
+		"\tmut passed := 0\n\tmut failed := 0\n\tmut seen := \"\"\n\tmut i := 0\n" +
+		"\tfor i < names.len() {\n" +
+		"\t\tif files[i] != seen {\n\t\t\tseen = files[i]\n\t\t\tio.println(seen)\n\t\t}\n" +
+		"\t\trp := summary + \".\" + str(i)\n\t\tzt_rm(rp)\n" +
+		"\t\tmut argv: list[str] = []\n\t\targv.append(exe)\n\t\targv.append(\"-t\")\n" +
+		"\t\targv.append(names[i])\n\t\targv.append(rp)\n\t\tcode := os.run(argv)\n" +
+		"\t\tres := zt_get(rp)\n\t\tzt_rm(rp)\n\t\thead := zt_head(res)\n" +
+		"\t\tif head == \"ok\" {\n\t\t\tio.println(\"  ok    \" + names[i])\n\t\t\tpassed = passed + 1\n" +
+		"\t\t} else if head == \"fail\" {\n\t\t\tio.println(\"  FAIL  \" + names[i])\n" +
+		"\t\t\tio.println(\"        \" + zt_tail(res))\n\t\t\tfailed = failed + 1\n" +
+		"\t\t} else if code == 0 {\n\t\t\tio.println(\"  FAIL  \" + names[i])\n" +
+		"\t\t\tio.println(\"        the test exited before it finished — `os.exit` ends the process, and a test that did not return did not pass\")\n" +
+		"\t\t\tfailed = failed + 1\n" +
+		"\t\t} else {\n\t\t\tio.println(\"  CRASH \" + names[i])\n" +
+		"\t\t\tio.println(\"        the test process died with status \" + str(code))\n" +
+		"\t\t\tfailed = failed + 1\n\t\t}\n" +
+		"\t\ti = i + 1\n\t}\n" +
+		"\tzt_put(summary, str(passed) + \"\\n\" + str(failed) + \"\\n\")\n" +
+		"\treturn 1 if failed > 0\n\n\treturn 0\n}\n\n" +
+		"fn zt_main(args: list[str]) -> int {\n" +
+		"\treturn zt_child(args[1], args[2]) if args.len() == 3 and args[0] == \"-t\"\n" +
+		"\treturn zt_parent(args[0]) if args.len() == 1\n\n" +
+		"\tio.eprintln(\"this is a `zerg test` driver: it is run by `zerg test`, which hands it a report path\")\n" +
+		"\treturn 2\n}\n\n" +
+		"fn main(args: list[str]) {\n\tos.exit(zt_main(args))\n}\n"
 }
 
 # --- import cycles ---------------------------------------------------------------------

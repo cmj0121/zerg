@@ -709,6 +709,9 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E391` | `…` 在頂層開了一個 statement,而編譯出來的程式沒有地方跑它                                             |
 | `E392` | 不能對 `…` 做 `…`:只有 `mut` 的 collection 能改動它的元素                                             |
 | `E393` | 不能 `…` `…`:collection 在自己的 `for` 迴圈裡對結構性改動是凍結的                                     |
+| `E508` | `…` 不是 module `…` 的公開型別                                                                        |
+| `E509` | `…` 是 module-private,而 … 在一個 `pub` 宣告上                                                        |
+| `E510` | `…` 不是 `…` 的公開欄位,而 `…` 是 module `…` 宣告的                                                   |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |
@@ -787,12 +790,24 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E486` | 解構賦值 `(a, b) = …` — **[not yet]**                                                                 |
 | `E487` | `…` 只能用在後面的 `struct`、`enum` 或 `spec` 上,而後面是 `…`                                         |
+| `E488` | `unsafe fn(…)` 型別 — **[not yet]**                                                                   |
+| `E489` | 在 `….…` 上的 `impl` — 帶點的目標 — **[not yet]**                                                     |
+| `E490` | 一個 `impl` 的 spec 是以裸的 `type-name` 指名的,而 `….…` 是透過 import 取得的                         |
+| `E491` | 泛型的 `type …[…] = …` — **[not yet]**                                                                |
+| `E492` | variant payload 裡的子 pattern — **[not yet]**                                                        |
+| `E493` | 把 range 當成值使用 — **[not yet]**                                                                   |
+| `E494` | `is …` 指名了一個內建的 error kind — **[not yet]**                                                    |
+| `E495` | 一個 decorator 至少要有一個項目,而 `#[]` 沒有指名任何可套用的東西                                     |
+| `E496` | decorator `#[sealed]` — 保留 — **[not yet]**                                                          |
+| `E497` | 一個 `#[derive]` 要指名它要產生的 spec                                                                |
+| `E498` | channel 是雙向、receive-only 或 send-only                                                             |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 | `E503` | 不能在 send-only 的 `…` 上接收                                                                        |
 | `E504` | 不能在 receive-only 的 `…` 上送出                                                                     |
 | `E505` | 不能關閉 receive-only 的 channel `…`                                                                  |
 | `E506` | channel 方向只能收窄：`…` 不能填進 `…`                                                                |
+| `E507` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

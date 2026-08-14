@@ -26,7 +26,8 @@
 
 ## 集合
 
-`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]` 是這個編譯器會讀的 decorator。其他每一個——`#[sealed]`、
+`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與 `#[allow]` 是這個編譯器會讀的 decorator。其他每一個——
+`#[sealed]`、
 layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
@@ -38,10 +39,16 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 - **`#[obj]`** — 掛在 `spec`,不帶參數。生成一個由 function value 組成的**伴生 struct** 與一個**泛型 wrap**,這是
   在「spec 是 bound、從來不是型別」的語言裡寫出異質集合的方式。`mut fn`、收 `This` 的方法,以及任何不是 spec 的東西,
   都會被指名拒絕。見 **[Specs & Generics](specs.zh-TW.md)**。
-- **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。函式不帶參數;
-  其中的斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。放在
+- **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。它不回傳東西,
+  參數可以是一個 **`testing.Context`**（以型別辨識）、它需要的 **fixture**（以名字比對）,或是完全不帶參數;其中的
+  斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。放在
   `*_test.zg` **之外**的 `#[test]` 是合法的,而且會**被打包出去**——它和其他函式一樣被編進 binary,卻沒有任何東西
   呼叫它——所以 `zerg lint` 會對它發出警告（**L601**,見 [fmt 與 lint](../tooling/fmt.zh-TW.md)）。
+- **`#[fixture]`** — 掛在 `*_test.zg` 裡的 `fn`。把該函式標記為 `zerg test` 會**為指名它的測試建置**的東西。它把
+  自己的測試當作 **continuation** 收下:一個型別為 `fn (T)` 的參數,以型別辨識,它同時是那些測試執行的所在,也是這個
+  fixture **產出什麼**的宣告。其餘每個參數都**指名另一個 fixture**。teardown 就是 `defer`,runner 不為它多提供
+  任何東西。同一條 **L601** 也適用——`*_test.zg` 之外的 `#[fixture]` 和 `#[test]` 一樣會被打包出去。見
+  [模組、套件與程式](../runtime/package.zh-TW.md)。
 - **`#[allow(Lxxx, …)]`** — 掛在任何 **statement**,宣告也在內。壓下該 statement 上所列的 **lint** finding;若該
   statement 帶一個區塊,區塊也在涵蓋範圍內:範圍就是它所領的 statement 的大小,這是**一條**規則,而不是在「一行」與
   「一個 scope」之間二選一。它不會延伸到下一個 statement,也到不了另一個檔案——刻意**沒有檔案層級的範圍**。
@@ -66,7 +73,8 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
 > **[not yet]** `#[repr]` 仍是一個沒有自己規則的保留名字:它落進未知 decorator 的分支,拿到
-> _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`, and no other_——與拼錯的
+> _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no
+> other_——與拼錯的
 > `#[frobnicate]` 同一句話。它被拒絕,所以沒有任何東西被默默丟掉;失去的是「等待實作」與「打錯字」之間的
 > 區分——`#[sealed]` 原本也有同樣的問題,現在有了 `E496`。
 >

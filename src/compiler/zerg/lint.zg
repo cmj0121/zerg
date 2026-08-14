@@ -74,11 +74,13 @@
 # `L6xx` is SHIPPING: what the binary carries that the source suggests was not meant to be in
 # it.
 #
-#   L601  a `#[test]` function outside a `*_test.zg` file. It is LEGAL and it SHIPS — the
-#         function is compiled into the binary like any other, its `import "testing"` travels
-#         with it, and nothing calls it. So the message states that CONSEQUENCE rather than
-#         the preference: a warning that only says "move it" is style advice and gets
-#         ignored, and what the reader has to weigh is 224 bytes of dead code in the artifact
+#   L601  a `#[test]` or `#[fixture]` function outside a `*_test.zg` file. It is LEGAL and it
+#         SHIPS — the function is compiled into the binary like any other, its
+#         `import "testing"` travels with it, and nothing calls it. So the message states that
+#         CONSEQUENCE rather than the preference: a warning that only says "move it" is style
+#         advice and gets ignored, and what the reader has to weigh is 224 bytes of dead code
+#         in the artifact. ONE code for the two decorators, because it is one consequence:
+#         what a reader has to weigh does not change with which of them they wrote
 #
 # --- severity, and the two exit codes it decides -----------------------------------------
 #
@@ -300,10 +302,19 @@ pub fn is_test_file(name: str) -> bool {
 # that runs, and style advice is what a reader learns to scroll past.
 fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
 	for fd in f.fns {
-		if fd.is_test and not is_test_file(fd.path) {
-			out.append(Finding("warning", fd.path, fd.line, fd.col, "L601", f"`{fd.name}` is a `#[test]` outside a `*_test.zg` file, so it SHIPS — it is compiled into the binary like any other function, nothing calls it, and its `import \"testing\"` travels with it; move it to a `*_test.zg` file beside its module if that is not what you meant"))
+		if (fd.is_test or fd.is_fixture) and not is_test_file(fd.path) {
+			out.append(Finding("warning", fd.path, fd.line, fd.col, "L601", f"`{fd.name}` is a `{deco_of(fd)}` outside a `*_test.zg` file, so it SHIPS — it is compiled into the binary like any other function, nothing calls it, and its `import \"testing\"` travels with it; move it to a `*_test.zg` file beside its module if that is not what you meant"))
 		}
 	}
+}
+
+# deco_of spells which of the two decorators a declaration carries, for the one sentence that
+# has to name it. They cannot both be on one item — a decorator leads a declaration and there
+# is one per item (E613) — so the question has an answer.
+fn deco_of(fd: FnDecl) -> str {
+	return "#[fixture]" if fd.is_fixture
+
+	return "#[test]"
 }
 
 fn lint_recv_is_mut(fd: FnDecl) -> bool {
@@ -690,14 +701,14 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[Findi
 		# `init` is called by the generated main, the same way the runtime calls `main`
 		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
 			continue_marker()
-		} else if fd.is_test {
-			# A `#[test]` IS CALLED BY THE DRIVER `zerg test` GENERATES, which is not in the
-			# source and never will be — so every test function in the tree read as dead
-			# private code, and a test file could not be linted at all.
+		} else if fd.is_test or fd.is_fixture {
+			# A `#[test]` AND A `#[fixture]` ARE CALLED BY THE DRIVER `zerg test` GENERATES,
+			# which is not in the source and never will be — so every test function in the tree
+			# read as dead private code, and a test file could not be linted at all.
 			#
-			# It is exempt here even OUTSIDE a `*_test.zg` file, where nothing does call it,
-			# because that case has a rule of its own: L601 says the same thing and says the
-			# part that matters, which is that the function ships.
+			# They are exempt here even OUTSIDE a `*_test.zg` file, where nothing does call
+			# them, because that case has a rule of its own: L601 says the same thing and says
+			# the part that matters, which is that the function ships.
 			continue_marker()
 		} else if has_str(reqs, fd.name) {
 			# A METHOD THAT SATISFIES A SPEC IS AN INTERFACE, the way a `pub` function is: what

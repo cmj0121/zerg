@@ -1005,11 +1005,30 @@ fn run_tests(root: str) -> int {
 	mut pkgs: list[str] = []
 	test_pkgs(root, pkgs)
 
+	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
+	# parameter whose type is not what the fixture produces, and a circle among fixtures are
+	# all facts about the SOURCE, and a runner that discovered one of them halfway through a
+	# run would have already reported verdicts for tests whose neighbours never got to run —
+	# a report whose green half means nothing. So they are asked for the whole tree first,
+	# reported together the way a compiler reports diagnostics, and nothing is executed.
+	mut errs: list[str] = []
+	for d in pkgs {
+		mut fixts: list[Fixt] = []
+		mut tests: list[Tst] = []
+		plan_pkg(root, d, fixts, tests, errs)
+	}
+	if errs.len() > 0 {
+		for e in errs {
+			io.ewrite(e + "\n")
+		}
+		return 2
+	}
+
 	mut passed := 0
 	mut failed := 0
 	mut skipped := 0
 	for d in pkgs {
-		run_pkg(d, passed, failed, skipped)
+		run_pkg(root, d, passed, failed, skipped)
 	}
 
 	if passed + failed + skipped == 0 {
@@ -1072,7 +1091,7 @@ fn is_hidden(name: str) -> bool {
 fn pkg_sources(dir: str) -> list[str] {
 	mut out: list[str] = []
 	for name in __zrt_listdir(dir) {
-		if has_suffix(name, ".zg") and name != DRIVER_NAME {
+		if has_suffix(name, ".zg") and name != DRIVER_NAME and not has_prefix(name, INHERITED_PREFIX) {
 			out.append(join_path(dir, name))
 		}
 	}
@@ -1089,45 +1108,423 @@ fn pkg_sources(dir: str) -> list[str] {
 # healing possible: a run interrupted twice leaves one file, not two.
 const DRIVER_NAME := "zerg_test_driver_test.zg"
 
-# pkg_tests collects a package's tests as three parallel lists: each `#[test]` function's
-# name, the file it was written in, and whether it asks for a `testing.Context` — in the order
-# they will run.
+# INHERITED_PREFIX names the copy of an ancestor's fixture file that a package's driver is
+# built with.
 #
-# ONLY A `*_test.zg` IS READ FOR ONE. A `#[test]` elsewhere in the package is compiled like any
-# other function and nothing calls it — the file's NAME is what makes a source a test file
-# (docs/runtime/package.md), and a second answer here would mean a function that runs under
-# `zerg test` from a file `zerg build` also ships.
-fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str], mut &ctxp: list[bool]) {
-	for f in files {
-		if zerg.is_test_file(path_tail(f)) {
-			tree := zerg.parse_at(read_source(f), f)
-			for fd in tree.fns {
-				if fd.is_test {
-					names.append(fd.name)
-					at.append(f)
-					ctxp.append(takes_ctx(fd))
-				}
-			}
-		}
+# A COPY, BECAUSE A MODULE IS A DIRECTORY. The file is read from an ancestor, and a
+# declaration read from another directory belongs to another module however the build was
+# told to compile it — so every type and function an inherited fixture file declares would be
+# `E508` / `E301` to the tests that asked for it. Writing it into the package is what the
+# driver already does for exactly this reason, and it is the only thing that puts the two in
+# one scope.
+#
+# The copy is byte for byte, so a diagnostic inside one points at the right LINE of the file
+# the author wrote; only the name in front of it is this run's. It ends in `_test.zg` like
+# everything else here, so no shipping build reads one, and it is taken away with the driver.
+const INHERITED_PREFIX := "zerg_test_inherited_"
+
+# --- fixtures --------------------------------------------------------------------------
+#
+# A TEST DECLARES WHAT IT NEEDS AND THE FRAMEWORK BUILDS IT. A `#[fixture]` is a function
+# that takes its tests as a CONTINUATION:
+#
+#   #[fixture]
+#   fn db(use: fn (Conn)) {
+#       c := connect("postgres://tmp/test")
+#       defer c.close()
+#       use(c)
+#   }
+#
+# `use: fn (T)` is identified by TYPE, and it is two things at once: the continuation the
+# tests run inside, and the declaration of what this fixture PRODUCES. Every OTHER parameter
+# is a DEPENDENCY, matched by NAME against another fixture — which is one rule for
+# test-to-fixture and fixture-to-fixture both.
+#
+# THE CONTINUATION IS WHY THERE ARE NO GENERICS HERE. The shape this replaced had the
+# fixture hand its value over with `ctx.ready(v)` and block; `ready` would have had to be
+# generic over the value's type, and `impl Context { fn ready[T] }` is `E409` in this
+# compiler. `use(c)` is an ordinary call of an ordinary function value, so the whole
+# mechanism is one the language already had — and the value's type is checked by the
+# compiler at the call, not by anything written here.
+#
+# TEARDOWN IS `defer`, the language's own idiom, and it needs nothing from this runner: the
+# fixture's body is a body, so its `defer` fires when the body ends, which is after `use`
+# returns. Dependency order and teardown order therefore BOTH fall out of the nesting the
+# driver writes — an inner `defer` fires first — and there is no topological sort to run at
+# runtime and no teardown registry to keep.
+#
+# WHERE A FIXTURE LIVES, and what inherits it: a fixture is declared in a `*_test.zg`, so it
+# reaches no shipping build, and it serves the tests of its own DIRECTORY. A fixture that is
+# to serve the directories BELOW as well goes in `fixtures_test.zg`, which is the one file an
+# ancestor directory contributes downward — see FIXTURES_NAME.
+#
+# WHAT A PACKAGE IS STAYS WHAT IT WAS: one directory, one driver, one process. So `pkg/sub`
+# and `pkg/sub2` each build their OWN instance of an inherited fixture, because they are
+# separate processes — pytest's `scope="package"`, not `scope="session"`. Session scope is
+# not wanted and is anyway unreachable: `E705` refuses two modules both defining a `pub`
+# name, so one driver over a whole tree cannot be built, and a live value does not cross a
+# process boundary.
+
+# FIXTURES_NAME is the file an ancestor directory contributes to every directory below it.
+#
+# IT IS ONE FIXED NAME AND NOT ANY `*_test.zg`, and the reason is what a test file IS: a
+# `*_test.zg` is a file OF its module, written in that module's scope, and it reads the
+# module's private names — that is the white-box position docs/runtime/package.md describes.
+# Compiling `pkg/lib/lib_test.zg` into the driver for `pkg/lib/sub` would carry it into a
+# scope where `pkg/lib`'s own sources are not, so every private name it touched would be
+# undeclared. A file that is to be read from BELOW has to be written for that, and a name is
+# how a reader and this runner both know which files those are.
+#
+# The second half of the same reason is what would otherwise happen to the TESTS in it: an
+# ancestor's `*_test.zg` compiled into every descendant would run its `#[test]` functions
+# once per descendant directory. So only the FIXTURES of an inherited file are taken; a
+# `#[test]` written in a `fixtures_test.zg` runs in its own directory, once, like any other.
+#
+# It ends in `_test.zg` because everything here does: that suffix is what keeps a file out of
+# a shipping build (`zerg.is_test_file`), and a fixture must never reach one.
+#
+# ANCESTORS ARE COUNTED FROM THE PATH `zerg test` WAS GIVEN, not from the filesystem root —
+# `zerg test .` at the top of a project reads every level, and `zerg test pkg/sub` reads from
+# `pkg/sub` down. That is pytest's rootdir model, and the alternative is a walk with no upper
+# bound that would read files outside anything the caller named.
+const FIXTURES_NAME := "fixtures_test.zg"
+
+# Fixt is one `#[fixture]`: its name, the type its `use: fn (T)` continuation takes — which is
+# what it produces — the names and declared types of its dependencies in order, and where it
+# was written.
+struct Fixt {
+	pub name: str
+	pub produces: str
+	pub deps: list[str]
+	pub deptys: list[str]
+	pub path: str
+	pub line: int
+	pub col: int
+}
+
+# Tst is one `#[test]`: its name and place, its parameters, which of them is the
+# `testing.Context`, and — filled in by resolution — the fixtures that have to be standing
+# before it can run, dependencies first.
+struct Tst {
+	pub name: str
+	pub path: str
+	pub line: int
+	pub col: int
+	pub pnames: list[str]
+	pub ptys: list[str]
+	pub isctx: list[bool]
+	pub need: list[str]
+}
+
+# plan_pkg reads one package's declarations and resolves them, appending a sentence to `errs`
+# for every parameter that names no fixture, every parameter whose type is not what its
+# fixture produces, and every circle. It is called twice per run — once for the whole tree
+# before anything executes, and once by run_pkg with the answers it needs — because a plan is
+# cheap and a second copy of the resolution would be a second place the rule is written down.
+fn plan_pkg(root: str, dir: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+	mut own: list[bool] = []
+	files := pkg_files(root, dir, own)
+	pkg_decls(files, own, fixts, tests, errs)
+
+	mut order: list[str] = []
+	fix_order(fixts, order, errs)
+
+	mut i := 0
+	for i < tests.len() {
+		resolve_test(fixts, order, tests, i, errs)
+		i = i + 1
 	}
 }
 
-# takes_ctx is how the driver decides which call to write for a test — `t()` or `t(ctx)`.
-#
-# THE CONTEXT IS IDENTIFIED BY TYPE, not by the parameter's name. A runner that looked for a
-# parameter called `ctx` would be reading a name the author chose, so `fn t(t: testing.Context)`
-# would silently get the wrong call and `fn t(ctx: int)` the right one. The qualifier is
-# resolved away at the parse — `testing.Context` and a local `Context` are one name by then —
-# which is a smaller ambiguity than the alternative and the one this compiler already has
-# everywhere else.
-#
-# ANY OTHER SIGNATURE FALLS TO `t()`, deliberately: the generated call is then a call the
-# compiler checks like any other, and `fn t(n: int)` is a compile error naming the function
-# rather than a test the runner quietly skipped.
-fn takes_ctx(fd: zerg.FnDecl) -> bool {
-	return false if fd.params.len() != 1
+# pkg_files is every source one test binary is built from: the `fixtures_test.zg` of each
+# directory between the path `zerg test` was given and this one, then the package's own
+# sources. `own` says, for each, whether its `#[test]` functions belong to this package —
+# an inherited file contributes its fixtures and nothing else.
+fn pkg_files(root: str, dir: str, mut &own: list[bool]) -> list[str] {
+	mut out: list[str] = []
+	for a in ancestors_of(root, dir) {
+		f := join_path(a, FIXTURES_NAME)
+		if __zrt_exists(f) {
+			out.append(f)
+			own.append(false)
+		}
+	}
+	for f in pkg_sources(dir) {
+		out.append(f)
+		own.append(true)
+	}
+	return out
+}
 
-	return zerg.ty_name(fd.params[0].ty) == "Context"
+# ancestors_of is the directories strictly between `root` and `dir`, `root` included and `dir`
+# excluded, outermost first. A package's own `fixtures_test.zg` is already among its sources,
+# which is why the directory itself is left out.
+fn ancestors_of(root: str, dir: str) -> list[str] {
+	mut out: list[str] = []
+	return out if dir == root
+
+	mut rev: list[str] = []
+	mut at := dir_of(dir)
+	mut more := true
+	for more {
+		rev.append(at)
+
+		# `root` is a prefix of every package directory — `test_pkgs` builds each one by
+		# joining onto it — so the climb ends there. The other two are the floor `dir_of`
+		# answers with, and they are here so a path this walk did not build cannot loop.
+		if at == root or at == "." or at == "/" {
+			more = false
+		} else {
+			at = dir_of(at)
+		}
+	}
+	mut i := rev.len() - 1
+	for i >= 0 {
+		out.append(rev[i])
+		i = i - 1
+	}
+	return out
+}
+
+# pkg_decls collects the `#[test]` and `#[fixture]` declarations of a package's test files.
+#
+# ONLY A `*_test.zg` IS READ FOR ONE. A `#[test]` elsewhere in the package is compiled like
+# any other function and nothing calls it — the file's NAME is what makes a source a test
+# file (docs/runtime/package.md), and a second answer here would mean a function that runs
+# under `zerg test` from a file `zerg build` also ships.
+fn pkg_decls(files: list[str], own: list[bool], mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+	mut i := 0
+	for i < files.len() {
+		f := files[i]
+		if zerg.is_test_file(path_tail(f)) {
+			tree := zerg.parse_at(read_source(f), f)
+			for fd in tree.fns {
+				if fd.is_fixture {
+					fixts.append(mk_fixture(fd, errs))
+				} else if fd.is_test and own[i] {
+					tests.append(mk_test(fd))
+				}
+			}
+		}
+		i = i + 1
+	}
+}
+
+# mk_fixture reads one `#[fixture]` declaration: the continuation parameter says what it
+# produces, and every other parameter is a dependency named after the fixture that builds it.
+fn mk_fixture(fd: zerg.FnDecl, mut &errs: list[str]) -> Fixt {
+	mut produces := ""
+	mut uses := 0
+	mut deps: list[str] = []
+	mut deptys: list[str] = []
+	mut i := 0
+	for i < fd.params.len() {
+		p := fd.params[i]
+		a := zerg.ty_fn1_arg(p.ty)
+		if a == "" {
+			deps.append(p.name)
+			deptys.append(zerg.ty_name(p.ty))
+		} else {
+			uses = uses + 1
+			produces = a
+		}
+		i = i + 1
+	}
+
+	at := f"{fd.path}:{fd.line}:{fd.col}"
+	if uses == 0 {
+		errs.append(f"{at}: the fixture `{fd.name}` declares no `use: fn (T)` parameter — a fixture hands its value to the tests by CALLING one, and the type that continuation takes is what the fixture produces, so a fixture without one produces nothing anything could ask for")
+	} else if uses > 1 {
+		errs.append(f"{at}: the fixture `{fd.name}` declares {uses} parameters of the shape `fn (T)` — one of them is the continuation the tests run inside and there is no way to tell which, so a fixture takes exactly one")
+	}
+	return Fixt(fd.name, produces, deps, deptys, fd.path, fd.line, fd.col)
+}
+
+# mk_test reads one `#[test]` declaration's parameter list.
+#
+# THE CONTEXT IS IDENTIFIED BY TYPE and a fixture by NAME, which is the whole of the rule. A
+# runner that looked for a parameter called `ctx` would be reading a name the author chose,
+# so `fn t(t: testing.Context)` would get the wrong argument and `fn t(ctx: int)` the right
+# one. The qualifier is resolved away at the parse — `testing.Context` and a local `Context`
+# are one name by then — which is the same ambiguity this compiler already has everywhere
+# else.
+fn mk_test(fd: zerg.FnDecl) -> Tst {
+	mut pnames: list[str] = []
+	mut ptys: list[str] = []
+	mut isctx: list[bool] = []
+	mut i := 0
+	for i < fd.params.len() {
+		p := fd.params[i]
+		tn := zerg.ty_name(p.ty)
+		pnames.append(p.name)
+		ptys.append(tn)
+		isctx.append(tn == "Context")
+		i = i + 1
+	}
+	mut need: list[str] = []
+	return Tst(fd.name, fd.path, fd.line, fd.col, pnames, ptys, isctx, need)
+}
+
+# fix_index is where a fixture of this name is, or -1.
+fn fix_index(fixts: list[Fixt], name: str) -> int {
+	mut i := 0
+	for i < fixts.len() {
+		return i if fixts[i].name == name
+		i = i + 1
+	}
+	return -1
+}
+
+fn has_str(xs: list[str], s: str) -> bool {
+	for x in xs {
+		return true if x == s
+	}
+	return false
+}
+
+# fix_order puts the fixtures in an order where a dependency comes before what depends on it,
+# and reports the two things that walk finds: a dependency naming no fixture, and a circle.
+#
+# THE ORDER IS WHAT MAKES THE NESTING POSSIBLE. A test's chain is its required fixtures listed
+# in this order, so every fixture in a chain has its own dependencies already standing above
+# it — which is why the driver can write the nesting straight out and never has to sort
+# anything at runtime.
+fn fix_order(fixts: list[Fixt], mut &order: list[str], mut &errs: list[str]) {
+	mut color: list[int] = []
+	for f in fixts {
+		color.append(0)
+	}
+	mut i := 0
+	for i < fixts.len() {
+		mut stack: list[str] = []
+		fix_visit(fixts, i, color, order, errs, stack)
+		i = i + 1
+	}
+}
+
+# fix_visit is the depth-first walk: white is unvisited, GREY IS ON THE STACK — which is what
+# a circle is — and black is finished.
+fn fix_visit(fixts: list[Fixt], i: int, mut &color: list[int], mut &order: list[str], mut &errs: list[str], mut &stack: list[str]) {
+	return if color[i] == 2
+
+	if color[i] == 1 {
+		errs.append(cycle_says(fixts, i, stack))
+
+		# EVERY FIXTURE IN THE CIRCLE IS ANSWERED FOR by that one sentence, so they are all
+		# finished here. Left grey, the outer loop would enter the same circle at each of its
+		# members in turn and report one rotation of it per member.
+		mut k := stack_index(stack, fixts[i].name)
+		for k < stack.len() {
+			j := fix_index(fixts, stack[k])
+			if j >= 0 {
+				color[j] = 2
+			}
+			k = k + 1
+		}
+		return
+	}
+
+	color[i] = 1
+	stack.append(fixts[i].name)
+	mut d := 0
+	for d < fixts[i].deps.len() {
+		j := fix_index(fixts, fixts[i].deps[d])
+		if j < 0 {
+			errs.append(f"{fixts[i].path}:{fixts[i].line}:{fixts[i].col}: the fixture `{fixts[i].name}` asks for `{fixts[i].deps[d]}` and no `#[fixture]` of that name is in scope — every parameter of a fixture but its `use: fn (T)` names another fixture")
+		} else {
+			if fixts[j].produces != fixts[i].deptys[d] {
+				errs.append(f"{fixts[i].path}:{fixts[i].line}:{fixts[i].col}: the fixture `{fixts[i].name}` declares `{fixts[i].deps[d]}: {fixts[i].deptys[d]}` and the fixture `{fixts[j].name}` produces `{fixts[j].produces}` — a fixture's `use: fn (T)` is what it produces, and the parameter that receives it is declared T")
+			}
+			fix_visit(fixts, j, color, order, errs, stack)
+		}
+		d = d + 1
+	}
+	stack = drop_last(stack)
+	color[i] = 2
+	order.append(fixts[i].name)
+}
+
+# cycle_says names the circle the way it was walked — `a` -> `b` -> `a` — starting and ending
+# at the fixture that closed it, so a reader can follow it back through their own source.
+fn cycle_says(fixts: list[Fixt], i: int, stack: list[str]) -> str {
+	name := fixts[i].name
+	mut chain := ""
+	mut k := stack_index(stack, name)
+	for k < stack.len() {
+		chain = chain + f"`{stack[k]}` -> "
+		k = k + 1
+	}
+	chain = chain + f"`{name}`"
+	return f"{fixts[i].path}:{fixts[i].line}:{fixts[i].col}: the fixtures {chain} depend on each other in a circle — a fixture is built inside the fixtures it names, so a circle has no place to start"
+}
+
+fn stack_index(stack: list[str], name: str) -> int {
+	mut i := 0
+	for i < stack.len() {
+		return i if stack[i] == name
+		i = i + 1
+	}
+	return 0
+}
+
+fn drop_last(xs: list[str]) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < xs.len() - 1 {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
+}
+
+# resolve_test checks one test's parameters and works out the chain it needs.
+#
+# A PARAMETER NAMING NO FIXTURE IS AN ERROR, reported here and before anything runs, and that
+# is what keeps name-matching from being quietly fragile: a renamed fixture, or a misspelled
+# parameter, is a sentence with a place rather than a test that silently never ran.
+fn resolve_test(fixts: list[Fixt], order: list[str], mut &tests: list[Tst], i: int, mut &errs: list[str]) {
+	t := tests[i]
+	mut want: list[str] = []
+	mut k := 0
+	for k < t.pnames.len() {
+		if not t.isctx[k] {
+			j := fix_index(fixts, t.pnames[k])
+			if j < 0 {
+				errs.append(f"{t.path}:{t.line}:{t.col}: the test `{t.name}` asks for `{t.pnames[k]}` and no `#[fixture]` of that name is in scope — a test's parameter names a fixture, or is a `testing.Context`")
+			} else {
+				if fixts[j].produces != t.ptys[k] {
+					errs.append(f"{t.path}:{t.line}:{t.col}: the test `{t.name}` declares `{t.pnames[k]}: {t.ptys[k]}` and the fixture `{t.pnames[k]}` produces `{fixts[j].produces}` — a fixture's `use: fn (T)` is what it produces, and the parameter that receives it is declared T")
+				}
+				add_closure(fixts, j, want)
+			}
+		}
+		k = k + 1
+	}
+
+	mut need: list[str] = []
+	for nm in order {
+		if has_str(want, nm) {
+			need.append(nm)
+		}
+	}
+	tests[i] = Tst(t.name, t.path, t.line, t.col, t.pnames, t.ptys, t.isctx, need)
+}
+
+# add_closure adds a fixture and everything it is built from. The membership test is also what
+# ends it: a circle is reported by fix_order, and this walk must not hang on one before the
+# report is printed.
+fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
+	return if has_str(want, fixts[j].name)
+
+	want.append(fixts[j].name)
+	mut d := 0
+	for d < fixts[j].deps.len() {
+		k := fix_index(fixts, fixts[j].deps[d])
+		if k >= 0 {
+			add_closure(fixts, k, want)
+		}
+		d = d + 1
+	}
 }
 
 # run_pkg builds one package's test binary and runs it, adding its counts to the run's.
@@ -1135,13 +1532,25 @@ fn takes_ctx(fd: zerg.FnDecl) -> bool {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
-	srcs := pkg_sources(dir)
+fn run_pkg(root: str, dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
+	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
+	# findings somewhere: run_tests planned every package before it ran any of them, and a run
+	# holding one unresolved parameter never reaches here at all.
+	mut fixts: list[Fixt] = []
+	mut tests: list[Tst] = []
+	mut errs: list[str] = []
+	plan_pkg(root, dir, fixts, tests, errs)
+	return if tests.len() == 0
+
 	mut names: list[str] = []
 	mut at: list[str] = []
-	mut ctxp: list[bool] = []
-	pkg_tests(srcs, names, at, ctxp)
-	return if names.len() == 0
+	for t in tests {
+		names.append(t.name)
+		at.append(t.path)
+	}
+
+	mut own: list[bool] = []
+	srcs := pkg_files(root, dir, own)
 
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
 	# module is a directory and that is the only thing that puts its declarations in the same
@@ -1164,9 +1573,25 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	# compiler, and the driver now has both. A generated file has no need of an argument
 	# anyway: whatever a run would have passed, the run also wrote the file.
 	guard {
-		io.write_file(drv, bytearray(gen_driver(names, ctxp, rep, sel)))
+		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel)))
 	}
-	mut files := srcs
+
+	mut files: list[str] = []
+	mut copies: list[str] = []
+	mut k := 0
+	for k < srcs.len() {
+		if own[k] {
+			files.append(srcs[k])
+		} else {
+			c := join_path(dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			guard {
+				io.write_file(c, bytearray(read_source(srcs[k])))
+			}
+			copies.append(c)
+			files.append(c)
+		}
+		k = k + 1
+	}
 	files.append(drv)
 	link_units(load_units_of(files, dir, dir), drv, bin, TEST_JOBS)
 
@@ -1177,12 +1602,17 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 		text.append("")
 	}
 
+	# `broke` is what the driver said about a FIXTURE rather than about a test — the one thing
+	# in a run no test's slot can hold. A fixture whose tests all answered for themselves and
+	# which then raised on its way out has failed, and it is attributable to nothing else.
+	mut broke: list[str] = []
+
 	rm_file(rep)
 	rm_file(sel)
 	mut argv: list[str] = []
 	argv.append(bin)
 	__zrt_exec(argv)
-	take_records(rep, names, verdict, text)
+	take_records(rep, names, verdict, text, broke)
 
 	# THE FALLBACK. Every test with no record is one the in-process run never got back from,
 	# and each is re-run in a process of its own — which is what turns "the run died" into
@@ -1196,12 +1626,12 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 			if fell < 0 {
 				fell = i
 			}
-			run_one(bin, sel, rep, names, i, verdict, text)
+			run_one(bin, sel, rep, names, i, verdict, text, broke)
 		}
 		i = i + 1
 	}
 
-	report_pkg(names, at, verdict, text, fell, passed, failed, skipped)
+	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped)
 
 	# the driver and its binary belong to THIS run: the next one writes them again from whatever
 	# the test files then declare, and a stale one left behind is a test binary that answers for
@@ -1210,6 +1640,9 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	rm_file(sel)
 	rm_file(drv)
 	rm_file(bin)
+	for c in copies {
+		rm_file(c)
+	}
 }
 
 # run_one runs a single named test in a process of its own — the isolated path, which is the
@@ -1218,7 +1651,7 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 # THE NAME TRAVELS IN A FILE for the reason the driver's paths do: the driver cannot read a
 # command line (E734), so the one thing that varies between these runs is written where the
 # driver looks for it.
-fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str]) {
+fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
 	rm_file(rep)
 	guard {
 		io.write_file(sel, bytearray(names[i]))
@@ -1226,7 +1659,7 @@ fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict:
 	mut argv: list[str] = []
 	argv.append(bin)
 	code := __zrt_exec(argv)
-	take_records(rep, names, verdict, text)
+	take_records(rep, names, verdict, text, broke)
 	return if verdict[i] != ""
 
 	# STILL NO RECORD, so this test is the one that ends processes. The status tells the two
@@ -1263,11 +1696,19 @@ fn test_dir() -> str {
 # A NAME IT DOES NOT KNOW IS IGNORED rather than reported, which costs nothing: the driver is
 # generated from this same list, so the only way to reach that is a stale file, and a stale
 # file is exactly what `rm_file` before each run is for.
-fn take_records(path: str, names: list[str], mut &verdict: list[str], mut &text: list[str]) {
+fn take_records(path: str, names: list[str], mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
 	mut at := -1
 	for ln in lines_of(read_or_empty(path)) {
 		if has_prefix(ln, "T ") {
 			at = name_index(names, drop_tag(ln))
+		} else if has_prefix(ln, "F ") {
+			# an `F` is about a fixture, so it ends whatever test the lines above were about:
+			# nothing that follows belongs to one
+			at = -1
+			f := drop_tag(ln)
+			if not has_str(broke, f) {
+				broke.append(f)
+			}
 		} else if at >= 0 and has_prefix(ln, "V ") {
 			verdict[at] = drop_tag(ln)
 		} else if at >= 0 and has_prefix(ln, "M ") {
@@ -1339,7 +1780,7 @@ fn lines_of(text: str) -> list[str] {
 # paths: the in-process run and the fallback processes write the same records, and a reader
 # cannot tell from a line which way it was produced — except where it is told, which is the
 # one line that says the strategy changed.
-fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	mut seen := ""
 	mut i := 0
 	for i < names.len() {
@@ -1367,6 +1808,14 @@ fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[st
 			failed = failed + 1
 		}
 		i = i + 1
+	}
+
+	# A FIXTURE THAT FAILED WITH NOTHING LEFT TO BLAME IT ON is still a failure, and it is
+	# printed last because that is when it happened: the tests under it had each already
+	# answered for themselves, and what broke was the teardown on the way out.
+	for b in broke {
+		io.println(f"  FAIL  {b}")
+		failed = failed + 1
 	}
 }
 
@@ -1414,22 +1863,33 @@ fn rm_file(path: str) {
 	}
 }
 
-# gen_driver writes the driver source for one package: the list of tests, the dispatch that
-# turns a name back into a call, the two paths it holds the report at, and the fixed half
-# below.
+# gen_driver writes the driver source for one package: the fixed half below, one trio of
+# functions per test, and the NESTING that stands the fixtures up around them.
 #
-# It is GENERATED rather than fixed because the only part that varies is the list of names, and
-# a fixed driver reading them from somewhere would need the names to exist as data at runtime —
-# which means a table the compiler emits, which is this file written by another route. Written
-# out, the calls are ordinary calls in the package's own scope and the compiler checks every one
-# of them: a `#[test]` with a parameter this runner does not know is a compile error naming the
-# function, not a runner that skips it.
+# It is GENERATED rather than fixed because the only part that varies is the tests and what
+# they asked for, and a fixed driver reading them from somewhere would need the names to exist
+# as data at runtime — which means a table the compiler emits, which is this file written by
+# another route. Written out, the calls are ordinary calls in the package's own scope and the
+# compiler checks every one of them: a `#[test]` with a parameter this runner does not know is
+# a compile error naming the function, not a runner that skips it.
 #
-# THE CALL IS WRITTEN TO THE SIGNATURE, which is the whole of what `testing.Context` costs the
-# language: `t()` and `t(ctx)` are both legal declarations and the generated call is whichever
-# the declaration asked for, so a test takes the context when it has something to say and
-# nothing when it does not.
-fn gen_driver(names: list[str], ctxp: list[bool], report: str, chosen: str) -> str {
+# THE NESTING IS THE WHOLE MECHANISM. A test's chain — its fixtures, dependencies first — is a
+# path, and the paths of a package's tests form a tree. The tree is written out as nested
+# calls, so:
+#
+#   a fixture is built ONCE for every test under it, because the call is written once
+#   a dependency is standing before its dependent, because it is written outside it
+#   teardown runs in reverse, because an inner `defer` fires first
+#   a level nobody needs is NEVER WRITTEN, because no test's path went through it
+#
+# and none of those four is a rule this file enforces at runtime — each is a consequence of
+# where the text was put. There is no topological sort in the driver and no teardown registry.
+#
+# THE CLOSURE BODIES ARE ONE CALL EACH, and that is not a style: `E735 a closure captures
+# `io`, and this compiler cannot work out what it holds` — a lambda may not reach a module
+# namespace, so anything a level does that touches `io` or `testing` has to be in a top-level
+# function. Each level is one, and the closure passed to a fixture only ever calls it.
+fn gen_driver(fixts: list[Fixt], tests: list[Tst], report: str, chosen: str) -> str {
 	mut out := "# Generated by `zerg test` for one run, and removed when that run ends. Not a source to\n"
 	out = out + "# edit: the next run writes it again from whatever the test files then declare.\n"
 	out = out + "import (\n\t\"io\"\n\t\"testing\"\n)\n\n"
@@ -1437,25 +1897,286 @@ fn gen_driver(names: list[str], ctxp: list[bool], report: str, chosen: str) -> s
 	out = out + "const ZT_REPORT := \"" + report + "\"\n"
 	out = out + "const ZT_SELECT := \"" + chosen + "\"\n\n"
 
-	out = out + "fn zt_names() -> list[str] {\n\tmut out: list[str] = []\n"
-	for n in names {
-		out = out + "\tout.append(\"" + n + "\")\n"
-	}
-	out = out + "\treturn out\n}\n\n"
+	out = out + driver_body()
 
-	out = out + "fn zt_call(name: str, ctx: testing.Context) -> int {\n\tmut found := false\n"
 	mut i := 0
-	for i < names.len() {
-		mut arg := "()"
-		if ctxp[i] {
-			arg = "(ctx)"
-		}
-		out = out + "\tif name == \"" + names[i] + "\" {\n\t\t" + names[i] + arg + "\n\t\tfound = true\n\t}\n"
+	for i < tests.len() {
+		out = out + gen_test(tests[i], i)
 		i = i + 1
 	}
-	out = out + "\traise \"zerg test: this driver has no such test\" if not found\n\treturn 0\n}\n\n"
 
-	return out + driver_body()
+	mut idxs: list[int] = []
+	mut k := 0
+	for k < tests.len() {
+		idxs.append(k)
+		k = k + 1
+	}
+
+	mut defs := ""
+	mut seq := 0
+	mut path: list[str] = []
+	body := gen_level(fixts, tests, idxs, path, defs, seq)
+
+	return out + defs + "fn main() {\n" + body + "}\n"
+}
+
+# gen_test writes the three functions one test needs: the body the coroutine runs, the start
+# that spawns it and hands back the receiving end, and the run that decides whether this
+# process is the one to run it.
+#
+# THE CALL IS WRITTEN TO THE SIGNATURE, in the order the test declared its parameters: the
+# `testing.Context` goes where its type stands and each fixture value where its name does. So
+# `fn t()`, `fn t(ctx: testing.Context)` and `fn t(db: Conn, ctx: testing.Context)` are all
+# ordinary declarations and the generated call is whichever one of them was written.
+fn gen_test(t: Tst, i: int) -> str {
+	n := f"{i}"
+	ps := test_params(t)
+	ar := test_args(t)
+	mut psc := ps
+	mut arc := ar
+	if ps != "" {
+		psc = ps + ", "
+		arc = ar + ", "
+	}
+
+	mut out := "fn zt_body" + n + "(" + psc + "zt_ch: chan[testing.Event]) {\n"
+	out = out + "\tzt_ctx := testing.context(\"" + t.name + "\", zt_ch)\n"
+	out = out + "\tzt_r := guard {\n\t\t" + test_call(t) + "\n\t}\n"
+	out = out + "\tzt_ok := match zt_r {\n\t\tEither.Left(_)  => true\n\t\tEither.Right(_) => false\n\t}\n"
+	out = out + "\tzt_why := match zt_r {\n\t\tEither.Left(_)  => \"\"\n\t\tEither.Right(e) => e.message()\n\t}\n"
+	out = out + "\ttesting.finished(zt_ctx, zt_ok, zt_why)\n}\n\n"
+
+	out = out + "fn zt_start" + n + "(" + ps + ") -> <-chan[testing.Event] {\n"
+	out = out + "\tzt_ch := chan[testing.Event]()\n\tspawn zt_body" + n + "(" + arc + "zt_ch)\n\n\treturn zt_ch\n}\n\n"
+
+	out = out + "fn zt_run" + n + "(" + ps + ") {\n"
+	out = out + "\treturn if not zt_want(\"" + t.name + "\")\n\n"
+	out = out + "\tzt_emit(\"" + t.name + "\", testing.collect(zt_start" + n + "(" + ar + ")))\n}\n\n"
+	return out
+}
+
+# test_params / test_args are the fixture values one test takes, as a parameter list and as
+# the arguments that fill it. The context is not among them: it is made inside the body, one
+# per test, which is what makes `ctx.name()` answer this test's own name.
+fn test_params(t: Tst) -> str {
+	mut out := ""
+	mut m := 0
+	mut k := 0
+	for k < t.pnames.len() {
+		if not t.isctx[k] {
+			if out != "" {
+				out = out + ", "
+			}
+			out = out + f"zt_p{m}: {t.ptys[k]}"
+			m = m + 1
+		}
+		k = k + 1
+	}
+	return out
+}
+
+fn test_args(t: Tst) -> str {
+	mut out := ""
+	mut m := 0
+	mut k := 0
+	for k < t.pnames.len() {
+		if not t.isctx[k] {
+			if out != "" {
+				out = out + ", "
+			}
+			out = out + f"zt_p{m}"
+			m = m + 1
+		}
+		k = k + 1
+	}
+	return out
+}
+
+fn test_call(t: Tst) -> str {
+	mut args := ""
+	mut m := 0
+	mut k := 0
+	for k < t.pnames.len() {
+		if args != "" {
+			args = args + ", "
+		}
+		if t.isctx[k] {
+			args = args + "zt_ctx"
+		} else {
+			args = args + f"zt_p{m}"
+			m = m + 1
+		}
+		k = k + 1
+	}
+	return f"{t.name}({args})"
+}
+
+# gen_level writes the body of one level of the nesting: the tests whose chain ends here, and
+# a block for each fixture the tests below it go through.
+#
+# The order is FIRST APPEARANCE, so a package's tests are stood up in the order they were
+# written as far as the tree allows. Which order they RUN in does not decide the order they
+# are REPORTED in — the report walks the declarations and looks each verdict up by name — so
+# the nesting is free to group them.
+fn gen_level(fixts: list[Fixt], tests: list[Tst], idxs: list[int], path: list[str], mut &defs: str, mut &seq: int) -> str {
+	mut body := ""
+	mut done: list[str] = []
+	mut a := 0
+	for a < idxs.len() {
+		ti := idxs[a]
+		if tests[ti].need.len() == path.len() {
+			body = body + run_call(tests[ti], ti, path)
+		} else {
+			f := tests[ti].need[path.len()]
+			if not has_str(done, f) {
+				done.append(f)
+				mut sub: list[int] = []
+				mut b := 0
+				for b < idxs.len() {
+					tj := idxs[b]
+					if tests[tj].need.len() > path.len() and tests[tj].need[path.len()] == f {
+						sub.append(tj)
+					}
+					b = b + 1
+				}
+				body = body + gen_fixture(fixts, tests, sub, path, f, defs, seq)
+			}
+		}
+		a = a + 1
+	}
+	return body
+}
+
+# gen_fixture writes one level: the guarded call that builds the fixture, the closure that is
+# everything below it, and the two functions that decide whether to enter it and what to say
+# when it does not hold.
+#
+# THE CALL IS GUARDED, and what the guard is for is the owner's decision that a fixture which
+# cannot be built makes every test needing it FAIL. A test that could not run must never look
+# like one that passed, so the failure is written into each of their slots by name — see
+# gen_blame.
+fn gen_fixture(fixts: list[Fixt], tests: list[Tst], sub: list[int], path: list[str], name: str, mut &defs: str, mut &seq: int) -> str {
+	seq = seq + 1
+
+	id := f"{seq}"
+	fi := fix_index(fixts, name)
+	depth := path.len()
+
+	mut npath := path
+	npath.append(name)
+
+	inner := gen_level(fixts, tests, sub, npath, defs, seq)
+
+	defs = defs + "fn zt_lv" + id + "(" + level_params(fixts, npath) + ") {\n" + inner + "}\n\n"
+	defs = defs + gen_need(id, tests, sub)
+	defs = defs + gen_blame(id, name, tests, sub)
+
+	call := name + "(" + dep_args(fixts, fi, path) + "fn (zt_v: " + fixts[fi].produces + ") { zt_lv" + id + "(" + level_call_args(depth) + ") })"
+
+	mut out := "\tif zt_need" + id + "() {\n"
+	out = out + "\t\tzt_r" + id + " := guard {\n\t\t\t" + call + "\n\t\t}\n"
+	out = out + "\t\tzt_bad" + id + " := match zt_r" + id + " {\n\t\t\tEither.Left(_)  => false\n\t\t\tEither.Right(_) => true\n\t\t}\n"
+	out = out + "\t\tzt_why" + id + " := match zt_r" + id + " {\n\t\t\tEither.Left(_)  => \"\"\n\t\t\tEither.Right(e) => e.message()\n\t\t}\n"
+	out = out + "\t\tzt_blame" + id + "(zt_bad" + id + ", zt_why" + id + ")\n"
+	out = out + "\t}\n"
+	return out
+}
+
+# run_call is a test's call at the level its chain ends on. Its arguments are the fixture
+# values its own parameters NAME — which is a subset of the chain, since a chain also holds
+# what those fixtures were built from.
+fn run_call(t: Tst, i: int, path: list[str]) -> str {
+	mut args := ""
+	mut k := 0
+	for k < t.pnames.len() {
+		if not t.isctx[k] {
+			if args != "" {
+				args = args + ", "
+			}
+			args = args + f"zt_f{path_index(path, t.pnames[k])}"
+		}
+		k = k + 1
+	}
+	return f"\tzt_run{i}({args})\n"
+}
+
+# level_params is the parameter list of a level function: every fixture value standing at that
+# point, in the order they were built. level_call_args is how the closure calls it — the outer
+# values by their slot, and the one this level just made under the name the closure bound.
+fn level_params(fixts: list[Fixt], path: list[str]) -> str {
+	mut out := ""
+	mut i := 0
+	for i < path.len() {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + f"zt_f{i}: {fixts[fix_index(fixts, path[i])].produces}"
+		i = i + 1
+	}
+	return out
+}
+
+fn level_call_args(depth: int) -> str {
+	mut out := ""
+	mut i := 0
+	for i < depth {
+		out = out + f"zt_f{i}, "
+		i = i + 1
+	}
+	return out + "zt_v"
+}
+
+# dep_args fills a fixture's own parameters from the values already standing. Every dependency
+# is on the path and was built earlier — that is what fix_order's ordering guarantees — so
+# each one is a slot number. The trailing separator is here because a closure always follows.
+fn dep_args(fixts: list[Fixt], fi: int, path: list[str]) -> str {
+	mut out := ""
+	mut d := 0
+	for d < fixts[fi].deps.len() {
+		out = out + f"zt_f{path_index(path, fixts[fi].deps[d])}, "
+		d = d + 1
+	}
+	return out
+}
+
+fn path_index(path: list[str], name: str) -> int {
+	mut i := 0
+	for i < path.len() {
+		return i if path[i] == name
+		i = i + 1
+	}
+	return 0
+}
+
+# gen_need is what makes "only when needed" true of the FALLBACK too. The in-process run wants
+# every test, so every level is entered; a fallback process wants exactly one, and a level is
+# entered only when that one is somewhere below it. So a re-run rebuilds the fixtures the test
+# it is re-running needs, and builds no others.
+fn gen_need(id: str, tests: list[Tst], sub: list[int]) -> str {
+	mut out := "fn zt_need" + id + "() -> bool {\n\tzt_one := zt_get(ZT_SELECT)\n\treturn true if zt_one == \"\"\n\n"
+	for j in sub {
+		out = out + "\treturn true if zt_one == \"" + tests[j].name + "\"\n"
+	}
+	return out + "\n\treturn false\n}\n\n"
+}
+
+# gen_blame is what a fixture's failure costs. Every test under it that was WANTED and has no
+# record yet is failed by name, carrying the reason — a test that could not run must never
+# look like one that passed, and it must not look like one nobody asked for either.
+#
+# "HAS NO RECORD YET" IS ALSO WHAT TELLS SETUP FROM TEARDOWN. The tests run INSIDE the call
+# this guard is around, so a raise reaching it may have come from before `use` or from after
+# it. If every test under it already answered for itself, the failure is the teardown's, and
+# it is recorded against the fixture rather than against anybody's test.
+fn gen_blame(id: str, name: str, tests: list[Tst], sub: list[int]) -> str {
+	mut out := "fn zt_blame" + id + "(zt_bad: bool, zt_why: str) {\n\treturn if not zt_bad\n\n\tmut zt_any := false\n"
+	for j in sub {
+		nm := tests[j].name
+		out = out + "\tif zt_want(\"" + nm + "\") and not zt_has(\"" + nm + "\") {\n"
+		out = out + "\t\tzt_fail(\"" + nm + "\", \"fixture `" + name + "` could not be built: \" + zt_why)\n"
+		out = out + "\t\tzt_any = true\n\t}\n"
+	}
+	return out + "\tif not zt_any {\n\t\tzt_broke(\"" + name + "\", zt_why)\n\t}\n}\n\n"
 }
 
 # driver_body is the half of the driver that does not vary. It is a text constant and not a
@@ -1465,34 +2186,29 @@ fn gen_driver(names: list[str], ctxp: list[bool], report: str, chosen: str) -> s
 # everything a test can see — `testing.Context` and the events it sends — because that half is
 # something a person writes against.
 #
-# `zt_start` is where the coroutine isolation is: the channel is made here, the test runs on
-# the far side of a `spawn`, and the receiving end is handed back — so the coroutine is the
-# channel's last sender and the body returning is what ends the stream. `testing.collect` then
-# reads the whole of one test's life off it, including the case where there is nothing to read
-# because the coroutine died.
+# THE REPORT IS APPENDED TO, NOT ACCUMULATED, and that is the fixtures' doing: an accumulator
+# would have to be a variable the nesting carried down through its closures, and a closure
+# captures by value. So each record is a read of the file and a write of it with one record
+# more — which keeps the property the fallback runs on, that a run cut short leaves exactly
+# the records of the tests that finished.
 fn driver_body() -> str {
-	return "fn zt_body(name: str, ch: chan[testing.Event]) {\n" +
-		"\tctx := testing.context(name, ch)\n" +
-		"\tr := guard {\n\t\tzt_call(name, ctx)\n\t}\n" +
-		"\tok := match r {\n\t\tEither.Left(_)  => true\n\t\tEither.Right(_) => false\n\t}\n" +
-		"\tmsg := match r {\n\t\tEither.Left(_)  => \"\"\n\t\tEither.Right(e) => e.message()\n\t}\n" +
-		"\ttesting.finished(ctx, ok, msg)\n}\n\n" +
-		"fn zt_start(name: str) -> <-chan[testing.Event] {\n" +
-		"\tch := chan[testing.Event]()\n\tspawn zt_body(name, ch)\n\n\treturn ch\n}\n\n" +
-		"fn zt_record(name: str) -> str {\n" +
-		"\toc := testing.collect(zt_start(name))\n" +
-		"\tmut out := \"T \" + name + \"\\nV \" + oc.verdict + \"\\n\"\n" +
-		"\tb := bytearray(oc.text)\n\tmut cur: list[byte] = []\n\tmut i := 0\n" +
-		"\tfor i < b.len() {\n" +
-		"\t\tif b[i] == b'\\n' {\n\t\t\tout = out + \"M \" + str(cur) + \"\\n\"\n\t\t\tcur = []\n" +
+	return "fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
+		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
+		"fn zt_append(rec: str) {\n\tzt_put(ZT_REPORT, zt_get(ZT_REPORT) + rec)\n}\n\n" +
+		"fn zt_want(name: str) -> bool {\n\tone := zt_get(ZT_SELECT)\n\treturn true if one == \"\"\n\n\treturn one == name\n}\n\n" +
+		"fn zt_has(name: str) -> bool {\n\ttag := \"T \" + name\n\tb := bytearray(zt_get(ZT_REPORT))\n" +
+		"\tmut cur: list[byte] = []\n\tmut i := 0\n\tfor i < b.len() {\n" +
+		"\t\tif b[i] == b'\\n' {\n\t\t\treturn true if str(cur) == tag\n\t\t\tcur = []\n" +
+		"\t\t} else {\n\t\t\tcur.append(b[i])\n\t\t}\n\t\ti = i + 1\n\t}\n\treturn false\n}\n\n" +
+		"fn zt_msg(text: str) -> str {\n\tb := bytearray(text)\n\tmut out := \"\"\n\tmut cur: list[byte] = []\n\tmut i := 0\n" +
+		"\tfor i < b.len() {\n\t\tif b[i] == b'\\n' {\n\t\t\tout = out + \"M \" + str(cur) + \"\\n\"\n\t\t\tcur = []\n" +
 		"\t\t} else {\n\t\t\tcur.append(b[i])\n\t\t}\n\t\ti = i + 1\n\t}\n" +
 		"\tif cur.len() > 0 {\n\t\tout = out + \"M \" + str(cur) + \"\\n\"\n\t}\n\treturn out\n}\n\n" +
-		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
-		"fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
-		"fn main() {\n\tone := zt_get(ZT_SELECT)\n" +
-		"\tif one != \"\" {\n\t\tzt_put(ZT_REPORT, zt_record(one))\n\t} else {\n" +
-		"\t\tmut acc := \"\"\n\t\tfor n in zt_names() {\n" +
-		"\t\t\tacc = acc + zt_record(n)\n\t\t\tzt_put(ZT_REPORT, acc)\n\t\t}\n\t}\n}\n"
+		"fn zt_flat(text: str) -> str {\n\tb := bytearray(text)\n\tmut out: list[byte] = []\n\tmut i := 0\n" +
+		"\tfor i < b.len() {\n\t\tif b[i] == b'\\n' {\n\t\t\tout.append(b' ')\n\t\t} else {\n\t\t\tout.append(b[i])\n\t\t}\n\t\ti = i + 1\n\t}\n\treturn str(out)\n}\n\n" +
+		"fn zt_emit(name: str, oc: testing.Outcome) {\n\tzt_append(\"T \" + name + \"\\nV \" + oc.verdict + \"\\n\" + zt_msg(oc.text))\n}\n\n" +
+		"fn zt_fail(name: str, why: str) {\n\tzt_append(\"T \" + name + \"\\nV fail\\n\" + zt_msg(why))\n}\n\n" +
+		"fn zt_broke(name: str, why: str) {\n\tzt_append(\"F fixture `\" + name + \"` raised with every test under it already answered for — a teardown that fails is still a failure: \" + zt_flat(why) + \"\\n\")\n}\n\n"
 }
 
 # --- import cycles ---------------------------------------------------------------------

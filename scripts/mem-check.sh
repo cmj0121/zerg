@@ -61,7 +61,7 @@ MANY="${MANY:-200}"
 # How many cases must actually be measured. Every assertion here is of the form "these two
 # numbers agree", which an empty list satisfies — so a typo in the case list would leave a
 # green gate that built nothing.
-MIN_CASES="${MIN_CASES:-9}"
+MIN_CASES="${MIN_CASES:-10}"
 
 [ -x "$ZERG" ] || {
 	printf 'mem-check: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -275,6 +275,53 @@ fn main() {
 		ys.append(a)
 		v := Tag.Names(ys)
 		n = n + size(t) + size(dup) + size(v)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# --- a tuple that owns something ------------------------------------------------------
+# THE THIRD COMPOSITE, and the one that had a copy helper and no drop at all: `t := (i, s)`
+# retained the str and nothing ever gave it back. It is one allocation a round, which is
+# exactly the shape this gate reads, and it went unmeasured because every carrier case
+# above holds a str DIRECTLY.
+#
+# The same missing half is why `(int, str)?` did not compile: the carrier decided whether to
+# emit its copy/drop pair from the drop question and its callers named the pair from
+# c_needs_copy, and a tuple was the type the two disagreed about. So the carrier of a tuple
+# is here beside the bare one — the leak and the cc error were one defect.
+#
+# The list of tuples reaches the same pair through an element vtable, and `(int, list[int])`
+# is the other kind of heap element, so the three call sites are all in one round. NO `!`:
+# force-unwrap discards the payload it copies out, for every carrier and not just this one,
+# and a case measuring that belongs with that defect rather than hiding inside this one.
+case_run tuple_heap no no <<'ZG'
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		a := str(i) + "!"
+		t := (i, a)
+		dup := t
+
+		mut ys: list[int] = []
+		ys.append(i)
+		u := (i, ys)
+		v := u
+
+		mut rows: list[(int, str)] = []
+		rows.append(t)
+		more := rows
+
+		p: (int, str)? = t
+		q := p
+		if g := q {
+			n = n + g.0
+		}
+
+		n = n + bytearray(dup.1).len() + v.1[0] + more[0].0
 		i = i + 1
 	}
 	print n

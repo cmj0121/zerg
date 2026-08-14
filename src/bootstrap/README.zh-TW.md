@@ -187,6 +187,11 @@ src/bootstrap/
   "variable has incomplete type 'void'"。現在它被指名拒絕了——單純的 `(A, B)` 回傳可行，而 `zerg` 兩種都
   建得起來。這也是 **stdlib 不得使用 optional tuple** 的原因：它同樣由種子編譯，跟那裡什麼都不用 slicing
   是同一個道理。
+- **持有東西的 tuple 不能被複製。** `t := (1, s)`（`s` 是 `str`），以及任何持有 `list` 或 `map` 的 tuple，
+  都會被指名拒絕——"copying a (int, str) is not supported in Phase 1d iteration 2 (only Ref[T] and structs
+  holding Refs)"。純量組成的 tuple 複製沒問題，持有同樣東西的 struct 也沒問題，所以這只針對 tuple。`zerg`
+  兩種都複製得了：tuple 會拿到一份按形狀產生的 `_copy`，旁邊還有一份 `_drop`，那正是 `(int, str)` 在離開
+  作用域時把它的 `str` 還回去的原因。
 - **宣告了兩次的型別名稱會被接受。** `struct`、`enum` 與 `spec` 共用同一個命名空間，而且在兩個編譯器裡，
   程式的每個模組都攤平進同一個作用域——所以兩個 `enum E`、兩個 `spec T`，以及 `struct A` 與 `spec A` 並存，
   都是一個名字對上兩份宣告。種子每一種都建得起來也跑得動。`zerg` 拒絕這樣的一對，並在兩者種類不同時把那

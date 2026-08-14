@@ -1713,7 +1713,39 @@ fn run_pkg(root: str, p: Pkg, mut &passed: int, mut &failed: int, mut &skipped: 
 		k = k + 1
 	}
 	files.append(drv)
-	link_units(load_units_of(files, p.dir, p.dir), drv, bin, TEST_JOBS)
+
+	# THE FILES THIS COMMAND WROTE COME OFF DISK THE MOMENT THEY HAVE BEEN READ, and that one
+	# line is what makes the cleanup total rather than best-effort. `load_units_of` reads every
+	# source into a `Unit`; everything after it — emit, cc, link, and every diagnostic any of
+	# them reports — works from those values and never opens a source again. So the window in
+	# which a driver exists on disk is exactly this call, and the only way out of it that is
+	# not a return is a raise, which the guard has.
+	#
+	# It used to be the last thing run_pkg did, which meant every path that did NOT reach the
+	# end left the driver behind: `zerg test src/stdlib` stopped at an `E215` inside
+	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
+	# standard library — a directory the compiler resolves imports by LISTING.
+	res := guard {
+		load_units_of(files, p.dir, p.dir)
+	}
+	rm_file(drv)
+	for c in copies {
+		rm_file(c)
+	}
+
+	lerr := match res {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	if lerr != "" {
+		io.ewrite(lerr + "\n")
+		__zrt_exit(1)
+	}
+	units := match res {
+		Either.Left(u)  => u
+		Either.Right(_) => []
+	}
+	link_units(units, drv, bin, TEST_JOBS)
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []
@@ -1753,16 +1785,13 @@ fn run_pkg(root: str, p: Pkg, mut &passed: int, mut &failed: int, mut &skipped: 
 
 	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped)
 
-	# the driver and its binary belong to THIS run: the next one writes them again from whatever
+	# the binary and the report belong to THIS run: the next one writes them again from whatever
 	# the test files then declare, and a stale one left behind is a test binary that answers for
-	# a program nobody has any more
+	# a program nobody has any more. The driver and the inherited copies went above, as soon as
+	# they had been read.
 	rm_file(rep)
 	rm_file(sel)
-	rm_file(drv)
 	rm_file(bin)
-	for c in copies {
-		rm_file(c)
-	}
 }
 
 # run_one runs a single named test in a process of its own — the isolated path, which is the

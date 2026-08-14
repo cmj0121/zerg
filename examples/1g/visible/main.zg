@@ -1,0 +1,27 @@
+# visibility demo (positive): what a `pub` surface DOES reach across a module boundary.
+#
+# `pub` is enforced past functions now — a module-private TYPE, a module-private FIELD, and
+# a namespace this module never imported are each a compile error — so this file is the
+# other half of the claim: a rule that also turned away the program below would be too
+# broad, and nothing but a program that must still build can say so.
+#
+#   zerg build examples/1g/visible/main.zg
+# Expected output:
+#   hits
+#   1
+#
+# Three things cross the boundary here, and each is one the rules must let through:
+#
+#   the TYPE      `lib.Counter` is `pub`, so naming it in an annotation is legal
+#   the FIELD     `c.label` is `pub`, so reading it from outside `lib/` is legal
+#   the NAMESPACE `lib` is imported BY THIS FILE, so writing `lib.` is legal
+#
+# What does not cross is `seen`: it is module-private, so the count comes back through
+# `lib.seen_of`, a `pub fn` reading its own module's field.
+import "lib"
+
+fn main() {
+	c: lib.Counter = lib.bumped("hits")
+	print c.label        # hits — a `pub` field of a `pub` type, read from another module
+	print lib.seen_of(c) # 1 — the private field, read by its own module and handed out
+}

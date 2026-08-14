@@ -180,13 +180,25 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 根本無法指名那個型別。一個型別的 **`pub` method 會隨它一起走**：一旦型別抵達公開表面，它的 `pub` method 也能
 被依賴者呼叫——method 上的可見性讀法與 function 完全相同。
 
-> **[deviation]** **函式與 module 常數已強制，其餘尚未。** 指名另一個 module 的 module-private **函式**是編譯錯誤，
-> 而且帶位置——裸呼叫與具名空間的 `lib.helper()` 兩種形狀都擋——讀取它的 module-private **常數**也一樣，
-> 同樣兩種形狀：裸名的 `FLOOR` 與具名空間的 `lib.FLOOR`。module-private 的**型別**與**欄位**目前仍可跨界讀取：一個
-> `pub fn` 可以回傳私有 struct，相依端也讀得到它的私有欄位，沒有任何 finding。每個 module 仍壓平進同一個命名空間
-> ——這也是兩個 module 宣告同名會相撞的原因，而那個拒絕針對的是名字、不是可見性。規則比較的是**宣告被讀進來的
-> 目錄**與**進行讀取的目錄**，也就是 module 邊界而非 package 邊界；上文的 **package-internal** 與
-> **package-public** 仍然需要先有 package 才談得上。
+**module 指名得到的每一種宣告都已強制。** 指名另一個 module 的 module-private **函式**是編譯錯誤，
+而且帶位置——裸呼叫與具名空間的 `lib.helper()` 兩種形狀都擋——讀取它的 module-private **常數**也一樣，
+同樣兩種形狀：裸名的 `FLOOR` 與具名空間的 `lib.FLOOR`。module-private 的**型別**以同樣方式被拒絕，不論寫成裸名
+（`s: Secret`、`Secret(…)` 建構）或透過命名空間（`lib.Secret`）；module-private 的**欄位**在讀與寫兩邊都被拒絕，
+那正是「私有欄位必須帶預設值」那條規則的另一半。而上文那句規範本身也是一條規則：**一個 `pub` 宣告指名了不是
+`pub` 的型別**會在**宣告處**被拒絕，所以 `pub fn` 不能回傳、不能收下、也不能用 `pub` 欄位持有一個相依端根本
+拼不出來的型別。
+
+兩處都成立時，兩個 finding 都會回報——外洩的匯出，以及伸手進去的讀取——因為那是兩個檔案裡的兩個錯誤，一則訊息
+指不到兩個地方。匯出是有辦法修的那一方：寫下 `pub` 的 module 決定把型別交出去，也只有它能把型別標成 `pub` 或
+不再回傳它；讀取私有欄位的相依端兩件事都做不到。
+
+每個 module 仍壓平進同一個命名空間——這也是兩個 module 宣告同名會相撞的原因，而那個拒絕針對的是名字、不是
+可見性。
+
+> **[deviation]** 規則比較的是**宣告被讀進來的目錄**與**進行讀取的目錄**，也就是 **module** 邊界而非 package
+> 邊界。所以就編譯器而言，上文的 **package-internal** 與 **package-public** 仍是同一層：一個 `pub` 宣告，凡是
+> import 它的 module 都指名得到，沒有任何東西把它收窄到某個 package 的 root 表面——因為還沒有 package 這個單位
+> 可以拿來量。re-export（`import pub`）建得出一個表面；但還沒有任何規則要求一個名字必須在某個表面上。
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
@@ -215,15 +227,25 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 > `bogus.f()`、或把路徑片段當成名字用（`import "util/text"` 之下寫 `util.f()`）都會被當成未定義的名字拒絕，並附
 > 位置；兩個綁定相撞的 import，以及被某個頂層宣告先佔走的綁定，同樣被拒絕，而 `as` 就是這兩者的解法。
 >
-> **[deviation]** **綁定是整個建置的，成員也是。** 同一個壓平的兩半，而且兩半都被程式看得見：
+> **「無遞迴傳遞」已被強制。** 一個綁定屬於**寫下該 `import` 的那個檔案所屬的 module**——粒度是 module 而不是
+> 檔案，因為同一個 module 的檔案共用一個命名空間——所以一個 module 叫得出來的命名空間，就是它自己的檔案綁過的
+> 那些，包含它自己的 `as` 別名，不含別的 module 的。指名一個本 module 從未 import 的 module 是帶位置的編譯錯誤，
+> 而且在每一個寫得出 module 名的位置都擋：呼叫、成員讀取、`spawn` / `defer` 的 callee、建構、variant 讀取，以及
+> **型別**位置——註記 `c: lib.Counter` 與簽章 `fn take(c: lib.Counter)` 一樣擋。import graph 決定的既是什麼被編進
+> 建置、也是建置內部什麼名字叫得出來；而這兩個答案還要跟第三種分開：一個憑空的前綴（`bogus.f()`）在任何地方都
+> 不指名任何東西，它仍然是**未定義的名字**——叫讀者去為一個根本不存在的 module 補一行 import，會比原本那個洞
+> 還糟。
 >
-> - **「無遞迴傳遞」未被強制。** 在場的命名空間是這次建置裡每個 module 綁過的每一個命名空間——包含別的 module 的
->   `as` 別名——所以本 module 從未 import 的 module，它仍然指名得到。import graph 決定的是什麼被**編進**建置，
->   不是建置內部什麼名字叫得出來。
-> - **成員是在全程式範圍查的。** 前綴解出來之後，`.` 之後的名字是在那唯一一個壓平的命名空間裡找的，而不是在前綴
->   所指的那個 module 裡找：於是同時 import 了 `a` 與 `b` 時，`b.helper()` 回答的是 module `a` 宣告的 `helper`。
->   `pub` 仍然是對**宣告**該成員的 module 檢查的——這也是為什麼一個私有成員被拒絕時，訊息指名的是它真正的擁有者，
->   而不是程式寫下的那個 module。seed 編譯器這一半是對的，它回報 `module "b" has no public member "helper"`。
+> > **[deviation]** **型別位置會把解不掉的 qualifier 丟掉。** `c: bogus.Counter` 建得起來，而且讀作 `Counter`：
+> > 一個帶命名空間的型別名是取它的最後一段來解析的——也就是本章記載的那個壓平——而未知的 qualifier 在那裡被丟棄，
+> > 不是被回報。所以上面那個三分的答案只有在運算式位置才完整；型別位置分得出「本 module 沒有 import 它」與
+> > 「這是一個真的命名空間」，但這兩者都還分不出打錯字。
+>
+> **[deviation]** **成員是在全程式範圍查的。** 前綴解出來之後，`.` 之後的名字是在那唯一一個壓平的命名空間裡找的，
+> 而不是在前綴所指的那個 module 裡找：於是同時 import 了 `a` 與 `b` 時，`b.helper()` 回答的是 module `a` 宣告的
+> `helper`。`pub` 仍然是對**宣告**該成員的 module 檢查的——這也是為什麼一個私有成員被拒絕時，訊息指名的是它真正
+> 的擁有者，而不是程式寫下的那個 module。seed 編譯器這一半是對的，它回報
+> `module "b" has no public member "helper"`。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
 > 這個成員——本節承諾的一等值到 module 邊界就停住了。

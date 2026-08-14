@@ -50,18 +50,13 @@ set -uo pipefail
 SRC=${SRC:-src/compiler}
 DOC=${DOC:-docs/tooling/fmt.md}
 
-# THE MIRROR IS A SECOND COPY OF THE CATALOGUE, and a second copy owes a gate. Everything
-# above compared three sets and every one of them was read from $DOC alone, so a code could be
-# reported, gate-asserted and listed in English while the zh-TW table beside it said the rule
-# does not exist — which it did, for eleven codes, silently.
-#
-# The retired heading is a PARAMETER rather than a shared string because it is prose: the
-# mirror translates it, so a range keyed on the English spelling matches nothing there and
-# swallows the retired rows into the live set. One knob per file is what keeps the two tables
-# read the same way rather than approximately.
-DOC_MIRROR=${DOC_MIRROR:-docs/tooling/fmt.zh-TW.md}
-DOC_RETIRED=${DOC_RETIRED:-'^### Retired codes'}
-DOC_MIRROR_RETIRED=${DOC_MIRROR_RETIRED:-'^### 已退場的代碼'}
+# The TRANSLATED catalogue, held to the same code set. It is asked separately from the three
+# lists above because it answers a different question: those ask whether a code is real, and
+# this asks whether a reader of the other language can look it up. Nothing gated it, so the
+# two drifted the first time somebody added a code — four rows landed in the English table and
+# none in this one, inside a commit that updated two other zh-TW pages, which means the
+# omission was not a decision anybody made.
+DOC_ZH=${DOC_ZH:-docs/tooling/fmt.zh-TW.md}
 GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
 fail=0
@@ -102,22 +97,21 @@ codes_in_gates() {
 # `### Retired codes` heading a row is on rather than by the row itself. A heading is what
 # a reader already uses to tell them apart, and giving the retired rows a different column
 # layout would be a second spelling of a code for the sake of a grep.
-codes_listed() {
-	sed -n "1,/$2/p" "$1" |
-		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
-}
-
 codes_in_doc() {
-	codes_listed "$DOC" "$DOC_RETIRED"
-}
-
-codes_in_mirror() {
-	codes_listed "$DOC_MIRROR" "$DOC_MIRROR_RETIRED"
+	sed -n "1,/^### Retired codes/p" "$DOC" |
+		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
 }
 
 codes_retired() {
-	sed -n "/$DOC_RETIRED/,\$p" "$DOC" |
+	sed -n "/^### Retired codes/,\$p" "$DOC" |
 		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
+}
+
+# The translated table, live and retired rows together: what the zh-TW page owes is the same
+# SET of codes, and which side of its own retired heading each one sits on is that page's
+# business rather than this gate's.
+codes_in_doc_zh() {
+	grep -oE '^\| `E[0-9]{3}`' "$DOC_ZH" | grep -oE 'E[0-9]{3}' | sort -u
 }
 
 # WHICH STAGE A RANGE BELONGS TO, read from the catalogue's range table — `| \`E2xx\` | parser
@@ -137,8 +131,8 @@ stages_in_doc() {
 src=$(codes_in_source)
 gates=$(codes_in_gates)
 doc=$(codes_in_doc)
-mirror=$(codes_in_mirror)
 retired=$(codes_retired)
+doc_zh=$(codes_in_doc_zh)
 
 # A FLOOR, and it is on the catalogue rather than on the compiler. Every comparison below is
 # a set difference, and a difference against an empty set is empty: a renamed heading, a
@@ -149,6 +143,26 @@ n_doc=$(printf '%s\n' "$doc" | grep -c .)
 if [ "$n_doc" -lt "$MIN_CODES" ]; then
 	printf 'error-codes-check: the catalogue yielded %s codes, below the floor of %s\n' "$n_doc" "$MIN_CODES" >&2
 	printf 'error-codes-check: %s no longer reads as one table per scheme, so nothing was compared\n' "$DOC" >&2
+	exit 1
+fi
+
+# AND THE SAME FLOOR UNDER THE TRANSLATION, which the paragraph above is exactly as true of:
+# the two comparisons against `doc_zh` are set differences, and one of them is
+# `English minus zh-TW`, so an extraction that stops matching empties the zh-TW side and that
+# difference becomes the whole catalogue — loud. The other direction, `zh-TW minus English`,
+# goes SILENT instead, and silence is what a floor is for.
+#
+# ONE FLOOR FOR BOTH TABLES, and the same number, because the assertion right below is that
+# they list the same SET: two independently tunable water lines for one set is two knobs that
+# can contradict each other. It is compared against a count that includes the retired rows
+# (codes_in_doc_zh does not split them, deliberately), so it is measured against a larger
+# base than the English one — 150 against the 310 rows there are today, where the English
+# floor is 150 against 292 live ones. Both are far enough below to survive ordinary growth
+# and far enough above that a table which lost most of itself cannot pass.
+n_doc_zh=$(printf '%s\n' "$doc_zh" | grep -c .)
+if [ "$n_doc_zh" -lt "$MIN_CODES" ]; then
+	printf 'error-codes-check: the zh-TW catalogue yielded %s codes, below the floor of %s\n' "$n_doc_zh" "$MIN_CODES" >&2
+	printf 'error-codes-check: %s no longer reads as a table of codes, so the mirror was not compared\n' "$DOC_ZH" >&2
 	exit 1
 fi
 
@@ -166,8 +180,14 @@ report "reported by the compiler, asserted by no gate" "$(comm -23 <(printf '%s\
 report "asserted by a gate, reported by no source" "$(comm -13 <(printf '%s\n' "$src") <(printf '%s\n' "$gates"))"
 report "reported by the compiler, missing from the catalogue" "$(comm -23 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
 report "in the catalogue, reported by no source" "$(comm -13 <(printf '%s\n' "$src") <(printf '%s\n' "$doc"))"
-report "in the catalogue, missing from $DOC_MIRROR" "$(comm -23 <(printf '%s\n' "$doc") <(printf '%s\n' "$mirror"))"
-report "in $DOC_MIRROR, missing from the catalogue" "$(comm -13 <(printf '%s\n' "$doc") <(printf '%s\n' "$mirror"))"
+
+# AND THE SAME SET IN THE OTHER LANGUAGE. Both directions, because both have happened: a code
+# added to one table and not the other leaves a reader who cannot look it up, and a row left
+# behind in the translation names a rule that no longer exists.
+report "listed in English, missing from the zh-TW catalogue" \
+	"$(comm -23 <(printf '%s\n%s\n' "$doc" "$retired" | sort -u) <(printf '%s\n' "$doc_zh"))"
+report "listed in the zh-TW catalogue, missing from English" \
+	"$(comm -13 <(printf '%s\n%s\n' "$doc" "$retired" | sort -u) <(printf '%s\n' "$doc_zh"))"
 
 # EVERY RULE HAS ONE, which is the half the three sets cannot see: they compare codes that
 # already exist, so a rule reported with no code at all is absent from all three and nothing

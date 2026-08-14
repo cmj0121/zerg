@@ -168,8 +168,18 @@ reject() {
 	# one, so the whole class was invisible here. `bare-entry` runs the build from the case's
 	# own directory and names the entry with no directory at all, which is what a reader
 	# standing in their own source tree types.
+	# `emit-lib` BUILDS THE CASE AS A LIBRARY, and it is here because the two paths do not
+	# check the same program. `--emit bin` emits unit by unit, so every module of the build is
+	# walked; `--emit lib` emits ONE unit (zergc.zg's `emit_unit_at(merge_asts(trees),
+	# trees[last])`), and a declaration rule that only reads the unit being emitted therefore
+	# stops seeing every module the entry imported. That is not hypothetical: narrowing the
+	# declaration passes to `own` sent a dependency's bad return type to cc under this flag
+	# and nothing here noticed, because no case built a multi-module program this way.
 	local out status first
-	if has_flag "$flags" bare-entry; then
+	if has_flag "$flags" emit-lib; then
+		out=$("$ZERG" build --emit lib -o "$tmp/$name.o" "$src" 2>&1 >/dev/null)
+		status=$?
+	elif has_flag "$flags" bare-entry; then
 		out=$(cd "$dir" && "$ZERG_ABS" build --emit bin -o "$tmp/$name.bin" "$name.zg" 2>&1 >/dev/null)
 		status=$?
 	else
@@ -4708,6 +4718,380 @@ fn main() {
 --- glob/glob.zg
 unsafe {
 	pub mut shared := 5
+}
+EOF
+
+# --- visibility past functions ------------------------------------------------------------
+#
+# `pub` was enforced on functions and module constants and on NOTHING ELSE, which left the
+# three holes below. Each of them is the same sentence from docs/runtime/package.md read at a
+# different declaration, and each was measured before it was closed:
+#
+#   a module-private TYPE was nameable from outside its module (E508)
+#   a `pub` declaration could name a type that is not `pub` (E509)
+#   a module-private FIELD was readable from outside (E510)
+#   a namespace ANY module of the build imported was nameable from EVERY module (E507)
+#
+# THE SEED IS THE ORACLE FOR THE FIRST and for nothing else here — it has refused a private
+# type through a qualified name since it was written (resolveTypeRef), so that one is a rule
+# `zerg` LOST rather than a rule invented. The other three are seed gaps, recorded by name in
+# src/bootstrap/README.md.
+
+reject a-module-private-type-named-outside-its-module E508 <<'EOF'
+import "lib"
+
+fn main() {
+	s: Secret = Secret("t")
+	print s.tag
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub fn tag_of(s: str) -> str {
+	return Secret(s).tag
+}
+EOF
+
+# THE SAME TYPE, SPELLED THROUGH THE NAMESPACE. `lib.Secret` is rewritten to its last segment
+# before anything is lowered (c_ns_unqualify), so a rule written only on the bare form would
+# have left the qualified one — which is the ONLY form the seed refuses — accepted by the
+# compiler the seed builds.
+reject a-module-private-type-named-through-its-namespace E508 <<'EOF'
+import "lib"
+
+fn main() {
+	s: lib.Secret = lib.Secret("t")
+	print s.tag
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub fn tag_of(s: str) -> str {
+	return Secret(s).tag
+}
+EOF
+
+# A `pub` DECLARATION MAY NOT NAME A PRIVATE TYPE — "a declaration can never be more visible
+# than the types it names". It is a finding in the DECLARING module, on a program that has no
+# second module at all, because the mistake is the export and not any use of it.
+#
+# seed-gap: the seed lets a `pub fn` return a module-private struct, and a dependent then
+# obtains a value of a type it could never have named.
+reject a-pub-fn-that-returns-a-module-private-type E509 'the result of `make`' seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	print lib.make().tag
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub fn make() -> Secret {
+	return Secret("s")
+}
+EOF
+
+# THE PARAMETER SIDE OF THE SAME RULE, which is not the return side read backwards: a
+# dependent cannot CALL the function either, having no way to spell an argument for it.
+reject a-pub-fn-that-takes-a-module-private-type E509 'parameter `s` of `use`' seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	print lib.tag()
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub fn use(s: Secret) -> str {
+	return s.tag
+}
+
+pub fn tag() -> str {
+	return use(Secret("s"))
+}
+EOF
+
+# AND THE FIELD OF A `pub` STRUCT, where the struct is on the surface and the field's type is
+# not — the same leak one level in, and the case that says `decl_pub` is a fact about the pair
+# rather than about the struct.
+reject a-pub-field-whose-type-is-module-private E509 'field `Box.it`' seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	print lib.tag()
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub struct Box {
+	pub it: Secret
+}
+
+pub fn tag() -> str {
+	return Box(Secret("s")).it.tag
+}
+EOF
+
+# A MODULE-PRIVATE FIELD IS NOT READABLE FROM OUTSIDE, which is the other half of the rule
+# E482 already enforces: a non-`pub` field must carry a DEFAULT so external code can
+# construct the type without naming a value it may not read. The default was required and the
+# value was readable anyway, so the requirement protected nothing.
+#
+# seed-gap: the seed prints the private field's value.
+reject a-module-private-field-read-outside-its-module E510 at=5:2 seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	s := lib.make()
+	print s.hidden
+}
+--- lib/lib.zg
+pub struct Secret {
+	pub tag: str
+	hidden: int = 42
+}
+
+pub fn make() -> Secret {
+	return Secret("s")
+}
+EOF
+
+# AND IT IS NOT WRITABLE EITHER. A write reaches the field through the same lowering as a
+# read (c_lvalue goes through c_expr), so one rule covers both — and a rule written on the
+# assignment path alone would have covered the half nobody tries first.
+reject a-module-private-field-written-outside-its-module E510 at=5:2 seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	mut s := lib.make()
+	s.hidden = 7
+	print s.tag
+}
+--- lib/lib.zg
+pub struct Secret {
+	pub tag: str
+	hidden: int = 42
+}
+
+pub fn make() -> Secret {
+	return Secret("s")
+}
+EOF
+
+# THE SAME LEAK UNDER `--emit lib`, which is a DIFFERENT WALK and not a second spelling of
+# the case above. `--emit bin` emits every unit, so a dependency's declaration is reached
+# while its own unit is compiled; `--emit lib` emits one unit, and a rule that reads only the
+# unit being emitted goes silent about every module the entry imported. Both halves of this
+# branch's declaration rules — the leak below and the private type beside it — were
+# unenforced that way for a while, and a `pub fn make() -> Nonexistent` in a dependency
+# reached cc as `unknown type name 'zg_Nonexistent'`: an escape to cc, which is the class
+# this file exists to keep empty.
+reject a-pub-fn-leaking-a-private-type-under-emit-lib E509 'the result of `make`' emit-lib seed-gap <<'EOF'
+import "lib"
+
+fn main() {
+	print lib.make().tag
+}
+--- lib/lib.zg
+struct Secret {
+	pub tag: str
+}
+
+pub fn make() -> Secret {
+	return Secret("s")
+}
+EOF
+
+# A `pub` METHOD ON A MODULE-PRIVATE TYPE is the same sentence about a receiver, and the
+# receiver is what makes it worth its own case: `this` is SYNTHESIZED, so a message naming it
+# as a parameter names a word the author never wrote — and one this compiler refuses as a
+# parameter name elsewhere (E245). The sentence is pinned here because that is the whole
+# claim.
+#
+# It is a real narrowing of the language: docs/runtime/package.md says a type's `pub` methods
+# travel WITH it, so a `pub` method on a type that never reaches a surface promises something
+# to nobody. Both the seed and this compiler accepted it before.
+reject a-pub-method-on-a-module-private-type E509 'the receiver of `shout`' seed-gap <<'EOF'
+struct Secret {
+	pub tag: str
+}
+
+impl Secret {
+	pub fn shout() -> str {
+		return this.tag
+	}
+}
+
+fn main() {
+	print Secret("s").shout()
+}
+EOF
+
+# --- an import is not transitive ----------------------------------------------------------
+#
+# "importing a package gives you its public surface only, never the packages it imports in
+# turn" (docs/runtime/package.md). Every module flattened into one namespace here, so the
+# binding an `import` introduced belonged to the BUILD: `main` importing only `mid` could
+# still write `lib.make()`, a module it never named.
+#
+# seed-gap: the seed binds namespaces program-wide too, and builds this.
+reject a-namespace-this-module-did-not-import E507 at=5:2 seed-gap <<'EOF'
+import "mid"
+
+fn main() {
+	print mid.relay()
+	print lib.make().tag
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return lib.make().tag
+}
+--- lib/lib.zg
+pub struct Open {
+	pub tag: str
+}
+
+pub fn make() -> Open {
+	return Open("s")
+}
+EOF
+
+# THE SAME NAME, ONE KEYWORD EARLIER — `spawn` and `defer` resolve their callee down a path
+# of their own, which is where every other rule about a namespaced call has had to be asked
+# twice (see the E301 pair above).
+#
+# NO `seed-gap` MARKER, AND THE SEED DOES NOT ENFORCE THIS EITHER: it refuses `spawn` outright
+# ("concurrency belongs to the self-hosting compiler"), so it says no for a reason that is not
+# this rule. The marker asserts its own opposite — it fails the day the seed starts refusing —
+# so carrying one here would report a gap closed the first time anybody read the line, and
+# what is actually pinned is the shipping compiler's second callee path.
+# AND AT A TYPE POSITION, which is where the rule was first built and did NOT reach. The
+# three shapes above are expressions; `c: lib.Counter` is not, and parse_base_type resolves
+# `lib.Counter` to `Counter` before anything is emitted — correctly, since every module
+# flattens into one scope — so the qualifier the rule asks about was already gone. Four
+# positions went silent that way while three were loud, for one rule; the parser now writes
+# down that a qualifier was typed (File.ty_quals) and the checker asks over the whole program.
+#
+# Four cases because the four are four different paths to the same qualifier: an annotation
+# and a signature reach it as a TYPE, and a construction and a variant read reach it as an
+# EXPRESSION that names a type.
+reject a-namespace-this-module-did-not-import-in-an-annotation E507 at=4:2 seed-gap <<'EOF'
+import "mid"
+
+fn main() {
+	c: lib.Counter = lib.Counter("a")
+	print c.tag
+	print mid.relay()
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return "r"
+}
+--- lib/lib.zg
+pub struct Counter {
+	pub tag: str
+}
+EOF
+
+reject a-namespace-this-module-did-not-import-in-a-signature E507 seed-gap <<'EOF'
+import "mid"
+
+fn take(c: lib.Counter) -> str {
+	return c.tag
+}
+
+fn main() {
+	print take(lib.Counter("a"))
+	print mid.relay()
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return "r"
+}
+--- lib/lib.zg
+pub struct Counter {
+	pub tag: str
+}
+EOF
+
+reject a-namespace-this-module-did-not-import-constructing E507 at=4:2 seed-gap <<'EOF'
+import "mid"
+
+fn main() {
+	c := lib.Counter("a")
+	print c.tag
+	print mid.relay()
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return "r"
+}
+--- lib/lib.zg
+pub struct Counter {
+	pub tag: str
+}
+EOF
+
+# NO `seed-gap` ON THIS ONE, and not because the seed enforces the rule: it refuses
+# `lib.Colour.Red` outright with `type "Colour" used as a value`, and refuses it identically
+# when `lib` IS imported — so its "no" is about a form it does not read, not about who
+# imported what. The marker asserts its own opposite, so carrying one here would report a gap
+# closed the first time anybody ran this. (Same shape as the `spawn` case below.)
+reject a-namespace-this-module-did-not-import-naming-a-variant E507 at=4:2 <<'EOF'
+import "mid"
+
+fn main() {
+	c := lib.Colour.Red
+	print int(c)
+	print mid.relay()
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return "r"
+}
+--- lib/lib.zg
+pub enum Colour {
+	Red
+	Green
+}
+EOF
+
+reject a-namespace-this-module-did-not-import-spawned E507 <<'EOF'
+import "mid"
+
+fn main() {
+	spawn lib.shout("a")
+	print mid.relay()
+}
+--- mid/mid.zg
+import "lib"
+
+pub fn relay() -> str {
+	return "r"
+}
+--- lib/lib.zg
+pub fn shout(s: str) {
+	print s
 }
 EOF
 

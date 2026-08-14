@@ -59,6 +59,9 @@
 #     anywhere  a `#[test]` in an ordinary file   runs, wherever it is written, while `zerg
 #                                                 lint` goes on warning (L601) that it SHIPS.
 #                                                 Both, not one
+#     returns   a `#[test]` declaring `-> T`      refused with a place, and nothing in its
+#                                                 package runs: the value would be dropped,
+#                                                 and it was reported `ok`
 #
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
 # package checked into the repository is a package every other gate then has to know about —
@@ -1232,6 +1235,48 @@ say "the report did not name the ordinary file a test was written in" $?
 "$ZERG" lint "$tmp/anywhere/mixed/ships.zg" 2>&1 | grep -qF 'L601'
 say "L601 stopped warning that a \`#[test]\` outside a \`*_test.zg\` ships" $?
 
+# --- a `#[test]` with a return type -----------------------------------------------------------
+#
+# `#[test] fn t() -> bool { return false }` was reported `ok`. The driver calls a test as a
+# STATEMENT, so the value goes nowhere — and the one person who could be told, the one who
+# believes the value is the verdict, was told the opposite. It is refused where the decorator
+# means something, with a place, before anything is compiled or run.
+
+mkdir -p "$tmp/returns"
+
+cat >"$tmp/returns/ret_test.zg" <<'EOF'
+#[test]
+fn test_returns_false() -> bool {
+	return false
+}
+
+#[test]
+fn test_beside_it() {
+	assert true
+}
+EOF
+
+ret_out=$("$ZERG" test "$tmp/returns" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a \`#[test]\` declaring a return type was not refused" $?
+
+printf '%s\n' "$ret_out" | grep -qE 'ret_test\.zg:[0-9]+:[0-9]+: the test `test_returns_false` declares `-> bool`'
+say "the refusal does not name the test, its return type, or where it was written" $?
+
+# NOTHING RAN. A refusal that reported a verdict for the test beside it would have compiled and
+# executed a package it had already found a fault in — which is the arrangement every other
+# resolution error here is refused before.
+printf '%s\n' "$ret_out" | grep -qE '^  ok    test_beside_it$'
+[ $? -ne 0 ]
+say "a package holding a test with a return type ran its other tests anyway" $?
+
+# and it is NOT reported `ok` itself, which is the measured defect
+printf '%s\n' "$ret_out" | grep -qF 'ok    test_returns_false'
+[ $? -ne 0 ]
+say "a test that returned \`false\` was still reported \`ok\`" $?
+
 # 42. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
 #     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
@@ -1243,9 +1288,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 94 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 98 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-94}
+MIN_ASSERTS=${MIN_ASSERTS:-98}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \
@@ -1259,4 +1304,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"
+printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"

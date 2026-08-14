@@ -130,7 +130,7 @@ chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
-unsafe ptr   asm
+unsafe ptr   asm     assert
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -602,7 +602,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
 
 Failure comes in **two tiers**. A **recoverable** failure is an ordinary value of a sum type —
 `Either[X, Y]`, `Result[T]` = `Either[T, Err]`, and `T?` = `Either[T, nil]` with the placeholder `nil`. A
-**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers:
+**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers,
+and one statement states a claim across them:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?

@@ -126,7 +126,7 @@ chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
-unsafe ptr   asm
+unsafe ptr   asm     assert
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
@@ -521,7 +521,7 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
 
 失敗分**兩層**。**可回復**失敗是 sum type 的普通值——`Either[X, Y]`、`Result[T]` = `Either[T, Err]`、以及
 `T?` = `Either[T, nil]`（placeholder 為 `nil`）。**bug** 是**abort**,會 unwind stack（跑 `defer`）。六個運算子在兩層
-間搭橋:
+間搭橋,另有一個敘述跨層陳述一項主張:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?

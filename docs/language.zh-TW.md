@@ -128,7 +128,7 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 - **Raw pointer 內建（僅限 `unsafe`）**——`addr` / `ptr` / `ptr[T]` / `uint(p)`，以及指標方法
   `.load` / `.store` / `.offset`（[值與記憶體](core/memory.zh-TW.md)）。
 
-其餘看起來可呼叫的都**不是**內建函式：`print` / `raise` / `guard` / `spawn` / `defer` / `del` 是**關鍵字**；
+其餘看起來可呼叫的都**不是**內建函式：`print` / `raise` / `guard` / `spawn` / `defer` / `del` / `assert` 是**關鍵字**；
 `list.len()` / `map.get()` 是內建型別上的**方法**；`math.sqrt` / `io.read_file` 則是需 `import` 的**標準函式庫**函式。
 逐項細節見 **[內建函式（Built-in Functions）](runtime/builtins.zh-TW.md)**；可 import 的套件見
 **[標準函式庫（Standard Library）](runtime/stdlib.zh-TW.md)**。

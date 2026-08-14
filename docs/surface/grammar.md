@@ -63,7 +63,7 @@ A Zerg program is a sequence of statements:
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt | decorated-decl
+statement     ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt   ::= nop | …          # no block; fits on one line
 compound-stmt ::= …                # owns a '{ … }' block (if / for / …)
 decorated-decl ::= …               # a name-introducing declaration, optional #[…] prefix (fn / struct / …, group 7)
@@ -490,7 +490,7 @@ spec-member ::= fn-sig | fn-decl              # a required method, or a provided
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # bound: a spec → type param; a concrete type → value param
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
-decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
+decorated-decl ::= decorator? declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2)
@@ -580,13 +580,18 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
   associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
   which is the other thing it was carrying.
-- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
-  leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
-  declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to
-  **generate** the canonical impls of the named specs by reading the type's structure (see
-  [Derive & Default Behavior](../core/derive.md)); a logging decorator would sit on a `fn`. Decorators are a
-  **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
-  misspelled decorator is a compile error**, never silently dropped. `#[derive]`, `#[obj]` and `#[test]`
+- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator?` prefix
+  leads **any statement**, declarations included (`statement` and `decorated-decl`, group 1), and binds to
+  it. Which decorators are valid in which position is a **semantic** rule — `#[derive(Encode, Decode)]` on a
+  `struct`/`enum` asks the compiler to **generate** the canonical impls of the named specs by reading the
+  type's structure (see [Derive & Default Behavior](../core/derive.md)); `#[allow(L103)]` on a plain
+  statement suppresses a lint finding over it, and a `#[derive]` there is a compile error. **One decorator
+  per item**: an item that wants several writes the comma list, `#[a(x), b(y)]`, and a stacked `#[a(x)]`
+  over `#[b(y)]` is a compile error — two spellings for one thing is what `zerg fmt` exists to remove, and
+  it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
+  the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
+  compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
+  decorator is a compile error**, never silently dropped. `#[derive]`, `#[obj]`, `#[test]` and `#[allow]`
   are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
   `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a
   comment — the lexer

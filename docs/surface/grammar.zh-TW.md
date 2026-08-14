@@ -60,7 +60,7 @@ import**（呼叫 C library 的符號如 `malloc`）是 **stdlib 機制**——�
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt | decorated-decl
+statement     ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt   ::= nop | …          # 無區塊；一行即可
 compound-stmt ::= …                # 擁有一個 '{ … }' 區塊（if / for / …）
 decorated-decl ::= …               # 引入名字的宣告，可選 #[…] 前綴（fn / struct / …，group 7）
@@ -439,7 +439,7 @@ spec-member ::= fn-sig | fn-decl              # 必要方法，或已提供實�
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # bound 是 spec → 型別參數；具體型別 → 值參數
 bound         ::= type-name ( '+' type-name )*  # spec 的合取
-decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
+decorated-decl ::= decorator? declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(16)、align(SIZE*2)
@@ -505,13 +505,16 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
   一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
   另一件事。
-- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
-  （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
-  `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
-  [Derive & Default Behavior](../core/derive.zh-TW.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
-  擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator 是編譯錯誤**,絕不被默默丟棄。今日已實作:
-  `#[derive]`、`#[obj]` 與 `#[test]`;`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是
-  保留名稱,在實作前會被識別並拒絕。`#[` 是唯一不算註解的
+- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator?` 前綴可領**任何
+  statement**,宣告也在內（`statement` 與 `decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪個位置是**語意**
+  規則——`struct`/`enum` 上的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的
+  canonical impl（見 [Derive & Default Behavior](../core/derive.zh-TW.md)）；一般 statement 上的 `#[allow(L103)]`
+  壓下它涵蓋範圍內的 lint finding,而 `#[derive]` 放在那裡是編譯錯誤。**一個項目一個 decorator**:要掛好幾個就寫
+  逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
+  而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
+  項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
+  是編譯錯誤**,絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]` 與 layout
+  指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕。`#[` 是唯一不算註解的
   `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors

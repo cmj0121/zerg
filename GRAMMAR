@@ -54,10 +54,15 @@ stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
 
 # A statement is either simple (no block — fits on one line), compound (it owns a
-# '{ … }' block), or a declaration (introduces a name, and may carry a decorator
-# prefix). 'nop' is the smallest simple statement; the rest are filled in by later
-# groups.
-statement      ::= simple-stmt | compound-stmt | decorated-decl
+# '{ … }' block), or a declaration (introduces a name). 'nop' is the smallest simple
+# statement; the rest are filled in by later groups.
+#
+# ANY of the three may carry ONE decorator (group 7) in front of it. Which decorator is
+# valid in which position is a SEMANTIC rule like every other one about a decorator:
+# 'derive'/'obj'/'test' are about a DECLARATION and are refused above a simple or compound
+# statement, and '#[allow(…)]' — which suppresses a lint finding over the statement it
+# leads — is the one that belongs there.
+statement      ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt    ::= nop | binding | reassign | print | return | raise-stmt | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
                  | del-stmt | close-stmt | expr-stmt
@@ -69,7 +74,7 @@ compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-se
 # only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' is the one declaration
 # with no block; the rest own one. 'unsafe-group' is a module-level 'unsafe { … }' that GROUPS
 # declarations in an unsafe context (group 12) — the home of a mutable global.
-decorated-decl ::= decorator* declaration
+decorated-decl ::= decorator? declaration
 declaration    ::= type-decl | unsafe-group | fn-decl | struct-decl | enum-decl
                  | spec-decl | impl-decl | init-decl
 nop            ::= 'nop'
@@ -99,8 +104,10 @@ nop            ::= 'nop'
 # begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached
 # to the declaration that follows — consecutive '##' lines form one doc block; there is NO
 # inner/trailing doc and NO block comment); any other '#' begins an ordinary line comment.
-# A decorator binds to the declaration that follows it; a line break between a decorator and
-# its target does not separate them (no ASI ';' applies there).
+# A decorator binds to the item that follows it, and it STANDS ON ITS OWN LINE: it is an item
+# of the 'stmt-list' like any other, so a 'stmt-sep' separates it from what it leads, and
+# '#[derive(Eq)] struct P' — both on one line — is not a form. What it binds to is the next
+# item and not the next line, so blank lines and comments between them change nothing.
 
 letter     ::= [a-zA-Z]
 upper      ::= [A-Z]
@@ -582,10 +589,17 @@ const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see 
 # constructor — the module still builds with 'T(...)' internally.
 
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
-# ones — Zerg has no macros). A decorator prefix leads any declaration (the
-# 'decorator*' on 'decorated-decl', group 1) and binds to it. 'derive' asks the
-# compiler to generate the canonical impls of the named blessed specs by reading the
-# type's structure; other decorators (layout, logging, FFI, …) slot in here later.
+# ones — Zerg has no macros). A decorator prefix leads any statement, declarations
+# included (the 'decorator?' on 'statement' and on 'decorated-decl', group 1), and
+# binds to it. 'derive' asks the compiler to generate the canonical impls of the named
+# blessed specs by reading the type's structure; 'allow' names lint codes to suppress
+# over the statement it leads; other decorators (layout, logging, FFI, …) slot in here
+# later.
+#
+# ONE PER ITEM, and the comma list is how an item takes several: '#[a(x), b(y)]', never
+# '#[a(x)]' stacked over '#[b(y)]'. Two spellings for one thing is what a formatter exists
+# to remove, and it cannot remove one once both are legal — so 'decorator?' rather than
+# 'decorator*' on both productions above, and the stacked form is refused.
 decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg     ::= type-name | const-expr        # derive(Eq, Ord), align(16), align(SIZE*2), …

@@ -325,8 +325,9 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > 需要的 **fixture**(以名字比對);driver 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
 > `Ref` 值,複製即共享——上頭有 `ctx.name()`、`ctx.log(msg)`(只在測試失敗時顯示)、`ctx.skip(reason)` 與
 > `ctx.fatal(msg)`。後兩者以 `raise` 解開、把理由留在 context 上,所以沒有任何一方需要比對訊息字串才能分辨
-> skip 與 fail。斷言維持**自由函式**(`testing.assert_eq`),因為泛型**方法**是 `E409 NotImplemented`,泛型
-> 自由函式則不是。
+> skip 與 fail。它同時帶有累積**失敗脈絡**的 `str` / `int` / `bool` builder,以及作為終端的
+> `ctx.assert(cond, msg)`。**泛型**斷言維持自由函式(`testing.assert_eq`、`assert_ne`、`assert_raises`),
+> 因為泛型**方法**是 `E409 NotImplemented`,泛型自由函式則不是。
 >
 > **Fixture。** 一個測試**宣告它需要什麼**,框架建置一次、交給它,再拆掉。`#[fixture]` 是一個把自己的測試當作
 > **continuation** 收下的函式:
@@ -401,8 +402,10 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、benchmark,以及
 > 同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制流,所以它自己就會從測試本體解開出去。
 >
-> **斷言**那一側也一樣還沒建:失敗的 `assert_eq` 只說兩個值不相等、不說它們是什麼;沒有「這個呼叫有 raise」
-> 的斷言——想要的測試套件得自己寫一個吃 `guard` 的 `Result[T]` 的泛型 helper;而 `assert_eq` 收不了
+> **斷言**那一側已經補上,並隨模組一起記錄([標準函式庫](stdlib.zh-TW.md#testing)):失敗的 `assert_eq` 會報出
+> 兩個值、`assert` 收得下一個訊息、`assert_raises` 交回一次 `guard` 包住的呼叫所 raise 的 `Err`,而 `Context`
+> 的鏈式呼叫把具名的值帶進一個以斷言為終端的形式。仍然沒有的是泛型斷言的**方法**形式——
+> `ctx.str("file", p).assert_eq(got, want)` 是 `E409`,泛型方法——以及 `assert_eq` 依然收不了
 > `list[T]`,它沒有實作 `Eq`(`E412`),所以回傳 list 的函式只能透過某個把它縮成純量的東西去斷言。
 >
 > **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——

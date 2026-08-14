@@ -3090,13 +3090,12 @@ struct AClaim {
 }
 
 # ACond is one claim under construction: the condition being rebuilt over temporaries, the
-# bindings those temporaries are, and — parallel — the source text of each operand bound and
-# the name it went to, which is what the message reads back.
+# bindings those temporaries are, and the message accumulating beside them — as the BODY of an
+# f-string, holes and all, which is the one representation both spellings of this form share.
 struct ACond {
 	pub toks: list[Token]
 	pub pre: list[Stmt]
-	pub texts: list[str]
-	pub names: list[str]
+	pub msg: str
 }
 
 fn parse_assert(mut &p: Parser) -> Stmt {
@@ -3138,9 +3137,7 @@ fn p_assert_claims(mut &p: Parser, lo: int, hi: int) -> list[AClaim] {
 	}
 	return out if sp.pos == hi
 
-	mut one: list[AClaim] = []
-	one.append(AClaim(lo, hi, out[0].op, out[0].end))
-	return one
+	return [AClaim(lo, hi, out[0].op, out[0].end)]
 }
 
 # p_assert_cmp reads one cmp-expr and answers the index of its comparison operator, or -1.
@@ -3165,12 +3162,12 @@ fn p_assert_cmp(mut &sp: Parser) -> int {
 # p_assert_claim writes the statements one claim IS, onto the end of `out`.
 fn p_assert_claim(mut &p: Parser, at: Token, c: AClaim, mut &out: list[Stmt]) {
 	head := p.toks[c.lo]
-	mut cond := ACond([], [], [], [])
+	mut cond := ACond([], [], assert_head(p.toks, last_segment(p.path), at.line, c.lo, c.hi))
 
 	if c.op >= 0 {
-		p_assert_side(p, c.lo, c.op, f"zga_l{head.line}c{head.col}", cond)
+		p_assert_side(p, c.lo, c.op, assert_tmp("l", head), cond)
 		cond.toks.append(p.toks[c.op])
-		p_assert_side(p, c.op + 1, c.end, f"zga_r{head.line}c{head.col}", cond)
+		p_assert_side(p, c.op + 1, c.end, assert_tmp("r", head), cond)
 		p_assert_copy(p, c.end, c.hi, cond.toks)
 	} else {
 		p_assert_copy(p, c.lo, c.hi, cond.toks)
@@ -3180,12 +3177,18 @@ fn p_assert_claim(mut &p: Parser, at: Token, c: AClaim, mut &out: list[Stmt]) {
 		out.append(s)
 	}
 
+	# THE MESSAGE IS PARSED, not assembled. It is one f-string, handed to the parser's own
+	# f-string lowering — so what reaches the emitter is exactly the tree `f"…{x}…"` builds,
+	# rather than a hand-folded imitation of it that has to be kept identical forever. That
+	# sameness is the claim `zerg desugar`'s D104 rests on: D104 writes this same f-string out
+	# as text, and the two are held to being one program down to the emitted C.
+	mut args: list[Expr] = []
+	args.append(fstr_expr(p, assert_fstr(cond.msg, at)))
+
 	# `raise AssertionError(msg) if not (cond)` — the postfix guard on a raise, written as the
 	# `if` block it is defined as, which is what parse_jump_guard would have made of it
 	mut body: list[Stmt] = []
 	mut none: list[Stmt] = []
-	mut args: list[Expr] = []
-	args.append(p_assert_msg(p, at, c, cond))
 	body.append(Stmt.SRaise(Expr.ECall("AssertionError", args, []), false, Expr.ENil))
 	out.append(Stmt.SIf(Expr.EUnary("not", p_assert_parse(p, cond.toks)), body, false, none))
 }
@@ -3199,41 +3202,65 @@ fn p_assert_side(mut &p: Parser, lo: int, hi: int, name: str, mut &c: ACond) {
 		return
 	}
 	t := p.toks[lo]
-	c.pre.append(Stmt.SLet(name, Ty.TUnknown, false, false, false, p_assert_parse(p, p_assert_span(p, lo, hi))))
+	mut span := p_assert_span(p, lo, hi)
+	c.pre.append(Stmt.SLet(name, Ty.TUnknown, false, false, false, p_assert_parse(p, span)))
 	c.toks.append(Token(Kind.Ident, name, "", t.line, t.col))
-	c.texts.append(fmt_fstr_span(p.toks, lo, hi - 1))
-	c.names.append(name)
+	c.msg = c.msg + assert_note(p.toks, lo, hi, name)
 }
 
-# p_assert_msg builds the message: where the claim was written, the claim as it was written,
-# and then one line per operand that went into a temporary.
+# --- the message, which both spellings of this form have to write the same way --------------
+#
+# The four below are the SPEC of an assert's failure — where the claim was, how an operand is
+# reported, what a temporary is called, and how the whole thing is spelled as a literal — and
+# they are functions rather than four format strings because `zerg desugar`'s D104 writes the
+# same message as source text. Two copies of a format string are two messages the day either
+# is edited, and the only thing that would notice is a golden file somebody reads.
+#
+# What they answer is the BODY OF AN F-STRING, escaped and holes included, because that is the
+# one representation both sides can use: the parser hands it to fstr_expr and gets the tree,
+# the desugar wraps it in `f"…"` and gets the text.
+
+# assert_head is the message's first line: the file, the line, and the claim as written.
 #
 # The path is the file's LAST SEGMENT and not the whole of it, and that is what a
-# source-to-source sugar can honestly say: `zerg desugar`'s D104 writes this same message out
-# as text, and the text it writes has to keep meaning the same thing after the file it came
-# from has been copied somewhere else to be built. A basename survives that; a path does not.
-fn p_assert_msg(mut &p: Parser, at: Token, c: AClaim, cond: ACond) -> Expr {
-	line := strconv.to_string(at.line, 10)
-	mut lead := f"{last_segment(p.path)}:{line}  assert {fmt_fstr_span(p.toks, c.lo, c.hi - 1)}"
-	mut m: Expr = Expr.ENil
-	mut have := false
+# source-to-source sugar can honestly say: the text D104 writes has to keep meaning the same
+# thing after the file it came from has been copied somewhere else to be built. A basename
+# survives that; a path does not.
+fn assert_head(mut &toks: list[Token], base: str, line: int, lo: int, hi: int) -> str {
+	return assert_escape(f"{base}:{strconv.to_string(line, 10)}  assert {fmt_fstr_span(toks, lo, hi - 1)}")
+}
 
-	# THE FOLD IS fstr_expr's, down to fstr_join, and the sameness is the point: what this
-	# builds has to be the tree the f-string spelling of the same message builds, because
-	# `zerg desugar`'s D104 writes that spelling out and the two are held to being one
-	# program. A literal run gathered separately would put an empty `EStr` where the hole
-	# starts, which is the same output and not the same C.
-	mut i := 0
-	for i < cond.names.len() {
-		lead = f"{lead}\n  {cond.texts[i]} = "
-		m = fstr_join(m, have, Expr.EStr(lead))
-		have = true
-		lead = ""
-		m = fstr_join(m, have, Expr.EConv(Ty.TStr, Expr.EIdent(cond.names[i]), "str"))
-		i = i + 1
+# assert_note is one operand's line: what it was written as, and what it turned out to be.
+fn assert_note(mut &toks: list[Token], lo: int, hi: int, name: str) -> str {
+	return f"\\n  {assert_escape(fmt_fstr_span(toks, lo, hi - 1))} = {{{name}}}"
+}
+
+# assert_tmp names the temporary one operand goes into. The line and column are the CLAIM's
+# first token, so two claims cannot collide and the name says where it came from.
+fn assert_tmp(side: str, t: Token) -> str {
+	return f"zga_{side}{t.line}c{t.col}"
+}
+
+# assert_fstr wraps a body as the whole f-string token it is.
+fn assert_fstr(body: str, at: Token) -> Token {
+	return Token(Kind.FStr, f"f\"{body}\"", body, at.line, at.col)
+}
+
+# assert_escape puts a run of SOURCE TEXT inside an f-string literal. A condition's own text
+# may hold any of the four characters that mean something in there — a string literal brings
+# quotes and backslashes, a map literal brings braces — and each is written the way the lexer
+# will read back: the first two escaped, the second two doubled.
+fn assert_escape(s: str) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(s) {
+		if c == b'\\' or c == b'"' {
+			out.append(b'\\')
+		} else if c == b'{' or c == b'}' {
+			out.append(c)
+		}
+		out.append(c)
 	}
-	return fstr_join(m, have, Expr.EStr(lead)) if lead != "" or not have
-	return m
+	return str(out)
 }
 
 # p_assert_is_lit reports a span that is one literal — or a sign and one literal, since `-1`
@@ -3270,10 +3297,13 @@ fn p_assert_span(mut &p: Parser, lo: int, hi: int) -> list[Token] {
 # p_assert_parse reads a token run as one expression. It is fstr_hole's mechanism — a parser
 # of its own over tokens that are not the file's — and it inherits the depth budgets for that
 # one's reason: what it parses is spliced into the enclosing tree and measured as part of it.
-fn p_assert_parse(mut &p: Parser, toks: list[Token]) -> Expr {
-	mut ts := toks
-	ts.append(Token(Kind.Eof, "", "", 0, 0))
-	mut sp := Parser(ts, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
+#
+# It takes the run BY REFERENCE and terminates it in place. A list is copy-on-write, so a
+# by-value parameter would share the caller's buffer and the `Eof` would unshare it — copying
+# every Token of a run this function was handed to read.
+fn p_assert_parse(mut &p: Parser, mut &toks: list[Token]) -> Expr {
+	toks.append(Token(Kind.Eof, "", "", 0, 0))
+	mut sp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
 	return parse_expr(sp)
 }
 

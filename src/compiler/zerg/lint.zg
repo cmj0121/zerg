@@ -152,8 +152,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	lint_optionals(f, out)
 	lint_idle_mut_fn(f, out)
 	lint_ships_a_test(f, out)
-	lint_ships_an_assert(srcs, paths, out)
-	lint_with_names(srcs, paths, out)
+	lint_token_rules(srcs, paths, out)
 
 	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
 	# driver made and a second loop it printed, which meant the suppression below would have
@@ -186,25 +185,35 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 # parser (GRAMMAR defines it by expansion), so by the time there is an AST there is no
 # `with` left to lint. Every rule about this form is a token rule for the same reason —
 # F409 next door is the other one.
-fn lint_with_names(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
+#
+# lint_token_rules is the ONE lex the token rules share. There are two of them now (L105 and
+# L602) and each used to open with the same `for k < srcs.len() { tokenize(srcs[k]) }`, so a
+# second token rule meant a second pass over every byte of the program — and a third loop
+# skeleton to keep in step with the other two.
+fn lint_token_rules(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
 	mut k := 0
 	for k < srcs.len() {
-		toks := tokenize(srcs[k])
+		mut toks := tokenize(srcs[k])
 		path := lint_path_at(paths, k)
-		mut i := 0
-		for i + 3 < toks.len() {
-			if toks[i].kind == Kind.With {
-				at := lint_with_as(toks, i)
-				if at > 0 {
-					name := toks[at].lexeme
-					if not lint_reads_name(toks, at + 1, name) {
-						out.append(Finding("", path, toks[at].line, toks[at].col, "L105", f"`with … as {name}` — nothing in the block reads the name, and the block already scopes the resource"))
-					}
+		lint_with_names(toks, path, out)
+		lint_ships_an_assert(toks, path, out)
+		k = k + 1
+	}
+}
+
+fn lint_with_names(mut &toks: list[Token], path: str, mut &out: list[Finding]) {
+	mut i := 0
+	for i + 3 < toks.len() {
+		if toks[i].kind == Kind.With {
+			at := lint_with_as(toks, i)
+			if at > 0 {
+				name := toks[at].lexeme
+				if not lint_reads_name(toks, at + 1, name) {
+					out.append(Finding("", path, toks[at].line, toks[at].col, "L105", f"`with … as {name}` — nothing in the block reads the name, and the block already scopes the resource"))
 				}
 			}
-			i = i + 1
 		}
-		k = k + 1
+		i = i + 1
 	}
 }
 
@@ -331,19 +340,15 @@ fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
 # shortcut: `assert` can be written inside a `guard` block or a closure body, which hang off
 # an EXPRESSION, so an AST walk would have to chase all 28 expression variants to see every
 # one — and a rule that quietly misses a case is the shape this project takes out of its
-# gates. A token cannot be missed. L105 next door is a token rule for its own reason.
-fn lint_ships_an_assert(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
-	mut k := 0
-	for k < srcs.len() {
-		path := lint_path_at(paths, k)
-		if not is_test_file(path) {
-			for t in tokenize(srcs[k]) {
-				if t.kind == Kind.Assert {
-					out.append(Finding("warning", path, t.line, t.col, "L602", "`assert` outside a `*_test.zg` file SHIPS — it is always compiled in, there is no flag that strips it, and this claim can abort a running program. It is not a weaker check than the one you meant, it is a LESS SPECIFIC one: it says the claim was false, never what it meant. `raise ValueError(\"xs must be non-empty\") if xs.len() == 0` says both, and is the form that belongs in a program somebody runs"))
-				}
-			}
+# gates. A token cannot be missed. L105 next door is a token rule for its own reason, and the
+# two share one lex — see lint_token_rules.
+fn lint_ships_an_assert(mut &toks: list[Token], path: str, mut &out: list[Finding]) {
+	return if is_test_file(path)
+
+	for t in toks {
+		if t.kind == Kind.Assert {
+			out.append(Finding("warning", path, t.line, t.col, "L602", "`assert` outside a `*_test.zg` file SHIPS — it is always compiled in, there is no flag that strips it, and this claim can abort a running program. It is not a weaker check than the one you meant, it is a LESS SPECIFIC one: it says the claim was false, never what it meant. `raise ValueError(\"xs must be non-empty\") if xs.len() == 0` says both, and is the form that belongs in a program somebody runs"))
 		}
-		k = k + 1
 	}
 }
 

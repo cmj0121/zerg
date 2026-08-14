@@ -95,6 +95,7 @@ fn test_cmd() -> cli.Command {
 	return (
 		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
 		.opt("k", "only", "run only the tests whose name begins with this", "")
+		.opt("t", "timeout", "seconds one test may take before it is reported STUCK", "60")
 		.add(cli.positional("path", "the directory to search (default: the current one)"))
 		.run(do_test)
 	)
@@ -171,9 +172,10 @@ fn do_build(c: cli.Ctx) -> int {
 fn do_test(c: cli.Ctx) -> int {
 	args := c.args()
 	only := c.get("only")
-	return run_tests(args[0], only) if args.len() > 0
+	secs := c.int_of("timeout", TEST_TIMEOUT)
+	return run_tests(args[0], only, secs) if args.len() > 0
 
-	return run_tests(".", only)
+	return run_tests(".", only, secs)
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
@@ -993,7 +995,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # A RUN THAT FOUND NOTHING SAYS SO. Discovering no test and printing nothing is
 # indistinguishable from a run where everything passed, which is the one failure a test runner
 # must not have — every gate in this repository is written against it.
-fn run_tests(root: str, only: str) -> int {
+fn run_tests(root: str, only: str, secs: int) -> int {
 	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
 	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
 	# because its other caller is probing a search path — so `zerg test tset/` would report "no
@@ -1040,11 +1042,12 @@ fn run_tests(root: str, only: str) -> int {
 	mut passed := 0
 	mut failed := 0
 	mut skipped := 0
+	mut stuck := 0
 	for p in pkgs {
-		run_pkg(root, p, only, passed, failed, skipped)
+		run_pkg(root, p, only, secs, passed, failed, skipped, stuck)
 	}
 
-	if passed + failed + skipped == 0 {
+	if passed + failed + skipped + stuck == 0 {
 		io.println(f"no tests: nothing under `{root}` declares a `#[test]` in a `*_test.zg`")
 		return 0
 	}
@@ -1054,8 +1057,11 @@ fn run_tests(root: str, only: str) -> int {
 	# not a failure — nothing was claimed. Folding it into either makes the number that
 	# matters the one nobody can read: a suite whose skips are counted as passes goes green
 	# on a platform where none of it ran.
-	io.println(f"{passed} passed, {failed} failed, {skipped} skipped")
-	return 1 if failed > 0
+	# A TIMEOUT IS COUNTED APART TOO, for the same reason a skip is: it is not a failed
+	# assertion — nothing was decided — and folding it into the failures would make a hung test
+	# and a broken one the same number.
+	io.println(f"{passed} passed, {failed} failed, {skipped} skipped, {stuck} timed out")
+	return 1 if failed > 0 or stuck > 0
 
 	return 0
 }
@@ -1688,7 +1694,7 @@ fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(root: str, p: Pkg, only: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
 	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
 	# findings somewhere: run_tests planned every package before it ran any of them, and a run
 	# holding one unresolved parameter never reaches here at all.
@@ -1729,7 +1735,7 @@ fn run_pkg(root: str, p: Pkg, only: str, mut &passed: int, mut &failed: int, mut
 	# compiler, and the driver now has both. A generated file has no need of an argument
 	# anyway: whatever a run would have passed, the run also wrote the file.
 	guard {
-		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel)))
+		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel, secs)))
 	}
 
 	mut files: list[str] = []
@@ -1819,7 +1825,7 @@ fn run_pkg(root: str, p: Pkg, only: str, mut &passed: int, mut &failed: int, mut
 		i = i + 1
 	}
 
-	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped)
+	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped, stuck)
 
 	# the binary and the report belong to THIS run: the next one writes them again from whatever
 	# the test files then declare, and a stale one left behind is a test binary that answers for
@@ -1863,6 +1869,17 @@ fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict:
 # TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather
 # than a flag: `zerg test --jobs` is a knob for the part of the command nobody is waiting on.
 const TEST_JOBS := 4
+
+# TEST_TIMEOUT is how many seconds one test may take before the run stops waiting on it, and
+# it is a DEFAULT rather than a constant: `--timeout` moves it, and a suite whose slowest test
+# is genuinely slower than this says so on its own command line.
+#
+# A HUNG TEST AND A SLOW TEST LOOK IDENTICAL until something decides which is which, and with
+# nothing deciding, the one that hangs takes the whole run with it — until CI's own timeout
+# kills the job, at which point the log says the job was killed and nothing says which test
+# did it. Sixty seconds is far above anything a unit test should take and far below any CI
+# job limit, which is the whole of what a default here has to be.
+const TEST_TIMEOUT := 60
 
 # test_dir is where a test binary and its report are written: a `test` directory under the build
 # cache, which is already the place a build puts what it made and which `make clean` already
@@ -1965,7 +1982,7 @@ fn lines_of(text: str) -> list[str] {
 # paths: the in-process run and the fallback processes write the same records, and a reader
 # cannot tell from a line which way it was produced — except where it is told, which is the
 # one line that says the strategy changed.
-fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int) {
+fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
 	mut seen := ""
 	mut i := 0
 	for i < names.len() {
@@ -1990,7 +2007,16 @@ fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[st
 			for ln in lines_of(text[i]) {
 				io.println("        " + ln)
 			}
-			failed = failed + 1
+
+			# A TIMEOUT IS ITS OWN VERDICT and is counted apart, because it is not a failed
+			# assertion: nothing was checked and nothing was claimed, the test simply never
+			# came back. A runner that reported it FAIL would send the reader looking for an
+			# assertion that does not exist.
+			if v == "timeout" {
+				stuck = stuck + 1
+			} else {
+				failed = failed + 1
+			}
 		}
 		i = i + 1
 	}
@@ -2008,6 +2034,7 @@ fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[st
 # whatever happened to the test above.
 fn verdict_word(v: str) -> str {
 	return "CRASH" if v == "crash"
+	return "STUCK" if v == "timeout"
 
 	return "FAIL "
 }
@@ -2074,13 +2101,15 @@ fn rm_file(path: str) {
 # `io`, and this compiler cannot work out what it holds` — a lambda may not reach a module
 # namespace, so anything a level does that touches `io` or `testing` has to be in a top-level
 # function. Each level is one, and the closure passed to a fixture only ever calls it.
-fn gen_driver(fixts: list[Fixt], tests: list[Tst], report: str, chosen: str) -> str {
+fn gen_driver(fixts: list[Fixt], tests: list[Tst], report: str, chosen: str, secs: int) -> str {
 	mut out := "# Generated by `zerg test` for one run, and removed when that run ends. Not a source to\n"
 	out = out + "# edit: the next run writes it again from whatever the test files then declare.\n"
 	out = out + "import (\n\t\"io\"\n\t\"testing\"\n)\n\n"
 
 	out = out + "const ZT_REPORT := \"" + report + "\"\n"
-	out = out + "const ZT_SELECT := \"" + chosen + "\"\n\n"
+	out = out + "const ZT_SELECT := \"" + chosen + "\"\n"
+	out = out + "const ZT_TIMEOUT := " + f"{secs}" + " * 1000000000\n"
+	out = out + "const ZT_STUCK := \"the test did not finish within " + f"{secs}" + "s — nothing was decided, so this is not a failed assertion; raise the limit with `zerg test --timeout`\"\n\n"
 
 	out = out + driver_body()
 
@@ -2136,7 +2165,7 @@ fn gen_test(t: Tst, i: int) -> str {
 
 	out = out + "fn zt_run" + n + "(" + ps + ") {\n"
 	out = out + "\treturn if not zt_want(\"" + t.name + "\")\n\n"
-	out = out + "\tzt_emit(\"" + t.name + "\", testing.collect(zt_start" + n + "(" + ar + ")))\n}\n\n"
+	out = out + "\tzt_emit(\"" + t.name + "\", zt_await(zt_start" + n + "(" + ar + ")))\n}\n\n"
 	return out
 }
 
@@ -2376,8 +2405,32 @@ fn gen_blame(id: str, name: str, tests: list[Tst], sub: list[int]) -> str {
 # captures by value. So each record is a read of the file and a write of it with one record
 # more — which keeps the property the fallback runs on, that a run cut short leaves exactly
 # the records of the tests that finished.
+#
+# THE DEADLINE IS A TIMER AND A `select`, which is the whole of the mechanism: a test runs in
+# a coroutine already, so waiting for it with a limit is one more receive arm. `testing.collect`
+# is the function that drains a test's channel, and it is moved onto a coroutine of its own so
+# that the arm can race it — rather than a second copy of the event folding written here with a
+# deadline in it, which would be the same rule in two places.
+#
+# THE TIMER IS WRITTEN HERE AND NOT IMPORTED from `time`, even though `time.after` is exactly
+# this. A driver's imports land in the package's namespace, and `E705` refuses two modules
+# defining one `pub` name — so importing `time` would make a package that declares its own
+# `after`, `now` or `ticker` stop compiling the moment it grew a test. Everything the driver
+# declares is `zt_`-prefixed for that reason, and the timer is four lines over the same runtime
+# leaf `time.after` is written over.
+#
+# THE COST IS A COROUTINE PER TEST, and it outlives the test: nothing cancels a sleep, so a
+# timer for a test that finished at once still holds its stack until its deadline passes. That
+# is the same cost `time.after` carries and the reason it is one timer per test rather than one
+# per assertion.
 fn driver_body() -> str {
-	return "fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
+	return "fn zt_timer(zt_out: chan[int]<-, zt_d: int) {\n\t__zrt_sleep_ns(zt_d)\n\tzt_out <- 1\n}\n\n" +
+		"fn zt_after(zt_d: int) -> <-chan[int] {\n\tzt_ch := chan[int](1)\n\tspawn zt_timer(zt_ch, zt_d)\n\n\treturn zt_ch\n}\n\n" +
+		"fn zt_collect(zt_rx: <-chan[testing.Event], zt_out: chan[testing.Outcome]<-) {\n\tzt_out <- testing.collect(zt_rx)\n}\n\n" +
+		"fn zt_await(zt_rx: <-chan[testing.Event]) -> testing.Outcome {\n\tzt_oc := chan[testing.Outcome](1)\n\tspawn zt_collect(zt_rx, zt_oc)\n\n" +
+		"\tfor select {\n\t\tzt_v := <-zt_oc => return zt_v\n\n\t\t<-zt_after(ZT_TIMEOUT) => return testing.Outcome(\"timeout\", ZT_STUCK)\n\t}\n\n" +
+		"\treturn testing.Outcome(\"timeout\", ZT_STUCK)\n}\n\n" +
+		"fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
 		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
 		"fn zt_append(rec: str) {\n\tzt_put(ZT_REPORT, zt_get(ZT_REPORT) + rec)\n}\n\n" +
 		"fn zt_want(name: str) -> bool {\n\tone := zt_get(ZT_SELECT)\n\treturn true if one == \"\"\n\n\treturn one == name\n}\n\n" +

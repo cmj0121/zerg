@@ -305,14 +305,27 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 > **[not yet]** `zerg test` 目前是一個**骨架**。它會走訪一條路徑找出 `*_test.zg`,把每個含有測試檔的目錄
 > 當成一個 package 編譯——它自己的原始碼、它的測試檔,加上一個產生出來的 driver,所以白箱測試不需要 import
-> 也不需要 `pub` 就摸得到 module 的內部——然後把找到的每個 `#[test] fn name()` 跑起來,**一個測試一個
-> process**,以檔案分組回報 `ok` / `FAIL` / `CRASH`,只要有一個沒過就以非零狀態結束。什麼都沒找到的一次執行
-> 會把這件事說出來。
+> 也不需要 `pub` 就摸得到 module 的內部——然後把找到的每個 `#[test]` 跑起來,以檔案分組回報
+> `ok` / `FAIL` / `SKIP` / `CRASH`,skip 與 pass、fail 分開計數,只要有一個沒過就以非零狀態結束。什麼都
+> 沒找到的一次執行會把這件事說出來。
 >
-> **還沒建**的是第一輪之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、setup 與
-> teardown、benchmark,以及任何平行化——一個測試一個 process 是刻意選的「慢而正確」,直到有一個量測開口要求
-> 別的做法為止。一個 `#[test]` 不收參數、也不回傳;失敗的 `testing.assert*` 會 `raise`,而 raise 是控制流,
-> 所以它自己就會從測試本體解開出去。
+> **兩條路徑,而報告會說走的是哪一條。** 一個測試以 **coroutine** 的形式、包在 `guard` 裡、在同一個 process
+> 中執行——這同時接住了「斷言不成立」與「未捕捉的 abort」,因為 `guard` 兩者都接得住,而沒有 `guard` 的
+> coroutine 死掉時也只死自己。coroutine 接不住的是把 **process** 本身結束掉的測試:stack overflow,或
+> `os.exit`。所以一次執行結束時仍然沒有結果的測試,會各自在**自己的 process** 裡重跑一次——正好是剩下那些,
+> 因為結果只在本體返回之後才寫下——這才把「死掉」歸到造成它的那個測試身上。這件事發生時,報告會用一行
+> `NOTE` 說出來;一次悄悄換了策略的執行,是一次沒有人能解讀結果的執行。
+>
+> 一個 `#[test]` 不回傳,參數則是**沒有**或**一個 `testing.Context`**,以型別辨識而非以參數名字辨識;driver
+> 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
+> `Ref` 值,複製即共享——上頭有 `ctx.name()`、`ctx.log(msg)`(只在測試失敗時顯示)、`ctx.skip(reason)` 與
+> `ctx.fatal(msg)`。後兩者以 `raise` 解開、把理由留在 context 上,所以沒有任何一方需要比對訊息字串才能分辨
+> skip 與 fail。斷言維持**自由函式**(`testing.assert_eq`),因為泛型**方法**是 `E409 NotImplemented`,泛型
+> 自由函式則不是。
+>
+> **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、用樣式挑測試、**fixture**
+> ——setup 與 teardown、benchmark,以及同時跑兩個測試。失敗的 `testing.assert*` 會 `raise`,而 raise 是控制
+> 流,所以它自己就會從測試本體解開出去。
 >
 > **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
 > 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的

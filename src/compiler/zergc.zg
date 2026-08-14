@@ -952,20 +952,38 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # directory holding a `*_test.zg` becomes one test binary — its own sources, its test files,
 # and one generated driver that calls the `#[test]` functions by name.
 #
-# ONE PROCESS PER TEST, always. A test that overflows its stack or calls `os.exit` ends the
-# process it is running in, and with every test in one process that would end all the tests
-# after it too: the first crash would decide what the rest of the run reports. So the driver
-# RE-EXECUTES ITSELF once per test — `__zrt_exe_path` names the running binary and `os.run`
-# starts it — and the child runs exactly one test and stops. It is the slow arrangement and it
-# is the correct one; a faster one is worth building on the day there is a measurement asking
-# for it, and not before.
+# ONE COROUTINE PER TEST, and one PROCESS per test when that is not enough. A test runs in a
+# `spawn`ed coroutine, inside a `guard`, and the two together contain everything a test can do
+# to itself that is containable — measured on this branch:
 #
-# A CHILD ANSWERS IN A FILE, not in its exit status. A status is one small integer: it cannot
+#   an assertion that does not hold    the `guard` catches it; it is a value the runner reads
+#   an uncaught abort (`IndexError`)   the `guard` catches that too; and with no guard at all
+#                                      the coroutine dies alone and the process runs on
+#   a stack overflow                   THE PROCESS DIES — exit 1, and nothing after it runs
+#   `os.exit(0)`                       THE PROCESS DIES — with the status a passing run has
+#
+# The last two are the un-catchable class, and they are why the one-process-per-test
+# arrangement is still here as the FALLBACK rather than deleted. The driver re-runs one named
+# test when it is asked to, in a process of its own, which is how a run that died gets each
+# survivor attributed to the test that caused it.
+#
+# A TEST ANSWERS IN A FILE, not in an exit status. A status is one small integer: it cannot
 # carry which assertion failed or what the values were, and — the part that decides the shape —
-# `os.exit(0)` inside a test produces exactly the status a passing test does. So the child
-# writes its verdict AFTER the body has returned, and a MISSING file is the fact that the body
-# never did. Finishing is observed, never inferred from a number that cannot tell the two
-# apart.
+# `os.exit(0)` inside a test produces exactly the status a passing test does. So a record is
+# written AFTER the body is out of the driver's hands, and a MISSING record is the fact that it
+# never came back. Finishing is observed, never inferred from a number that cannot tell the two
+# apart, and THAT is what makes the fallback exact: the records present after a run that died
+# are a prefix, so the tests with no record are precisely the ones left to run.
+#
+# THE RECORD FILE is line-oriented, one record per test, written by the driver and read by
+# `take_records` below — the only two readers there are, and they sit in this file together:
+#
+#   T <name>        this record is about test <name>
+#   V <verdict>     `ok`, `fail`, `skip` or `crash`
+#   M <line>        one line of what goes under it — a skip's reason, a failure's notes
+#
+# A message is many `M` lines rather than one escaped field, so nothing has to encode a
+# newline: a test's notes are lines already.
 
 # run_tests is the whole command: find the packages, run each one's tests, and say what
 # happened. It answers 0 only when nothing failed.
@@ -989,16 +1007,22 @@ fn run_tests(root: str) -> int {
 
 	mut passed := 0
 	mut failed := 0
+	mut skipped := 0
 	for d in pkgs {
-		run_pkg(d, passed, failed)
+		run_pkg(d, passed, failed, skipped)
 	}
 
-	if passed + failed == 0 {
+	if passed + failed + skipped == 0 {
 		io.println(f"no tests: nothing under `{root}` declares a `#[test]` in a `*_test.zg`")
 		return 0
 	}
 	io.println("")
-	io.println(f"{passed} passed, {failed} failed")
+
+	# A SKIP IS COUNTED APART FROM BOTH. It is not a pass — nothing was checked — and it is
+	# not a failure — nothing was claimed. Folding it into either makes the number that
+	# matters the one nobody can read: a suite whose skips are counted as passes goes green
+	# on a platform where none of it ran.
+	io.println(f"{passed} passed, {failed} failed, {skipped} skipped")
 	return 1 if failed > 0
 
 	return 0
@@ -1065,14 +1089,15 @@ fn pkg_sources(dir: str) -> list[str] {
 # healing possible: a run interrupted twice leaves one file, not two.
 const DRIVER_NAME := "zerg_test_driver_test.zg"
 
-# pkg_tests collects a package's tests as two parallel lists: each `#[test]` function's name,
-# and the file it was written in, in the order they will run.
+# pkg_tests collects a package's tests as three parallel lists: each `#[test]` function's
+# name, the file it was written in, and whether it asks for a `testing.Context` — in the order
+# they will run.
 #
 # ONLY A `*_test.zg` IS READ FOR ONE. A `#[test]` elsewhere in the package is compiled like any
 # other function and nothing calls it — the file's NAME is what makes a source a test file
 # (docs/runtime/package.md), and a second answer here would mean a function that runs under
 # `zerg test` from a file `zerg build` also ships.
-fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
+fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str], mut &ctxp: list[bool]) {
 	for f in files {
 		if zerg.is_test_file(path_tail(f)) {
 			tree := zerg.parse_at(read_source(f), f)
@@ -1080,10 +1105,29 @@ fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
 				if fd.is_test {
 					names.append(fd.name)
 					at.append(f)
+					ctxp.append(takes_ctx(fd))
 				}
 			}
 		}
 	}
+}
+
+# takes_ctx is how the driver decides which call to write for a test — `t()` or `t(ctx)`.
+#
+# THE CONTEXT IS IDENTIFIED BY TYPE, not by the parameter's name. A runner that looked for a
+# parameter called `ctx` would be reading a name the author chose, so `fn t(t: testing.Context)`
+# would silently get the wrong call and `fn t(ctx: int)` the right one. The qualifier is
+# resolved away at the parse — `testing.Context` and a local `Context` are one name by then —
+# which is a smaller ambiguity than the alternative and the one this compiler already has
+# everywhere else.
+#
+# ANY OTHER SIGNATURE FALLS TO `t()`, deliberately: the generated call is then a call the
+# compiler checks like any other, and `fn t(n: int)` is a compile error naming the function
+# rather than a test the runner quietly skipped.
+fn takes_ctx(fd: zerg.FnDecl) -> bool {
+	return false if fd.params.len() != 1
+
+	return zerg.ty_name(fd.params[0].ty) == "Context"
 }
 
 # run_pkg builds one package's test binary and runs it, adding its counts to the run's.
@@ -1091,11 +1135,12 @@ fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(dir: str, mut &passed: int, mut &failed: int) {
+fn run_pkg(dir: str, mut &passed: int, mut &failed: int, mut &skipped: int) {
 	srcs := pkg_sources(dir)
 	mut names: list[str] = []
 	mut at: list[str] = []
-	pkg_tests(srcs, names, at)
+	mut ctxp: list[bool] = []
+	pkg_tests(srcs, names, at, ctxp)
 	return if names.len() == 0
 
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
@@ -1110,28 +1155,91 @@ fn run_pkg(dir: str, mut &passed: int, mut &failed: int) {
 	key := sha256.hex(bytearray(dir))
 	drv := join_path(dir, DRIVER_NAME)
 	bin := join_path(test_dir(), key + ".bin")
-	sum := join_path(test_dir(), key + ".sum")
+	rep := join_path(test_dir(), key + ".rep")
+	sel := join_path(test_dir(), key + ".sel")
 
+	# THE TWO PATHS ARE BAKED INTO THE DRIVER rather than handed to it on the command line,
+	# and that is not a preference: `E734 NotImplemented: main(args) in a program that uses
+	# concurrency` — a `fn main(args)` and a `spawn` cannot be in one program in this
+	# compiler, and the driver now has both. A generated file has no need of an argument
+	# anyway: whatever a run would have passed, the run also wrote the file.
 	guard {
-		io.write_file(drv, bytearray(gen_driver(names, at)))
+		io.write_file(drv, bytearray(gen_driver(names, ctxp, rep, sel)))
 	}
 	mut files := srcs
 	files.append(drv)
 	link_units(load_units_of(files, dir, dir), drv, bin, TEST_JOBS)
 
-	rm_file(sum)
+	mut verdict: list[str] = []
+	mut text: list[str] = []
+	for n in names {
+		verdict.append("")
+		text.append("")
+	}
+
+	rm_file(rep)
+	rm_file(sel)
 	mut argv: list[str] = []
 	argv.append(bin)
-	argv.append(sum)
-	code := __zrt_exec(argv)
-	take_summary(sum, code, passed, failed)
+	__zrt_exec(argv)
+	take_records(rep, names, verdict, text)
+
+	# THE FALLBACK. Every test with no record is one the in-process run never got back from,
+	# and each is re-run in a process of its own — which is what turns "the run died" into
+	# "this test died". `fell` is the first of them, and it is what the report says the
+	# strategy changed at: a run that quietly ran half of itself another way is a run whose
+	# result nobody can interpret.
+	mut fell := -1
+	mut i := 0
+	for i < names.len() {
+		if verdict[i] == "" {
+			if fell < 0 {
+				fell = i
+			}
+			run_one(bin, sel, rep, names, i, verdict, text)
+		}
+		i = i + 1
+	}
+
+	report_pkg(names, at, verdict, text, fell, passed, failed, skipped)
 
 	# the driver and its binary belong to THIS run: the next one writes them again from whatever
 	# the test files then declare, and a stale one left behind is a test binary that answers for
 	# a program nobody has any more
-	rm_file(sum)
+	rm_file(rep)
+	rm_file(sel)
 	rm_file(drv)
 	rm_file(bin)
+}
+
+# run_one runs a single named test in a process of its own — the isolated path, which is the
+# only thing that survives a test taking the process with it.
+#
+# THE NAME TRAVELS IN A FILE for the reason the driver's paths do: the driver cannot read a
+# command line (E734), so the one thing that varies between these runs is written where the
+# driver looks for it.
+fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str]) {
+	rm_file(rep)
+	guard {
+		io.write_file(sel, bytearray(names[i]))
+	}
+	mut argv: list[str] = []
+	argv.append(bin)
+	code := __zrt_exec(argv)
+	take_records(rep, names, verdict, text)
+	return if verdict[i] != ""
+
+	# STILL NO RECORD, so this test is the one that ends processes. The status tells the two
+	# un-catchable ways apart, and `os.exit(0)` is the one that needs saying out loud: it
+	# leaves exactly the status a passing test does, and only the missing record says it
+	# never finished.
+	if code == 0 {
+		verdict[i] = "fail"
+		text[i] = "the test exited before it finished — `os.exit` ends the process, and a test that did not return did not pass\n"
+	} else {
+		verdict[i] = "crash"
+		text[i] = f"the test process died with status {code}\n"
+	}
 }
 
 # TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather
@@ -1147,27 +1255,147 @@ fn test_dir() -> str {
 	return dir
 }
 
-# take_summary adds one driver's counts to the run's. The driver writes them as two lines
-# AFTER its last child has answered, so a summary that is not there is the driver itself not
-# having finished — which is a failure of the package, not a package with nothing in it. A gate
-# that reads an absent report as "nothing to report" is the gate that measures nothing.
-fn take_summary(path: str, code: int, mut &passed: int, mut &failed: int) {
-	text := read_or_empty(path)
-	mut p := 0
-	mut f := 0
-	mut ok := false
-	guard {
-		p = strconv.parse_int(source_line(text, 1), 10)
-		f = strconv.parse_int(source_line(text, 2), 10)
-		ok = true
+# take_records reads whatever the driver managed to write and fills in the tests it named. It
+# is called after the in-process run and again after every fallback process, and it only ever
+# WRITES a slot it found a record for — so a partial file adds what it has and leaves the rest
+# empty, which is the whole signal the fallback runs on.
+#
+# A NAME IT DOES NOT KNOW IS IGNORED rather than reported, which costs nothing: the driver is
+# generated from this same list, so the only way to reach that is a stale file, and a stale
+# file is exactly what `rm_file` before each run is for.
+fn take_records(path: str, names: list[str], mut &verdict: list[str], mut &text: list[str]) {
+	mut at := -1
+	for ln in lines_of(read_or_empty(path)) {
+		if has_prefix(ln, "T ") {
+			at = name_index(names, drop_tag(ln))
+		} else if at >= 0 and has_prefix(ln, "V ") {
+			verdict[at] = drop_tag(ln)
+		} else if at >= 0 and has_prefix(ln, "M ") {
+			text[at] = f"{text[at]}{drop_tag(ln)}\n"
+		}
 	}
-	if not ok {
-		io.println(f"  ERROR the test driver ended without a report (status {code})")
-		failed = failed + 1
-		return
+}
+
+fn name_index(names: list[str], name: str) -> int {
+	mut i := 0
+	for i < names.len() {
+		return i if names[i] == name
+		i = i + 1
 	}
-	passed = passed + p
-	failed = failed + f
+	return -1
+}
+
+# drop_tag takes the two-character tag off a record line. Everything after it is the payload
+# verbatim, spaces and all — a test's message is prose and nothing may trim it.
+fn drop_tag(ln: str) -> str {
+	b := bytearray(ln)
+	mut out: list[byte] = []
+	mut i := 2
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+fn has_prefix(s: str, prefix: str) -> bool {
+	b := bytearray(s)
+	x := bytearray(prefix)
+	return false if x.len() > b.len()
+
+	mut i := 0
+	for i < x.len() {
+		return false if b[i] != x[i]
+		i = i + 1
+	}
+	return true
+}
+
+# lines_of splits text on newlines and drops the empty tail a trailing newline leaves. A
+# record file always ends in one, and an empty file is no lines rather than one empty one.
+fn lines_of(text: str) -> list[str] {
+	b := bytearray(text)
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'\n' {
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(b[i])
+		}
+		i = i + 1
+	}
+	if cur.len() > 0 {
+		out.append(str(cur))
+	}
+	return out
+}
+
+# report_pkg prints one package's results and adds them to the run's counts.
+#
+# THE REPORT IS PRINTED HERE AND NOT BY THE DRIVER, which is what lets one format serve both
+# paths: the in-process run and the fallback processes write the same records, and a reader
+# cannot tell from a line which way it was produced — except where it is told, which is the
+# one line that says the strategy changed.
+fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int) {
+	mut seen := ""
+	mut i := 0
+	for i < names.len() {
+		if at[i] != seen {
+			seen = at[i]
+			io.println(seen)
+		}
+		if i == fell {
+			io.println("  NOTE  the in-process run ended here — the tests below ran one process each")
+		}
+		v := verdict[i]
+		if v == "ok" {
+			io.println("  ok    " + names[i])
+			passed = passed + 1
+		} else if v == "skip" {
+			# a skip's reason goes ON the line: it is one short phrase, and a reader
+			# scanning for what did not run wants it beside the name rather than under it
+			io.println(f"  SKIP  {pad_name(names[i])}{first_line(text[i])}")
+			skipped = skipped + 1
+		} else {
+			io.println(f"  {verdict_word(v)} {names[i]}")
+			for ln in lines_of(text[i]) {
+				io.println("        " + ln)
+			}
+			failed = failed + 1
+		}
+		i = i + 1
+	}
+}
+
+# verdict_word is the six-character column every verdict is printed in, so the names line up
+# whatever happened to the test above.
+fn verdict_word(v: str) -> str {
+	return "CRASH" if v == "crash"
+
+	return "FAIL "
+}
+
+# pad_name puts a skip's reason in a column, and keeps two spaces between the two whatever the
+# name's length — a name longer than the column would otherwise run straight into its reason
+# and make one word out of two.
+fn pad_name(name: str) -> str {
+	mut out := name + "  "
+	for bytearray(out).len() < NAME_COLUMN {
+		out = out + " "
+	}
+	return out
+}
+
+const NAME_COLUMN := 23
+
+fn first_line(text: str) -> str {
+	for ln in lines_of(text) {
+		return ln
+	}
+	return ""
 }
 
 fn read_or_empty(path: str) -> str {
@@ -1186,20 +1414,28 @@ fn rm_file(path: str) {
 	}
 }
 
-# gen_driver writes the driver source for one package: the two lists the parent walks, the
-# dispatch that turns a name back into a call, and the parent/child halves of the process
-# arrangement above.
+# gen_driver writes the driver source for one package: the list of tests, the dispatch that
+# turns a name back into a call, the two paths it holds the report at, and the fixed half
+# below.
 #
 # It is GENERATED rather than fixed because the only part that varies is the list of names, and
 # a fixed driver reading them from somewhere would need the names to exist as data at runtime —
 # which means a table the compiler emits, which is this file written by another route. Written
 # out, the calls are ordinary calls in the package's own scope and the compiler checks every one
-# of them: a `#[test]` with a parameter is a compile error naming the function, not a runner
-# that skips it.
-fn gen_driver(names: list[str], at: list[str]) -> str {
+# of them: a `#[test]` with a parameter this runner does not know is a compile error naming the
+# function, not a runner that skips it.
+#
+# THE CALL IS WRITTEN TO THE SIGNATURE, which is the whole of what `testing.Context` costs the
+# language: `t()` and `t(ctx)` are both legal declarations and the generated call is whichever
+# the declaration asked for, so a test takes the context when it has something to say and
+# nothing when it does not.
+fn gen_driver(names: list[str], ctxp: list[bool], report: str, chosen: str) -> str {
 	mut out := "# Generated by `zerg test` for one run, and removed when that run ends. Not a source to\n"
 	out = out + "# edit: the next run writes it again from whatever the test files then declare.\n"
-	out = out + "import (\n\t\"fs\"\n\t\"io\"\n\t\"os\"\n)\n\n"
+	out = out + "import (\n\t\"io\"\n\t\"testing\"\n)\n\n"
+
+	out = out + "const ZT_REPORT := \"" + report + "\"\n"
+	out = out + "const ZT_SELECT := \"" + chosen + "\"\n\n"
 
 	out = out + "fn zt_names() -> list[str] {\n\tmut out: list[str] = []\n"
 	for n in names {
@@ -1207,15 +1443,15 @@ fn gen_driver(names: list[str], at: list[str]) -> str {
 	}
 	out = out + "\treturn out\n}\n\n"
 
-	out = out + "fn zt_files() -> list[str] {\n\tmut out: list[str] = []\n"
-	for f in at {
-		out = out + "\tout.append(\"" + f + "\")\n"
-	}
-	out = out + "\treturn out\n}\n\n"
-
-	out = out + "fn zt_call(name: str) -> int {\n\tmut found := false\n"
-	for n in names {
-		out = out + "\tif name == \"" + n + "\" {\n\t\t" + n + "()\n\t\tfound = true\n\t}\n"
+	out = out + "fn zt_call(name: str, ctx: testing.Context) -> int {\n\tmut found := false\n"
+	mut i := 0
+	for i < names.len() {
+		mut arg := "()"
+		if ctxp[i] {
+			arg = "(ctx)"
+		}
+		out = out + "\tif name == \"" + names[i] + "\" {\n\t\t" + names[i] + arg + "\n\t\tfound = true\n\t}\n"
+		i = i + 1
 	}
 	out = out + "\traise \"zerg test: this driver has no such test\" if not found\n\treturn 0\n}\n\n"
 
@@ -1225,50 +1461,38 @@ fn gen_driver(names: list[str], at: list[str]) -> str {
 # driver_body is the half of the driver that does not vary. It is a text constant and not a
 # module of the standard library, because a test driver is not something a program imports: it
 # exists for the length of one run, in the package's own scope, and the only reader it ever has
-# is the compiler that was handed it a moment earlier.
+# is the compiler that was handed it a moment earlier. What IS in the standard library is
+# everything a test can see — `testing.Context` and the events it sends — because that half is
+# something a person writes against.
+#
+# `zt_start` is where the coroutine isolation is: the channel is made here, the test runs on
+# the far side of a `spawn`, and the receiving end is handed back — so the coroutine is the
+# channel's last sender and the body returning is what ends the stream. `testing.collect` then
+# reads the whole of one test's life off it, including the case where there is nothing to read
+# because the coroutine died.
 fn driver_body() -> str {
-	return "fn zt_child(name: str, out: str) -> int {\n" +
-		"\tr := guard {\n\t\tzt_call(name)\n\t}\n" +
+	return "fn zt_body(name: str, ch: chan[testing.Event]) {\n" +
+		"\tctx := testing.context(name, ch)\n" +
+		"\tr := guard {\n\t\tzt_call(name, ctx)\n\t}\n" +
 		"\tok := match r {\n\t\tEither.Left(_)  => true\n\t\tEither.Right(_) => false\n\t}\n" +
-		"\tif ok {\n\t\tzt_put(out, \"ok\\n\")\n\t\treturn 0\n\t}\n" +
 		"\tmsg := match r {\n\t\tEither.Left(_)  => \"\"\n\t\tEither.Right(e) => e.message()\n\t}\n" +
-		"\tzt_put(out, \"fail\\n\" + msg + \"\\n\")\n\treturn 1\n}\n\n" +
+		"\ttesting.finished(ctx, ok, msg)\n}\n\n" +
+		"fn zt_start(name: str) -> <-chan[testing.Event] {\n" +
+		"\tch := chan[testing.Event]()\n\tspawn zt_body(name, ch)\n\n\treturn ch\n}\n\n" +
+		"fn zt_record(name: str) -> str {\n" +
+		"\toc := testing.collect(zt_start(name))\n" +
+		"\tmut out := \"T \" + name + \"\\nV \" + oc.verdict + \"\\n\"\n" +
+		"\tb := bytearray(oc.text)\n\tmut cur: list[byte] = []\n\tmut i := 0\n" +
+		"\tfor i < b.len() {\n" +
+		"\t\tif b[i] == b'\\n' {\n\t\t\tout = out + \"M \" + str(cur) + \"\\n\"\n\t\t\tcur = []\n" +
+		"\t\t} else {\n\t\t\tcur.append(b[i])\n\t\t}\n\t\ti = i + 1\n\t}\n" +
+		"\tif cur.len() > 0 {\n\t\tout = out + \"M \" + str(cur) + \"\\n\"\n\t}\n\treturn out\n}\n\n" +
 		"fn zt_put(path: str, text: str) {\n\tguard {\n\t\tio.write_file(path, bytearray(text))\n\t}\n}\n\n" +
 		"fn zt_get(path: str) -> str {\n\tmut out := \"\"\n\tguard {\n\t\tout = str(io.read_file(path))\n\t}\n\treturn out\n}\n\n" +
-		"fn zt_rm(path: str) {\n\tguard {\n\t\tfs.remove(path)\n\t}\n}\n\n" +
-		"fn zt_head(text: str) -> str {\n\tb := bytearray(text)\n\tmut out: list[byte] = []\n\tmut i := 0\n" +
-		"\tfor i < b.len() {\n\t\tbreak if b[i] == b'\\n'\n\t\tout.append(b[i])\n\t\ti = i + 1\n\t}\n\treturn str(out)\n}\n\n" +
-		"fn zt_tail(text: str) -> str {\n\tb := bytearray(text)\n\tmut i := 0\n" +
-		"\tfor i < b.len() and b[i] != b'\\n' {\n\t\ti = i + 1\n\t}\n" +
-		"\tmut out: list[byte] = []\n\tmut j := i + 1\n" +
-		"\tfor j < b.len() {\n\t\tbreak if b[j] == b'\\n'\n\t\tout.append(b[j])\n\t\tj = j + 1\n\t}\n\treturn str(out)\n}\n\n" +
-		"fn zt_parent(summary: str) -> int {\n" +
-		"\texe := __zrt_exe_path()\n\tnames := zt_names()\n\tfiles := zt_files()\n" +
-		"\tmut passed := 0\n\tmut failed := 0\n\tmut seen := \"\"\n\tmut i := 0\n" +
-		"\tfor i < names.len() {\n" +
-		"\t\tif files[i] != seen {\n\t\t\tseen = files[i]\n\t\t\tio.println(seen)\n\t\t}\n" +
-		"\t\trp := summary + \".\" + str(i)\n\t\tzt_rm(rp)\n" +
-		"\t\tmut argv: list[str] = []\n\t\targv.append(exe)\n\t\targv.append(\"-t\")\n" +
-		"\t\targv.append(names[i])\n\t\targv.append(rp)\n\t\tcode := os.run(argv)\n" +
-		"\t\tres := zt_get(rp)\n\t\tzt_rm(rp)\n\t\thead := zt_head(res)\n" +
-		"\t\tif head == \"ok\" {\n\t\t\tio.println(\"  ok    \" + names[i])\n\t\t\tpassed = passed + 1\n" +
-		"\t\t} else if head == \"fail\" {\n\t\t\tio.println(\"  FAIL  \" + names[i])\n" +
-		"\t\t\tio.println(\"        \" + zt_tail(res))\n\t\t\tfailed = failed + 1\n" +
-		"\t\t} else if code == 0 {\n\t\t\tio.println(\"  FAIL  \" + names[i])\n" +
-		"\t\t\tio.println(\"        the test exited before it finished — `os.exit` ends the process, and a test that did not return did not pass\")\n" +
-		"\t\t\tfailed = failed + 1\n" +
-		"\t\t} else {\n\t\t\tio.println(\"  CRASH \" + names[i])\n" +
-		"\t\t\tio.println(\"        the test process died with status \" + str(code))\n" +
-		"\t\t\tfailed = failed + 1\n\t\t}\n" +
-		"\t\ti = i + 1\n\t}\n" +
-		"\tzt_put(summary, str(passed) + \"\\n\" + str(failed) + \"\\n\")\n" +
-		"\treturn 1 if failed > 0\n\n\treturn 0\n}\n\n" +
-		"fn zt_main(args: list[str]) -> int {\n" +
-		"\treturn zt_child(args[1], args[2]) if args.len() == 3 and args[0] == \"-t\"\n" +
-		"\treturn zt_parent(args[0]) if args.len() == 1\n\n" +
-		"\tio.eprintln(\"this is a `zerg test` driver: it is run by `zerg test`, which hands it a report path\")\n" +
-		"\treturn 2\n}\n\n" +
-		"fn main(args: list[str]) {\n\tos.exit(zt_main(args))\n}\n"
+		"fn main() {\n\tone := zt_get(ZT_SELECT)\n" +
+		"\tif one != \"\" {\n\t\tzt_put(ZT_REPORT, zt_record(one))\n\t} else {\n" +
+		"\t\tmut acc := \"\"\n\t\tfor n in zt_names() {\n" +
+		"\t\t\tacc = acc + zt_record(n)\n\t\t\tzt_put(ZT_REPORT, acc)\n\t\t}\n\t}\n}\n"
 }
 
 # --- import cycles ---------------------------------------------------------------------

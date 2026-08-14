@@ -1259,7 +1259,11 @@ fn ty_eq_all(xs: list[Ty], ys: list[Ty]) -> bool {
 	return true
 }
 
-fn ty_name(t: Ty) -> str {
+# ty_name spells a type the way a program writes it. It is `pub` for one reader outside
+# this module: `zerg test` decides whether a `#[test]` takes a `testing.Context` by the
+# TYPE in its parameter slot and not by the parameter's name, and a qualifier is resolved
+# away at the parse — so what it has to compare is the name this function gives.
+pub fn ty_name(t: Ty) -> str {
 	return match t {
 		Ty.TInt          => "int"
 		Ty.TFloat        => "float"

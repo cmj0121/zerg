@@ -19,17 +19,21 @@ refcounted cell**. A recursive value therefore copies **by reference** (refcount
 copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
 holder's scope exit.
 
-> **[deviation]** The chain is **never freed**. The cell is allocated with a **no-op drop** and no release
-> is registered for the binding that holds it, so a recursive value leaks its whole chain at scope exit —
-> and a cycle is not required to see it, because nothing frees the acyclic case either. Measured: 200
-> rounds that each build and drop a 2000-node `enum L { Nil; Cons(int, L) }` reach **20.8 MB** of resident
-> memory where five rounds reach 1.9 MB, which is the chain accumulating and not a high-water mark.
+> **[deviation]** Freeing a chain **recurses one C stack frame per node**, so a chain longer than the
+> native stack cannot be freed at all. Measured on a default 8 MiB main stack: **60 000 nodes complete and
+> 70 000 do not**, which is about 128 bytes of stack per node. It dies with its name —
+> `StackOverflowError: stack overflow`, status 1, from the runtime's fault handler — rather than as a bare
+> SIGSEGV, but that is a diagnosis and not a recovery: the free runs on the scope-exit and abort-unwind
+> paths, where raising is not safe, so no `guard` can catch it and no `defer` after it runs. An
+> **iterative** chain teardown is what this owes, and it is not built.
 >
-> This supersedes two artifacts this paragraph used to name, and both were narrower than the truth. A
-> runtime **cycle** built by reassigning a recursive field does leak, but so does every other recursive
-> value, so the missing cycle collector is not what a reader meets first. And freeing a long chain
-> **recursing O(depth) on the native C stack** is not reachable at all: an eight-million-node chain runs to
-> completion without overflowing anything, because the free that would have recursed never happens.
+> What this paragraph used to say — that the chain is never freed at all, that the cell carries a no-op
+> drop, and that a binding holding one registers no release — is closed. The cell's drop is the enum's own,
+> a binding registers it where it is declared, and an assignment gives the old value back after
+> materialising the new one. Measured over a counting allocator: 200 rounds that each build and drop a
+> 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many live allocations as five rounds do
+> (`make mem-check`). The stack-overflow sentence above is the price of that fix: it was unreachable while
+> nothing recursed, because nothing was freed.
 
 ---
 
@@ -136,14 +140,18 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
   visible via every holder** of that tail.
 
-> **[deviation]** A reference-counted value that **enters a carrier** — the `T?` a channel receive
-> answers, a `Result[T]` — is released only where the carrier is **unwrapped in place**. `if v := <-c { … }`
-> emits the drop after retaining what it bound; a carrier given a **name**, `got := <-c`, registers none,
-> so it is never released. The drop exists and that second path does not call it: a carrier has no copy
-> helper, so registering the drop there would let two names for one value each give it back. Refcounted
-> values crossing a `chan[T]` therefore leak one reference per value bound that way, which is invisible for
-> a `chan[int]` and real for a `chan[str]` — measured under LeakSanitizer with
-> `test-data/codegen/chan_str_shared.zg`, the first case in this tree to send one.
+> **[deviation]** A carrier owns its **Left** and not its **Right**. Whether a carrier owns anything at all
+> is asked of the Left's type alone, so an `Either[int, str]` is judged to own nothing and gets **no copy
+> helper and no drop at all** — while the wrap that BUILDS a Right retains its payload. One reference is
+> therefore leaked per Right constructed, and copying such a carrier is a bit copy that counts nothing: a
+> leak, never a double free, which is why it is invisible under ASan. A `Result[T]` is unaffected — its
+> Right is an `Err`, whose storage is the runtime's. What is owed is the same pair over the other side.
+>
+> The **Left** half of this paragraph is closed. A carrier now has a copy helper, so a binding can register
+> the drop the way every other owning type does: `got := <-c` releases its payload at scope exit, and so do
+> a carrier passed as an argument, returned, held in a struct field or a `list[T?]` element, and the value
+> `if v := <-c { … }` retains into its binding — which was a second leak, and did not need the carrier to be
+> named at all. Measured over a counting allocator, 200 rounds against five (`make mem-check`).
 
 Copying a composite applies the rule field by field — its value-type parts are copied and any
 reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
@@ -169,6 +177,17 @@ mirrors setup. The order is pinned **inside an aggregate** too: a `struct`'s fie
 on **every** path, **including the abort-unwind path**, and several `defer`s in a block run
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
 order.
+
+**Assignment** is a drop too: writing over a binding that owns something frees what it held, and the new
+value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
+
+> **[deviation]** Only a recursive `enum` and a carrier do that. Assigning over a `str`, a `list`, a `map`,
+> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does a
+> `tuple` at scope exit, which has a copy helper and no drop at all, and the collection a `for … in` over a
+> **map** copies to walk. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two
+> allocations a round, the closure's environment and the value it captured. Each is the same missing half
+> of one pair rather than a rule of its own, and none of them has a case in `make mem-check` yet — which is
+> what a gate not finding something looks like.
 
 ## `Ref[T]` — a resource that outlives its scope
 

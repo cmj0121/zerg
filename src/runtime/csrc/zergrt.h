@@ -330,6 +330,7 @@ enum {
 	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
+	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
 typedef struct zrt_err {

@@ -131,6 +131,7 @@ static const char *zrt_err_kindname(int kind) {
 	case ZRT_ERR_SEND_ON_CLOSED: return "SendOnClosedError";
 	case ZRT_ERR_STOP_ITERATION: return "StopIteration";
 	case ZRT_ERR_DIVZERO: return "DivideByZeroError";
+	case ZRT_ERR_ASSERTION: return "AssertionError";
 	default: return NULL;
 	}
 }

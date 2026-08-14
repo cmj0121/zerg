@@ -419,10 +419,95 @@ does.
 > (`testing.assert_eq`) because a generic **method** is `E409 NotImplemented` while a generic
 > free function is not.
 >
+> **Fixtures.** A test **declares what it needs**, the framework builds it once, hands it over and
+> tears it down. A `#[fixture]` is a function that takes its tests as a **continuation**:
+>
+> ```zerg
+> #[fixture]
+> fn db(use: fn (Conn)) {
+>     c := connect("postgres://tmp/test")
+>     defer c.close()
+>     use(c)
+> }
+>
+> #[fixture]
+> fn schema(db: Conn, use: fn (Schema)) {
+>     s := make_schema(db)
+>     defer drop_schema(s)
+>     use(s)
+> }
+> ```
+>
+> `use: fn (T)` is identified **by type**, and it is two things at once: the continuation the tests
+> run inside, and the declaration of what this fixture **produces**. Every other parameter is a
+> **dependency matched by name** against another fixture — one rule for test-to-fixture and
+> fixture-to-fixture both. Teardown is `defer`, the language's own idiom, and needs nothing from the
+> runner.
+>
+> A test resolves its parameters the same way: a `testing.Context` **by type**, a fixture **by
+> name**, and no parameter meaning a direct call.
+>
+> ```zerg
+> #[test]
+> fn test_insert(schema: Schema) { … }
+>
+> #[test]
+> fn test_query(db: Conn, ctx: testing.Context) { … }
+>
+> #[test]
+> fn test_pure() { … }
+> ```
+>
+> The framework **composes by nesting** — `db(fn (c) { … schema(c, fn (s) { … }) })` — so dependency
+> order, teardown order (an inner `defer` fires first), and "only when needed" are all consequences
+> of where the calls were written. There is no topological sort at runtime and no teardown registry,
+> and a level no test goes through is never generated at all.
+>
+> **Everything is resolved before anything runs.** A parameter naming no fixture, a parameter whose
+> type is not what the fixture produces, and a **circle** among fixtures are each reported with a
+> **place**, for the whole tree at once, and the run exits `2` having executed nothing.
+>
+> **A fixture that cannot be built fails every test that needed it** — `FAIL test_query` with
+> _fixture `db` could not be built: …_ under it, and the run exits non-zero: a test that could not
+> run must never look like one that passed. If the raise arrives when every test under it has
+> already answered for itself, what broke was the **teardown**, and the failure is recorded against
+> the fixture instead of against anybody's test.
+>
+> **Where a fixture lives, and what inherits it.** A fixture is declared in a `*_test.zg`, so it
+> reaches no shipping build, and it serves the tests of **its own directory**. One that is to serve
+> the directories **below** as well goes in **`fixtures_test.zg`** — the one file an ancestor
+> contributes downward, to **every** level below it and not merely the next one. That is pytest's
+> `conftest.py` model, and the fixed name is load-bearing twice: an ordinary `*_test.zg` is a file
+> **of** its module and reads that module's private names, so carrying it into a directory below
+> would put it in a scope where those names are not; and an ancestor's own tests would otherwise run
+> once per descendant directory. A `#[test]` written in a `fixtures_test.zg` runs in its own
+> directory, once, like any other. Ancestors are counted from the path `zerg test` was **given**.
+>
+> An inherited file is **copied into the package** for the length of the run, because a module is a
+> **directory** — the same reason the generated driver is written there. The copy is byte for byte,
+> so a diagnostic inside one points at the right line, and it is taken away when the run ends. A
+> package therefore cannot **shadow** an inherited fixture: two declarations of one name in one
+> scope are refused as the collision they are.
+>
+> **The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own**
+> instance of an inherited fixture, because each is one driver in one process. That is pytest's
+> `scope="package"`. Session scope is deliberately not wanted and is anyway unreachable: `E705`
+> refuses two modules both defining a `pub` name, so one driver over a whole tree cannot be built,
+> and a live value does not cross a process boundary.
+>
+> A fixture value reaches a test the way any value reaches a call — **by value** — and the test body
+> runs on the far side of a `spawn`, so a `Ref` inside it (a channel, a boxed handle) is shared and
+> the rest is copied. Tests are **serial**; `ctx.parallel()` is **[not yet]**, and when it lands,
+> tests sharing a fixture will share one instance of it.
+>
+> **The fallback rebuilds what it needs.** When a test ends the process and the remainder is re-run
+> one process each, each of those processes enters only the levels the test it was asked for is
+> under — so it stands that test's fixtures up again, and no others.
+>
 > What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
-> test, selecting tests by pattern, **fixtures** — setup and teardown — benchmarks, and running
-> two tests at once. A failing `testing.assert*` `raise`s, and a raise is control flow, so it
-> unwinds out of the test body on its own.
+> test, selecting tests by pattern, benchmarks, and running two tests at once. A failing
+> `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
+> its own.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

@@ -243,6 +243,19 @@ pub enum Stmt {
 	# expression, the way every other optional part of a statement does here — the subset's
 	# flat enums cannot hold an optional.
 	SRaise(Expr, bool, Expr)
+
+	# SAssert is `assert cond` (GRAMMAR#assert-stmt), ALREADY DESUGARED: what it carries is
+	# the statements the claim is defined as — the operand temporaries, and the guarded
+	# raise that tests them — which the emitter runs in the enclosing block, in order, like
+	# any other statement list.
+	#
+	# It is a NODE and not the bare list because the tree is asked what the SOURCE said.
+	# `--emit ast` renders it, and the linter's walks each decide once whether an assert's
+	# insides are the author's business — an import reached only from a condition is a used
+	# import (walk_body descends), and the operand temporaries are nobody's bindings
+	# (collect_binds_at does not). Flattened into the enclosing block, neither question could
+	# be asked: what is left is an `if` somebody could equally have typed out by hand.
+	SAssert(list[Stmt])
 	SBreak
 	SContinue
 	SNop
@@ -999,6 +1012,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		Stmt.SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForSelect(arms) => ind + "for-select\n"
 		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
+		Stmt.SAssert(body_b) => ind + "assert\n" + dump_block(body_b, ind + "\t")
 		Stmt.SBreak => ind + "break\n"
 		Stmt.SContinue => ind + "continue\n"
 		_ => ind + "nop\n"

@@ -8933,6 +8933,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		Stmt.SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
+		Stmt.SAssert(body) => c_assert(em, body, ind)
 		Stmt.SScope(body) => c_block(em, body, ind)
 		Stmt.SDefer(x) => c_defer(em, x, ind)
 		Stmt.SSpawn(x) => c_spawn(em, x, ind)
@@ -8948,6 +8949,19 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		# a marker, not a statement: it records where the next one starts and emits nothing
 		Stmt.SAt(l, c) => c_at(em, l, c)
 	}
+}
+
+# c_assert emits the statements `assert cond` IS — the operand temporaries and the guarded
+# raise — into the ENCLOSING block rather than a scope of their own. The temporaries carry
+# the line and column they came from in their names, so nothing can collide with them, and a
+# scope here would be a `{ … }` the desugared source does not have: `zerg desugar`'s D104
+# writes these same statements out flat, and the two have to be the same program.
+fn c_assert(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	mut out := ""
+	for s in body {
+		out = out + c_stmt(em, s, ind)
+	}
+	return out
 }
 
 # c_expr_stmt lowers a bare expression statement. A `guard` in statement position is a

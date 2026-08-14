@@ -300,6 +300,21 @@ fn chk_ns_bound(mut &em: Emitter, ns: str) {
 	chk_at(em, "E507", f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
 }
 
+# chk_ty_quals is the SAME RULE AT A TYPE POSITION, and it is a separate pass for one reason:
+# a type position has no qualifier left to ask about by the time anything is emitted.
+# parse_base_type resolves `lib.Counter` to `Counter` — correctly, since every module
+# flattens into one scope here — so `c: lib.Counter` and `fn take(c: lib.Counter)` reached
+# the emitter with the `lib.` gone, and the rule that was asked at the three EXPRESSION
+# paths had nothing to be asked about at the four declaration ones. Four silent positions
+# against three loud ones, for one rule.
+#
+# What the parser records instead is that a qualifier was TYPED, and where (File.ty_quals),
+# which is a fact about the text and inside its contract. This asks the checker's half of it.
+#
+# It runs over the WHOLE program, like every other declaration pass here: a qualifier carries
+# its own path, so the module doing the writing is the entry's own — and an imported module's
+# qualifiers have to be judged even when only one unit is emitted, which is the `--emit lib`
+# lesson c_check_named_types carries in full.
 # THE INVENTED QUALIFIER IS NOT THIS RULE'S, and this is the one path where saying so takes
 # a guard. The three expression paths reach chk_ns_bound only once c_ns_kind has answered
 # NsModule, so by then the name is known to be a real namespace and the only open question
@@ -1751,7 +1766,7 @@ fn chk_folded_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 # for a division by zero and for a fold that leaves i64 — neither is a value, and neither is
 # this function's to report: an expression that cannot be folded is simply not one that adopts,
 # and the position then says what it always said about a value of the wrong type.
-pub struct Folded {
+struct Folded {
 	pub ok: bool
 	pub value: int
 }
@@ -2346,7 +2361,7 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 # `pos` arrives 1-based, which is chk_arg_says' convention; the field table is 0-based. A
 # struct nothing registered has no name to give, and then this falls back to the number
 # rather than printing an empty one.
-pub fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
+fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
 	row := c_struct_field_row(em, sname, pos - 1)
 	return f"field {strconv.to_string(pos, 10)} of `{sname}`" if row < 0
 

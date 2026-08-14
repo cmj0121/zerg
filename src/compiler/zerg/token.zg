@@ -14,7 +14,7 @@ import "ascii"
 # GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
 # lexer does not yet emit every kind (f-strings, decorators).
 #[derive(Eq)]
-pub enum Kind {
+enum Kind {
 	Eof
 	Illegal
 	Semi
@@ -142,7 +142,7 @@ pub enum Kind {
 
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
 # value for string-like literals, and the 1-based line/column where it starts.
-pub struct Token {
+struct Token {
 	pub kind: Kind
 	pub lexeme: str
 	pub value: str
@@ -368,7 +368,7 @@ fn lookup_keyword(w: str) -> Kind {
 #
 # The formatter asks the same question for the same reason: printed tight, `20.. =>` becomes
 # `20..=>`, which lexes as `20`, `..=`, `>`.
-pub fn no_bound_follows(k: Kind) -> bool {
+fn no_bound_follows(k: Kind) -> bool {
 	return match k {
 		Kind.FatArrow => true
 		Kind.If       => true

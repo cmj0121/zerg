@@ -149,6 +149,15 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 > `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包的環境,以及它捕獲的那個值。每一個都是同一組配對缺了
 > 一半,而不是各自的規則;而且 `make mem-check` 裡目前一個案例都沒有——這正是「一道量不到東西的 gate」長的樣子。
 
+**`spawn` 捕獲的值屬於那個 coroutine**,不屬於發起它的 scope:環境為每一個捕獲值取得自己的一份 reference,並把它
+**交給** coroutine,由後者的 by-value 參數在函式體返回時還回去。那是每個捕獲值、在每一條退出路徑上各還一次,
+包含 abort-unwind 那條。
+
+> **[deviation]** 一個從來沒跑過的 coroutine 就從來不會還。環境在 `spawn` 當下就填好,而只有函式體會釋放它,
+> 所以一個 scheduler 始終沒輪到的 spawn——例如程式先結束了——會漏掉每個捕獲值各一個 reference,連同那塊環境。
+> 這是這一帶唯一一個哪裡都沒有案例的洩漏類別:`make sanitize-conc` 跑的程式,它們的 coroutine 全都會跑完,
+> 而 `make mem-check` 除了一個被排空的 channel 之外沒有任何併發案例。
+
 ## `Ref[T]`——逃出自身 scope 的資源
 
 > **[not yet]** 這個編譯器裡沒有 `Ref[T]`。`Ref(5)` 會被指名拒絕——

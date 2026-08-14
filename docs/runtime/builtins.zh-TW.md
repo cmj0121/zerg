@@ -78,11 +78,6 @@
 `e is IOError` 測試已抹除的 `Err`。這組由編譯器擁有——本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
 
-> **[deviation]** kind 在**型別**裡活著、在**訊息**裡掉了。對建構出來的 `Err`，`e is IOError` 回答正確；但
-> 一個 `raise ValueError("bad input")` 走到頂端時，標準錯誤上只有 _bad input_，而
-> [abort 契約](../conformance.zh-TW.md)所定的是 `Kind: message`——那正是 runtime 自己 raise 時用的形狀
-> （_IndexError: index out of range_）。同一個 kind、兩種輸出形狀，取決於是誰 raise 的。
-
 ## raw pointer（僅限 `unsafe`）
 
 **只在 `unsafe` 情境內**合法。自由函式 `addr(x) -> ptr[T]`（可定址值的位址）、`ptr(p) -> ptr` /

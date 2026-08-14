@@ -108,19 +108,14 @@ failure an `IOError`, a `str` bridge over invalid UTF-8 an `EncodingError`, an o
 `IndexError`, a missing `map` key a `KeyError`. A `Result` / `Either` carries them and `?` / `??` / `guard`
 thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes the kind. The abort
 contract itself — the message written to stderr, exit status 1, the `Kind: message` line — is
-[Conformance](../conformance.md).
+[Conformance](../conformance.md). The prefix belongs to that **line**, not to the message: `message()`
+answers the text alone, and the kind is rendered in front of it when the error reaches the top, for a
+`raise ValueError("bad input")` exactly as for the runtime's own `IndexError`.
 
 > **[not yet]** `code()` answers `byte?` and answers it **absent**, always. No `Err` this compiler can
 > construct carries a code: the errors that exist are the built-in kinds, and a code belongs to a
 > user-defined error type, which is the part of this paragraph that is not built. `message()` and
 > `unwrap()` are.
->
-> **[deviation]** A hand-written `raise` of a built-in kind loses the **`Kind:` prefix** the abort contract
-> specifies. `raise ValueError("bad input")` writes `bad input` and nothing else to stderr, while the same
-> kind raised by the runtime writes `IndexError: index out of range`. The kind is in the value either way;
-> only the runtime's own path renders it into the line. One kind thus has two output shapes decided by who
-> raised it, and nothing about the compile is wrong, so the mismatch shows only in a program's stderr — a
-> place no gate reads for a `raise` a test wrote on purpose.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
 expected failure. Of the fault names this chapter uses, ten reify as `is`-testable **kinds** today:

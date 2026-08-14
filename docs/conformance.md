@@ -213,13 +213,16 @@ An **uncaught error** ends the program deterministically: a `raise` that reaches
 force `!` on an absent optional, or a built-in runtime fault (see [Errors](code/errors.md)) that no `guard`/`?`
 recovers. On abort the runtime:
 
-1. writes the error's message to **standard error**, followed by a newline;
+1. writes **one line** describing the error to **standard error**, followed by a newline;
 2. runs the pending `defer`s on the unwound path (the same cleanup stack the normal return path uses); and
 3. terminates the process with exit status **1**.
 
-A built-in error's message has the form `Kind: text` (for example `IndexError: list index out of range`).
-The exact `text` is not normative; the `Kind:` prefix for a taxonomy error is. See [Errors](code/errors.md) for
-the built-in error kinds and which operations raise them.
+The line a **taxonomy** error writes has the form `Kind: text`, where `text` is the error's `message()` — for
+example `IndexError: index out of range`. The exact `text` is not normative; the `Kind:` prefix is. It belongs
+to the **line** and not to the message: `message()` answers `text` alone, and the prefix is rendered for **any**
+raised taxonomy `Err` — a `raise ValueError("bad input")` a program wrote and a fault the runtime raised itself
+report the same shape. An error carrying **no** kind (what a bare `raise "…"` builds) writes its message alone.
+See [Errors](code/errors.md) for the built-in error kinds and which operations raise them.
 
 > **[deviation]** A hardware fault that the runtime cannot intercept — today, a coroutine stack overflowing
 > past its guard page, or `main`'s unguarded native stack — terminates the process by signal without

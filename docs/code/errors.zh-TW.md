@@ -90,17 +90,13 @@ KeyError              沒有任何 map 持有這個 key
 `ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
 UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`
 攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
-寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
+寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。前綴屬於那
+**一行**、不屬於訊息:`message()` 只回答文字本身,而錯誤走到頂端時種類會被渲染在它前面——手寫的
+`raise ValueError("bad input")` 與 runtime 自己的 `IndexError` 一視同仁。
 
 > **[not yet]** `code()` 回答 `byte?`，而且**永遠回答 absent**。本編譯器建得出來的 `Err` 沒有一個帶著 code：
 > 存在的錯誤就是那些內建種類，而 code 屬於使用者自訂的錯誤型別——那才是本段尚未建置的部分。`message()` 與
 > `unwrap()` 已經建了。
->
-> **[deviation]** 手寫 `raise` 一個內建種類時，abort 契約所定的 **`Kind:` 前綴**會掉。
-> `raise ValueError("bad input")` 只往 stderr 寫 `bad input`、別的都沒有，而同一個種類由 runtime raise 出來時寫的
-> 是 `IndexError: index out of range`。種類兩邊都在值裡；只有 runtime 自己那條路徑會把它渲染進那一行。於是同一個
-> 種類有兩種輸出形狀、由「誰 raise 的」決定，而編譯這一段沒有任何地方是錯的，所以這個落差只顯示在程式的 stderr
-> ——對一個測試刻意寫下的 `raise` 來說，那是沒有任何 gate 在讀的地方。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
 用到的 fault 名稱裡,今天有十個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、

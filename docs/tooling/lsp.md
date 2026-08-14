@@ -382,9 +382,8 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 | `hover`, `definition`, `references`, `rename` | nothing maps a position to a declaration                         |
 | `completion`                                  | the same query surface                                           |
 | `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
-| a `zerg lint` finding's **code** as data      | those rules answer `list[str]` and render their code into it     |
 | a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
-| the `lint_files` findings                     | they answer `list[str]` and carry no position to place           |
+| the `lint_program` findings                   | they carry a place now; nothing publishes them                   |
 | incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |
 
 The first row is the real gap and everything interactive is behind it. The information exists —

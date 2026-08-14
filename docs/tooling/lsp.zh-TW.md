@@ -305,15 +305,14 @@ diff 把兩邊綁在一起。**
 
 ## 還沒做的,以及各自在等什麼
 
-| 缺的                                          | 在等                                                |
-| --------------------------------------------- | --------------------------------------------------- |
-| `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                      |
-| `completion`                                  | 同一套 query surface                                |
-| `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| `zerg lint` 發現的 **code** 作為資料          | 那些規則回答 `list[str]`,把代碼渲染進字串裡         |
-| 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
-| `lint_files` 的 findings                      | 它們回答 `list[str]`,沒有位置可以放                 |
-| 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
+| 缺的                                          | 在等                                                  |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                        |
+| `completion`                                  | 同一套 query surface                                  |
+| `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match   |
+| 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束             |
+| `lint_program` 的 findings                    | 現在帶了代碼、嚴重度與位置,只是還沒有人把它們發布出去 |
+| 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式               |
 
 第一列是真正的缺口,所有互動功能都卡在它後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。需要
 的不是把那些型別一個一個公開,而是一個 **query surface**:給一個 path 與一個位置,那裡宣告了什麼、它在哪裡被宣告、它

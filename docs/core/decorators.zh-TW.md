@@ -1,9 +1,24 @@
 # Zerg Decorator
 
-**decorator** 是掛在宣告前的 `#[…]` 前綴——一道給 compiler 的指令。這個集合是**固定、compiler 擁有**的:使用者
+**decorator** 是掛在 statement 前的 `#[…]` 前綴——一道給 compiler 的指令。這個集合是**固定、compiler 擁有**的:使用者
 不能自訂（Zerg **沒有 macro**），所以本頁以外的任何東西都無法改寫你的程式。因為集合封閉,**未知或拼錯的 decorator
-是編譯錯誤**——絕不會被默默忽略。每個 decorator 綁定其後的宣告。屬於
+是編譯錯誤**——絕不會被默默忽略。每個 decorator 綁定其後的 statement。屬於
 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](decorators.md) 版本。
+
+## 形狀
+
+無論指名什麼,每個 decorator 都受這三條規則約束。
+
+- **它領一個 statement**,而宣告也是 statement——所以 `struct` 上的 `#[derive(Eq)]` 與一個綁定上的
+  `#[allow(L103)]` 是同一種形式（`statement`、`decorated-decl`,[`GRAMMAR`](../../GRAMMAR) group 1）。**哪一個**
+  decorator 能用在哪裡是**語意**規則,而且很短:`#[derive]`、`#[obj]` 與 `#[test]` 講的是**宣告**,放在一般 statement
+  上會被指名拒絕——_E612 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows it, and a
+  statement is not one_。`#[allow(…)]` 才是屬於 statement 的那一個。
+- **一個項目一個 decorator。** 要掛好幾個就寫**逗號列表**——`#[allow(L601), test]`——把一個疊在另一個上是編譯錯誤:
+  _E613 a second decorator on one item — an item takes ONE decorator, so merge them into its comma list_。
+  一件事兩種寫法正是 `zerg fmt` 存在的理由,而兩種都合法之後它就無從移除。
+- **它自成一行。** decorator 和其他項目一樣是 statement list 的一個項目,所以有分隔符把它和它所領的項目分開;
+  `#[derive(Eq)] struct P` 寫在同一行不是一種形式。
 
 > **[not yet]** `#[sealed]` 有自己的碼——_E496 NotImplemented: the decorator `#[sealed]` — it is a reserved
 > decorator … and this compiler does not build it, so the constructor stays public rather than being sealed
@@ -11,7 +26,7 @@
 
 ## 集合
 
-`#[derive]`、`#[obj]` 與 `#[test]` 是這個編譯器會讀的 decorator。其他每一個——`#[sealed]`、
+`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]` 是這個編譯器會讀的 decorator。其他每一個——`#[sealed]`、
 layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
@@ -20,8 +35,24 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
   **[not yet]**:指名其中一個是一次乾淨的拒絕,_NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`;
   `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt_。**沒有自動 derive 的 `Object`**。使用者 spec 不可
   被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
+- **`#[obj]`** — 掛在 `spec`,不帶參數。生成一個由 function value 組成的**伴生 struct** 與一個**泛型 wrap**,這是
+  在「spec 是 bound、從來不是型別」的語言裡寫出異質集合的方式。`mut fn`、收 `This` 的方法,以及任何不是 spec 的東西,
+  都會被指名拒絕。見 **[Specs & Generics](specs.zh-TW.md)**。
 - **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。函式不帶參數;
-  其中的斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。
+  其中的斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](../runtime/package.zh-TW.md)）。放在
+  `*_test.zg` **之外**的 `#[test]` 是合法的,而且會**被打包出去**——它和其他函式一樣被編進 binary,卻沒有任何東西
+  呼叫它——所以 `zerg lint` 會對它發出警告（**L601**,見 [fmt 與 lint](../tooling/fmt.zh-TW.md)）。
+- **`#[allow(Lxxx, …)]`** — 掛在任何 **statement**,宣告也在內。壓下該 statement 上所列的 **lint** finding;若該
+  statement 帶一個區塊,區塊也在涵蓋範圍內:範圍就是它所領的 statement 的大小,這是**一條**規則,而不是在「一行」與
+  「一個 scope」之間二選一。它不會延伸到下一個 statement,也到不了另一個檔案——刻意**沒有檔案層級的範圍**。
+
+  它只收 **`L` 代碼**。`E` 代碼是**編譯器診斷**,`#[allow]` 絕不壓下任何一個:一個程式若能把編譯器的檢查關掉,
+  等於把繞過檢查變成官方功能。lint finding 是建議性質的,所以壓下它是正當的。
+
+  它是編譯器**會讀、但從不使用**的那一個 decorator。parser 接受這個名字並且不賦予它任何意義——代碼目錄屬於 linter,
+  在編譯器裡放一份副本就是同一個語言事實的第二個落點。因此關於「壓制」本身,由 linter 說兩件事:**L106**（**info**）
+  代表它沒有東西可壓,**L107**（**warning**）代表它指名了沒有規則對應的代碼。完全沒點名代碼的 `#[allow]` 則直接被
+  拒絕——_E614_。
 
 ## 已識別但尚未支援
 
@@ -35,7 +66,7 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
 > **[not yet]** `#[repr]` 仍是一個沒有自己規則的保留名字:它落進未知 decorator 的分支,拿到
-> _E217 … this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no other_——與拼錯的
+> _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`, and no other_——與拼錯的
 > `#[frobnicate]` 同一句話。它被拒絕,所以沒有任何東西被默默丟掉;失去的是「等待實作」與「打錯字」之間的
 > 區分——`#[sealed]` 原本也有同樣的問題,現在有了 `E496`。
 >

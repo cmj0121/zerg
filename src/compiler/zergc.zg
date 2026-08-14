@@ -112,6 +112,7 @@ fn fmt_cmd() -> cli.Command {
 fn lint_cmd() -> cli.Command {
 	return (
 		cli.command("lint", "report unused imports and dead private code")
+		.flag("s", "strict", "fail on a warning too, not only on a finding")
 		.add(cli.positional("file.zg", "the sources to check").required().repeated())
 		.run(do_lint)
 	)
@@ -203,7 +204,7 @@ fn do_desugar(c: cli.Ctx) -> int {
 }
 
 fn do_lint(c: cli.Ctx) -> int {
-	return run_lint(c.args())
+	return run_lint(c.args(), c.has("strict"))
 }
 
 # job_count reads -j, falling back to one job rather than none when it is not a number —
@@ -1015,7 +1016,7 @@ fn test_pkgs(root: str, mut &out: list[str]) {
 	names := __zrt_listdir(root)
 	mut has := false
 	for name in names {
-		if is_test_file(name) {
+		if zerg.is_test_file(name) {
 			has = true
 		}
 	}
@@ -1073,7 +1074,7 @@ const DRIVER_NAME := "zerg_test_driver_test.zg"
 # `zerg test` from a file `zerg build` also ships.
 fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
 	for f in files {
-		if is_test_file(path_tail(f)) {
+		if zerg.is_test_file(path_tail(f)) {
 			tree := zerg.parse_at(read_source(f), f)
 			for fd in tree.fns {
 				if fd.is_test {
@@ -1336,7 +1337,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 # A test file is not importable from anywhere, including a sibling test file: the convention
 # says which builds compile one, and `zerg test` is what will compile them together.
 fn chk_test_import(im: zerg.ImportDecl) {
-	return if not is_test_file(path_tail(im.path) + ".zg")
+	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
 
 	place := zerg.place_line(im.at, im.line, im.col)
 	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
@@ -1614,13 +1615,9 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
 }
 
-# is_test_file reports whether a source is a TEST FILE by the build tool's convention, which
-# is its name (docs/runtime/package.md). A test is ordinary code under the ordinary visibility
-# rules — there is no test-only backdoor into privacy — so the only thing that separates it
-# from the module it sits in is which builds compile it, and this is that line.
-fn is_test_file(name: str) -> bool {
-	return name == "_test.zg" or has_suffix(name, "_test.zg")
-}
+# WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written
+# here, and moved into the module when the linter grew a rule about it (L601): two tools ask
+# the question now, and a naming convention answered in two places is one that drifts.
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
 # DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
@@ -1642,7 +1639,7 @@ fn module_at(root: str, path: str) -> list[str] {
 	if __zrt_exists(dir) {
 		mut many: list[str] = []
 		for name in __zrt_listdir(dir) {
-			if has_suffix(name, ".zg") and not is_test_file(name) {
+			if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
 				many.append(join_path(dir, name))
 			}
 		}
@@ -1967,24 +1964,37 @@ fn run_desugar_check(files: list[str], off: list[str]) -> int {
 # there is one, so `zerg lint` can gate a build rather than merely inform. It returns the
 # status rather than exiting on it because a sub-command's function is what decides the
 # process's exit, and it is the only thing that knows what the finding meant.
-fn run_lint(files: list[str]) -> int {
+#
+# THE SEVERITIES DECIDE THE STATUS, and there are two answers rather than one. A FINDING
+# fails, always: a rule fired on the program. A WARNING prints and does not, because what it
+# reports is legal — a `#[test]` that ships is a decision somebody may have made on purpose —
+# and `strict` is what turns those into failures for a caller that has decided otherwise.
+# `make lint`, over this project's own source, is that caller. INFO never fails anything.
+fn run_lint(files: list[str], strict: bool) -> int {
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
 
-	findings := zerg.lint_files(srcs)
-	for f in findings {
-		io.write(f + "\n")
+	mut bad := 0
+	mut warned := 0
+	for f in zerg.lint_program(srcs, paths) {
+		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
+		if f.sev == "" {
+			bad = bad + 1
+		} else if f.sev == "warning" {
+			warned = warned + 1
+		}
 	}
 
-	# THE L5xx FAMILY IS ASKED SEPARATELY, because it is the one that needs types: the
-	# lowering walk answers it and the C is thrown away. It carries a place, which the
-	# tree-only rules above do not, so it is printed like a diagnostic rather than like a
-	# bare sentence.
-	convs := zerg.lint_conversions(srcs, paths)
-	for d in convs {
-		io.write(f"{d.path}:{d.line}:{d.col}: {diag_code_prefix(d)}{d.msg}\n")
-	}
+	return 1 if bad > 0
+	return 1 if strict and warned > 0
 
-	return 1 if findings.len() + convs.len() > 0
 	return 0
+}
+
+# lint_sev is the adjective a finding's line opens with, and the empty string for the default
+# — see lint.zg's header for why only two of the three are named out loud.
+fn lint_sev(f: zerg.Finding) -> str {
+	return "" if f.sev == ""
+
+	return f"{f.sev}: "
 }

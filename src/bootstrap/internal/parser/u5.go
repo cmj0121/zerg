@@ -107,14 +107,25 @@ func setDecorators(d ast.Decl, decos []*ast.Decorator) {
 
 // --- decorators ---------------------------------------------------------------
 
-// parseDecorators consumes a run of '#[…]' decorators. A newline after a
-// decorator's ']' is not a separator (GRAMMAR group 2), so any inserted ';' is
-// skipped before the next decorator or the target declaration.
+// parseDecorators consumes the ONE '#[…]' decorator an item may carry. A newline
+// after a decorator's ']' is not a separator (GRAMMAR group 2), so any inserted
+// ';' is skipped before the target declaration.
+//
+// ONE PER ITEM (GRAMMAR#decorated-decl). Stacking used to parse here, so `#[a]`
+// on one line and `#[b]` on the next said exactly what `#[a, b]` says — two
+// spellings for one thing, which is what a formatter exists to remove and what it
+// cannot remove once both are legal. The comma list is the spelling, and a stack
+// is turned away rather than quietly folded into one.
 func (p *parser) parseDecorators() []*ast.Decorator {
 	var out []*ast.Decorator
 	for p.at(token.Hash) {
-		out = append(out, p.parseDecorator())
+		h := p.cur()
+		d := p.parseDecorator()
 		p.skipSemis()
+		if len(out) > 0 {
+			p.fail(h.Span, "a second decorator on one item — an item takes one decorator, so merge them into its comma list: #[a(x), b(y)]")
+		}
+		out = append(out, d)
 	}
 	return out
 }

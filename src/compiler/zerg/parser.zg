@@ -3117,6 +3117,22 @@ fn parse_assert(mut &p: Parser) -> Stmt {
 	return Stmt.SAssert(out)
 }
 
+# p_scratch is a parser of its own over tokens that are not the file's — fstr_hole's
+# mechanism, and the one both of this section's readers need.
+#
+# It INHERITS THE DEPTH BUDGETS, and that is the whole reason it is a function: what a scratch
+# parser reads is spliced into the enclosing tree and measured as part of it, so a fresh budget
+# would be a nesting limit each of these quietly opted out of. Three call sites had the
+# seven-field construction written out, and a fourth would have been the fourth chance to get
+# one field wrong.
+#
+# The run is taken BY VALUE, which is what lets `p_assert_claims` hand over the parser's OWN
+# token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
+# copy-on-write, so the value here is a refcount and not the file.
+fn p_scratch(mut &p: Parser, toks: list[Token], pos: int) -> Parser {
+	return Parser(toks, pos, p.impl_ty, p.path, p.depth, p.edepth, [])
+}
+
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
 # claim for anything else.
 #
@@ -3125,7 +3141,7 @@ fn parse_assert(mut &p: Parser) -> Stmt {
 # an operand the language promises to evaluate — so the claim covers the whole condition and
 # takes the first conjunct's decomposition, leaving everything after it where it was written.
 fn p_assert_claims(mut &p: Parser, lo: int, hi: int) -> list[AClaim] {
-	mut sp := Parser(p.toks, lo, p.impl_ty, p.path, p.depth, p.edepth, [])
+	mut sp := p_scratch(p, p.toks, lo)
 	mut out: list[AClaim] = []
 	mut a := lo
 	for true {
@@ -3294,16 +3310,14 @@ fn p_assert_span(mut &p: Parser, lo: int, hi: int) -> list[Token] {
 	return out
 }
 
-# p_assert_parse reads a token run as one expression. It is fstr_hole's mechanism — a parser
-# of its own over tokens that are not the file's — and it inherits the depth budgets for that
-# one's reason: what it parses is spliced into the enclosing tree and measured as part of it.
+# p_assert_parse reads a token run as one expression.
 #
 # It takes the run BY REFERENCE and terminates it in place. A list is copy-on-write, so a
 # by-value parameter would share the caller's buffer and the `Eof` would unshare it — copying
 # every Token of a run this function was handed to read.
 fn p_assert_parse(mut &p: Parser, mut &toks: list[Token]) -> Expr {
 	toks.append(Token(Kind.Eof, "", "", 0, 0))
-	mut sp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
+	mut sp := p_scratch(p, toks, 0)
 	return parse_expr(sp)
 }
 
@@ -4638,13 +4652,13 @@ fn fstr_unbrace(raw: str) -> str {
 fn fstr_hole(mut &p: Parser, t: Token, hole: str) -> Expr {
 	fstr_reject(p, t, hole)
 
-	toks := tokenize(hole)
+	mut toks := tokenize(hole)
 
 	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
 	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
 	# enclosing tree, which is measured as one whole, so the hole is not a root.
-	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
+	mut hp := p_scratch(p, toks, 0)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

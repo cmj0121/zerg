@@ -1259,6 +1259,77 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
 }
 
+# chk_intrinsic_arity IS THE SET of compiler primitives, and it answers both questions asked of
+# that set: whether a `__zrt_…` name is one at all, and how many operands it takes. `-1` is "not
+# a primitive", which is what lets one function do both — two lists of the same 28 names is the
+# drift this file refuses everywhere else.
+#
+# A primitive is not a function anyone declares. The emitter lowers the name directly, by
+# stripping the prefix, so before this the set was whatever the emitter would strip:
+# `__zrt_trunk(x)` emitted `zrt_trunk(x)` into C and was reported by cc against a file in
+# .zerg-cache that nobody wrote — the one report this compiler exists to get in front of — and
+# `__zrt_trunc()` with no argument still did, which is what the arity half closes.
+#
+# The names and the arities are the seed's switch (src/bootstrap/internal/sema/infer.go), entry
+# for entry. Both compilers build the same `src/stdlib/*.zg`, so a leaf one knows and the other
+# does not is a standard library that builds under only one of them.
+#
+# OPERAND TYPES ARE CHECKED BY NEITHER, and that is measured rather than assumed. The seed HAS
+# the machinery — `unaryIntrinsic(n, Float, Int)` checks its argument against `Float` — and it
+# does not fire: `__zrt_trunc("hello")` reaches cc under both compilers, and `__zrt_trunc(true)`
+# builds under both and prints `1`, a silent miscompile they share. So it is a gap of the SET
+# rather than a place this compiler is behind the seed — and where the two do differ it runs the
+# other way, `zerg` reporting the cc failure against the `.zg` line and the seed against a temp C
+# file nobody wrote. Named here as the gap it is, rather than left looking like coverage.
+#
+# It says nothing about WHO may call one. A primitive is the standard library's way down to the
+# machine and a program has no business writing one, but this compiler's own driver reaches for
+# `__zrt_exec`, `__zrt_exit` and `__zrt_listdir` in thirty places, several of which no stdlib
+# function wraps — so a stdlib-only rule is a refusal that would first have to be given somewhere
+# to point.
+fn chk_intrinsic_arity(name: str) -> int {
+	return 0 if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return 0 if name == "__zrt_platform" or name == "__zrt_arch" or name == "__zrt_exe_path"
+
+	return 1 if name == "__zrt_open" or name == "__zrt_open_write" or name == "__zrt_read" or name == "__zrt_close"
+	return 1 if name == "__zrt_sleep_ns" or name == "__zrt_trunc"
+	return 1 if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_exit"
+	return 1 if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
+	return 1 if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
+	return 1 if name == "__zrt_atomic_load"
+
+	return 2 if name == "__zrt_write" or name == "__zrt_write_bytes"
+	return 2 if name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
+
+	return 3 if name == "__zrt_atomic_cas"
+
+	return 0 - 1
+}
+
+# chk_is_intrinsic is that set as a predicate. The emitter asks it before it decides a leaf's
+# RESULT TYPE, so a name the set does not hold answers TUnknown rather than nil — which is what
+# earns an unknown primitive one diagnostic instead of two. The second one said `print` had been
+# handed a nil: a true sentence about a type this compiler invented for a name it had, in the
+# line above, already said it does not have.
+pub fn chk_is_intrinsic(name: str) -> bool {
+	return chk_intrinsic_arity(name) >= 0
+}
+
+# chk_intrinsic_call holds one CALL to that set — the name first, and then the count, because a
+# name that is not a primitive has no arity to be wrong about.
+fn chk_intrinsic_call(mut &em: Emitter, name: str, argc: int) {
+	n := chk_intrinsic_arity(name)
+
+	if n < 0 {
+		chk_at(em, "E396", f"`{name}` is not a compiler primitive — the `__zrt_…` set is closed and belongs to the standard library, which reaches the runtime through it")
+		return
+	}
+
+	return if argc == n
+
+	chk_at(em, "E397", f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
+}
+
 # chk_conv_pair holds a WRITTEN `T(x)` to the same table, and it is the half that was never
 # asked. chk_into_builtin above decided which conversions exist, and only the ADOPTION path
 # consulted it: a written conversion went straight to the lowering, which lowers by SHAPE and

@@ -302,8 +302,8 @@ say "the fallback note appears for a file that did not need it" $?
 # 11. the counts, and the grouping. The summary is the line a person reads, and it is the one
 #     place the whole run is stated in numbers — with the skip counted APART from both, since
 #     a suite whose skips are passes goes green on a platform where none of it ran.
-grep -qE '^4 passed, 4 failed, 1 skipped$' "$tmp/out"
-say "the summary does not count 4 passed, 4 failed and 1 skipped" $?
+grep -qE '^4 passed, 4 failed, 1 skipped, 0 timed out$' "$tmp/out"
+say "the summary does not count 4 passed, 4 failed, 1 skipped and 0 timed out" $?
 
 grep -qF 'lib/lib_test.zg' "$tmp/out"
 say "the report does not name the file its tests came from" $?
@@ -332,7 +332,7 @@ status=$?
 [ "$status" -eq 0 ]
 say "a run whose only non-pass was a skip exited non-zero" $?
 
-printf '%s\n' "$skips" | grep -qE '^1 passed, 0 failed, 1 skipped$'
+printf '%s\n' "$skips" | grep -qE '^1 passed, 0 failed, 1 skipped, 0 timed out$'
 say "a run of one pass and one skip did not count them apart" $?
 
 # --- the fixture packages ------------------------------------------------------------------
@@ -694,7 +694,7 @@ grep -qE '^  ok    test_(h|i)_' "$tmp/fx"
 say "a test that never ran because its fixture broke was counted as passing" $?
 
 # 23. the counts.
-grep -qE '^6 passed, 3 failed, 0 skipped$' "$tmp/fx"
+grep -qE '^6 passed, 3 failed, 0 skipped, 0 timed out$' "$tmp/fx"
 say "the fixture run does not count 6 passed, 3 failed and 0 skipped" $?
 
 # 24. nothing left behind — and for fixtures that is one file more than the driver: an
@@ -773,7 +773,273 @@ say "a fixture declared in a plain \`*_test.zg\` was inherited by the directory 
 printf '%s\n' "$uni" | grep -qE 'the test `test_below_cannot` asks for `local` and no `#\[fixture\]` of that name is in scope'
 say "the test below was not told that the fixture it named is not in its scope" $?
 
-# 30. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
+# --- a flat directory of independent modules ------------------------------------------------
+#
+# THE SHAPE THE STANDARD LIBRARY HAS, and the one a test build used to be unable to reach. A
+# `.zg` file beside its neighbours is a module in its own right — `module_at` resolves an
+# import to a single `<name>.zg` BEFORE it resolves one to a directory — so `flat` here is
+# three independent modules, exactly as `src/stdlib` is sixteen.
+#
+# `broken.zg` and `clash.zg` are the two failures the pilot actually met, reproduced: a generic
+# struct is `E215` in this compiler, and two modules defining one `pub` name is `E705`. Neither
+# is imported by anything. A runner that took the DIRECTORY as the package would compile both
+# beside `good.zg` and report an error inside a file the author never wrote — before one test
+# had run.
+
+mkdir -p "$tmp/flat"
+
+cat >"$tmp/flat/good.zg" <<'EOF'
+fn doubled(n: int) -> int {
+	return n + n
+}
+
+pub fn shared() -> int {
+	return doubled(21)
+}
+EOF
+
+cat >"$tmp/flat/broken.zg" <<'EOF'
+struct Box[T] {
+	v: T
+}
+
+pub fn boxed(v: int) -> Box[int] {
+	return Box(v)
+}
+EOF
+
+cat >"$tmp/flat/clash.zg" <<'EOF'
+pub fn shared() -> int {
+	return 0
+}
+EOF
+
+cat >"$tmp/flat/good_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+#[test]
+fn test_reaches_the_modules_private_name() {
+	testing.assert_eq(doubled(3), 6)
+}
+
+#[test]
+fn test_reaches_its_public_one_too() {
+	testing.assert_eq(shared(), 42)
+}
+EOF
+
+flat=$("$ZERG" test "$tmp/flat" 2>&1)
+status=$?
+printf '%s\n' "$flat" >"$tmp/flat.out"
+
+# 30. the tests of the one-file module RAN — white-box, with no `pub` and no import, which is
+#     the whole of what was lost when a suite had to move out to a package of its own.
+[ "$status" -eq 0 ]
+say "a test beside a module in a flat directory of modules did not exit 0" $?
+
+grep -qE '^  ok    test_reaches_the_modules_private_name$' "$tmp/flat.out"
+say "a test beside its module could not reach the module's private name" $?
+
+grep -qE '^  ok    test_reaches_its_public_one_too$' "$tmp/flat.out"
+say "a test beside its module could not reach the module's public name" $?
+
+grep -qE '^2 passed, 0 failed, 0 skipped, 0 timed out$' "$tmp/flat.out"
+say "the flat-directory run does not count 2 passed" $?
+
+# 31. and the two SIBLINGS were never compiled. Asserted by their error codes rather than by
+#     their names: `E215` and `E705` are what reaching them costs, and they are what the pilot
+#     was shown instead of a test result.
+grep -qF 'E215' "$tmp/flat.out"
+[ $? -ne 0 ]
+say "an independent module beside the one under test was compiled into the same package (E215)" $?
+
+grep -qF 'E705' "$tmp/flat.out"
+[ $? -ne 0 ]
+say "a \`pub\` name in an unrelated module of the same directory collided with the one under test (E705)" $?
+
+# --- nothing is left behind on a path that FAILED --------------------------------------------
+#
+# The success path is asserted above (12, 24). This is the other one, and it is the one that
+# actually happened: `zerg test src/stdlib` stopped inside `atomic.zg` and left a generated
+# `zerg_test_driver_test.zg` behind — in the directory the compiler resolves the standard
+# library by LISTING.
+#
+# The two failures are the two SHAPES a build has: a raise carried out of the loader (an
+# import that resolves nowhere) and a diagnostic reported by the compiler proper (a write to
+# an immutable). Neither returns through the end of the run, and neither may leave a file.
+
+mkdir -p "$tmp/left/raises" "$tmp/left/diags"
+
+cat >"$tmp/left/fixtures_test.zg" <<'EOF'
+struct Held {
+	n: int = 0
+}
+
+#[fixture]
+fn held(use: fn (Held)) {
+	use(Held(1))
+}
+EOF
+
+cat >"$tmp/left/raises/raises_test.zg" <<'EOF'
+import (
+	"no_such_module_anywhere"
+	"testing"
+)
+
+#[test]
+fn test_never_gets_to_run() {
+	testing.assert_eq(no_such_module_anywhere.value(), 1)
+}
+EOF
+
+cat >"$tmp/left/diags/diags_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+#[test]
+fn test_writes_to_an_immutable() {
+	n := 1
+	n = 2
+	testing.assert_eq(n, 2)
+}
+EOF
+
+# 32. the raise: the loader gave up, and the driver AND the copy of the inherited fixture file
+#     it had already written are both gone. The copy is the half a `rm` at the end of the happy
+#     path would still have missed.
+raises=$("$ZERG" test "$tmp/left/raises" 2>&1)
+status=$?
+
+[ "$status" -ne 0 ]
+say "a test build whose import resolves nowhere exited 0" $?
+
+printf '%s\n' "$raises" | grep -qF 'E502'
+say "the unresolvable import was not reported" $?
+
+[ "$(ls "$tmp/left/raises")" = "raises_test.zg" ]
+say "a test build that raised left its generated files behind in the package" $?
+
+# 33. the diagnostic: the compiler reported and exited, and the driver is still gone.
+diags=$("$ZERG" test "$tmp/left/diags" 2>&1)
+status=$?
+
+[ "$status" -ne 0 ]
+say "a test build with a compile error exited 0" $?
+
+[ "$(ls "$tmp/left/diags")" = "diags_test.zg" ]
+say "a test build that reported a diagnostic left its generated files behind in the package" $?
+
+# --- --only ----------------------------------------------------------------------------------
+#
+# THE FILTER IS APPLIED BEFORE THE DRIVER IS WRITTEN, which is what makes the claim about
+# fixtures exact: a test that was not selected is not resolved, not generated and not compiled,
+# so the level that would have stood its fixtures up is never written at all. `setup db` is
+# printed BY the fixture, so its absence is the assertion — and `fixt` is used rather than a new
+# tree because that is where the fixtures that announce themselves already are.
+
+only=$("$ZERG" test "$tmp/fixt" --only test_f_needs_nothing 2>&1)
+status=$?
+printf '%s\n' "$only" >"$tmp/only.out"
+
+# 34. the one test named ran, and nothing else did.
+[ "$status" -eq 0 ]
+say "a run filtered down to one passing test did not exit 0" $?
+
+grep -qE '^  ok    test_f_needs_nothing$' "$tmp/only.out"
+say "--only did not run the test it named" $?
+
+grep -qE '^1 passed, 0 failed, 0 skipped, 0 timed out$' "$tmp/only.out"
+say "--only ran a test it was not asked for" $?
+
+# 35. AND THE FIXTURES OF THE TESTS IT DROPPED WERE NEVER BUILT. Without this the filter is
+#     only a filter on the report: the run would still stand `db` and `schema` up, pay for
+#     them, and then skip past the tests that needed them.
+grep -qF 'setup db' "$tmp/only.out"
+[ $? -ne 0 ]
+say "--only built a fixture that only the tests it filtered out had asked for" $?
+
+# 36. a PREFIX selects a family, which is the form a suite is iterated on. `serial` is the
+#     counter the `counted` fixture appends to, and it is reset because this run stands that
+#     fixture up a second time — the earlier run above left one build in it.
+rm -f "$tmp/serial"
+fam=$("$ZERG" test "$tmp/fixt" --only test_a 2>&1)
+printf '%s\n' "$fam" | grep -qE '^  ok    test_a_first_sees_the_first_build$'
+say "--only with a name stem did not select the test under it" $?
+
+# 37. and a filter that selected NOTHING is a typo, not a green run — the one failure mode a
+#     filter adds to a runner, and the one every gate here is written against.
+none=$("$ZERG" test "$tmp/fixt" --only test_no_such_thing 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "--only naming no test did not end the run with status 2" $?
+
+printf '%s\n' "$none" | grep -qF 'has a name beginning with `test_no_such_thing`'
+say "--only naming no test did not say so" $?
+
+# --- the per-test timeout ---------------------------------------------------------------------
+#
+# A HUNG TEST AND A SLOW TEST LOOK IDENTICAL until something decides which is which. With
+# nothing deciding, the hung one takes the whole run with it and CI's own timeout kills the job
+# with nothing in the log saying which test did it.
+#
+# `test_a_hangs` sleeps far longer than the limit this run is given, and `test_b_after_it` is
+# what says the run went ON — a runner that treated a timeout as the end of the world would
+# report nothing after it.
+
+mkdir -p "$tmp/slow/a"
+
+cat >"$tmp/slow/a/a_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+#[test]
+fn test_a_hangs() {
+	__zrt_sleep_ns(30000000000)
+	testing.assert(true)
+}
+
+#[test]
+fn test_b_after_it() {
+	testing.assert(true)
+}
+EOF
+
+slow=$("$ZERG" test "$tmp/slow" --timeout 1 2>&1)
+status=$?
+printf '%s\n' "$slow" >"$tmp/slow.out"
+
+# 38. the verdict is its OWN, and it is not a failure: nothing was checked and nothing was
+#     claimed, so a reader sent looking for the assertion that failed would find none.
+grep -qE '^  STUCK test_a_hangs$' "$tmp/slow.out"
+say "a test that never finishes is not reported STUCK" $?
+
+grep -qE '^  (FAIL |CRASH) test_a_hangs$' "$tmp/slow.out"
+[ $? -ne 0 ]
+say "a test that timed out was reported as a failed assertion" $?
+
+grep -qE '^        the test did not finish within 1s' "$tmp/slow.out"
+say "the timeout does not say how long it waited" $?
+
+# 39. counted apart, in the line a person reads.
+grep -qE '^1 passed, 0 failed, 0 skipped, 1 timed out$' "$tmp/slow.out"
+say "a timeout is not counted apart from the failures and the passes" $?
+
+# 40. it still fails the RUN — a suite with a hung test in it is not a green suite.
+[ "$status" -ne 0 ]
+say "a run holding a test that never finished exited 0" $?
+
+# 41. and the run went on. This is the half that makes the limit worth having: the tests after
+#     the hung one still ran, in the same process, and answered for themselves.
+grep -qE '^  ok    test_b_after_it$' "$tmp/slow.out"
+say "the tests after a hung one did not run" $?
+
+# 42. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
 #     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
 #     the canonical `fn (T)`, with nothing to say so. No generated driver is among them: every
@@ -784,9 +1050,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 55 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 79 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-55}
+MIN_ASSERTS=${MIN_ASSERTS:-79}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

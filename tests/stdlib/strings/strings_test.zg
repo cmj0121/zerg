@@ -20,20 +20,10 @@ import (
 	"testing"
 )
 
-# raised_value_error demotes an abort to the one question these tests ask of it: did the
-# call refuse, and did it refuse with the taxonomy kind the module's doc comment promises.
-#
-# IT IS GENERIC BECAUSE THE CARRIER IS. `split` raises out of a `list[str]`, `repeat` out
-# of a `str` and `count` out of an `int`, so a non-generic helper would need one copy per
-# return type — or every call funnelled through `.len()` to make one carrier serve them
-# all, which is what the codegen corpus case had to do. `testing` has no `assert_raises`,
-# so this is hand-rolled here; the next test package will hand-roll it again.
-fn raised_value_error[T](r: Result[T]) -> bool {
-	return match r {
-		Either.Left(_)  => false
-		Either.Right(e) => e is ValueError
-	}
-}
+# THE REFUSALS ARE ASKED WITH `testing.assert_raises`, which takes the `guard` written at
+# the point of the call and answers the `Err` that came out of it — so what each of those
+# tests asserts is the taxonomy kind the module's doc comment promises, in the language's
+# own `is`. The helper this suite used to carry for that is the one the library now has.
 
 # --- has_prefix ---------------------------------------------------------------------
 
@@ -53,13 +43,15 @@ fn test_has_prefix_boundaries() {
 }
 
 #[test]
-fn test_has_prefix_multibyte() {
+fn test_has_prefix_multibyte(ctx: testing.Context) {
 	testing.assert(strings.has_prefix("日本語", "日"))
 	testing.assert(strings.has_prefix("日本語", "日本"))
 
 	# `日` is E6 97 A5 and `有` is E6 9C 89 — the same lead byte. A prefix test that
-	# looked at one byte would answer true here.
-	testing.assert(not strings.has_prefix("日本語", "有"))
+	# looked at one byte would answer true here — and the failure has to say WHICH needle,
+	# because `assert` sees only a `bool` and this test asks about three of them. That is
+	# what the chain on the context is for; the assertion is its terminal.
+	ctx.str("haystack", "日本語").str("needle", "有").assert(not strings.has_prefix("日本語", "有"), "a shared lead byte is not a prefix")
 }
 
 # --- has_suffix ---------------------------------------------------------------------
@@ -203,7 +195,8 @@ fn test_split_boundaries() {
 
 #[test]
 fn test_split_empty_separator_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.split("a,b", "") }))
+	e := testing.assert_raises(guard { strings.split("a,b", "") })
+	testing.assert(e is ValueError, "an empty separator is a value split cannot accept")
 
 	# the demotion the module's own comment names, in the form its example shows: `guard`
 	# turns the abort into a value and `??` supplies what to do instead
@@ -252,7 +245,8 @@ fn test_repeat_boundaries() {
 
 #[test]
 fn test_repeat_negative_count_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.repeat("ab", -1) }))
+	e := testing.assert_raises(guard { strings.repeat("ab", -1) })
+	testing.assert(e is ValueError, "a negative count is a value repeat cannot accept")
 }
 
 # --- trim / trim_left / trim_right ------------------------------------------------------
@@ -376,7 +370,8 @@ fn test_count_multibyte() {
 
 #[test]
 fn test_count_empty_needle_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.count("banana", "") }))
+	e := testing.assert_raises(guard { strings.count("banana", "") })
+	testing.assert(e is ValueError, "an empty needle is a value count cannot accept")
 }
 
 # --- replace ----------------------------------------------------------------------------
@@ -414,7 +409,8 @@ fn test_replace_multibyte() {
 
 #[test]
 fn test_replace_empty_target_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.replace("abc", "", "x") }))
+	e := testing.assert_raises(guard { strings.replace("abc", "", "x") })
+	testing.assert(e is ValueError, "an empty target is a value replace cannot accept")
 }
 
 # --- trim_prefix / trim_suffix ------------------------------------------------------------
@@ -600,16 +596,20 @@ fn test_pad_counts_bytes_not_characters() {
 
 #[test]
 fn test_pad_empty_fill_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.pad_start("x", 4, "") }))
-	testing.assert(raised_value_error(guard { strings.pad_end("x", 4, "") }))
+	s := testing.assert_raises(guard { strings.pad_start("x", 4, "") })
+	testing.assert(s is ValueError, "an empty fill is a value pad_start cannot accept")
+	e := testing.assert_raises(guard { strings.pad_end("x", 4, "") })
+	testing.assert(e is ValueError, "an empty fill is a value pad_end cannot accept")
 }
 
 # a multi-byte fill cannot land on a byte width without cutting a code point in half,
 # which is why it is refused rather than truncated
 #[test]
 fn test_pad_multibyte_fill_raises_value_error() {
-	testing.assert(raised_value_error(guard { strings.pad_start("x", 4, "ab") }))
-	testing.assert(raised_value_error(guard { strings.pad_end("x", 4, "日") }))
+	s := testing.assert_raises(guard { strings.pad_start("x", 4, "ab") })
+	testing.assert(s is ValueError, "a two-byte fill is a value pad_start cannot accept")
+	e := testing.assert_raises(guard { strings.pad_end("x", 4, "日") })
+	testing.assert(e is ValueError, "a multi-byte fill is a value pad_end cannot accept")
 
 	# demoted to a value, which is the form the module's example shows
 	testing.assert_eq(guard { strings.pad_start("x", 4, "ab") } ?? "refused", "refused")
@@ -620,6 +620,8 @@ fn test_pad_multibyte_fill_raises_value_error() {
 # or not it would have been used.
 #[test]
 fn test_pad_refuses_a_bad_fill_even_when_no_padding_is_needed() {
-	testing.assert(raised_value_error(guard { strings.pad_start("hello", 2, "") }))
-	testing.assert(raised_value_error(guard { strings.pad_end("hello", 2, "ab") }))
+	s := testing.assert_raises(guard { strings.pad_start("hello", 2, "") })
+	testing.assert(s is ValueError, "the fill is refused before the width is consulted")
+	e := testing.assert_raises(guard { strings.pad_end("hello", 2, "ab") })
+	testing.assert(e is ValueError, "the fill is refused before the width is consulted")
 }

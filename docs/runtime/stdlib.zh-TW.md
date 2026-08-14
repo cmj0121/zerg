@@ -9,6 +9,38 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 
 編譯器直接提供、**免** import 的函式，見 [內建函式（Built-in Functions）](builtins.zh-TW.md)。
 
+## 模組註解裡可執行的範例
+
+`pub` 函式的註解可以帶範例：在普通的 `#` 註解裡寫成一組 fenced block——運算式放 ` ```zerg `，它印出什麼放
+` ```output `。`make stdlib-test` 會**編譯並執行**每一組，再把實際輸出與寫下的輸出 diff，所以範例是一個被檢查的
+主張，而不是一段寫下來的話。（`##` doc comment 與 `zerg doc` 仍是 **[not yet]**；這組 fence 就是它們將採用的形式。）
+
+````text
+# ```zerg
+# strings.index_of("日本語", "本")
+# ```
+# ```output
+# 3
+# ```
+````
+
+> **` ```output ` 的行尾不能是空白。** 本倉庫自己的 pre-commit hook 會裁掉行尾空白，而且就在**新增該範例的那一次
+> commit** 裡裁掉——所以一個最後一個字元本來就該是空白的 output block，會被無聲改寫成範例根本不會產生的樣子，
+> 範例從真變成假，且沒有留下任何痕跡。`trim_left` 就是發現這件事的案例。
+>
+> 解法是讓**運算式**本身以一個看得見的終止符收尾，並在測試套件裡用同樣的形式斷言，讓兩邊一致：
+>
+> ````text
+> # ```zerg
+> # strings.trim_left("  hi  ") + "|"
+> # ```
+> # ```output
+> # hi  |
+> # ```
+> ````
+>
+> 不要試著把該檔案排除在 hook 之外：檔案裡其他每一行都應該被裁，而一個需要行尾空白的範例，讀者的眼睛同樣看不見它。
+
 ## 套件
 
 | 套件                  | Import             | 提供                               |
@@ -270,8 +302,52 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 `guard` 接住，或帶訊息 abort。它 raise 的是**沒有種類**的 `Err`——標準函式庫中唯一如此的模組，而且是刻意的：一次失敗的斷言是
 一個不成立的程式主張，不是函式無法接受的值，內建 taxonomy 沒有對應的種類。
 
-| 函式                                          | 摘要              |
-| --------------------------------------------- | ----------------- |
-| `assert(cond: bool) -> Result[nil]`           | `cond` 成立時通過 |
-| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]` | `a == b` 時通過   |
-| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]` | `a != b` 時通過   |
+| 函式                                               | 摘要                                         |
+| -------------------------------------------------- | -------------------------------------------- |
+| `assert(cond: bool, msg: str = "") -> Result[nil]` | `cond` 成立時通過；`msg` 說明是什麼          |
+| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]`      | `a == b` 時通過；失敗時報出兩個值            |
+| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]`      | `a != b` 時通過；失敗時報出那個值            |
+| `assert_raises[T](r: Result[T]) -> Err`            | 交回一次 `guard` 包住的呼叫所 raise 的 `Err` |
+
+失敗會說出值**當時是什麼**：`assert_eq failed: 2 != 3`、`assert_ne failed: both values are 7`。
+`assert(cond, msg)` 只有訊息可說，因為條件在失敗之前就已經被編譯掉了。
+
+`assert_raises` 拿的是**呼叫當下寫的那個 `guard`**，並把錯誤交回來，所以種類是用語言自己的 `is` 去問，而不是傳進去
+——在 Zerg 裡型別不是值，`assert_raises(f, ValueError)` 根本寫不出來：
+
+```text
+e := testing.assert_raises(guard { strings.split("a,b", "") })
+testing.assert(e is ValueError, "split refused with the wrong kind")
+```
+
+> 用 **closure**——`assert_raises(fn () { strings.split("a,b", "") })`——讀起來更好，但編不過：closure 主體
+> 只要提到被 import 的模組就是 _E735 a closure captures `strings`_，因為 namespace 是自由名稱，而 capture 得給它
+> 一個型別。每一個透過 `import` 取用自己模組的測試都是這個形狀，所以能服務它們的是 `guard`。
+
+### 帶結構的失敗脈絡
+
+`Context` 用鏈式呼叫累積具名的值，而**斷言是終端**——刻意與 logger 的 `log.str(…).msg(…)` 相反：如果斷言在中間，
+忘了寫終端的那一次就會什麼都沒斷言，而 Zerg 沒有 `impl Drop` 可以察覺。
+
+| 方法                                               | 摘要                         |
+| -------------------------------------------------- | ---------------------------- |
+| `str(key: str, value: str) -> This`                | 為下一次斷言加一個具名 `str` |
+| `int(key: str, value: int) -> This`                | 加一個具名 `int`             |
+| `bool(key: str, value: bool) -> This`              | 加一個具名 `bool`            |
+| `assert(cond: bool, msg: str = "") -> Result[nil]` | 終端：帶著脈絡做斷言         |
+
+```text
+ctx.str("file", path).int("row", i).assert(ok, "the row did not round-trip")
+# FAIL … assertion failed: the row did not round-trip [file=a.zg row=3]
+```
+
+每個 builder 交回的是一份**複本**，所以一條鏈累積的東西只會到它自己的終端、不會流到下一個斷言；同時 `Context`
+內的 channel 仍是共用的，`log` / `skip` / `fatal` 從複本一樣送得到 runner。代價是每次呼叫都複製一次已累積的文字
+——N 個欄位的鏈搬動 O(N²) bytes，而一次失敗要的兩三個欄位只有幾十 bytes。
+
+builder **依型別分開**，因為 Zerg 沒有 varargs、沒有 `any`，也沒有泛型 struct 可以裝一串已渲染的值。
+
+> **[not yet]** `assert_eq`、`assert_ne` 與 `assert_raises` **沒有方法形式**，所以
+> `ctx.str("file", p).assert_eq(got, want)` 寫不出來：三者都是泛型，而泛型**方法**在這個編譯器是
+> _E409 NotImplemented: a generic METHOD_。這也正是 `assert_eq` 自己報出兩個值的主因。需要脈絡時，把值放進鏈裡、
+> 以 `assert` 收尾。

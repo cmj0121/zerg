@@ -383,6 +383,17 @@ pub struct FnDecl {
 	# A method, a lambda and a monomorphized specialization each take the flag from whatever
 	# they were written in or made for, so the context is not lost by being copied.
 	pub in_unsafe: bool
+
+	# is_test is whether this function was declared under `#[test]` — the decorator that marks
+	# a function `zerg test` runs (docs/core/decorators.md). It rides on the declaration and
+	# not on a list beside it, the way a derive does, because a derive is read BEFORE the
+	# declaration it names exists while this one is taken by the `fn` arm that just built the
+	# declaration, and because the one thing that reads it — the test runner's discovery —
+	# walks the functions.
+	#
+	# The flag changes nothing about a normal build: the function is type-checked and emitted
+	# like any other, and nothing calls it. What calls it is the driver `zerg test` generates.
+	pub is_test: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

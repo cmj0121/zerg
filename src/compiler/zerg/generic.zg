@@ -156,7 +156,7 @@ fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list
 # it an ordinary function, and what stops it being instantiated again.
 fn subst_fn(tpl: FnDecl, args: list[Ty]) -> FnDecl {
 	names := tpl.tparams
-	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe)
+	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.

@@ -1159,7 +1159,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		# refusal hung off the arms that do not want one — the arms are nine and the rule is
 		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
 		# and `Hash` is allowed through so decorators stack.
-		raise p_diag_at(p, deco_line, deco_col, "E487", f"`{p_deco_says(pending[0])}` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if pending.len() > 0 and not p_deco_may_lead(p)
+		raise p_diag_at(p, deco_line, deco_col, "E487", f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if pending.len() > 0 and not p_deco_may_lead(p, pending)
 
 		if p_at(p, Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
@@ -1167,7 +1167,12 @@ pub fn parse_at(src: str, path: str) -> File {
 			raise p_diag_at(p, t.line, t.col, "E247", "`pub import` is not a form — a re-export marks the spec instead: `import pub \"…\"`") if is_pub
 			parse_import(p, imports)
 		} else if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, "", false, in_unsafe))
+			# a pending `#[test]` is TAKEN here and the list emptied, the way the three type arms
+			# take a derive: a marker left on the list would be reported at `Eof` as a decorator
+			# with no declaration under it, about the declaration it had just been given
+			is_test := p_deco_is_test(pending)
+			pending = []
+			fns.append(parse_fn(p, is_pub, "", false, in_unsafe, is_test))
 		} else if p_at(p, Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl), and the marker is CARRIED.
 			# It used to be read and dropped, because type visibility was not enforced and a
@@ -1321,7 +1326,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
 	# same contract every other unsupported form has: what is written is either implemented
 	# or named, never quietly dropped.
-	raise p_diag_at(p, deco_line, deco_col, "E208", f"`{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the `struct`, `enum` or `spec` that follows it, and this one is the last item in the file") if pending.len() > 0
+	raise p_diag_at(p, deco_line, deco_col, "E208", f"`{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the {p_deco_leads(pending)} that follows it, and this one is the last item in the file") if pending.len() > 0
 
 	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
 	# one this function did not look at. The loop simply ran to `Eof` with the group still
@@ -1381,21 +1386,48 @@ fn p_not_a_binding() -> ConstDecl {
 	raise p_impossible("parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else")
 }
 
-# p_deco_may_lead reports whether the item starting here is one a decorator may lead. The
-# three that TAKE one are the three that call p_take_derives — `struct`, `enum` and `spec` —
-# and a second decorator is let through so they stack: `#[derive(Eq)] #[obj] spec S` puts two
-# names on one pending list and the declaration under them takes both.
-fn p_deco_may_lead(mut &p: Parser) -> bool {
-	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec) or p_at(p, Kind.Hash)
+# p_deco_may_lead reports whether the item starting here is one THIS pending list may lead.
+# The three that take a derive or an `#[obj]` are the three that call p_take_derives —
+# `struct`, `enum` and `spec` — and `#[test]` goes on the one declaration none of those is, a
+# `fn`. A second decorator is let through either way so they stack: `#[derive(Eq)] #[obj] spec
+# S` puts two names on one pending list and the declaration under them takes both.
+#
+# It reads the LIST and not just the token, because the two sets are disjoint: without that,
+# `#[test]` on a struct would be accepted and dropped, which is the silence the whole rule
+# exists to end.
+fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
+	return true if p_at(p, Kind.Hash)
+	return p_at(p, Kind.Fn) if p_deco_is_test(pending)
+
+	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec)
+}
+
+# p_deco_is_test reports whether a pending list holds a `#[test]`.
+fn p_deco_is_test(pending: list[str]) -> bool {
+	for nm in pending {
+		return true if nm == "#test"
+	}
+	return false
+}
+
+# p_deco_leads spells the declarations the pending list may lead, for the sentence that turns
+# one away. A derive and an `#[obj]` name a type or a spec; a `#[test]` names a function, and
+# telling a reader who wrote one that it belongs on a `struct` would be advice for the other
+# decorator.
+fn p_deco_leads(pending: list[str]) -> str {
+	return "`fn`" if p_deco_is_test(pending)
+
+	return "`struct`, `enum` or `spec`"
 }
 
 # p_deco_says spells a PENDING entry the way the program wrote it. The list carries derive
-# arguments and `#obj` together — under a marker no spec name can be, since a `#` is not an
-# identifier character — and every sentence about the list assumed a derive, so `#[obj] fn f()`
-# was refused as `#[derive(#obj)]`: a decorator quoted at a reader who never wrote it, in a
-# spelling the language does not have.
+# arguments, `#obj` and `#test` together — under markers no spec name can be, since a `#` is
+# not an identifier character — and every sentence about the list assumed a derive, so `#[obj]
+# fn f()` was refused as `#[derive(#obj)]`: a decorator quoted at a reader who never wrote it,
+# in a spelling the language does not have.
 fn p_deco_says(nm: str) -> str {
 	return "#[obj]" if nm == "#obj"
+	return "#[test]" if nm == "#test"
 
 	return f"#[derive({nm})]"
 }
@@ -1921,7 +1953,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, Kind.RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false)
+	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false)
 }
 
 pub fn init_name(at: int) -> str {
@@ -2244,6 +2276,20 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[test]` takes no arguments and goes on a `fn`. It rides the same pending list under the
+	# same kind of marker, for the same reason: one attachment mechanism, and a `#` keeps the
+	# marker out of the namespace a derive argument is a name in.
+	#
+	# It is READ rather than refused because a test file is compiled by `zerg test` and by
+	# nothing else — so the decorator that names a test has to reach a parse somewhere, and the
+	# seed has recognised it since 1i. Refusing it here would have made `zerg` the compiler
+	# that cannot read its own test files.
+	if name == "test" {
+		p_advance(p)
+		pending.append("#test")
+		return
+	}
+
 	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
 	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
 	# module-private — so a reader who writes it has not made a typo, and telling them the
@@ -2254,7 +2300,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 
 	raise p_diag_at(p, nt.line, nt.col, "E496", f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
-	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and `#[obj]`, and no other") if name != "derive"
+	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no other") if name != "derive"
 
 	p_advance(p)
 
@@ -2403,7 +2449,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 			recv_mut = true
 		}
 		if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe))
+			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe, false))
 		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
@@ -2419,11 +2465,15 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	p.impl_ty = outer
 }
 
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> FnDecl {
+# `is_test` is the `#[test]` the caller took off the pending decorator list. It arrives as a
+# parameter rather than being read here because a decorator is its own top-level item — it is
+# read before the `fn` under it exists — and only the arm that dispatched to this one has the
+# list in hand.
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool) -> FnDecl {
 	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
 	body := parse_block(p)
 
-	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe)
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test)
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -2535,7 +2585,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 		has_ret = true
 	}
 	mut none: list[Stmt] = []
-	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe)
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

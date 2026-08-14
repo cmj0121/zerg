@@ -784,6 +784,19 @@ fn f() {
 fn main() { f() }
 EOF
 
+# `#[test]` GOES THE OTHER WAY: it is the one decorator whose declaration is a `fn`, so the
+# rule cannot be "a decorator leads a type" and the sentence cannot say so either. A reader who
+# writes `#[test]` on a struct and is told it belongs on a `struct` has been handed the other
+# decorator's advice, which is how `#[obj] fn f()` used to report `#[derive(#obj)]`.
+expect "$ZERG" test-on-a-struct E487 '`#[test]`' <<'EOF'
+#[test]
+struct P {
+	pub x: int
+}
+
+fn main() { print P(1).x }
+EOF
+
 expect "$ZERG" derive-on-an-impl E487 '`#[derive(Eq)]`' <<'EOF'
 struct P {
 	pub x: int

@@ -394,6 +394,14 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   (`E398`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
   operand is either a cc diagnostic or an answer that is quietly wrong where C converts it.
   Two cases in `reject-check.sh` carry the marker.
+- **A `#[test]` FUNCTION IS NOT TYPE-CHECKED.** The seed strips every `#[test]` out of the item
+  list before `sema.Check` runs (`dropTestItems`, `internal/build/build.go`), so `#[test] fn t()
+{ x: int = "no" }` builds and runs, and so does one calling a function that does not exist.
+  `zerg` reads `#[test]` as an ordinary decorator on an ordinary declaration and checks the body
+  like any other: a test that does not compile is a compile error, in a normal build as much as
+  under `zerg test`. The seed's stripping is not wrong for the seed — it keeps a normal build's
+  emitted C byte-identical whether or not a `#[test]` is present — but it means the one
+  compiler that runs tests is the only one that ever looks at them.
 
 ## Changing the seed
 

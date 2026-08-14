@@ -101,7 +101,12 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 
 `count` 與 `replace` 對空的 needle raise `ValueError`，與 `split` 一致。`pad_start` / `pad_end` 對不是恰好一個
 位元組的 `fill` raise `ValueError`——多位元組的填充字元無法落在位元組寬度上而不把一個 code point 切成兩半——而
-`s` 已達該寬度時原樣回傳。
+`s` 已達該寬度時原樣回傳。`fill` 在**檢查寬度之前**先被驗證，所以即使這次呼叫根本不會補任何東西，壞的 `fill`
+一樣被拒。
+
+空的 needle 是**找得到**而不是找不到，位置在各函式搜尋的那一端：`index_of` 答 `0`、`contains` 答 `true`、
+`last_index_of` 答字串的位元組長度——最後一個空 needle 就在最末一個位元組之後。拒絕它的是 `split`、`count`
+與 `replace` 三個，理由是零寬度的匹配永遠不會讓它們前進。
 
 ## `ascii`
 

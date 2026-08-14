@@ -7,18 +7,19 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group       | Is                                                 |
-| ------ | ----------- | -------------------------------------------------- |
-| `F1xx` | layout      | where the line breaks and how far it is indented   |
-| `F2xx` | spacing     | where a space goes between two tokens              |
-| `F3xx` | trivia      | what happens to what a person wrote for a person   |
-| `F4xx` | rewrites    | the rules that MOVE code rather than space it      |
-| `L1xx` | dead code   | things written that nothing reaches                |
-| `L2xx` | null safety | an optional operator that does not do what it says |
-| `L3xx` | capture     | what a coroutine or a deferred call actually took  |
-| `L4xx` | resolution  | a name that answers to more than one thing         |
-| `L5xx` | conversion  | a literal that took a type the page does not show  |
-| `E1xx` | lexical     | text that is not a token                           |
+| Prefix | Group       | Is                                                    |
+| ------ | ----------- | ----------------------------------------------------- |
+| `F1xx` | layout      | where the line breaks and how far it is indented      |
+| `F2xx` | spacing     | where a space goes between two tokens                 |
+| `F3xx` | trivia      | what happens to what a person wrote for a person      |
+| `F4xx` | rewrites    | the rules that MOVE code rather than space it         |
+| `L1xx` | dead code   | things written that nothing reaches                   |
+| `L2xx` | null safety | an optional operator that does not do what it says    |
+| `L3xx` | capture     | what a coroutine or a deferred call actually took     |
+| `L4xx` | resolution  | a name that answers to more than one thing            |
+| `L5xx` | conversion  | a literal that took a type the page does not show     |
+| `E1xx` | lexical     | text that is not a token                              |
+| `E6xx` | parser      | tokens that are not a Zerg form, where `E2xx` ran out |
 
 ## `zerg fmt`
 
@@ -561,7 +562,7 @@ goes; `F403` is a rewrite for the same reason in reverse — it inserts line bre
 wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
 wrote at all.
 
-## E1xx–E5xx — compile errors
+## E1xx–E6xx — compile errors
 
 These are not advisory. A program that hits one does not build, so each is a **compile
 error** the build stops on. They carry codes because a code is a **stable identity for a
@@ -576,10 +577,37 @@ order a build meets them:
 | `E3xx` | checking | a form whose meaning does not hold together                        |
 | `E4xx` | emitting | a form this compiler will not lower, including a `[not yet]`       |
 | `E5xx` | building | the program as a set of files, which no single file's text answers |
+| `E6xx` | parser   | the parser again: `E2xx` is full, and a range is a hundred numbers |
 
 `E5xx` is the one range that is not a point in that order. A build resolves imports before
 it lexes what they name and looks for `fn main` after everything is emitted, so the driver's
 own findings bracket the other four rather than sitting between two of them.
+
+`E6xx` is not a stage at all — it is **`E2xx` continued**. A range is a hundred numbers and
+the parser used ninety-eight of them; the rules that arrived when the parser's refusals were
+moved onto one reporting channel had nowhere in `E2xx` to go. Continuing in a fresh range is
+the only move that keeps the two properties the scheme is for: a number is never reused, and
+a reader who meets one can tell which stage is speaking.
+
+**When a range fills, open a continuation range for that stage and close the old one.** Two
+open ranges for one stage means two places to allocate from, and that is the exact condition
+the three collisions in one week came out of. Closing is what `E299` is doing in the retired
+table below: it was never issued, and retiring it is how a number is taken out of circulation
+without being spent, so `E2xx` reads as **full** rather than as one slot somebody may still
+take. `E4xx` is one number from the same position, and the emitting stage's continuation is
+the same documented cost as this one — a row here, and nothing else.
+
+That is why the table above names a **stage** rather than a range, and why `make
+error-codes-check` answers per stage:
+
+```text
+error-codes-check: next free code per stage — building E507, checking E392, emitting E499,
+                                              lexical E112, parser E610
+```
+
+It reads both the ranges and their stages out of the table above rather than carrying its own
+copy, so the answer for a stage is its **highest** range's — which is what a continuation
+means. Adding a continuation range is therefore one row here, and the advice follows it.
 
 A code sits at the **front of the message**, before the sentence: `E109 invalid escape in a
 rune literal`. Where a diagnostic carries a place, the renderer's `error:` opens the line
@@ -891,6 +919,15 @@ shipping compiler rather than a part of it (the line
 | `E504` | cannot send on a receive-only `…`                                                           |
 | `E505` | cannot close a receive-only channel `…`                                                     |
 | `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
+| `E601` | `…` needs a name, and `…` is not one                                                        |
+| `E602` | a `<-` prefix is a channel direction: only `<-chan[T]` is a type                            |
+| `E603` | `mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`     |
+| `E604` | `is` wants a type name on its right                                                         |
+| `E605` | `…` is a statement, and an expression is wanted here — **[not yet]**                        |
+| `E606` | `…` is not an expression this compiler reads — **[not yet]**                                |
+| `E607` | a match arm's body is an expression, and this one is a statement — **[not yet]**            |
+| `E608` | an f-string's literal text is malformed                                                     |
+| `E609` | an f-string hole holds more than one expression                                             |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -947,6 +984,7 @@ holds each range to exactly that: a number that is neither listed above nor list
 | `E447` | never issued: the conversion pass that numbered `E4xx` skipped it                          |
 | `E448` | an ordering that comes from `Ord` — the rule it named is the checker's, and always was     |
 | `E450` | no field `…` on a type — the same rule as the row that kept the number below it            |
+| `E299` | never issued: `E2xx` closed at `E298`, and the parser's numbers continue in `E6xx`         |
 
 ## `zerg lint`
 

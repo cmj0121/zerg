@@ -40,8 +40,9 @@ skip=0
 noplace=0
 unbuildable=0
 
-# How many refusals may still carry no place: every one of them is from the parser or the
-# emitter, which do not report through chk_at yet.
+# How many refusals may still carry no place: every one of them is from the EMITTER, which
+# does not report through a channel yet. The parser did not either — it raised, and a place
+# was whatever each site remembered to append — and that is what `p_diag` ended.
 #
 # PER KIND, and one kind is deliberately not capped. A single scalar over six mutation
 # kinds and a growing corpus had to be raised for reasons that were not regressions —
@@ -50,30 +51,31 @@ unbuildable=0
 # places while another gained them keeps the total flat, which is the one thing the total
 # cannot see.
 #
-# `extra-arg` is REPORTED and not capped. It is dominated by the parser's and the emitter's
-# `NotImplemented` refusals, which are a known gap tracked as a whole rather than through
+# `extra-arg` is REPORTED and not capped. It is dominated by the emitter's `NotImplemented`
+# refusals, which are a known gap tracked as a whole rather than through
 # this gate, and it grows by about one per corpus file — so a ceiling on it measures how
 # many test programs exist. The other five are the check.zg rules, which DO report a place,
 # and there the number is small, meaningful, and may only go down.
 #
-# Four of the five are at ZERO, and they got there the only way a ceiling may be satisfied:
-# the rules that were answering with a bare sentence — an unknown name, a construction short
-# of a required field, a `str` handed to a conversion that does not parse one — became
-# checked rules that carry a place. The last one belongs to `write-immutable` and is the
-# PARSER's, which has no diag channel at all: it raises, so `x = 1` where the surrounding
-# form wanted something else is reported as `expected X, found Y` with nowhere attached.
-# That is one gap owed once, and this is what is left of it here — a `select` arm, where a
-# write is not a statement the head can hold.
+# All five are at ZERO, and they got there the only way a ceiling may be satisfied: the rules
+# that were answering with a bare sentence — an unknown name, a construction short of a
+# required field, a `str` handed to a conversion that does not parse one — became checked
+# rules that carry a place.
 #
-# It was TWO. The other was the mutator's: this kind writes its statement on the line after
-# the binding, so a binding whose value the formatter WRAPPED had the write inserted into
-# the middle of an expression, and what got measured was the parser's opinion of `=` in a
-# place no program puts one. `ends_stmt` skips those now, and the ceiling came down with
-# them — which is the only direction it may move.
+# `write-immutable` was the last of them to fall, and it was the PARSER's: `x = 1` where the
+# surrounding form wanted something else — a `select` arm, where a write is not a statement
+# the head can hold — was reported as `expected X, found Y` with nowhere attached. The parser
+# reports through a channel of its own now (p_diag in parser.zg), so every refusal it makes
+# carries a place, and this kind's ceiling came down with them.
+#
+# It was TWO before that. The other was the mutator's: this kind writes its statement on the
+# line after the binding, so a binding whose value the formatter WRAPPED had the write
+# inserted into the middle of an expression, and what got measured was the parser's opinion
+# of `=` in a place no program puts one. `ends_stmt` skips those now.
 
 NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-0}
 NOPLACE_MAX_wrong_type=${NOPLACE_MAX_wrong_type:-0}
-NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-1}
+NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-0}
 NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-0}
 NOPLACE_MAX_mixed_operands=${NOPLACE_MAX_mixed_operands:-0}
 

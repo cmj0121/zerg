@@ -102,25 +102,38 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 此；而一個拒絕會在第一個就結束整趟執行，那正是兩種形狀的另一半意義。
 
 > **[deviation]** 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒
-> 絕。走檢查通道回報的規則永遠兩者俱全。用 `raise` 回報的規則，只有在它 raise 的字串本身寫上碼時才有碼、只有
-> 在該處自己接上後綴時才有位置——於是 parser 與 emitter 的拒絕就此分成兩半，而少數幾條**真正在檢查**的規則也
-> 跟著掉到分界線錯的那一邊。
+> 絕。三個階段裡已經有兩個有通道了。走檢查通道回報的規則永遠兩者俱全（`chk_at`，check.zg），parser 做出的每一
+> 次拒絕也是（`p_diag`，parser.zg）。**emitter** 仍然用 parser 從前的方式 raise：只有在它 raise 的字串本身寫上
+> 碼時才有碼、只有在該處自己接上後綴時才有位置——於是本段描述的那道分界線，如今是落在 emitter 與其餘所有東西之
+> 間，而仍有兩條**真正在檢查**的規則掉在錯的那一邊。
 >
 > ---
 >
-> 今日量測：在由 `raise` 回報的碼裡，約四分之三不接位置——`E210`、`E217`、`E223`、`E236`、`E446`、`E465` 這一
-> 族——其餘則接（`E224`、`E244`、`E285`、`E286`、`E404`、`E454`、`E247`–`E256` 這一組巢狀家族、`E483`）。約有
-> **七十**處診斷完全沒有**碼**，遠多於本段曾經點名的那兩則：它們就是每一個訊息寫成散文、而非以 `E###` 開頭的
-> `raise`，從 parser 的萬用兜底 _NotImplemented: `X` is not an expression this compiler reads_，一路經過
-> emitter 的 carrier、method、module 與 match 幾個家族，到 lexer 的 _f-string: a bare '}' is not text_。
-> `scripts/error-codes-check.sh` 看不見它們：它比對的是已經存在的碼與 gate、catalogue 三者，而一條沒有碼的規則
-> 在三者裡都不存在。
+> 今日量測。**parser 這一半做完了。** 它全部 **103** 處拒絕都走同一條通道，該通道把碼當成引數收下、位置自己
+> 讀，所以一處不可能帶了其中一個卻忘掉另一個。九條原本完全沒有碼的規則——包括萬用兜底
+> _`X` is not an expression this compiler reads_——拿到了 `E601`–`E609`，每一條各配一個 gate 案例與一列
+> catalogue。剩下一處 raise 刻意兩者皆無：`p_impossible`，那是任何程式都到不了的分支，給它一個碼等於給出一個沒
+> 有任何案例能斷言的身分。這次改動看得見的形狀是：`scripts/reject-check.sh` 退掉 **31** 個 `no-place` 標記、
+> `scripts/refuse-check.sh` 的 `place` 斷言從 73 個增為 **149** 個——其中 72 個加在本來就存在的案例上、4 個加在
+> 新增的案例上——而 `reject-fuzz` 的 `write-immutable` 上限，也就是 parser 最後一處沒有位置的拒絕，降到了零。
+>
+> **emitter 這一半還沒有。** 它有 **126** 個 raise 語句，其中 **76** 個以碼開頭、**13** 個接上位置；在拒絕這一
+> 側，這就是本 deviation 剩下的全部。它是同一個形狀的一次改動：在 emit.zg 裡開一條收下碼、自己讀位置的通道，然後把
+> 每一處搬上去。lexer 還有 **兩** 處——_f-string: unterminated literal_ 與
+> _f-string: a bare '}' is not text_——兩者皆無。
+>
+> `scripts/error-codes-check.sh` 靠比對三個集合是看不見一條沒有碼的規則的：它比對的是已經存在的碼與 gate、
+> catalogue 三者，而一條沒有碼的規則在三者裡都不存在。它現在改用另一個問題看見 parser 這一半——那裡若有一個
+> `raise` 自己寫訊息、而不是向通道要一則，就會被指名報出來——這個斷言正是讓通道不會被一處一處繞過去的東西，也
+> 是 emitter 那一半將來同樣會需要的。
 >
 > ---
 >
-> **檢查的規則並不豁免**，這正是舊文字說反了的地方。有兩條 `zerg` 真正**檢查**的規則回報時沒有位置：常數環
-> （_these constants depend on each other and none can be given a value first_），它連碼也沒有；以及 `E382`，
-> 一個名字被宣告兩次，它有碼而沒有位置，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。
+> **檢查的規則並不豁免**，這正是舊文字說反了的地方。常數環（_these constants depend on each other and none
+> can be given a value first_）回報時沒有位置，也沒有碼。`E382`——一個名字被宣告兩次——則是有些宣告形式帶位置、
+> 有些不帶：重複的 `type A = …` 帶位置，因為那條規則帶著 typedef 自己的位置走到通道收位置的那一半；重複的
+> `struct` 不帶，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。同一條規則，兩種答案，由絆倒它的是哪
+> 一種宣告形式決定。
 >
 > 還有兩條曾經在這份名單上、現在不在了：`` `x` is used after del `` 與它 on-some-paths 的手足，如今是 `E297`
 > 與 `E298`。規則本身沒有任何改變——它們從 `raise` 搬到了檢查通道，而那正是唯一決定這個問題的東西，

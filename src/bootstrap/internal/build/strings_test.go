@@ -64,12 +64,16 @@ func TestStringsTransform(t *testing.T) {
 
 // TestStringsSplitEmptySepAborts pins that an empty separator is a loud ValueError
 // (abort), not a silent surprise.
+//
+// The KIND is half the assertion, and it is the half that was missing: the test said
+// ValueError in its name and checked only the text, while the raise threw a bare `str`
+// and the abort line said `strings.split: empty separator` with no kind in front of it.
 func TestStringsSplitEmptySepAborts(t *testing.T) {
 	out := runProgramRTAbort(t, "import \"strings\"\n"+
 		"fn main() {\n"+
 		"\tprint strings.join(strings.split(\"abc\", \"\"), \"|\")\n"+
 		"}\n")
-	if !strings.Contains(out, "empty separator") {
+	if !strings.Contains(out, "ValueError: strings.split: empty separator") {
 		t.Fatalf("expected empty-separator abort, got %q", out)
 	}
 }

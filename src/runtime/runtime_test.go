@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -30,6 +31,18 @@ func findCC() string {
 // spelling them out each time buries what the test is actually about.
 func buildConcurrent(t *testing.T, name, src string) string {
 	t.Helper()
+	return buildUnits(t, name, src, true)
+}
+
+// buildCore is buildConcurrent without the scheduler: a driver that runs on the one thread
+// it started on links the core runtime and nothing else.
+func buildCore(t *testing.T, name, src string) string {
+	t.Helper()
+	return buildUnits(t, name, src, false)
+}
+
+func buildUnits(t *testing.T, name, src string, conc bool) string {
+	t.Helper()
 	cc := findCC()
 	if cc == "" {
 		t.Skip("no C compiler found")
@@ -39,7 +52,9 @@ func buildConcurrent(t *testing.T, name, src string) string {
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	if conc {
+		cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	}
 	driver := filepath.Join(dir, name+".c")
 	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
 		t.Fatalf("write driver: %v", err)
@@ -875,6 +890,55 @@ func TestBuiltinAbortsNameTheirKind(t *testing.T) {
 		})
 	}
 }
+
+// TestRaisedErrRendersItsKind pins the other half of that contract: the `Kind: ` prefix is
+// a property of the abort LINE and not of the message, so an Err a program built and raised
+// itself reports exactly as an intrinsic one does.
+//
+// The two paths used to differ, and the difference was invisible from here because every
+// runtime literal spelled the prefix into itself — `zrt_abort_kind(ZRT_ERR_INDEX,
+// "IndexError: index out of range")`. A program's own `raise ValueError("bad input")` built
+// the same kind with a message that had no prefix in it, so it reached stderr as `bad
+// input` and docs/conformance.md's claim held only for errors the runtime raised itself.
+//
+// The untyped case is the reason the prefix cannot simply always be there: a bare
+// `raise "…"` builds an Err with NO kind, and there is nothing to name.
+func TestRaisedErrRendersItsKind(t *testing.T) {
+	cases := []struct {
+		name string
+		stmt string
+		want string
+	}{
+		{"constructed", `zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "bad input"));`, "ValueError: bad input\n"},
+		{"intrinsic", `zrt_abort_kind(ZRT_ERR_INDEX, "index out of range");`, "IndexError: index out of range\n"},
+		{"untyped", `zrt_abort("boom");`, "boom\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := buildCore(t, "raise_"+tc.name, fmt.Sprintf(abortLineC, tc.stmt))
+			_, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+			if code != 1 {
+				t.Errorf("exit=%d, want 1", code)
+			}
+			// The WHOLE line, unlike the concurrency cases above: these messages are
+			// this test's own, so there is no non-normative text to leave room for.
+			if errOut != tc.want {
+				t.Errorf("stderr=%q, want %q", errOut, tc.want)
+			}
+		})
+	}
+}
+
+// abortLineC aborts once, with no handler anywhere: the last-resort arm of the abort core,
+// which is the shape a program that raises out of main has.
+const abortLineC = `
+#include "zergrt.h"
+
+int main(void) {
+    %s
+    return 0;
+}
+`
 
 // sendOnClosedC: main gives up the only send end, which closes the channel cleanly, then
 // sends on the receive handle it kept. Nothing can take that value and nothing ever will,

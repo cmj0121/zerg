@@ -21,8 +21,8 @@
 
 #include "zergrt.h"
 
-static const char *const kRangeMsg = "OverflowError: integer conversion out of range";
-static const char *const kFloatMsg = "OverflowError: float conversion out of range";
+static const char *const kRangeMsg = "integer conversion out of range";
+static const char *const kFloatMsg = "float conversion out of range";
 
 int64_t zrt_conv_i_from_i(int64_t v, int64_t lo, int64_t hi) {
 	if (v < lo || v > hi) {

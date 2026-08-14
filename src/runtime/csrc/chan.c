@@ -282,7 +282,7 @@ void zrt_chan_sender_release(zrt_chan *ch) {
  * is written down. A send on a closed channel is a program error, not a value: the
  * counterparty is gone and there is nothing to hand the value to. */
 static _Noreturn void chan_send_closed(void) {
-	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "SendOnClosedError: send on a closed channel");
+	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "send on a closed channel");
 }
 
 /* chan_deadlock is the protocol every park point in this file owes the abort that follows

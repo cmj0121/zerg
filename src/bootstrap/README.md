@@ -170,7 +170,7 @@ The seed is deliberately the narrower compiler, and it refuses most of what it h
 built. These are the places it does NOT — where it does not turn a program away ITSELF, so
 `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
 
-"Itself" is the whole of it. Two of the two remaining were counted as refusals for a year
+"Itself" is the whole of it. Two of the entries below were counted as refusals for a year
 because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 `-Waddress-of-temporary` are errors there and warnings under gcc, so the same seed and the
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
@@ -298,6 +298,29 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   program to reach it — the same reasoning that folds a literal in a typed position. The
   seed folds nothing here and emits the division, whose runtime check then raises. Both
   refuse the program in the end; only one of them does it before the program runs.
+
+- **A `pub` declaration may name a module-private TYPE.** `pub fn make() -> Secret` beside a
+  module-private `struct Secret` is accepted, so a dependent obtains a value of a type it
+  could never have spelled — "a declaration can never be more visible than the types it
+  names" (docs/runtime/package.md) is unenforced. The same goes for a parameter, for a `pub`
+  field whose type is private, and for a `pub` METHOD on a private type — the last is the
+  same sentence read about a receiver, and the specification's "a type's `pub` methods travel
+  with it" is what makes it one rule rather than a separate courtesy. `zerg` refuses each at
+  the declaration, which is the party with a line to change. The seed IS the stricter
+  compiler on the neighbouring rule — it has
+  refused a module-private type named through a namespace (`lib.Secret`) since it was
+  written, and only the qualified spelling, because it never flattens a type into the
+  importer's namespace at all.
+- **A module-private FIELD is readable, and writable, from another module.** The seed
+  requires the default that GRAMMAR#field makes a private field carry — so external code can
+  construct the type without naming a value it may not read — and then lets that value be
+  read. `zerg` refuses the read and the write alike, at the use.
+- **An import is not transitive, and the seed does not enforce it.** Both compilers bind a
+  namespace into one program-wide space, so a module the build reached at all used to be one
+  every module could name: `main` importing only `mid` could still write `lib.make()`.
+  `zerg` now records which module WROTE each binding and refuses a namespace this one did not
+  import — while still telling that apart from an invented prefix, which stays an undefined
+  name in both compilers.
 
 ## Changing the seed
 

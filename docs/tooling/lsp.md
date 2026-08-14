@@ -21,8 +21,8 @@ That is also the invariant, and it is enforced rather than asserted:
 
 `make lsp` is that sentence as a gate. It drives a real session over stdio for every example and 40
 corpus programs, and holds what the server publishes to what `zerg build` and `zerg lint` say about
-the same file — errors against the command that refuses over one, information findings against the
-command that reports one. It is `make oracle`'s argument applied to the second front end.
+the same file — errors against the command that refuses over one, lint findings against the command
+that reports one. It is `make oracle`'s argument applied to the second front end.
 
 It carries **ten protocol cases** beside that, and every one of them failed once: the exit status, the
 post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification versus
@@ -55,7 +55,7 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | ------------------------------------------------------------- | -------------------------------------------------- |
 | `initialize` / `shutdown` / `exit`                            | the session                                        |
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_conversions` |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_program`     |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
@@ -80,10 +80,25 @@ not redundant with an empty string, since a client clearing a file to nothing se
 another module has to be checked with that module or every name it borrowed reads as undefined —
 a server that underlines correct code is one a person turns off.
 
-**Two severities, from two places.** An **error** is what `emit_files_diag` reports and `zerg build`
-refuses over. The `L5xx` conversion findings are about **legal** programs — a literal that took a type
-the page does not show — so they arrive as **information**. A server that paints a working
-program red teaches its user to ignore red.
+**Four severities, from two places.** An **error** — LSP severity 1 — is what `emit_files_diag`
+reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
+use. Everything else on the wire came from `lint_program`, and every one of those is a **legal**
+program that builds, so none of them is ever an error: a server that paints a working program red
+teaches its user to ignore red. The linter's own three levels are ordered — a **finding** fails
+`zerg lint`, a **warning** prints and exits 0, an **info** never gates anything
+([the linter's severities](fmt.md)) — so they land on LSP's remaining three in that order:
+
+| `Finding.sev` | `zerg lint` prints | LSP severity    |
+| ------------- | ------------------ | --------------- |
+| `""`          | `L103 …`           | 2 — warning     |
+| `"warning"`   | `warning: L601 …`  | 3 — information |
+| `"info"`      | `info: L106 …`     | 4 — hint        |
+
+The words do not line up, and they are not meant to: the left column is what a **command's exit
+status** turns on and the right is how loudly an **editor** draws. The mapping is written once, in
+`ls_severity`, and `make lsp` holds it — the gate reassembles each published diagnostic as the line
+`zerg lint` would have printed, adjective included, so a server that flattened all three into one
+severity would fail rather than agree about every count.
 
 **A code travels as a code.** `Diag` carries the rule's identity — `E307`, `L502` — in a field of
 its own, so the server sends LSP's `Diagnostic.code` and an editor can filter, group and link by it.
@@ -383,7 +398,6 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 | `completion`                                  | the same query surface                                           |
 | `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
 | a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
-| the `lint_program` findings                   | they carry a place now; nothing publishes them                   |
 | incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |
 
 The first row is the real gap and everything interactive is behind it. The information exists —

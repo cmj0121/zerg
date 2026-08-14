@@ -1242,9 +1242,10 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: Ty, e: Expr) -> str {
 }
 
 # c_carrier_drop_fn names the drop c_carrier_decl generated for this carrier, or "" when
-# the payload owns nothing and none was generated.
+# the payload owns nothing and none was generated. The test is c_carrier_decl's own, in the
+# same words, because the two are one question asked from either side.
 fn c_carrier_drop_fn(mut &em: Emitter, t: Ty) -> str {
-	return "" if c_drop_fn(em, c_carrier_elem(t)) == ""
+	return "" if not c_needs_copy(em, c_carrier_elem(t))
 	return "zg_drop_" + c_carrier_of(em, t)
 }
 
@@ -1382,9 +1383,14 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	#
 	# The copy retains only a PRESENT payload: `tag != 0` carries nothing, and retaining
 	# whatever bytes sit in `ok` would count a cell the carrier does not hold.
-	df := c_drop_stmt(em, left, "r->ok")
-	return d if df == "(void)(r->ok);"
+	# WHETHER TO EMIT THE PAIR IS THE QUESTION THE CALL SITES ASK, and it is asked in their
+	# words. This used to compare c_drop_stmt's TEXT against the do-nothing spelling, while
+	# c_copy_of, c_elem_kind and c_drop_thunk each decided to name these helpers from
+	# c_needs_copy — so a payload the two dispatches disagreed about got no helpers and was
+	# named anyway. `(int, str)?` was that payload, and cc reported the undefined symbol.
+	return d if not c_needs_copy(em, left)
 
+	df := c_drop_stmt(em, left, "r->ok")
 	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
 	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
 	d = d + "}\n"
@@ -3844,7 +3850,6 @@ fn c_elem_vt(mut &em: Emitter, t: Ty) -> str {
 	k := c_elem_kind(em, t)
 
 	return "zg_listvt" if k == ""
-	return k + "_listvt" if c_is_tuple(t)
 
 	return "zg_listvt_" + k
 }
@@ -3857,7 +3862,6 @@ fn c_elem_copy_fn(mut &em: Emitter, t: Ty) -> str {
 	k := c_elem_kind(em, t)
 
 	return "NULL" if k == ""
-	return k + "_elemcopy" if c_is_tuple(t)
 
 	return "zg_elemcopy_" + k
 }
@@ -3944,9 +3948,16 @@ fn c_drop_stmt(mut &em: Emitter, t: Ty, place: str) -> str {
 	return f"{f}({c_drop_arg(em, t, place)});"
 }
 
-# c_drop_fn is what gives a value of this type back, or "" for one that owes nothing. A
-# TUPLE is deliberately "" — it has a copy helper and no drop, so a tuple holding a list
-# still leaks it, which is a leak and not a corruption and is named in the README table.
+# c_drop_fn is what gives a value of this type back, or "" for one that owes nothing.
+#
+# IT ANSWERS FOR EXACTLY THE TYPES c_needs_copy ANSWERS TRUE FOR, and that is not a
+# coincidence to be re-derived at each call site — it is the invariant every emitter here
+# relies on: a helper is generated for the types that need a copy, and named by the types
+# that need a drop, so a kind the two dispatches disagree about is C naming a function
+# nobody declared. A TUPLE used to be that kind: `c_needs_copy` walked its elements and
+# said true while this said "" (there is no declared name to build `zg_drop_<name>` out
+# of), so `(int, str)` leaked its str, and `(int, str)?` — whose carrier decides what to
+# emit from HERE and is read through c_needs_copy — reached cc as an undefined symbol.
 #
 # A STRUCT AND AN ENUM ARE THE SAME ANSWER, `zg_drop_<name>`, because they are the same
 # question: a declared type that owns what its parts own. The enum was excluded here and
@@ -3956,6 +3967,10 @@ fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
 	return "zrt_str_release" if c_is_str(t)
+
+	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
+	# pair together, under this same question asked as c_needs_copy
+	return f"{c_tuple_cname(ty_tuple_elems(t))}_drop" if c_is_tuple(t) and c_needs_copy(em, t)
 
 	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
 	# the payload owns nothing
@@ -11261,9 +11276,18 @@ fn c_tuple_ty(mut &em: Emitter, elems: list[Expr]) -> Ty {
 # c_tuple_cname is the carrier's C name. It is a PURE function of the shape because c_type
 # needs the same spelling and has no Emitter to ask — registering the typedef is
 # c_tuple_name's job, and every tuple reaches it through its literal.
-# c_tuple_copy_helper emits the tuple's copy and the element thunk that lets a list of it
-# reach one. It is the struct helper's shape with `f0`-style fields instead of names.
-fn c_tuple_copy_helper(mut &em: Emitter, name: str, tys: list[Ty]) -> str {
+# c_tuple_helpers emits the tuple's copy and the drop that balances it. It is c_copy_helper
+# and c_drop_helper's shape with `f0`-style fields instead of names, and the two are written
+# in one function for the reason those two are written next to each other: a field the copy
+# retains and the drop does not release is a leak, and the reverse is a use-after-free.
+#
+# The drop was missing entirely. The copy alone was the whole of a tuple's ownership, so
+# `t := (i, s)` retained the str and nothing ever gave it back — one allocation a round,
+# which scripts/mem-check.sh counts.
+#
+# THE FIELDS ARE RELEASED IN REVERSE, which is the order docs/core/memory.md pins inside an
+# aggregate and the order c_enum_variant_drop already walks.
+fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[Ty]) -> str {
 	mut out := f"static {name} {name}_copy({name} v) {{\n    {name} r = v;\n"
 	mut i := 0
 	for i < tys.len() {
@@ -11274,8 +11298,17 @@ fn c_tuple_copy_helper(mut &em: Emitter, name: str, tys: list[Ty]) -> str {
 		i = i + 1
 	}
 	out = out + "    return r;\n}\n"
-	out = out + f"static void {name}_elemcopy(void *dst, const void *src) {{ *({name}*)dst = {name}_copy(*(const {name}*)src); }}\n"
-	return out + f"static const zrt_elem_vt {name}_listvt = {{{name}_elemcopy, NULL}};\n"
+
+	out = out + f"static void {name}_drop({name} *v) {{\n"
+	mut j := tys.len() - 1
+	for j >= 0 {
+		fj := f"f{strconv.to_string(j, 10)}"
+		if c_needs_copy(em, tys[j]) {
+			out = out + "    " + c_drop_stmt(em, tys[j], f"v->{fj}") + "\n"
+		}
+		j = j - 1
+	}
+	return out + "}\n"
 }
 
 fn c_tuple_cname(tys: list[Ty]) -> str {
@@ -11317,7 +11350,7 @@ fn c_tuple_decl(mut &em: Emitter, tys: list[Ty]) -> str {
 	em.tup_names.append(name)
 	out = out + decl + f" }} {name};\n"
 	if c_needs_copy(em, Ty.TTuple(tys)) {
-		out = out + c_tuple_copy_helper(em, name, tys)
+		out = out + c_tuple_helpers(em, name, tys) + c_elem_vt_helper(em, Ty.TTuple(tys))
 	}
 	return out
 }
@@ -12030,12 +12063,13 @@ fn c_pend_release(mut &em: Emitter, local: str, thunk: str, ind: str) -> str {
 # c_elem_kind, the one that exists so the decision is not written out twice, plus a prefix.
 # It was a longhand copy, and the copy is how a kind gets added to one and not the other.
 #
-# A TUPLE is the exception: it has an element vtable under a different naming scheme and no
-# drop at all, which is the leak the README table names.
+# A TUPLE used to be the exception — an element vtable under a naming scheme of its own and
+# no drop thunk in it — so this had to name the exception too. It has the same trio under
+# the same names as every other kind now, and the exception is gone from all three.
 fn c_drop_thunk(mut &em: Emitter, t: Ty) -> str {
 	k := c_elem_kind(em, t)
 
-	return "" if k == "" or c_is_tuple(t)
+	return "" if k == ""
 
 	return "zg_elemdrop_" + k
 }

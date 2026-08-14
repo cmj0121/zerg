@@ -144,10 +144,18 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 ——`s = s + x` 要讀 `s` 才做得出自己的右手邊。
 
 > **[deviation]** 只有遞迴 `enum` 與 carrier 這麼做。指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或
-> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;一個 `tuple` 在 scope 結束時也一樣——它有 copy helper
-> 而完全沒有 drop——`for … in` 走訪一個 **map** 時複製出來的那份集合也是。fn value 的部分實測過:迴圈裡
-> `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包的環境,以及它捕獲的那個值。每一個都是同一組配對缺了
-> 一半,而不是各自的規則;而且 `make mem-check` 裡目前一個案例都沒有——這正是「一道量不到東西的 gate」長的樣子。
+> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;`for … in` 走訪一個 **map** 時複製出來的那份集合也是,
+> **force-unwrap** 抄出來的那份 payload 也是——`q!` 交回的是 carrier 所持有之物的一份複本,而只讀其中一個欄位
+> 的運算式會把其餘的丟掉。fn value 的部分實測過:迴圈裡 `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包
+> 的環境,以及它捕獲的那個值。force-unwrap 也實測過:迴圈裡 `p: str? = s` 之後 `q!`,每輪漏一個。每一個都是
+> 同一組配對缺了一半,而不是各自的規則;而且 `make mem-check` 裡目前一個案例都沒有——這正是「一道量不到東西
+> 的 gate」長的樣子。
+>
+> **tuple 在 scope 結束時**本來也在那份名單上,現在不在了。它曾經有 copy helper 而完全沒有 drop,所以
+> `t := (1, s)` retain 了那個 `str`、卻沒有任何地方把它還回去;現在它的 `_copy` 旁邊有一份 `_drop`,而
+> `make mem-check` 的 `tuple_heap` 會把它數出來。缺的那一半也正是 `(int, str)?` 根本編不起來的原因——
+> carrier 是從 drop 那個問題決定要 emit 什麼,它的呼叫端卻是從 copy 那個問題決定要叫什麼名字,於是那個被兩
+> 邊答得不一樣的型別,在 C 裡被叫了名字、卻沒有任何地方宣告過它。
 
 **`spawn` 捕獲的值屬於那個 coroutine**,不屬於發起它的 scope:環境為每一個捕獲值取得自己的一份 reference,並把它
 **交給** coroutine,由後者的 by-value 參數在函式體返回時還回去。那是每個捕獲值、在每一條退出路徑上各還一次,

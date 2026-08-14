@@ -1618,7 +1618,7 @@ fn pkg_decls(files: list[str], own: list[bool], mut &fixts: list[Fixt], mut &tes
 			if fd.is_fixture {
 				fixts.append(mk_fixture(fd, errs))
 			} else if fd.is_test and own[i] {
-				tests.append(mk_test(fd))
+				tests.append(mk_test(fd, errs))
 			}
 		}
 		i = i + 1
@@ -1663,7 +1663,28 @@ fn mk_fixture(fd: zerg.FnDecl, mut &errs: list[str]) -> Fixt {
 # one. The qualifier is resolved away at the parse — `testing.Context` and a local `Context`
 # are one name by then — which is the same ambiguity this compiler already has everywhere
 # else.
-fn mk_test(fd: zerg.FnDecl) -> Tst {
+#
+# A `#[test]` DECLARES NO RETURN TYPE, and that is REFUSED here rather than warned about.
+# `#[test] fn t() -> bool { return false }` was reported `ok`: the driver writes the call as a
+# statement, so the value went nowhere, and the one reader who could have been told — a person
+# who believes the value is the verdict — was told the opposite. Go refuses the same shape
+# outright (`wrong signature for TestX`).
+#
+# WHY A REFUSAL AND NOT A LINT. A lint is advice and exits 0, so `zerg test` would go on
+# printing `ok` for that function while a second command elsewhere disagreed — which is this
+# whole class of defect, one tool answering calmly and wrongly about what another can see. It
+# is refused where the decorator MEANS something, beside the fixture rules and through the same
+# channel: reported with a place, for the whole tree, before anything is compiled or run.
+#
+# IT IS ABOUT `#[test]` AND NOT ABOUT `#[fixture]`. A fixture hands its value over by CALLING
+# its `use: fn (T)` continuation, so what it produces is already declared and a return type
+# there is a separate question.
+fn mk_test(fd: zerg.FnDecl, mut &errs: list[str]) -> Tst {
+	at := f"{fd.path}:{fd.line}:{fd.col}"
+	if fd.has_ret {
+		errs.append(f"{at}: the test `{fd.name}` declares `-> {zerg.ty_name(fd.ret)}` and nothing reads it — a `#[test]` answers with an `assert`, and the driver calls it as a statement, so the value would be dropped; drop the return type, or `assert` what you were going to return")
+	}
+
 	mut pnames: list[str] = []
 	mut ptys: list[str] = []
 	mut isctx: list[bool] = []

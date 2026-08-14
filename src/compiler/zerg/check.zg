@@ -1379,6 +1379,85 @@ fn chk_conv_same(a: Ty, b: Ty) -> bool {
 	return c_scalar_class(a) == c_scalar_class(b) and c_scalar_bits(a) == c_scalar_bits(b)
 }
 
+# chk_conv_const is the CONSTANT layer of a written `T(x)`, and the whole of it is which entry to
+# the fold it asks.
+#
+# docs/core/types.md states the criterion as "THE VALUE IS KNOWN", and the language already had a
+# second, broader reading of that phrase: `[0; N]` reaches through a plain binding, through a
+# `const`, and through constant arithmetic over either, because a fill count asks `chk_const_eval`
+# — the fold WITH the name leaf, reading the `env_cval` column every binder fills. The conversion
+# asked `chk_int_lit`, the fold with names switched off, so `big := 300; byte(big)` died at run
+# time while `[0; big]` folded. One sentence, two answers, which is the thing this project forbids.
+#
+# It is not two folders and never was: `chk_lit_eval` and `chk_const_eval` are one recursion with
+# one operator set and one checked arithmetic, entered with `names` false or true. So this is a
+# change of ENTRY and not a new mechanism, and the notion a reader has to hold is still one.
+#
+# THE LINE FALLS AT A CALL. `byte(idi(300))` and `byte(id(300))` still raise where they run, for
+# an ordinary function and a generic one alike — a call is not a constant form, which the spec
+# says of enum discriminants in the same words: "`A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1`
+# are all the form and a call is not."
+#
+# A WRITTEN LITERAL TREE KEEPS ITS OWN SENTENCES, and that is a refinement rather than a second
+# rule: it can be told which LEAF is wrong (`byte(300 - 100)` is about the `300`, not about the
+# 200 it folds to), whether a divisor is zero, and that `uint`'s upper half is a literal too.
+# None of those questions can be asked of a value arriving through a name, so a name gets the
+# range test and the sentence that names it.
+fn chk_conv_const(mut &em: Emitter, want: Ty, e: Expr) {
+	return if not chk_into_side(want)
+
+	if chk_int_lit(e) {
+		chk_const_into_at(em, want, e, false)
+		return
+	}
+
+	f := chk_const_eval(em, e)
+
+	return if not f.ok or c_is_float(want)
+	return if chk_fold_in_range(em, want, f)
+
+	chk_out_of_range(em, want, chk_fold_offender(e, f))
+}
+
+# chk_fold_in_range is chk_int_in_range given a FOLDED value rather than a written literal. That
+# function takes a magnitude and a sign, because a literal's minus is a separate node; a fold has
+# already done the subtraction, so the sign is taken off the number here.
+fn chk_fold_in_range(mut &em: Emitter, want: Ty, f: Folded) -> bool {
+	return chk_int_in_range(em, want, f.value, false) if f.value >= 0
+
+	# THE COMPILER'S OWN ARITHMETIC IS CHECKED, so INT_MIN's magnitude is not a number this can
+	# compute — `0 - f.value` would raise inside the compiler about a value in the program. It is
+	# also the one value with nothing to compute: no target narrower than a signed 64 holds it,
+	# and a signed 64 is the type it already has.
+	mag := guard { 0 - f.value } ?? 0
+
+	return chk_int_in_range(em, want, mag, true) if mag > 0
+
+	return c_scalar_class(want) == SC_SIGNED and c_scalar_bits(want) >= 64
+}
+
+# chk_fold_offender names what the reader has to change, and the rule is the same one twice: DO
+# NOT QUOTE A NUMBER THE READER DID NOT WRITE. `300` in backticks reads as a thing on the line,
+# so a reader shown it goes looking for it — and everything reaching here got its value from
+# somewhere else, which is what made the fold necessary in the first place.
+#
+# A NAME is said together with what it holds, "`big`, which is 300", because the name IS on the
+# line and the number is what the name is hiding. Anything else is a tree the fold computed —
+# `N * 3`, `big - 0` — where no single fragment is the offender and quoting the product would
+# name none of the three things actually written; "this expression" is the phrase E332 already
+# uses next door for the same situation, so the two read alike.
+#
+# A literal tree never arrives here at all: chk_conv_const gives it to chk_const_into_at, which
+# can name the offending LEAF and says so.
+fn chk_fold_offender(e: Expr, f: Folded) -> str {
+	v := strconv.to_string(f.value, 10)
+
+	return match e {
+		Expr.EIdent(n) => f"`{n}`, which is {v},"
+		_ => f"this expression, whose value is {v},"
+	}
+}
+
 # chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
 # is not a type error. `b: byte = 300` type-checks — `int → byte` is a conversion this language
 # has — and what is wrong with it is the VALUE. Saying "cannot bind int to a byte binding"
@@ -1418,7 +1497,20 @@ fn chk_const_into_at(mut &em: Emitter, want: Ty, e: Expr, noted: bool) {
 	return if chk_lit_fits_noted(em, want, e, noted)
 	return if chk_const_unfoldable(em, want, e)
 
-	chk_at(em, "E330", f"`{chk_lit_offender(em, want, e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+	chk_out_of_range(em, want, f"`{chk_lit_offender(em, want, e, false)}`")
+}
+
+# chk_out_of_range is E330's ONE report site, and it is one because a code is an IDENTITY. Two
+# callers reach it — a written literal tree, which can be told which leaf is wrong, and a value
+# arriving through a name, which is named together with what it holds — and they are one rule
+# said two ways: the value is known, and the conversion is known to fail. A second `chk_at`
+# wearing this code would be two rules under one name, which is what `error-codes-check` refuses
+# and what a reader chasing a code would find no single answer for.
+#
+# The sentence says "the value is known" rather than "the conversion is known", which is the
+# criterion docs/core/types.md states and the one both callers actually apply.
+fn chk_out_of_range(mut &em: Emitter, want: Ty, says: str) {
+	chk_at(em, "E330", f"{says} is not a value a {ty_name(want)} holds — the value is known here, so it is reported now rather than raised")
 }
 
 fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool {

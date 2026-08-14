@@ -5678,9 +5678,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# NOT NOTED: a written conversion shows its type on the page, which is exactly what L502
 	# reports the absence of — and `b'\n'` desugars to this very node, so noting it told the
 	# reader to "write `byte(10)`" about a line that already said `b'\n'`.
-	if chk_into_side(ty) and chk_int_lit(x) {
-		chk_const_into_at(em, ty, x, false)
-	}
+	chk_conv_const(em, ty, x)
 
 	# `uint(18446744073709551615)` IS THE MOST EXPLICIT SPELLING THERE IS, and it was the one
 	# still refused: a conversion's operand is rendered before the target reaches c_conv_scalar,

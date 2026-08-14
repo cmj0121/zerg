@@ -221,9 +221,17 @@ A built-in error's message has the form `Kind: text` (for example `IndexError: l
 The exact `text` is not normative; the `Kind:` prefix for a taxonomy error is. See [Errors](code/errors.md) for
 the built-in error kinds and which operations raise them.
 
-> **[deviation]** A hardware fault that the runtime cannot intercept — today, a coroutine stack overflowing
-> past its guard page, or `main`'s unguarded native stack — terminates the process by signal without
-> running `defer`s, rather than as a clean `StackOverflowError` abort. See [Errors](code/errors.md).
+> **[deviation]** A stack overflow — a coroutine running past its guard page, or `main` past its native
+> stack — now dies with its name: the runtime's fault handler writes `StackOverflowError: stack overflow`
+> to standard error and terminates with exit status **1**, steps 1 and 3 of the contract above. What
+> still deviates is step 2: the faulting stack is exhausted and cannot be unwound from a signal handler,
+> so the pending `defer`s are **skipped**, not run — and unlike an ordinary abort, which a coroutine
+> contains to itself, an overflow ends the whole process wherever it happens. A fault the handler does
+> not recognise is handed back to whatever held the signal before the runtime did (a sanitizer's handler,
+> or the default disposition), so it dies as the signal it is with that handler's diagnostic intact. The
+> two windows it does claim are **one page each** — a coroutine's guard page exactly, and the single page
+> below `main`'s stack bound — which is also the whole of what it can misname: an access into that one
+> page under `main` reads as an overflow. See [Errors](code/errors.md).
 
 ## The C the reference implementation emits
 
@@ -249,8 +257,9 @@ The specification uses these terms precisely:
 - **Undefined behavior (UB)** — the spec places no requirement on the result. A conforming program must
   avoid it; a conforming implementation may do anything, including crash. Zerg's design goal is to have
   **no reachable UB from safe code**; where the bootstrap currently admits UB, the chapter marks it a
-  **[deviation]** (for example, a coroutine stack overflow is a hardware fault rather than a clean
-  `StackOverflowError` — see [Errors](code/errors.md)).
+  **[deviation]** (for example, a stack overflow is a hardware fault the runtime names
+  `StackOverflowError` and exits 1 on, rather than a clean unwind that runs the pending `defer`s — see
+  [Errors](code/errors.md)).
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
   points, each detailed in its chapter, include:

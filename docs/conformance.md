@@ -133,7 +133,7 @@ of what the two shapes are.
 >
 > ---
 >
-> Measured today. **The parser is done.** All **103** of its refusals report through its channel. Nine
+> Measured today. **The parser is done.** Of its **103** raises, all but one report through its channel. Nine
 > rules that had no code at all — the catch-all _`X` is not an expression this compiler reads_ among them —
 > were given `E601`–`E609`, a gate case each and a catalogue row each. One raise is left with neither on
 > purpose: `p_impossible`, an arm no program reaches, where a code would be an identity no case could ever
@@ -141,9 +141,11 @@ of what the two shapes are.
 > and `reject-fuzz`'s `write-immutable` ceiling, the parser's last place-less refusal, down to zero.
 >
 > **The emitter is done too.** It had **126** raise statements, **76** opening with a code and **13**
-> appending a place; all **125** it has now go through `c_diag` / `c_diag_at`, and the missing one is a
-> rule that stopped raising — a struct and an enum record their own position, so a duplicate declaration
-> reaches the checking channel like the other four kinds. Forty-three rules that had no code were given
+> appending a place; all **123** it has now go through `c_diag` / `c_diag_at`, and the three that went
+> stopped raising rather than moved — a struct and an enum record their own position, so a duplicate
+> declaration reaches the checking channel like the other four kinds, and the two rules about a variant a
+> subject cannot hold (`E456`, `E457`) became checked findings for the same reason. Forty-three rules that
+> had no code were given
 > `E701`–`E743`, a gate case each and a catalogue row each; `E4xx` closed at `E498` with `E499` retired
 > unspent, exactly as `E2xx` closed for the parser. **No raise here is exempt.** Two were briefly written
 > as an ICE on the reasoning that the parser refuses the only shape that reaches them, and both reasonings

@@ -296,16 +296,16 @@ package **cycles be rejected**.
 > whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
 > is how both are resolved.
 >
-> **No transitivity is enforced.** A binding belongs to the MODULE of the file that wrote the `import` —
-> module-grained and not file-grained, because a module's files share one namespace — so the namespaces a
-> module may name are the ones its own files bound, its `as` aliases included and another module's
-> excluded. Naming a module this one never imported is a compile error with a place, at every position that
-> can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant read, and a
-> TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The import
-> graph decides what is compiled into
-> the build AND what is nameable inside it, and the two answers are told apart from a third: an invented
-> prefix (`bogus.f()`) names nothing anywhere and stays an **undefined name**, because sending a reader to
-> add an import for a module that does not exist would be worse than the hole.
+> **The "no transitivity" rule is enforced.** A binding belongs to the MODULE of the file that wrote the
+> `import` — module-grained and not file-grained, because a module's files share one namespace — so the
+> namespaces a module may name are the ones its own files bound, its `as` aliases included and another
+> module's excluded. Naming a module this one never imported is a compile error with a place, at every
+> position that can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant
+> read, and a TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The
+> import graph decides what is compiled into the build AND what is nameable inside it, and the two answers
+> are told apart from a third: an invented prefix (`bogus.f()`) names nothing anywhere and stays an
+> **undefined name**, because sending a reader to add an import for a module that does not exist would be
+> worse than the hole.
 >
 > > **[deviation]** **A type position discards a qualifier it cannot resolve.** `c: bogus.Counter` builds,
 > > and reads as `Counter`: a qualified type name resolves to its last segment — the flatten this chapter

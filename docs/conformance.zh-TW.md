@@ -108,15 +108,16 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 >
 > ---
 >
-> 今日量測。**parser 這一半做完了。** 它全部 **103** 處拒絕都走它的通道。九條原本完全沒有碼的規則——包括萬用兜
+> 今日量測。**parser 這一半做完了。** 它 **103** 處 raise 中，除了一處以外都走它的通道。九條原本完全沒有碼的規則——包括萬用兜
 > 底 _`X` is not an expression this compiler reads_——拿到了 `E601`–`E609`，每一條各配一個 gate 案例與一列
 > catalogue。剩下一處 raise 刻意兩者皆無：`p_impossible`，那是任何程式都到不了的分支，給它一個碼等於給出一個沒
 > 有任何案例能斷言的身分。那次改動看得見的形狀是：`scripts/reject-check.sh` 退掉 **31** 個 `no-place` 標記，而
 > `reject-fuzz` 的 `write-immutable` 上限，也就是 parser 最後一處沒有位置的拒絕，降到了零。
 >
 > **emitter 這一半也做完了。** 它原本有 **126** 個 raise 語句，其中 **76** 個以碼開頭、**13** 個接上位置；如今
-> 的 **125** 個全部走 `c_diag` / `c_diag_at`，少掉的那一個是一條不再 raise 的規則——struct 與 enum 現在各自記錄
-> 自己的位置，所以重複宣告和另外四種宣告一樣走檢查通道。四十三條原本沒有碼的規則拿到了 `E701`–`E743`，每一條各
+> 的 **123** 個全部走 `c_diag` / `c_diag_at`，少掉的三個都是不再 raise 的規則——struct 與 enum 現在各自記錄自己
+> 的位置，所以重複宣告和另外四種宣告一樣走檢查通道；而「subject 拿不到的 variant」那兩條（`E456`、`E457`）也
+> 因為同一個理由改成由檢查通道記錄。四十三條原本沒有碼的規則拿到了 `E701`–`E743`，每一條各
 > 配一個 gate 案例與一列 catalogue；`E4xx` 收在 `E498`、`E499` 未發出就退場，和 parser 關掉 `E2xx` 的做法一模一
 > 樣。**這裡沒有任何一處 raise 是例外。** 曾有兩處被寫成 ICE，理由是「唯一能走到它的形式已被 parser 擋下」，而
 > 兩個理由都錯了——`p_builtin_type_ctor` 把六個名字排除在 `E275` 之外，其中四個不是保留字，所以
@@ -155,12 +156,12 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 **一個形式要嘛被正確下降、要嘛被具名拒絕。** 它永遠不是崩潰、永遠不是靜默的錯誤答案，也永遠不是 C 編譯器或
 linker 對著沒人寫過的產生碼所報的錯。
 
-> **[deviation]** 在一個**沒有人實例化的 template** 裡,一個形式兩者皆非。這個編譯器強制的每一條規則,都由「把
-> body **下降**」那趟走訪驅動,而 template 在那趟走訪之前就被移除了——只有呼叫端要求的 specialization 會被下降
-> ——所以沒有任何呼叫抵達的 `fn f[T](xs: list[T], v: T) { xs.append(v) }` 安靜地編得過,同一個 body 去寫一個
-> immutable binding 也一樣,而那是 `E307`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷,因為它的語意
-> pass 走的是**宣告**而不是下降。這是欠一次的一個缺口,不是任何單一規則的性質。要補上它,body 必須對型別參數的
-> **bound** 檢查、而不是對具體型別——`T: Show` 上的 `x.show()` 在 `T` 還不是某個具體型別以前沒有 method 可解析,
+> **[deviation]** 在一個**沒有人實例化的 template** 裡，一個形式兩者皆非。這個編譯器強制的每一條規則，都由「把
+> body **下降**」那趟走訪驅動，而 template 在那趟走訪之前就被移除了——只有呼叫端要求的 specialization 會被下降
+> ——所以沒有任何呼叫抵達的 `fn f[T](xs: list[T], v: T) { xs.append(v) }` 安靜地編得過，同一個 body 去寫一個
+> immutable binding 也一樣，而那是 `E307`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷，因為它的語意
+> pass 走的是**宣告**而不是下降。這是欠一次的一個缺口，不是任何單一規則的性質。要補上它，body 必須對型別參數的
+> **bound** 檢查、而不是對具體型別——`T: Show` 上的 `x.show()` 在 `T` 還不是某個具體型別以前沒有 method 可解析，
 > 而下降只定義在具體型別上——那是這個編譯器還沒有的檢查器。
 
 有一個推論值得寫在這裡，因為沒有任何單一章節擁有它：沒有 `fn main` 的程式在文法上是合法的——

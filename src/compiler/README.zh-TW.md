@@ -144,16 +144,19 @@ Go emit 大部分的複雜度。決定性（M5 唯一需要的性質）不受洩
 
 每個擁有者今天做到哪裡，還剩下什麼：
 
-| 擁有者         | 今天                                                  | 還剩下什麼                   |
-| -------------- | ----------------------------------------------------- | ---------------------------- |
-| `chan`         | binding，以及沒被 bind 的 handle                      | ——                           |
-| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值             | ——                           |
-| `str`          | refcount cell；binding、參數、每一次 join             | ——                           |
-| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位 | ——                           |
-| carrier        | `!` / `??` 讀進來的那個暫存值有 drop 了               | 還缺 copy，binding 才能 drop |
-| tuple          | 有 copy helper，沒有 drop                             | 在 copy 旁邊補上 drop        |
-| ref-box        | 每個節點一次 `zrt_ref_alloc`，從來不釋放              | 遞迴型別的 drop              |
-| 以上全部       | 在宣告處註冊，靠 unwind 還回去                        | ——                           |
+| 擁有者         | 今天                                                  | 還剩下什麼            |
+| -------------- | ----------------------------------------------------- | --------------------- |
+| `chan`         | binding，以及沒被 bind 的 handle                      | ——                    |
+| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值             | ——                    |
+| `str`          | refcount cell；binding、參數、每一次 join             | ——                    |
+| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位 | ——                    |
+| carrier        | copy 加 drop；binding、參數、元素 vtable              | `Either` 的 Right     |
+| enum           | `zg_drop_<E>` 就寫在 `zg_copy_<E>` 旁邊，逐個 variant | ——                    |
+| ref-box        | cell 的 drop 就是 enum 自己的 drop                    | 改成迭代式的鏈拆解    |
+| fn value       | 捕獲環境是一個 cell；一組 `zg_*_fnptr`                | ——                    |
+| tuple          | 有 copy helper，沒有 drop                             | 在 copy 旁邊補上 drop |
+| assignment     | enum 與 carrier 的舊值會被 drop                       | 其他每一種擁有型別    |
+| 以上全部       | 在宣告處註冊，靠 unwind 還回去                        | ——                    |
 
 concurrency corpus 現在是 **0 筆洩漏報告**（從 39 筆），而 `scripts/sanitize-conc.sh` 已經打開
 `detect_leaks=1`——那裡再出現洩漏就是 regression，不是已知欠債。`str` 那一列本來不是「多 emit
@@ -169,9 +172,14 @@ mark 還回去——那本來就是其他每一條出口都會走的同一條路
 
 **還沒被量到的**是 corpus 的其餘部分。`sanitize-conc` 跑的是 17 個 concurrency case；我對另外 48
 個做了一次性的掃描，13 個裡面總共 47 筆，而且都是 concurrency case 碰不到的類別——一連串的
-rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box 的遞迴型別（就是 `ref-box`
-那一列，它從設計上就沒有被釋放過）。下一步需要的是一個涵蓋整個 corpus 的洩漏 gate，因為沒有東西
-在跑的類別，就是沒有東西在量的類別。
+rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box 的遞迴型別。
+
+`make mem-check` 是第一個能跑在別處的 gate。它建起寫在 `scripts/mem-check.sh` 裡面的 9 支程式，
+每一支各跑 5 輪與 200 輪，連結的是取代 `alloc.c` 的計數配置器，並要求兩次的存活筆數相等——所以它
+既不需要 LeakSanitizer 也不需要私有 corpus，在 macOS 上、在 fork 上都跑得起來。ref-box、carrier
+與 closure 環境就是它被寫出來要抓的那三個，而它在三個關掉之前都是紅的。它自己聲明的限制是：一個
+**有界**的洩漏——每支程式一筆，或每個位置一筆而不是每次建構一筆——在兩個輪數下是同一個數字，它看
+不見。
 
 **通往 M5 的增量階梯**（每一階都端到端測過，然後才 commit）：
 

@@ -190,7 +190,7 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 
 ## `time`
 
-時鐘與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
+時鐘、日曆與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
 channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它們的一條 `select` arm 就是 timeout 或一次 tick，
 不需要任何新語法（見 [Coroutines](../code/coroutine.zh-TW.md)）。duration 的單位是**奈秒**，與 `monotonic` 的讀數
 同單位；`<= 0` 的 duration 會立刻觸發。
@@ -199,8 +199,23 @@ channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它�
 | -------------------------- | ---------------------------------------------- |
 | `now() -> int`             | 牆鐘時間，Unix epoch 起算的整數秒              |
 | `monotonic() -> int`       | 單調時鐘讀數（奈秒；請取差值）                 |
+| `utc(t: int) -> Date`      | 把 Unix 秒數拆成 UTC 的日曆欄位                |
+| `rfc3339(t: int) -> str`   | 同一個時刻，寫成 `2025-08-15T10:22:31Z`        |
+| `duration(ns: int) -> str` | 人讀得懂的奈秒數——`1.5s`、`250ms`              |
 | `after(d) -> <-chan[int]`  | `d` 奈秒過後送出一個值，僅一次                 |
 | `ticker(d) -> <-chan[int]` | 每 `d` 奈秒送出一個值；channel 只裝**一** tick |
+
+**`Date` 只有 UTC**，這是決定而不是缺口：本地時間需要時區資料庫，那是一個 host 上的檔案，而 zero-external-dependency
+的 stdlib 不會去讀它。欄位是 `year`、`month`（1..12）、`day`（1..31）、`hour`、`minute`、`second`。轉換用的是
+civil-from-days 演算法——精確、沒有月份表、沒有閏年分支——而且**1970 之前也對**，因為 Zerg 的除法朝負無窮取整
+（`-1 / 86400` 是 `-1`，不是 `0`），取模的正負號跟著除數走。
+
+`rfc3339` 只有秒的精度，因為 `now()` 就只有這麼多。年份落在 `0000`–`9999` 之外時，有幾位就印幾位、負數帶一個前導
+`-`——那**已經不是 RFC 3339**，而之所以優於截斷，是因為差這麼遠的時鐘是一個「讀的人必須看得見」的 bug。
+
+`duration` 會挑「還留得下整數部分」的最大單位（`s`、`ms`、`µs`、`ns`），再給最多三位小數、去掉尾端的零，而且是
+**截斷不是四捨五入**——所以讀起來低於某個門檻的 duration，真的就低於它。最大單位是秒：沒有分鐘，因為 `1.5m` 會被
+讀成 milli 什麼的。
 
 送出的值是 **timer 觸發當下的 monotonic 讀數**，不是佔位符：一次 tick 可能比它觸發的時刻晚任意久才送達，而這個讀數
 正是「在乎的接收者」用來判斷自己遲了多少的依據。接收者跟不上的 `ticker` 會**停在 send 上**、而不是把 tick 排隊起來，

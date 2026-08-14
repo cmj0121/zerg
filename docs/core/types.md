@@ -277,16 +277,21 @@ the **enum name is a value namespace** — `Color.Green` names the variant and `
 — with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding
 `nil`, never a wrong variant).
 
-> **[deviation]** The namespace is not the enum's. A **variant name belongs to the first enum that declares
-> it**, program-wide: with `enum Colour { Red; Green }` ahead of `enum Signal { Red; Amber }`, the
-> qualified `Signal.Red` — the spelling this paragraph tells a reader to use — is refused with _E457 `Red`
-> is a variant of `Colour`, not of `Signal`_, a sentence that is false about the program it is reporting
-> on, and with no place. So the second enum's variant is unreachable and the enum itself is unusable. The
-> linter meanwhile still emits `L401` for the same pair and advises writing `Signal.Red`, which is the one
-> spelling the compiler will not take.
-> A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
-> reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
-> `Encode` / `Decode` impl (**[not yet]**), never a decorator.
+The namespace is the **enum's**, and two enums may each declare a `Red`: with `enum Colour { Red; Green }`
+and `enum Signal { Amber; Red }`, `Colour.Red` and `Signal.Red` are two different variants that are spelled
+alike, each with its own discriminant. A qualified name is resolved **inside the enum it names**, so naming
+one the enum does not declare is _E457 `Apple` is a variant of `Fruit`, not of `Colour`_ — a sentence about
+the enum on the line, with a place.
+
+> **[deviation]** A **bare** variant name is not a value in this compiler: `c := Red` is _E383 `Red` is a
+> variant of `Colour`, and a variant is named through its enum_, where [Grammar](../surface/grammar.md)
+> makes a bare name a variant when it resolves to one. Where two enums declare the name, the suggestion in
+> that sentence names the first of them — it is one of the two spellings that would work, not necessarily
+> the one meant.
+
+A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
+reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
+`Encode` / `Decode` impl (**[not yet]**), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,

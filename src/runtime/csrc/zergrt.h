@@ -465,14 +465,14 @@ zrt_err zrt_taken_err(void);
 
 /* One message per fault, named once: each helper below is `static inline` in a header, so
  * a repeated literal is re-emitted per translation unit as well as re-typed per edit. */
-#define ZRT_MSG_ADD_OVERFLOW "OverflowError: integer addition overflowed"
-#define ZRT_MSG_SUB_OVERFLOW "OverflowError: integer subtraction overflowed"
-#define ZRT_MSG_MUL_OVERFLOW "OverflowError: integer multiplication overflowed"
-#define ZRT_MSG_NEG_OVERFLOW "OverflowError: integer negation overflowed"
-#define ZRT_MSG_DIV_OVERFLOW "OverflowError: integer division overflowed"
-#define ZRT_MSG_SHIFT_WIDTH  "OverflowError: shift distance outside the type width"
-#define ZRT_MSG_DIV_ZERO     "DivideByZeroError: division by zero"
-#define ZRT_MSG_MOD_ZERO     "DivideByZeroError: remainder by zero"
+#define ZRT_MSG_ADD_OVERFLOW "integer addition overflowed"
+#define ZRT_MSG_SUB_OVERFLOW "integer subtraction overflowed"
+#define ZRT_MSG_MUL_OVERFLOW "integer multiplication overflowed"
+#define ZRT_MSG_NEG_OVERFLOW "integer negation overflowed"
+#define ZRT_MSG_DIV_OVERFLOW "integer division overflowed"
+#define ZRT_MSG_SHIFT_WIDTH  "shift distance outside the type width"
+#define ZRT_MSG_DIV_ZERO     "division by zero"
+#define ZRT_MSG_MOD_ZERO     "remainder by zero"
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
 	int64_t r;
@@ -799,9 +799,14 @@ zrt_list zrt_listdir(const char *path);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
-/* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just
- * abort-message output; the stream primitives below are the io module's leaves. */
-void zrt_report(const char *msg);
+/* zrt_report writes one diagnostic line to stderr: `kind: msg`, or `msg` alone when kind
+ * is NULL. The MVP sys surface is just abort-message output; the stream primitives below
+ * are the io module's leaves.
+ *
+ * The kind arrives as a separate argument, and is not folded into the message by the
+ * caller, because this is the abort path: joining them costs an allocation that can fail
+ * and that nobody is left to free. */
+void zrt_report(const char *kind, const char *msg);
 
 /* --- io streams (sys.c, Phase 1f) ---------------------------------------------
  *

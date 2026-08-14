@@ -1290,11 +1290,17 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# forcing a Right RE-RAISES it when it is an Err — the reason it is there is in it. An
 	# optional's absent side and a general Either's Right carry no abort, so forcing one
 	# raises a message of its own.
+	#
+	# The Err goes up WHOLE — message, cause and kind — and the runtime renders the kind's
+	# name onto the abort line, so a clean close (the message "channel closed" under the
+	# kind StopIteration) is still told apart from a crash without this having to build the
+	# prefix itself. It used to, in a `zg_err_kindname` prelude that was a second copy of
+	# the taxonomy's numbering.
 	mut fail := "zrt_raise_err(zrt_err_new(\"force-unwrap of a Right\"));"
 	if ty_is_opt(c) {
 		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
 	} else if c_is_err_ty(c_either_right(c)) {
-		fail = "zg_force_fail(" + c_res_err("r") + ");"
+		fail = "zrt_raise_err(" + c_res_err("r") + ");"
 	}
 	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
 
@@ -1325,29 +1331,6 @@ fn c_carrier_ty_cname(c: Ty) -> str {
 fn c_carrier_left(c: Ty) -> Ty {
 	return c_opt_elem(c) if ty_is_opt(c)
 	return c_either_left(c)
-}
-
-# c_carrier_prelude is what every force helper lands on: an Err that was never meant to
-# be forced, re-raised as the abort it is.
-#
-# The Err goes up WHOLE — message, cause and kind — with only the kind's NAME prefixed
-# onto the message, which is the same `Kind: message` shape a runtime abort already
-# reports. That prefix is the whole reason this is not a one-liner: a clean close carries
-# the message "channel closed" under the kind StopIteration, and an abort that said only
-# "channel closed" would leave the reader to guess which of the two endings they had.
-# A generic Err (kind NONE, what a bare `raise "…"` builds) has no name to add, so a
-# crash reason arrives verbatim — which is what makes a forced crash readable at all.
-fn c_carrier_prelude() -> str {
-	mut out := "static const char *zg_err_kindname(int k) {\n"
-	for nm in c_err_kinds() {
-		out = out + "    if (k == " + strconv.to_string(c_err_kind(nm), 10) + ") { return \"" + nm + "\"; }\n"
-	}
-	out = out + "    return NULL;\n}\n"
-	out = out + "static void zg_force_fail(zrt_err e) {\n"
-	out = out + "    const char *k = zg_err_kindname(e.kind);\n"
-	out = out + "    if (k != NULL) { e.msg = zrt_str_concat(k, zrt_str_concat(\": \", e.msg)); }\n"
-	out = out + "    zrt_raise_err(e);\n}\n"
-	return out
 }
 
 # A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer PLUS an
@@ -8868,7 +8851,7 @@ fn c_const_cycle_says(f: File, done: list[bool]) -> str {
 #
 # The `Result[nil]` arm maps the entry's Result to the exit docs/runtime/package.md
 # specifies: a Left exits 0, and a Right REPORTS its Err on stderr and exits 1. The
-# reporting is zg_force_fail — the same funnel a forced Err already goes up, `Kind:
+# reporting is zrt_raise_err — the same funnel a forced Err already goes up, `Kind:
 # message` and all — raised from the wrapper, so the message travels the root handler's
 # own path and the exit status is the one every abort already has. Both used to be
 # dropped: such a main fell to the nil shape, its `Right` was discarded and the program
@@ -8897,10 +8880,8 @@ fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
 	if ret_res {
 		# The Result travels as an int64 exit code so the two shims `-> int` already has
 		# carry it — args or not, concurrent or not — rather than a third family of
-		# entry shims existing for one tag test. zg_force_fail is in the carrier
-		# prelude, which the `Result[nil]` in main's own signature guarantees is
-		# emitted; the raise lands on the root handler the shim armed, which reports
-		# the message and answers 1.
+		# entry shims existing for one tag test. The raise lands on the root handler the
+		# shim armed, which reports the message and answers 1.
 		em.used_rt = true
 		rcn := c_carrier_ty_cname(ret)
 		mut callargs := ""
@@ -8908,7 +8889,7 @@ fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
 			callargs = "__zerg_args"
 		}
 		mut body := f"    {rcn} zgt_r = zg_main({callargs});\n"
-		body = body + "    if (" + c_res_is_right("zgt_r") + ") { zg_force_fail(" + c_res_err("zgt_r") + "); }\n    return 0;\n"
+		body = body + "    if (" + c_res_is_right("zgt_r") + ") { zrt_raise_err(" + c_res_err("zgt_r") + "); }\n    return 0;\n"
 		if has_args {
 			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + body + "}\n\n"
 			return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args_int(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
@@ -11771,10 +11752,11 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # i + 1, and kind 0 is the untyped Err a bare `raise` carries. Those numbers are the
 # runtime's ABI (zergrt.h's zrt_err_kind), so the ORDER here is not free.
 #
-# Both directions read this one list — c_err_kind maps a name to its number, and the
-# prelude's zg_err_kindname maps the number back to the `Kind: ` prefix a forced Err
-# reports under. A second copy is how a tenth kind arrives with half a mapping and loses
-# its prefix silently, which is exactly the failure the prefix exists to prevent.
+# One direction only: a NAME to its number, which is what a `raise ValueError(…)` needs.
+# The way back — a number to the `Kind: ` prefix an abort line reports under — belongs to
+# the runtime, which renders it in zrt_err_kindname; this file used to emit a second copy
+# of the numbering into every program to do it, and a second copy is how a tenth kind
+# arrives with half a mapping and loses its prefix silently.
 #
 # The last three are the ones the concurrency chapter names. DeadlockError and
 # SendOnClosedError are raised by the runtime, and StopIteration is the sentinel a clean
@@ -12754,12 +12736,6 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	mut carriers: list[Ty] = []
 	c_decl_types(sites, tuples, carriers)
 
-	# the force helpers land on zg_force_fail, so it goes ahead of the FIRST carrier
-	# wherever that is — here when a declaration named one, with the on-demand carriers
-	# below otherwise. Exactly one of the two writes it.
-	if carriers.len() > 0 {
-		types = types + c_carrier_prelude()
-	}
 	types = types + c_type_decls(em, f, carriers, tuples)
 	mut i := 0
 	for i < f.enums.len() {
@@ -12870,14 +12846,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# the moment it was written. The ones a DECLARATION names went through the type sweep
 	# instead, in dependency order among the enums and structs; the shape registries are
 	# shared, so a shape is emitted exactly once whichever path first met it.
-	#
-	# The prelude asks res_names, not res_decls: the stream now holds tuples too, and a
-	# tuple-only program owes no force helper — while a carrier inlined INSIDE a tuple's
-	# text is in the stream without a res_decls entry of its own, and still calls it.
 	mut ress := ""
-	if em.res_names.len() > 0 and carriers.len() == 0 {
-		ress = c_carrier_prelude()
-	}
 	for d in em.res_decls {
 		ress = ress + d
 	}

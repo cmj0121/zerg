@@ -487,7 +487,7 @@ void zrt_sched_park(void) {
 }
 
 _Noreturn void zrt_sched_deadlock(void) {
-	zrt_abort_kind(ZRT_ERR_DEADLOCK, "DeadlockError: all coroutines blocked (deadlock)");
+	zrt_abort_kind(ZRT_ERR_DEADLOCK, "all coroutines blocked (deadlock)");
 }
 
 void zrt_sched_wake(zrt_coro *co) {

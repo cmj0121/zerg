@@ -213,7 +213,7 @@ What each owner does today, and what is left:
 | enum           | `zg_drop_<E>` beside `zg_copy_<E>`, per variant   | —                           |
 | ref-box        | the cell's drop is the enum's own                 | an ITERATIVE chain teardown |
 | fn value       | the environment is a cell; one pair, `zg_*_fnptr` | —                           |
-| tuple          | copy helper, no drop                              | the drop beside the copy    |
+| tuple          | `_drop` beside `_copy`, per shape, element vtable | —                           |
 | assignment     | the old value is dropped for an enum, a carrier   | every other owning type     |
 | all of them    | registered where declared, given back by unwind   | —                           |
 

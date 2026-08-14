@@ -26,6 +26,7 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | `e?`                               | unwrap the `Left`, else early-return the `Right` from the function      |
 | `a ?? b` / `a?.m` / `e!`           | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`   |
 | `del ch`                           | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
+| `assert c`                         | operand temporaries, then `raise AssertionError(<message>) if not (c)`  |
 
 **Status.** Every row above works except inside an f-string hole, plus `del ch` and the operator rows on a
 user-defined type. In a hole only the plain `{x}` form does:
@@ -58,8 +59,8 @@ in this state, with the gate that holds it, is
 the compiler lowers each surface form directly, so the core form a row here NAMES goes down a
 different path in the emitter, and nothing compared the two.
 
-Three rows are undone today: the postfix guard, the while-`for`, and the range-`for`. The rest
-decline, and each decline is a measured reason rather than a gap — `for x in xs` needs the type
+Four rows are undone today: the postfix guard, the while-`for`, the range-`for`, and `assert`. The
+rest decline, and each decline is a measured reason rather than a gap — `for x in xs` needs the type
 of `xs`, and a range arm's core form does not currently build. See
 [Desugar Rules](../tooling/desugar.md).
 

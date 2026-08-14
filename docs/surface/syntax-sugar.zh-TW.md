@@ -25,6 +25,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `e?`                               | 取出 `Left`,否則從函式提前 return 那個 `Right`                   |
 | `a ?? b` / `a?.m` / `e!`           | default;optional chain 成 `nil`;force-unwrap 否則 raise          |
 | `del ch`                           | 撤銷名字**並**放掉這個持有者（要結束 stream 請用 `close(ch)`）   |
+| `assert c`                         | 運算元暫時變數,再 `raise AssertionError(<訊息>) if not (c)`      |
 
 **狀態。** 上表每一列皆可用，唯 f-string 的洞、`del ch`,以及使用者自訂型別上的運算子那幾列除外。洞裡只有純
 `{x}` 形式可用:**轉換**（`!r` / `!s` / `!a`）、**format spec**（`{x:.2f}`）與自述的 `f"{x=}"` 各自皆為
@@ -52,7 +53,7 @@ access——以及**具名引數** `f(x: 1)`,引數只以位置綁定。那一�
 遍,檢查它們是同一個程式——因為編譯器對每個 surface form 是直接 lowering 的,所以這裡某一列**點名**的那個 core 形式
 走的是 emitter 裡的另一條路徑,而沒有東西比較過兩者。
 
-今天有三列能被還原:postfix guard、while-`for`、range-`for`。其餘 decline,而每一條 decline 都是量出來的理由、不是
+今天有四列能被還原:postfix guard、while-`for`、range-`for`,以及 `assert`。其餘 decline,而每一條 decline 都是量出來的理由、不是
 缺口——`for x in xs` 需要 `xs` 的型別,而 range arm 的 core 形式目前建不起來。見
 [Desugar 規則](../tooling/desugar.zh-TW.md)。
 

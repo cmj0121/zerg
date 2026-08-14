@@ -529,6 +529,7 @@ coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
 raise         ::= 'raise' expr ( 'from' expr )?
 guard-expr    ::= 'guard' block
+assert-stmt   ::= 'assert' expr
 postfix       += '?' | '!' | '?.' identifier
 ```
 
@@ -541,6 +542,11 @@ postfix       += '?' | '!' | '?.' identifier
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
 - **`guard { … }`**——把區塊內任何 abort **降級**回值,產出 `Result[T]`(abort→value)。它是從 abort 層回來的唯一途徑,
   guard 過的 abort 就是普通 `Result`,用同一套 `?` / `??` / `match` 處理。
+- **`assert cond`**——陳述一項主張,不成立時 **raise `AssertionError`**。它只收一個條件、**再無其他**:訊息由編譯器
+  寫——主張寫在哪個檔案哪一行、主張本身的原始文字、以及比較拆開後每個運算元當時的值。需要「解釋」而非「展示」的
+  主張請寫 `raise ValueError("why") if not cond`,那才是產品程式碼的形式。它就是那個 raise 的語法糖,只是運算元會
+  **先**綁進暫時變數,訊息才不會把它們再求值一次;`assert a and b` 是兩條 assert,而且運算元絕不跨過短路運算子被
+  提出來。它**永遠會被編譯進去**——沒有任何旗標能拿掉它——`*_test.zg` 之外寫一條的代價由 linter 的 `L602` 說明。
 
 ## Group 9 — Concurrency
 

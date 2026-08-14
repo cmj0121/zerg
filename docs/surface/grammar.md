@@ -610,6 +610,7 @@ coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
 raise         ::= 'raise' expr ( 'from' expr )?
 guard-expr    ::= 'guard' block
+assert-stmt   ::= 'assert' expr
 postfix       += '?' | '!' | '?.' identifier
 ```
 
@@ -625,6 +626,14 @@ postfix       += '?' | '!' | '?.' identifier
 - **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
   (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
   handled by the same `?` / `??` / `match`.
+- **`assert cond`** — state a claim and **raise `AssertionError`** when it does not hold. It takes a
+  condition and **nothing else**: the compiler writes the message, from the position the claim was written
+  at, the claim's own source text, and the value of each operand a comparison came apart into. A claim that
+  needs explaining rather than showing is `raise ValueError("why") if not cond`, which is the production
+  form. It is sugar for exactly that raise, with the operands bound to temporaries FIRST so the message
+  cannot evaluate them a second time; `assert a and b` is two asserts, and no operand is ever lifted across
+  a short-circuiting operator. It is **always compiled in** — there is no flag that strips it — and the
+  linter's `L602` says what one costs outside a `*_test.zg` file.
 
 ## Group 9 — Concurrency
 

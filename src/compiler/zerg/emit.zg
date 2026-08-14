@@ -8100,8 +8100,23 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	return c_var_cname(em, n)
 }
 
+# c_is_bound is "did anything bind this name", and it asks the ENVIRONMENT rather than the
+# type the environment holds. c_lookup_var answers `TUnknown` for a name it does not find,
+# so reading boundness out of it conflated two different facts — no row, and a row whose
+# type nothing could work out — and the second is exactly what a binding over a REJECTED
+# expression leaves behind: `x := s[0]` on a `str` reports E320 and binds `x` as unknown.
+#
+# Every later read of that name was then reported as _E372 undefined name `x`_ — a CASCADE,
+# a second error for a mistake already named, about a binding that is right there on the
+# line above. `assert` made it worse than noise: its desugar hoists each operand into a
+# temporary of its own, so a bad operand leaked _undefined name `zga_l3c9`_ — a name the
+# author never wrote and cannot find in the file, one per conjunct of an `and`.
+#
+# Membership is what all four callers want. A local shadows a function by EXISTING, not by
+# having a type worked out; `this` is bound by the receiver being there; and a name a
+# statement bound is not a namespace and not undefined, whatever went wrong inside it.
 fn c_is_bound(mut &em: Emitter, n: str) -> bool {
-	return not c_is_unknown(c_lookup_var(em, n))
+	return c_live_idx(em, n) >= 0
 }
 
 # c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the

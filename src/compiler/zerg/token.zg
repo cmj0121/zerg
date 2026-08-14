@@ -86,6 +86,12 @@ enum Kind {
 	Del
 	Close
 	Raise
+
+	# Assert is a keyword of THIS compiler and not of the seed (GRAMMAR#assert-stmt). The
+	# word is reserved here so a program cannot bind it, which is the half of a keyword that
+	# has to arrive before the form does: `assert` was an ordinary name until now, and a
+	# reservation that lands later would take a name out from under whoever had used it.
+	Assert
 	Guard
 	With
 	Unsafe
@@ -213,6 +219,7 @@ fn kind_name(k: Kind) -> str {
 		Kind.Del => "del"
 		Kind.Close => "close"
 		Kind.Raise => "raise"
+		Kind.Assert => "assert"
 		Kind.Guard => "guard"
 		Kind.With => "with"
 		Kind.Unsafe => "unsafe"
@@ -342,6 +349,8 @@ fn lookup_keyword(w: str) -> Kind {
 		return Kind.Close
 	} else if w == "raise" {
 		return Kind.Raise
+	} else if w == "assert" {
+		return Kind.Assert
 	} else if w == "guard" {
 		return Kind.Guard
 	} else if w == "with" {

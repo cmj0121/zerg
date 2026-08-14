@@ -204,6 +204,10 @@ fn test_split_boundaries() {
 #[test]
 fn test_split_empty_separator_raises_value_error() {
 	testing.assert(raised_value_error(guard { strings.split("a,b", "") }))
+
+	# the demotion the module's own comment names, in the form its example shows: `guard`
+	# turns the abort into a value and `??` supplies what to do instead
+	testing.assert_eq(guard { strings.split("a,b", "").len() } ?? -1, -1)
 }
 
 # --- join -----------------------------------------------------------------------------
@@ -606,6 +610,9 @@ fn test_pad_empty_fill_raises_value_error() {
 fn test_pad_multibyte_fill_raises_value_error() {
 	testing.assert(raised_value_error(guard { strings.pad_start("x", 4, "ab") }))
 	testing.assert(raised_value_error(guard { strings.pad_end("x", 4, "日") }))
+
+	# demoted to a value, which is the form the module's example shows
+	testing.assert_eq(guard { strings.pad_start("x", 4, "ab") } ?? "refused", "refused")
 }
 
 # THE FILL IS VALIDATED BEFORE THE WIDTH IS CONSULTED. A string already wide enough

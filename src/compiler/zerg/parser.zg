@@ -1190,8 +1190,9 @@ pub fn parse_at(src: str, path: str) -> File {
 			# take a derive: a marker left on the list would be reported at `Eof` as a decorator
 			# with no declaration under it, about the declaration it had just been given
 			is_test := p_deco_is_test(pending)
+			is_fixture := p_deco_is_fixture(pending)
 			pending = []
-			fns.append(parse_fn(p, is_pub, "", false, in_unsafe, is_test))
+			fns.append(parse_fn(p, is_pub, "", false, in_unsafe, is_test, is_fixture))
 		} else if p_at(p, Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl), and the marker is CARRIED.
 			# It used to be read and dropped, because type visibility was not enforced and a
@@ -1417,9 +1418,17 @@ fn p_not_a_binding() -> ConstDecl {
 # `#[test]` on a struct would be accepted and dropped, which is the silence the whole rule
 # exists to end.
 fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
-	return p_at(p, Kind.Fn) if p_deco_is_test(pending)
+	return p_at(p, Kind.Fn) if p_deco_on_fn(pending)
 
 	return p_at(p, Kind.Struct) or p_at(p, Kind.Enum) or p_at(p, Kind.Spec)
+}
+
+# p_deco_on_fn is the pending list that belongs on a `fn` — `#[test]` and `#[fixture]`, the two
+# decorators `zerg test` reads. They are asked about together because every question the parser
+# has about them is the same one: which declaration may they lead, and what to say when what
+# follows is not it.
+fn p_deco_on_fn(pending: list[str]) -> bool {
+	return p_deco_is_test(pending) or p_deco_is_fixture(pending)
 }
 
 # p_deco_stacked is the ONE decorator-per-item refusal, written once and raised from the two
@@ -1438,12 +1447,20 @@ fn p_deco_is_test(pending: list[str]) -> bool {
 	return false
 }
 
+# p_deco_is_fixture reports whether a pending list holds a `#[fixture]`.
+fn p_deco_is_fixture(pending: list[str]) -> bool {
+	for nm in pending {
+		return true if nm == "#fixture"
+	}
+	return false
+}
+
 # p_deco_leads spells the declarations the pending list may lead, for the sentence that turns
 # one away. A derive and an `#[obj]` name a type or a spec; a `#[test]` names a function, and
 # telling a reader who wrote one that it belongs on a `struct` would be advice for the other
 # decorator.
 fn p_deco_leads(pending: list[str]) -> str {
-	return "`fn`" if p_deco_is_test(pending)
+	return "`fn`" if p_deco_on_fn(pending)
 
 	return "`struct`, `enum` or `spec`"
 }
@@ -1456,6 +1473,7 @@ fn p_deco_leads(pending: list[str]) -> str {
 fn p_deco_says(nm: str) -> str {
 	return "#[obj]" if nm == "#obj"
 	return "#[test]" if nm == "#test"
+	return "#[fixture]" if nm == "#fixture"
 
 	return f"#[derive({nm})]"
 }
@@ -1981,7 +1999,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, Kind.RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false)
+	return FnDecl(init_name(at), "", params, false, Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false)
 }
 
 pub fn init_name(at: int) -> str {
@@ -2335,6 +2353,15 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
+	# `#[fixture]` takes no arguments and goes on a `fn`, under the same kind of marker and for
+	# the same reason as `#[test]`: it names a function `zerg test` calls and `zerg build` never
+	# reaches, so it too has to reach a parse somewhere.
+	if name == "fixture" {
+		p_advance(p)
+		pending.append("#fixture")
+		return
+	}
+
 	# `#[allow(L…)]` IS THE ONE DECORATOR THIS COMPILER READS AND NEVER USES. It names lint
 	# codes to suppress over the statement it leads, and what a code MEANS is the linter's to
 	# know — so the whole of the parser's job is to accept the name and attribute no meaning to
@@ -2377,7 +2404,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 
 	raise p_diag_at(p, nt.line, nt.col, "E496", f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
-	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`, and no other") if name != "derive"
+	raise p_diag(p, "E217", f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
 
 	p_advance(p)
 
@@ -2526,7 +2553,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 			recv_mut = true
 		}
 		if p_at(p, Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe, false))
+			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe, false, false))
 		} else if p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
@@ -2542,15 +2569,15 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]
 	p.impl_ty = outer
 }
 
-# `is_test` is the `#[test]` the caller took off the pending decorator list. It arrives as a
-# parameter rather than being read here because a decorator is its own top-level item — it is
-# read before the `fn` under it exists — and only the arm that dispatched to this one has the
-# list in hand.
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool) -> FnDecl {
+# `is_test` and `is_fixture` are the `#[test]` / `#[fixture]` the caller took off the pending
+# decorator list. They arrive as parameters rather than being read here because a decorator is
+# its own top-level item — it is read before the `fn` under it exists — and only the arm that
+# dispatched to this one has the list in hand.
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool) -> FnDecl {
 	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
 	body := parse_block(p)
 
-	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test)
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture)
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -2662,7 +2689,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 		has_ret = true
 	}
 	mut none: list[Stmt] = []
-	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false)
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

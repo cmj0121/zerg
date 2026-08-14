@@ -4410,6 +4410,36 @@ fn c_undefined_name(mut &em: Emitter, n: str) {
 	chk_at(em, "E372", f"undefined name `{n}`")
 }
 
+# c_undefined_fn is the same finding one position along — a name in CALLEE position that
+# nothing declares — and it is one function for the same reason c_undefined_name is one.
+#
+# Two shapes reach it: an ordinary call (c_call), and a `spawn` or `defer` callee
+# (c_chk_callable), which used to reach nothing at all and spelled `zg_<name>()` into its
+# thunk for cc to report. A code is an identity, so the two sites answer with the ONE rule
+# rather than with two copies of its sentence — which is also what the catalogue's
+# reported-once gate holds this file to.
+#
+# The built-in check comes first here rather than at each caller: a documented built-in this
+# compiler has not built is not a typo, and telling a reader "undefined function `sizeof`"
+# says the language lacks a form its own documentation describes.
+fn c_undefined_fn(mut &em: Emitter, n: str) {
+	c_builtin_check(em, n)
+
+	raise c_diag(em, "E425", f"undefined function `{n}`")
+}
+
+# c_not_callable is the rule that A BINDING SHADOWS THE FUNCTION OF ITS NAME even when it
+# holds something that cannot be called. The innermost binding wins, which is the language's
+# shadowing rule — so this is not a collision to report but a call that cannot happen, and
+# the sentence says what the name holds.
+#
+# REPORTED rather than raised, so it carries the place every checked rule does: it is a
+# statement about a program the language rejects, not a form this compiler has not built.
+# Both callers carry on afterwards and the C they emit is thrown away.
+fn c_not_callable(mut &em: Emitter, n: str, bt: Ty) {
+	chk_at(em, "E369", f"`{n}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{n}` in scope here is that value and not the function of the same name")
+}
+
 # c_bare_variant is the rule that a variant is NEVER A NAME ON ITS OWN (GRAMMAR group 7's
 # CONSTRUCTION note): an enum puts its own name into the value namespace and not its
 # variants', so `Color.Red` and never `Red`. That is what keeps two enums that both declare
@@ -7350,7 +7380,7 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[Expr], ts: list[
 
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(em, name) {
-		chk_intrinsic_call(em, name, args.len())
+		chk_intrinsic_call(em, name, args)
 		em.used_rt = true
 		return f"{c_intrinsic(name)}({c_args(em, args, sb)})"
 	}
@@ -7374,15 +7404,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# something else the walk fell through to the FUNCTION of that name, emitting a call to
 	# `zg_f` while `f` was an int64_t in scope. cc reported "called object type 'int64_t' is
 	# not a function or function pointer" against generated code; the reader wrote `f := 2`
-	# above their `f()` and was told nothing about it.
-	#
-	# The innermost binding wins, which is the language's shadowing rule — so this is not a
-	# collision to report but a call that cannot happen, and the sentence says what `f` holds.
-	# REPORTED rather than raised, so it carries the place every checked rule does: it is a
-	# statement about a program the language rejects, not a form this compiler has not built.
-	# Emission carries on into the function of that name and the C is thrown away.
+	# above their `f()` and was told nothing about it. The rule is c_not_callable's, which a
+	# `spawn` and a `defer` callee ask as well. Emission carries on into the function of that
+	# name and the C is thrown away.
 	if not c_is_unknown(bt) {
-		chk_at(em, "E369", f"`{name}` holds an {ty_name(bt)}, and an {ty_name(bt)} is not callable — the innermost binding wins, so the `{name}` in scope here is that value and not the function of the same name")
+		c_not_callable(em, name, bt)
 	}
 
 	if name_is_type(name) {
@@ -7442,9 +7468,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
 	# is exactly the answer this should be giving by name.
 	if not c_is_free_fn(em, name) {
-		c_builtin_check(em, name)
-
-		raise c_diag(em, "E425", f"undefined function `{name}`")
+		c_undefined_fn(em, name)
 	}
 
 	# The callee is a real free function, so the last two questions are whether this module
@@ -10809,20 +10833,62 @@ fn c_callee_args_of(x: Expr) -> list[Expr] {
 
 # c_callee_free is a Callee for a FREE FUNCTION reached by a `spawn` or a `defer`, and it
 # exists so both shapes that get there — the plain `f(…)` and the namespaced `mod.f(…)` —
-# ask the two rules an ordinary call asks about its callee (c_call).
+# ask the rules an ordinary call asks about its callee (c_call).
 #
-# Neither of them did. `spawn` and `defer` resolve a callee down a path of their own, so a
+# None of them did. `spawn` and `defer` resolve a callee down a path of their own, so a
 # `defer mod.hidden()` reached a module-private function that the identical call written
 # plainly is refused for (E301), and `spawn poke()` reached an `unsafe { … }` group's
 # function straight out of safe code (E387). A rule enforced at one of a form's two
 # resolvers is a rule one keyword away from meaning nothing — which is the same argument
 # c_ns_kind was extracted for, one question further along.
+#
+# WHETHER THE NAME IS A FUNCTION AT ALL is asked one step earlier, by c_chk_callable, and
+# only of the BARE spelling — see there.
 fn c_callee_free(mut &em: Emitter, name: str, args: list[Expr], what: str) -> Callee {
 	sr := c_sig_row_of(em, name)
 	c_chk_visible_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code", sr)
 
 	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", name), args, name)
+}
+
+# c_chk_callable is "is this name a function", and it was the question a `spawn` and a
+# `defer` never asked. Visibility and `unsafe` are both read off a signature ROW, and a row
+# of -1 is deliberately quiet — so a name with no row asked two rules that had nothing to
+# say and went straight on to spell `zg_<name>()` inside the thunk. `spawn nosuchfn()`,
+# `defer nosuchfn()` and a `defer x()` on an int binding all reached cc, which reported an
+# implicitly-declared function against a file under .zerg-cache. The ordinary call has
+# answered all three by name for as long as those codes have existed.
+#
+# It is asked in the order c_call asks it: a BINDING first, because the innermost one wins
+# and shadows the function of that name, and only then the function table.
+#
+# ONLY OF THE BARE SPELLING. `spawn mod.work()` names a module, and a module qualifier is
+# not shadowed by anything a body binds — asking the binding question there would report
+# `E369` for a local `work := 3` that has nothing to do with the callee. The namespaced path
+# asks its own half of this (`c_name_in(em.sig_names, m)`, then chk_no_member) before it
+# reaches the free function, which is the same question with the qualifier already resolved.
+#
+# A BINDING HOLDING A FUNCTION IS THE ONE CASE THE ORDINARY CALL CAN DO AND THIS CANNOT.
+# `f()` on a `f := fn () { … }` calls through the stored pointer; a `spawn` and a `defer`
+# both lower to a C THUNK — `static void zg_spawn_1(void *p) { … }` — whose body names a C
+# symbol, and a value has none. The environment a closure carries has nowhere to go either:
+# the thunk's one `void *` is already the argument snapshot. So it is refused where it is
+# ASKED FOR rather than emitted as a call to a symbol nobody declared, which is what
+# `spawn work()` on a named closure did.
+fn c_chk_callable(mut &em: Emitter, name: str, what: str) {
+	bt := c_lookup_var(em, name)
+
+	raise c_diag(em, "E744", f"NotImplemented: a `{what}` of `{name}`, a binding that HOLDS a function — a `{what}` lowers to a C thunk that names a symbol, and a function value has none. Name the function itself, or call it inside a `{what}`ed one") if c_is_fn(bt)
+
+	if not c_is_unknown(bt) {
+		c_not_callable(em, name, bt)
+		return
+	}
+
+	return if c_is_free_fn(em, name)
+
+	c_undefined_fn(em, name)
 }
 
 fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
@@ -10833,7 +10899,11 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# it has no symbol, having been taken out of the program. `chk_callsite` was looking up
 	# the same absent key, so the arity and argument rules were skipped as well.
 	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
-	return c_callee_free(em, n, c_call_args_of(x), what) if n != ""
+	if n != "" {
+		c_chk_callable(em, n, what)
+
+		return c_callee_free(em, n, c_call_args_of(x), what)
+	}
 	raise c_diag(em, "E736", f"NotImplemented: {what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)

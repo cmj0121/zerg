@@ -14,9 +14,12 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 > 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md) 稱之為 built-in——兩處
 > 都沒有。
 >
-> 這裡有一件事不只是沒建、而是今天就是錯的，它標在下方出現的位置：`handle` 型別的 binding 會對著產生的 C 漏到
-> `cc`。（分組的呼叫者規則本來是第二件：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從安全程式碼呼叫
-> 且沒有任何診斷。它現在被強制了，回報為 `E387`。）
+> 本章已經沒有任何東西會漏到 `cc`。`handle` 是 `zerg` 程式裡沒有任何宣告帶有的名字，所以標註它的 binding
+> ——`mut h: handle = 0` 或 `mut h: handle? = nil`——會在寫下它的地方被拒絕，回報為
+> _E707 no type named `handle` (the binding `h`)_。（本來有兩條規則會漏出去：optional 的那種拼法會對著產生的
+> C 冒出 `error: unknown type name 'zg_handle'`，因為那個檢查讀的是標註的裸名字，而 `?` 不是裸名字；另一件是
+> 宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從安全程式碼呼叫且沒有任何診斷。兩者現在都由 `zerg`
+> 回報，後者回報為 `E387`。）
 
 ## 兩條邊、一份契約
 
@@ -204,9 +207,10 @@ global 的。
 組存在的理由。在上面那個 block-expression 建起來之前，那也是一個程式僅有的呼叫者：進入點是安全的，所以分組的
 `fn` 只能被同一個分組的成員叫到，除此之外無處可及。
 
-> **[deviation]** `handle` 型別的 binding 會漏到 `cc`。`mut h: handle? = nil` 不產生任何 Zerg 診斷，而是對著
-> 產生的 C 以 `error: unknown type name 'zg_handle'` 失敗——這是本章唯一一處形式以「抵達 C 編譯器」而非「被拒絕」
-> 的方式打破標準契約。
+> **[not yet]** `handle` 型別的 binding 會被具名拒絕。`mut h: handle? = nil` 是
+> _E707 no type named `handle` (the binding `h`)_，而且帶著位置：程式裡沒有任何宣告帶著這個名字，而這個編譯器
+> 也不出貨任何能帶著它的 `ffi` 模組。它以前會漏到 `cc`，變成 `error: unknown type name 'zg_handle'`——那是本章
+> 唯一一處形式打破標準契約的地方。
 
 ```text
 unsafe {

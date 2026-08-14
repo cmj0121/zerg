@@ -426,11 +426,11 @@ base-type   ::= type-name type-args? ( '.' identifier )*   # 'text.Splitter' 透
 type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
 generic-arg ::= type | const-expr             # 型別，或填入值泛型參數的 const-expr
 array-type  ::= '[' type ';' const-expr ']'   # N 是 const-expr
-struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
-type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+struct-decl ::= 'pub'? 'struct' type-ident generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' type-ident generics? '{' variant-list? '}'
+type-decl   ::= 'pub'? 'type' type-ident generics? '=' type
 const-expr  ::= expr                          # 可編譯期摺疊的 expr（無 'const' 關鍵字）
-spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+spec-decl   ::= 'pub'? 'spec' type-ident generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
 impl-item   ::= fn-decl | val-bind            # 方法／關聯函式，或型別常數

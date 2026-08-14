@@ -477,11 +477,11 @@ base-type   ::= type-name type-args? ( '.' identifier )*   # 'text.Splitter' nam
 type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
 generic-arg ::= type | const-expr             # a type, or a const-expr filling a value generic param
 array-type  ::= '[' type ';' const-expr ']'   # N is a const-expr
-struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
-type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+struct-decl ::= 'pub'? 'struct' type-ident generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' type-ident generics? '{' variant-list? '}'
+type-decl   ::= 'pub'? 'type' type-ident generics? '=' type
 const-expr  ::= expr                          # compile-time-foldable expr (no 'const' keyword)
-spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+spec-decl   ::= 'pub'? 'spec' type-ident generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
 impl-item   ::= fn-decl | val-bind            # a method / associated fn, or a type constant

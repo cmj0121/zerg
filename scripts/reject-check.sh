@@ -1865,11 +1865,9 @@ fn main() {
 }
 EOF
 
-# The NAME being in the set does not make the CALL one. Arity was the half still escaping: the
-# emitter wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no
-# argument, against generated C, with no code and no place. (Operand TYPES still do —
-# `__zrt_trunc("hello")` is the gap named in check.zg, and the seed is the stricter compiler on
-# that one.)
+# The NAME being in the set does not make the CALL one. Arity was one half escaping: the emitter
+# wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no argument,
+# against generated C, with no code and no place.
 reject a-compiler-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
 fn main() {
 	print __zrt_trunc()
@@ -1879,6 +1877,25 @@ EOF
 reject a-compiler-primitive-with-too-many-arguments E397 'takes 1 argument and this gives 2' <<'EOF'
 fn main() {
 	print __zrt_trunc(1.5, 2.5)
+}
+EOF
+
+# and the operand TYPES were the other half, escaping in both directions. A primitive is
+# lowered by NAME to a C function with a real signature, so a wrong operand is either a cc
+# diagnostic against a file nobody wrote, or an answer that is quietly wrong where C converts
+# it for you: `__zrt_trunc(true)` built under BOTH compilers and printed `1`.
+#
+# Both carry `seed-gap`. The seed has the machinery — `unaryIntrinsic(n, Float, Int)` names the
+# argument type — and it does not fire, so it builds the bool and hands the str to cc.
+reject a-compiler-primitive-given-a-bool E398 'is float, and this gives bool' seed-gap <<'EOF'
+fn main() {
+	print __zrt_trunc(true)
+}
+EOF
+
+reject a-compiler-primitive-given-a-str E398 'is float, and this gives str' seed-gap <<'EOF'
+fn main() {
+	print __zrt_trunc("hello")
 }
 EOF
 
@@ -4670,9 +4687,39 @@ EOF
 # `type X = Y`'s underlying name too; a local's was the one that did not have to, and reported
 # "cannot bind int to a Nope binding" — a sentence about the VALUE that treats an unknown name
 # as a type the value failed to be.
-reject local-annotation-names-no-type E334 <<'EOF'
+reject local-annotation-names-no-type E707 '(the binding `x`)' <<'EOF'
 fn main() {
 	x: Nope = 5
+	print 1
+}
+EOF
+
+# AND IT IS THE WHOLE TYPE THAT IS ASKED. The rule above was written against the bare name
+# and read the annotation with `c_named_of`, which answers "" for every type that WRAPS one —
+# so `Nope` was refused and `Nope?` was emitted as `zg_Nope` for cc to report against a file
+# under .zerg-cache. These are the two wrappers a local is likeliest to spell; the walk that
+# answers them answers `chan[…]`, `map[…]`, a tuple and a fn type by the same recursion.
+reject local-optional-annotation-names-no-type E707 '(the binding `h`)' <<'EOF'
+fn main() {
+	mut h: Nope? = nil
+	print 1
+}
+EOF
+
+reject local-list-annotation-names-no-type E707 '(the binding `xs`)' <<'EOF'
+fn main() {
+	mut xs: list[Nope] = []
+	print xs.len()
+}
+EOF
+
+# `handle` IS THE FFI CHAPTER'S, and docs/runtime/ffi.md is a design rather than a description
+# — nothing in this compiler declares the type. It earned its own line here because it is the
+# spelling that found the wrapper hole above, and because a reader who follows that chapter
+# should be told the name resolves to nothing rather than be handed a cc diagnostic.
+reject an-ffi-handle-annotation E707 '(the binding `h`)' <<'EOF'
+fn main() {
+	mut h: handle? = nil
 	print 1
 }
 EOF
@@ -6392,6 +6439,53 @@ fn main() {
 }
 EOF
 
+# A DECLARED TYPE'S NAME BEGINS WITH AN UPPER-CASE LETTER (GRAMMAR#type-ident). The case of
+# that letter is how the language separates its two namespaces, and two of the three readers
+# are in the PARSER — `cli.Opt` the module qualifier against `It.Item` the associated-type
+# projection, and a bound naming a spec against one naming a concrete type — where nothing
+# is resolved and there is no table to consult. So a lower-case type name cannot be made to
+# work by teaching the constructor alone: it would be legal in one position and misread in
+# three.
+#
+# It used to be legal in NONE and said so wrongly. `_Box(1)` on a declared `struct _Box`
+# answered `E425 undefined function`, which is false about a program that declares the type
+# eight lines up — the constructor dispatch is `name_is_type`, and `_` is not upper-case.
+# The leading underscore needs no rule of its own: `_` has no case, so a name that starts
+# with one is in neither namespace, which is exactly what this asks about.
+#
+# The seed resolves the name against its symbol table and builds all three (`seed-gap`).
+reject a-struct-named-with-a-leading-underscore E610 '`_Box` cannot name a struct' seed-gap <<'EOF'
+struct _Box {
+	pub v: int
+}
+
+fn main() {
+	b := _Box(1)
+	print b.v
+}
+EOF
+
+reject a-struct-named-in-lower-case E610 '`lower` cannot name a struct' seed-gap <<'EOF'
+struct lower {
+	pub v: int
+}
+
+fn main() {
+	b := lower(1)
+	print b.v
+}
+EOF
+
+reject an-enum-named-with-a-leading-underscore E610 '`_E` cannot name an enum' seed-gap <<'EOF'
+enum _E {
+	A
+}
+
+fn main() {
+	print int(_E.A)
+}
+EOF
+
 
 # --- the emitter's own rules, one case per code -------------------------------------------
 #
@@ -6783,6 +6877,34 @@ fn main() {
 }
 EOF
 
+# A `spawn` AND A `defer` NEVER ASKED WHETHER THE CALLEE IS A FUNCTION. Visibility and the
+# `unsafe` rule are read off a signature ROW and a missing row is deliberately quiet, so a
+# name nothing declares asked two rules with nothing to say and went straight on to spell
+# `zg_<name>()` inside the thunk — reported by cc, against a file under .zerg-cache. The
+# ordinary call has answered by name since `E425` existed; these are the two keywords that
+# reached the same emitter down a path of their own.
+reject spawn-of-a-function-nothing-declares E425 <<'EOF'
+fn main() {
+	spawn nosuchfn()
+}
+EOF
+
+reject defer-of-a-function-nothing-declares E425 <<'EOF'
+fn main() {
+	defer nosuchfn()
+}
+EOF
+
+# and the same path missed the SHADOWING half of the question, which the ordinary call
+# answers with `E369`: the innermost binding wins, so a `defer x()` under an `x := 1` is a
+# call that cannot happen rather than a call to the function of that name.
+reject defer-of-a-binding-that-holds-an-int E369 'is not callable' <<'EOF'
+fn main() {
+	x := 1
+	defer x()
+}
+EOF
+
 reject map-len-given-an-argument E738 <<'EOF'
 fn main() {
 	m := {1: 2}
@@ -6908,7 +7030,27 @@ EOF
 #
 # The three kinds are here rather than one because the message names the slot, and a slot
 # that stopped asking would leave the other two green.
-reject a-prelude-name-names-a-struct E610 'cannot name a struct' at=1:8 <<'EOF'
+#
+# A TYPE DECLARATION'S NAME IS ASKED TWICE, and the struct case is written with an UPPER-CASE
+# prelude name so that this half of it is what answers. The case below is the other half.
+reject a-prelude-name-names-a-struct E611 'cannot name a struct' at=1:8 <<'EOF'
+struct Either {
+	pub n: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AND `struct list` IS BOTH — a prelude name and a lower-case one — so it is the case that
+# pins WHICH of the two rules answers. The case rule does, and that is a decision rather than
+# an accident: PascalCasing a lower-case prelude name leaves the prelude alone (`List` is a
+# name the reserved set does not hold, and so is every other one of them), so `E610`'s advice
+# clears both rules in one edit where `E611`'s — pick another name — says nothing about the
+# letter and lets the second attempt be refused again for a reason the first never mentioned.
+# Swap the two and this case reports `E611`.
+reject a-lower-case-prelude-name-at-a-type-declaration E610 'begins with an UPPER-CASE LETTER' at=1:8 <<'EOF'
 struct list {
 	pub n: int
 }
@@ -6918,7 +7060,7 @@ fn main() {
 }
 EOF
 
-reject a-prelude-name-names-a-spec E610 'cannot name a spec' at=1:6 <<'EOF'
+reject a-prelude-name-names-a-spec E611 'cannot name a spec' at=1:6 <<'EOF'
 spec Eq {
 	fn eq(o: This) -> bool
 }
@@ -6928,7 +7070,7 @@ fn main() {
 }
 EOF
 
-reject a-prelude-name-names-a-function E610 'cannot name a function' at=1:4 <<'EOF'
+reject a-prelude-name-names-a-function E611 'cannot name a function' at=1:4 <<'EOF'
 fn int() -> int {
 	return 1
 }
@@ -6942,7 +7084,7 @@ EOF
 # reads `Left` and `Right` BY NAME — an arity rule, a tag, and the match-exhaustiveness rule
 # that says which side an arm covers — so a declaration taking one leaves those rules reading
 # a name the program means something else by.
-reject a-prelude-name-names-an-enum E610 'cannot name an enum' at=1:6 <<'EOF'
+reject a-prelude-name-names-an-enum E611 'cannot name an enum' at=1:6 <<'EOF'
 enum Left {
 	A
 }

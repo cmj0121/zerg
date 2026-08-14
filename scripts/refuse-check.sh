@@ -1021,6 +1021,30 @@ fn main() {
 }
 EOF
 
+# A `spawn` AND A `defer` CANNOT TAKE A FUNCTION VALUE, which the ordinary call can. Both
+# lower to a C THUNK — `static void zg_spawn_1(void *p) { … }` — whose body names a symbol,
+# and a value has none: `spawn work()` on a named closure emitted `zg_work()` and cc reported
+# a call to an undeclared function, at a line under .zerg-cache. The thunk's one `void *` is
+# already the argument snapshot, so a closure's environment has nowhere to go either.
+expect "$ZERG" spawn-of-a-named-closure E744 'a `spawn` of `work`' <<'EOF'
+fn main() {
+	work := fn () {
+		print "hi"
+	}
+	spawn work()
+}
+EOF
+
+expect "$ZERG" defer-of-a-named-closure E744 'a `defer` of `work`' <<'EOF'
+fn main() {
+	work := fn () {
+		print "bye"
+	}
+	defer work()
+	print "hi"
+}
+EOF
+
 # A NAMED ARGUMENT is GRAMMAR#arg's `( identifier ':' )? expr`, the sanctioned way to skip
 # the middle (docs/code/functions.md). This compiler is positional-only, and the `:` used to
 # reach parse_primary, which answered "`:` is not an expression this compiler reads" — a

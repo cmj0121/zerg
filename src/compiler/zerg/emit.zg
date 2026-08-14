@@ -10478,7 +10478,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn)))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false)))
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open

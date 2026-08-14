@@ -415,6 +415,117 @@ fn p_name(mut &p: Parser, what: str) -> str {
 	return lx
 }
 
+# p_prelude_role names what a PRELUDE NAME is for, and returns "" for everything else. The
+# prelude is bound in every module before a program is read (docs/runtime/package.md), so a
+# declaration that takes one of its names does not shadow it — it leaves the form that
+# desugars to it with no name to reach for, which is a silence rather than an error.
+#
+# THE SET IS WHAT THIS TOOLCHAIN BINDS, not what the prelude is specified to hold, and each
+# member is here because a site reads it BY NAME:
+#
+#   the scalars and the two list aliases    parse_base_type, which maps them to a `Ty`
+#   `list` `map`                            parse_base_type again — their `[ … ]` is the type's
+#   `Either` `Result` `Err`                 the carrier's spellings, likewise
+#   `Left` `Right`                          the emitter's constructor and exhaustiveness rules
+#   `Eq` `Into`                             the two specs the emitter injects as source
+#
+# `Ord`, `Hash`, `Error`, `Iterator`, `Iterable` and `Ref` are named by the same page and are
+# declared by NOTHING here, so a program's own `spec Ord` is the only `Ord` there is. Refusing
+# it would take a working declaration away to hold a name for a feature that does not exist,
+# and the day one lands is the day its name joins this list.
+#
+# `set` AND `array` ARE THE SAME ANSWER read from a nearer miss. p_builtin_type_ctor names
+# them beside `list` and `map`, but that predicate is about a BRACKET — whose `[ … ]` is a
+# type's arguments rather than an index — and parse_base_type maps neither to a `Ty`. There is
+# no `set[T]` in this language yet (docs/runtime/package.md marks it absent), so nothing is
+# bound and nothing is knocked out; a mention is not a binding.
+fn p_prelude_role(lx: str) -> str {
+	return "a built-in scalar type" if lx == "int" or lx == "uint" or lx == "float" or lx == "bool" or lx == "str" or lx == "byte" or lx == "rune"
+	return "a built-in list alias" if lx == "bytearray" or lx == "runearray"
+	return "a built-in container type" if lx == "list" or lx == "map"
+	return "an error-carrier type" if lx == "Either" or lx == "Result" or lx == "Err"
+	return "an error-carrier constructor" if lx == "Left" or lx == "Right"
+	return "a built-in spec" if lx == "Eq" or lx == "Into"
+
+	return ""
+}
+
+# p_decl_name is p_name at a slot that DECLARES a top-level name, and it is a second function
+# rather than a flag on the first because the two slots differ in what they may take. Every
+# naming position refuses a reserved WORD; only a declaration refuses a prelude name, because
+# only a declaration is silent about it — a local `list := 5` shadows the constructor inside
+# one scope and any call of it is a loud type error, while a top-level `struct list` removes
+# the name from the whole program and the first word of the complaint is `undefined`.
+#
+# A MODULE CONSTANT IS NOT HERE, and that is the parser's shape rather than a decision: a
+# top-level `const` and a local one are the same `parse_binding`, so gating it would gate
+# every binding in every function with it.
+#
+# `<builtin>` is exempt because the toolchain's own injected source is not a program: the
+# emitter parses `spec Eq` and `spec Into` from a string (emit.zg's ZG_BUILTIN_SPECS) and it
+# is the very declaration this rule reserves the name for.
+fn p_decl_name(mut &p: Parser, what: str) -> str {
+	lx := cur(p).lexeme
+	role := p_prelude_role(lx)
+
+	raise p_diag(p, "E611", f"`{lx}` is a prelude name — {role} — and cannot name {what}: the prelude is bound in every module before a program is read, so the forms that desugar to it can never be knocked out from under the language") if role != "" and p.path != "<builtin>"
+
+	return p_name(p, what)
+}
+
+# p_fn_name is the `fn` slot's half of that rule, and `recv` is the whole of the question. A
+# METHOD'S NAME IS NOT A TOP-LEVEL NAME: a spec member reads `This` and an impl's supply reads
+# its target, so only a free function arrives with none — and c_build_top_names registers only
+# the receiverless ones for exactly that reason. `impl P { fn set(v: int) }` names nothing the
+# prelude bound; it lives in `P`'s namespace, where a call has already said which type it is
+# on. Reserving through here refused two cases scripts/reject-check.sh was already written on.
+fn p_fn_name(mut &p: Parser, recv: str) -> str {
+	return p_name(p, "a function") if recv != ""
+
+	return p_decl_name(p, "a function")
+}
+
+# p_type_name is the name slot of a DECLARATION THAT INTRODUCES A TYPE — a struct, an enum,
+# a spec, a `type X = Y` (GRAMMAR#type-ident). It is p_decl_name plus the one rule that
+# separates the two namespaces this language has: a type's name begins with an UPPER-CASE
+# LETTER, and a value's does not.
+#
+# THAT RULE IS LEXICAL, AND EVERYTHING DEPENDS ON IT. `name_is_type` is how a construction is
+# told from a call, how `cli.Opt` the module qualifier is told from `It.Item` the associated
+# type, and how a generic bound naming a spec is told from one naming a concrete type. The
+# last two are asked by the PARSER, which has resolved nothing and has no table to consult —
+# so a `struct _Box` or a `struct lower` cannot be made to work by teaching the constructor
+# alone. It would be legal in one position and misread in three.
+#
+# It used to be legal in NONE and said so wrongly: `_Box(1)` on a declared `struct _Box`
+# answered `E425 undefined function`, which is false about the program — the name is a type,
+# and the reader declared it eight lines up. The seed builds all of them, so this is a
+# LANGUAGE decision rather than a gap: the upper-case letter is what the declaration owes,
+# and GRAMMAR#type-ident now derives it.
+#
+# A leading `_` is refused by the same rule and not by one of its own. `_` has no case, so it
+# is neither namespace, and a name that is in neither is exactly what this asks about.
+#
+# THE CASE RULE IS ASKED BEFORE THE PRELUDE ONE, and `struct list` is the name that decides
+# it: both rules are true of it, and only one of the two answers is a repair. PascalCasing a
+# lower-case prelude name leaves the prelude alone — `Int`, `List`, `Map`, `Str` and every
+# other one of them is a name p_prelude_role does not know — so the case rule's advice
+# satisfies both rules in one edit, while "pick another name" says nothing about the letter
+# and lets the second attempt be refused again for a reason the first refusal never mentioned.
+# The reverse order costs a round trip and buys nothing; a name that is BOTH gets the finding
+# that ends the matter.
+#
+# It reads the token WITHOUT consuming it, which is what lets it be asked first, and it asks
+# only of an identifier: a reserved word and a token that is no name at all are p_name's E245
+# and E601, and they arrive at a slot that has not been told a type is wanted yet.
+fn p_type_name(mut &p: Parser, what: str) -> str {
+	t := cur(p)
+
+	raise p_diag_at(p, t.line, t.col, "E610", f"`{t.lexeme}` cannot name {what} — a declared type's name begins with an UPPER-CASE LETTER (GRAMMAR#type-ident), which is how the language tells a type from a value: `{t.lexeme}(…)` would read as a call to a function of that name, and `{t.lexeme}.X` as a module qualifier. Write it in PascalCase") if p_at(p, Kind.Ident) and not name_is_type(t.lexeme)
+
+	return p_decl_name(p, what)
+}
+
 # expect consumes the token the grammar requires, and REPORTS when it is not there.
 #
 # It used to advance on a match and say nothing otherwise, so a malformed construct was not
@@ -1289,6 +1400,15 @@ pub fn imports_of_at(src: str, path: str) -> list[str] {
 	return out
 }
 
+# import_decls_at is imports_of_at with the DECLARATION kept, and it exists for the one thing
+# the path alone cannot buy: a place. A loader that holds only `"atomic"` can say a module is
+# unavailable and cannot say which line asked for it, so its refusal is the one shape this
+# repo's gates turn away — a real error the reader has to go and find.
+pub fn import_decls_at(src: str, path: str) -> list[ImportDecl] {
+	f := parse_at(src, path)
+	return f.imports
+}
+
 # parse_fill reads the tail of `[v; N]`. The count is a CONST-EXPR (GRAMMAR group 4's
 # `list-lit`), so it is parsed as an ordinary expression and carried on the node — the parser
 # used to expand the form into N copies right here, which is why the count could only ever be
@@ -1619,7 +1739,7 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 fn parse_spec(mut &p: Parser, is_pub: bool) -> SpecDecl {
 	kw := cur(p)
 	p_advance(p) # 'spec'
-	name := p_name(p, "a spec")
+	name := p_type_name(p, "a spec")
 
 	# `spec Ix[K]` and `spec Ix[K: Ord]` — the spec's OWN type parameters. They are what a
 	# required signature's `K` stands for, and an `impl Ix[int]` says which type that is.
@@ -1742,7 +1862,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	# read its identifier for itself and so was the one declaration the rule never reached.
 	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
-	name := p_name(p, "a type alias")
+	name := p_type_name(p, "a type alias")
 
 	# A code and a place, which this one refusal did without while its two siblings — E212
 	# for a generic `enum` and E215 for a generic `struct` — carry both. Three declarations
@@ -1915,7 +2035,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 fn parse_enum(mut &p: Parser, is_pub: bool) -> EnumDecl {
 	kw := cur(p)
 	p_advance(p) # 'enum'
-	name := p_name(p, "an enum")
+	name := p_type_name(p, "an enum")
 
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
@@ -1991,7 +2111,7 @@ fn is_pascal(s: str) -> bool {
 fn parse_struct(mut &p: Parser, is_pub: bool) -> StructDecl {
 	kw := cur(p)
 	p_advance(p) # 'struct'
-	name := p_name(p, "a struct")
+	name := p_type_name(p, "a struct")
 
 	# `struct B[T] { … }` — READ AND DROPPED, so a field of type `T` then reported
 	# `no type named T`: a message about the consequence, from two steps away, for a form
@@ -2327,7 +2447,8 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
 	p_advance(p) # 'fn'
-	name := p_name(p, "a function")
+
+	name := p_fn_name(p, recv)
 
 	# `fn f[T, U: Eq](…)` — the type parameters, and the spec each is bounded by. They are
 	# read here rather than skipped because a generic function is a TEMPLATE: nothing is

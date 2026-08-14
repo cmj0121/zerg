@@ -58,11 +58,15 @@ The filesystem **structure** — a file's _contents_ are `io.read_file` / `io.wr
 
 Process and platform facts. `platform` / `arch` resolve at **compile time**, so they name the target the
 binary was built for. The program's own arguments arrive as `fn main(args: list[str])`, not from here.
+`run` is the one leaf that starts ANOTHER process — argv straight to the OS, no shell, no pipes, and the
+exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
+of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
 
 | Function                | Summary                                              |
 | ----------------------- | ---------------------------------------------------- |
 | `env(key: str) -> str?` | an environment variable's value, or `nil` when unset |
 | `exit(code: int)`       | terminate the process with `code` (does not return)  |
+| `run(argv: list[str])`  | run `argv[0]` (PATH-searched), wait, `-> int` status |
 | `platform() -> str`     | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
 | `arch() -> str`         | target CPU — `"arm64"`, `"x86_64"`, …                |
 
@@ -74,25 +78,33 @@ self-synchronises, so a valid needle only matches at a code-point boundary); `in
 offset, like Go's `strings.Index`. Case folding is **ASCII-only** — a non-ASCII byte is passed through
 unchanged. An empty `split` separator, or a negative `repeat` count, raises `ValueError`.
 
-| Function                               | Summary                                             |
-| -------------------------------------- | --------------------------------------------------- |
-| `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)        |
-| `has_suffix(s: str, suffix: str)`      | whether `s` ends with `suffix` (`-> bool`)          |
-| `contains(s: str, sub: str) -> bool`   | whether `sub` occurs anywhere in `s`                |
-| `index_of(s: str, sub: str) -> int`    | byte offset of the first `sub`, or `-1` when absent |
-| `split(s: str, sep: str) -> list[str]` | pieces between each `sep` (N seps → N+1 pieces)     |
-| `join(parts: list[str], sep: str)`     | concatenate `parts` with `sep` between (`-> str`)   |
-| `repeat(s: str, count: int) -> str`    | `s` concatenated `count` times                      |
-| `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace              |
-| `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase           |
-| `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase           |
-| `count(s: str, sub: str) -> int`       | number of non-overlapping occurrences of `sub`      |
-| `replace(s: str, old: str, new: str)`  | replace every occurrence of `old` with `new`        |
-| `trim_prefix(s: str, prefix: str)`     | drop one leading `prefix`, else `s` unchanged       |
-| `trim_suffix(s: str, suffix: str)`     | drop one trailing `suffix`, else `s` unchanged      |
-| `fields(s: str) -> list[str]`          | split around whitespace runs, no empty pieces       |
+| Function                               | Summary                                               |
+| -------------------------------------- | ----------------------------------------------------- |
+| `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)          |
+| `has_suffix(s: str, suffix: str)`      | whether `s` ends with `suffix` (`-> bool`)            |
+| `contains(s: str, sub: str) -> bool`   | whether `sub` occurs anywhere in `s`                  |
+| `index_of(s: str, sub: str) -> int`    | byte offset of the first `sub`, or `-1` when absent   |
+| `split(s: str, sep: str) -> list[str]` | pieces between each `sep` (N seps → N+1 pieces)       |
+| `join(parts: list[str], sep: str)`     | concatenate `parts` with `sep` between (`-> str`)     |
+| `repeat(s: str, count: int) -> str`    | `s` concatenated `count` times                        |
+| `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace                |
+| `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase             |
+| `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase             |
+| `count(s: str, sub: str) -> int`       | number of non-overlapping occurrences of `sub`        |
+| `replace(s: str, old: str, new: str)`  | replace every occurrence of `old` with `new`          |
+| `trim_prefix(s: str, prefix: str)`     | drop one leading `prefix`, else `s` unchanged         |
+| `trim_suffix(s: str, suffix: str)`     | drop one trailing `suffix`, else `s` unchanged        |
+| `fields(s: str) -> list[str]`          | split around whitespace runs, no empty pieces         |
+| `last_index_of(s: str, sub: str)`      | byte offset of the LAST `sub`, or `-1` (`-> int`)     |
+| `trim_left(s: str) -> str`             | drop leading ASCII whitespace only                    |
+| `trim_right(s: str) -> str`            | drop trailing ASCII whitespace only                   |
+| `equal_fold(a: str, b: str) -> bool`   | equality ignoring ASCII case, folding no new string   |
+| `pad_start(s, width: int, fill: str)`  | pad on the left to at least `width` bytes (`-> str`)  |
+| `pad_end(s, width: int, fill: str)`    | pad on the right to at least `width` bytes (`-> str`) |
 
-`count` and `replace` raise `ValueError` on an empty needle, like `split`.
+`count` and `replace` raise `ValueError` on an empty needle, like `split`. `pad_start` / `pad_end` raise
+`ValueError` on a `fill` that is not exactly one byte — a multi-byte fill cannot land on a byte width
+without cutting a code point in half — and return `s` unchanged when it is already that wide.
 
 ## `ascii`
 
@@ -238,10 +250,17 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**. `Atomic[T]` is a generic struct and a
-> generic struct is a form this compiler refuses, so `import "atomic"` itself reports
-> `NotImplemented: a generic struct`Atomic[…]``. The signatures below also name `Ref[T]`, which does not
-> exist either. It is the one module of the twelve that does not import cleanly.
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the thirteen that
+> does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
+> so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
+> ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
+> exist either. Share state across coroutines with a channel until this lands.
+>
+> It stays in the table rather than being taken out of the shipped set, because this compiler resolves
+> the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
+> `zerg fmt --check` and the rest of the self-source set, and rots unread until generics arrive. What
+> would be left at the import is _E502 cannot resolve import `atomic`_ — a sentence about a module
+> that is right there.
 
 | Function                                                       | Summary                                   |
 | -------------------------------------------------------------- | ----------------------------------------- |

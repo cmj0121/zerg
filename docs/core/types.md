@@ -227,6 +227,14 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 
 Declare your own **product types** (`struct`) and **sum types** (`enum`), each generic over `[...]`.
 
+**A declared type's name begins with an upper-case letter** ([GRAMMAR#type-ident](../../GRAMMAR)), and
+that is a rule rather than a convention: the case of the first letter is the whole of how the language
+separates its two namespaces. `Point(1, 2)` constructs and `point(1, 2)` calls; `cli.Opt` qualifies a
+module and `It.Item` projects an associated type. Those are decided before any name is resolved, so a
+`struct lower` — or a `struct _Box`, since `_` has no case and is therefore in neither namespace — is
+refused at the declaration, as `E610`. A **use** is not constrained the same way: the built-in type
+names (`int`, `str`, `list`, the fixed-width members) are lower case, and no declaration introduces one.
+
 **Visibility (`pub`)** — every declaration (a type, a field, a function) is **private to its module
 by default**; prefix it with `pub` to export it for use elsewhere. Mutability is a separate axis and
 is **not** declared here: it belongs to the **instance** (the binding; see [Values & Memory](memory.md)), never to

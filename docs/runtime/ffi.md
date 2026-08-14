@@ -16,10 +16,13 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > would have been left out of one. `sizeof` / `alignof`, which this chapter calls a stdlib facility and
 > [Built-ins](builtins.md) calls a built-in, exist in neither place.
 >
-> One thing here is not merely unbuilt but wrong today, and it is marked where it appears below: a
-> `handle`-typed binding escapes to `cc` against generated C. (The group's caller rule used to be the
-> second: a `fn` declared inside a module-level `unsafe { … }` group was callable from safe code with no
-> diagnostic. It is enforced now, and reported as `E387`.)
+> Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
+> carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
+> where it is written, as _E707 no type named `handle` (the binding `h`)_. (Two rules used to escape
+> instead: the optional spelling produced `error: unknown type name 'zg_handle'` against generated C,
+> because the check read the annotation's bare name and a `?` is not one; and a `fn` declared inside a
+> module-level `unsafe { … }` group was callable from safe code with no diagnostic. Both are reported by
+> `zerg` now, the second as `E387`.)
 
 ## Two edges, one contract
 
@@ -238,10 +241,10 @@ rejected as `E387`, with a place. Its callers are the other declarations in the 
 group is for. Until the block-expression above is built, that is also the ONLY caller a program has: an
 entry point is safe, so a group's `fn` is reachable from another group member and from nowhere else.
 
-> **[deviation]** A `handle`-typed binding escapes to `cc`. `mut h: handle? = nil` produces no Zerg
-> diagnostic and fails as `error: unknown type name 'zg_handle'` against the generated C — the one place in
-> this chapter where a form breaks the standing contract by reaching the C compiler rather than being
-> refused.
+> **[not yet]** A `handle`-typed binding is refused by name. `mut h: handle? = nil` is _E707 no type named
+> `handle` (the binding `h`)_, with a place: no declaration in the program carries the name, and this
+> compiler ships no `ffi` module that could. It used to escape to `cc` as `error: unknown type name
+'zg_handle'` — the one place in this chapter where a form broke the standing contract.
 
 ```text
 unsafe {

@@ -882,9 +882,12 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 	# `paths` rides beside `srcs` row for row
 	mut si := 0
 	for si < srcs.len() {
-		for im in zerg.imports_of_at(srcs[si], paths[si]) {
+		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
+			im := imd.path
+			chk_test_import(imd)
+			chk_unbuilt_module(imd)
 			chk_import_cycle(here, im)
-			load_unit(module_files(im, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
+			load_unit(module_files(imd, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
@@ -928,6 +931,46 @@ fn chk_import_cycle(stack: list[str], im: str) {
 		j = j + 1
 	}
 	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
+}
+
+# chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
+# the line that asked for it.
+#
+# `atomic` is the whole list, and it earns the entry the hard way: the module is written, it
+# is formatted and checked with the rest of the stdlib, and it declares `Atomic[T]`, a generic
+# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E215
+# NotImplemented: a generic struct` pointing INTO `src/stdlib/atomic.zg`, a file the reader
+# did not write and cannot fix. That is the same shape as a cc error against generated C, and
+# it is the shape this repo's gates exist to turn away.
+#
+# THE MODULE STAYS SHIPPED rather than being taken out of the stdlib directory. Unshipping it
+# means moving the source out of `src/stdlib/`, because this compiler resolves the stdlib by
+# LISTING that directory — and the moment it leaves, `zerg fmt --check` and the rest of
+# SELF_SRCS stop reading it, so a hundred lines of Zerg rot quietly until generics land. What
+# is left behind would be `E502 cannot resolve import`, which is a sentence about a module
+# that is right there. Between a listing that needs a marker and a diagnostic that is false,
+# the marker is the honest one, and docs/runtime/stdlib.md carries it.
+#
+# This function deletes itself the day a generic struct is built.
+# chk_test_import turns away an import that NAMES a test file. `import "lib/lib_test"` reaches
+# module_at's single-file arm, which the directory arm's filter does not cover, and dropping it
+# there instead would resolve the import to an empty module and move the complaint to whatever
+# name the program went on to write.
+#
+# A test file is not importable from anywhere, including a sibling test file: the convention
+# says which builds compile one, and `zerg test` is what will compile them together.
+fn chk_test_import(im: zerg.ImportDecl) {
+	return if not is_test_file(path_tail(im.path) + ".zg")
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
+}
+
+fn chk_unbuilt_module(im: zerg.ImportDecl) {
+	return if path_tail(im.path) != "atomic"
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -1154,7 +1197,14 @@ fn has_suffix(s: str, suffix: str) -> bool {
 # The entry directory STAYS as the second root rather than being replaced: a nested module
 # reaching a module beside the program resolved before this and still does. So the change
 # only ever adds a place to look.
-fn module_files(path: str, near: str, from_dir: str) -> list[str] {
+#
+# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E502 was the last
+# import rule with no place: the two beside it (E511, E512) are handed the `ImportDecl` and
+# spell `place_line` from it, and this one was handed the path alone — a string that knows
+# what was written and not which line wrote it. A reader told an import resolves nowhere and
+# not which import is left grepping their own program for the quoted path.
+fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
+	path := im.path
 	mut roots: list[str] = []
 	roots.append(near)
 
@@ -1184,11 +1234,27 @@ fn module_files(path: str, near: str, from_dir: str) -> list[str] {
 		}
 	}
 
-	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path"
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
+}
+
+# is_test_file reports whether a source is a TEST FILE by the build tool's convention, which
+# is its name (docs/runtime/package.md). A test is ordinary code under the ordinary visibility
+# rules — there is no test-only backdoor into privacy — so the only thing that separates it
+# from the module it sits in is which builds compile it, and this is that line.
+fn is_test_file(name: str) -> bool {
+	return name == "_test.zg" or has_suffix(name, "_test.zg")
 }
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
 # DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
+#
+# A `*_test.zg` IS NOT IN EITHER ANSWER. A normal build compiled them like every other file,
+# so a test's declarations reached the shipped artifact and its `pub` ones joined the module's
+# surface — `lib.only_in_test()` resolved and ran from a program that never asked for a test.
+# The directory case drops them; the single-file case refuses, because `import "lib/lib_test"`
+# names one deliberately and dropping it would leave the module empty and the complaint about
+# some name much later.
 fn module_at(root: str, path: str) -> list[str] {
 	file := join_path(root, path + ".zg")
 	if __zrt_exists(file) {
@@ -1200,7 +1266,7 @@ fn module_at(root: str, path: str) -> list[str] {
 	if __zrt_exists(dir) {
 		mut many: list[str] = []
 		for name in __zrt_listdir(dir) {
-			if has_suffix(name, ".zg") {
+			if has_suffix(name, ".zg") and not is_test_file(name) {
 				many.append(join_path(dir, name))
 			}
 		}
@@ -1270,11 +1336,14 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
-	for im in zerg.imports_of_at(src, file) {
+	for imd in zerg.import_decls_at(src, file) {
+		im := imd.path
+		chk_test_import(imd)
+		chk_unbuilt_module(imd)
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)
-		for dep in module_files(im, dir_of(file), from_dir) {
+		for dep in module_files(imd, dir_of(file), from_dir) {
 			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}

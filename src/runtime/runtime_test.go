@@ -1615,6 +1615,19 @@ func TestUnclaimedFaultReachesThePreviousHandler(t *testing.T) {
 }
 
 const chainedHandlerC = `
+/* sigaction/sigemptyset — and write/_exit below — are POSIX, which a strict '-std=c11'
+ * glibc hides from <signal.h> unless a feature-test macro asks for them; macOS exposes
+ * them regardless, so the omission was invisible from there. src/runtime/csrc/sys.c
+ * carries the same pair for the same reason, including the _DARWIN_C_SOURCE that puts
+ * back what _POSIX_C_SOURCE narrows away on macOS. Both must precede EVERY #include:
+ * a feature-test macro is read at the first one. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include "zergrt.h"
 #include <signal.h>
 #include <string.h>

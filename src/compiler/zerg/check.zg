@@ -282,6 +282,24 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		return
 	}
 
+	# WITHIN ITS OWN `for` the walked collection is frozen against structural change
+	# (docs/code/collections.md), and an assignment spells two of its forms: REBINDING the
+	# walked name, and a map index-assign — `m[k] = v` INSERTS when `k` is new, and whether
+	# it is new is a runtime fact, so the whole form is refused inside the loop. An element
+	# write through a frozen LIST (`xs[0] = 9`) stays legal: it moves no cursor.
+	nm := c_ident_name(lhs)
+	if nm != "" and chk_frozen_name(em, nm) {
+		chk_frozen(em, nm, "rebind")
+		return
+	}
+	if c_is_index(lhs) {
+		tn := c_ident_name(chk_store_target(lhs))
+		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, chk_store_target(lhs))) {
+			chk_frozen(em, tn, "assign into")
+			return
+		}
+	}
+
 	idx := c_live_idx(em, root)
 
 	return if idx < 0
@@ -336,6 +354,85 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 # the top level is just as much a row here as a `const` is.
 fn chk_is_module_binding(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_decls.len()
+}
+
+# --- the frozen half of the collection model ---------------------------------------
+#
+# docs/code/collections.md draws the model in two halves: only a `mut` collection can
+# modify its elements, and within a `for … in xs` the collection being walked is FROZEN
+# against structural change — growing, shrinking or rebinding — so an iterator can never
+# be invalidated. The first half was enforced on the assignment forms alone: a method call
+# was never asked whether its receiver is `mut`, so every `mut this` method passed through
+# a plain binding unchallenged. The second half was never written at all, and
+# `for x in xs { xs = [9] }` rebound the very buffer the cursor was walking.
+#
+# WHAT THE FREEZE SEES is the loop's own BINDING and nothing more, which is the spec's
+# "local rule": c_forin / c_formap push the environment row of a bare-name iterable for the
+# body's extent, and the two spellings of a structural change — a mutating method and an
+# assignment — each ask the stack. What it deliberately does not see is an alias: a second
+# binding is a COPY under value semantics, and a capture is a copy too, so neither can reach
+# the walked buffer. What it does not see YET is a structural change reached through a PATH
+# (`for x in p.xs { p.xs.append(v) }`), which docs/code/collections.md carries as its one
+# remaining [deviation] on this section.
+#
+# A ROW AND NOT A NAME, because a plain `:=` may be shadowed: a body declaring its own `xs`
+# inside `for x in xs` names a second collection, and matching the spelling refused an
+# append to it — with a sentence that was not true of that `xs`, and which the seed accepts.
+
+# chk_frozen_name is whether an enclosing `for … in` walks the binding `name` resolves to
+# HERE. Resolving first is the whole rule: a shadowing declaration in the body binds a new
+# row, so the name the loop froze and the name this statement writes are different bindings
+# and only the loop's own is refused.
+fn chk_frozen_name(mut &em: Emitter, name: str) -> bool {
+	idx := c_live_idx(em, name)
+	return false if idx < 0
+
+	for f in em.frz_idxs {
+		return true if f == idx
+	}
+	return false
+}
+
+# chk_frozen records the one finding every spelling of a structural change shares; `action`
+# names the spelling ("rebind", "`append` to", "assign into"), and the sentence is the rule.
+fn chk_frozen(mut &em: Emitter, name: str, action: str) {
+	chk_at(em, "E393", f"cannot {action} `{name}`: it is the collection this `for` loop walks, and a collection is frozen against structural change inside its own loop (docs/code/collections.md) — append to a different collection, or rebuild after the loop")
+}
+
+# chk_recv_mut judges a `mut this` method's receiver the way chk_assignable judges an
+# assignment's target, and for the same reason: the method writes the binding the receiver
+# roots in, so reaching into a value creates no second, more permissive name for it. The
+# receiver has already been proven a place by c_list_method; what is asked here is whether
+# this scope may WRITE it, and whether an enclosing `for` has frozen it.
+fn chk_recv_mut(mut &em: Emitter, target: Expr, meth: str) {
+	nm := c_ident_name(target)
+	if nm != "" and chk_frozen_name(em, nm) {
+		chk_frozen(em, nm, f"`{meth}` to")
+		return
+	}
+
+	root := chk_root_name(target)
+	return if root == ""
+
+	idx := c_live_idx(em, root)
+
+	return if idx < 0
+	return if em.env_mut[idx]
+
+	# ONE sentence per shape, ONE report: the same three kinds chk_assignable tells apart —
+	# a module binding, `this`, and everything else — worded for a method rather than an
+	# assignment, and recorded through a single call so the code stays one identity.
+	mut msg := f"cannot `{meth}` to `{root}`: it is not `mut`, and only a `mut` collection can modify its elements (docs/code/collections.md) — declare it `mut {root} := …`"
+	if chk_is_module_binding(em, idx) {
+		if em.env_const[idx] {
+			msg = f"cannot `{meth}` to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one"
+		} else {
+			msg = f"cannot `{meth}` to `{root}`: it is a module binding, and the top level is immutable — bind a `mut` copy of it here"
+		}
+	} else if root == "this" {
+		msg = f"cannot `{meth}` through `this`: a plain method holds its receiver by value, and the form that mutates the instance is `mut fn` — its receiver arrives as a `mut &`"
+	}
+	chk_at(em, "E392", msg)
 }
 
 # --- a default is a property of the declaration ------------------------------------

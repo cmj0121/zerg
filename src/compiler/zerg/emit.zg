@@ -18,7 +18,7 @@ import (
 
 # Emitter carries the per-function variable environment (name -> type) and the
 # whole-file function signature table (name -> return type).
-pub struct Emitter {
+struct Emitter {
 	pub env_names: list[str]
 	pub env_tys: list[Ty]
 
@@ -494,7 +494,7 @@ pub struct Emitter {
 # `names` emits the parallel `repls` entry instead of a mangled name. It splices a match
 # arm's bound names — a scrutinee alias, or an enum payload field access — into the arm's
 # guard and body.
-pub struct Subst {
+struct Subst {
 	pub names: list[str]
 	pub repls: list[str]
 }
@@ -2835,10 +2835,24 @@ fn c_decl_sites(f: File) -> list[Site] {
 		# reach cc under whatever name a specialization gave it.
 		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, fn_i.is_pub))
 		for pm in fn_i.params {
-			out.append(Site(pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`", fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, fn_i.is_pub))
+			out.append(Site(pm.ty, c_param_says(fn_i, pm), fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, fn_i.is_pub))
 		}
 	}
 	return out
+}
+
+# c_param_says names a parameter in a sentence, and the RECEIVER is the one it must not name
+# as a parameter. A method's `this` is synthesized — the author wrote `pub fn shout()` and no
+# parameter at all — so "parameter `this` of `shout`" points at a word that is not in the
+# file, and this same compiler refuses `this` as a parameter name elsewhere (E245), which
+# makes the sentence advice the language would reject.
+#
+# The receiver is the parameter NAMED `this` on a declaration that has a receiver, which is
+# what c_build_sigs synthesizes; a free function has none and every parameter of it is one.
+fn c_param_says(fn_i: FnDecl, pm: Param) -> str {
+	return f"the receiver of `{fn_i.name}`" if fn_i.recv != "" and pm.name == "this"
+
+	return f"parameter `{pm.name}` of `{fn_i.name}`"
 }
 
 # c_decl_types collects every TUPLE and every CARRIER a declaration spells, in ONE walk.

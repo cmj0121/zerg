@@ -2356,43 +2356,59 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 			# global registry on purpose), so the answer is a compile error plus a link-name
 			# override — which is what docs/runtime/ffi.md already specifies, and which needs the
 			# package layer to exist first.
-			c_mod_collide(em, fn_i)
+			c_mod_collide(em, fn_i, c_first_with_key(f, key, fn_i))
 		}
 		c_add_sig(em, fn_i)
 	}
 }
 
-# c_mod_collide answers a name two modules both declare. A private pair is recorded so both
-# get a module tag in C; a public one has nowhere to be unique and is refused.
-fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl) {
-	mod := c_mod_of(fn_i.path)
-	prev := c_sig_mod_of(em, c_sig_key(fn_i.recv, fn_i.name))
+# c_first_with_key is the EARLIER declaration a key was already taken by — the half of a
+# collision no place line can carry, since the marker points at the second one.
+#
+# IT READS THE DECLARATION AND NOT A COLUMN, which is what lets c_mod_collide answer all three
+# of its questions — which file, which line, and whether it was `pub` — from ONE source. The
+# signature tables carry a module and a `pub` flag per row, and reading half the answer from
+# there and half from here would be two sources that only have to agree until they do not.
+#
+# The scan is on the path that has already found a duplicate, and c_sig_seen — a scan of the
+# same table, run for every function — is what told it so, so this costs nothing that walk did
+# not already cost.
+#
+# `fallback` is the answer of last resort and is unreachable from the only caller: c_sig_seen
+# has just said the key IS taken, and every row of that table below c_add_sig's other caller
+# comes from this same list. A function that ends without answering is E333 here, so the case
+# has to be written; giving it the CURRENT declaration is what keeps a wrong answer from
+# pointing at somebody else's function.
+fn c_first_with_key(f: File, key: str, fallback: FnDecl) -> FnDecl {
+	for d in f.fns {
+		return d if c_sig_key(d.recv, d.name) == key
+	}
+	return fallback
+}
 
-	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, "E705", f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or c_sig_pub_of(em, c_sig_key(fn_i.recv, fn_i.name))
-	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name) if mod == prev
+# c_mod_collide answers a name declared twice at the top level, and there are three shapes of
+# that. `prev` is the earlier declaration; the rules below are told apart by where it was
+# WRITTEN, because that is the only thing that separates them:
+#
+#   one FILE declaring it twice        permanently ill-formed, whatever this compiler grows
+#   two files of one directory         one flat namespace, so no tag can separate them
+#   two directories, one `pub`         no package for a public name to be unique within
+#   two directories, both private      answerable, and recorded here for a module tag
+#
+# THE FIRST IS NOT THE SECOND, and reporting it as one sent a reader looking for a module that
+# is not there: two `#[test]` functions of one name in one `*_test.zg` were refused with "two
+# modules both define `test_same`". It gets a rule of its own rather than a second wording of
+# E706, because the two have different LIFETIMES — E706 is a `NotImplemented` that the package
+# layer retires, and a name declared twice in one file is refused by every compiler there will
+# ever be.
+fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl, prev: FnDecl) {
+	raise c_same_file_twice(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.line) if prev.path == fn_i.path
+	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, "E705", f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
+	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if c_mod_of(fn_i.path) == c_mod_of(prev.path)
 
 	if not c_name_in(em.mod_tagged, fn_i.name) {
 		em.mod_tagged.append(fn_i.name)
 	}
-}
-
-# c_sig_mod_of / c_sig_pub_of read back what c_add_sig recorded for a key.
-fn c_sig_mod_of(mut &em: Emitter, key: str) -> str {
-	mut i := 0
-	for i < em.sig_names.len() {
-		return em.sig_mod[i] if em.sig_names[i] == key
-		i = i + 1
-	}
-	return ""
-}
-
-fn c_sig_pub_of(mut &em: Emitter, key: str) -> bool {
-	mut i := 0
-	for i < em.sig_names.len() {
-		return em.sig_pub[i] if em.sig_names[i] == key
-		i = i + 1
-	}
-	return false
 }
 
 # c_add_sig records one function's signature and its parameter rows. It is a function of its
@@ -4823,8 +4839,33 @@ fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
 	return c_diag(em, "E444", f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`")
 }
 
-fn c_mod_flat_collide(path: str, line: int, col: int, name: str) -> str {
-	return c_diag_at(path, line, col, "E706", f"NotImplemented: two modules both define `{name}` — this compiler flattens every module into one namespace, so the two cannot be told apart")
+# c_same_file_twice and c_mod_flat_collide are the two shapes a top-level name declared twice
+# arrives in, and they are two rules rather than two wordings of one because they have
+# different LIFETIMES — which is what a code is for. Both are asked by two walks over two
+# tables: a signature and a module constant.
+#
+# ONE FILE DECLARING IT TWICE is permanently ill-formed, in this compiler and in every one
+# there will ever be, so it is a plain sentence and no package layer retires it. It used to be
+# answered by the rule below, which told the reader about a second MODULE — two `#[test]`
+# functions of one name in one `*_test.zg` were refused as "two modules both define
+# `test_same`", and a reader following that sentence goes looking for a module that is not
+# there. The first declaration's LINE is what the place cannot carry: the marker points at the
+# second one, and both halves of a duplicate are worth having.
+fn c_same_file_twice(path: str, line: int, col: int, name: str, first: int) -> str {
+	return c_diag_at(path, line, col, "E745", f"`{name}` is declared twice in this file — the first is at line {strconv.to_string(first, 10)}, and one scope declares a name once")
+}
+
+# TWO FILES UNDER ONE DIRECTORY is this compiler's limit and not the language's, so it keeps
+# its `NotImplemented` and the package layer retires it.
+#
+# IT NAMES BOTH FILES, because "two modules" is a READING of the evidence and the files are the
+# evidence. A directory is a module and a lone `.zg` file is one too (`module_at` answers the
+# file first), so two declarations under one directory may be two modules or two files of one,
+# and nothing at this stage can tell which — what it CAN say is where each of them is written.
+# Asserting the first reading is what made it wrong about the same-file case above; naming the
+# files is right about all of them.
+fn c_mod_flat_collide(path: str, line: int, col: int, name: str, other: str) -> str {
+	return c_diag_at(path, line, col, "E706", f"NotImplemented: `{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
 }
 
 # The two below are one rule over a two-valued domain, which is why they read a side rather
@@ -9396,7 +9437,16 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# was the half a constant walk could see, so `const f := 1` beside `fn f()` was
 		# refused and `const A := 1` beside `struct A` reached cc. c_build_top_names asks it
 		# of every top-level declaration at once now, and reports at this same place.
-		raise c_mod_flat_collide(c.path, c.line, c.col, c.name) if c_k_idx(em, c.name) >= 0
+		#
+		# WHICH of the two rules is the earlier declaration's FILE, exactly as it is for a
+		# signature: one file declaring a constant twice is ill-formed for good, and two files
+		# under one directory is the flat namespace this compiler still has.
+		ki := c_k_idx(em, c.name)
+		if ki >= 0 {
+			raise c_same_file_twice(c.path, c.line, c.col, c.name, em.k_decls[ki].line) if em.k_decls[ki].path == c.path
+
+			raise c_mod_flat_collide(c.path, c.line, c.col, c.name, em.k_decls[ki].path)
+		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
 		# is chk_binding's — the value must fit the declared type, literals adopting the

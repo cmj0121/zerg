@@ -92,8 +92,16 @@ func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, []Mod
 	return "", nil, false
 }
 
+// IsTestFile reports whether a source is a TEST FILE by the build tool's convention,
+// which is its name (docs/runtime/package.md). A normal build compiles none of them,
+// so nothing a test declares reaches a shipped artifact or a module's surface. The
+// shipping compiler states the same rule in zergc.zg's is_test_file.
+func IsTestFile(name string) bool {
+	return strings.HasSuffix(name, "_test.zg")
+}
+
 // resolveDirModule reads canonical as a directory module: every `.zg` file directly
-// in it, in a stable (name-sorted) order.
+// in it that is not a test file, in a stable (name-sorted) order.
 func resolveDirModule(fsys fs.FS, canonical string) ([]ModuleFile, bool) {
 	info, err := fs.Stat(fsys, canonical)
 	if err != nil || !info.IsDir() {
@@ -105,7 +113,7 @@ func resolveDirModule(fsys fs.FS, canonical string) ([]ModuleFile, bool) {
 	}
 	var files []ModuleFile
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".zg") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".zg") || IsTestFile(e.Name()) {
 			continue
 		}
 		data, err := fs.ReadFile(fsys, path.Join(canonical, e.Name()))

@@ -126,43 +126,82 @@ first — `zerg` does, for the rules it checks; a refusal ends the run at the fi
 of what the two shapes are.
 
 > **[deviation]** A place and a code are owed on every diagnostic, and what decides whether one carries
-> them is the **channel**, not whether the rule checks or refuses. A rule reported through the checking
-> channel always has both. A rule reported by `raise` has a code only when the string it raises is written
-> with one, and a place only when the site appends the trailer itself — so the parser's and the emitter's
-> refusals split, and a handful of genuinely CHECKED rules fall out on the wrong side of the split with
-> them.
+> them is the **channel**, not whether the rule checks or refuses. All three stages that answer about a
+> PROGRAM now have one — `chk_at` in check.zg, `p_diag` in parser.zg, `c_diag` in emit.zg — and each takes
+> the code as an argument and reads the place itself, so a site cannot carry one and forget the other. What
+> is left of this deviation is the **lexer**, whose two refusals carry neither.
 >
 > ---
 >
-> Measured today: of the codes reported by `raise`, roughly three quarters append no place — `E210`,
-> `E217`, `E223`, `E236`, `E446`, `E465` and their neighbours — and the rest do (`E224`, `E244`, `E285`,
-> `E286`, `E404`, `E454`, the `E247`–`E256` nesting family, `E483`). Around **seventy** diagnostic sites
-> carry no **code** at all, which is far more than the two this paragraph once named: they are every
-> `raise` whose message was written as prose rather than opened with an `E###`, and they run from the
-> parser's catch-all _NotImplemented: `X` is not an expression this compiler reads_ through the
-> emitter's carrier, method, module and match families to the lexer's _f-string: a bare '}' is not text_.
-> `scripts/error-codes-check.sh` cannot see them: it compares codes that exist against the gates and the
-> catalogue, and a rule with no code is absent from all three.
+> Measured today. **The parser is done.** Of its **103** raises, all but one report through its channel. Nine
+> rules that had no code at all — the catch-all _`X` is not an expression this compiler reads_ among them —
+> were given `E601`–`E609`, a gate case each and a catalogue row each. One raise is left with neither on
+> purpose: `p_impossible`, an arm no program reaches, where a code would be an identity no case could ever
+> assert. What the change was visible as: **31** `no-place` markers retired from `scripts/reject-check.sh`,
+> and `reject-fuzz`'s `write-immutable` ceiling, the parser's last place-less refusal, down to zero.
+>
+> **The emitter is done too.** It had **126** raise statements, **76** opening with a code and **13**
+> appending a place; all **123** it has now go through `c_diag` / `c_diag_at`, and the three that went
+> stopped raising rather than moved — a struct and an enum record their own position, so a duplicate
+> declaration reaches the checking channel like the other four kinds, and the two rules about a variant a
+> subject cannot hold (`E456`, `E457`) became checked findings for the same reason. Forty-three rules that
+> had no code were given
+> `E701`–`E743`, a gate case each and a catalogue row each; `E4xx` closed at `E498` with `E499` retired
+> unspent, exactly as `E2xx` closed for the parser. **No raise here is exempt.** Two were briefly written
+> as an ICE on the reasoning that the parser refuses the only shape that reaches them, and both reasonings
+> were wrong — `p_builtin_type_ctor` exempts six names from `E275` and four of them are not reserved, so
+> `fn set[T](…)` and `set[int, str](1)` reach the arity rule; and `1..=nil` writes out by hand the shape a
+> bare `..=` used to leave behind. An unreachable rule has to be shown unreachable, and neither was.
+> What the change is visible as: **18** more `no-place` markers retired, and `scripts/refuse-check.sh`'s
+> `place` marker gone entirely — a place is asserted of every `zerg` case there now, because there is no
+> longer a case that may lack one.
+>
+> **The lexer is what is left**, and it is two: _f-string: unterminated literal_ and _f-string: a bare '}'
+> is not text_. Both are raised from the driver rather than from a stage with a channel.
+>
+> `scripts/error-codes-check.sh` cannot see an uncoded rule by comparing its three sets: it compares codes
+> that exist against the gates and the catalogue, and a rule with no code is absent from all three. It sees
+> the parser's and the emitter's by a different question — a `raise` in either file that writes its own
+> message rather than asking the channel for one is reported by name — which is the assertion that keeps a
+> channel from being bypassed a site at a time. It is a ratchet and not a proof: it sees a string LITERAL,
+> so a message picked into a variable first would pass, and it must let `raise anything(…)` through
+> because every site in both files raises a call.
 >
 > ---
 >
-> **Checked rules are not exempt**, which is the part of this the older text had backwards. Two rules
-> `zerg` genuinely CHECKS report with no place: a constant cycle (_these constants depend on each other and
-> none can be given a value first_), which carries no code either, and `E382`, a name declared twice, which
-> carries a code and no place because a struct and an enum are registered before anything records one.
+> **Checked rules are not exempt**, which is the part of this the older text had backwards, and the two
+> that were named here have both moved. A constant cycle (`E732`) reported with no place and no code at
+> all; it opens with its code and points at the first constant that cannot be given a value. `E382`, a name
+> declared twice, reported with a place for some declarations and not for others — a duplicate `type A = …`
+> carried one and a duplicate `struct` did not, because a struct and an enum were registered before
+> anything recorded a position to give it. Both now carry the declaration's own line, and the channel that
+> chose between raising and recording is gone with the reason for it.
 >
 > Two more used to be on that list and are not: `` `x` is used after del `` and its on-some-paths sibling,
 > now `E297` and `E298`. Nothing about the rules changed — they moved from `raise` to the checking channel,
 > which is the only thing that decides the question, and the move is the whole fix.
 >
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
-> narrows to the token when the message quotes one that is on that line.
+> narrows to the token when the message quotes one that is on that line. A rule that runs over a
+> DECLARATION — a field's default, a duplicate variant name, a method declared twice — takes the
+> declaration's place instead, because it runs before any statement has been emitted for the marker to
+> point at.
 
 The rule the project holds itself to is stronger than the paragraphs above, and it is worth stating on its
 own, because it is the yardstick every finding in this specification is measured against:
 
 **A form is either lowered correctly or refused by name.** It is never a crash, never a silently wrong answer,
 and never an error reported by the C compiler or the linker against generated code nobody wrote.
+
+> **[deviation]** A form inside a **template nobody instantiates** is neither. Every rule this compiler
+> enforces is driven by the walk that LOWERS a body, and a template is removed before that walk — only the
+> specializations a call asks for are lowered — so `fn f[T](xs: list[T], v: T) { xs.append(v) }` that no call
+> reaches compiles in silence, and so does the same body assigning to an immutable binding, which is `E307`,
+> a rule enforced everywhere else. The seed diagnoses both, because its semantic pass walks a **declaration**
+> rather than a lowering. It is one gap owed once and not a property of any one rule. Closing it needs a body
+> checked against a type parameter's **bounds** rather than against a concrete type — `x.show()` on a
+> `T: Show` has no method to resolve until `T` is one, and lowering is defined only over concrete types —
+> which is a checker this compiler does not have.
 
 One consequence is worth writing down here, because no single chapter owns it: a program with no `fn main` is
 grammatical — `program ::= stmt-list`, the `nop` program the grammar opens with — so what rejects it is the
@@ -213,17 +252,28 @@ An **uncaught error** ends the program deterministically: a `raise` that reaches
 force `!` on an absent optional, or a built-in runtime fault (see [Errors](code/errors.md)) that no `guard`/`?`
 recovers. On abort the runtime:
 
-1. writes the error's message to **standard error**, followed by a newline;
+1. writes **one line** describing the error to **standard error**, followed by a newline;
 2. runs the pending `defer`s on the unwound path (the same cleanup stack the normal return path uses); and
 3. terminates the process with exit status **1**.
 
-A built-in error's message has the form `Kind: text` (for example `IndexError: list index out of range`).
-The exact `text` is not normative; the `Kind:` prefix for a taxonomy error is. See [Errors](code/errors.md) for
-the built-in error kinds and which operations raise them.
+The line a **taxonomy** error writes has the form `Kind: text`, where `text` is the error's `message()` — for
+example `IndexError: index out of range`. The exact `text` is not normative; the `Kind:` prefix is. It belongs
+to the **line** and not to the message: `message()` answers `text` alone, and the prefix is rendered for **any**
+raised taxonomy `Err` — a `raise ValueError("bad input")` a program wrote and a fault the runtime raised itself
+report the same shape. An error carrying **no** kind (what a bare `raise "…"` builds) writes its message alone.
+See [Errors](code/errors.md) for the built-in error kinds and which operations raise them.
 
-> **[deviation]** A hardware fault that the runtime cannot intercept — today, a coroutine stack overflowing
-> past its guard page, or `main`'s unguarded native stack — terminates the process by signal without
-> running `defer`s, rather than as a clean `StackOverflowError` abort. See [Errors](code/errors.md).
+> **[deviation]** A stack overflow — a coroutine running past its guard page, or `main` past its native
+> stack — now dies with its name: the runtime's fault handler writes `StackOverflowError: stack overflow`
+> to standard error and terminates with exit status **1**, steps 1 and 3 of the contract above. What
+> still deviates is step 2: the faulting stack is exhausted and cannot be unwound from a signal handler,
+> so the pending `defer`s are **skipped**, not run — and unlike an ordinary abort, which a coroutine
+> contains to itself, an overflow ends the whole process wherever it happens. A fault the handler does
+> not recognise is handed back to whatever held the signal before the runtime did (a sanitizer's handler,
+> or the default disposition), so it dies as the signal it is with that handler's diagnostic intact. The
+> two windows it does claim are **one page each** — a coroutine's guard page exactly, and the single page
+> below `main`'s stack bound — which is also the whole of what it can misname: an access into that one
+> page under `main` reads as an overflow. See [Errors](code/errors.md).
 
 ## The C the reference implementation emits
 
@@ -249,8 +299,9 @@ The specification uses these terms precisely:
 - **Undefined behavior (UB)** — the spec places no requirement on the result. A conforming program must
   avoid it; a conforming implementation may do anything, including crash. Zerg's design goal is to have
   **no reachable UB from safe code**; where the bootstrap currently admits UB, the chapter marks it a
-  **[deviation]** (for example, a coroutine stack overflow is a hardware fault rather than a clean
-  `StackOverflowError` — see [Errors](code/errors.md)).
+  **[deviation]** (for example, a stack overflow is a hardware fault the runtime names
+  `StackOverflowError` and exits 1 on, rather than a clean unwind that runs the pending `defer`s — see
+  [Errors](code/errors.md)).
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
   points, each detailed in its chapter, include:

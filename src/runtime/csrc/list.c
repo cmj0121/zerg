@@ -166,7 +166,7 @@ void zrt_list_push(zrt_list *l, const void *elem) {
 
 void *zrt_list_at_ref(zrt_list *l, size_t i) {
 	if (i >= l->len) {
-		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
+		zrt_abort_kind(ZRT_ERR_INDEX, "index out of range");
 	}
 	return l->data + i * l->elemsz;
 }
@@ -213,7 +213,7 @@ void *zrt_list_get(zrt_list *l, size_t i) {
  * A range outside the list is an IndexError, the same answer `xs[i]` gives. */
 void zrt_list_slice(zrt_list *dst, const zrt_list *src, size_t lo, size_t hi) {
 	if (hi > src->len || lo > hi) {
-		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: slice out of range");
+		zrt_abort_kind(ZRT_ERR_INDEX, "slice out of range");
 	}
 	zrt_list_init(dst, src->elemsz, src->vt);
 	for (size_t i = lo; i < hi; i++) {

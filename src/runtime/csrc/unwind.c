@@ -109,11 +109,37 @@ void zrt_handler_pop(zrt_frame *frame) {
 	g_tls.handler = frame->prev;
 }
 
-/* zrt_unwind_abort is the shared abort core: report the message, then unwind to the
+/* zrt_err_kindname is the taxonomy's number -> NAME direction, and the one place the
+ * `Kind: ` prefix of the abort line (docs/conformance.md) is built. A generic Err — kind
+ * NONE, what a bare `raise "…"` carries — has no name to say, so it reports verbatim.
+ *
+ * The prefix belongs to the RENDERING and not to the message. It used to be spelled into
+ * each of the runtime's own literals ("IndexError: index out of range"), which made the
+ * shape of the line a property of who raised the error: a `raise ValueError("bad input")`
+ * a program wrote itself carried the kind in its value and printed without it, and the
+ * same kind from the runtime printed with it. Rendering here gives both one shape, and
+ * leaves message() answering the bare text either way. */
+static const char *zrt_err_kindname(int kind) {
+	switch (kind) {
+	case ZRT_ERR_VALUE: return "ValueError";
+	case ZRT_ERR_OVERFLOW: return "OverflowError";
+	case ZRT_ERR_IO: return "IOError";
+	case ZRT_ERR_ENCODING: return "EncodingError";
+	case ZRT_ERR_INDEX: return "IndexError";
+	case ZRT_ERR_KEY: return "KeyError";
+	case ZRT_ERR_DEADLOCK: return "DeadlockError";
+	case ZRT_ERR_SEND_ON_CLOSED: return "SendOnClosedError";
+	case ZRT_ERR_STOP_ITERATION: return "StopIteration";
+	case ZRT_ERR_DIVZERO: return "DivideByZeroError";
+	default: return NULL;
+	}
+}
+
+/* zrt_unwind_abort is the shared abort core: report the error, then unwind to the
  * innermost handler and longjmp (or exit when none). Both the string zrt_abort and
  * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
  * an Err value was stashed in g_tls.taken first (Decision D). */
-static _Noreturn void zrt_unwind_abort(const char *msg) {
+static _Noreturn void zrt_unwind_abort(zrt_err e) {
 	zrt_frame *h = g_tls.handler;
 	/* A `guard` handler demotes this abort to a Result value, so it is not an error
 	 * the program failed to handle: land on it WITHOUT reporting the message (the Err
@@ -122,7 +148,7 @@ static _Noreturn void zrt_unwind_abort(const char *msg) {
 		zrt_unwind_to(h->mark);
 		longjmp(h->buf, 1);
 	}
-	zrt_report(msg);
+	zrt_report(zrt_err_kindname(e.kind), e.msg);
 	if (h != NULL) {
 		/* An unhandled coroutine crash unwinds to the coroutine's outermost handler
 		 * (the trampoline's, whose prev is NULL); mark it so the sender releases run
@@ -143,14 +169,14 @@ _Noreturn void zrt_abort(const char *msg) {
 	/* A string abort still stashes an Err so a surrounding `guard` recovers a value
 	 * (with the message) rather than nothing; behaviour is otherwise unchanged. */
 	g_tls.taken = zrt_err_new(msg);
-	zrt_unwind_abort(msg);
+	zrt_unwind_abort(g_tls.taken);
 }
 
 _Noreturn void zrt_abort_kind(int kind, const char *msg) {
 	/* Like zrt_abort, but the stashed Err carries a built-in KIND so a guard-recovered
 	 * intrinsic error is distinguishable (`err is ValueError`, etc.). */
 	g_tls.taken = zrt_err_new_kind(kind, msg);
-	zrt_unwind_abort(msg);
+	zrt_unwind_abort(g_tls.taken);
 }
 
 zrt_err zrt_err_new(const char *msg) {
@@ -215,7 +241,7 @@ zrt_err zrt_err_chain(zrt_err e, zrt_err cause) {
 
 _Noreturn void zrt_raise_err(zrt_err e) {
 	g_tls.taken = e;
-	zrt_unwind_abort(e.msg);
+	zrt_unwind_abort(e);
 }
 
 zrt_err zrt_taken_err(void) {

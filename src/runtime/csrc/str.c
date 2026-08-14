@@ -143,7 +143,7 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 	size_t n = bytes.len;
 	if (!utf8_ok(data, n)) {
 		zrt_list_drop(&bytes);
-		zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: bytes are not valid UTF-8 for a str");
+		zrt_abort_kind(ZRT_ERR_ENCODING, "bytes are not valid UTF-8 for a str");
 	}
 	char *out = str_alloc(n + 1);
 	if (n > 0) {
@@ -214,7 +214,7 @@ int zrt_utf8_encode(int64_t cp, char *out) {
  * conversion is re-construction, checked). */
 int64_t zrt_parse_int(const char *s) {
 	if (s == NULL || *s == 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an integer from an empty string");
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot parse an integer from an empty string");
 	}
 	const char *p = s;
 	int neg = 0;
@@ -223,7 +223,7 @@ int64_t zrt_parse_int(const char *s) {
 		p++;
 	}
 	if (*p == 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an integer from a lone sign");
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot parse an integer from a lone sign");
 	}
 	/* Accumulate magnitude as unsigned; the signed range is asymmetric, so the limit is
 	 * 2^63 for a negative value and 2^63-1 for a non-negative one. */
@@ -231,11 +231,11 @@ int64_t zrt_parse_int(const char *s) {
 	uint64_t acc = 0;
 	for (; *p != 0; p++) {
 		if (*p < '0' || *p > '9') {
-			zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid digit while parsing an integer");
+			zrt_abort_kind(ZRT_ERR_VALUE, "invalid digit while parsing an integer");
 		}
 		uint64_t d = (uint64_t)(*p - '0');
 		if (acc > (limit - d) / 10) {
-			zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer literal out of range");
+			zrt_abort_kind(ZRT_ERR_OVERFLOW, "integer literal out of range");
 		}
 		acc = acc * 10 + d;
 	}
@@ -250,23 +250,23 @@ int64_t zrt_parse_int(const char *s) {
  * OverflowError above UINT64_MAX. It is `uint(s)` for a str argument. */
 uint64_t zrt_parse_uint(const char *s) {
 	if (s == NULL || *s == 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an unsigned integer from an empty string");
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot parse an unsigned integer from an empty string");
 	}
 	const char *p = s;
 	if (*p == '+') {
 		p++;
 	}
 	if (*p == 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an unsigned integer from a lone sign");
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot parse an unsigned integer from a lone sign");
 	}
 	uint64_t acc = 0;
 	for (; *p != 0; p++) {
 		if (*p < '0' || *p > '9') {
-			zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid digit while parsing an unsigned integer");
+			zrt_abort_kind(ZRT_ERR_VALUE, "invalid digit while parsing an unsigned integer");
 		}
 		uint64_t d = (uint64_t)(*p - '0');
 		if (acc > (UINT64_MAX - d) / 10) {
-			zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: unsigned integer out of range");
+			zrt_abort_kind(ZRT_ERR_OVERFLOW, "unsigned integer out of range");
 		}
 		acc = acc * 10 + d;
 	}
@@ -332,19 +332,19 @@ static bool float_shape(const char *s) {
  * out of double's range. It is `float(s)` for a str argument. */
 double zrt_parse_float(const char *s) {
 	if (s == NULL || *s == 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse a float from an empty string");
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot parse a float from an empty string");
 	}
 	if (!float_shape(s)) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid characters while parsing a float");
+		zrt_abort_kind(ZRT_ERR_VALUE, "invalid characters while parsing a float");
 	}
 	errno = 0;
 	char  *end = NULL;
 	double v = strtod(s, &end);
 	if (end == s || *end != 0) {
-		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid characters while parsing a float");
+		zrt_abort_kind(ZRT_ERR_VALUE, "invalid characters while parsing a float");
 	}
 	if (errno == ERANGE) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: float out of range");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "float out of range");
 	}
 	return v;
 }
@@ -361,7 +361,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 		int len = zrt_utf8_len(cps[i]);
 		if (len == 0) {
 			zrt_list_drop(&runes);
-			zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: rune is not a valid code point for a str");
+			zrt_abort_kind(ZRT_ERR_ENCODING, "rune is not a valid code point for a str");
 		}
 		total += (size_t)len;
 	}

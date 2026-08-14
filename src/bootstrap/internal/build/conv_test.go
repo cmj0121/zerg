@@ -148,15 +148,45 @@ func TestConvNonScalarRejected(t *testing.T) {
 	}
 }
 
-// TestConvDoesNotMaskUserFunction checks the conversion never steals a call: a user
-// `fn int(...)` is still that function.
+// TestConvDoesNotMaskUserFunction checks the conversion never steals a call — asked of
+// the only name it can still be asked of.
+//
+// It used to be asked of `fn byte`, and the answer it asserted was one compiler's. This
+// seed resolved `byte(41)` to the user function and printed 42; the shipping compiler read
+// the same callee as the conversion, printed 41, and left the declaration unreachable.
+// Both accepted the program and NEITHER said anything — one source, two answers, no
+// diagnostic. A prelude name is now refused at the declaration that takes it, in both
+// compilers, which is what makes that question unaskable; reject-check.sh pins the refusal
+// and TestConvUserFunctionRefusedOnAPreludeName pins it here.
+//
+// `map` is what is left to ask it of, and it is the whole of the difference between the
+// function slot's set and the type slots' (parser.preludeCalleeRole): `map[...](...)` as a
+// constructor is built by neither compiler, so no call can spell the name and the
+// conversion machinery has nothing to steal.
 func TestConvDoesNotMaskUserFunction(t *testing.T) {
-	code, _, diags := Compile("fn byte(n: int) -> int {\n\treturn n + 1\n}\n" +
-		"fn main() {\n\tprint byte(41)\n}\n")
+	code, _, diags := Compile("fn map(n: int) -> int {\n\treturn n + 1\n}\n" +
+		"fn main() {\n\tprint map(41)\n}\n")
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if !strings.Contains(code, "zg_byte(") {
-		t.Fatalf("a user fn named byte must keep its call:\n%s", code)
+	if !strings.Contains(code, "zg_map(") {
+		t.Fatalf("a user fn named map must keep its call:\n%s", code)
+	}
+}
+
+// TestConvUserFunctionRefusedOnAPreludeName pins the other half: a function slot taking a
+// name a CALL can spell is refused at the declaration, so the conversion and the user
+// symbol can never both be candidates for one callee.
+func TestConvUserFunctionRefusedOnAPreludeName(t *testing.T) {
+	for _, name := range []string{"int", "byte", "str", "bytearray", "list", "Either", "Left", "Eq"} {
+		src := "fn " + name + "(n: int) -> int {\n\treturn n + 1\n}\n" +
+			"fn main() {\n\tprint 1\n}\n"
+		_, _, diags := Compile(src)
+		if len(diags) == 0 {
+			t.Fatalf("fn %s: expected a refusal at the declaration", name)
+		}
+		if !strings.Contains(diags[0].Error(), "is a prelude name") {
+			t.Fatalf("fn %s: got %v, want the prelude-name refusal", name, diags[0])
+		}
 	}
 }

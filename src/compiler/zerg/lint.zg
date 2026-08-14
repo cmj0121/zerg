@@ -81,6 +81,13 @@
 #         advice and gets ignored, and what the reader has to weigh is 224 bytes of dead code
 #         in the artifact. ONE code for the two decorators, because it is one consequence:
 #         what a reader has to weigh does not change with which of them they wrote
+#   L602  an `assert` outside a `*_test.zg` file. It is LEGAL and it is ALWAYS COMPILED IN —
+#         there is no flag that strips it, deliberately, because a program with its assertions
+#         and the same program without them are two programs and nobody writes anything
+#         load-bearing into a check that may not run. So the claim ships and can abort a
+#         running program. The message names the replacement, which is what makes this
+#         warning earned rather than stylistic: `assert` in production is not WEAKER than a
+#         check, it is LESS SPECIFIC — it says the claim was false, not what it meant
 #
 # --- severity, and the two exit codes it decides -----------------------------------------
 #
@@ -145,6 +152,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	lint_optionals(f, out)
 	lint_idle_mut_fn(f, out)
 	lint_ships_a_test(f, out)
+	lint_ships_an_assert(srcs, paths, out)
 	lint_with_names(srcs, paths, out)
 
 	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
@@ -308,6 +316,37 @@ fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
 	}
 }
 
+# lint_ships_an_assert is L602: an `assert` outside a `*_test.zg` file. It is L601's direct
+# sibling — same family, same severity, same shape of argument — and the sentence leads with
+# the CONSEQUENCE for L601's reason: "move it to a test" is style advice about a program that
+# runs, and style advice is what a reader learns to scroll past.
+#
+# The consequence here is not dead weight but a LIVE claim. `assert` is always compiled in
+# (GRAMMAR#assert-stmt says why there is no flag that strips it), so what ships is a check
+# that can abort a running program — and the honest framing is that `assert` in production is
+# not weaker than the check somebody meant to write, it is LESS SPECIFIC: it says the claim
+# was false and not what it meant. Naming the replacement is what makes the warning earned.
+#
+# IT READS TOKENS, not the tree, and that is the completeness argument rather than a
+# shortcut: `assert` can be written inside a `guard` block or a closure body, which hang off
+# an EXPRESSION, so an AST walk would have to chase all 28 expression variants to see every
+# one — and a rule that quietly misses a case is the shape this project takes out of its
+# gates. A token cannot be missed. L105 next door is a token rule for its own reason.
+fn lint_ships_an_assert(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
+	mut k := 0
+	for k < srcs.len() {
+		path := lint_path_at(paths, k)
+		if not is_test_file(path) {
+			for t in tokenize(srcs[k]) {
+				if t.kind == Kind.Assert {
+					out.append(Finding("warning", path, t.line, t.col, "L602", "`assert` outside a `*_test.zg` file SHIPS — it is always compiled in, there is no flag that strips it, and this claim can abort a running program. It is not a weaker check than the one you meant, it is a LESS SPECIFIC one: it says the claim was false, never what it meant. `raise ValueError(\"xs must be non-empty\") if xs.len() == 0` says both, and is the form that belongs in a program somebody runs"))
+				}
+			}
+		}
+		k = k + 1
+	}
+}
+
 # deco_of spells which of the two decorators a declaration carries, for the one sentence that
 # has to name it. They cannot both be on one item — a decorator leads a declaration and there
 # is one per item (E613) — so the question has an answer.
@@ -418,6 +457,7 @@ fn lint_opt_body(body: list[Stmt], at: LWhere, ret_opt: bool, mut &out: list[Fin
 			Stmt.SIfLet(nm, v, tb, he, eb) => lint_opt_two(tb, eb, w, ret_opt, out)
 			Stmt.SFor(hc, c, b) => lint_opt_body(b, w, ret_opt, out)
 			Stmt.SForIn(nm, it, b) => lint_opt_body(b, w, ret_opt, out)
+			Stmt.SAssert(b) => lint_opt_body(b, w, ret_opt, out)
 			Stmt.SSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
 			Stmt.SForSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
 			_ => lint_skip()
@@ -544,6 +584,7 @@ fn lint_captures_body(body: list[Stmt], at: LWhere, refs: list[str], mut &muts: 
 			Stmt.SIfLet(nm, v, tb, he, eb) => lint_captures_two(tb, eb, w, refs, muts, out)
 			Stmt.SFor(hc, c, b) => lint_captures_body(b, w, refs, muts, out)
 			Stmt.SForIn(nm, it, b) => lint_captures_body(b, w, refs, muts, out)
+			Stmt.SAssert(b) => lint_captures_body(b, w, refs, muts, out)
 
 			# a select arm's body is a block like any other, and it is where coroutines
 			# actually live — the other two walks in this file grew an `_arms` helper for
@@ -787,6 +828,10 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 # collect_binds_at is the same walk, keeping WHERE each name was bound alongside it. The two
 # lists are parallel: `ats[i]` is where `names[i]` was written, taken from the SAt marker the
 # parser leaves before every statement of a block.
+#
+# IT DOES NOT DESCEND INTO AN `assert`, and that is the one deliberate omission. The bindings
+# in there are the desugar's own operand temporaries — nobody wrote them, and nobody can
+# delete them — so reporting one as unread would be the linter reporting the compiler.
 fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	mut w := at
 	for s in body {
@@ -865,6 +910,11 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			Stmt.SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
 			Stmt.SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
 			Stmt.SRaise(x, hc, c) => walk_raise(x, hc, c, ids, calls, ns)
+
+			# an `assert` holds the author's own expressions, desugared: an import reached
+			# only from a condition is a used import, and a walk that skipped this reported
+			# it as dead
+			Stmt.SAssert(body_b) => walk_body(body_b, ids, calls, ns)
 			Stmt.SDefer(x) => walk_expr(x, ids, calls, ns)
 			Stmt.SSpawn(x) => walk_expr(x, ids, calls, ns)
 			Stmt.SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
@@ -1041,7 +1091,7 @@ struct Allow {
 # directions: a code documented and not listed here can never be allowed, and a code listed
 # here and not documented is a rule with no entry to read.
 fn lint_codes() -> list[str] {
-	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502", "L601"]
+	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502", "L601", "L602"]
 }
 
 # lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that

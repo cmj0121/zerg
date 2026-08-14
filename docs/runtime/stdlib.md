@@ -10,6 +10,43 @@ Nothing here binds a third-party library.
 
 For the compiler-provided functions that need **no** import, see [Built-in Functions](builtins.md).
 
+## Runnable examples in a module's comments
+
+A `pub` function's comment may carry an example, as a pair of fenced blocks in a plain `#` comment — the
+expressions in ` ```zerg `, and what they print in ` ```output `. `make stdlib-test` **compiles and runs**
+every pair and diffs the real output against the stated one, so an example is a claim that is checked
+rather than one that is written down. (`##` doc comments and `zerg doc` are **[not yet]**; the fences are
+the form they will take.)
+
+````text
+# ```zerg
+# strings.index_of("日本語", "本")
+# ```
+# ```output
+# 3
+# ```
+````
+
+> **An ` ```output ` line may not end in whitespace.** The repository's own pre-commit hook trims trailing
+> whitespace, and it does so in the very commit that adds the example — so an output block whose last
+> character is legitimately a space is silently rewritten into one the example does not produce, and the
+> example goes from true to false with nothing to show for it. `trim_left` is the case that found this.
+>
+> The workaround is to end the **expression** with a terminator the eye can see, and to assert the same
+> form in the suite so the two agree:
+>
+> ````text
+> # ```zerg
+> # strings.trim_left("  hi  ") + "|"
+> # ```
+> # ```output
+> # hi  |
+> # ```
+> ````
+>
+> Do not try to exempt the file from the hook: every other line in it should be trimmed, and an example
+> that needs a trailing space is an example whose reader cannot see it either.
+
 ## Packages
 
 | Package               | Import             | Provides                                         |
@@ -287,8 +324,57 @@ an **untyped** `Err` — the only stdlib module of which that is true, and delib
 a claim about the program that did not hold, not a value a function could not accept, and the built-in
 taxonomy has no kind for it.
 
-| Function                                      | Summary                   |
-| --------------------------------------------- | ------------------------- |
-| `assert(cond: bool) -> Result[nil]`           | succeed when `cond` holds |
-| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]` | succeed when `a == b`     |
-| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]` | succeed when `a != b`     |
+| Function                                           | Summary                                            |
+| -------------------------------------------------- | -------------------------------------------------- |
+| `assert(cond: bool, msg: str = "") -> Result[nil]` | succeed when `cond` holds; `msg` names the claim   |
+| `assert_eq[T: Eq](a: T, b: T) -> Result[nil]`      | succeed when `a == b`; a failure names both values |
+| `assert_ne[T: Eq](a: T, b: T) -> Result[nil]`      | succeed when `a != b`; a failure names the value   |
+| `assert_raises[T](r: Result[T]) -> Err`            | answer the `Err` a `guard`ed call raised           |
+
+A failure says what the values **were**: `assert_eq failed: 2 != 3`, and `assert_ne failed: both values
+are 7`. `assert(cond, msg)` has only the message, because a condition is compiled away before it fails.
+
+`assert_raises` takes the **`guard` written at the point of the call** and hands back the error, so the
+kind is asked with the language's own `is` rather than passed in — a type is not a value in Zerg, so
+`assert_raises(f, ValueError)` cannot be spelled at all:
+
+```text
+e := testing.assert_raises(guard { strings.split("a,b", "") })
+testing.assert(e is ValueError, "split refused with the wrong kind")
+```
+
+> A **closure** — `assert_raises(fn () { strings.split("a,b", "") })` — reads better and does not compile:
+> a closure body naming an imported module is _E735 a closure captures `strings`_, a namespace being a
+> free name that a capture would have to give a type. Every test that reaches its module through `import`
+> is that shape, so the `guard` is the form that serves them.
+
+### Structured failure context
+
+`Context` accumulates named values through a chain, and **the assertion is the terminal** — deliberately
+the opposite end from a logger's `log.str(…).msg(…)`. An assertion in the middle would let a forgotten
+terminal assert nothing, and Zerg has no `impl Drop` to notice.
+
+| Method                                             | Summary                                    |
+| -------------------------------------------------- | ------------------------------------------ |
+| `str(key: str, value: str) -> This`                | add one named `str` to the next assertion  |
+| `int(key: str, value: int) -> This`                | add one named `int`                        |
+| `bool(key: str, value: bool) -> This`              | add one named `bool`                       |
+| `assert(cond: bool, msg: str = "") -> Result[nil]` | the terminal: assert, carrying the context |
+
+```text
+ctx.str("file", path).int("row", i).assert(ok, "the row did not round-trip")
+# FAIL … assertion failed: the row did not round-trip [file=a.zg row=3]
+```
+
+Each builder answers a **copy**, so what a chain accumulated reaches its own terminal and nothing after
+it, while the channel inside a `Context` stays shared and `log` / `skip` / `fatal` still reach the runner
+from a copy. The cost of that is a copy of the accumulated text per call — an N-field chain moves O(N²)
+bytes, which for the two or three a failure wants is a few dozen.
+
+The builders are **per type** because Zerg has no varargs, no `any`, and no generic struct to hold a
+rendered list.
+
+> **[not yet]** `assert_eq`, `assert_ne` and `assert_raises` have **no method form**, so
+> `ctx.str("file", p).assert_eq(got, want)` cannot be written: all three are generic, and a generic
+> method is _E409 NotImplemented: a generic METHOD_ in this compiler. This is most of why `assert_eq`
+> names both values itself. Put the values in the chain and end on `assert` when the context matters.

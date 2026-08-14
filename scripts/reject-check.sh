@@ -1345,6 +1345,57 @@ fn main() {
 }
 EOF
 
+# AN AGGREGATE IS A PAIR TOO, and equality was the last family that only judged the scalars.
+# The relation it asked was `ty_name(a) == ty_name(b)` — a type's diagnostic SPELLING, which
+# is unique only where a type has a name of its own — so every composite fell out of the rule
+# and was left to cc, which reported `invalid operands to binary expression
+# ('zgt_tup_int64_t_int64_t' and 'zgt_tup_constcharp_constcharp')` against generated C.
+#
+# FOUR SHAPES, because ty_eq answers structurally and a mismatch can be at any depth: a tuple
+# against a tuple of other components, a map against a map of other values, a list against a
+# list of other elements, a function against a function of another signature. The seed has
+# refused all four since it had a semantic pass, with the same words minus the code.
+
+reject compare-two-different-tuples E348 'cannot compare (int, int) and (str, str)' <<'EOF'
+fn main() {
+	t := (1, 2)
+	u := ("a", "b")
+	print t == u
+}
+EOF
+
+reject compare-two-different-maps E348 'cannot compare map[str, int] and map[str, str]' <<'EOF'
+fn main() {
+	a: map[str, int] = {"x": 1}
+	b: map[str, str] = {"x": "y"}
+	print a == b
+}
+EOF
+
+reject compare-two-different-lists E348 'cannot compare list[int] and list[str]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	ys := ["a"]
+	print xs == ys
+}
+EOF
+
+reject compare-two-different-fns E348 'cannot compare fn(int) -> int and fn(str) -> str' <<'EOF'
+fn takes_int(x: int) -> int {
+	return x
+}
+
+fn takes_str(s: str) -> str {
+	return s
+}
+
+fn main() {
+	a := takes_int
+	b := takes_str
+	print a == b
+}
+EOF
+
 reject add-an-int-to-a-uint E353 <<'EOF'
 fn main() {
 	i: int = 3
@@ -1715,6 +1766,82 @@ reject uint-of-a-byte E395 '`byte` -> `uint`' seed-gap <<'EOF'
 fn main() {
 	b: byte = 65
 	print(f"{int(uint(b))}")
+}
+EOF
+
+reject byte-of-a-uint E395 '`uint` -> `byte`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{int(byte(u))}")
+}
+EOF
+
+reject rune-of-a-uint E395 '`uint` -> `rune`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{int(rune(u))}")
+}
+EOF
+
+reject float-of-a-uint E395 '`uint` -> `float`' seed-gap <<'EOF'
+fn main() {
+	u: uint = 65
+	print(f"{float(u)}")
+}
+EOF
+
+reject byte-of-a-rune E395 '`rune` -> `byte`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{int(byte(r))}")
+}
+EOF
+
+reject uint-of-a-rune E395 '`rune` -> `uint`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{int(uint(r))}")
+}
+EOF
+
+reject float-of-a-rune E395 '`rune` -> `float`' seed-gap <<'EOF'
+fn main() {
+	r: rune = 'A'
+	print(f"{float(r)}")
+}
+EOF
+
+# THE SOURCE IS A BINDING and not a literal, which is the same rule reached down the other
+# path. A written `1.9` is a literal tree, and the folding rule types it from the position it
+# stands in before this rule ever looks; a `float` binding arrives already typed. The four
+# cases above are all literals, so the whole of E394 rested on one of its two approaches —
+# and the half nobody wrote a case for is the half a change to constant folding moves.
+
+reject int-of-a-float-binding E394 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 1.9
+	print(f"{int(f)}")
+}
+EOF
+
+reject byte-of-a-float-binding E394 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 3.5
+	print(f"{int(byte(f))}")
+}
+EOF
+
+reject uint-of-a-float-binding E394 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 3.5
+	print(f"{int(uint(f))}")
+}
+EOF
+
+reject rune-of-a-float-binding E394 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+fn main() {
+	f: float = 65.5
+	print(f"{int(rune(f))}")
 }
 EOF
 
@@ -2706,7 +2833,7 @@ fn main() {
 }
 EOF
 
-reject qualify-with-the-wrong-enum E457 no-place <<'EOF'
+reject qualify-with-the-wrong-enum E457 <<'EOF'
 enum Color {
 	Red
 }
@@ -2721,13 +2848,35 @@ fn main() {
 }
 EOF
 
-reject qualify-a-name-that-is-not-a-variant E456 no-place <<'EOF'
+reject qualify-a-name-that-is-not-a-variant E456 <<'EOF'
 enum Color {
 	Red
 }
 
 fn main() {
 	c := Color.Purple
+	print(f"{int(c)}")
+}
+EOF
+
+# AND THE SENTENCE HAS TO BE TRUE ABOUT THE PROGRAM. E457 used to read the FLAT variant
+# table — which enum declares this bare name, program-wide, first — so with two enums that
+# both declare a `Red` it said "`Red` is a variant of `Color`, not of `Fruit`" about a `Fruit`
+# that has one, and the second enum's variant was unreachable. The shared name is in this case
+# on purpose: it is what the rule used to answer from, and the finding is about `Apple`.
+reject qualify-with-the-wrong-enum-of-two-that-share-a-name E457 '`Apple` is a variant of `Fruit`, not of `Color`' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+enum Fruit {
+	Red
+	Apple
+}
+
+fn main() {
+	c := Color.Apple
 	print(f"{int(c)}")
 }
 EOF

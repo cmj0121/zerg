@@ -132,6 +132,12 @@ struct Emitter {
 	pub var_name: list[str]
 	pub var_enum: list[str]
 	pub var_tag: list[int]
+
+	# vf_enum is the OWNING ENUM of a payload row, and it is here for the same reason
+	# var_enum is: a variant name is a name INSIDE an enum, so a row keyed by the bare name
+	# alone answers whichever enum was declared first. Two enums that each declare a
+	# `Circle(…)` had one arity, one field type and one boxedness between them.
+	pub vf_enum: list[str]
 	pub vf_variant: list[str]
 	pub vf_index: list[int]
 	pub vf_boxed: list[bool]
@@ -3666,7 +3672,7 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	# after the version without it looped forever.
 	mut j := 0
 	for j < em.vf_variant.len() {
-		if c_variant_enum(em, em.vf_variant[j]) == nm {
+		if em.vf_enum[j] == nm {
 			return true if em.vf_boxed[j]
 			return true if c_needs_copy(em, em.vf_ty[j])
 		}
@@ -3754,20 +3760,20 @@ fn c_enum_copy_helper(mut &em: Emitter, ed: EnumDecl) -> str {
 	mut out := "static " + nm + " zg_copy_" + ed.name + "(" + nm + " v) {\n"
 	out = out + "    " + nm + " r = v;\n    switch (v.tag) {\n"
 	for vd in ed.variants {
-		body := c_enum_variant_copy(em, vd)
+		body := c_enum_variant_copy(em, ed.name, vd)
 		if body != "" {
-			out = out + "    case " + strconv.to_string(c_variant_tag(em, vd.name), 10) + ":\n" + body + "        break;\n"
+			out = out + "    case " + strconv.to_string(c_variant_tag_in(em, ed.name, vd.name), 10) + ":\n" + body + "        break;\n"
 		}
 	}
 	return out + "    default: break;\n    }\n    return r;\n}\n\n"
 }
 
-fn c_enum_variant_copy(mut &em: Emitter, vd: VariantDef) -> str {
+fn c_enum_variant_copy(mut &em: Emitter, en: str, vd: VariantDef) -> str {
 	mut out := ""
 	mut i := 0
 	for i < vd.fields.len() {
 		slot := f".u.{vd.name}.f{i}"
-		if c_is_boxed(em, vd.name, i) {
+		if c_is_boxed(em, en, vd.name, i) {
 			em.used_rt = true
 			out = out + "        r" + slot + " = zrt_ref_copy(v" + slot + ");\n"
 		} else if c_needs_copy(em, vd.fields[i]) {
@@ -3785,20 +3791,20 @@ fn c_enum_drop_helper(mut &em: Emitter, ed: EnumDecl) -> str {
 	nm := "zg_" + ed.name
 	mut out := "static void zg_drop_" + ed.name + "(" + nm + " *v) {\n    switch (v->tag) {\n"
 	for vd in ed.variants {
-		body := c_enum_variant_drop(em, vd)
+		body := c_enum_variant_drop(em, ed.name, vd)
 		if body != "" {
-			out = out + "    case " + strconv.to_string(c_variant_tag(em, vd.name), 10) + ":\n" + body + "        break;\n"
+			out = out + "    case " + strconv.to_string(c_variant_tag_in(em, ed.name, vd.name), 10) + ":\n" + body + "        break;\n"
 		}
 	}
 	return out + "    default: break;\n    }\n}\n\n"
 }
 
-fn c_enum_variant_drop(mut &em: Emitter, vd: VariantDef) -> str {
+fn c_enum_variant_drop(mut &em: Emitter, en: str, vd: VariantDef) -> str {
 	mut out := ""
 	mut i := vd.fields.len() - 1
 	for i >= 0 {
 		slot := f"v->u.{vd.name}.f{i}"
-		if c_is_boxed(em, vd.name, i) {
+		if c_is_boxed(em, en, vd.name, i) {
 			em.used_rt = true
 			out = out + "        zrt_release(" + slot + ");\n"
 		} else if c_needs_copy(em, vd.fields[i]) {
@@ -4031,6 +4037,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 			em.var_tag.append(tag)
 			mut k := 0
 			for k < v.fields.len() {
+				em.vf_enum.append(ed.name)
 				em.vf_variant.append(v.name)
 				em.vf_index.append(k)
 
@@ -4059,35 +4066,41 @@ fn c_tag_taken(taken: list[int], tag: int) -> bool {
 # That is the enum GRAMMAR#variant gives an observable integer value to — `int(v)` reads it and
 # `E.of(n)` reverses it; a payload enum's tag is opaque and match-only.
 #
-# It is read off the tables already there rather than recorded beside the name: vf_variant
-# holds exactly the variants that HAVE a payload field, so an enum is flat when none of its
-# variants is in it.
+# It is read off the tables already there rather than recorded beside the name: vf_enum /
+# vf_variant hold exactly the variants that HAVE a payload field, so an enum is flat when
+# none of its variants is in them.
 fn c_is_flat_enum(mut &em: Emitter, en: str) -> bool {
 	return false if not c_is_enum_name(em, en)
 
 	mut i := 0
 	for i < em.vf_variant.len() {
-		return false if c_variant_enum(em, em.vf_variant[i]) == en
+		return false if em.vf_enum[i] == en
 		i = i + 1
 	}
 	return true
 }
 
-# c_is_boxed reports whether payload field `idx` of variant `variant` is a ref-boxed
+# c_is_boxed reports whether payload field `idx` of `en`'s variant `variant` is a ref-boxed
 # (self-recursive) field.
-fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
+#
+# THE ENUM IS PART OF THE QUESTION, and it is the parameter every reader of this table gained
+# at once: a payload row is a row about a variant of ONE enum, and a lookup by the bare name
+# answered from whichever enum declared that name first. Two enums that each carry a
+# `Node(int)` shared one row — one type, one arity, one boxedness — and the second enum's
+# constructor wrote the first enum's union member.
+fn c_is_boxed(mut &em: Emitter, en: str, variant: str, idx: int) -> bool {
 	mut i := 0
 	for i < em.vf_variant.len() {
-		return em.vf_boxed[i] if em.vf_variant[i] == variant and em.vf_index[i] == idx
+		return em.vf_boxed[i] if em.vf_enum[i] == en and em.vf_variant[i] == variant and em.vf_index[i] == idx
 		i = i + 1
 	}
 	return false
 }
 
-fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
+fn c_variant_field_ty(mut &em: Emitter, en: str, variant: str, idx: int) -> Ty {
 	mut i := 0
 	for i < em.vf_variant.len() {
-		return em.vf_ty[i] if em.vf_variant[i] == variant and em.vf_index[i] == idx
+		return em.vf_ty[i] if em.vf_enum[i] == en and em.vf_variant[i] == variant and em.vf_index[i] == idx
 		i = i + 1
 	}
 	return Ty.TUnknown
@@ -4120,9 +4133,13 @@ fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
 			}
 		}
 	} else if a.pat == 3 {
+		# the SCRUTINEE'S enum names the variant: a constructor pattern is written inside a
+		# match on a value, so which enum's `Circle` this is was never in doubt — the table
+		# was what could not say it
+		en := c_named_of(st)
 		mut i := 0
 		for i < a.binds.len() {
-			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i), false, false)
+			c_add_var(em, a.binds[i], c_variant_field_ty(em, en, a.ctor, i), false, false)
 			i = i + 1
 		}
 	}
@@ -4146,7 +4163,7 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 	en := c_ident_name(target)
 
 	return "" if en == "" or not c_is_enum_name(em, en)
-	return "" if not c_is_variant(em, fld) or c_variant_enum(em, fld) != en
+	return "" if not c_is_variant_in(em, en, fld)
 
 	return en
 }
@@ -4382,13 +4399,19 @@ fn c_bare_variant(mut &em: Emitter, name: str) {
 	chk_at(em, "E383", f"`{name}` is a variant of `{c_variant_enum(em, name)}`, and a variant is named through its enum — write `{c_variant_enum(em, name)}.{name}`")
 }
 
-# c_var_row is THE variant lookup. `var_name` / `var_enum` / `var_tag` are one table in
-# three columns, and each of the three readers below used to walk it itself — the shape this
-# file already criticises at the signature table, where a column-per-reader pair walked the
-# rows twice per call site.
+# c_var_row is THE variant lookup BY BARE NAME. `var_name` / `var_enum` / `var_tag` are one
+# table in three columns, and each of the three readers below used to walk it itself — the
+# shape this file already criticises at the signature table, where a column-per-reader pair
+# walked the rows twice per call site.
 #
 # It matters more than the walk it saves: three scans are three chances for the answers to
 # disagree about which row they meant. They cannot now, because there is one row.
+#
+# A BARE NAME IS AMBIGUOUS BY CONSTRUCTION and this answers the FIRST enum that declares it,
+# which is all a bare name can mean. That is enough for the two questions asked of it — "is
+# this name a variant of anything" and "which enum should the reader have written" (E383,
+# c_bare_variant) — and it is not enough for anything else. Every question about a variant a
+# spelling has already NAMED THE ENUM of goes to c_var_row_in below.
 fn c_var_row(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.var_name.len() {
@@ -4398,8 +4421,38 @@ fn c_var_row(mut &em: Emitter, name: str) -> int {
 	return -1
 }
 
+# c_var_row_in is that lookup INSIDE ONE ENUM, and it is what a variant name means: docs/core/
+# types.md makes an enum a value namespace, so `Red` is a name in `Colour` and another name in
+# `Signal`, and the two are different variants that happen to be spelled alike.
+#
+# The flat table could not say that. `Signal.Red` asked which enum owns the bare `Red`, got
+# `Colour` — the first declaration, program-wide — and was refused with a sentence that was
+# false about the program it was reporting on. The second enum's variant was unreachable and
+# the enum itself unusable. The seed has resolved it per-enum since it had enums
+# (enumVariantSym in infer.go), which is what makes this a rule `zerg` LOST rather than one
+# nobody wrote.
+fn c_var_row_in(mut &em: Emitter, en: str, name: str) -> int {
+	mut i := 0
+	for i < em.var_name.len() {
+		return i if em.var_name[i] == name and em.var_enum[i] == en
+		i = i + 1
+	}
+	return -1
+}
+
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	return c_var_row(em, name) >= 0
+}
+
+fn c_is_variant_in(mut &em: Emitter, en: str, name: str) -> bool {
+	return c_var_row_in(em, en, name) >= 0
+}
+
+fn c_variant_tag_in(mut &em: Emitter, en: str, name: str) -> int {
+	r := c_var_row_in(em, en, name)
+	return 0 if r < 0
+
+	return em.var_tag[r]
 }
 
 fn c_variant_enum(mut &em: Emitter, name: str) -> str {
@@ -5400,8 +5453,12 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		# already reported by chk_binary above, and they are the better sentence — what is
 		# wrong there is the pair, not a missing impl. Raising here as well replaced a
 		# diagnostic about the program with one about a spec the program never mentioned.
+		#
+		# `ty_eq` and not `ty_name`, which is the same correction chk_binary's equality rule
+		# took: a SPELLING is the same question only where a type has a name of its own, and
+		# the pair that reaches here is a pair of aggregates, which is exactly where it is not.
 		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
-			if ty_name(ta) == ty_name(c_infer(em, b)) {
+			if ty_eq(ta, c_infer(em, b)) {
 				c_eq_refuse(em, oper, ta)
 			}
 		}
@@ -6921,7 +6978,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 	# `Shape.Line(5)` — a variant CONSTRUCTOR named by its enum, the payload-carrying half
 	# of `Color.Red`. It arrives here rather than at c_fieldref because a call is a method
 	# shape, and `of` is the other thing an enum name answers.
-	return c_variant_ctor(em, meth, args, sb) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+	return c_variant_ctor(em, en, meth, args, sb) if c_is_variant_in(em, en, meth)
 
 	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
 	raise f"`{en}.of(n)` takes one integer — the discriminant to reverse" if args.len() != 1
@@ -7221,7 +7278,10 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if name_is_type(name) {
 		if c_is_variant(em, name) {
 			c_bare_variant(em, name)
-			return c_variant_ctor(em, name, args, sb)
+
+			# the bare spelling is already the finding; the enum it is built as is the one a
+			# bare name resolves to, which is what c_bare_variant just told the reader to write
+			return c_variant_ctor(em, c_variant_enum(em, name), name, args, sb)
 		}
 
 		# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
@@ -7773,14 +7833,13 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
 # omitted for a tag-only variant).
-fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Subst) -> str {
 	# the same disagreement as a pattern that binds too much, from the other side: `Line(7,
 	# 8)` on a `Line(int)` wrote a union member that was never declared, and cc reported it
 	# against generated C
-	chk_variant_arity(em, name, args.len(), "gives")
+	chk_variant_arity(em, en, name, args.len(), "gives")
 
-	en := c_variant_enum(em, name)
-	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, name), 10)
+	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, name), 10)
 	if args.len() > 0 {
 		out = out + ", .u." + name + " = {"
 		mut i := 0
@@ -7788,8 +7847,8 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, name, i), args[i], sb)
-			if c_is_boxed(em, name, i) {
+			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, en, name, i), args[i], sb)
+			if c_is_boxed(em, en, name, i) {
 				# box a self-recursive payload into a leaked ref cell
 				val = f"zg_refnew_{en}({val})"
 			}
@@ -8038,15 +8097,19 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	for i < arms.len() {
 		a := arms[i]
 		if a.pat == 3 {
-			en := c_variant_enum(em, a.ctor)
+			# ASKED OF THE SUBJECT'S ENUM, which is the only enum a constructor pattern can
+			# name a variant of. It used to ask which enum owns the bare name program-wide and
+			# then compare: `match s { Red => … }` on a `Signal` was answered `Colour`, so the
+			# arm was refused as unable to match a subject it matches exactly.
+			en := c_named_of(st)
 
-			raise f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum" if en == ""
-			raise f"E427 variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}" if c_named_of(st) != en
+			raise f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum" if not c_is_variant(em, a.ctor)
+			raise f"E427 variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}" if not c_is_variant_in(em, en, a.ctor)
 
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 			# arm but the last — the count of a diagnostic depended on where the arm sat.
-			chk_variant_arity(em, a.ctor, a.binds.len(), "pattern binds")
+			chk_variant_arity(em, en, a.ctor, a.binds.len(), "pattern binds")
 		}
 		i = i + 1
 	}
@@ -8185,12 +8248,12 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 		return c_extend(sb, a.binds[0], c_res_err(s))
 	}
 	if a.pat == 3 {
-		en := c_variant_enum(em, a.ctor)
+		en := c_named_of(st)
 		mut r := sb
 		mut i := 0
 		for i < a.binds.len() {
 			mut acc := f"{s}.u.{a.ctor}.f{i}"
-			if c_is_boxed(em, a.ctor, i) {
+			if c_is_boxed(em, en, a.ctor, i) {
 				# unbox a self-recursive payload back to the enum value
 				acc = f"(*(zg_{en}*)zrt_ref_payload({acc}))"
 			}
@@ -8256,7 +8319,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	}
 
 	if a.pat == 3 {
-		mut base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
+		mut base := f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), a.ctor)})"
 		if c_is_either(st) {
 			base = f"({c_res_tag(s)} == {c_result_tag(a.ctor)})"
 		}
@@ -8462,7 +8525,7 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr])
 
 		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
 		# variant is named rather than looked up, so there is nothing to fail.
-		return Ty.TNamed(en) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+		return Ty.TNamed(en) if c_is_variant_in(em, en, meth)
 	}
 
 	tty := c_infer(em, target)
@@ -11241,7 +11304,7 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# answered before inference for the reason `E.of(n)` is: an enum name is not a binding,
 	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
 	en := c_qualified_variant(em, target, fld)
-	return "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, fld), 10) + "}" if en != ""
+	return "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, fld), 10) + "}" if en != ""
 
 	# `lib.LIMIT` — a MODULE-QUALIFIED name. A module flattens into this unit, so the
 	# qualifier says where the name came from and the last segment IS the name — which is
@@ -11251,10 +11314,26 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 
 	# the enum is named and the field is not one of ITS variants. Falling through said
 	# `undefined name `Color`` — about the one name in the expression that IS defined.
+	#
+	# THE TWO ARE ASKED IN ONE ORDER because they are one question read twice: `fld` is not a
+	# variant of `tn` either way, and E457 only adds where it IS one. It used to ask the second
+	# of the FLAT table — "which enum owns this bare name" — so a `Red` that both enums declared
+	# reported `Red` is a variant of `Colour`, not of `Signal`` about a `Signal` that has one.
+	# A false sentence is worse than no sentence: it sends the reader to fix a program that is
+	# right. The scoped lookup above answers that spelling now, and what is left here cannot be
+	# false — E457 speaks only of a name `tn` does not declare, and names an enum that does.
+	#
+	# REPORTED rather than raised, so both carry the place every checked rule does. They are
+	# statements about a program the language rejects, not forms this compiler has not built;
+	# the C built after a finding is thrown away, which is what lets the walk carry on.
 	tn := c_ident_name(target)
 	if tn != "" and c_is_enum_name(em, tn) {
-		raise f"E456 `{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
-		raise f"E457 `{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
+		if c_is_variant(em, fld) {
+			chk_at(em, "E457", f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`")
+		} else {
+			chk_at(em, "E456", f"`{fld}` is not a variant of `{tn}`")
+		}
+		return "0"
 	}
 
 	ns := c_ident_name(target)
@@ -13338,7 +13417,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

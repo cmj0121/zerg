@@ -1089,25 +1089,19 @@ than every shape that could.
 
 ### `L4xx` — resolution
 
-| Code   | Rule                                                      |
-| ------ | --------------------------------------------------------- |
-| `L401` | a variant name TWO enums declare (**[deviation]**, below) |
-| `L402` | a `mut fn` that never writes through `this`               |
+| Code   | Rule                                        |
+| ------ | ------------------------------------------- |
+| `L402` | a `mut fn` that never writes through `this` |
 
-`L401` was **retired and is still emitted**. It reported a variant name two enums declare:
-a bare name was a variant when it resolved to one, resolution took the **first**
-declaration, and `c := Red` was a coin toss decided by declaration order. A variant is now
-always named by its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing —
-`c := Red` is _E383 `Red` is a variant of `Colour`, and a variant is named through its enum_
-— and the two declarations never compete for a bare name.
-
-> **[deviation]** `zerg lint` still runs the rule, so two enums sharing a variant name draw
-> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to
-> `Colour` by declaration order alone — name it `Signal.Red` where you mean this one_. Both
-> halves of that sentence are now false: a bare `Red` resolves to nothing, and `Signal.Red`
-> is the one spelling the compiler refuses (`E457` — see [Types](../core/types.md), where
-> that refusal is its own deviation). Nothing catches it, because `error-codes-check` holds
-> the `E` codes to the source, the gates and this table, and reads no `L` code at all.
+`L401` stood here and has **retired**. It reported a variant name two enums declare: a bare
+name was a variant when it resolved to one, resolution took the **first** declaration, and
+`c := Red` was a coin toss decided by declaration order. Neither half of that survives. A
+variant is named through its enum ([Grammar](../surface/grammar.md)), so `Red` alone is
+_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_ in either
+enum; and a qualified `Signal.Red` is resolved **inside the enum it names**, so the two
+declarations are two different variants that never compete. The rule is gone from the
+linter rather than left running, which is what its own case in `lint-check` would otherwise
+have gone on asserting.
 
 `mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
 the instance in a `mut` binding. A method that only reads charges its callers that and gives

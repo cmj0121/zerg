@@ -237,11 +237,15 @@ enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 
 ——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
 `E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。
 
-> **[deviation]** 那個命名空間不是 enum 的。一個 **variant 名字屬於全程式第一個宣告它的 enum**:當
-> `enum Colour { Red; Green }` 排在 `enum Signal { Red; Amber }` 之前,帶限定的 `Signal.Red`——正是本段要
-> 讀者採用的那個寫法——會被 _E457 `Red` is a variant of `Colour`, not of `Signal`_ 拒絕,而那句話對它正在報告
-> 的那支程式而言是假的,且沒有位置。於是第二個 enum 的 variant 搆不到,那個 enum 本身也無法使用。與此同時
-> linter 仍會對同一組發出 `L401`,並建議寫 `Signal.Red`——那正是編譯器唯一不收的寫法。
+那個命名空間是 **enum 自己的**,兩個 enum 各自宣告一個 `Red` 是可以的:有 `enum Colour { Red; Green }` 與
+`enum Signal { Amber; Red }` 時,`Colour.Red` 與 `Signal.Red` 是兩個剛好拼法相同的不同 variant,各有自己的
+discriminant。帶限定的名字是**在它指名的那個 enum 裡面**解析的,所以指到該 enum 沒有宣告的名字會是
+_E457 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
+
+> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E383 `Red` is a variant of
+> `Colour`, and a variant is named through its enum_,而 [Grammar](../surface/grammar.zh-TW.md) 說裸名字只要
+> 解析得到一個 variant 就是那個 variant。當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個
+> ——它是兩種可行寫法之一,未必是你要的那一個。
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是

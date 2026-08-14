@@ -49,7 +49,7 @@ void zrt_cond_destroy(zrt_cond *c) { (void)c; }
 void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) {
 	(void)c;
 	(void)m;
-	zrt_report("zrt_cond_wait with no thread support (would never wake)");
+	zrt_report(NULL, "zrt_cond_wait with no thread support (would never wake)");
 }
 
 void zrt_cond_timedwait(zrt_cond *c, zrt_mutex *m, int64_t ns) {

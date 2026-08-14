@@ -100,11 +100,9 @@ variadic。
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
 而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
 
-> **[deviation]** 那個環境**永遠不會被釋放**。這不是一個被編譯器擋下的形式——閉包編得過也跑得動,而發出的 C 裡
-> 每一次建構都有一個 `zrt_alloc`、整個翻譯單元裡沒有相對應的 free——所以它是一支行為與這裡所寫不同的程式,而不是
-> 一筆有名字的債。這個實作配置的其他每一個值都在造出它的 scope 被釋放,而閉包的照那條規則不能——因為閉包可能活得
-> 比那個 scope 久,那正是「把值關進去」的意義。要正確釋放,fn value 必須自己帶 copy 與 drop 函式,那是**型別**的
-> 改動而不是 lambda 的。在迴圈裡不斷造閉包的程式會長大。
+那個環境是 **refcounted** 的,不是 scope-owned——這是上面那條複製規則唯一由實作、而非由 scope 來實現的地方。閉包
+可能活得比造出它的 scope 久,所以 fn value 算它環境的一個 holder,最後一個 holder 釋放它,並依宣告的逆序拆解捕獲,
+與其他任何聚合體一樣。被當成值持有的具名函式根本沒有環境,對這條規則零成本。
 
 因為每個捕獲都是 immutable,retain 或 clone 都不可觀察。等價地說:
 
@@ -137,9 +135,10 @@ for x in xs {
 ```
 
 > **[not yet]** 這個迴圈的 coroutine 寫法用不了。closure **literal** 不在 `spawn` 的三種 callee 形式之列——
-> `spawn fn () { … }()` 是 _E222 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫 `spawn
-work()` 更糟:它會發出一個沒有人宣告的 C 函式呼叫,建置死在 `cc` 裡(**[deviation]**,因為那正是總則明文禁止的
-> 結局)。行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
+> `spawn fn () { … }()` 是 _E222 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫
+> `spawn work()` 是 _E744_,帶著位置:這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的是一個符號,
+> 函式值沒有符號。(它以前會把 `zg_work()` 寫進那個 thunk 裡,建置死在 `cc`——那正是總則明文禁止的結局。)
+> 行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
 > [Coroutines 與 Channels](coroutine.zh-TW.md)。
 
 而且因為捕獲永遠是 immutable copy，「捕獲的是變數還是值？」根本沒有可觀察的答案——被捕獲的值永不改變，這個

@@ -81,6 +81,13 @@ jobs:
       - name: Every error code is reported once, asserted, and listed
         run: make error-codes-check
 
+      # The seed's gap list is the contract a `seed-gap` case is excused against, so a
+      # reader of either language needs it. The zh-TW page had NO gap section at all while
+      # the English one had 27 entries — nobody decided that, it drifted one entry at a
+      # time, and nothing was watching.
+      - name: The seed's gap list says the same thing in both languages
+        run: make seed-gaps
+
       # And the board itself: a gate the workflow never runs is a gate that finds
       # nothing. This is the check that would have caught the nine that were green
       # only when somebody thought to type them.
@@ -165,6 +172,15 @@ jobs:
       # programs only, which is why that whole class went unseen.
       - name: Every program that is not Zerg, is rejected
         run: make reject
+
+      # --- 7b''. the values that outlive their scope -----------------------------
+      # The leak gate that needs neither LeakSanitizer nor the private corpus, which is
+      # why it is HERE — on both platforms, on every fork — rather than beside
+      # `sanitize-conc` in the Linux-only job that has been this repository's single
+      # source of leak signal. Its programs are written in the script, the way `refuse`
+      # and `reject` above write theirs.
+      - name: No value outlives the scope that made it
+        run: make mem-check
 
       # --- 7b'. the compiler's own sources are canonical -------------------------
       # fmt-corpus and fmt-tokens both need the private corpus, so the formatter's rules

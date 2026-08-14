@@ -368,7 +368,7 @@ fn lookup_keyword(w: str) -> Kind {
 #
 # The formatter asks the same question for the same reason: printed tight, `20.. =>` becomes
 # `20..=>`, which lexes as `20`, `..=`, `>`.
-pub fn no_bound_follows(k: Kind) -> bool {
+fn no_bound_follows(k: Kind) -> bool {
 	return match k {
 		Kind.FatArrow => true
 		Kind.If       => true

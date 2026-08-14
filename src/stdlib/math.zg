@@ -8,8 +8,8 @@
 # binding onto libc `<math.h>` — they are pure-Zerg numerical algorithms over the
 # primitive `float` ops. `sqrt` (Newton's method) and `pow` (integer exponent, by
 # squaring) land here, with the `pi` / `e` constants as functions (the grammar has no
-# module-level value constant yet). The trigonometric family, a float-exponent `pow`
-# (needing `exp`/`ln`), and floor/ceil/round are a straightforward extension, deferred.
+# module-level value constant yet). The trigonometric family and a float-exponent `pow`
+# (needing `exp`/`ln`) are a straightforward extension, deferred.
 
 # abs returns the absolute value of the integer x.
 pub fn abs(x: int) -> int {
@@ -40,7 +40,7 @@ pub fn max(a: int, b: int) -> int {
 # quadratically. A negative x raises ValueError — the domain error, which a `guard`
 # demotes to a value.
 pub fn sqrt(x: float) -> float {
-	raise "math.sqrt: domain error (negative input)" if x < 0.0
+	raise ValueError("math.sqrt: domain error (negative input)") if x < 0.0
 	return 0.0 if x == 0.0
 
 	mut guess := x
@@ -66,7 +66,7 @@ pub fn sqrt(x: float) -> float {
 # by zero). A float-exponent pow awaits exp/ln (deferred).
 pub fn pow(base: float, exp: int) -> float {
 	if exp < 0 {
-		raise "math.pow: domain error (zero base, negative exponent)" if base == 0.0
+		raise ValueError("math.pow: domain error (zero base, negative exponent)") if base == 0.0
 		return 1.0 / pow(base, -exp)
 	}
 
@@ -83,40 +83,51 @@ pub fn pow(base: float, exp: int) -> float {
 	return result
 }
 
-# no_fraction reports whether x's magnitude is large enough that a float64 holds no
-# fractional part (>= 2^52) — such a value is already integral, and int() of it would
-# overflow, so the rounding family returns it unchanged. Module-private.
-fn no_fraction(x: float) -> bool {
-	return fabs(x) >= 4503599627370496.0
+# THE ROUNDING FAMILY ANSWERS AN `int`, and that is the whole of why it exists.
+#
+# `int(x)` on a `float` is REFUSED by the language (docs/core/types.md): dropping a fraction
+# is a decision and four different answers are defensible, so the decision is spelled with a
+# VERB rather than made silently by a cast. These four are those verbs, and a verb that gave
+# back a `float` would leave the caller with the same undone conversion it started with —
+# `int(math.floor(x))` is the refused form again.
+#
+# The contract for a magnitude no `int` holds is therefore OverflowError, not the old
+# "returned unchanged". That answer was only available while the result was a float; an `int`
+# result has nowhere to put 1e30, and inventing one — a clamp, a zero — would be the silent
+# decision this family is here to prevent. `guard { math.trunc(x) } ?? d` demotes it to a
+# value, the same as every other conversion that can raise.
+#
+# `__zrt_trunc` is the thin compiler primitive this rests on, in the `__zrt_write` /
+# `__zrt_open` family (see io): the stdlib reaches the machine through the self runtime's
+# own leaves, never an FFI binding, and this leaf is the float -> int the language declines
+# to give the surface a spelling for. Its range check is the one every conversion goes
+# through, so the OverflowError above is the runtime's own and not a second rule.
+
+# trunc returns x with its fractional part removed, rounding toward zero: trunc(2.7) is 2
+# and trunc(-2.7) is -2. A magnitude no `int` holds raises OverflowError.
+pub fn trunc(x: float) -> int {
+	return __zrt_trunc(x)
 }
 
-# trunc returns x with its fractional part removed, rounding toward zero: trunc(2.7) is
-# 2.0 and trunc(-2.7) is -2.0. Computed in pure Zerg — for |x| < 2^52 through the checked
-# int truncation, and a larger x (already integral) returned as is.
-pub fn trunc(x: float) -> float {
-	return x if no_fraction(x)
-	return float(int(x))
-}
-
-# floor returns the greatest integer value not greater than x: floor(2.7) is 2.0 and
-# floor(-2.1) is -3.0.
-pub fn floor(x: float) -> float {
+# floor returns the greatest integer not greater than x: floor(2.7) is 2 and floor(-2.1)
+# is -3. A magnitude no `int` holds raises OverflowError.
+pub fn floor(x: float) -> int {
 	t := trunc(x)
-	return t - 1.0 if t > x
+	return t - 1 if float(t) > x
 	return t
 }
 
-# ceil returns the least integer value not less than x: ceil(2.1) is 3.0 and ceil(-2.7)
-# is -2.0.
-pub fn ceil(x: float) -> float {
+# ceil returns the least integer not less than x: ceil(2.1) is 3 and ceil(-2.7) is -2. A
+# magnitude no `int` holds raises OverflowError.
+pub fn ceil(x: float) -> int {
 	t := trunc(x)
-	return t + 1.0 if t < x
+	return t + 1 if float(t) < x
 	return t
 }
 
 # round returns x rounded to the nearest integer, with a half rounded away from zero:
-# round(2.5) is 3.0 and round(-2.5) is -3.0.
-pub fn round(x: float) -> float {
+# round(2.5) is 3 and round(-2.5) is -3. A magnitude no `int` holds raises OverflowError.
+pub fn round(x: float) -> int {
 	return -floor(-x + 0.5) if x < 0.0
 	return floor(x + 0.5)
 }

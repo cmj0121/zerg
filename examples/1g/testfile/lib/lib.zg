@@ -1,0 +1,4 @@
+# The module a normal build compiles: one file, one `pub` surface.
+pub fn greeting() -> str {
+	return "shipped"
+}

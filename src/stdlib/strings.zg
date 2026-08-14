@@ -66,7 +66,7 @@ pub fn split(s: str, sep: str) -> list[str] {
 	hay := bytearray(s)
 	sepb := bytearray(sep)
 	m := sepb.len()
-	raise "strings.split: empty separator" if m == 0
+	raise ValueError("strings.split: empty separator") if m == 0
 
 	mut out: list[str] = []
 	mut cur: list[byte] = []
@@ -113,7 +113,7 @@ pub fn join(parts: list[str], sep: str) -> str {
 # string). A negative count raises ValueError. It decodes s once and appends its bytes,
 # so the build is linear in the output length rather than the quadratic re-copy of `+`.
 pub fn repeat(s: str, count: int) -> str {
-	raise "strings.repeat: negative count" if count < 0
+	raise ValueError("strings.repeat: negative count") if count < 0
 
 	sb := bytearray(s)
 	mut out: list[byte] = []
@@ -185,7 +185,7 @@ pub fn count(s: str, sub: str) -> int {
 	hay := bytearray(s)
 	nee := bytearray(sub)
 	m := nee.len()
-	raise "strings.count: empty substring" if m == 0
+	raise ValueError("strings.count: empty substring") if m == 0
 
 	n := hay.len()
 	mut c := 0
@@ -206,7 +206,7 @@ pub fn count(s: str, sub: str) -> int {
 pub fn replace(s: str, old: str, new: str) -> str {
 	oldb := bytearray(old)
 	m := oldb.len()
-	raise "strings.replace: empty target" if m == 0
+	raise ValueError("strings.replace: empty target") if m == 0
 
 	hay := bytearray(s)
 	newb := bytearray(new)
@@ -351,7 +351,7 @@ pub fn pad_end(s: str, width: int, fill: str) -> str {
 # pad_count validates the fill and answers how many of it are missing — never negative, so
 # a string already at or past the width pads with none.
 fn pad_count(s: str, width: int, fill: str) -> int {
-	raise "strings.pad: the fill is one byte" if bytearray(fill).len() != 1
+	raise ValueError("strings.pad: the fill is one byte") if bytearray(fill).len() != 1
 
 	n := width - bytearray(s).len()
 	return 0 if n < 0

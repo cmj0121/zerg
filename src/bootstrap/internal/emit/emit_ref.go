@@ -385,12 +385,14 @@ var ioIntrinsicNames = map[string]bool{
 }
 
 // sysFloorIntrinsics are the non-io runtime floor leaves other bundled stdlib modules
-// lower onto (the `time` clock leaves; os/fs join later). Like the io floor they live in
-// the always-linked sys.c, so a program that lowers one needs the runtime — but not the
-// io-specific NeedsIO flag.
+// lower onto — `time`'s clock, `os`'s environment and process leaves, `fs`'s directory
+// leaves, and `math`'s truncation. They ride in the always-linked
+// runtime — sys.c for most of them, and the zergrt.h inline over conv.c for `__zrt_trunc`
+// — so a program that lowers one needs the runtime, but not the io-specific NeedsIO flag.
 var sysFloorIntrinsics = map[string]bool{
 	"__zrt_time_unix":  true,
 	"__zrt_time_mono":  true,
+	"__zrt_trunc":      true,
 	"__zrt_platform":   true,
 	"__zrt_arch":       true,
 	"__zrt_exe_path":   true,
@@ -627,8 +629,9 @@ func (e *emitter) schedIntrinsicEmit(n *ast.Call) (string, bool) {
 }
 
 // sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`
-// clock leaves and the `os` process/platform leaves — each to its always-linked sys.c
-// primitive. A shadowed name is left to the ordinary call path.
+// clock leaves, the `os` process/platform leaves, and `math`'s truncation — each to its
+// always-linked runtime primitive: sys.c for all of them but `__zrt_trunc`, whose primitive
+// is the zergrt.h inline over conv.c. A shadowed name is left to the ordinary call path.
 func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok {
@@ -665,6 +668,8 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_exists(%s)", arg), true
 		case "__zrt_remove":
 			return fmt.Sprintf("zrt_remove(%s)", arg), true
+		case "__zrt_trunc":
+			return fmt.Sprintf("zrt_trunc(%s)", arg), true
 		}
 	}
 	return "", false

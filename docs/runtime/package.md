@@ -234,17 +234,31 @@ surface** (whether module-private, or package-internal and never re-exported), b
 not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
 its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
 
-> **[deviation]** **Enforced on functions and module constants, and on nothing else yet.** Naming another
-> module's module-private FUNCTION is a compile error, reported with a place — both as a bare call and as
-> the namespaced `lib.helper()` — and so is reading its module-private CONSTANT, in the same two shapes:
-> the bare `FLOOR` and the namespaced `lib.FLOOR`. A
-> module-private TYPE and a module-private FIELD are still readable across the boundary: a `pub fn` may
-> return a private struct and a dependent may read a private field of it, with no finding. Every module is
-> flattened into one namespace, which is also why two modules that declare the same
-> name collide — that refusal is about the name, not about the visibility. What the rule compares is the
-> DIRECTORY a declaration was read from against the directory doing the reading, which is the module
-> boundary and not the package one; **package-internal** and **package-public** above still need a package
-> to exist.
+**Enforced on every declaration a module can name.** Naming another module's module-private FUNCTION is a
+compile error, reported with a place — both as a bare call and as the namespaced `lib.helper()` — and so
+is reading its module-private CONSTANT, in the same two shapes: the bare `FLOOR` and the namespaced
+`lib.FLOOR`. A module-private TYPE is refused the same way, whether it is written bare (`s: Secret`, a
+`Secret(…)` construction) or through the namespace (`lib.Secret`); a module-private FIELD is refused on
+read and on write alike, which is the other half of the rule requiring one to carry a default. And the
+normative sentence above is a rule of its own: a **`pub` declaration that names a type which is not
+`pub`** is refused **at the declaration**, so a `pub fn` cannot return, take, or hold in a `pub` field a
+type its dependents could never spell.
+
+Two findings are reported where both are true — the export that leaks and the read that reaches in —
+because they are two mistakes in two files and one message cannot point at both. The export is the one
+with a fix available: the module that wrote `pub` decided to hand the type out and is the only party who
+can mark the type `pub` or stop returning it, where a dependent reading a private field can do neither.
+
+Every module is still flattened into one namespace, which is why two modules that declare the same name
+collide — that refusal is about the name, not about the visibility.
+
+> **[deviation]** What the rule compares is the DIRECTORY a declaration was read from against the
+> directory doing the reading, which is the **module** boundary and not the package one. So
+> **package-internal** and **package-public** above are still one tier as far as the compiler is
+> concerned: a `pub` declaration is nameable by every other module of the build that imports it, and
+> nothing narrows that to a package's root surface, because no package exists yet to be the unit that
+> narrowing is measured against. Re-export (`import pub`) builds a surface; nothing yet requires a name to
+> be on one.
 
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
@@ -282,19 +296,29 @@ package **cycles be rejected**.
 > whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
 > is how both are resolved.
 >
-> **[deviation]** **The binding is the BUILD's, and so is the member.** Two halves of one flatten, and
-> both are visible to a program:
+> **The "no transitivity" rule is enforced.** A binding belongs to the MODULE of the file that wrote the
+> `import` — module-grained and not file-grained, because a module's files share one namespace — so the
+> namespaces a module may name are the ones its own files bound, its `as` aliases included and another
+> module's excluded. Naming a module this one never imported is a compile error with a place, at every
+> position that can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant
+> read, and a TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The
+> import graph decides what is compiled into the build AND what is nameable inside it, and the two answers
+> are told apart from a third: an invented prefix (`bogus.f()`) names nothing anywhere and stays an
+> **undefined name**, because sending a reader to add an import for a module that does not exist would be
+> worse than the hole.
 >
-> - **No transitivity is not enforced.** The namespaces in scope are every namespace every module of the
->   build bound — including another module's `as` alias — so a module this one never imported is one it
->   can still name. The import graph decides what is COMPILED into the build, not what is nameable inside
->   it.
-> - **The member is looked up program-wide.** Once the prefix resolves, the name after the `.` is found in
->   the one flattened namespace rather than in the module the prefix named, so with `a` and `b` both
->   imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked against the
->   module that DECLARED the member, which is why a private one is refused naming its real owner rather
->   than the module the program wrote. The seed compiler resolves this half correctly, and answers
->   `module "b" has no public member "helper"`.
+> > **[deviation]** **A type position discards a qualifier it cannot resolve.** `c: bogus.Counter` builds,
+> > and reads as `Counter`: a qualified type name resolves to its last segment — the flatten this chapter
+> > documents — and an unknown qualifier is dropped there rather than reported. So the three-way answer
+> > above is complete only at the expression positions; a type position tells "this module did not import
+> > it" from "this is a real namespace", and neither of those from a typo.
+>
+> **[deviation]** **The member is looked up program-wide.** Once the prefix resolves, the name after the
+> `.` is found in the one flattened namespace rather than in the module the prefix named, so with `a` and
+> `b` both imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked
+> against the module that DECLARED the member, which is why a private one is refused naming its real owner
+> rather than the module the program wrote. The seed compiler resolves this half correctly, and answers
+> `module "b" has no public member "helper"`.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section
@@ -329,9 +353,27 @@ exception.
 > `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
 >
-> **[deviation]** Prelude names are **not reserved**. A program may declare `struct list`, `struct
-Result`, `struct Ref` or `spec Eq` and none of it is refused, so the names the operators desugar to can
-> in fact be knocked out from under the language.
+> **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
+> this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
+> — _E611 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
+> — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
+> the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
+> `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
+> there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
+> the day it is bound.
+>
+> The **function slot takes a narrower set than the type slots**, and `map` is the whole of the
+> difference: `fn map(xs, f)` is legal, every other name in the set is not. A type declaration's name
+> lands in the namespace all of them are bound in, while a function's lands where only the ones a
+> **call can spell** are — and `map[…](…)` as a constructor is built by neither compiler, so the name
+> has no value form to take. The rest do: a callee spelling `int`, `byte`, `bytearray` or `list` is read
+> as a conversion, and one spelling `Either`, `Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a
+> construction, before any user symbol is looked for.
+>
+> Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
+> not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
+> constant, which are one form in the parser — may still take a prelude name; shadowing one inside a
+> scope is a loud error at its first use, which is the thing a declaration was not.
 
 ### Testing & visibility
 
@@ -351,14 +393,21 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** **No part of the convention is recognized.** There is no `zerg test` command, and a
-> `*_test.zg` file is not kept out of anything: it is compiled into an ordinary build like every other
-> file in its module, so its declarations DO reach the shipped artifact and a `pub` one DOES join the
-> module's surface — `lib.only_in_test()` resolves and runs from a program that never asked for a test.
-> A name it repeats collides with its siblings, and a syntactically broken one fails a normal build. So
-> the white-box and black-box positions above are places to put a file rather than a way to run one, and
-> the file is not inert while it waits. The `testing` module's `assert` family is callable from an
-> ordinary program in the meantime.
+> **[not yet]** There is no `zerg test` command, so a test file is a file **nothing runs**: the
+> white-box and black-box positions above are places to put one rather than a way to run one. The
+> `testing` module's `assert` family is callable from an ordinary program in the meantime.
+>
+> The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
+> module's directory is read, in both compilers — so nothing a test declares reaches the shipped
+> artifact or joins a module's surface, and a name it repeats or a file that does not parse costs a
+> normal build nothing. Naming one of its declarations is _E388 module `lib` has no `only_in_test`_,
+> and naming the file is _E512 `lib/lib_test` names a test file, and a normal build compiles none_,
+> both with a place. E388 does not go on to say that a test file declares one: that fact is the
+> loader's, and the rule that reports it is in the checker.
+>
+> A test file is not importable from anywhere, a sibling test file included — a white-box test shares
+> its module's namespace and reaches its internals with no import at all, which is what makes `zerg
+test` a matter of compiling more files rather than of relaxing a visibility rule.
 
 ### Target-conditional files
 

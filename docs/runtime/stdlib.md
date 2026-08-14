@@ -58,11 +58,15 @@ The filesystem **structure** — a file's _contents_ are `io.read_file` / `io.wr
 
 Process and platform facts. `platform` / `arch` resolve at **compile time**, so they name the target the
 binary was built for. The program's own arguments arrive as `fn main(args: list[str])`, not from here.
+`run` is the one leaf that starts ANOTHER process — argv straight to the OS, no shell, no pipes, and the
+exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
+of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
 
 | Function                | Summary                                              |
 | ----------------------- | ---------------------------------------------------- |
 | `env(key: str) -> str?` | an environment variable's value, or `nil` when unset |
 | `exit(code: int)`       | terminate the process with `code` (does not return)  |
+| `run(argv: list[str])`  | run `argv[0]` (PATH-searched), wait, `-> int` status |
 | `platform() -> str`     | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
 | `arch() -> str`         | target CPU — `"arm64"`, `"x86_64"`, …                |
 
@@ -74,32 +78,33 @@ self-synchronises, so a valid needle only matches at a code-point boundary); `in
 offset, like Go's `strings.Index`. Case folding is **ASCII-only** — a non-ASCII byte is passed through
 unchanged. An empty `split` separator, or a negative `repeat` count, raises `ValueError`.
 
-> **[deviation]** The error a standard-library function raises is **not a taxonomy kind**. `strings`,
-> `strconv` and `math` raise with a message rather than with one of the built-in kinds, so a caught error
-> answers `false` to `e is ValueError` and an uncaught one aborts with a bare `strings.repeat: negative count`
-> instead of the `Kind: message` shape the [abort contract](../conformance.md) specifies. The `io` and `fs`
-> functions do raise a real `IOError`, which is what makes this a gap in the pure-Zerg modules rather than in
-> the runtime.
+| Function                               | Summary                                               |
+| -------------------------------------- | ----------------------------------------------------- |
+| `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)          |
+| `has_suffix(s: str, suffix: str)`      | whether `s` ends with `suffix` (`-> bool`)            |
+| `contains(s: str, sub: str) -> bool`   | whether `sub` occurs anywhere in `s`                  |
+| `index_of(s: str, sub: str) -> int`    | byte offset of the first `sub`, or `-1` when absent   |
+| `split(s: str, sep: str) -> list[str]` | pieces between each `sep` (N seps → N+1 pieces)       |
+| `join(parts: list[str], sep: str)`     | concatenate `parts` with `sep` between (`-> str`)     |
+| `repeat(s: str, count: int) -> str`    | `s` concatenated `count` times                        |
+| `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace                |
+| `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase             |
+| `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase             |
+| `count(s: str, sub: str) -> int`       | number of non-overlapping occurrences of `sub`        |
+| `replace(s: str, old: str, new: str)`  | replace every occurrence of `old` with `new`          |
+| `trim_prefix(s: str, prefix: str)`     | drop one leading `prefix`, else `s` unchanged         |
+| `trim_suffix(s: str, suffix: str)`     | drop one trailing `suffix`, else `s` unchanged        |
+| `fields(s: str) -> list[str]`          | split around whitespace runs, no empty pieces         |
+| `last_index_of(s: str, sub: str)`      | byte offset of the LAST `sub`, or `-1` (`-> int`)     |
+| `trim_left(s: str) -> str`             | drop leading ASCII whitespace only                    |
+| `trim_right(s: str) -> str`            | drop trailing ASCII whitespace only                   |
+| `equal_fold(a: str, b: str) -> bool`   | equality ignoring ASCII case, folding no new string   |
+| `pad_start(s, width: int, fill: str)`  | pad on the left to at least `width` bytes (`-> str`)  |
+| `pad_end(s, width: int, fill: str)`    | pad on the right to at least `width` bytes (`-> str`) |
 
-| Function                               | Summary                                             |
-| -------------------------------------- | --------------------------------------------------- |
-| `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)        |
-| `has_suffix(s: str, suffix: str)`      | whether `s` ends with `suffix` (`-> bool`)          |
-| `contains(s: str, sub: str) -> bool`   | whether `sub` occurs anywhere in `s`                |
-| `index_of(s: str, sub: str) -> int`    | byte offset of the first `sub`, or `-1` when absent |
-| `split(s: str, sep: str) -> list[str]` | pieces between each `sep` (N seps → N+1 pieces)     |
-| `join(parts: list[str], sep: str)`     | concatenate `parts` with `sep` between (`-> str`)   |
-| `repeat(s: str, count: int) -> str`    | `s` concatenated `count` times                      |
-| `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace              |
-| `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase           |
-| `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase           |
-| `count(s: str, sub: str) -> int`       | number of non-overlapping occurrences of `sub`      |
-| `replace(s: str, old: str, new: str)`  | replace every occurrence of `old` with `new`        |
-| `trim_prefix(s: str, prefix: str)`     | drop one leading `prefix`, else `s` unchanged       |
-| `trim_suffix(s: str, suffix: str)`     | drop one trailing `suffix`, else `s` unchanged      |
-| `fields(s: str) -> list[str]`          | split around whitespace runs, no empty pieces       |
-
-`count` and `replace` raise `ValueError` on an empty needle, like `split`.
+`count` and `replace` raise `ValueError` on an empty needle, like `split`. `pad_start` / `pad_end` raise
+`ValueError` on a `fill` that is not exactly one byte — a multi-byte fill cannot land on a byte width
+without cutting a code point in half — and return `s` unchanged when it is already that wide.
 
 ## `ascii`
 
@@ -178,7 +183,7 @@ consumer slows the ticker instead of building a backlog.
 ## `math`
 
 Numeric helpers over the primitives, plus **pure-Zerg** transcendentals (numerical algorithms, never a
-libm binding). A domain error (e.g. `sqrt` of a negative) raises, demotable with `guard`.
+libm binding). A domain error (e.g. `sqrt` of a negative) raises `ValueError`, demotable with `guard`.
 
 | Function                              | Summary                                           |
 | ------------------------------------- | ------------------------------------------------- |
@@ -188,12 +193,19 @@ libm binding). A domain error (e.g. `sqrt` of a negative) raises, demotable with
 | `max(a: int, b: int) -> int`          | the larger of two integers                        |
 | `sqrt(x: float) -> float`             | square root (Newton's method); negative raises    |
 | `pow(base: float, exp: int) -> float` | integer exponent by squaring                      |
-| `trunc(x: float) -> float`            | drop the fractional part, toward zero             |
-| `floor(x: float) -> float`            | greatest integer `<= x`                           |
-| `ceil(x: float) -> float`             | least integer `>= x`                              |
-| `round(x: float) -> float`            | nearest integer, halves away from zero            |
+| `trunc(x: float) -> int`              | drop the fractional part, toward zero             |
+| `floor(x: float) -> int`              | greatest integer `<= x`                           |
+| `ceil(x: float) -> int`               | least integer `>= x`                              |
+| `round(x: float) -> int`              | nearest integer, halves away from zero            |
 | `pi() -> float`                       | π (a function; the grammar has no value constant) |
 | `e() -> float`                        | Euler's number                                    |
+
+**The rounding four answer an `int`, and that is what they are for.** `int(x)` on a `float` is refused —
+dropping a fraction is a decision, and four answers are defensible ([Types](../core/types.md)) — so these
+are the verbs that make it. A verb that gave back a `float` would leave the caller holding the very
+conversion it called a verb to perform. A magnitude no `int` holds raises `OverflowError`, demotable with
+`guard` like any other conversion that can fail; a narrower target is the verb and then the conversion,
+`byte(math.trunc(x))`.
 
 ## `rand`
 
@@ -238,10 +250,17 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**. `Atomic[T]` is a generic struct and a
-> generic struct is a form this compiler refuses, so `import "atomic"` itself reports
-> `NotImplemented: a generic struct`Atomic[…]``. The signatures below also name `Ref[T]`, which does not
-> exist either. It is the one module of the twelve that does not import cleanly.
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the thirteen that
+> does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
+> so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
+> ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
+> exist either. Share state across coroutines with a channel until this lands.
+>
+> It stays in the table rather than being taken out of the shipped set, because this compiler resolves
+> the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
+> `zerg fmt --check` and the rest of the self-source set, and rots unread until generics arrive. What
+> would be left at the import is _E502 cannot resolve import `atomic`_ — a sentence about a module
+> that is right there.
 
 | Function                                                       | Summary                                   |
 | -------------------------------------------------------------- | ----------------------------------------- |
@@ -256,7 +275,10 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 Assertion helpers for `#[test]` functions. **[not yet]** — no compiler builds a test binary
 today. A satisfied assertion is `nil`; a
-violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message.
+violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message. What it raises is
+an **untyped** `Err` — the only stdlib module of which that is true, and deliberately: a failed assertion is
+a claim about the program that did not hold, not a value a function could not accept, and the built-in
+taxonomy has no kind for it.
 
 | Function                                      | Summary                   |
 | --------------------------------------------- | ------------------------- |

@@ -86,7 +86,7 @@ const char *zrt_str_concat(const char *a, const char *b) {
 /* zrt_str_dup COPIES a C string into a managed cell, and is what an `Err`'s message is read
  * through. `zrt_str_retain` cannot serve there: it recovers a cell header from the byte
  * BEFORE the payload, and a zrt_err's msg is very often not a payload at all — every abort
- * the runtime raises itself passes a plain string literal ("IndexError: index out of range"
+ * the runtime raises itself passes a plain string literal ("index out of range"
  * in list.c, and its like in str.c, map.c, sys.c and conv.c). Retaining one of those reads
  * eight bytes of .rodata as a refcount and writes them back, which is a bus error on a good
  * day and silent corruption on a bad one.
@@ -220,11 +220,11 @@ static void parse_spec(const char *s, fmt_spec *f) {
 		i++;
 	}
 	f->width = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
-	                       "ValueError: a format spec's width is past what this runtime pads to");
+	                       "a format spec's width is past what this runtime pads to");
 	if (i < n && s[i] == '.') {
 		i++;
 		f->prec = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
-		                      "ValueError: a format spec's precision is past what this runtime produces");
+		                      "a format spec's precision is past what this runtime produces");
 	}
 	if (i < n) {
 		f->type = s[i];
@@ -266,7 +266,7 @@ const char *zrt_fmt_int(int64_t v, const char *spec) {
 	 * hand, so an unknown letter was never a memory hazard the way the float path's was —
 	 * it was a silent one, rendering `{n:q}` as though the `q` had not been written. */
 	if (f.type != 0 && strchr("boxXcd", f.type) == NULL) {
-		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
+		spec_reject("an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
 	}
 
 	/* `c` RENDERS A CODE POINT, and it used to render the low byte of one: `{300:c}` came
@@ -277,7 +277,7 @@ const char *zrt_fmt_int(int64_t v, const char *spec) {
 		char cb[5];
 		int  len = zrt_utf8_encode(v, cb);
 		if (len == 0) {
-			spec_reject("ValueError: `c` renders a code point, and this is not one a str can hold");
+			spec_reject("`c` renders a code point, and this is not one a str can hold");
 		}
 		cb[len] = '\0';
 		return pad_field(cb, '<', &f);
@@ -382,7 +382,7 @@ const char *zrt_fmt_uint(uint64_t v, const char *spec) {
 	 * fallback rather than the base machinery, so an unknown letter was dropped in silence
 	 * here while its twin three lines up refused it. */
 	if (f.type != 0 && strchr("boxXcd", f.type) == NULL) {
-		spec_reject("ValueError: an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
+		spec_reject("an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another");
 	}
 	const char *body = zrt_display_uint(v); /* a fresh cell; pad_field copies, so free it here */
 	const char *out = pad_field(body, '>', &f);
@@ -408,7 +408,7 @@ const char *zrt_fmt_float(double v, const char *spec) {
 	 * truncation and an int ignores it, so neither wants this number — checking it in
 	 * parse_spec made `f"{s:.200}"`, a legal 200-character truncation, an error. */
 	if (f.prec > ZRT_FMT_MAX_PREC) {
-		spec_reject("ValueError: a float renders at most a hundred fractional digits, and a format spec asked for more");
+		spec_reject("a float renders at most a hundred fractional digits, and a format spec asked for more");
 	}
 	long prec = f.prec >= 0 ? f.prec : 6;
 	char body[ZRT_FMT_BODY];
@@ -433,7 +433,7 @@ const char *zrt_fmt_float(double v, const char *spec) {
 		snprintf(digits, sizeof(digits), "%.*G", (int)prec, v);
 		break;
 	default:
-		spec_reject("ValueError: a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another");
+		spec_reject("a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another");
 	}
 	if ((f.sign == '+' || f.sign == ' ') && digits[0] != '-') {
 		snprintf(body, sizeof(body), "%c%s", f.sign, digits);
@@ -466,7 +466,7 @@ const char *zrt_fmt_str(const char *s, const char *spec) {
 	fmt_spec f;
 	parse_spec(spec, &f);
 	if (f.type != 0 && f.type != 's') {
-		spec_reject("ValueError: a str renders as `s`, and a format spec asked for another");
+		spec_reject("a str renders as `s`, and a format spec asked for another");
 	}
 	size_t len = strlen(s);
 	if (f.prec >= 0 && (size_t)f.prec < len) {

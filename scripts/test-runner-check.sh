@@ -29,6 +29,17 @@
 #     said      the report SAYS the strategy changed — a run that quietly ran half of itself
 #               another way is a run whose result nobody can interpret
 #
+#   the fixtures — a test declares what it needs and the framework builds it
+#     once      two tests sharing one fixture      both see build 1, asserted from inside
+#     chain     `schema` is built from `db`        the test names only `schema` and gets it
+#     reverse   setup outermost, teardown inner    the whole sequence, not four greps
+#     survives  a test fails under a fixture       the level runs on and the teardown still runs
+#     broken    a fixture that raises              every test needing it FAILS, by name and reason
+#     inherited `fixtures_test.zg` two levels up   available below, and its copy taken away after
+#     rebuilt   the fallback re-runs one test      it stands that test's fixtures up again
+#     refused   no such fixture / a circle / a type that is not what the fixture produces —
+#               each reported with a place BEFORE anything runs, and nothing runs
+#
 #   none    a directory with no test files     exit 0, and it SAYS so rather than printing
 #                                              nothing — a silent run that found nothing is
 #                                              indistinguishable from one where all passed
@@ -324,11 +335,458 @@ say "a run whose only non-pass was a skip exited non-zero" $?
 printf '%s\n' "$skips" | grep -qE '^1 passed, 0 failed, 1 skipped$'
 say "a run of one pass and one skip did not count them apart" $?
 
+# --- the fixture packages ------------------------------------------------------------------
+#
+# A TEST DECLARES WHAT IT NEEDS AND THE FRAMEWORK BUILDS IT, so what is measured here is what
+# a fixture is FOR: that it is built once for the tests that share it, that a chain of them
+# stands up in order and comes down in reverse, that a test failing under one does not take
+# the rest of the level with it, and that a fixture which cannot be built fails the tests that
+# needed it instead of leaving them looking like passes.
+#
+# THE TREE IS THE FIXTURE. `fixt/fixtures_test.zg` is the file an ancestor contributes
+# downward, `fixt/pkg` inherits it, and `fixt/pkg/deep` inherits it from TWO levels up —
+# because "every directory below" is the claim, not "the next one".
+
+mkdir -p "$tmp/fixt/pkg/deep" "$tmp/fixt/broke" "$tmp/fell/a" \
+	"$tmp/noname/a" "$tmp/cycle/a" "$tmp/mistyped/a" "$tmp/uninherited/pkg/sub"
+
+# the inherited file: two fixtures, one built from the other, each announcing both ends of its
+# life so the ORDER they run in is observable from outside
+cat >"$tmp/fixt/fixtures_test.zg" <<'EOF'
+import (
+	"io"
+)
+
+struct Conn {
+	id: int = 0
+}
+
+struct Schema {
+	tag: str = ""
+}
+
+#[fixture]
+fn db(use: fn (Conn)) {
+	defer io.println("teardown db")
+	io.println("setup db")
+	use(Conn(7))
+}
+
+#[fixture]
+fn schema(db: Conn, use: fn (Schema)) {
+	defer io.println("teardown schema")
+	io.println("setup schema")
+	use(Schema(f"from db {db.id}"))
+}
+EOF
+
+# THE COUNT IS ASSERTED FROM INSIDE A TEST, not read off a print. `counted` appends one byte to
+# a file per build and hands back its length, so "built once for two tests" is two tests that
+# both see 1 — a claim that arrives through the REPORT. A driver that built the fixture per
+# test would leave the second one reading 2, and only the second one would go red.
+#
+# The heredoc is UNQUOTED for this one file, because the counter has to live outside the tree
+# `zerg test` walks and only the shell knows where that is.
+cat >"$tmp/fixt/pkg/pkg_test.zg" <<EOF
+import (
+	"io"
+	"testing"
+)
+
+struct Serial {
+	n: int = 0
+}
+
+fn bump(path: str) -> int {
+	mut s := ""
+	guard {
+		s = str(io.read_file(path))
+	}
+	s = s + "x"
+	guard {
+		io.write_file(path, bytearray(s))
+	}
+	return bytearray(s).len()
+}
+
+#[fixture]
+fn counted(use: fn (Serial)) {
+	use(Serial(bump("$tmp/serial")))
+}
+
+#[test]
+fn test_a_first_sees_the_first_build(counted: Serial) {
+	testing.assert_eq(counted.n, 1)
+}
+
+#[test]
+fn test_b_second_sees_the_same_one(counted: Serial) {
+	testing.assert_eq(counted.n, 1)
+}
+
+#[test]
+fn test_c_gets_the_whole_chain(schema: Schema) {
+	testing.assert_eq(schema.tag, "from db 7")
+}
+
+#[test]
+fn test_d_fails_under_a_fixture(db: Conn) {
+	testing.assert_eq(db.id, 99)
+}
+
+#[test]
+fn test_e_still_ran_after_it(db: Conn, ctx: testing.Context) {
+	testing.assert_eq(ctx.name(), "test_e_still_ran_after_it")
+	testing.assert_eq(db.id, 7)
+}
+
+#[test]
+fn test_f_needs_nothing() {
+	testing.assert(true)
+}
+EOF
+
+# two levels below the file that declares them
+cat >"$tmp/fixt/pkg/deep/deep_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+#[test]
+fn test_g_two_levels_down(schema: Schema) {
+	testing.assert_eq(schema.tag, "from db 7")
+}
+EOF
+
+# a fixture that cannot be built, and the two tests that asked for it
+cat >"$tmp/fixt/broke/broke_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+struct Sock {
+	fd: int = 0
+}
+
+#[fixture]
+fn sock(use: fn (Sock)) {
+	raise "the socket was refused"
+	use(Sock(1))
+}
+
+#[test]
+fn test_h_needs_the_broken_one(sock: Sock) {
+	testing.assert_eq(sock.fd, 1)
+}
+
+#[test]
+fn test_i_also_needs_it(sock: Sock) {
+	testing.assert_eq(sock.fd, 1)
+}
+EOF
+
+# fell — the fallback, with a fixture over it. `test_j` ends the PROCESS, so `test_k` is re-run
+# on its own, and it can only pass if that process built `res` again.
+cat >"$tmp/fell/a/a_test.zg" <<'EOF'
+import (
+	"io"
+	"os"
+	"testing"
+)
+
+struct Res {
+	n: int = 0
+}
+
+#[fixture]
+fn res(use: fn (Res)) {
+	io.println("built res")
+	use(Res(5))
+}
+
+#[test]
+fn test_j_ends_the_process(res: Res) {
+	os.exit(0)
+	print res.n
+}
+
+#[test]
+fn test_k_after_it(res: Res) {
+	testing.assert_eq(res.n, 5)
+}
+EOF
+
+# the three refusals, each in a tree of its own because each ends the run before it starts
+cat >"$tmp/noname/a/a_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+struct Conn {
+	id: int = 0
+}
+
+#[fixture]
+fn db(use: fn (Conn)) {
+	use(Conn(1))
+}
+
+#[test]
+fn test_asks_for_nobody(conn: Conn) {
+	testing.assert_eq(conn.id, 1)
+}
+
+#[test]
+fn test_would_have_passed() {
+	testing.assert(true)
+}
+EOF
+
+cat >"$tmp/cycle/a/a_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+struct A {
+	n: int = 0
+}
+
+struct B {
+	n: int = 0
+}
+
+#[fixture]
+fn one(two: B, use: fn (A)) {
+	use(A(two.n))
+}
+
+#[fixture]
+fn two(one: A, use: fn (B)) {
+	use(B(one.n))
+}
+
+#[test]
+fn test_round(one: A) {
+	testing.assert_eq(one.n, 0)
+}
+EOF
+
+cat >"$tmp/mistyped/a/a_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+struct Conn {
+	id: int = 0
+}
+
+#[fixture]
+fn db(use: fn (Conn)) {
+	use(Conn(1))
+}
+
+#[test]
+fn test_declares_the_wrong_type(db: int) {
+	testing.assert_eq(db, 1)
+}
+EOF
+
+# uninherited — a fixture in a plain `*_test.zg` serves its OWN directory and no other. That is
+# the whole of what the `fixtures_test.zg` name buys, so it is asserted rather than assumed.
+cat >"$tmp/uninherited/pkg/pkg_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+struct Local {
+	n: int = 0
+}
+
+#[fixture]
+fn local(use: fn (Local)) {
+	use(Local(1))
+}
+
+#[test]
+fn test_here_can_have_it(local: Local) {
+	testing.assert_eq(local.n, 1)
+}
+EOF
+
+cat >"$tmp/uninherited/pkg/sub/sub_test.zg" <<'EOF'
+import (
+	"testing"
+)
+
+#[test]
+fn test_below_cannot(local: Local) {
+	testing.assert_eq(local.n, 1)
+}
+EOF
+
+# --- fixtures: the run ----------------------------------------------------------------------
+
+fxbefore=$(ls "$tmp/fixt" "$tmp/fixt/pkg" "$tmp/fixt/pkg/deep" "$tmp/fixt/broke")
+
+fx=$("$ZERG" test "$tmp/fixt" 2>&1)
+status=$?
+printf '%s\n' "$fx" >"$tmp/fx"
+
+[ "$status" -ne 0 ]
+say "a run whose fixture could not be built exited 0" $?
+
+# 15. built ONCE for the tests that share it. Both halves are the assertion: the first test
+#     seeing build 1 says the fixture ran, and the SECOND one seeing build 1 says it did not
+#     run again. A driver that built it per test leaves only the second red.
+grep -qE '^  ok    test_a_first_sees_the_first_build$' "$tmp/fx"
+say "the first test under a fixture did not get the fixture's first build" $?
+
+grep -qE '^  ok    test_b_second_sees_the_same_one$' "$tmp/fx"
+say "the fixture was built again for the second test that needed it — it is built once for the tests that share it" $?
+
+# 16. a dependency chain: `schema` names `db`, and the test names only `schema`.
+grep -qE '^  ok    test_c_gets_the_whole_chain$' "$tmp/fx"
+say "a fixture built from another fixture did not receive it" $?
+
+# 17. the ORDER, both ways. Setup outermost first and teardown innermost first is what the
+#     nesting is for, and it is asserted as the whole sequence rather than as two greps: a
+#     driver that tore down in the wrong order still prints all four lines.
+seq=$(printf '%s\n' "$fx" | grep -E '^(setup|teardown) (db|schema)$' | tr '\n' '|')
+[ "$seq" = "setup db|setup schema|teardown schema|teardown db|setup db|setup schema|teardown schema|teardown db|" ]
+say "the fixtures did not stand up outermost-first and come down innermost-first" $?
+
+# 18. and teardown ran EVEN THOUGH a test under it failed. Counted rather than grepped: one
+#     teardown per package that built it, and a package that skipped teardown after a failure
+#     would leave one.
+[ "$(grep -cE '^teardown db$' "$tmp/fx")" -eq 2 ]
+say "a fixture was not torn down once per package — a failing test under it swallowed the teardown" $?
+
+# 19. the failing test, and the one after it. A test failing inside `use(...)` must not abort
+#     the continuation: the rest of the level runs and the fixture still comes down.
+grep -qE '^  FAIL  test_d_fails_under_a_fixture$' "$tmp/fx"
+say "a test that failed under a fixture is not reported FAIL" $?
+
+grep -qE '^  ok    test_e_still_ran_after_it$' "$tmp/fx"
+say "a test after a failing one under the same fixture did not run — a failure inside \`use\` aborted the continuation" $?
+
+# 20. a test that asks for nothing still runs, beside ones that do.
+grep -qE '^  ok    test_f_needs_nothing$' "$tmp/fx"
+say "a test with no parameter did not run in a package that has fixtures" $?
+
+# 21. inheritance, TWO levels down — pytest's conftest model, all sub-levels.
+grep -qE '^  ok    test_g_two_levels_down$' "$tmp/fx"
+say "a fixture two directories up was not available to the tests below it" $?
+
+# 22. a fixture that cannot be built FAILS every test that needed it, by name and with the
+#     reason. Asserted as the FAIL line, the message under it, and the ABSENCE of an ok line:
+#     a test that could not run must never look like one that passed.
+grep -qE '^  FAIL  test_h_needs_the_broken_one$' "$tmp/fx"
+say "a test whose fixture could not be built is not reported FAIL" $?
+
+grep -qE '^        fixture `sock` could not be built: the socket was refused$' "$tmp/fx"
+say "the failure does not say which fixture could not be built, or why" $?
+
+grep -qE '^  FAIL  test_i_also_needs_it$' "$tmp/fx"
+say "only the first test of the two needing a broken fixture was failed" $?
+
+grep -qE '^  ok    test_(h|i)_' "$tmp/fx"
+[ $? -ne 0 ]
+say "a test that never ran because its fixture broke was counted as passing" $?
+
+# 23. the counts.
+grep -qE '^6 passed, 3 failed, 0 skipped$' "$tmp/fx"
+say "the fixture run does not count 6 passed, 3 failed and 0 skipped" $?
+
+# 24. nothing left behind — and for fixtures that is one file more than the driver: an
+#     inherited fixture file is COPIED into the package, and a run that does not take the copy
+#     away leaves somebody else's declarations in a source directory.
+fxafter=$(ls "$tmp/fixt" "$tmp/fixt/pkg" "$tmp/fixt/pkg/deep" "$tmp/fixt/broke")
+[ "$fxbefore" = "$fxafter" ]
+say "the run left the copy of an inherited fixture file behind in the package" $?
+
+# --- fixtures: the fallback -----------------------------------------------------------------
+#
+# 25. THE FALLBACK MUST REBUILD WHAT THE TEST IT RE-RUNS NEEDS. `test_j` ends the process, so
+#     `test_k` is re-run alone — and it can only pass if that process stood `res` up again.
+fell=$("$ZERG" test "$tmp/fell" 2>&1)
+printf '%s\n' "$fell" >"$tmp/fell.out"
+
+grep -qE '^  ok    test_k_after_it$' "$tmp/fell.out"
+say "the fallback did not rebuild the fixture the test it re-ran needed" $?
+
+# once for the run that died, and once for each of the two re-runs — no more, because a
+# fallback process enters only the levels the test it was asked for is under
+[ "$(grep -cE '^built res$' "$tmp/fell.out")" -eq 3 ]
+say "the fallback built the fixture a number of times that is not once per process that needed it" $?
+
+# --- fixtures: what is refused before anything runs ------------------------------------------
+
+# 26. a parameter naming no fixture. The exit status, a sentence with a PLACE, and — the part
+#     that matters — that NOTHING RAN: a resolution failure found halfway through a run would
+#     have already reported verdicts for tests whose neighbours never got to run.
+noname=$("$ZERG" test "$tmp/noname" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a test naming no fixture did not end the run with status 2" $?
+
+printf '%s\n' "$noname" | grep -qE 'a_test\.zg:[0-9]+:[0-9]+: the test `test_asks_for_nobody` asks for `conn` and no `#\[fixture\]` of that name is in scope'
+say "the parameter naming no fixture was not reported by name and with a place" $?
+
+printf '%s\n' "$noname" | grep -qE '^  ok    '
+[ $? -ne 0 ]
+say "a package with an unresolvable parameter ran some of its tests anyway" $?
+
+# 27. a circle. Reported ONCE, by name, in the order it was walked — a report per member would
+#     be one circle described three ways.
+cyc=$("$ZERG" test "$tmp/cycle" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a circle among fixtures did not end the run with status 2" $?
+
+printf '%s\n' "$cyc" | grep -qE 'a_test\.zg:[0-9]+:[0-9]+: the fixtures `one` -> `two` -> `one` depend on each other in a circle'
+say "the circle was not named end to end with a place" $?
+
+[ "$(printf '%s\n' "$cyc" | grep -c 'depend on each other in a circle')" -eq 1 ]
+say "one circle was reported once per fixture in it" $?
+
+# 28. a parameter whose type is not what the fixture produces.
+mis=$("$ZERG" test "$tmp/mistyped" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a parameter typed differently from what its fixture produces did not end the run with status 2" $?
+
+printf '%s\n' "$mis" | grep -qE 'declares `db: int` and the fixture `db` produces `Conn`'
+say "the type a fixture produces and the type the parameter declared were not both named" $?
+
+# 29. THE FILE NAME IS THE INHERITANCE RULE. A fixture in a plain `*_test.zg` serves its own
+#     directory; only `fixtures_test.zg` goes downward. Asserted from below, where a test asks
+#     for a sibling directory's fixture and is told there is none.
+uni=$("$ZERG" test "$tmp/uninherited" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a fixture declared in a plain \`*_test.zg\` was inherited by the directory below it" $?
+
+printf '%s\n' "$uni" | grep -qE 'the test `test_below_cannot` asks for `local` and no `#\[fixture\]` of that name is in scope'
+say "the test below was not told that the fixture it named is not in its scope" $?
+
+# 30. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
+#     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
+#     does not have — which is exactly how `fn(T)` came to be written all through this file for
+#     the canonical `fn (T)`, with nothing to say so. No generated driver is among them: every
+#     run above took its own away, which the `before`/`after` checks already assert.
+find "$tmp" -name '*.zg' -print0 | xargs -0 "$ZERG" fmt --check >/dev/null 2>&1
+say "a source this gate holds up as the way to write a test or a fixture is not in canonical form" $?
+
+
 # --- the floor -----------------------------------------------------------------------------
 #
-# 25 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 55 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-25}
+MIN_ASSERTS=${MIN_ASSERTS:-55}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \
@@ -342,4 +800,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'test-runner-check: %s assertions — both paths, and a failure, a skip, a crash, an early exit and an empty tree are each seen\n' "$total"
+printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"

@@ -15,37 +15,124 @@
 # subtree a handler catches for another reason, so it stays the untyped Err a bare
 # `raise` builds until the taxonomy has a name for a broken claim.
 
+# detail renders one failure's message out of its three parts: WHAT did not hold, what the
+# author called it, and the context a chain accumulated. Each part is left out when it is
+# empty, so a bare `assert(false)` still raises the two words it always raised and no
+# existing reader of these messages has to learn a new shape to keep working.
+fn detail(what: str, msg: str, notes: str) -> str {
+	mut s := what
+	if msg != "" {
+		s = s + ": " + msg
+	}
+	if notes != "" {
+		s = s + " [" + notes + "]"
+	}
+	return s
+}
+
 # assert succeeds when cond holds; otherwise it raises so the failure is observable
 # (an enclosing `guard` catches it, or it aborts the program).
-pub fn assert(cond: bool) -> Result[nil] {
-	raise "assertion failed" if not cond
+#
+# `msg` IS WHAT THE BARE FORM COULD NOT SAY. A condition is compiled away before it fails,
+# so `assertion failed` is the whole of what the runtime knows and the author is the only
+# one who can say which claim it was. The parameter has a default because most assertions
+# are `assert_eq` and want none, and a default costs the call site nothing.
+pub fn assert(cond: bool, msg: str = "") -> Result[nil] {
+	raise detail("assertion failed", msg, "") if not cond
 	return nil
 }
 
 # assert_eq succeeds when a and b compare equal under their Eq impl (the blessed Eq
-# spec / a `#[derive(Eq)]` from Phase 1c); otherwise it raises. Generic over any
-# `T: Eq`, so it serves the primitive scalars and any user type that derives Eq.
+# spec / a `#[derive(Eq)]` from Phase 1c); otherwise it raises, NAMING BOTH VALUES.
+# Generic over any `T: Eq`, so it serves the primitive scalars and any user type that
+# derives Eq.
+#
+# THE VALUES ARE INTERPOLATED AND NOT `str()`-ed, and the difference is the bootstrap seed
+# rather than a style. Both spellings are the same rendering in this compiler — `display`
+# is a built-in rendering rather than a spec, so it needs no bound — but the seed checks a
+# generic body ABSTRACTLY, before any instantiation, and `str(x)` over a type parameter is
+# _cannot build a str from T_ there while `f"{x}"` lowers. `testing` is a module the seed
+# compiles, so the module writes the spelling both compilers take.
 pub fn assert_eq[T: Eq](a: T, b: T) -> Result[nil] {
-	raise "assert_eq failed: values are not equal" if a != b
+	raise f"assert_eq failed: {a} != {b}" if a != b
 	return nil
 }
 
 # assert_ne is the negation: it succeeds when a and b differ, and raises when they
-# compare equal.
+# compare equal — naming the value they both are, which is the one fact a reader of the
+# failure does not have.
 pub fn assert_ne[T: Eq](a: T, b: T) -> Result[nil] {
-	raise "assert_ne failed: values are equal" if a == b
+	raise f"assert_ne failed: both values are {a}" if a == b
 	return nil
+}
+
+# not_raised is what assert_raises does when the call it was handed came back. It is a
+# function rather than a `raise` written into the match arm because both arms of a match
+# answer one type, and this one has to answer an `Err` it never gets to build.
+fn not_raised() -> Err {
+	raise "assert_raises failed: the call returned instead of raising"
+}
+
+# assert_raises answers the `Err` a call raised; it FAILS when the call returned instead.
+# What it takes is the `guard` the caller writes at the point of the call:
+#
+#   e := testing.assert_raises(guard { strings.split("a,b", "") })
+#   testing.assert(e is ValueError, "split refused with the wrong kind")
+#
+# THE ERROR COMES BACK RATHER THAN THE KIND GOING IN, and that is not a preference: a type
+# is not a value in `zerg`, so `assert_raises(f, ValueError)` cannot be spelled at all. The
+# form that is left is also the better half of the trade — the caller asks with the
+# language's own `is`, and this module never has to learn the error taxonomy it is
+# deliberately outside of (see the header).
+#
+# A `guard` AND NOT AN `fn ()`, and the difference was measured rather than preferred. The
+# closure reads better — `assert_raises(fn () { strings.split("a,b", "") })` says what it
+# does — and this compiler cannot compile it: a closure body naming an imported module is
+# _E735 a closure captures `strings`, and this compiler cannot work out what it holds_,
+# because a namespace is a free name and a capture needs a type. Every test that reaches
+# its module through `import` is exactly that shape, so the closure form would be a form
+# that works only for the tests that need it least. The `guard` is evaluated at the CALL
+# SITE, where the namespace is in scope, and hands the outcome over as an ordinary value.
+#
+# IT IS GENERIC BECAUSE THE CARRIER IS — `split` raises out of a `list[str]`, `repeat` out
+# of a `str`, `count` out of an `int` — which is what a suite that hand-rolled this helper
+# found and had to write for itself. `T` is never inspected here; the whole body is about
+# the Right.
+pub fn assert_raises[T](r: Result[T]) -> Err {
+	return match r {
+		Either.Left(_)  => not_raised()
+		Either.Right(e) => e
+	}
 }
 
 # --- the test context ---------------------------------------------------------------
 #
-# THE ASSERTIONS ABOVE STAY FREE FUNCTIONS, and this type is why the split is worth
-# naming: `assert_eq` is generic, and a generic METHOD is `E409 NotImplemented` in this
-# compiler while a generic free function is not. So `ctx.assert_eq(a, b)` cannot be
-# written today — and writing the non-generic half of the assertions as methods anyway
-# would put half of one idea on the receiver and half beside it, and move again the day
-# generic methods land. Everything a test CLAIMS is a free function; everything a test
-# SAYS ABOUT ITSELF is on the context.
+# EVERY ASSERTION IS A FREE FUNCTION, AND THE ONE NON-GENERIC ONE IS ALSO A METHOD. The
+# free function is the plain form and takes no context; the method is the terminal of a
+# chain that carries some. `assert_eq`, `assert_ne` and `assert_raises` have no method form
+# and the reason is measured rather than chosen: all three are generic, and a generic
+# METHOD is _E409 NotImplemented: a generic METHOD `Context.assert_eq[…]`_ in this compiler
+# while a generic free function is not. So `t.str("file", path).assert_eq(got, want)` is
+# unwritable today — which is most of why `assert_eq` now names both values itself: the
+# failure that most wanted context is the one that can carry none.
+#
+# THE ASSERTION IS THE CHAIN'S TERMINAL, deliberately the opposite end from the logger's
+# `log.str(…).msg(…)`. If an assertion sat in the middle, a `t.assert(cond)` whose terminal
+# the author forgot would assert NOTHING and say so to no one — and `zerg` has no `impl
+# Drop` to notice a value that was built and never finished. Putting the assertion last
+# makes a dangling assertion a thing that cannot be written.
+#
+# THE CONTEXT IS PER-ASSERTION FOR FREE, and value semantics are the whole mechanism: each
+# `str` / `int` / `bool` answers a COPY carrying one more field, so what a chain accumulated
+# reaches its own terminal and nothing after it — measured, and the receiver the chain
+# started from is unchanged afterwards. The cost of that is worth knowing: a copy is a copy
+# of the accumulated text, so an N-field chain moves O(N²) bytes. N is two or three in every
+# failure that wants context, and the chain is written out by hand, so there is no shape of
+# this that gets large.
+#
+# PER TYPE, because there is no other way to spell it: `zerg` has no varargs, no `any`, and
+# no generic struct to hold a rendered list, so one method per scalar is what a named value
+# costs. The three that exist are the three a failure has been asking for.
 #
 # A Context is taken BY VALUE — `fn my_test(ctx: testing.Context)` — and by value is not
 # a copy of what matters. The one field that carries anything out is a channel, and a
@@ -88,6 +175,11 @@ pub struct Context {
 	# `name` is the method, so the field cannot be
 	tname: str = ""
 
+	# what the chain has accumulated, already rendered — `file=a.zg row=3`. It is a `str`
+	# and not a `list` because the only thing ever done with it is to be appended to a
+	# message, and a list would be a second representation of the same text.
+	notes: str = ""
+
 	# THE CHANNEL IS BIDIRECTIONAL, and the direction is what makes the runner's loop
 	# end: a channel closes when its last SEND-capable holder goes, and the runner holds
 	# a `<-chan[Event]` which is not one. So the context — held only by the coroutine
@@ -108,13 +200,51 @@ pub struct Context {
 # context builds the Context for one test. It is the generated driver's entry point and
 # not something a test writes: a test is HANDED one.
 pub fn context(name: str, events: chan[Event]) -> Context {
-	return Context(name, events)
+	return Context(name, "", events)
 }
 
 impl Context {
 	# name is which test this is — the function's own name, as the report prints it.
 	pub fn name() -> str {
 		return this.tname
+	}
+
+	# str / int / bool each add one NAMED value to the context the next assertion carries,
+	# and answer the context to chain the following one onto:
+	#
+	#   t.str("file", path).int("row", i).assert(ok, "the row did not round-trip")
+	#
+	# They are named for the type they take because that is the only way to take one (see
+	# the note above the type), and they are the ordinary way to put a value into a failure
+	# now that `assert_eq` and `assert_ne` name theirs themselves.
+	pub fn str(key: str, value: str) -> This {
+		return this.noted(key, value)
+	}
+
+	pub fn int(key: str, value: int) -> This {
+		return this.noted(key, f"{value}")
+	}
+
+	pub fn bool(key: str, value: bool) -> This {
+		return this.noted(key, f"{value}")
+	}
+
+	# noted is the copy the three above share: one more `key=value` on the end, on a context
+	# that is this one plus that field and is not this one.
+	fn noted(key: str, value: str) -> This {
+		mut c := this
+		if c.notes != "" {
+			c.notes = c.notes + " "
+		}
+		c.notes = f"{c.notes}{key}={value}"
+		return c
+	}
+
+	# assert is the free `assert` with whatever the chain accumulated appended, and it is a
+	# TERMINAL: a chain ends at an assertion or it never asserted anything.
+	pub fn assert(cond: bool, msg: str = "") -> Result[nil] {
+		raise detail("assertion failed", msg, this.notes) if not cond
+		return nil
 	}
 
 	# log records a message to show ONLY IF this test fails. A test that logs its way

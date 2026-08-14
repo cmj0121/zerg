@@ -36,3 +36,160 @@ pub fn assert_ne[T: Eq](a: T, b: T) -> Result[nil] {
 	raise "assert_ne failed: values are equal" if a == b
 	return nil
 }
+
+# --- the test context ---------------------------------------------------------------
+#
+# THE ASSERTIONS ABOVE STAY FREE FUNCTIONS, and this type is why the split is worth
+# naming: `assert_eq` is generic, and a generic METHOD is `E409 NotImplemented` in this
+# compiler while a generic free function is not. So `ctx.assert_eq(a, b)` cannot be
+# written today — and writing the non-generic half of the assertions as methods anyway
+# would put half of one idea on the receiver and half beside it, and move again the day
+# generic methods land. Everything a test CLAIMS is a free function; everything a test
+# SAYS ABOUT ITSELF is on the context.
+#
+# A Context is taken BY VALUE — `fn my_test(ctx: testing.Context)` — and by value is not
+# a copy of what matters. The one field that carries anything out is a channel, and a
+# channel is a `Ref` value: copying a value refcount-bumps the `Ref`s it contains and
+# deep-copies the rest (docs/code/coroutine.md). So the copy the parameter makes shares
+# the one thing that must be shared, and a test says what it has to say without `mut &`
+# — measured: a Context passed by value through two frames and a `spawn` delivered every
+# event to the runner holding the receiving end.
+#
+# WHAT A TEST SAYS TRAVELS AS AN EVENT, not as a field it sets, and that is the same
+# reasoning one step on: a `bool` field set by the test would be set on the COPY, and the
+# runner would never see it. The channel is the only field, so it is the only mechanism.
+
+# Event is one thing a running test told its runner. It is `pub` because the generated
+# driver names the channel's type; its fields are the module's own, because nothing
+# outside reads one — `collect` below is the only reader there is.
+pub struct Event {
+	kind: int = 0
+	text: str = ""
+}
+
+# The kinds an Event carries. LOG / SKIP / FATAL are what the test itself says; DONE and
+# RAISE are what the driver says about the body afterwards, over the same channel, so
+# that one receive loop sees the whole of a test's life and there is no second route for
+# a runner to get wrong.
+const EV_LOG := 0
+const EV_SKIP := 1
+const EV_FATAL := 2
+const EV_DONE := 3
+const EV_RAISE := 4
+
+# Outcome is what one test came to, as the runner reports it: `ok`, `fail` or `skip`, and
+# the text that goes under it — a skip's reason, or a failure's notes and message.
+pub struct Outcome {
+	pub verdict: str = ""
+	pub text: str = ""
+}
+
+pub struct Context {
+	# `name` is the method, so the field cannot be
+	tname: str = ""
+
+	# THE CHANNEL IS BIDIRECTIONAL, and the direction is what makes the runner's loop
+	# end: a channel closes when its last SEND-capable holder goes, and the runner holds
+	# a `<-chan[Event]` which is not one. So the context — held only by the coroutine
+	# running the test — is the last sender, and the body returning is what ends the
+	# stream.
+	events: chan[Event] = chan[Event]()
+}
+
+# context builds the Context for one test. It is the generated driver's entry point and
+# not something a test writes: a test is HANDED one.
+pub fn context(name: str, events: chan[Event]) -> Context {
+	return Context(name, events)
+}
+
+impl Context {
+	# name is which test this is — the function's own name, as the report prints it.
+	pub fn name() -> str {
+		return this.tname
+	}
+
+	# log records a message to show ONLY IF this test fails. A test that logs its way
+	# through a passing run is a test whose output nobody reads; the note earns its
+	# place at the moment there is something to explain.
+	pub fn log(msg: str) {
+		this.events <- Event(EV_LOG, msg)
+	}
+
+	# skip says this test does not apply here — a platform it is not for, a resource that
+	# is not present — and stops it. IT IS NOT A FAILURE, and the report counts it apart
+	# from both.
+	#
+	# THE UNWIND SAYS "STOPPED" AND THE CONTEXT SAYS "WHY", which is the whole reason
+	# there is no error KIND for either of these. `testing` is deliberately outside the
+	# taxonomy (see the header): a claim that did not hold is not a value that was
+	# refused, and a runner that told a skip from a failure by matching on a message
+	# string would be reading prose as a protocol. So the raise carries nothing anyone
+	# reads, the event carries everything, and the runner asks the context.
+	pub fn skip(reason: str) -> Result[nil] {
+		this.events <- Event(EV_SKIP, reason)
+		raise "test skipped"
+	}
+
+	# fatal stops this test now, failed. It is what a test says when going on would only
+	# produce noise — a fixture that did not open, a parse that returned nothing to
+	# assert about.
+	pub fn fatal(msg: str) -> Result[nil] {
+		this.events <- Event(EV_FATAL, msg)
+		raise "test failed"
+	}
+}
+
+# finished is what the driver says after the body is out of its hands: `ok` when it
+# returned, and otherwise the message it raised. It is the last event on the channel.
+pub fn finished(ctx: Context, ok: bool, msg: str) {
+	if ok {
+		ctx.events <- Event(EV_DONE, "")
+	} else {
+		ctx.events <- Event(EV_RAISE, msg)
+	}
+}
+
+# collect drains one test's channel and says what the test came to.
+#
+# A MISSING TERMINAL EVENT IS A CRASH, and it is the default rather than a branch: the
+# loop ends either because the sender finished — which it does only after `finished` —
+# or because the coroutine died, and only the first can have said DONE or RAISE. A death
+# also raises out of the receive (the channel closes carrying the producer's Err, or the
+# runtime finds nothing left to run), which is what the `guard` is for; both routes land
+# on the same verdict.
+pub fn collect(rx: <-chan[Event]) -> Outcome {
+	mut notes := ""
+	mut verdict := "crash"
+	mut text := ""
+	mut why := ""
+	mut skipped := false
+
+	guard {
+		for ev in rx {
+			if ev.kind == EV_LOG {
+				notes = notes + ev.text + "\n"
+			} else if ev.kind == EV_SKIP {
+				skipped = true
+				why = ev.text
+			} else if ev.kind == EV_FATAL {
+				why = ev.text
+			} else if ev.kind == EV_DONE {
+				verdict = "ok"
+			} else if ev.kind == EV_RAISE {
+				verdict = "fail"
+				text = ev.text
+			}
+		}
+	}
+
+	if verdict == "fail" {
+		# `skip` and `fatal` both arrive as a raise, and the context is what tells them
+		# from each other and from an assertion nobody wrote a reason for
+		return Outcome("skip", why) if skipped
+		if why != "" {
+			text = why
+		}
+		return Outcome("fail", notes + text)
+	}
+	return Outcome(verdict, text)
+}

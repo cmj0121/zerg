@@ -396,15 +396,33 @@ does.
 > **[not yet]** `zerg test` is a **scaffold**. It walks a path for `*_test.zg`, compiles each
 > holding directory as one package — its sources, its test files and a generated driver, so a
 > white-box test reaches the module's internals with no import and no `pub` — and runs every
-> `#[test] fn name()` it finds, **one process per test**, reporting `ok` / `FAIL` / `CRASH`
-> grouped by file and exiting non-zero if any did not hold. A run that finds nothing says so.
+> `#[test]` it finds, reporting `ok` / `FAIL` / `SKIP` / `CRASH` grouped by file, counting skips
+> apart from passes and failures, and exiting non-zero if any did not hold. A run that finds
+> nothing says so.
 >
-> What is **not** built is everything past that first pass: a doc comment (`##`), a doc example
-> run as a test, selecting tests by pattern, setup and teardown, benchmarks, and any parallelism
-> — the process-per-test arrangement is deliberately the slow correct one until there is a
-> measurement asking for another. A `#[test]` takes no parameters and returns nothing; a failing
-> `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
-> its own.
+> **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in
+> one process — which contains an assertion that does not hold and an uncaught abort alike, since
+> a `guard` catches both and a coroutine that dies without one dies alone. What no coroutine can
+> contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no
+> result when the run ends is re-run in a **process of its own** — the remainder, exactly, since
+> a result is written only after a body returns — and that is what attributes the death to the
+> test that caused it. When it happens the report says so on a `NOTE` line; a run that quietly
+> changed strategy is a run whose result nobody can interpret.
+>
+> A `#[test]` returns nothing and takes either **no parameter** or one **`testing.Context`**,
+> identified by its type and not by its name; the driver writes whichever call the signature
+> asks for. A context is passed **by value** and shares what matters anyway — its one field is a
+> channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,
+> `ctx.log(msg)` (shown only if the test fails), `ctx.skip(reason)` and `ctx.fatal(msg)`. The
+> last two `raise` to unwind and leave the reason on the context, so nothing has to read a
+> message string to tell a skip from a failure. Assertions stay **free functions**
+> (`testing.assert_eq`) because a generic **method** is `E409 NotImplemented` while a generic
+> free function is not.
+>
+> What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
+> test, selecting tests by pattern, **fixtures** — setup and teardown — benchmarks, and running
+> two tests at once. A failing `testing.assert*` `raise`s, and a raise is control flow, so it
+> unwinds out of the test body on its own.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

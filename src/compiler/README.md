@@ -203,16 +203,19 @@ reporting nothing at all. The first honest run named it.
 
 What each owner does today, and what is left:
 
-| owner          | today                                           | what is left                  |
-| -------------- | ----------------------------------------------- | ----------------------------- |
-| `chan`         | binding, and a handle nobody binds              | —                             |
-| `list` / `map` | binding, parameter, element vtable, rvalue temp | —                             |
-| `str`          | refcounted cell; binding, parameter, every join | —                             |
-| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields | —                             |
-| carrier        | a drop for the temporary a `!` / `??` reads     | a copy, so a binding can drop |
-| tuple          | copy helper, no drop                            | the drop beside the copy      |
-| ref-box        | `zrt_ref_alloc` per node, never released        | a drop for a recursive type   |
-| all of them    | registered where declared, given back by unwind | —                             |
+| owner          | today                                             | what is left                |
+| -------------- | ------------------------------------------------- | --------------------------- |
+| `chan`         | binding, and a handle nobody binds                | —                           |
+| `list` / `map` | binding, parameter, element vtable, rvalue temp   | —                           |
+| `str`          | refcounted cell; binding, parameter, every join   | —                           |
+| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields   | —                           |
+| carrier        | copy + drop, binding, parameter, element vtable   | the Right of an `Either`    |
+| enum           | `zg_drop_<E>` beside `zg_copy_<E>`, per variant   | —                           |
+| ref-box        | the cell's drop is the enum's own                 | an ITERATIVE chain teardown |
+| fn value       | the environment is a cell; one pair, `zg_*_fnptr` | —                           |
+| tuple          | copy helper, no drop                              | the drop beside the copy    |
+| assignment     | the old value is dropped for an enum, a carrier   | every other owning type     |
+| all of them    | registered where declared, given back by unwind   | —                           |
 
 The concurrency corpus is at **0 leak reports**, from 39, and `scripts/sanitize-conc.sh`
 runs with `detect_leaks=1` — a leak there is now a regression rather than a known debt. The
@@ -231,9 +234,16 @@ that registers anything takes its own mark and unwinds at its own end.
 **Where it has not been measured** is the rest of the corpus. `sanitize-conc` runs the
 seventeen concurrency cases; a one-off sweep of the other forty-eight found 47 reports in
 thirteen of them, in classes the concurrency cases do not reach — a chain of rvalue indexes,
-a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types, which are
-the `ref-box` row and were never freed by design. A leak gate over the whole corpus is what
-this needs next, because a class nothing runs is a class nothing measures.
+a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types.
+
+`make mem-check` is the first gate that runs anywhere else. It builds seven programs written
+inside `scripts/mem-check.sh`, runs each at 5 rounds and at 200 against a counting allocator
+linked in place of `alloc.c`, and holds the two live counts equal — so it needs neither
+LeakSanitizer nor the private corpus, and runs on macOS and on a fork. The ref-box, the
+carrier and the closure environment are what it was written for and it was RED on all three
+before they were closed. Its declared limit is that a **bounded** leak — one per program, or
+one per site rather than one per construction — is identical at both round counts and
+invisible to it.
 
 **Increment ladder toward M5** (each end-to-end tested, then committed):
 

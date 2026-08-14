@@ -122,14 +122,11 @@ refcount-bumped, and a **non-POD immutable value** is **retained into the closur
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
 carries its own captures and can never dangle.
 
-> **[deviation]** The environment is **never freed**. This is not a form the compiler turns away — the
-> closure compiles and runs, and the emitted C holds one `zrt_alloc` per construction and no matching free
-> anywhere in the translation unit — so it is a program that behaves differently from what is written here
-> rather than a debt with a name. Every other value this implementation allocates is released at the scope
-> that made it; a closure's cannot be by that rule, because the closure may outlive that scope, which is
-> what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
-> functions of its own, which is a change to the type rather than to the lambda. A program that makes
-> closures in a loop grows.
+The environment is **refcounted**, not scope-owned — that is the one place the copy rule above is realised by
+the implementation rather than by the scope. A closure may outlive the scope that made it, so the fn value
+counts as a holder of its environment and the last holder frees it, tearing the captures down in reverse
+declaration order like any other aggregate. A named function held as a value has no environment at all, and
+costs nothing for the rule.
 
 Because every capture is immutable, retaining versus cloning is unobservable. Equivalently:
 

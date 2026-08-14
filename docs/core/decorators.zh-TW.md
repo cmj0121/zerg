@@ -11,7 +11,7 @@
 
 ## 集合
 
-`#[derive]` 與 `#[obj]` 是這個編譯器會讀的 decorator。其他每一個——`#[test]`、`#[sealed]`、
+`#[derive]`、`#[obj]` 與 `#[test]` 是這個編譯器會讀的 decorator。其他每一個——`#[sealed]`、
 layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
@@ -34,10 +34,15 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
   padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
-> **[not yet]** `#[repr]` 與 `#[test]` 仍是沒有自己規則的保留名字:它們落進未知 decorator 的分支,拿到
-> _E217 … this compiler reads `#[derive(…)]` and `#[obj]`, and no other_——與拼錯的 `#[frobnicate]` 同一句話。
-> 兩者都被拒絕,所以沒有任何東西被默默丟掉;對這兩個名字失去的是「等待實作」與「打錯字」之間的區分——`#[sealed]`
-> 原本也有同樣的問題,現在有了 `E496`。
+> **[not yet]** `#[repr]` 仍是一個沒有自己規則的保留名字:它落進未知 decorator 的分支,拿到
+> _E217 … this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no other_——與拼錯的
+> `#[frobnicate]` 同一句話。它被拒絕,所以沒有任何東西被默默丟掉;失去的是「等待實作」與「打錯字」之間的
+> 區分——`#[sealed]` 原本也有同樣的問題,現在有了 `E496`。
+>
+> `#[test]` 現在**兩個編譯器都會讀**,而 `zerg test` 會把它標記的東西跑起來(那個指令走到哪裡,見
+> [模組、套件與程式](../runtime/package.zh-TW.md))。裡面還留著一個 **[deviation]**:種子在它的檢查器跑之前
+> 就把 `#[test]` 函式剝掉,所以那裡從來不曾對函式本體做型別檢查,而 `zerg` 與其他函式一視同仁。一個編不過的
+> 測試在 `zerg` 底下是編譯錯誤,在 `zerg0` 底下是沉默——記錄在 `src/bootstrap/README.md`。
 
 ## 不是 macro
 

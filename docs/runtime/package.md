@@ -393,9 +393,18 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** There is no `zerg test` command, so a test file is a file **nothing runs**: the
-> white-box and black-box positions above are places to put one rather than a way to run one. The
-> `testing` module's `assert` family is callable from an ordinary program in the meantime.
+> **[not yet]** `zerg test` is a **scaffold**. It walks a path for `*_test.zg`, compiles each
+> holding directory as one package — its sources, its test files and a generated driver, so a
+> white-box test reaches the module's internals with no import and no `pub` — and runs every
+> `#[test] fn name()` it finds, **one process per test**, reporting `ok` / `FAIL` / `CRASH`
+> grouped by file and exiting non-zero if any did not hold. A run that finds nothing says so.
+>
+> What is **not** built is everything past that first pass: a doc comment (`##`), a doc example
+> run as a test, selecting tests by pattern, setup and teardown, benchmarks, and any parallelism
+> — the process-per-test arrangement is deliberately the slow correct one until there is a
+> measurement asking for another. A `#[test]` takes no parameters and returns nothing; a failing
+> `testing.assert*` `raise`s, and a raise is control flow, so it unwinds out of the test body on
+> its own.
 >
 > The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
 > module's directory is read, in both compilers — so nothing a test declares reaches the shipped

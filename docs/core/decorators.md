@@ -13,7 +13,7 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-`#[derive]` and `#[obj]` are the decorators the compiler reads. Every other one — `#[test]`,
+`#[derive]`, `#[obj]` and `#[test]` are the decorators the compiler reads. Every other one —
 `#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
@@ -46,11 +46,17 @@ is a "not yet supported" **compile error**, never a silent no-op:
   controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
 
-> **[not yet]** `#[repr]` and `#[test]` are still reserved names with no rule of their own: they fall into
-> the unknown-decorator arm and get _E217 … this compiler reads `#[derive(…)]` and `#[obj]`, and no other_,
-> the same sentence a misspelled `#[frobnicate]` gets. Both are refused, so nothing is silently dropped;
-> what is lost for those two is the distinction between a name awaiting implementation and a typo —
+> **[not yet]** `#[repr]` is still a reserved name with no rule of its own: it falls into the
+> unknown-decorator arm and gets _E217 … this compiler reads `#[derive(…)]`, `#[obj]` and `#[test]`, and no
+> other_, the same sentence a misspelled `#[frobnicate]` gets. It is refused, so nothing is silently
+> dropped; what is lost is the distinction between a name awaiting implementation and a typo —
 > `#[sealed]`, which had the same problem, now has `E496`.
+>
+> `#[test]` is **read** now, by both compilers, and `zerg test` runs what it marks (see
+> [Modules, Packages & Programs](../runtime/package.md) for how far that command goes). One
+> **[deviation]** is left in it: the seed strips a `#[test]` function before its checker runs, so the body
+> is never type-checked there, while `zerg` checks it like any other. A test that does not compile is a
+> compile error under `zerg` and silence under `zerg0` — recorded in `src/bootstrap/README.md`.
 
 ## Not a macro
 

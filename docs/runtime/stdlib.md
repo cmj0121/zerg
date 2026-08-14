@@ -273,8 +273,8 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 ## `testing`
 
-Assertion helpers for `#[test]` functions. **[not yet]** — no compiler builds a test binary
-today. A satisfied assertion is `nil`; a
+Assertion helpers for `#[test]` functions, which `zerg test` builds and runs — see
+[Modules, Packages & Programs](package.md) for how far that command goes. A satisfied assertion is `nil`; a
 violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message. What it raises is
 an **untyped** `Err` — the only stdlib module of which that is true, and deliberately: a failed assertion is
 a claim about the program that did not hold, not a value a function could not accept, and the built-in

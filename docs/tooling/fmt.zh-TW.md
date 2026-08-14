@@ -709,6 +709,10 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E391` | `…` 在頂層開了一個 statement,而編譯出來的程式沒有地方跑它                                             |
 | `E392` | 不能對 `…` 做 `…`:只有 `mut` 的 collection 能改動它的元素                                             |
 | `E393` | 不能 `…` `…`:collection 在自己的 `for` 迴圈裡對結構性改動是凍結的                                     |
+| `E394` | `float` 上的 `…(…)` —— 寫出動詞:`math.trunc` / `floor` / `ceil` / `round`                             |
+| `E395` | 一次轉換只有一步:`…` -> `…` 是 `…` -> `int` -> `…`,所以要寫成兩步                                     |
+| `E396` | `…` 不是編譯器 primitive —— `__zrt_…` 這個集合是封閉的                                                |
+| `E397` | 編譯器 primitive `…` 收 …,而這裡給了 …                                                                |
 | `E401` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E402` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E403` | 跳出 `guard` block —— **[not yet]**                                                                   |
@@ -787,6 +791,17 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E486` | 解構賦值 `(a, b) = …` — **[not yet]**                                                                 |
 | `E487` | `…` 只能用在後面的 `struct`、`enum` 或 `spec` 上,而後面是 `…`                                         |
+| `E488` | `unsafe fn(…)` 型別 — **[not yet]**                                                                   |
+| `E489` | 在 `….…`(帶點的目標)上的 `impl` — **[not yet]**                                                       |
+| `E490` | `impl` 的 spec 以裸 `type-name` 指名,而 `….…` 是透過 import 取得的                                    |
+| `E491` | 泛型的 `type …[…] = …` — **[not yet]**                                                                |
+| `E492` | variant payload 裡的子 pattern — **[not yet]**                                                        |
+| `E493` | 把 range 當成值使用 — **[not yet]**                                                                   |
+| `E494` | `is …` 指名了內建錯誤種類之一 — **[not yet]**                                                         |
+| `E495` | decorator 至少要持有一個項目,而 `#[]` 沒有指名任何要套用的東西                                        |
+| `E496` | decorator `#[sealed]` — 保留 — **[not yet]**                                                          |
+| `E497` | `#[derive]` 要指名要產生的 spec                                                                       |
+| `E498` | channel 是雙向、只收或只送                                                                            |
 | `E501` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E502` | 在任何 source root 下都無法解析 import `…`                                                            |
 | `E503` | 不能在 send-only 的 `…` 上接收                                                                        |

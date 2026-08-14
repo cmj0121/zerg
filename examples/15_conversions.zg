@@ -5,12 +5,29 @@
 # / `float(s)` over a `str` PARSE the number's text instead, raising ValueError on a
 # malformed one. `guard { … } ?? d` demotes either failure to a value.
 #
+# THE TABLE IS CLOSED (docs/core/types.md). `int` is the hub every pair has on one side,
+# so a conversion between two other scalars is written as the TWO steps it is —
+# `float(int(b))` and not `float(b)` — and dropping a fraction is not a conversion at all
+# but a decision, spelled with one of `math`'s four verbs. Both of those spellings are
+# exercised below, because a rule that only ever appears in a reject list has never had
+# its replacement run.
+#
 # This example ASSERTS its answers rather than printing them, because `make examples`
 # gates on the exit status: a wrong conversion raises here and the gate goes red. Every
 # value reaches `check` as an `int` so that the SEED compiles it too — it types `uint`
 # and `byte` as their own types, and `make oracle` needs both compilers to build this.
+import "math"
+
 fn check(what: str, got: int, want: int) {
 	raise f"{what}: got {got}, want {want}" if got != want
+}
+
+# given hands back the number it was given, and exists to make one UNKNOWN. A binding to a
+# literal is a value the compiler works out, so `byte(big)` for `big := 300` is a compile error;
+# a call is where the constant rule stops, so this is how the example still demonstrates a
+# conversion failing where it RUNS.
+fn given(n: int) -> int {
+	return n
 }
 
 fn main() {
@@ -20,24 +37,38 @@ fn main() {
 	check("uint(str)", int(uint("9")), 9)
 	raise "float(str)" if float("3.5") != 3.5
 
-	# a narrowing conversion that does not fit raises, and `guard` demotes it. The operand is a
-	# VALUE, which is what makes the failure a run-time one: the same conversion written on a
-	# CONSTANT — `byte(300)`, `uint(-5)` — is a compile error, because the compiler holds the
-	# number and knows the answer. Two rules, and the difference between them is what the
-	# compiler can see.
+	# a narrowing conversion that does not fit raises, and `guard` demotes it. What makes the
+	# failure a RUN-TIME one is that the compiler cannot work the value out: `byte(300)`,
+	# `byte(big)` for `big := 300`, and `byte(N * 3)` for a `const N := 100` are all compile
+	# errors, because the value is known and the conversion is known to raise. The line falls at
+	# a CALL — `given(300)` below is a number this compiler does not hold — which is the same
+	# line a fill count `[v; N]` draws, and it is one rule and not two.
 	check("byte fits", int(byte(200)), 200)
 
-	neg := 0 - 5
-	big := 300
-	check("uint(neg) raises", int(guard { uint(neg) } ?? uint(7)), 7)
-	check("byte(big) raises", int(guard { byte(big) } ?? byte(7)), 7)
-	check("int(1e30) raises", guard { int(1e30) } ?? 7, 7)
+	check("uint(given(-5)) raises", int(guard { uint(given(0 - 5)) } ?? uint(7)), 7)
+	check("byte(given(300)) raises", int(guard { byte(given(300)) } ?? byte(7)), 7)
 
-	# float -> int truncates toward zero, and 255.7 still fits a byte
-	check("truncation", int(3.9), 3)
-	check("truncation is toward zero", int(0.0 - 3.9), -3)
-	check("byte(255.7)", int(byte(255.7)), 255)
-	check("byte(256.0) raises", int(guard { byte(256.0) } ?? byte(7)), 7)
+	# TWO STEPS, THROUGH THE HUB. `float(b)` on a byte is not a conversion this language has —
+	# it is `byte -> int -> float` — and `int(b)` is the step that makes the widening visible.
+	b := byte(200)
+	raise "float(int(b))" if float(int(b)) != 200.0
+	check("uint(int(b))", int(uint(int(b))), 200)
+
+	# A FRACTION IS DROPPED BY A VERB, never by `int(x)`: four answers are defensible, so the
+	# language will not pick one for the program. Each verb answers an `int` already, which is
+	# what makes it the whole conversion rather than half of one.
+	check("trunc is toward zero", math.trunc(3.9), 3)
+	check("trunc is toward zero, negative", math.trunc(0.0 - 3.9), -3)
+	check("floor goes down", math.floor(0.0 - 3.1), -4)
+	check("ceil goes up", math.ceil(3.1), 4)
+	check("round takes a half away from zero", math.round(0.0 - 2.5), -3)
+
+	# a magnitude no `int` holds is an OverflowError, not a value handed back unchanged
+	check("trunc(1e30) raises", guard { math.trunc(1e30) } ?? 7, 7)
+
+	# and a narrower target is the verb, then the conversion — 255.7 still fits a byte
+	check("byte(trunc(255.7))", int(byte(math.trunc(255.7))), 255)
+	check("byte(trunc(256.0)) raises", int(guard { byte(math.trunc(256.0)) } ?? byte(7)), 7)
 
 	# a malformed string is a ValueError, not a zero
 	check("a malformed str raises", guard { int("nope") } ?? 7, 7)

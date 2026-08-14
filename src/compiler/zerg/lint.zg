@@ -15,6 +15,17 @@
 #         the binder is the one part of the line nothing reaches
 #   L105  `with e as x { … }` where nothing in the block reads `x` — the block already scopes
 #         the resource, so the name buys nothing and costs the next reader a question
+#   L106  an `#[allow(…)]` with nothing to suppress — the rule did not fire over the
+#         statement below it, so the suppression is silencing nothing AND will go on
+#         silencing it when the real problem comes back. That is the shape this project
+#         spent a whole span taking out of its gates — a thing that measures nothing looks
+#         exactly like a thing that finds nothing — and it must not come back in through
+#         the suppression mechanism, so a stale allow is reported rather than tolerated
+#   L107  an `#[allow(…)]` naming a code no rule has. An `E` code is one spelling of it and
+#         the important one: an `E` is a COMPILER diagnostic, and a program that could
+#         switch a compiler check off would make bypassing one an official feature. A lint
+#         finding is advisory — L502 says so in its own text — so suppressing one is
+#         legitimate and suppressing an `E` is not
 #
 # `L2xx` is NULL SAFETY: an optional handled in a way that works but says the wrong thing.
 # Nothing here is a compile error — each of these programs runs — which is exactly why a
@@ -67,12 +78,14 @@
 #   a finding   the default. A rule fired on the program, which is what the tool is for, and
 #               `zerg lint` exits nonzero — so it gates a build rather than decorating one.
 #   warning     printed, and `zerg lint` still exits 0. It is what a rule says about a
-#               program that is NOT wrong — something legal that the writer may have meant
-#               and may not.
-#   info        printed, and nothing exits nonzero for it, ever. A tidying job, not a defect.
+#               program that is not wrong: a suppression that will never apply harms nothing
+#               by itself.
+#   info        printed, and nothing exits nonzero for it, ever. A stale allow is a tidying
+#               job, not a defect.
 #
 # `make lint` — this project's gate over its OWN source — passes `--strict` and fails on a
-# warning too. A gate board stricter than the tool has precedent here: refuse-check asserts
+# warning too, because the compiler's own source should not carry a suppression that will
+# never apply. A gate board stricter than the tool has precedent here: refuse-check asserts
 # more than `zerg build` requires.
 #
 # ONLY THE DEFAULT PRINTS NO ADJECTIVE. A finding is what `zerg lint` is for and needs no
@@ -141,7 +154,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 		out.append(Finding("", d.path, d.line, d.col, d.code, d.msg))
 	}
 
-	return out
+	return lint_allowed(srcs, paths, out)
 }
 
 # lint_with_names is L105: `with e as x { … }` where nothing in the block reads `x`. The
@@ -927,6 +940,206 @@ fn walk_match(scrut: Expr, arms: list[Arm], mut &ids: list[str], mut &calls: lis
 			walk_expr(a.guard_expr, ids, calls, ns)
 		}
 	}
+}
+
+# --- #[allow(…)] — the suppression, and the two things worth saying about one ------------
+#
+# SCOPE IS THE STATEMENT IT LEADS, and that is ONE rule rather than two. "A single line or a
+# scope" reads like a choice; it is not — the size of the suppression is the size of the
+# statement, so `#[allow(L103)] n := 1` covers a line and `#[allow(L301)] if c { … }` covers
+# the block, because that is what those two statements are. It does not reach the statement
+# after, and it cannot reach another file: there is deliberately NO file-level scope, so the
+# question "is the first line of a file about the file or about its first declaration?" never
+# has to be answered.
+#
+# IT IS READ FROM TOKENS, like L105 next door and for a related reason: the compiler drops
+# `#[allow(…)]` on the floor (parse_deco_item) precisely so that no copy of the L-code
+# catalogue lives in the parser, and a decorator the AST does not carry is one only the token
+# stream still has.
+struct Allow {
+	pub path: str
+	pub code: str
+
+	# where the `#[` is — the place both L106 and L107 report at, because the allow is what
+	# they are about
+	pub line: int
+	pub col: int
+
+	# the last line the statement below it spans, so `line`..`last` is the whole of what
+	# this allow covers
+	pub last: int
+}
+
+# lint_codes is the catalogue: every code this linter can report. `#[allow]` is checked
+# against it, and it is the LINTER's list because the linter owns the rules — the compiler
+# accepts the decorator's name and attributes no meaning to it, so this is the one place a
+# code has to be known.
+#
+# `scripts/lint-check.sh` holds it to the doc block at the top of this file, in both
+# directions: a code documented and not listed here can never be allowed, and a code listed
+# here and not documented is a rule with no entry to read.
+fn lint_codes() -> list[str] {
+	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502"]
+}
+
+# lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that
+# are worth saying about the allows themselves.
+fn lint_allowed(srcs: list[str], paths: list[str], found: list[Finding]) -> list[Finding] {
+	allows := lint_allows(srcs, paths)
+
+	# fired[i] is whether allow i suppressed anything. It is what makes L106 possible, and
+	# L106 is the reason this is not a filter: a suppression that silences nothing is exactly
+	# the "measures nothing looks like finds nothing" shape, and the only way to see it is to
+	# watch which ones did work.
+	mut fired: list[int] = []
+	for a in allows {
+		fired.append(0)
+	}
+
+	mut out: list[Finding] = []
+	for fd in found {
+		hit := lint_allow_for(allows, fd)
+		if hit < 0 {
+			out.append(fd)
+		} else {
+			fired[hit] = 1
+		}
+	}
+
+	mut i := 0
+	for i < allows.len() {
+		lint_allow_says(allows[i], fired[i], out)
+		i = i + 1
+	}
+	return out
+}
+
+# lint_allow_for is the index of an allow covering this finding, or -1.
+fn lint_allow_for(allows: list[Allow], fd: Finding) -> int {
+	mut i := 0
+	for i < allows.len() {
+		a := allows[i]
+		return i if a.code == fd.code and a.path == fd.path and fd.line >= a.line and fd.line <= a.last
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# lint_allow_says reports what is wrong with an allow, and nothing at all when it did its job.
+#
+# The two are exclusive and in this order: a code no rule has could not have suppressed
+# anything, so reporting BOTH would be the same fact twice with the useless half second.
+fn lint_allow_says(a: Allow, fired: int, mut &out: list[Finding]) {
+	if not has_str(lint_codes(), a.code) {
+		out.append(Finding("warning", a.path, a.line, a.col, "L107", f"`#[allow({a.code})]` names no rule this linter has, so this suppression will never apply — {lint_no_rule_why(a.code)}"))
+		return
+	}
+
+	return if fired != 0
+
+	out.append(Finding("info", a.path, a.line, a.col, "L106", f"`#[allow({a.code})]` has nothing to suppress — {a.code} did not fire over the statement below it, so it silences nothing now and will go on silencing nothing when the real problem comes back; delete it"))
+}
+
+# lint_no_rule_why is the half of L107's sentence that depends on WHICH kind of name was
+# given. An `E` code is the case worth separating: it is not a typo, it is a reader asking
+# for something the language will not do.
+fn lint_no_rule_why(code: str) -> str {
+	return "an `E` code is a COMPILER diagnostic and `#[allow]` never suppresses one: a program that could switch a compiler check off would make the bypass an official feature" if strings_has_prefix(code, "E")
+
+	return "this linter's rules are the `L…` codes documented in lint.zg"
+}
+
+# lint_allows reads every `#[allow(…)]` in the program, one entry per code named.
+fn lint_allows(srcs: list[str], paths: list[str]) -> list[Allow] {
+	mut out: list[Allow] = []
+	mut k := 0
+	for k < srcs.len() {
+		toks := tokenize(srcs[k])
+		path := lint_path_at(paths, k)
+		mut i := 0
+		for i < toks.len() {
+			if toks[i].kind == Kind.Hash {
+				lint_allow_at(toks, i, path, out)
+			}
+			i = i + 1
+		}
+		k = k + 1
+	}
+	return out
+}
+
+# lint_allow_at reads the decorator opening at `at` and records one entry per code its
+# `allow` item names.
+#
+# IT READS THE WHOLE DECORATOR, not just its first item. One decorator per item is the rule
+# (E613), so an item that wants an allow beside another decorator writes `#[allow(L1xx), d]` —
+# and a scan that only looked at the item after the `#[` would see nothing in exactly the
+# program the merged form was made for.
+fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {
+	h := toks[at]
+	mut codes: list[str] = []
+	mut i := at + 1
+	for i < toks.len() and toks[i].kind != Kind.RBrack {
+		if toks[i].kind == Kind.Ident and toks[i].lexeme == "allow" {
+			i = lint_allow_args(toks, i + 1, codes)
+		} else {
+			i = i + 1
+		}
+	}
+
+	last := lint_stmt_last_line(toks, i + 1)
+	for c in codes {
+		out.append(Allow(path, c, h.line, h.col, last))
+	}
+}
+
+# lint_allow_args reads one `( CODE, … )` argument list onto `codes` and answers the index
+# just past it — or `at` itself when the item took no arguments, which is E614's program and
+# not this walk's business.
+fn lint_allow_args(toks: list[Token], at: int, mut &codes: list[str]) -> int {
+	return at if at >= toks.len() or toks[at].kind != Kind.LParen
+
+	mut i := at + 1
+	for i < toks.len() and toks[i].kind != Kind.RParen {
+		if toks[i].kind == Kind.Ident {
+			codes.append(toks[i].lexeme)
+		}
+		i = i + 1
+	}
+	return i + 1
+}
+
+# lint_stmt_last_line is the last line of the statement beginning at or after `at` — the
+# other end of an allow's scope.
+#
+# It counts brackets rather than trusting the separator, and that is the whole of how one
+# rule covers both a line and a block: a `;` inside braces belongs to a statement of the
+# BLOCK, so the scan runs past it, and the `}` that closes the block is the last token of the
+# statement that owns it.
+fn lint_stmt_last_line(toks: list[Token], at: int) -> int {
+	mut i := at
+	for i < toks.len() and toks[i].kind == Kind.Semi {
+		i = i + 1
+	}
+	return 0 if i >= toks.len()
+
+	mut depth := 0
+	mut last := toks[i].line
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return last if k == Kind.Eof
+		return last if depth == 0 and (k == Kind.Semi or k == Kind.RBrace)
+
+		if k == Kind.LParen or k == Kind.LBrack or k == Kind.LBrace or k == Kind.Hash {
+			depth = depth + 1
+		} else if k == Kind.RParen or k == Kind.RBrack or k == Kind.RBrace {
+			depth = depth - 1
+		}
+		last = toks[i].line
+		i = i + 1
+	}
+	return last
 }
 
 # --- helpers -----------------------------------------------------------------------------

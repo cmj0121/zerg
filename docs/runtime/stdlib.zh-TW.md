@@ -229,9 +229,14 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-> **[not yet]** 這個模組會出貨，但**無法 import**。`Atomic[T]` 是 generic struct，而 generic struct 是本編譯器
-> 拒絕的形式之一，所以 `import "atomic"` 本身就會回報 `NotImplemented: a generic struct`Atomic[…]``。下表的
-簽章另外還提到 `Ref[T]`，那個型別也不存在。它是十二個模組中唯一無法乾淨 import 的一個。
+> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十三個模組中唯一如此的一個。`Atomic[T]` 是 generic
+> struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
+> ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
+> 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。
+>
+> 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
+> `src/stdlib/` 的模組同時也離開了 `zerg fmt --check` 與其餘的 self-source 集合，會在 generics 到來之前無人閱讀
+> 地爛掉。而那樣留在 import 處的會是 _E502 cannot resolve import `atomic`_——一句關於一個明明就在那裡的模組的話。
 
 | 函式                                                           | 摘要                                |
 | -------------------------------------------------------------- | ----------------------------------- |

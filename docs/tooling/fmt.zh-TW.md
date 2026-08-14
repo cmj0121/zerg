@@ -836,6 +836,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E508` | `…` 不是 module `…` 的公開型別                                                                        |
 | `E509` | `…` 是 module-private,而 … 在一個 `pub` 宣告上                                                        |
 | `E510` | `…` 不是 `…` 的公開欄位,而 `…` 是 module `…` 宣告的                                                   |
+| `E511` | module `atomic` 有出貨卻無法 import — **[not yet]**                                                   |
+| `E512` | `…` 指名一個測試檔,而一般建置一個都不編                                                               |
 | `E601` | `…` 需要一個名字,而 `…` 不是                                                                          |
 | `E602` | 前綴 `<-` 是 channel 方向:只有 `<-chan[T]` 是型別                                                     |
 | `E603` | `impl` 裡宣告前的 `mut` 標記的是 `mut fn` 方法,而這個不是 `fn`                                        |
@@ -845,6 +847,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E607` | match arm 的 body 是 expression,而這個是 statement — **[not yet]**                                    |
 | `E608` | f-string 的字面文字格式不良                                                                           |
 | `E609` | f-string 的洞裡裝了不只一個 expression                                                                |
+| `E610` | `…` 是 prelude 名稱 — … — 不能用來命名…                                                               |
 | `E701` | `…` 收的是 … 或 …,而這個裸值兩邊都不是                                                                |
 | `E702` | … 上沒有欄位 `…`(optional chain `?.…`)                                                                |
 | `E703` | 在 … 上用 `?` — 它拆的是 carrier 的 Left — **[not yet]**                                              |

@@ -3260,22 +3260,22 @@ fn main() {
 EOF
 
 reject impl-breaks-the-self-type E317 'parameter `other` is int, and the spec declares A' seed-gap <<'EOF'
-spec Eq {
-	fn eq(other: This) -> bool
+spec Same {
+	fn same(other: This) -> bool
 }
 
 struct A {
 	pub v: int
 }
 
-impl Eq for A {
-	fn eq(other: int) -> bool {
+impl Same for A {
+	fn same(other: int) -> bool {
 		return this.v == other
 	}
 }
 
 fn main() {
-	print(A(1).eq(1))
+	print(A(1).same(1))
 }
 EOF
 
@@ -3299,12 +3299,12 @@ fn main() {
 }
 EOF
 
-reject super-spec-is-not-satisfied E318 'does not implement `eq`, which `Eq` requires' <<'EOF'
-spec Eq {
-	fn eq() -> bool
+reject super-spec-is-not-satisfied E318 'does not implement `same`, which `Same` requires' <<'EOF'
+spec Same {
+	fn same() -> bool
 }
 
-spec Ord: Eq {
+spec Ranked: Same {
 	fn lt() -> bool
 }
 
@@ -3312,7 +3312,7 @@ struct A {
 	pub v: int
 }
 
-impl Ord for A {
+impl Ranked for A {
 	fn lt() -> bool {
 		return false
 	}
@@ -6895,6 +6895,96 @@ struct A {
 
 fn main() {
 	print 1
+}
+EOF
+
+# --- the prelude's names, and what a test file is on the surface of ------------------
+#
+# A PRELUDE NAME IS TAKEN BEFORE THE PROGRAM IS READ, so a declaration cannot have one
+# (docs/runtime/package.md). Each case here is `at=1:8` or `at=1:4`, because the whole claim
+# is that the refusal lands on the DECLARATION: `struct list` used to be accepted and the
+# complaint arrived at the first `list(1)` after it, as `E425 undefined function` — a
+# sentence that is false about a program that does declare one.
+#
+# The three kinds are here rather than one because the message names the slot, and a slot
+# that stopped asking would leave the other two green.
+reject a-prelude-name-names-a-struct E610 'cannot name a struct' at=1:8 <<'EOF'
+struct list {
+	pub n: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-prelude-name-names-a-spec E610 'cannot name a spec' at=1:6 <<'EOF'
+spec Eq {
+	fn eq(o: This) -> bool
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-prelude-name-names-a-function E610 'cannot name a function' at=1:4 <<'EOF'
+fn int() -> int {
+	return 1
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# THE CARRIER'S CONSTRUCTORS ARE IN THE SET for the same reason its type name is: the emitter
+# reads `Left` and `Right` BY NAME — an arity rule, a tag, and the match-exhaustiveness rule
+# that says which side an arm covers — so a declaration taking one leaves those rules reading
+# a name the program means something else by.
+reject a-prelude-name-names-an-enum E610 'cannot name an enum' at=1:6 <<'EOF'
+enum Left {
+	A
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# A TEST FILE IS ON NO MODULE'S SURFACE. `*_test.zg` is the build tool's convention and a
+# normal build compiles none of them (docs/runtime/package.md), so this pair is what the
+# exclusion looks like from a program: the name is not there, and naming the FILE is refused
+# where it is written rather than resolved to an empty module.
+#
+# The positive half — that a module with a test file beside it still builds, and builds
+# without it — is examples/1g/testfile, because a program that must BUILD cannot be written
+# in this script.
+reject a-member-a-test-file-declares E388 'has no `only_in_test`' <<'EOF'
+import "lib"
+
+fn main() {
+	print lib.only_in_test()
+}
+--- lib/lib.zg
+pub fn hello() -> int {
+	return 1
+}
+--- lib/lib_test.zg
+pub fn only_in_test() -> int {
+	return 42
+}
+EOF
+
+reject an-import-that-names-a-test-file E512 at=1:8 <<'EOF'
+import "lib/lib_test"
+
+fn main() {
+	print lib_test.only_in_test()
+}
+--- lib/lib_test.zg
+pub fn only_in_test() -> int {
+	return 42
 }
 EOF
 

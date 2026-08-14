@@ -249,12 +249,17 @@ pub enum Stmt {
 	# raise that tests them — which the emitter runs in the enclosing block, in order, like
 	# any other statement list.
 	#
-	# It is a NODE and not the bare list because the tree is asked what the SOURCE said.
-	# `--emit ast` renders it, and the linter's walks each decide once whether an assert's
-	# insides are the author's business — an import reached only from a condition is a used
-	# import (walk_body descends), and the operand temporaries are nobody's bindings
-	# (collect_binds_at does not). Flattened into the enclosing block, neither question could
-	# be asked: what is left is an `if` somebody could equally have typed out by hand.
+	# It is a NODE and not the bare list because the tree is asked what the SOURCE said —
+	# `--emit ast` renders the word, and flattened into the enclosing block what is left is an
+	# `if` somebody could equally have typed out by hand.
+	#
+	# It is TRANSPARENT, and every walk over a statement list owes it an arm: what it holds is
+	# ordinary code, so a walk that skips it is a walk that has not seen the whole function.
+	# An import reached only from a condition is a used import, a name bound in there is a name
+	# the closure analysis must not call free, and a `T` in there is one monomorphization has
+	# to substitute. Each of those is a `_ =>` fallback away from being wrong, and one of them
+	# was: a closure holding an `assert` was refused as capturing a temporary the desugar had
+	# just introduced.
 	SAssert(list[Stmt])
 	SBreak
 	SContinue

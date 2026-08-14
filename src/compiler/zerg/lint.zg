@@ -829,9 +829,16 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 # lists are parallel: `ats[i]` is where `names[i]` was written, taken from the SAt marker the
 # parser leaves before every statement of a block.
 #
-# IT DOES NOT DESCEND INTO AN `assert`, and that is the one deliberate omission. The bindings
-# in there are the desugar's own operand temporaries — nobody wrote them, and nobody can
-# delete them — so reporting one as unread would be the linter reporting the compiler.
+# IT DESCENDS INTO AN `assert` AND SO DOES walk_body, and the two must agree — which is the
+# whole reason this note is here, because they briefly did not. This walk has a second caller
+# that is not a lint rule at all: `c_lambda_free_all` subtracts what a body BINDS from what it
+# READS to get a closure's captures, so a name in one half and not the other becomes a capture
+# out of nothing. It did: a closure holding an `assert` was turned away with _E735 a closure
+# captures `zga_l3c10`_, a diagnostic naming a temporary the reader never wrote.
+#
+# The temporaries cost nothing here. Every one of them is READ — by the condition that tests
+# it, and by the message that names it — so L103 has nothing to say about any of them, and the
+# rule that would have needed protecting protects itself.
 fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	mut w := at
 	for s in body {
@@ -841,6 +848,7 @@ fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &at
 			Stmt.SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, w, names, ats)
 			Stmt.SFor(is_cond, cond, body_b) => collect_binds_at(body_b, w, names, ats)
 			Stmt.SForIn(name, iter, body_b) => collect_binds_at(body_b, w, names, ats)
+			Stmt.SAssert(body_b) => collect_binds_at(body_b, w, names, ats)
 			Stmt.SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, w, names, ats)
 			Stmt.SExpr(x) => collect_binds_expr(x, w, names, ats)
 			Stmt.SSelect(arms) => collect_binds_arms(arms, w, names, ats)

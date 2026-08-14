@@ -47,10 +47,12 @@ one —
   **generic wrap**, which is how a heterogeneous collection is written in a language where a spec is a bound
   and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
   See **[Specs & Generics](specs.md)**.
-- **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
-  excluded from a normal one. It returns nothing and takes a **`testing.Context`** (by type), the **fixtures**
-  it needs (by name), or no parameter at all; a failing assertion or an abort inside it fails the test (see
-  [Modules, Packages & Programs](../runtime/package.md) on where tests live). It may be written
+- **`#[test]`** — on a `fn`. Marks the function as a test case, run by `zerg test` and by nothing else. It
+  **returns nothing** and takes a **`testing.Context`** (by type), the **fixtures** it needs (by name), or no
+  parameter at all; a failing assertion or an abort inside it fails the test (see
+  [Modules, Packages & Programs](../runtime/package.md) on where tests live). A declared return type is
+  **refused** by `zerg test`, with a place: the driver calls a test as a statement, so the value would be
+  dropped, and a reader who thinks it is the verdict has to be told it is not. It may be written
   **anywhere**, and `zerg test` **discovers it wherever it is** — a directory whose only `#[test]` sits in an
   ordinary module file is still a test package. Written outside a `*_test.zg` it is legal and it **ships**:
   it is compiled into the binary like any other function and nothing in the **program** calls it, so

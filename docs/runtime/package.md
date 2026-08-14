@@ -440,6 +440,11 @@ does.
 > already compiles the file it is in — so the monotone rule above is untouched: which files a
 > package is built from is still decided by the `*_test.zg` names alone.
 >
+> **A `#[test]` returns nothing, and a declared return type is refused** with a place, before
+> anything is compiled: the driver calls a test as a **statement**, so the value would be dropped
+> — and `#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than
+> linted because a lint exits 0 and the run would go on saying `ok`.
+>
 > **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
 > test, a stem selects the family. It is applied before anything is generated, so a test it did not
 > select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
@@ -460,7 +465,7 @@ does.
 > test that caused it. When it happens the report says so on a `NOTE` line; a run that quietly
 > changed strategy is a run whose result nobody can interpret.
 >
-> A `#[test]` returns nothing and takes either **no parameter** or one **`testing.Context`**,
+> A `#[test]` takes either **no parameter** or one **`testing.Context`**,
 > identified by its type and not by its name; the driver writes whichever call the signature
 > asks for. A context is passed **by value** and shares what matters anyway — its one field is a
 > channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,

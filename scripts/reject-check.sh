@@ -811,6 +811,70 @@ fn main() {
 }
 EOF
 
+# --- one decorator per item, and which decorators lead a statement -------------------
+#
+# A decorator may lead a STATEMENT now (GRAMMAR#statement), which is what `#[allow(…)]` is
+# for. That makes `#[derive(Eq)]` above a statement SYNTACTICALLY legal and semantically
+# nothing, so it owes its own refusal — a decorator changes what a declaration means, and
+# there is no declaration in a body for one to change.
+#
+# It is a rejection rather than a refusal: no future feature makes `#[derive]` on a binding
+# mean something. The seed refuses it too, by not reading a decorator inside a body at all.
+reject derive-leading-a-statement E612 '`#[derive(Eq)]`' at=2:2 <<'EOF'
+fn main() {
+	#[derive(Eq)]
+	n := 1
+	print n
+}
+EOF
+
+# `#[test]` gets the sentence about a `fn`, not the derive's about a type — the same split
+# E487 makes one position up, and the reason is the same: advice for the other decorator is
+# advice the reader cannot act on.
+reject test-leading-a-statement E612 '`#[test]`' at=2:2 <<'EOF'
+fn main() {
+	#[test]
+	n := 1
+	print n
+}
+EOF
+
+# ONE DECORATOR PER ITEM. Stacking parsed in both compilers and said exactly what the comma
+# list says — two spellings for one thing, which is what `zerg fmt` exists to remove and what
+# it cannot remove once both are legal.
+reject stacked-decorators-on-a-declaration E613 at=2:1 <<'EOF'
+#[derive(Eq)]
+#[obj]
+spec Draw {
+	fn draw() -> str
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# and in the position that opened this: `#[allow]` puts nothing on the pending list, so a
+# stack that began with one would have read as no decorator at all without a flag of its own
+reject stacked-decorators-on-a-statement E613 at=3:2 <<'EOF'
+fn main() {
+	#[allow(L103)]
+	#[allow(L104)]
+	n := 1
+	print n
+}
+EOF
+
+# `#[allow]` NAMES THE CODES IT SUPPRESSES. With none it suppresses nothing while reading as
+# though it did — E497's argument for `#[derive]`, one decorator over.
+reject an-allow-with-no-codes E614 at=2:4 <<'EOF'
+fn main() {
+	#[allow]
+	n := 1
+	print n
+}
+EOF
+
 reject pub-on-an-unsafe-group E252 at=1:1 <<'EOF'
 pub unsafe {
 	mut counter := 0

@@ -45,9 +45,10 @@
 #     refused   no such fixture / a circle / a type that is not what the fixture produces —
 #               each reported with a place BEFORE anything runs, and nothing runs
 #
-#   none    a directory with no test files     exit 0, and it SAYS so rather than printing
+#   none    a directory with no test in it     exit 3, and it SAYS so rather than printing
 #                                              nothing — a silent run that found nothing is
-#                                              indistinguishable from one where all passed
+#                                              indistinguishable from one where all passed,
+#                                              and 3 is told from the 2 a bad path gets
 #   skips   a package that only passes and skips   exit 0: a skip is not a failure
 #
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
@@ -336,15 +337,32 @@ after=$(ls "$tmp/pkg/lib" "$tmp/pkg/edge")
 [ "$before" = "$after" ]
 say "the run left a generated file behind in the package" $?
 
-# 13. a directory with no test files: exit 0, and NOT silence.
+# 13. a directory with no test in it: it SAYS so, and it says so in the STATUS.
+#
+#     A RUN THAT FOUND NOTHING IS NOT A RUN THAT PASSED. Rename a directory, move a suite,
+#     edit a glob, or mistype a path into a CI line, and a runner answering 0 leaves the board
+#     green forever while running nothing — this repository's own sentence for it is that a
+#     gate measuring nothing looks like a gate finding nothing. The sentence alone does not
+#     close it, because the reader of a CI line is a shell, so 3 is asserted here.
+#
+#     3 AND NOT 2, asserted as the exact number rather than as "non-zero": 2 is already "the
+#     command was wrong" — no such path, a `--only` that matched nothing — and a gate that
+#     accepted either could not tell a search that found nothing from a command line nobody
+#     can run.
 none=$("$ZERG" test "$tmp/none" 2>&1)
 status=$?
 
-[ "$status" -eq 0 ]
-say "a tree with no test files did not exit 0" $?
+[ "$status" -eq 3 ]
+say "a tree with no test in it did not exit 3 — a run that found nothing is not a run that passed" $?
 
 printf '%s\n' "$none" | grep -qF 'no tests'
-say "a tree with no test files said nothing — a silent run is indistinguishable from one where everything passed" $?
+say "a tree with no test in it said nothing — a silent run is indistinguishable from one where everything passed" $?
+
+# and the two non-zero answers are TOLD APART. A path that is not there is a command nobody
+# can run; a path that is there and holds no test is a tree to go and look at.
+"$ZERG" test "$tmp/none/nosuchdir" >/dev/null 2>&1
+[ $? -eq 2 ]
+say "a path that does not exist did not exit 2 — a bad command line and an empty search are not one answer" $?
 
 # 14. a skip is not a failure, said in the one place it decides something: the exit status.
 skips=$("$ZERG" test "$tmp/skips" 2>&1)
@@ -1071,9 +1089,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 79 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 82 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-79}
+MIN_ASSERTS=${MIN_ASSERTS:-82}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

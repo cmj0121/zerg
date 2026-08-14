@@ -12720,10 +12720,14 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # of the numbering into every program to do it, and a second copy is how a tenth kind
 # arrives with half a mapping and loses its prefix silently.
 #
-# The last three are the ones the concurrency chapter names. DeadlockError and
-# SendOnClosedError are raised by the runtime, and StopIteration is the sentinel a clean
-# channel close carries — a kind rather than a message, which is what lets a receiver tell
-# an ordinary ending from a crash without matching on text.
+# DeadlockError and SendOnClosedError are raised by the runtime, and StopIteration is the
+# sentinel a clean channel close carries — a kind rather than a message, which is what lets a
+# receiver tell an ordinary ending from a crash without matching on text.
+#
+# AssertionError is the last, and it is here for that same reason one step up: `zerg test`
+# has to tell a claim that did not hold from a program that fell over, and a runner reading
+# prose to do it would be reading a message as a protocol. `assert` (GRAMMAR#assert-stmt)
+# raises this one and nothing else does.
 fn c_err_kinds() -> list[str] {
 	return [
 		"ValueError",
@@ -12735,7 +12739,8 @@ fn c_err_kinds() -> list[str] {
 		"DeadlockError",
 		"SendOnClosedError",
 		"StopIteration",
-		"DivideByZeroError"
+		"DivideByZeroError",
+		"AssertionError"
 	]
 }
 

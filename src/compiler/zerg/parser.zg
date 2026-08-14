@@ -33,6 +33,12 @@ struct Parser {
 	# inside a `guard` or a closure holds statements, and each of their expressions is a
 	# root of its own.
 	pub edepth: int
+
+	# ty_quals collects the MODULE QUALIFIERS written in a type position, which parse_base_type
+	# resolves away (File.ty_quals says why the fact is kept on the side). It rides on the
+	# parser rather than being threaded through parse_type's dozen returns: a type is parsed
+	# from six positions and each would otherwise have to hand a list down and collect it back.
+	pub ty_quals: list[TyQual]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -655,6 +661,13 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# and `It.Item` is a projection.
 		raise p_diag(p, "E265", f"NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all") if name_is_type(name)
 
+		# THE QUALIFIER IS RESOLVED AWAY AND WRITTEN DOWN. Dropping it is right for
+		# resolution — the last segment IS the name here — and it is also the moment the
+		# only evidence of `lib.` in `c: lib.Counter` disappears, which is the evidence the
+		# no-transitivity rule reads. So the fact that one was typed, and where, is recorded
+		# before the name moves on.
+		p.ty_quals.append(TyQual(name, p.path, kw.line, kw.col))
+
 		p_advance(p)
 		name = cur(p).lexeme
 		p_advance(p)
@@ -928,7 +941,7 @@ fn conv_ty(name: str) -> Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path, 0, 0)
+	mut p := Parser(toks, 0, "", path, 0, 0, [])
 	mut imports: list[ImportDecl] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -1015,21 +1028,21 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Kind.Fn) {
 			fns.append(parse_fn(p, is_pub, "", false, in_unsafe))
 		} else if p_at(p, Kind.Struct) {
-			# a struct may be declared `pub` (GRAMMAR#struct-decl); like a field's marker
-			# (parse_struct), it is read and dropped — type visibility is not enforced,
-			# the deviation docs/runtime/package.md owns ("enforced on functions, and on
-			# nothing else"), so recording it here would be a flag nothing reads
-			sd := parse_struct(p)
+			# a struct may be declared `pub` (GRAMMAR#struct-decl), and the marker is CARRIED.
+			# It used to be read and dropped, because type visibility was not enforced and a
+			# flag nothing reads is a lie the next reader believes; now the type registry
+			# records it and chk_ty_visible asks it.
+			sd := parse_struct(p, is_pub)
 			p_take_derives(sd.name, pending, derive_on, derive_spec)
 			structs.append(sd)
 		} else if p_at(p, Kind.Enum) {
-			# `pub enum` — read and dropped, the struct arm's reason
-			ed := parse_enum(p)
+			# `pub enum` — carried, the struct arm's reason
+			ed := parse_enum(p, is_pub)
 			p_take_derives(ed.name, pending, derive_on, derive_spec)
 			enums.append(ed)
 		} else if p_at(p, Kind.Spec) {
-			# `pub spec` — read and dropped, the struct arm's reason
-			sp := parse_spec(p)
+			# `pub spec` — carried, the struct arm's reason
+			sp := parse_spec(p, is_pub)
 			p_take_derives(sp.name, pending, derive_on, derive_spec)
 			specs.append(sp)
 		} else if p_at(p, Kind.Const) {
@@ -1177,7 +1190,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, "E256", "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -1603,7 +1616,7 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 # compiled, so nothing in it is checked — a `this.x` naming a field no implementor has, a
 # call to a function that does not exist, a type error. It reads like the method that will
 # run and is not, which is the shape this compiler turns away by name everywhere else.
-fn parse_spec(mut &p: Parser) -> SpecDecl {
+fn parse_spec(mut &p: Parser, is_pub: bool) -> SpecDecl {
 	kw := cur(p)
 	p_advance(p) # 'spec'
 	name := p_name(p, "a spec")
@@ -1706,7 +1719,7 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, Kind.RBrace)
-	return SpecDecl(name, params, supers, super_args, reqs, p.path, kw.line, kw.col)
+	return SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -1899,7 +1912,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 	return out
 }
 
-fn parse_enum(mut &p: Parser) -> EnumDecl {
+fn parse_enum(mut &p: Parser, is_pub: bool) -> EnumDecl {
 	kw := cur(p)
 	p_advance(p) # 'enum'
 	name := p_name(p, "an enum")
@@ -1963,7 +1976,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, "E214", f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
-	return EnumDecl(name, variants, p.path, kw.line, kw.col)
+	return EnumDecl(name, variants, is_pub, p.path, kw.line, kw.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -1975,7 +1988,7 @@ fn is_pascal(s: str) -> bool {
 	return v >= 65 and v <= 90
 }
 
-fn parse_struct(mut &p: Parser) -> StructDecl {
+fn parse_struct(mut &p: Parser, is_pub: bool) -> StructDecl {
 	kw := cur(p)
 	p_advance(p) # 'struct'
 	name := p_name(p, "a struct")
@@ -2023,7 +2036,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		p_stmt_sep(p, Kind.RBrace)
 	}
 	expect(p, Kind.RBrace)
-	return StructDecl(name, fields, p.path, kw.line, kw.col)
+	return StructDecl(name, fields, is_pub, p.path, kw.line, kw.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -4014,7 +4027,7 @@ fn fstr_hole(mut &p: Parser, t: Token, hole: str) -> Expr {
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
 	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
 	# enclosing tree, which is measured as one whole, so the hole is not a root.
-	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth)
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

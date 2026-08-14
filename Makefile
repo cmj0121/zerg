@@ -477,7 +477,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -574,6 +574,9 @@ cache-key-check:                # the build cache names the compiler that filled
 
 error-codes-check:              # every error code is reported once, asserted, and listed
 	./scripts/error-codes-check.sh
+
+seed-gaps:                      # the seed's gap list says the same thing in both languages
+	./scripts/seed-gaps-check.sh
 
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build

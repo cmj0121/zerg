@@ -384,8 +384,9 @@ rejected at the field's own declaration (`E482`), naming the field.
 > with the field's place.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
-and, given a `mut` binding, writable; a private field is neither (**[deviation]** — access across a
-module boundary is not yet checked; see [Modules, Packages & Programs](../runtime/package.md)). There is
+and, given a `mut` binding, writable; a private field is neither, and naming one from another module is
+a compile error in both directions, reported with a place (see
+[Modules, Packages & Programs](../runtime/package.md)). There is
 no separate "public read, private write" axis; finer control is expressed with methods.
 
 Copy-by-value reframes what a writable `pub` field means: writing one only ever changes the holder's

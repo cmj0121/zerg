@@ -194,6 +194,149 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
 
+# chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
+# third caller of the first because what it reads is a different table: a function's row
+# carries its module and its marker (sig_mod / sig_pub), and a type's carries them in the
+# type registry (tk_mod / tk_pub). Everything else is the same rule, and is deliberately
+# spelled the same way — `pub` is quiet, own module is quiet, an unknown module on either
+# side is quiet.
+#
+# The SEED IS THE ORACLE for this one. It has refused `lib.Secret` from outside since it was
+# written (`resolveTypeRef`, src/bootstrap/internal/sema/typeref.go) with the sentence this
+# borrows, and only the shipping compiler lost the rule on the way to self-hosting — the
+# fourth time that has happened. What is NOT borrowed is the seed's scope: it refuses only
+# the qualified spelling, because it never flattens a type into the importer's namespace at
+# all, so a BARE `Secret` there is an unknown type rather than a private one. This compiler
+# does flatten, so the bare spelling is exactly the hole and is what this covers.
+fn chk_ty_visible(mut &em: Emitter, nm: str) {
+	return if c_ty_pub(em, nm)
+
+	decl_mod := c_ty_mod(em, nm)
+	return if decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+
+	return if here == decl_mod
+	return if here == ""
+
+	chk_at(em, "E508", f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
+}
+
+# chk_ty_exported is the OTHER sentence, and it is not the same rule read backwards: "a
+# declaration can never be more visible than the types it names" (docs/runtime/package.md).
+# It fires on the DECLARATION, in the declaring module, where chk_ty_visible fires on a
+# reader outside it — so `pub fn make() -> Secret` beside a module-private `Secret` is a
+# finding even in a program no other module has yet been written for.
+#
+# WHY THE EXPORT AND NOT THE READ IS THE PRIMARY FINDING. Both are reported where both are
+# true, because they are two mistakes in two files and one message cannot point at two
+# places. But the export is the one with a fix available: the module that wrote `pub`
+# decided to hand the type out, and it is the only party that can mark the type `pub` or
+# stop returning it. A dependent reading `s.hidden` can do neither — telling it alone would
+# be reporting a mistake to the one person who cannot correct it. That is the same call
+# `E484` already makes about a `pub mut` global ("the finding lands on the DECLARATION and
+# not on either use").
+#
+# A TYPE PARAMETER never reaches here: the walk asks c_is_type_name first, and a bound name
+# is not a declared type.
+fn chk_ty_exported(mut &em: Emitter, nm: str, site: str, decl_pub: bool) {
+	return if not decl_pub
+	return if c_ty_pub(em, nm)
+
+	# a generated declaration names whatever the expansion put there, and its author wrote
+	# neither half — the same silence chk_visible keeps for one
+	return if c_ty_mod(em, nm) == ""
+
+	chk_at(em, "E509", f"`{nm}` is module-private, and {site} is on a `pub` declaration — a declaration can never be more visible than the types it names, so a dependent could not name this one")
+}
+
+# chk_fld_visible is the field half, and the reason a field needs its own rule is that the
+# type may be perfectly public while the field is not: GRAMMAR#field makes a non-`pub` field
+# module-private and requires it to carry a DEFAULT, precisely so external code can
+# construct the type without naming a value it may not read. `E482` enforced the default and
+# nothing enforced the "may not read" it exists for, so the default was a courtesy and the
+# field was public in every way that mattered.
+#
+# It asks the OWNING TYPE's module, not the reader's guess: a field is declared inside a
+# struct declaration, so the struct's module is the field's, and there is no separate row to
+# get out of step with it.
+fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
+	return if c_fld_pub(em, sname, fname)
+
+	decl_mod := c_ty_mod(em, sname)
+	return if decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+
+	return if here == decl_mod
+	return if here == ""
+
+	chk_at(em, "E510", f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
+}
+
+# chk_ns_bound is NO TRANSITIVITY (docs/runtime/package.md): "importing a package gives you
+# its public surface only, never the packages it imports in turn". The binding an `import`
+# introduces belongs to the MODULE of the file that wrote it — module-grained, because a
+# module's files share one namespace — and this compiler bound them program-wide, so a module
+# the build happened to reach was one every module could name, and `main` importing only
+# `mid` could still write `lib.make()`.
+#
+# THE POINT OF THE RULE IS THE DISTINCTION IT DRAWS, and the trap is that both sides look
+# alike from inside one flattened namespace. `bogus.f()` names nothing anywhere and is an
+# undefined name (E372) — that answer is right and must not become a visibility finding.
+# `lib.f()` where some OTHER module imported `lib` names something real that this module has
+# no right to; reporting THAT as an undefined name would be false, and would send the reader
+# looking for a typo in a name that is spelled correctly. So the namespace question answers
+# three ways, and this is the third.
+#
+# It is asked at the three places that REPORT about a qualified name — the namespaced call,
+# the member read, and the `spawn` / `defer` callee — and not inside c_ns_kind, which
+# decides and stays silent so that inference (c_field_ty_of) can ask the same question
+# without a rule firing once per walk. That is the arrangement c_ns_kind was built with, and
+# a fourth NsKind would have moved the reporting into it.
+fn chk_ns_bound(mut &em: Emitter, ns: str) {
+	return if c_ns_bound_in(em, ns, c_mod_of(em.at_path))
+
+	chk_at(em, "E507", f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
+}
+
+# chk_ty_quals is the SAME RULE AT A TYPE POSITION, and it is a separate pass for one reason:
+# a type position has no qualifier left to ask about by the time anything is emitted.
+# parse_base_type resolves `lib.Counter` to `Counter` — correctly, since every module
+# flattens into one scope here — so `c: lib.Counter` and `fn take(c: lib.Counter)` reached
+# the emitter with the `lib.` gone, and the rule that was asked at the three EXPRESSION
+# paths had nothing to be asked about at the four declaration ones. Four silent positions
+# against three loud ones, for one rule.
+#
+# What the parser records instead is that a qualifier was TYPED, and where (File.ty_quals),
+# which is a fact about the text and inside its contract. This asks the checker's half of it.
+#
+# It runs over the WHOLE program, like every other declaration pass here: a qualifier carries
+# its own path, so the module doing the writing is the entry's own — and an imported module's
+# qualifiers have to be judged even when only one unit is emitted, which is the `--emit lib`
+# lesson c_check_named_types carries in full.
+# THE INVENTED QUALIFIER IS NOT THIS RULE'S, and this is the one path where saying so takes
+# a guard. The three expression paths reach chk_ns_bound only once c_ns_kind has answered
+# NsModule, so by then the name is known to be a real namespace and the only open question
+# is whose. A qualifier written in a TYPE position has had no such question asked about it —
+# the parser wrote down every one it saw, `bogus` included — so asking c_is_ns first is what
+# keeps `bogus.Counter` from being told that `bogus` "is a module this build compiles",
+# which is false and would send the reader to add an import for a module that does not exist.
+#
+# What a type position does with an unknown qualifier is unchanged: parse_base_type drops it
+# and the last segment is the name, which is the documented flatten. That is a deviation this
+# rule does not close, and pretending otherwise here would be worse than leaving it named.
+fn chk_ty_quals(mut &em: Emitter, f: File) {
+	for q in f.ty_quals {
+		if c_is_ns(em, q.ns) {
+			em.at_path = q.path
+			em.at_line = q.line
+			em.at_col = q.col
+			chk_ns_bound(em, q.ns)
+		}
+	}
+}
+
 # chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
 # is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
 # unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust
@@ -2229,6 +2372,14 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 		return
 	}
 
+	# and the annotation has to name a type THIS MODULE MAY WRITE. It is asked here, off the
+	# name the sentence above already resolved, rather than by a second walk of the type: an
+	# annotation is a value-position type name, which c_decl_sites does not list, and this is
+	# where the one that exists is already in hand.
+	if nm != "" {
+		chk_ty_visible(em, nm)
+	}
+
 	got := c_infer(em, ival)
 
 	if not chk_fits_expr(em, declared, got, ival) {
@@ -2422,7 +2573,7 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 # `pos` arrives 1-based, which is chk_arg_says' convention; the field table is 0-based. A
 # struct nothing registered has no name to give, and then this falls back to the number
 # rather than printing an empty one.
-pub fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
+fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
 	row := c_struct_field_row(em, sname, pos - 1)
 	return f"field {strconv.to_string(pos, 10)} of `{sname}`" if row < 0
 

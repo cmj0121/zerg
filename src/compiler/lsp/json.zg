@@ -34,7 +34,7 @@ struct JField {
 # is genuinely fatal, the caller asks `jhas` and says so itself.
 
 # jget is the value at `key`, or `JNull`.
-pub fn jget(v: JVal, key: str) -> JVal {
+fn jget(v: JVal, key: str) -> JVal {
 	return match v {
 		JVal.JObj(fs) => jfield(fs, key)
 		_             => JVal.JNull
@@ -50,43 +50,43 @@ fn jfield(fs: list[JField], key: str) -> JVal {
 
 # jat walks a path of keys — `jat(msg, "params", "textDocument", "uri")` — which is what
 # every LSP request needs and what three nested `jget`s per handler would otherwise be.
-pub fn jat(v: JVal, a: str, b: str) -> JVal {
+fn jat(v: JVal, a: str, b: str) -> JVal {
 	return jget(jget(v, a), b)
 }
 
-pub fn jat3(v: JVal, a: str, b: str, c: str) -> JVal {
+fn jat3(v: JVal, a: str, b: str, c: str) -> JVal {
 	return jget(jat(v, a, b), c)
 }
 
-pub fn jhas(v: JVal, key: str) -> bool {
+fn jhas(v: JVal, key: str) -> bool {
 	return match jget(v, key) {
 		JVal.JNull => false
 		_          => true
 	}
 }
 
-pub fn jstr(v: JVal) -> str {
+fn jstr(v: JVal) -> str {
 	return match v {
 		JVal.JStr(s) => s
 		_            => ""
 	}
 }
 
-pub fn jint(v: JVal) -> int {
+fn jint(v: JVal) -> int {
 	return match v {
 		JVal.JInt(n) => n
 		_            => 0
 	}
 }
 
-pub fn jarr(v: JVal) -> list[JVal] {
+fn jarr(v: JVal) -> list[JVal] {
 	return match v {
 		JVal.JArr(xs) => xs
 		_             => []
 	}
 }
 
-pub fn jis_null(v: JVal) -> bool {
+fn jis_null(v: JVal) -> bool {
 	return match v {
 		JVal.JNull => true
 		_          => false
@@ -101,54 +101,46 @@ pub fn jis_null(v: JVal) -> bool {
 # in. They are also what keeps the server's reply-building readable: `jo_str(fs, "id", x)`
 # beside `fs.append(JField("id", JStr(x)))`.
 
-pub fn jnull() -> JVal {
+fn jnull() -> JVal {
 	return JVal.JNull
 }
 
-pub fn jbool_of(b: bool) -> JVal {
-	return JVal.JBool(b)
-}
-
-pub fn jint_of(n: int) -> JVal {
-	return JVal.JInt(n)
-}
-
-pub fn jstr_of(s: str) -> JVal {
+fn jstr_of(s: str) -> JVal {
 	return JVal.JStr(s)
 }
 
-pub fn jarr_of(xs: list[JVal]) -> JVal {
+fn jarr_of(xs: list[JVal]) -> JVal {
 	return JVal.JArr(xs)
 }
 
-pub fn jobj_of(fs: list[JField]) -> JVal {
+fn jobj_of(fs: list[JField]) -> JVal {
 	return JVal.JObj(fs)
 }
 
-pub fn jfields() -> list[JField] {
+fn jfields() -> list[JField] {
 	mut fs: list[JField] = []
 	return fs
 }
 
-pub fn jput(mut &fs: list[JField], key: str, v: JVal) {
+fn jput(mut &fs: list[JField], key: str, v: JVal) {
 	fs.append(JField(key, v))
 }
 
-pub fn jput_str(mut &fs: list[JField], key: str, s: str) {
+fn jput_str(mut &fs: list[JField], key: str, s: str) {
 	fs.append(JField(key, JVal.JStr(s)))
 }
 
-pub fn jput_int(mut &fs: list[JField], key: str, n: int) {
+fn jput_int(mut &fs: list[JField], key: str, n: int) {
 	fs.append(JField(key, JVal.JInt(n)))
 }
 
-pub fn jput_bool(mut &fs: list[JField], key: str, b: bool) {
+fn jput_bool(mut &fs: list[JField], key: str, b: bool) {
 	fs.append(JField(key, JVal.JBool(b)))
 }
 
 # --- writing ------------------------------------------------------------------------------
 
-pub fn json_write(v: JVal) -> str {
+fn json_write(v: JVal) -> str {
 	mut out: list[byte] = []
 	jw(v, out)
 	return str(out)
@@ -258,7 +250,7 @@ fn jw_hex(n: int) -> byte {
 # does not parse is not a request that can be answered — there is no id to answer it with —
 # so the server catches the abort, logs it, and reads the next frame.
 
-pub fn json_parse(s: str) -> JVal {
+fn json_parse(s: str) -> JVal {
 	b := bytearray(s)
 	mut at: list[int] = []
 	at.append(0)

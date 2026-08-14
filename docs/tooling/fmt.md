@@ -923,6 +923,10 @@ shipping compiler rather than a part of it (the line
 | `E504` | cannot send on a receive-only `…`                                                           |
 | `E505` | cannot close a receive-only channel `…`                                                     |
 | `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
+| `E507` | `…` is a module this build compiles and this module did not import                          |
+| `E508` | `…` is not a public type of module `…`                                                      |
+| `E509` | `…` is module-private, and … is on a `pub` declaration                                      |
+| `E510` | `…` is not a public field of `…`, which module `…` declared                                 |
 | `E601` | `…` needs a name, and `…` is not one                                                        |
 | `E602` | a `<-` prefix is a channel direction: only `<-chan[T]` is a type                            |
 | `E603` | `mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`     |

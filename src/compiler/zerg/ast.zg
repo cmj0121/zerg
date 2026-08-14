@@ -394,6 +394,15 @@ pub struct FnDecl {
 	# The flag changes nothing about a normal build: the function is type-checked and emitted
 	# like any other, and nothing calls it. What calls it is the driver `zerg test` generates.
 	pub is_test: bool
+
+	# is_fixture is whether this function was declared under `#[fixture]` — the decorator that
+	# marks a function `zerg test` BUILDS for the tests that name it (docs/runtime/package.md).
+	# It rides here for every reason `is_test` does, and it is a SECOND flag rather than one
+	# field holding which of the two: a `#[test]` and a `#[fixture]` are different declarations
+	# that the same discovery walk reads, and an item takes one decorator (E613), so nothing
+	# can ever be both — a single field would encode that fact a second time, where it could
+	# drift from the rule that enforces it.
+	pub is_fixture: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -1302,6 +1311,39 @@ fn ty_tuple_elems(t: Ty) -> list[Ty] {
 		Ty.TTuple(es) => es
 		_             => []
 	}
+}
+
+# ty_fn1_arg is the type a one-parameter, result-less function type takes — the spelling of
+# `T` in `fn (T)` — and "" for every other type, a `fn` of another arity included.
+#
+# It is here rather than in `zerg test` because it answers a question about a TYPE, and the
+# runner is not the place a type is taken apart. What the runner does with the answer is its
+# own: a `#[fixture]`'s continuation parameter is identified by this shape, and the type it
+# takes is what that fixture PRODUCES — so this one function is what makes `use: fn (Conn)`
+# both the continuation and the declaration of the value the tests receive.
+#
+# A NAME AND NOT A `Ty`, because the only thing asked of the answer is whether it is the same
+# type a test's parameter was declared with, and `ty_name` is what both sides are compared by
+# everywhere else in the toolchain.
+pub fn ty_fn1_arg(t: Ty) -> str {
+	return match t {
+		Ty.TFn(ps, r) => fn1_arg_of(ps, r)
+		_             => ""
+	}
+}
+
+fn fn1_arg_of(ps: list[Ty], r: Ty) -> str {
+	return "" if ps.len() != 1
+
+	# a result makes it something other than a continuation: `fn(Conn) -> int` is a function
+	# whose value somebody wants, and a fixture has no caller to hand one to
+	is_void := match r {
+		Ty.TVoid => true
+		_        => false
+	}
+	return "" if not is_void
+
+	return ty_name(ps[0])
 }
 
 fn ty_is_chan(t: Ty) -> bool {

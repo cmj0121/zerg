@@ -2927,7 +2927,10 @@ fn parse_stmt_node(mut &p: Parser) -> Stmt {
 		# is defined as (`if c { raise e }`), so the emitter needs to know nothing about it.
 		return parse_jump_guard(p, Stmt.SRaise(e, has_cause, cause))
 	}
+
+	return parse_assert(p) if k == Kind.Assert
 	return parse_return(p) if k == Kind.Return
+
 	if k == Kind.Break {
 		p_advance(p)
 		return parse_jump_guard(p, Stmt.SBreak)
@@ -3031,6 +3034,247 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 	body.append(jump)
 	mut none: list[Stmt] = []
 	return Stmt.SIf(parse_expr(p), body, false, none)
+}
+
+# --- `assert`, and the message the compiler writes for it ----------------------------------
+#
+# `assert cond` (GRAMMAR#assert-stmt) is a raise wearing a claim: it raises AssertionError
+# when `cond` is false, with a message nobody had to write. The whole of what a function
+# could say was "assertion failed" — `testing.assert_eq` did better only by naming its two
+# values, and neither could say WHERE, because Zerg has no `__FILE__` and no caller
+# attribution: a function does not know where it was called from. A keyword does.
+#
+# THE LEAVES ARE BOUND ONCE, BEFORE THE TEST, and that is the whole reason this is a
+# statement-level desugar rather than an expression rewrite. The message names the operands,
+# so rendering them from the condition a second time would make
+#
+#     assert next(it) == 3
+#
+# advance the iterator twice and print a value the test never saw — a silently wrong answer,
+# which is the one thing this compiler may not produce. So each operand goes into a
+# temporary of its own first, and the condition tests the temporaries.
+#
+# ONLY A COMPARISON COMES APART, NEVER A CALL. `assert contains(xs, 3)` reports its source
+# text and no values: taking its arguments apart would hand the message a `list` to render,
+# and a composite has no rendering here (E417 / E449). A comparison cannot reach that hole
+# from the same direction — a container has no `==` either (E445) — so the two holes very
+# nearly line up. NEARLY: a `#[derive(Eq)]` struct compares and does NOT render, so
+# `assert p == q` over one is E449 against a program that is otherwise fine. That is a hole
+# `testing.assert_eq` already had for the same reason — its own `f"{a} != {b}"` is E449
+# there, reported inside src/stdlib/testing.zg — and what changes here is only that the
+# diagnostic now points at the line the reader wrote. Closing it needs a structural Display,
+# which is a language feature and not this form's to invent.
+#
+# THE VALUES ARE INTERPOLATED, NEVER `str()`-ed. The two spellings are one rendering in this
+# compiler, and they are NOT one in the seed: `str(x)` over a type parameter is _cannot build
+# a str from T_ there, because the seed asks at the declaration, while an f-string hole defers
+# the rendering to lowering and survives substitution (src/bootstrap/README.md says so at
+# length). What is built below is the f-string's own lowering — an EConv to `str`, which is
+# what fstr_hole produces — and NOT an ECall to `str`. Rewriting it as the "simpler" call
+# would break every assert inside a generic function under the seed, and no gate would see it.
+#
+# A LEAF IS NEVER LIFTED ACROSS A SHORT-CIRCUITING OPERATOR. `assert p != nil and p.x == 1`
+# would crash in the lift, before the test that guards it. So `and` SPLITS into one assert
+# per conjunct — which keeps the evaluation order and count exactly, and says which half
+# failed — and under `or` / `??` only the first conjunct is bound, since it is the only
+# operand the language promises to evaluate.
+
+# AClaim is one claim an `assert` makes, as token indices into the file's own stream: the
+# span it was written as, where its comparison operator is (-1 for none), and where that
+# comparison ENDS — which is the span's end unless a short-circuiting tail follows it.
+struct AClaim {
+	pub lo: int
+	pub hi: int
+	pub op: int
+	pub end: int
+}
+
+# ACond is one claim under construction: the condition being rebuilt over temporaries, the
+# bindings those temporaries are, and — parallel — the source text of each operand bound and
+# the name it went to, which is what the message reads back.
+struct ACond {
+	pub toks: list[Token]
+	pub pre: list[Stmt]
+	pub texts: list[str]
+	pub names: list[str]
+}
+
+fn parse_assert(mut &p: Parser) -> Stmt {
+	at := cur(p)
+	p_advance(p)
+
+	# THE CONDITION IS PARSED HERE, by the real parser at the real position, and the tree is
+	# thrown away. What it is for is its DIAGNOSTICS and its END: everything below works from
+	# token spans, and a malformed condition reported out of a scratch parser would carry a
+	# position from a token list that is not the file.
+	lo := p.pos
+	parse_expr(p)
+	hi := p.pos
+
+	mut out: list[Stmt] = []
+	for c in p_assert_claims(p, lo, hi) {
+		p_assert_claim(p, at, c, out)
+	}
+	return Stmt.SAssert(out)
+}
+
+# p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
+# claim for anything else.
+#
+# "Anything else" is what the short-circuit rule comes to. If the chain does not reach the
+# end of the condition, what stopped it is an `or` or a `??`, and only the FIRST conjunct is
+# an operand the language promises to evaluate — so the claim covers the whole condition and
+# takes the first conjunct's decomposition, leaving everything after it where it was written.
+fn p_assert_claims(mut &p: Parser, lo: int, hi: int) -> list[AClaim] {
+	mut sp := Parser(p.toks, lo, p.impl_ty, p.path, p.depth, p.edepth, [])
+	mut out: list[AClaim] = []
+	mut a := lo
+	for true {
+		op := p_assert_cmp(sp)
+		out.append(AClaim(a, sp.pos, op, sp.pos))
+		break if not p_at(sp, Kind.And)
+		p_advance(sp)
+		a = sp.pos
+	}
+	return out if sp.pos == hi
+
+	mut one: list[AClaim] = []
+	one.append(AClaim(lo, hi, out[0].op, out[0].end))
+	return one
+}
+
+# p_assert_cmp reads one cmp-expr and answers the index of its comparison operator, or -1.
+#
+# It runs parse_range FIRST only to see where the left operand stops, then REWINDS and lets
+# parse_cmp decide the span. That is why there is no second copy of the comparison level
+# here: `is` takes a name and `in` takes a set, both sit at this level, and neither comes
+# apart — parse_cmp already knows all of that, and what this adds is the one thing an Expr
+# cannot carry, which is where the operator was written.
+fn p_assert_cmp(mut &sp: Parser) -> int {
+	start := sp.pos
+	parse_range(sp)
+	op := sp.pos
+	found := is_cmp_op(cur_kind(sp))
+	sp.pos = start
+	parse_cmp(sp)
+
+	return op if found
+	return -1
+}
+
+# p_assert_claim writes the statements one claim IS, onto the end of `out`.
+fn p_assert_claim(mut &p: Parser, at: Token, c: AClaim, mut &out: list[Stmt]) {
+	head := p.toks[c.lo]
+	mut cond := ACond([], [], [], [])
+
+	if c.op >= 0 {
+		p_assert_side(p, c.lo, c.op, f"zga_l{head.line}c{head.col}", cond)
+		cond.toks.append(p.toks[c.op])
+		p_assert_side(p, c.op + 1, c.end, f"zga_r{head.line}c{head.col}", cond)
+		p_assert_copy(p, c.end, c.hi, cond.toks)
+	} else {
+		p_assert_copy(p, c.lo, c.hi, cond.toks)
+	}
+
+	for s in cond.pre {
+		out.append(s)
+	}
+
+	# `raise AssertionError(msg) if not (cond)` — the postfix guard on a raise, written as the
+	# `if` block it is defined as, which is what parse_jump_guard would have made of it
+	mut body: list[Stmt] = []
+	mut none: list[Stmt] = []
+	mut args: list[Expr] = []
+	args.append(p_assert_msg(p, at, c, cond))
+	body.append(Stmt.SRaise(Expr.ECall("AssertionError", args, []), false, Expr.ENil))
+	out.append(Stmt.SIf(Expr.EUnary("not", p_assert_parse(p, cond.toks)), body, false, none))
+}
+
+# p_assert_side puts one operand of a comparison into a temporary and the temporary into the
+# condition — unless it is a LITERAL, which stays where it was written: `3 = 3` is a line of
+# output that carries nothing, and a binding for it would be one nothing reads.
+fn p_assert_side(mut &p: Parser, lo: int, hi: int, name: str, mut &c: ACond) {
+	if p_assert_is_lit(p.toks, lo, hi) {
+		p_assert_copy(p, lo, hi, c.toks)
+		return
+	}
+	t := p.toks[lo]
+	c.pre.append(Stmt.SLet(name, Ty.TUnknown, false, false, false, p_assert_parse(p, p_assert_span(p, lo, hi))))
+	c.toks.append(Token(Kind.Ident, name, "", t.line, t.col))
+	c.texts.append(fmt_fstr_span(p.toks, lo, hi - 1))
+	c.names.append(name)
+}
+
+# p_assert_msg builds the message: where the claim was written, the claim as it was written,
+# and then one line per operand that went into a temporary.
+#
+# The path is the file's LAST SEGMENT and not the whole of it, and that is what a
+# source-to-source sugar can honestly say: `zerg desugar`'s D104 writes this same message out
+# as text, and the text it writes has to keep meaning the same thing after the file it came
+# from has been copied somewhere else to be built. A basename survives that; a path does not.
+fn p_assert_msg(mut &p: Parser, at: Token, c: AClaim, cond: ACond) -> Expr {
+	line := strconv.to_string(at.line, 10)
+	mut lead := f"{last_segment(p.path)}:{line}  assert {fmt_fstr_span(p.toks, c.lo, c.hi - 1)}"
+	mut m: Expr = Expr.ENil
+	mut have := false
+
+	# THE FOLD IS fstr_expr's, down to fstr_join, and the sameness is the point: what this
+	# builds has to be the tree the f-string spelling of the same message builds, because
+	# `zerg desugar`'s D104 writes that spelling out and the two are held to being one
+	# program. A literal run gathered separately would put an empty `EStr` where the hole
+	# starts, which is the same output and not the same C.
+	mut i := 0
+	for i < cond.names.len() {
+		lead = f"{lead}\n  {cond.texts[i]} = "
+		m = fstr_join(m, have, Expr.EStr(lead))
+		have = true
+		lead = ""
+		m = fstr_join(m, have, Expr.EConv(Ty.TStr, Expr.EIdent(cond.names[i]), "str"))
+		i = i + 1
+	}
+	return fstr_join(m, have, Expr.EStr(lead)) if lead != "" or not have
+	return m
+}
+
+# p_assert_is_lit reports a span that is one literal — or a sign and one literal, since `-1`
+# is how a negative one is written and it says no more than `1` does.
+fn p_assert_is_lit(toks: list[Token], lo: int, hi: int) -> bool {
+	mut at := lo
+	if hi - lo == 2 and (toks[lo].kind == Kind.Minus or toks[lo].kind == Kind.MinusMod) {
+		at = lo + 1
+	} else if hi - lo != 1 {
+		return false
+	}
+	k := toks[at].kind
+
+	return true if k == Kind.Int or k == Kind.Float or k == Kind.Str or k == Kind.RawStr
+	return true if k == Kind.Rune or k == Kind.Byte or k == Kind.FStr
+
+	return k == Kind.True or k == Kind.False or k == Kind.Nil
+}
+
+fn p_assert_copy(mut &p: Parser, lo: int, hi: int, mut &out: list[Token]) {
+	mut i := lo
+	for i < hi {
+		out.append(p.toks[i])
+		i = i + 1
+	}
+}
+
+fn p_assert_span(mut &p: Parser, lo: int, hi: int) -> list[Token] {
+	mut out: list[Token] = []
+	p_assert_copy(p, lo, hi, out)
+	return out
+}
+
+# p_assert_parse reads a token run as one expression. It is fstr_hole's mechanism — a parser
+# of its own over tokens that are not the file's — and it inherits the depth budgets for that
+# one's reason: what it parses is spliced into the enclosing tree and measured as part of it.
+fn p_assert_parse(mut &p: Parser, toks: list[Token]) -> Expr {
+	mut ts := toks
+	ts.append(Token(Kind.Eof, "", "", 0, 0))
+	mut sp := Parser(ts, 0, p.impl_ty, p.path, p.depth, p.edepth, [])
+	return parse_expr(sp)
 }
 
 # p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
@@ -3966,6 +4210,7 @@ fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
 fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Kind.Print or k == Kind.Raise or k == Kind.Return or k == Kind.Nop
 	return true if k == Kind.Break or k == Kind.Continue or k == Kind.Del or k == Kind.Defer or k == Kind.Close
+	return true if k == Kind.Assert
 
 	return k == Kind.Spawn or k == Kind.Select or k == Kind.For or k == Kind.With
 }

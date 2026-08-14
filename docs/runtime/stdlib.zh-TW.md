@@ -72,11 +72,6 @@ leaf。
 offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**——非 ASCII 位元組原樣通過。空的 `split` 分隔字串、
 或負的 `repeat` 次數，會 raise `ValueError`。
 
-> **[deviation]** 標準函式庫函式拋出的錯誤**不是 taxonomy kind**。`strings`、`strconv` 與 `math` 是以訊息 raise、
-> 而非以某個內建 kind，所以接住的錯誤對 `e is ValueError` 回答 `false`，未接住的則以裸的
-> `strings.repeat: negative count` abort，而不是 [abort 契約](../conformance.zh-TW.md)所定的 `Kind: message`
-> 形狀。`io` 與 `fs` 的函式確實 raise 真正的 `IOError`——這正是為什麼這是純 Zerg 模組的缺口，而不是 runtime 的。
-
 | 函式                                   | 摘要                                       |
 | -------------------------------------- | ------------------------------------------ |
 | `has_prefix(s: str, prefix: str)`      | `s` 是否以 `prefix` 開頭（`-> bool`）      |
@@ -170,7 +165,7 @@ channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它�
 ## `math`
 
 primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算法，絕非綁 libm）。domain 錯誤（如 `sqrt` 負數）
-會 raise，`guard` 可降級。
+會 raise `ValueError`，`guard` 可降級。
 
 | 函式                                  | 摘要                                       |
 | ------------------------------------- | ------------------------------------------ |
@@ -244,7 +239,8 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 ## `testing`
 
 `#[test]` 函式用的斷言輔助。**[not yet]**——目前沒有任何編譯器會產生測試 binary。滿足的斷言是 `nil`；違反的會 `raise`，讓外圍
-`guard` 接住，或帶訊息 abort。
+`guard` 接住，或帶訊息 abort。它 raise 的是**沒有種類**的 `Err`——標準函式庫中唯一如此的模組，而且是刻意的:一次失敗的斷言是
+一個不成立的程式主張，不是函式無法接受的值，內建 taxonomy 沒有對應的種類。
 
 | 函式                                          | 摘要              |
 | --------------------------------------------- | ----------------- |

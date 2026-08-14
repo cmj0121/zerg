@@ -83,12 +83,6 @@ each called as `Kind(msg: str) -> Err`, builds an `Err` of that kind carrying th
 `raise` to abort, or in an `Either` value; test an erased `Err` with `e is IOError`. The set is
 compiler-owned — a program cannot define a new kind this phase. See [Null-safety & Errors](../code/errors.md).
 
-> **[deviation]** The kind survives in the TYPE and is lost in the MESSAGE. `e is IOError` answers correctly
-> on a constructed `Err`, but a `raise ValueError("bad input")` that reaches the top writes only _bad input_
-> to standard error, where the [abort contract](../conformance.md) specifies `Kind: message` — which is the
-> shape a runtime-raised one does use (_IndexError: index out of range_). One kind, two output shapes,
-> depending on who raised it.
-
 ## Raw pointers (`unsafe`)
 
 Legal **only inside an `unsafe` context**. The free functions `addr(x) -> ptr[T]` (the address of an

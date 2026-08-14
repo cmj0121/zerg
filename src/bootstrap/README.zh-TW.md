@@ -84,17 +84,28 @@ cc 對著產生的 C。
 
 以下沒有一項出現在自舉鏈裡；每一項都是**驗證過不存在**，不是假設。以 `zerg0` 於 2026-07-31 量測。
 
-| 形式                                                                  | 那是什麼           |
-| --------------------------------------------------------------------- | ------------------ |
-| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 整章並行           |
-| `map[K, V]`——字面值，以及複製一個                                     | 那個容器           |
-| 當成值用的 **closure literal**                                        | 具名的 `fn` 值可用 |
-| slicing `xs.slice(a, b)` / `xs[a..b]`                                 | 子範圍             |
-| 模組層級 `const`                                                      | 函式外的 binding   |
-| `#[dyn]` dispatch                                                     | 那個 decorator     |
-| `unsafe`、`asm`、`ptr[T]`                                             | 通往裸機的那道門   |
-| command literal `` `git status` ``                                    | 行程代換字面值     |
-| `for k in m` 走訪一張 map                                             | 那個迭代           |
+| 形式                                                                  | 那是什麼                 |
+| --------------------------------------------------------------------- | ------------------------ |
+| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 整章並行                 |
+| `map[K, V]`——字面值，以及複製一個                                     | 那個容器                 |
+| 當成值用的 **closure literal**                                        | 具名的 `fn` 值可用       |
+| slicing `xs.slice(a, b)` / `xs[a..b]`                                 | 子範圍                   |
+| 模組層級 `const`                                                      | 函式外的 binding         |
+| `#[dyn]` dispatch                                                     | 那個 decorator           |
+| `unsafe`、`asm`、`ptr[T]`                                             | 通往裸機的那道門         |
+| command literal `` `git status` ``                                    | 行程代換字面值           |
+| `for k in m` 走訪一張 map                                             | 那個迭代                 |
+| `e in ValueError`——錯誤 taxonomy 的**子樹**測試                       | docs/code/errors 的 `in` |
+
+`e is ValueError` 種子建得起來，沒有讀法的是 `in`。這兩個是不同的關係（identity 與 subtree，見
+docs/code/errors.zh-TW.md），而只有其中一個在這裡——這件事值得寫下來，因為它決定了一個 corpus 案例
+該怎麼寫：問 `is` 的案例兩個編譯器都能被檢驗，問 `in` 的案例只有 `zerg` 回答得了。有五條 oracle skip
+就架在這一個缺口上（`error_tree`、`err_kind_subtree` 及其同類），見 `test-data/oracle-skips.txt`。
+
+它同時也是一個**用錯句子的拒絕**。`e in ValueError` 對種子而言讀成「對一個叫 `ValueError` 的值做成員
+測試」，於是那個名字以一般運算式解析、答案是 `undefined name "ValueError"`——拼錯字會拿到的那句話，
+對這個運算子什麼也沒說。第二層說的是**指名拒絕**，而這不是；記在這裡而不修掉，是因為自舉源碼從來
+不問這個問題。
 
 其餘語言有的，種子都有：`defer`、`del`、`with`、tuple 與 `t.0`、range 當值與當可迭代對象、optional
 與整組 group-8 運算子、`init()`、`spec` / `impl`（含 provided method）、泛型函式定義、

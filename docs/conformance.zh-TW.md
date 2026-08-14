@@ -182,12 +182,15 @@ module 的用途。
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
 一個沒有 `guard`/`?` 復原的內建 runtime fault（見 [Errors](code/errors.zh-TW.md)）。abort 時 runtime：
 
-1. 把錯誤訊息寫到**標準錯誤**，後接一個換行；
+1. 把描述該錯誤的**一行**寫到**標準錯誤**，後接一個換行；
 2. 執行被展開路徑上待決的 `defer`（與正常 return 路徑用的是同一個 cleanup stack）；並
 3. 以 exit 狀態 **1** 終止行程。
 
-一個內建錯誤的訊息形式為 `Kind: text`（例如 `IndexError: list index out of range`）。確切的 `text` 非 normative；
-taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
+一個 **taxonomy** 錯誤寫出的那一行形式為 `Kind: text`，其中 `text` 是該錯誤的 `message()`——例如
+`IndexError: index out of range`。確切的 `text` 非 normative；`Kind:` 前綴則是。它屬於**那一行**、不屬於訊息：
+`message()` 只回答 `text` 本身，而前綴會對**任何**被 raise 的 taxonomy `Err` 渲染——程式自己寫的
+`raise ValueError("bad input")` 與 runtime 自己引發的 fault 報出同一種形狀。**不帶**種類的錯誤（一個裸的
+`raise "…"` 建出來的那種）則只寫它的訊息。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
 > **[deviation]** stack 溢位——coroutine 越過其 guard page，或 `main` 越過其原生 stack——如今會帶著名字死去：
 > runtime 的 fault handler 將 `StackOverflowError: stack overflow` 寫到標準錯誤、並以 exit 狀態 **1** 終止，

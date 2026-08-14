@@ -106,8 +106,22 @@ Measured against `zerg0` on 2026-07-31.
 | `unsafe`, `asm`, `ptr[T]`                                              | the bare-metal door              |
 | command literals `` `git status` ``                                    | the process-substitution literal |
 | `for k in m` over a map                                                | the iteration                    |
+| `e in ValueError` — the error taxonomy's SUBTREE test                  | the `in` of docs/code/errors.md  |
 
-One entry in this tier is a REFUSAL WITH THE WRONG SENTENCE, kept deliberately: the seed
+`e is ValueError` the seed does build; it is `in` it has no reading for. The two are
+different relations (identity and subtree, docs/code/errors.md) and only one of them is
+here, which is worth saying because it decides how a corpus case is written: a case asking
+`is` is one both compilers can be held to, and a case asking `in` is one only `zerg` answers.
+Five oracle skips rest on this single gap (`error_tree`, `err_kind_subtree`, and their
+kin) — see `test-data/oracle-skips.txt`.
+
+It is also a SECOND refusal with the wrong sentence. `e in ValueError` reads to the seed as
+a membership test against a value called `ValueError`, so the name resolves as an ordinary
+expression and the answer is `undefined name "ValueError"` — the message a misspelling gets,
+naming nothing about the operator. Tier 2 says refused BY NAME and this is not; it is
+recorded here rather than fixed because the self-host source never asks the question.
+
+One other entry in this tier is a REFUSAL WITH THE WRONG SENTENCE, kept deliberately: the seed
 rejects a **same-block re-declaration** (`x := 1` then `x := 2`) as `"x" is already declared
 in this scope`. The language permits it — docs/core/memory.md specifies declare-del-declare,
 and `zerg` builds it (the corpus case redeclare_same_block) — so this is the seed being

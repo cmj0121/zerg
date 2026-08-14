@@ -57,15 +57,20 @@ func TestStrconvRoundTrip(t *testing.T) {
 
 // TestStrconvAborts pins the loud ValueError paths: a base out of range, a digit not
 // valid for the base, an empty string, and a non-bool.
+//
+// The `ValueError: ` prefix is part of every want, because it is the part that was not
+// true: this test named the kind and asserted only the text, and the raises threw a bare
+// `str` — so each of these aborted with a message and no kind at all, and a caught one
+// answered `false` to `e is ValueError`.
 func TestStrconvAborts(t *testing.T) {
 	cases := []struct {
 		src  string
 		want string
 	}{
-		{"fn main() { print strconv.parse_int(\"10\", 40) }", "base out of range"},
-		{"fn main() { print strconv.parse_int(\"1f\", 10) }", "invalid digit for base"},
-		{"fn main() { print strconv.parse_int(\"\", 10) }", "empty string"},
-		{"fn main() { print strconv.parse_bool(\"yes\") }", "not a bool"},
+		{"fn main() { print strconv.parse_int(\"10\", 40) }", "ValueError: strconv: base out of range"},
+		{"fn main() { print strconv.parse_int(\"1f\", 10) }", "ValueError: strconv.parse_int: invalid digit for base"},
+		{"fn main() { print strconv.parse_int(\"\", 10) }", "ValueError: strconv.parse_int: empty string"},
+		{"fn main() { print strconv.parse_bool(\"yes\") }", "ValueError: strconv.parse_bool: not a bool"},
 	}
 	for _, tc := range cases {
 		out := runProgramRTAbort(t, "import \"strconv\"\n"+tc.src+"\n")

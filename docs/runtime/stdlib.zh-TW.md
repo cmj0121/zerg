@@ -57,7 +57,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性 |
 | [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help  |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                 |
-| [`testing`](#testing) | `import "testing"` | `#[test]` 函式用的斷言輔助         |
+| [`testing`](#testing) | `import "testing"` | `#[test]` 要而語言不給的東西       |
 
 ## `io`
 

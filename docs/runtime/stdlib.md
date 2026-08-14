@@ -49,21 +49,21 @@ the form they will take.)
 
 ## Packages
 
-| Package               | Import             | Provides                                         |
-| --------------------- | ------------------ | ------------------------------------------------ |
-| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write |
-| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal        |
-| [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch  |
-| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
-| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser |
-| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base     |
-| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                   |
-| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
-| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
-| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity  |
-| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders |
-| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                |
-| [`testing`](#testing) | `import "testing"` | assertion helpers for `#[test]` functions        |
+| Package               | Import             | Provides                                          |
+| --------------------- | ------------------ | ------------------------------------------------- |
+| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write  |
+| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal         |
+| [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch   |
+| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`            |
+| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
+| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
+| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
+| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
+| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
+| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity   |
+| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders  |
+| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                 |
+| [`testing`](#testing) | `import "testing"` | what a `#[test]` needs that the language does not |
 
 ## `io`
 

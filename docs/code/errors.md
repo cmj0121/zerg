@@ -127,7 +127,7 @@ and which nothing else raises. That exclusivity is the point of giving it a kind
 a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
 **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both** compilers, the
-name not being one of the ten — and the abort carries no distinct reified kind for them, only a generic
+name not being one of the eleven — and the abort carries no distinct reified kind for them, only a generic
 message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right

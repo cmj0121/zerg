@@ -15,6 +15,19 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+/* pthread_getattr_np — the only way glibc names the calling thread's stack bounds,
+ * which zrt_fault_init needs for main's — is a GNU extension a strict `-std=c11`
+ * glibc hides unless _GNU_SOURCE is set. And on macOS, defining _POSIX_C_SOURCE
+ * above NARROWS the default surface, hiding the Darwin `_np` pair that answers the
+ * same question there; _DARWIN_C_SOURCE puts it back. Both must precede every
+ * #include, feature-test macros being read at the first one. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include "zergrt.h"
 
 #if defined(__APPLE__)
@@ -24,6 +37,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +52,167 @@ void zrt_report(const char *msg) {
 		fputs(msg, stderr);
 		fputc('\n', stderr);
 	}
+}
+
+/* --- stack-overflow naming (zrt_fault_*) --------------------------------------
+ *
+ * The one fault the abort contract cannot route through zrt_abort: by the time a
+ * stack overflow is observable, the faulting stack is exhausted — nothing on it can
+ * run, so there is no unwind and the pending `defer`s are skipped, which is the half
+ * of the docs/conformance.md deviation that stays. What is fixed here is the NAME
+ * and the STATUS: the overflow now dies as `StackOverflowError: stack overflow` on
+ * stderr with exit status 1, the shape every other abort has, instead of as a bare
+ * signal the shell reports.
+ *
+ * Overflow-or-not is decided by the fault address, and the two windows are as NARROW
+ * as the two stacks allow, because everything they over-claim is a genuine memory bug
+ * wearing this error's name. A coroutine's stack begins with a real PROT_NONE guard
+ * page, so its window is that page EXACTLY — an overflow's si_addr always lands inside
+ * it, and no slack below it is needed or honest (measured on macOS/arm64 and
+ * Linux/aarch64, with frames from 512B to 1MB: both compilers stack-probe, so not one
+ * of them stepped over the page). Main's native stack has no mapping this process
+ * made, only the OS guard region under the low bound pthread reports, so its window is
+ * the ONE page below that bound — measured to be enough, where zero was not.
+ *
+ * A fault in neither window is passed on rather than reported: the handler puts back
+ * whatever action was installed before this one — a sanitizer's, or the default
+ * disposition — and returns, so the faulting instruction re-fires and the fault dies
+ * as itself, with the diagnostic that handler gives. That chaining is the difference
+ * between an ASan build printing `SEGV on unknown address 0x10` with a stack trace and
+ * printing nothing at all; restoring SIG_DFL instead threw ASan's report away.
+ *
+ * Everything the handler does after deciding is async-signal-safe by construction:
+ * write(2), sigaction(2) and _exit(2) only — all three on POSIX's list — no printf, no
+ * malloc, no unwind. It runs on its own sigaltstack because the normal stack being
+ * unusable is the very case it exists for; without SA_ONSTACK the handler could not
+ * even be entered.
+ *
+ * The state the handler reads is `volatile`: C11 7.14.1.1p5 promises nothing about any
+ * other object a handler touches. */
+
+/* the guard PAGE of the coroutine stack THIS thread is running user code on right now;
+ * 0 while it runs on its own native stack. Set by the scheduler around every switch. */
+static ZRT_THREAD_LOCAL volatile uintptr_t t_guard_lo;
+static ZRT_THREAD_LOCAL volatile uintptr_t t_guard_hi;
+
+/* main's native stack low bound, recorded at entry; 0 = unknown (a platform with no
+ * stack query — an overflow there dies by signal, as before). THREAD-LOCAL, so it is
+ * consulted only on the thread it describes: a worker whose fault arrives while it is
+ * between coroutines has no bounds to compare against, and comparing it against MAIN's
+ * would be a cross-thread guess that could only widen the mislabel. */
+static ZRT_THREAD_LOCAL volatile uintptr_t t_main_stack_lo;
+
+/* the host page size, read once at init — sysconf is not async-signal-safe, so the
+ * handler may not ask. */
+static volatile uintptr_t g_page;
+
+static bool fault_is_overflow(uintptr_t addr) {
+	if (t_guard_lo != 0) {
+		/* on a coroutine stack: the guard page is the whole tripwire, exactly */
+		return addr >= t_guard_lo && addr < t_guard_hi;
+	}
+	if (t_main_stack_lo != 0) {
+		/* main's native stack: an overflow faults in the page below the low bound */
+		return addr >= t_main_stack_lo - g_page && addr < t_main_stack_lo;
+	}
+	return false;
+}
+
+/* the actions installed before this runtime's, so a fault this handler does not claim
+ * goes back to whoever had the signal first. Written once, under g_fault_installed. */
+static struct sigaction g_old_segv;
+static struct sigaction g_old_bus;
+static bool g_fault_installed;
+
+static void fault_handler(int sig, siginfo_t *si, void *ctx) {
+	(void)ctx;
+	if (si != NULL && fault_is_overflow((uintptr_t)si->si_addr)) {
+		static const char msg[] = "StackOverflowError: stack overflow\n";
+		size_t off = 0;
+		while (off < sizeof(msg) - 1) {
+			ssize_t w = write(2, msg + off, sizeof(msg) - 1 - off);
+			if (w <= 0) {
+				break;
+			}
+			off += (size_t)w;
+		}
+		_exit(1);
+	}
+	/* not a stack overflow: hand the signal back to the action that was there before
+	 * and return, so the faulting instruction re-fires into it. */
+	{
+		const struct sigaction *old = (sig == SIGBUS) ? &g_old_bus : &g_old_segv;
+		(void)sigaction(sig, old, NULL);
+	}
+}
+
+void zrt_fault_thread_init(void) {
+#ifdef ZRT_ASAN
+	/* ASan already gave every thread an alternate signal stack, and it UNMAPS
+	 * whatever sigaltstack answers at thread exit, assuming its own mapping is
+	 * still installed. Replacing it with this TLS array made that munmap fail and
+	 * ASan abort the teardown — so under ASan, keep ASan's altstack: the handler
+	 * above is SA_ONSTACK and runs on it just the same. */
+#else
+	/* the normal stack is exactly what is exhausted when this handler matters, so
+	 * the handler needs its own ground. Static and thread-local: no allocation,
+	 * one per thread, alive as long as the thread — nothing to free, ever. 32KB is
+	 * the conventional SIGSTKSZ ceiling, spelled as a constant because glibc's
+	 * SIGSTKSZ has been a sysconf call since 2.34 and cannot size an array. This
+	 * handler's own needs are a few hundred bytes. */
+	static ZRT_THREAD_LOCAL char altstack[32 * 1024];
+	stack_t ss;
+	ss.ss_sp = altstack;
+	ss.ss_size = sizeof(altstack);
+	ss.ss_flags = 0;
+	(void)sigaltstack(&ss, NULL);
+#endif
+}
+
+void zrt_fault_init(void) {
+	long pg = sysconf(_SC_PAGESIZE);
+	g_page = (pg > 0) ? (uintptr_t)pg : 4096;
+	zrt_fault_thread_init();
+#if defined(__APPLE__)
+	{
+		pthread_t self = pthread_self();
+		uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self);
+		t_main_stack_lo = hi - (uintptr_t)pthread_get_stacksize_np(self);
+	}
+#elif defined(__linux__)
+	{
+		pthread_attr_t attr;
+		if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+			void *lo = NULL;
+			size_t size = 0;
+			if (pthread_attr_getstack(&attr, &lo, &size) == 0) {
+				t_main_stack_lo = (uintptr_t)lo;
+			}
+			(void)pthread_attr_destroy(&attr);
+		}
+	}
+#endif
+	/* ONCE, and the guard is not a nicety: there are seven callers (six entry.c
+	 * shims and sched_init), and a second install would save THIS handler as the
+	 * old one — after which an unclaimed fault hands the signal to itself and
+	 * ping-pongs forever instead of dying. */
+	if (!g_fault_installed) {
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_sigaction = fault_handler;
+		sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+		sigemptyset(&sa.sa_mask);
+		g_fault_installed = true;
+		(void)sigaction(SIGSEGV, &sa, &g_old_segv);
+		(void)sigaction(SIGBUS, &sa, &g_old_bus);
+	}
+}
+
+void zrt_fault_stack_set(void *base, size_t guard_len) {
+	/* hi BEFORE lo: lo != 0 is what arms the coroutine window, so writing it last
+	 * means the handler never reads a live lo against a stale hi. */
+	t_guard_hi = (uintptr_t)base + guard_len;
+	t_guard_lo = (uintptr_t)base;
 }
 
 long zrt_write(int fd, const uint8_t *buf, size_t n) {

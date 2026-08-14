@@ -275,12 +275,17 @@ pub struct Emitter {
 	# ns_names is THE SET OF NAMESPACE BINDINGS this program's imports introduce: the names a
 	# qualified expression may write to the left of a `.`.
 	#
-	# A `ns_mods` column stood beside it, holding each import's module path, and its comment
-	# said the pair answered two questions — "is this a namespace" and "which module is it".
-	# Only the first was ever asked. Nothing read the path column, because a module flattens
-	# into the one program-wide space and every reader of a qualified name goes on to look
-	# the MEMBER up rather than the module. A column nobody reads is not an answer waiting to
-	# be used; it is a claim in a comment that no code makes.
+	# A `ns_mods` column stood beside it once, holding each import's module PATH, and it was
+	# deleted as unread: a module flattens into the one program-wide space, so every reader
+	# of a qualified name goes on to look the MEMBER up rather than the module.
+	#
+	# ns_at is a different column and answers a different question — not "which module does
+	# this binding name" but "which module WROTE it". That is the one fact no transitivity
+	# needs (docs/runtime/package.md: "importing a package gives you its public surface only,
+	# never the packages it imports in turn"), and dropping it is exactly why the rule could
+	# not be stated: with only the name set, "is `lib` a namespace" is a question about the
+	# whole build, and a module that never imported `lib` got the same yes as the one that
+	# did.
 	#
 	# The name is the `as` alias when there is one and the path's last segment otherwise
 	# (GRAMMAR#import-spec) — the parser decides that, since it is a fact about the surface.
@@ -291,6 +296,13 @@ pub struct Emitter {
 	# anywhere got the advice written for `lib.LIMIT`, because the guard was "nothing else
 	# answers to this name" and a misspelling answers to nothing either.
 	pub ns_names: list[str]
+
+	# ns_at is the MODULE THAT WROTE each binding, row for row beside ns_names — the directory
+	# of the importing file, which is what `ImportDecl.at` carries and `c_mod_of` reduces. A
+	# name imported by two modules gets two rows: the set is a set of PAIRS now, since the
+	# same namespace legitimately belongs to several modules and dropping the duplicate would
+	# drop one of them.
+	pub ns_at: list[str]
 
 	# lv_write is set while the ASSIGNMENT TARGET of a statement is being lowered, and it
 	# is what tells `xs[0] = 9` from `x := xs[0]`. A list's buffer is copy-on-write, so a
@@ -3951,18 +3963,44 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 # the ordinary case, and it costs nothing to keep the set a set.
 fn c_build_namespaces(mut &em: Emitter, f: File) {
 	for im in f.imports {
-		if not c_is_ns(em, im.name) {
+		# `im.at` is the IMPORTING FILE, so its directory is the module that wrote the
+		# binding — the fact the transitivity rule is entirely made of. A pair already
+		# recorded is dropped, which is the ordinary case of one module importing the same
+		# thing from two of its files.
+		here := c_mod_of(im.at)
+		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
+			em.ns_at.append(here)
 		}
 	}
 }
 
-# c_is_ns is whether an import bound this name as a namespace. It answered a ROW INDEX once,
-# for a table whose second column nothing read — and both of its callers only ever compared
-# that index against zero, so the index was a shape the question did not have.
+# c_is_ns is whether an import ANYWHERE IN THE BUILD bound this name as a namespace. It is
+# still the whole-build question, and it is still the right one to ask first: it is what
+# tells a real module from a typo, and that distinction does not depend on who is asking.
 fn c_is_ns(mut &em: Emitter, n: str) -> bool {
 	for nm in em.ns_names {
 		return true if nm == n
+	}
+	return false
+}
+
+# c_ns_bound_in is the SAME QUESTION ASKED BY A MODULE — did THIS module import it. The two
+# are deliberately separate calls rather than one with a flag, because the answers mean
+# different things and the callers act on them differently: `c_is_ns` says the name is not a
+# typo, and this says the module is allowed to write it.
+#
+# An UNKNOWN reader module answers yes. No marker covers the code being emitted before the
+# first statement of the first function, and a rule that guessed there would refuse a
+# program for a reason nothing on the page explains — the silence chk_visible has always
+# kept for the same case.
+fn c_ns_bound_in(mut &em: Emitter, n: str, here: str) -> bool {
+	return true if here == ""
+
+	mut i := 0
+	for i < em.ns_names.len() {
+		return true if em.ns_names[i] == n and em.ns_at[i] == here
+		i = i + 1
 	}
 	return false
 }
@@ -4068,7 +4106,14 @@ fn c_ns_unqualify(mut &em: Emitter, e: Expr) -> Expr {
 # is not one, because the qualifier sits at the ROOT of a `.`-chain and the segment that
 # names the type may be anywhere along it.
 fn c_ns_unqualify_field(mut &em: Emitter, t: Expr, f: str) -> Expr {
-	return Expr.EIdent(f) if c_ns_names_type(em, t, f)
+	if c_ns_names_type(em, t, f) {
+		# THE QUALIFIER IS ABOUT TO BE DROPPED, so this is the last point that knows one was
+		# written. `lib.Colour.Red` names a real module and a real type, and whether THIS
+		# module may write that name is a separate question from whether the name resolves —
+		# the same pairing the call and the member-read paths already ask.
+		chk_ns_bound(em, c_ns_root(t))
+		return Expr.EIdent(f)
+	}
 
 	return Expr.EField(c_ns_unqualify(em, t), f)
 }
@@ -4077,6 +4122,9 @@ fn c_ns_unqualify_field(mut &em: Emitter, t: Expr, f: str) -> Expr {
 # a type name and so becomes the ECall the unqualified spelling parses to.
 fn c_ns_unqualify_meth(mut &em: Emitter, t: Expr, m: str, args: list[Expr]) -> Expr {
 	if c_ns_names_type(em, t, m) {
+		# `lib.Counter("a")` — a CONSTRUCTION through a namespace, the field path's question
+		# one node up
+		chk_ns_bound(em, c_ns_root(t))
 		mut none: list[Ty] = []
 		return Expr.ECall(m, args, none)
 	}
@@ -6702,6 +6750,10 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	# the file had imported.
 	ns := c_ns_kind(em, target)
 	if ns == NsKind.NsModule {
+		# AND WHETHER THIS MODULE IMPORTED IT. A namespace is a real one — that is what
+		# NsModule means — and being real is not the same as being this module's to write.
+		chk_ns_bound(em, c_ns_root(target))
+
 		# A NAMESPACED GENERIC — `testing.assert_eq(1, 1)`. A module's names flatten into
 		# the one program-wide function space, so this IS the free function of that name,
 		# and a template reached this way has to be instantiated exactly as one reached
@@ -10269,6 +10321,9 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 			return Callee("0", [], "")
 		}
 		if ns == NsKind.NsModule {
+			# the same import question the ordinary call asks, at the same point in the path
+			chk_ns_bound(em, c_ns_root(tgt))
+
 			# a NAMESPACED generic, `spawn mod.work(x)` — the same flattening, so the same
 			# instantiation the direct form gets
 			return c_callee_gen(em, c_instantiate(em, m, margs), x) if c_is_generic(em, m)
@@ -10867,6 +10922,10 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 
 	ns := c_ident_name(target)
 	if c_ns_kind(em, target) == NsKind.NsModule {
+		# the same import question the two call paths ask — a member READ crosses the module
+		# boundary exactly as a call does
+		chk_ns_bound(em, c_ns_root(target))
+
 		# `lib.LIMIT` — a module-qualified NAME. The qualifier is the binding an `import`
 		# introduced (c_is_ns), and a module flattens into this unit, so the last segment
 		# IS the name — which is the rule the CALL path has followed since it was written
@@ -12446,7 +12505,11 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
 	mut stmts: list[TopStmt] = []
+	mut ty_quals: list[TyQual] = []
 	for f in fs {
+		for q in f.ty_quals {
+			ty_quals.append(q)
+		}
 		for c in f.consts {
 			consts.append(c)
 		}
@@ -12484,7 +12547,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 			i = i + 1
 		}
 	}
-	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals)
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
@@ -12905,7 +12968,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [])
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -12960,6 +13023,14 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# and what those bindings COLLIDE with, asked of the same whole-program view that built
 	# them: an import binds into the one value namespace, so a name it takes has to be free
 	chk_import_names(em, f, own)
+
+	# AFTER the bindings exist, which is the whole of why this is here and not beside the
+	# other declaration passes above: it asks whether each qualifier names a namespace the
+	# writing module bound, and asked earlier it would read an empty table and refuse every
+	# qualified type in the program. The module qualifiers a TYPE position wrote are carried
+	# on the side (File.ty_quals) because parse_base_type resolves `lib.Counter` to `Counter`
+	# and no Site keeps the `lib.`.
+	chk_ty_quals(em, f)
 
 	# AFTER the tables, not inside the walk that fills them. A default is an expression, so
 	# judging it asks c_infer, and c_infer asks the signature, struct and enum tables — from

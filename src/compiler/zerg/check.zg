@@ -274,6 +274,54 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 	chk_at(em, "E510", f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
 }
 
+# chk_ns_bound is NO TRANSITIVITY (docs/runtime/package.md): "importing a package gives you
+# its public surface only, never the packages it imports in turn". The binding an `import`
+# introduces belongs to the MODULE of the file that wrote it — module-grained, because a
+# module's files share one namespace — and this compiler bound them program-wide, so a module
+# the build happened to reach was one every module could name, and `main` importing only
+# `mid` could still write `lib.make()`.
+#
+# THE POINT OF THE RULE IS THE DISTINCTION IT DRAWS, and the trap is that both sides look
+# alike from inside one flattened namespace. `bogus.f()` names nothing anywhere and is an
+# undefined name (E372) — that answer is right and must not become a visibility finding.
+# `lib.f()` where some OTHER module imported `lib` names something real that this module has
+# no right to; reporting THAT as an undefined name would be false, and would send the reader
+# looking for a typo in a name that is spelled correctly. So the namespace question answers
+# three ways, and this is the third.
+#
+# It is asked at the three places that REPORT about a qualified name — the namespaced call,
+# the member read, and the `spawn` / `defer` callee — and not inside c_ns_kind, which
+# decides and stays silent so that inference (c_field_ty_of) can ask the same question
+# without a rule firing once per walk. That is the arrangement c_ns_kind was built with, and
+# a fourth NsKind would have moved the reporting into it.
+fn chk_ns_bound(mut &em: Emitter, ns: str) {
+	return if c_ns_bound_in(em, ns, c_mod_of(em.at_path))
+
+	chk_at(em, "E507", f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
+}
+
+# THE INVENTED QUALIFIER IS NOT THIS RULE'S, and this is the one path where saying so takes
+# a guard. The three expression paths reach chk_ns_bound only once c_ns_kind has answered
+# NsModule, so by then the name is known to be a real namespace and the only open question
+# is whose. A qualifier written in a TYPE position has had no such question asked about it —
+# the parser wrote down every one it saw, `bogus` included — so asking c_is_ns first is what
+# keeps `bogus.Counter` from being told that `bogus` "is a module this build compiles",
+# which is false and would send the reader to add an import for a module that does not exist.
+#
+# What a type position does with an unknown qualifier is unchanged: parse_base_type drops it
+# and the last segment is the name, which is the documented flatten. That is a deviation this
+# rule does not close, and pretending otherwise here would be worse than leaving it named.
+fn chk_ty_quals(mut &em: Emitter, f: File) {
+	for q in f.ty_quals {
+		if c_is_ns(em, q.ns) {
+			em.at_path = q.path
+			em.at_line = q.line
+			em.at_col = q.col
+			chk_ns_bound(em, q.ns)
+		}
+	}
+}
+
 # chk_unsafe_reachable is GRAMMAR group 12's caller rule. A module-level `unsafe { … }` group
 # is a DECLARATION GROUP, and what it says about a `fn` inside it is that the function is an
 # unsafe fn — "unsafe throughout its body, callable only from unsafe". `unsafe` is a trust

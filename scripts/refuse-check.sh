@@ -718,6 +718,29 @@ struct P {
 fn main() { print 1 }
 EOF
 
+# `#[derive(From)]` IS THE ONE ENTRY IN FUTURE.md WITH A MEASURED DEMAND, and the exact form
+# it is written in there — on an error enum, generating the wrapping `?` needs at a boundary
+# — was pinned by nothing. The case above is a struct and a spec the program declares; this
+# is an enum and a spec nothing declares, which is the other side of E437's sentence and the
+# side a reader following FUTURE.md arrives at. It stops matching the day the derive lands.
+expect "$ZERG" derive-from-on-an-error-enum E437 'cannot derive `From`' <<'EOF'
+struct IoError {
+	pub code: int
+}
+
+struct ParseError {
+	pub code: int
+}
+
+#[derive(From)]
+enum AppError {
+	Io(IoError)
+	Parse(ParseError)
+}
+
+fn main() { print 1 }
+EOF
+
 # A DECORATOR WITH NOTHING UNDER IT AT ALL — the last item in the file. This is the whole of
 # what E208 says, and it used to be said about `#[derive(Eq)] fn main()` as well, where there
 # very much IS a declaration under it: the pending list was only ever drained by a `struct`,
@@ -1182,6 +1205,63 @@ expect "$ZERG" unknown-list-method E444 <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	print xs.slice(0, 2).len()
+}
+EOF
+
+# THE COLLECTION METHODS docs/code/collections.md SPECIFIES AND THIS COMPILER HAS NOT BUILT.
+# E444 and E740 each had one case, and each of those cases named a method the language does
+# not have either — `xs.pop()`, `m.drop(1)` — which is the reject list's question, not this
+# one. So the six methods the chapter names as `[not yet]` were pinned by nothing: every one
+# of them answered correctly, and would have gone on answering correctly if the rule that
+# says so were deleted, because the case that would notice tested a different sentence.
+#
+# THE SENTENCE IS ASSERTED, not just the code, and that is the whole point here: one code
+# covers every method of its container, so the code alone cannot tell `retain` from `pop`.
+# The list below IS the list, and a method that lands stops matching its own line.
+expect "$ZERG" list-retain E444 'the list method `retain`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	xs.retain(fn(v: int) -> bool { return v > 1 })
+	print xs.len()
+}
+EOF
+
+expect "$ZERG" list-filter E444 'the list method `filter`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.filter(fn(v: int) -> bool { return v > 1 }).len()
+}
+EOF
+
+expect "$ZERG" list-insert E444 'the list method `insert`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	xs.insert(0, 9)
+	print xs.len()
+}
+EOF
+
+expect "$ZERG" list-remove E444 'the list method `remove`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	xs.remove(0)
+	print xs.len()
+}
+EOF
+
+expect "$ZERG" map-insert E740 'the map method `insert`' <<'EOF'
+fn main() {
+	m := {1: 2}
+	m.insert(3, 4)
+	print m.len()
+}
+EOF
+
+expect "$ZERG" map-remove E740 'the map method `remove`' <<'EOF'
+fn main() {
+	m := {1: 2}
+	m.remove(1)
+	print m.len()
 }
 EOF
 
@@ -2380,6 +2460,18 @@ fn main() {
 	s := set([1, 2])
 	print s.len()
 }
+EOF
+
+# `set[T]` IS TWO FORMS, and only the constructor above had a case. docs/code/collections.md
+# marks the set "[not yet] in both type and value", and a type position is reached by a
+# different path — a declaration's type is read before any expression is lowered — so a rule
+# that held for the constructor says nothing about the annotation.
+expect "$ZERG" set-as-a-type E466 <<'EOF'
+fn f(s: set[int]) -> int {
+	return 1
+}
+
+fn main() { print f(1) }
 EOF
 
 # --- forms whose failure used to escape this compiler ----------------------------------

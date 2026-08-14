@@ -915,6 +915,19 @@ pub fn shout(s: str) -> str {
 }
 EOF
 
+# THE SAME MEMBER, ONE POSITION ALONG: the missing member is a method call's RECEIVER rather
+# than the whole expression. `io.stdout.write(…)` is how a reader spells the stream surface
+# docs/runtime/io.md marks `[not yet]`, and the answer was "the method `write` on a ?" — the
+# fourth shape of the finding above, and the one that survived it, because the method path
+# INFERS its receiver's type and never LOWERS it, so the receiver's own rule was never asked.
+reject a-namespace-member-that-does-not-exist-as-a-receiver E388 'has no `stdout`' <<'EOF'
+import "io"
+
+fn main() {
+	io.stdout.write("x")
+}
+EOF
+
 # TWO IMPORTS SHARING A LAST SEGMENT both bound `text`, and both answered through it: one
 # namespace holding the union of two modules' members, with no diagnostic. GRAMMAR says
 # `as` is "how two imports sharing a last segment coexist", which is only true if not
@@ -4569,7 +4582,12 @@ EOF
 
 # SILENT: the import resolved to nothing and the program ran. Using the module then reported
 # "the method `thing` on a ?", which names neither the module nor the import.
-reject import-a-module-that-does-not-exist E502 no-place <<'EOF'
+#
+# It carried no place until the resolver was handed the `ImportDecl` rather than the path
+# string — the last of the three import rules to be told which line wrote the import. The
+# other half of that old sentence, a method call whose RECEIVER is the ill-formed part, is
+# now the receiver's own finding (a-method-on-a-namespace-member-that-does-not-exist below).
+reject import-a-module-that-does-not-exist E502 <<'EOF'
 import "nope"
 
 fn main() {

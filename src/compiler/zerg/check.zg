@@ -1413,10 +1413,19 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
 }
 
-# chk_intrinsic_arity IS THE SET of compiler primitives, and it answers both questions asked of
-# that set: whether a `__zrt_…` name is one at all, and how many operands it takes. `-1` is "not
-# a primitive", which is what lets one function do both — two lists of the same 28 names is the
-# drift this file refuses everywhere else.
+# chk_intrinsic_params IS THE SET of compiler primitives, spelled as what each one TAKES. It
+# answers all three questions asked of that set — whether a `__zrt_…` name is one at all, how
+# many operands it takes, and what type each operand is — because an arity is this list's LENGTH
+# and two lists of the same 28 names is the drift this file refuses everywhere else.
+#
+# THE FIVE NULLARY PRIMITIVES CANNOT BE TOLD FROM A NON-PRIMITIVE BY THIS LIST, since both take
+# nothing. They are named in chk_intrinsic_nullary and nowhere else, which is five names rather
+# than a second copy of twenty-eight.
+#
+# `TUnknown` IS AN OPERAND WITH NO CONSTRAINT, and it is written where this compiler cannot
+# state one rather than where none exists. The atomics take a `Ref[int]` cell first, and `zerg`
+# has no `Ref[T]` at all (`E446`) — so the row says unknown, chk_fits lets it past, and the int
+# operands beside it are checked as the seed checks them.
 #
 # A primitive is not a function anyone declares. The emitter lowers the name directly, by
 # stripping the prefix, so before this the set was whatever the emitter would strip:
@@ -1428,36 +1437,51 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 # for entry. Both compilers build the same `src/stdlib/*.zg`, so a leaf one knows and the other
 # does not is a standard library that builds under only one of them.
 #
-# OPERAND TYPES ARE CHECKED BY NEITHER, and that is measured rather than assumed. The seed HAS
-# the machinery — `unaryIntrinsic(n, Float, Int)` checks its argument against `Float` — and it
-# does not fire: `__zrt_trunc("hello")` reaches cc under both compilers, and `__zrt_trunc(true)`
-# builds under both and prints `1`, a silent miscompile they share. So it is a gap of the SET
-# rather than a place this compiler is behind the seed — and where the two do differ it runs the
-# other way, `zerg` reporting the cc failure against the `.zg` line and the seed against a temp C
-# file nobody wrote. Named here as the gap it is, rather than left looking like coverage.
-#
 # It says nothing about WHO may call one. A primitive is the standard library's way down to the
 # machine and a program has no business writing one, but this compiler's own driver reaches for
 # `__zrt_exec`, `__zrt_exit` and `__zrt_listdir` in thirty places, several of which no stdlib
 # function wraps — so a stdlib-only rule is a refusal that would first have to be given somewhere
 # to point.
+fn chk_intrinsic_params(name: str) -> list[Ty] {
+	mut none: list[Ty] = []
+
+	return [Ty.TStr] if name == "__zrt_open" or name == "__zrt_open_write"
+	return [Ty.TStr] if name == "__zrt_getenv" or name == "__zrt_has_env"
+	return [Ty.TStr] if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
+
+	return [Ty.TInt] if name == "__zrt_read" or name == "__zrt_close"
+	return [Ty.TInt] if name == "__zrt_sleep_ns" or name == "__zrt_exit" or name == "__zrt_proc_wait"
+
+	return [Ty.TFloat] if name == "__zrt_trunc"
+
+	return [Ty.TList(Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn"
+
+	return [Ty.TInt, Ty.TStr] if name == "__zrt_write"
+	return [Ty.TInt, Ty.TList(Ty.TByte)] if name == "__zrt_write_bytes"
+
+	return [Ty.TUnknown] if name == "__zrt_atomic_load"
+	return [Ty.TUnknown, Ty.TInt] if name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
+	return [Ty.TUnknown, Ty.TInt, Ty.TInt] if name == "__zrt_atomic_cas"
+
+	return none
+}
+
+# chk_intrinsic_nullary is the five that take nothing. They need naming because the list above
+# cannot distinguish "no operands" from "no such primitive" — see there.
+fn chk_intrinsic_nullary(name: str) -> bool {
+	return true if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+
+	return name == "__zrt_platform" or name == "__zrt_arch" or name == "__zrt_exe_path"
+}
+
+# chk_intrinsic_arity is that set read for its COUNT alone, and `-1` is "not a primitive".
 fn chk_intrinsic_arity(name: str) -> int {
-	return 0 if name == "__zrt_time_unix" or name == "__zrt_time_mono"
-	return 0 if name == "__zrt_platform" or name == "__zrt_arch" or name == "__zrt_exe_path"
+	return 0 if chk_intrinsic_nullary(name)
 
-	return 1 if name == "__zrt_open" or name == "__zrt_open_write" or name == "__zrt_read" or name == "__zrt_close"
-	return 1 if name == "__zrt_sleep_ns" or name == "__zrt_trunc"
-	return 1 if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_exit"
-	return 1 if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
-	return 1 if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
-	return 1 if name == "__zrt_atomic_load"
+	ps := chk_intrinsic_params(name)
+	return 0 - 1 if ps.len() == 0
 
-	return 2 if name == "__zrt_write" or name == "__zrt_write_bytes"
-	return 2 if name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
-
-	return 3 if name == "__zrt_atomic_cas"
-
-	return 0 - 1
+	return ps.len()
 }
 
 # chk_is_intrinsic is that set as a predicate. The emitter asks it before it decides a leaf's
@@ -1469,19 +1493,42 @@ pub fn chk_is_intrinsic(name: str) -> bool {
 	return chk_intrinsic_arity(name) >= 0
 }
 
-# chk_intrinsic_call holds one CALL to that set — the name first, and then the count, because a
-# name that is not a primitive has no arity to be wrong about.
-fn chk_intrinsic_call(mut &em: Emitter, name: str, argc: int) {
+# chk_intrinsic_call holds one CALL to that set — the name, then the count, then the operands,
+# because a name that is not a primitive has no arity to be wrong about and a call of the wrong
+# LENGTH has no row to line its operands up against.
+#
+# THE OPERANDS WERE CHECKED BY NEITHER COMPILER, and that was measured rather than assumed. The
+# seed has the machinery — `unaryIntrinsic(n, Float, Int)` names its argument type — and it does
+# not fire: `__zrt_trunc(true)` built under both and printed `1`, a silent miscompile they
+# shared, and `__zrt_trunc("hello")` reached cc under both. A primitive is lowered by NAME to a
+# C function with a real signature, so a wrong operand is either a cc diagnostic against a file
+# nobody wrote or, when C converts it quietly, an answer that is simply wrong.
+#
+# The seed is left as it stands, and the two cases below carry `seed-gap`.
+fn chk_intrinsic_call(mut &em: Emitter, name: str, args: list[Expr]) {
 	n := chk_intrinsic_arity(name)
+	argc := args.len()
 
 	if n < 0 {
 		chk_at(em, "E396", f"`{name}` is not a compiler primitive — the `__zrt_…` set is closed and belongs to the standard library, which reaches the runtime through it")
 		return
 	}
 
-	return if argc == n
+	if argc != n {
+		chk_at(em, "E397", f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
+		return
+	}
 
-	chk_at(em, "E397", f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
+	ps := chk_intrinsic_params(name)
+	mut i := 0
+	for i < argc {
+		want := ps[i]
+		got := c_infer(em, args[i])
+		if not chk_fits_expr(em, want, got, args[i]) {
+			chk_at(em, "E398", f"operand {strconv.to_string(i + 1, 10)} of the compiler primitive `{name}` is {ty_name(want)}, and this gives {ty_name(got)}")
+		}
+		i = i + 1
+	}
 }
 
 # chk_conv_pair holds a WRITTEN `T(x)` to the same table, and it is the half that was never
@@ -2376,20 +2423,20 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	# but `x: Nope = 5` reported "cannot bind int to a Nope binding", a sentence about the VALUE
 	# that treats the unknown name as though it were a type the value failed to be. It also hid
 	# the fixed-width ladder's own sentence behind it, which is what sent anybody looking.
-	nm := c_named_of(declared)
-	if nm != "" and not c_is_type_name(em, nm) {
-		c_builtin_check(em, nm)
-		chk_at(em, "E334", f"the binding `{name}` is annotated `{nm}`, and no type of that name is declared in this program")
-		return
-	}
-
-	# and the annotation has to name a type THIS MODULE MAY WRITE. It is asked here, off the
-	# name the sentence above already resolved, rather than by a second walk of the type: an
-	# annotation is a value-position type name, which c_decl_sites does not list, and this is
-	# where the one that exists is already in hand.
-	if nm != "" {
-		chk_ty_visible(em, nm)
-	}
+	#
+	# IT IS THE WHOLE TYPE THAT IS ASKED, not the bare name it sometimes is. This used to be
+	# `c_named_of(declared)`, which answers "" for every type that WRAPS a name — so a local
+	# annotated `Nope` was refused and `Nope?`, `list[Nope]`, `chan[Nope]` and the rest were
+	# not: they were emitted as `zg_Nope` and reported by cc against a file under .zerg-cache.
+	# `mut h: handle? = nil` is the spelling that found it, and the `handle` in it is a red
+	# herring — `bogus?` did the same, and so did every other wrapper.
+	#
+	# c_check_named_ty is the walk a DECLARATION's types already get (c_check_named_types),
+	# with a site of this binding's own. That is one rule for four sites rather than two rules
+	# for four sites: a parameter, a result, a field and now a local all answer `E707`, and
+	# the module-visibility question the block below used to ask separately is one of the two
+	# the walk asks of every leaf it reaches.
+	c_check_named_ty(em, declared, Site(declared, f"the binding `{name}`", [], em.at_path, em.at_line, em.at_col, false))
 
 	got := c_infer(em, ival)
 

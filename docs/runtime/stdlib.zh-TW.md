@@ -56,12 +56,15 @@ leaf。
 ## `os`
 
 程序與平台資訊。`platform` / `arch` 在**編譯期**決定，因此指的是 binary 建置的目標。程式自己的引數由
-`fn main(args: list[str])` 取得，不在這裡。
+`fn main(args: list[str])` 取得，不在這裡。`run` 是唯一會啟動**另一個**程序的葉子——argv 直接交給 OS，沒有 shell
+也沒有 pipe，回來的是 exit status（死於信號時為 128+信號，無法執行時為 127）。有 shell 也有 pipe 的命令字面量見
+[Process 與 I/O](io.zh-TW.md)，仍是 **[not yet]**。
 
 | 函式                    | 摘要                                           |
 | ----------------------- | ---------------------------------------------- |
 | `env(key: str) -> str?` | 環境變數的值，未設為 `nil`                     |
 | `exit(code: int)`       | 以 `code` 結束程序（不返回）                   |
+| `run(argv: list[str])`  | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
 | `platform() -> str`     | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
 | `arch() -> str`         | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
 
@@ -72,25 +75,33 @@ leaf。
 offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**——非 ASCII 位元組原樣通過。空的 `split` 分隔字串、
 或負的 `repeat` 次數，會 raise `ValueError`。
 
-| 函式                                   | 摘要                                       |
-| -------------------------------------- | ------------------------------------------ |
-| `has_prefix(s: str, prefix: str)`      | `s` 是否以 `prefix` 開頭（`-> bool`）      |
-| `has_suffix(s: str, suffix: str)`      | `s` 是否以 `suffix` 結尾（`-> bool`）      |
-| `contains(s: str, sub: str) -> bool`   | `sub` 是否出現在 `s` 中                    |
-| `index_of(s: str, sub: str) -> int`    | 首個 `sub` 的位元組 offset，找不到回 `-1`  |
-| `split(s: str, sep: str) -> list[str]` | 各 `sep` 之間的片段（N 個 sep → N+1 片段） |
-| `join(parts: list[str], sep: str)`     | 以 `sep` 串接 `parts`（`-> str`）          |
-| `repeat(s: str, count: int) -> str`    | 把 `s` 串接 `count` 次                     |
-| `trim(s: str) -> str`                  | 去除前後的 ASCII 空白                      |
-| `to_upper(s: str) -> str`              | 把 ASCII 小寫字母折成大寫                  |
-| `to_lower(s: str) -> str`              | 把 ASCII 大寫字母折成小寫                  |
-| `count(s: str, sub: str) -> int`       | `sub` 的非重疊出現次數                     |
-| `replace(s: str, old: str, new: str)`  | 把每個 `old` 換成 `new`                    |
-| `trim_prefix(s: str, prefix: str)`     | 去掉一個前綴 `prefix`，否則原樣            |
-| `trim_suffix(s: str, suffix: str)`     | 去掉一個後綴 `suffix`，否則原樣            |
-| `fields(s: str) -> list[str]`          | 依空白區段切分，無空片段                   |
+| 函式                                   | 摘要                                                      |
+| -------------------------------------- | --------------------------------------------------------- |
+| `has_prefix(s: str, prefix: str)`      | `s` 是否以 `prefix` 開頭（`-> bool`）                     |
+| `has_suffix(s: str, suffix: str)`      | `s` 是否以 `suffix` 結尾（`-> bool`）                     |
+| `contains(s: str, sub: str) -> bool`   | `sub` 是否出現在 `s` 中                                   |
+| `index_of(s: str, sub: str) -> int`    | 首個 `sub` 的位元組 offset，找不到回 `-1`                 |
+| `split(s: str, sep: str) -> list[str]` | 各 `sep` 之間的片段（N 個 sep → N+1 片段）                |
+| `join(parts: list[str], sep: str)`     | 以 `sep` 串接 `parts`（`-> str`）                         |
+| `repeat(s: str, count: int) -> str`    | 把 `s` 串接 `count` 次                                    |
+| `trim(s: str) -> str`                  | 去除前後的 ASCII 空白                                     |
+| `to_upper(s: str) -> str`              | 把 ASCII 小寫字母折成大寫                                 |
+| `to_lower(s: str) -> str`              | 把 ASCII 大寫字母折成小寫                                 |
+| `count(s: str, sub: str) -> int`       | `sub` 的非重疊出現次數                                    |
+| `replace(s: str, old: str, new: str)`  | 把每個 `old` 換成 `new`                                   |
+| `trim_prefix(s: str, prefix: str)`     | 去掉一個前綴 `prefix`，否則原樣                           |
+| `trim_suffix(s: str, suffix: str)`     | 去掉一個後綴 `suffix`，否則原樣                           |
+| `fields(s: str) -> list[str]`          | 依空白區段切分，無空片段                                  |
+| `last_index_of(s: str, sub: str)`      | **最後**一個 `sub` 的位元組 offset，否則 `-1`（`-> int`） |
+| `trim_left(s: str) -> str`             | 只去除前導的 ASCII 空白                                   |
+| `trim_right(s: str) -> str`            | 只去除尾端的 ASCII 空白                                   |
+| `equal_fold(a: str, b: str) -> bool`   | 忽略 ASCII 大小寫的相等，不另建字串                       |
+| `pad_start(s, width: int, fill: str)`  | 左側補到至少 `width` 個位元組（`-> str`）                 |
+| `pad_end(s, width: int, fill: str)`    | 右側補到至少 `width` 個位元組（`-> str`）                 |
 
-`count` 與 `replace` 對空的 needle raise `ValueError`，與 `split` 一致。
+`count` 與 `replace` 對空的 needle raise `ValueError`，與 `split` 一致。`pad_start` / `pad_end` 對不是恰好一個
+位元組的 `fill` raise `ValueError`——多位元組的填充字元無法落在位元組寬度上而不把一個 code point 切成兩半——而
+`s` 已達該寬度時原樣回傳。
 
 ## `ascii`
 
@@ -229,9 +240,14 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-> **[not yet]** 這個模組會出貨，但**無法 import**。`Atomic[T]` 是 generic struct，而 generic struct 是本編譯器
-> 拒絕的形式之一，所以 `import "atomic"` 本身就會回報 `NotImplemented: a generic struct`Atomic[…]``。下表的
-簽章另外還提到 `Ref[T]`，那個型別也不存在。它是十二個模組中唯一無法乾淨 import 的一個。
+> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十三個模組中唯一如此的一個。`Atomic[T]` 是 generic
+> struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
+> ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
+> 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。
+>
+> 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
+> `src/stdlib/` 的模組同時也離開了 `zerg fmt --check` 與其餘的 self-source 集合，會在 generics 到來之前無人閱讀
+> 地爛掉。而那樣留在 import 處的會是 _E502 cannot resolve import `atomic`_——一句關於一個明明就在那裡的模組的話。
 
 | 函式                                                           | 摘要                                |
 | -------------------------------------------------------------- | ----------------------------------- |

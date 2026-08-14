@@ -327,7 +327,7 @@ func (p *parser) syncDecl() {
 // parseFuncDecl parses 'pub? unsafe? mut? fn name generics? (params) -> ret? block'
 // (GRAMMAR group 5, with the group 7 generics). It also serves as an impl method
 // or a spec's provided method.
-func (p *parser) parseFuncDecl() ast.Decl {
+func (p *parser) parseFuncDecl(free bool) ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub) // single-file for now; visibility preserved for fmt
 	mut := p.accept(token.Mut)
@@ -335,7 +335,7 @@ func (p *parser) parseFuncDecl() ast.Decl {
 		p.fail(p.cur().Span, "expected a function declaration")
 	}
 	p.expect(token.Fn)
-	name := p.expect(token.Ident)
+	name := p.funcName(free)
 	var generics *ast.Generics
 	if p.at(token.LBrack) {
 		generics = p.parseGenerics()

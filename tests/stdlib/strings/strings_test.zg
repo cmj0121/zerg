@@ -1,0 +1,625 @@
+# The `strings` suite — every `pub` function of src/stdlib/strings.zg, each asked the
+# ordinary case, its boundary, and the way it can refuse.
+#
+# BLACK-BOX, AND NOT BY CHOICE. docs/runtime/package.md puts a test in the module it
+# tests, and this one cannot be: `zerg test` compiles a DIRECTORY as one package, and
+# `src/stdlib` is a flat directory of sixteen independent modules. A test file dropped
+# beside strings.zg makes every other stdlib module a source of the same unit, which
+# `atomic.zg` (E215, a generic struct) and the `pub` names two modules share (E705
+# `is_digit`, in `ascii` and `strconv`) each refuse before a single test runs. So the
+# suite sits in a package of its own and reaches the module the way a user does, through
+# `import "strings"`. It costs the module-private helpers — `match_at`, `slice_str`,
+# `pad_count` — which are reachable only through the `pub` surface here.
+#
+# THE UTF-8 CLAIMS ARE TESTED, not restated. The module says it works at the BYTE level
+# and is UTF-8 correct because UTF-8 is self-synchronising, that `index_of` answers a
+# BYTE offset, and that case folding is ASCII-only. Those are three claims a byte-level
+# implementation can get wrong in three different ways, and each has its own tests below.
+import (
+	"strings"
+	"testing"
+)
+
+# raised_value_error demotes an abort to the one question these tests ask of it: did the
+# call refuse, and did it refuse with the taxonomy kind the module's doc comment promises.
+#
+# IT IS GENERIC BECAUSE THE CARRIER IS. `split` raises out of a `list[str]`, `repeat` out
+# of a `str` and `count` out of an `int`, so a non-generic helper would need one copy per
+# return type — or every call funnelled through `.len()` to make one carrier serve them
+# all, which is what the codegen corpus case had to do. `testing` has no `assert_raises`,
+# so this is hand-rolled here; the next test package will hand-roll it again.
+fn raised_value_error[T](r: Result[T]) -> bool {
+	return match r {
+		Either.Left(_)  => false
+		Either.Right(e) => e is ValueError
+	}
+}
+
+# --- has_prefix ---------------------------------------------------------------------
+
+#[test]
+fn test_has_prefix_ordinary() {
+	testing.assert(strings.has_prefix("hello", "he"))
+	testing.assert(not strings.has_prefix("hello", "el"))
+}
+
+#[test]
+fn test_has_prefix_boundaries() {
+	testing.assert(strings.has_prefix("hello", ""))
+	testing.assert(strings.has_prefix("hello", "hello"))
+	testing.assert(not strings.has_prefix("ab", "abc"))
+	testing.assert(not strings.has_prefix("", "x"))
+	testing.assert(strings.has_prefix("", ""))
+}
+
+#[test]
+fn test_has_prefix_multibyte() {
+	testing.assert(strings.has_prefix("日本語", "日"))
+	testing.assert(strings.has_prefix("日本語", "日本"))
+
+	# `日` is E6 97 A5 and `有` is E6 9C 89 — the same lead byte. A prefix test that
+	# looked at one byte would answer true here.
+	testing.assert(not strings.has_prefix("日本語", "有"))
+}
+
+# --- has_suffix ---------------------------------------------------------------------
+
+#[test]
+fn test_has_suffix_ordinary() {
+	testing.assert(strings.has_suffix("hello", "lo"))
+	testing.assert(not strings.has_suffix("hello", "ll"))
+}
+
+#[test]
+fn test_has_suffix_boundaries() {
+	testing.assert(strings.has_suffix("hello", ""))
+	testing.assert(strings.has_suffix("hello", "hello"))
+
+	# the suffix longer than the string is the one that reaches match_at with a NEGATIVE
+	# offset, which is the bound the caller is promised it need not check itself
+	testing.assert(not strings.has_suffix("ab", "abc"))
+	testing.assert(strings.has_suffix("", ""))
+}
+
+#[test]
+fn test_has_suffix_multibyte() {
+	testing.assert(strings.has_suffix("日本語", "語"))
+	testing.assert(strings.has_suffix("日本語", "本語"))
+	testing.assert(not strings.has_suffix("日本語", "本"))
+}
+
+# --- index_of -------------------------------------------------------------------------
+
+#[test]
+fn test_index_of_ordinary() {
+	testing.assert_eq(strings.index_of("hello", "h"), 0)
+	testing.assert_eq(strings.index_of("hello", "lo"), 3)
+	testing.assert_eq(strings.index_of("hello", "l"), 2)
+}
+
+#[test]
+fn test_index_of_absent_is_minus_one() {
+	testing.assert_eq(strings.index_of("hello", "z"), -1)
+	testing.assert_eq(strings.index_of("", "x"), -1)
+	testing.assert_eq(strings.index_of("ab", "abc"), -1)
+}
+
+#[test]
+fn test_index_of_empty_needle_is_zero() {
+	testing.assert_eq(strings.index_of("hello", ""), 0)
+	testing.assert_eq(strings.index_of("", ""), 0)
+}
+
+# THE HEADLINE CLAIM: the answer is a BYTE offset and not a rune count. `本` is the second
+# CHARACTER of `日本語` and its third BYTE, so a rune-counting implementation answers 1
+# here and a byte-level one answers 3.
+#[test]
+fn test_index_of_answers_a_byte_offset_not_a_rune_count() {
+	testing.assert_eq(strings.index_of("日本語", "日"), 0)
+	testing.assert_eq(strings.index_of("日本語", "本"), 3)
+	testing.assert_eq(strings.index_of("日本語", "語"), 6)
+
+	# and mixed widths: `h` is one byte, `é` is two, so `l` is at 3 and not at 2
+	testing.assert_eq(strings.index_of("héllo", "é"), 1)
+	testing.assert_eq(strings.index_of("héllo", "l"), 3)
+}
+
+# UTF-8 IS SELF-SYNCHRONISING, which is the module's stated reason a byte search is safe:
+# a lead byte (>= 0xC0) and a continuation byte (0x80..0xBF) are disjoint sets, so a valid
+# needle can never begin at the interior of a code point. What that leaves for a test is
+# the near miss — needles that SHARE leading bytes with what is there and must still not
+# match, which is where a search comparing fewer bytes than the needle has would go wrong.
+#[test]
+fn test_index_of_does_not_match_a_partial_code_point() {
+	# `本` is E6 9C AC and `有` is E6 9C 89 — two bytes in common out of three
+	testing.assert_eq(strings.index_of("本", "有"), -1)
+
+	# `日` is E6 97 A5 — one byte in common with both
+	testing.assert_eq(strings.index_of("日", "有"), -1)
+	testing.assert_eq(strings.index_of("日日日", "有"), -1)
+
+	# and the boundary IS found, in a haystack whose characters share that lead byte
+	testing.assert_eq(strings.index_of("日有本", "有"), 3)
+}
+
+# --- contains -------------------------------------------------------------------------
+
+#[test]
+fn test_contains_ordinary() {
+	testing.assert(strings.contains("hello world", "o w"))
+	testing.assert(not strings.contains("hello", "z"))
+}
+
+#[test]
+fn test_contains_boundaries() {
+	testing.assert(strings.contains("hello", ""))
+	testing.assert(strings.contains("", ""))
+	testing.assert(not strings.contains("", "x"))
+	testing.assert(strings.contains("hello", "hello"))
+}
+
+#[test]
+fn test_contains_multibyte() {
+	testing.assert(strings.contains("日本語", "本"))
+	testing.assert(not strings.contains("日本語", "有"))
+}
+
+# --- split ----------------------------------------------------------------------------
+#
+# A `list[str]` DOES NOT IMPLEMENT `Eq`, so `assert_eq` cannot take one (E412). Every
+# assertion about a split therefore goes back through `join` with a separator the input
+# does not contain, which is the only shape available — and which happily doubles as the
+# split/join round trip.
+
+#[test]
+fn test_split_ordinary() {
+	testing.assert_eq(strings.join(strings.split("a,b,c", ","), "|"), "a|b|c")
+	testing.assert_eq(strings.split("a,b,c", ",").len(), 3)
+}
+
+#[test]
+fn test_split_n_separators_give_n_plus_one_pieces() {
+	# the pieces between separators, empties included — leading, trailing and adjacent
+	testing.assert_eq(strings.join(strings.split("a,,b", ","), "|"), "a||b")
+	testing.assert_eq(strings.split("a,,b", ",").len(), 3)
+	testing.assert_eq(strings.split(",a,", ",").len(), 3)
+	testing.assert_eq(strings.join(strings.split(",a,", ","), "|"), "|a|")
+}
+
+#[test]
+fn test_split_boundaries() {
+	# no separator present: one piece, the whole string
+	testing.assert_eq(strings.split("abc", ",").len(), 1)
+	testing.assert_eq(strings.join(strings.split("abc", ","), "|"), "abc")
+
+	# the empty string is one empty piece, not none
+	testing.assert_eq(strings.split("", ",").len(), 1)
+	testing.assert_eq(strings.join(strings.split("", ","), "|"), "")
+
+	# a multi-byte separator, and a separator longer than the string
+	testing.assert_eq(strings.join(strings.split("a、b、c", "、"), "|"), "a|b|c")
+	testing.assert_eq(strings.split("ab", "abcd").len(), 1)
+}
+
+#[test]
+fn test_split_empty_separator_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.split("a,b", "") }))
+
+	# the demotion the module's own comment names, in the form its example shows: `guard`
+	# turns the abort into a value and `??` supplies what to do instead
+	testing.assert_eq(guard { strings.split("a,b", "").len() } ?? -1, -1)
+}
+
+# --- join -----------------------------------------------------------------------------
+
+#[test]
+fn test_join_ordinary() {
+	testing.assert_eq(strings.join(["a", "b", "c"], ","), "a,b,c")
+	testing.assert_eq(strings.join(["usr", "local", "bin"], "/"), "usr/local/bin")
+}
+
+#[test]
+fn test_join_boundaries() {
+	parts: list[str] = []
+	testing.assert_eq(strings.join(parts, ","), "")
+	testing.assert_eq(strings.join(["only"], ","), "only")
+
+	# an empty separator is legal for join — it is only `split` that cannot invert one
+	testing.assert_eq(strings.join(["a", "b"], ""), "ab")
+	testing.assert_eq(strings.join(["", ""], ","), ",")
+}
+
+#[test]
+fn test_join_multibyte() {
+	testing.assert_eq(strings.join(["日", "本"], "、"), "日、本")
+}
+
+# --- repeat ---------------------------------------------------------------------------
+
+#[test]
+fn test_repeat_ordinary() {
+	testing.assert_eq(strings.repeat("ab", 3), "ababab")
+	testing.assert_eq(strings.repeat("-", 5), "-----")
+}
+
+#[test]
+fn test_repeat_boundaries() {
+	testing.assert_eq(strings.repeat("ab", 0), "")
+	testing.assert_eq(strings.repeat("ab", 1), "ab")
+	testing.assert_eq(strings.repeat("", 5), "")
+	testing.assert_eq(strings.repeat("日", 2), "日日")
+}
+
+#[test]
+fn test_repeat_negative_count_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.repeat("ab", -1) }))
+}
+
+# --- trim / trim_left / trim_right ------------------------------------------------------
+
+#[test]
+fn test_trim_ordinary() {
+	testing.assert_eq(strings.trim("  hi  "), "hi")
+	testing.assert_eq(strings.trim("\t hi \n"), "hi")
+}
+
+#[test]
+fn test_trim_takes_the_whole_ascii_space_set() {
+	# the six `ascii.is_space` bytes — space, tab, LF, VT, FF, CR — on both sides
+	testing.assert_eq(strings.trim(" \t\n\u{0B}\u{0C}\rhi \t\n\u{0B}\u{0C}\r"), "hi")
+}
+
+#[test]
+fn test_trim_boundaries() {
+	testing.assert_eq(strings.trim(""), "")
+	testing.assert_eq(strings.trim("   "), "")
+	testing.assert_eq(strings.trim("hi"), "hi")
+
+	# inner whitespace is not touched
+	testing.assert_eq(strings.trim("  a b  "), "a b")
+}
+
+#[test]
+fn test_trim_leaves_multibyte_intact() {
+	# trimming is a byte scan, and `ascii.is_space` is false for every byte >= 0x80,
+	# so no part of a code point can be taken off either end
+	testing.assert_eq(strings.trim("  日本  "), "日本")
+	testing.assert_eq(strings.trim("日本"), "日本")
+}
+
+#[test]
+fn test_trim_left_and_right_take_one_side_each() {
+	testing.assert_eq(strings.trim_left("  hi  "), "hi  ")
+	testing.assert_eq(strings.trim_right("  hi  "), "  hi")
+	testing.assert_eq(strings.trim_left("hi  "), "hi  ")
+	testing.assert_eq(strings.trim_right("  hi"), "  hi")
+
+	# THE SAME TWO FACTS WITH THE SURVIVING SPACE MADE VISIBLE, and the reason is the
+	# example in the module's own comment: an `output` block ending in whitespace is a
+	# block this repository's pre-commit hook silently trims, which turns a true example
+	# into a false one. A terminator the eye can see is what lets the example be written
+	# at all, and this is the assertion that backs it.
+	testing.assert_eq(strings.trim_left("  hi  ") + "|", "hi  |")
+	testing.assert_eq(strings.trim_right("  hi  ") + "|", "  hi|")
+}
+
+#[test]
+fn test_trim_left_and_right_boundaries() {
+	testing.assert_eq(strings.trim_left(""), "")
+	testing.assert_eq(strings.trim_right(""), "")
+	testing.assert_eq(strings.trim_left("   "), "")
+	testing.assert_eq(strings.trim_right("   "), "")
+}
+
+# --- to_upper / to_lower ----------------------------------------------------------------
+
+#[test]
+fn test_to_upper_ordinary() {
+	testing.assert_eq(strings.to_upper("hello"), "HELLO")
+	testing.assert_eq(strings.to_upper("Hello World"), "HELLO WORLD")
+}
+
+#[test]
+fn test_to_lower_ordinary() {
+	testing.assert_eq(strings.to_lower("HELLO"), "hello")
+	testing.assert_eq(strings.to_lower("Hello World"), "hello world")
+}
+
+#[test]
+fn test_case_folds_leave_non_letters_alone() {
+	testing.assert_eq(strings.to_upper("a1!_z"), "A1!_Z")
+	testing.assert_eq(strings.to_lower("A1!_Z"), "a1!_z")
+	testing.assert_eq(strings.to_upper(""), "")
+	testing.assert_eq(strings.to_lower(""), "")
+}
+
+# THE ASCII-ONLY CLAIM. `é` is C3 A9 and `É` is C3 89; both bytes are >= 0x80, so both
+# fold to themselves and the character comes out of either fold unchanged. A fold that
+# reached above 0x7F would corrupt the string here rather than merely fail to fold it.
+#[test]
+fn test_case_folding_is_ascii_only() {
+	testing.assert_eq(strings.to_upper("héllo"), "HéLLO")
+	testing.assert_eq(strings.to_lower("HÉLLO"), "hÉllo")
+	testing.assert_eq(strings.to_upper("日本語"), "日本語")
+	testing.assert_eq(strings.to_lower("日本語"), "日本語")
+}
+
+# --- count ------------------------------------------------------------------------------
+
+#[test]
+fn test_count_ordinary() {
+	testing.assert_eq(strings.count("banana", "a"), 3)
+	testing.assert_eq(strings.count("banana", "na"), 2)
+}
+
+#[test]
+fn test_count_is_non_overlapping() {
+	# "aaaa" holds three overlapping "aa" and two that do not overlap
+	testing.assert_eq(strings.count("aaaa", "aa"), 2)
+	testing.assert_eq(strings.count("banana", "ana"), 1)
+}
+
+#[test]
+fn test_count_boundaries() {
+	testing.assert_eq(strings.count("hello", "z"), 0)
+	testing.assert_eq(strings.count("", "x"), 0)
+	testing.assert_eq(strings.count("abc", "abcd"), 0)
+	testing.assert_eq(strings.count("abc", "abc"), 1)
+}
+
+#[test]
+fn test_count_multibyte() {
+	testing.assert_eq(strings.count("ああ", "あ"), 2)
+	testing.assert_eq(strings.count("日本日", "日"), 2)
+	testing.assert_eq(strings.count("日本日", "有"), 0)
+}
+
+#[test]
+fn test_count_empty_needle_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.count("banana", "") }))
+}
+
+# --- replace ----------------------------------------------------------------------------
+
+#[test]
+fn test_replace_ordinary() {
+	testing.assert_eq(strings.replace("banana", "a", "o"), "bonono")
+	testing.assert_eq(strings.replace("a-b-c", "-", "::"), "a::b::c")
+}
+
+#[test]
+fn test_replace_is_non_overlapping_and_left_to_right() {
+	testing.assert_eq(strings.replace("aaa", "aa", "b"), "ba")
+
+	# the replacement is not rescanned: "aa" in the output came from the substitution
+	testing.assert_eq(strings.replace("ab", "b", "aa"), "aaa")
+}
+
+#[test]
+fn test_replace_boundaries() {
+	testing.assert_eq(strings.replace("abc", "x", "y"), "abc")
+	testing.assert_eq(strings.replace("", "x", "y"), "")
+
+	# an empty replacement is a deletion
+	testing.assert_eq(strings.replace("hello", "l", ""), "heo")
+	testing.assert_eq(strings.replace("abc", "abc", ""), "")
+}
+
+#[test]
+fn test_replace_multibyte() {
+	testing.assert_eq(strings.replace("日本語", "本", "X"), "日X語")
+	testing.assert_eq(strings.replace("a,b", ",", "、"), "a、b")
+	testing.assert_eq(strings.replace("日本語", "有", "X"), "日本語")
+}
+
+#[test]
+fn test_replace_empty_target_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.replace("abc", "", "x") }))
+}
+
+# --- trim_prefix / trim_suffix ------------------------------------------------------------
+
+#[test]
+fn test_trim_prefix_ordinary() {
+	testing.assert_eq(strings.trim_prefix("hello", "he"), "llo")
+	testing.assert_eq(strings.trim_prefix("/usr/bin", "/"), "usr/bin")
+}
+
+#[test]
+fn test_trim_prefix_takes_one_and_only_one() {
+	# a single leading prefix, not every one of them
+	testing.assert_eq(strings.trim_prefix("aaab", "a"), "aab")
+}
+
+#[test]
+fn test_trim_prefix_boundaries() {
+	testing.assert_eq(strings.trim_prefix("hello", "xy"), "hello")
+	testing.assert_eq(strings.trim_prefix("hello", ""), "hello")
+	testing.assert_eq(strings.trim_prefix("hello", "hello"), "")
+	testing.assert_eq(strings.trim_prefix("ab", "abc"), "ab")
+	testing.assert_eq(strings.trim_prefix("日本語", "日"), "本語")
+}
+
+#[test]
+fn test_trim_suffix_ordinary() {
+	testing.assert_eq(strings.trim_suffix("hello", "lo"), "hel")
+	testing.assert_eq(strings.trim_suffix("main.zg", ".zg"), "main")
+}
+
+#[test]
+fn test_trim_suffix_takes_one_and_only_one() {
+	testing.assert_eq(strings.trim_suffix("abbb", "b"), "abb")
+}
+
+#[test]
+fn test_trim_suffix_boundaries() {
+	testing.assert_eq(strings.trim_suffix("hello", "xy"), "hello")
+	testing.assert_eq(strings.trim_suffix("hello", ""), "hello")
+	testing.assert_eq(strings.trim_suffix("hello", "hello"), "")
+
+	# longer than the string — the negative window match_at is promised to survive
+	testing.assert_eq(strings.trim_suffix("ab", "abc"), "ab")
+	testing.assert_eq(strings.trim_suffix("日本語", "語"), "日本")
+}
+
+# --- fields --------------------------------------------------------------------------------
+
+#[test]
+fn test_fields_ordinary() {
+	testing.assert_eq(strings.join(strings.fields("a b c"), "|"), "a|b|c")
+	testing.assert_eq(strings.fields("a b c").len(), 3)
+}
+
+#[test]
+fn test_fields_never_yields_an_empty_piece() {
+	# leading, trailing and repeated whitespace, and the whole ascii space set at once
+	testing.assert_eq(strings.join(strings.fields("  a   b  "), "|"), "a|b")
+	testing.assert_eq(strings.fields("  a   b  ").len(), 2)
+	testing.assert_eq(strings.join(strings.fields("\ta\n\nb\r"), "|"), "a|b")
+}
+
+#[test]
+fn test_fields_boundaries() {
+	testing.assert_eq(strings.fields("").len(), 0)
+	testing.assert_eq(strings.fields("   ").len(), 0)
+	testing.assert_eq(strings.fields("solo").len(), 1)
+	testing.assert_eq(strings.join(strings.fields("solo"), "|"), "solo")
+}
+
+#[test]
+fn test_fields_multibyte() {
+	testing.assert_eq(strings.join(strings.fields(" 日  本 "), "|"), "日|本")
+	testing.assert_eq(strings.fields("日本").len(), 1)
+}
+
+# --- last_index_of ---------------------------------------------------------------------------
+
+#[test]
+fn test_last_index_of_ordinary() {
+	testing.assert_eq(strings.last_index_of("hello", "l"), 3)
+	testing.assert_eq(strings.last_index_of("abcabc", "abc"), 3)
+	testing.assert_eq(strings.last_index_of("hello", "h"), 0)
+}
+
+#[test]
+fn test_last_index_of_absent_is_minus_one() {
+	testing.assert_eq(strings.last_index_of("hello", "z"), -1)
+	testing.assert_eq(strings.last_index_of("", "x"), -1)
+	testing.assert_eq(strings.last_index_of("ab", "abc"), -1)
+}
+
+# the mirror of `index_of` finding an empty needle at 0: the LAST empty needle is the one
+# at the end, so the answer is the string's byte length
+#[test]
+fn test_last_index_of_empty_needle_is_the_length() {
+	testing.assert_eq(strings.last_index_of("hello", ""), 5)
+	testing.assert_eq(strings.last_index_of("", ""), 0)
+	testing.assert_eq(strings.last_index_of("日", ""), 3)
+}
+
+#[test]
+fn test_last_index_of_answers_a_byte_offset() {
+	testing.assert_eq(strings.last_index_of("日本日", "日"), 6)
+	testing.assert_eq(strings.last_index_of("日本語", "本"), 3)
+	testing.assert_eq(strings.last_index_of("日本日", "有"), -1)
+}
+
+# --- equal_fold --------------------------------------------------------------------------------
+
+#[test]
+fn test_equal_fold_ordinary() {
+	testing.assert(strings.equal_fold("Hello", "hELLO"))
+	testing.assert(strings.equal_fold("abc", "abc"))
+	testing.assert(not strings.equal_fold("abc", "abd"))
+}
+
+#[test]
+fn test_equal_fold_boundaries() {
+	testing.assert(strings.equal_fold("", ""))
+	testing.assert(not strings.equal_fold("", "a"))
+
+	# a length difference is answered before a byte is folded
+	testing.assert(not strings.equal_fold("abc", "ab"))
+	testing.assert(not strings.equal_fold("ab", "abc"))
+}
+
+# ASCII-ONLY AGAIN, and here it decides an answer rather than a rendering: `é` and `É`
+# are two different code points that ASCII folding cannot bring together, so they are
+# not equal-fold — while the ASCII letters around them are.
+#[test]
+fn test_equal_fold_is_ascii_only() {
+	testing.assert(strings.equal_fold("héllo", "HéLLO"))
+	testing.assert(not strings.equal_fold("héllo", "HÉLLO"))
+	testing.assert(strings.equal_fold("日本語", "日本語"))
+	testing.assert(not strings.equal_fold("日本語", "日本有"))
+}
+
+# --- pad_start / pad_end -------------------------------------------------------------------------
+
+#[test]
+fn test_pad_start_ordinary() {
+	testing.assert_eq(strings.pad_start("7", 3, "0"), "007")
+	testing.assert_eq(strings.pad_start("42", 5, " "), "   42")
+}
+
+#[test]
+fn test_pad_end_ordinary() {
+	testing.assert_eq(strings.pad_end("ab", 5, "."), "ab...")
+	testing.assert_eq(strings.pad_end("7", 3, "0"), "700")
+}
+
+#[test]
+fn test_pad_returns_a_string_already_that_wide_unchanged() {
+	testing.assert_eq(strings.pad_start("hello", 3, "-"), "hello")
+	testing.assert_eq(strings.pad_end("hello", 3, "-"), "hello")
+
+	# exactly at the width, and a width no string can be under
+	testing.assert_eq(strings.pad_start("ab", 2, "-"), "ab")
+	testing.assert_eq(strings.pad_start("ab", -1, "-"), "ab")
+	testing.assert_eq(strings.pad_end("ab", -1, "-"), "ab")
+}
+
+#[test]
+fn test_pad_boundaries() {
+	testing.assert_eq(strings.pad_start("", 3, "-"), "---")
+	testing.assert_eq(strings.pad_end("", 3, "-"), "---")
+	testing.assert_eq(strings.pad_start("", 0, "-"), "")
+}
+
+# THE WIDTH IS BYTES, which is the whole reason the fill has to be one. `日` is three
+# bytes and one character, so padding it to five adds TWO fill bytes and not four.
+#[test]
+fn test_pad_counts_bytes_not_characters() {
+	testing.assert_eq(strings.pad_start("日", 5, "-"), "--日")
+	testing.assert_eq(strings.pad_end("日", 5, "-"), "日--")
+	testing.assert_eq(bytearray(strings.pad_start("日", 5, "-")).len(), 5)
+
+	# already five bytes wide at one character each side of the width
+	testing.assert_eq(strings.pad_start("日本", 5, "-"), "日本")
+}
+
+#[test]
+fn test_pad_empty_fill_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.pad_start("x", 4, "") }))
+	testing.assert(raised_value_error(guard { strings.pad_end("x", 4, "") }))
+}
+
+# a multi-byte fill cannot land on a byte width without cutting a code point in half,
+# which is why it is refused rather than truncated
+#[test]
+fn test_pad_multibyte_fill_raises_value_error() {
+	testing.assert(raised_value_error(guard { strings.pad_start("x", 4, "ab") }))
+	testing.assert(raised_value_error(guard { strings.pad_end("x", 4, "日") }))
+
+	# demoted to a value, which is the form the module's example shows
+	testing.assert_eq(guard { strings.pad_start("x", 4, "ab") } ?? "refused", "refused")
+}
+
+# THE FILL IS VALIDATED BEFORE THE WIDTH IS CONSULTED. A string already wide enough
+# returns early — but not before the fill is refused, so a bad fill is a bad call whether
+# or not it would have been used.
+#[test]
+fn test_pad_refuses_a_bad_fill_even_when_no_padding_is_needed() {
+	testing.assert(raised_value_error(guard { strings.pad_start("hello", 2, "") }))
+	testing.assert(raised_value_error(guard { strings.pad_end("hello", 2, "ab") }))
+}

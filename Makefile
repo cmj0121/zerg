@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test test-runner run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -89,6 +89,42 @@ test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 test-runner:                    # the test runner can see a test that fails
 	$(MAKE) build
 	./scripts/test-runner-check.sh
+
+# And the suites written FOR that runner. `test-runner` asks whether the runner can see a
+# failure; this asks the standard library the questions, and it is a separate target because
+# a red board should say which of the two broke.
+#
+# THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md
+# puts a white-box test, and the reason is a property of the stdlib rather than a preference:
+# `zerg test` compiles a DIRECTORY as one package, and `src/stdlib` is a flat directory of
+# sixteen INDEPENDENT modules. A `strings_test.zg` dropped beside `strings.zg` makes every
+# other stdlib source a source of the same unit, which stops at `atomic.zg` (`E215`, a generic
+# struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii` and
+# `strconv`) — before one test has run. So each module's suite is a package of its own under
+# `tests/stdlib/` that reaches its module the way a user does, through `import`.
+#
+# A FLOOR, of the kind `corpus` and `test-runner` carry, and here it is not a formality: a
+# `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
+# broke, a directory that moved, or a suite somebody deleted all leave this target green for
+# having asked nothing — the one failure a test gate must not have.
+STDLIB_TEST_MIN ?= 60
+
+# The modules whose comments carry runnable examples. An example nobody executes is an
+# unverified claim, which is the shape this repository has spent a span removing, so the
+# ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
+# against what came out. The list is a variable so that adding a module's examples is one
+# name here rather than a second copy of the rule.
+DOC_EXAMPLE_SRCS := src/stdlib/strings.zg
+
+stdlib-test:                    # the standard library's own suites, and a floor under them
+	$(MAKE) build
+	./scripts/doc-examples-check.sh $(DOC_EXAMPLE_SRCS)
+	@out=$$(./bin/zerg test tests/stdlib); status=$$?; \
+	printf '%s\n' "$$out"; \
+	[ $$status -eq 0 ] || exit 1; \
+	n=$$(printf '%s\n' "$$out" | sed -n 's/^\([0-9][0-9]*\) passed,.*/\1/p'); \
+	[ -n "$$n" ] && [ $$n -ge $(STDLIB_TEST_MIN) ] || \
+		{ echo "stdlib-test: $${n:-no} tests passed, and the floor is $(STDLIB_TEST_MIN) — the gate did not run itself"; exit 1; }
 
 run: $(SUBDIR)                  # run in the local environment
 
@@ -284,7 +320,7 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # notice, so a whole directory of the compiler was outside the rule that every other line
 # of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
 # size of whatever was added last.
-SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
+SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg tests/stdlib/*/*.zg
 
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
@@ -485,7 +521,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test test-runner examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

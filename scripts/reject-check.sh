@@ -1605,6 +1605,44 @@ fn main() {
 }
 EOF
 
+# --- the conversion's constant layer -------------------------------------------------
+#
+# docs/core/types.md reports a conversion at compile time when "THE VALUE IS KNOWN", and what the
+# compiler means by known is one notion, shared with the fill count `[v; N]`: a literal, a plain
+# binding, a `const`, and constant arithmetic over any of them. The conversion used to ask a
+# narrower question — the written literal tree alone — so `[0; big]` folded while `byte(big)` died
+# at run time, which is one sentence of spec with two answers.
+#
+# All three are `seed-gap`: the seed folds a literal and nothing else, so it builds each of these
+# and raises where it runs. Where the line ENDS is held by test-data/codegen/conv_const_line.zg,
+# because a rule that only ever appears here is a rule nobody has watched stop.
+
+reject oversized-binding-converted E330 '`big`, which is 300' seed-gap <<'EOF'
+fn main() {
+	big := 300
+	print(f"{int(byte(big))}")
+}
+EOF
+
+reject oversized-const-converted E330 '`N`, which is 300' seed-gap <<'EOF'
+const N := 300
+
+fn main() {
+	print(f"{int(byte(N))}")
+}
+EOF
+
+# The sentence is pinned because it is the one that must NOT quote `300`: nothing on this line
+# says 300, and a reader shown it in backticks goes looking for it. A name can be quoted — it is
+# written — and the two cases above pin that half.
+reject oversized-const-arithmetic-converted E330 'this expression, whose value is 300' seed-gap <<'EOF'
+const N := 100
+
+fn main() {
+	print(f"{int(byte(N * 3))}")
+}
+EOF
+
 # --- the conversion table, closed --------------------------------------------------
 #
 # docs/core/types.md lists the pairs `T(x)` accepts "and no others", and `int` is the hub

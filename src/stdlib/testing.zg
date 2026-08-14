@@ -111,8 +111,10 @@ const EV_DONE := 3
 const EV_RAISE := 4
 const EV_CRASH := 5
 
-# Outcome is what one test came to, as the runner reports it: `ok`, `fail` or `skip`, and
-# the text that goes under it — a skip's reason, or a failure's notes and message.
+# Outcome is what one test came to, as the runner reports it — `ok`, `fail`, `skip` or
+# `crash`, which is the set `zergc.zg`'s report format lists — and the text that goes under
+# it: a skip's reason, or a failure's notes and message. (`timeout` is the driver's own and
+# never comes from here: a test that never finished said nothing to collect.)
 pub struct Outcome {
 	pub verdict: str = ""
 	pub text: str = ""
@@ -236,15 +238,14 @@ pub fn collect(rx: <-chan[Event]) -> Outcome {
 		}
 	}
 
-	if verdict != "ok" {
-		# `skip` and `fatal` both arrive as a raise that is NOT a claim, so both land on
-		# CRASH — and the context is what tells them from each other and from a program that
-		# really did fall over. Neither is a crash, and `fatal` is a failure the test itself
-		# declared, so each takes its own verdict back here.
-		return Outcome("skip", why) if skipped
-		return Outcome("fail", notes + why) if why != ""
+	return Outcome("ok", text) if verdict == "ok"
 
-		return Outcome(verdict, notes + text)
-	}
-	return Outcome(verdict, text)
+	# `skip` and `fatal` both arrive as a raise that is NOT a claim, so both land on CRASH —
+	# and the context is what tells them from each other and from a program that really did
+	# fall over. Neither is a crash, and `fatal` is a failure the test itself declared, so each
+	# takes its own verdict back here.
+	return Outcome("skip", why) if skipped
+	return Outcome("fail", notes + why) if why != ""
+
+	return Outcome(verdict, notes + text)
 }

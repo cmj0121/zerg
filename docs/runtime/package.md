@@ -432,6 +432,14 @@ does.
 > the tree. A run that found nothing says so on stderr as well, but a sentence alone leaves a CI
 > line green forever, and the reader of a CI line is a shell.
 >
+> **A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg`. The
+> decorator may be written anywhere, so a directory whose only `#[test]` sits in an ordinary
+> module file is a test package too, and `zerg lint` goes on warning (**L601**) that such a test
+> **ships**. Both, not one: the linter says where a test ought to live and the runner runs what is
+> written. It adds no package **shape** — the package a stray `#[test]` belongs to is the one that
+> already compiles the file it is in — so the monotone rule above is untouched: which files a
+> package is built from is still decided by the `*_test.zg` names alone.
+>
 > **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
 > test, a stem selects the family. It is applied before anything is generated, so a test it did not
 > select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`

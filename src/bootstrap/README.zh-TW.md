@@ -168,6 +168,16 @@ src/bootstrap/
   thunk，而那裡該放的是指標。`zerg` 在呼叫處拒絕它。
 - **裝不進自己參數的預設值會被接受。** `fn f(a: int, b: str = 1)` 照寫出來的樣子被 emit 出去，然後由 cc
   來報那個型別。`zerg` 在宣告處就判定一個預設值。
+- **會呼叫任何東西的預設值會被拒絕，而且那句話宣稱是語言禁止它。** `struct C { c: chan[int] =
+chan[int]() }`——或任何不是字面值、模組常數，或它們之間算術的預設值——都會被以「_a default value must be
+  a constant expression that does not reference a parameter/field_」擋下來。語言說的正好相反：一個預設值
+  「是**每次建構**時求值，而不是在宣告處求一次——裡面的運算式（一個呼叫、一個對模組常數的求和）會在每一次
+  省略該欄位的建構中重跑一遍」（`docs/core/types.md`，"Field defaults"），而 `zerg` 接受它。種子是把預設值
+  **逐字**回填到每一個呼叫處與建構處，而且根本不會對那個運算式做**型別判定**——`checkConstDefault` 只驗形狀，
+  所以一個預設值沒有被記錄的 `ExprType`，一個呼叫會以壞掉的 C 抵達 cc。因此那個拒絕對種子而言是對的、對
+  Zerg 而言是錯的：一個穿著語言規則外衣的 `NotImplemented`。這也是 `src/stdlib/testing.zg` 裡的
+  `Context.events` 是 `pub` 且不帶預設值的原因——模組私有欄位必須帶一個，而一個全新 channel 唯一能有的預設值
+  就是一個呼叫。
 - **頂層 binding 的型別標註不會拿來對照它的值。** `answer: bool = 42` 建得起來，那個全域變數就是種子隨手
   做出來的樣子；同樣的不相符若發生在**區域** binding 上，種子是會拒絕的。`zerg` 對待頂層標註的方式與對待
   區域的一致——全域採用宣告的型別，不相符在宣告處被拒絕。

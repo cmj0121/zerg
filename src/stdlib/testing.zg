@@ -93,7 +93,16 @@ pub struct Context {
 	# a `<-chan[Event]` which is not one. So the context — held only by the coroutine
 	# running the test — is the last sender, and the body returning is what ends the
 	# stream.
-	events: chan[Event] = chan[Event]()
+	#
+	# THE FIELD IS `pub` BECAUSE THE ALTERNATIVE IS A DEFAULT NOBODY CAN WRITE. A
+	# module-private field must carry one (`E482`), and the only value that would serve is
+	# a FRESH channel per construction — `chan[Event]()`, a call. `zerg` takes that: a
+	# default is evaluated per construction and may be a call (docs/core/types.md, "Field
+	# defaults"). The bootstrap SEED does not, and `testing` is a module the seed's own
+	# suite compiles, so the module has to stay inside the subset the seed reads. `pub`
+	# is what drops the requirement instead of working around it: `context` below hands
+	# every Context its channel, so the default was dead the day it was written.
+	pub events: chan[Event]
 }
 
 # context builds the Context for one test. It is the generated driver's entry point and

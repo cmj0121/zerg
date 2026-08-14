@@ -7176,7 +7176,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 		# NsModule means — and being real is not the same as being this module's to write.
 		chk_ns_bound(em, c_ns_root(target))
 
-		# A NAMESPACED GENERIC — `testing.assert_eq(1, 1)`. A module's names flatten into
+		# A NAMESPACED GENERIC — `testing.assert_raises(guard { … })`. A module's names flatten into
 		# the one program-wide function space, so this IS the free function of that name,
 		# and a template reached this way has to be instantiated exactly as one reached
 		# directly. Asking the sig table first would find nothing, a template having no

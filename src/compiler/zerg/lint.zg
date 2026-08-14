@@ -176,20 +176,10 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	return lint_allowed(srcs, paths, out)
 }
 
-# lint_with_names is L105: `with e as x { … }` where nothing in the block reads `x`. The
-# block already scopes the resource — that is what `with` IS — so the name buys nothing and
-# costs the next reader the question "where is `x` used?". The nameless form says the same
-# thing and says it shorter.
-#
-# It reads TOKENS rather than the AST, and that is not a shortcut: `with` expands in the
-# parser (GRAMMAR defines it by expansion), so by the time there is an AST there is no
-# `with` left to lint. Every rule about this form is a token rule for the same reason —
-# F409 next door is the other one.
-#
-# lint_token_rules is the ONE lex the token rules share. There are two of them now (L105 and
-# L602) and each used to open with the same `for k < srcs.len() { tokenize(srcs[k]) }`, so a
-# second token rule meant a second pass over every byte of the program — and a third loop
-# skeleton to keep in step with the other two.
+# lint_token_rules is the ONE lex the rules that read TOKENS share. There are two of them,
+# L105 and L602, and a rule that opens with its own `for k < srcs.len() { tokenize(srcs[k]) }`
+# is a second pass over every byte of the program — plus a second loop skeleton to keep in
+# step with the first. The rules take the tokens and the path; the lex happens once.
 fn lint_token_rules(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
 	mut k := 0
 	for k < srcs.len() {
@@ -201,6 +191,15 @@ fn lint_token_rules(srcs: list[str], paths: list[str], mut &out: list[Finding]) 
 	}
 }
 
+# lint_with_names is L105: `with e as x { … }` where nothing in the block reads `x`. The
+# block already scopes the resource — that is what `with` IS — so the name buys nothing and
+# costs the next reader the question "where is `x` used?". The nameless form says the same
+# thing and says it shorter.
+#
+# It reads TOKENS rather than the AST, and that is not a shortcut: `with` expands in the
+# parser (GRAMMAR defines it by expansion), so by the time there is an AST there is no
+# `with` left to lint. Every rule about this form is a token rule for the same reason —
+# F409 next door is the other one.
 fn lint_with_names(mut &toks: list[Token], path: str, mut &out: list[Finding]) {
 	mut i := 0
 	for i + 3 < toks.len() {
@@ -328,13 +327,8 @@ fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
 # lint_ships_an_assert is L602: an `assert` outside a `*_test.zg` file. It is L601's direct
 # sibling — same family, same severity, same shape of argument — and the sentence leads with
 # the CONSEQUENCE for L601's reason: "move it to a test" is style advice about a program that
-# runs, and style advice is what a reader learns to scroll past.
-#
-# The consequence here is not dead weight but a LIVE claim. `assert` is always compiled in
-# (GRAMMAR#assert-stmt says why there is no flag that strips it), so what ships is a check
-# that can abort a running program — and the honest framing is that `assert` in production is
-# not weaker than the check somebody meant to write, it is LESS SPECIFIC: it says the claim
-# was false and not what it meant. Naming the replacement is what makes the warning earned.
+# runs, and style advice is what a reader learns to scroll past. What that consequence is, and
+# why naming the replacement is what makes the warning earned, is in the registry above.
 #
 # IT READS TOKENS, not the tree, and that is the completeness argument rather than a
 # shortcut: `assert` can be written inside a `guard` block or a closure body, which hang off

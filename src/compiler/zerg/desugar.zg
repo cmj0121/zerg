@@ -673,8 +673,9 @@ fn dsg_assert_at(mut &toks: list[Token], at: int, base: str, mut &out: list[Toke
 # between them; the `;`s are what break them onto lines of their own.
 #
 # The message is `assert_head` plus one `assert_note` per bound operand, wrapped by
-# `assert_fstr` — the same four functions the parser's own lowering calls, so the two spellings
-# of this form cannot say different things. What is written HERE is only the token shape.
+# `assert_fstr`, over temporaries `assert_tmp` names — the same four functions the parser's own
+# lowering calls, so the two spellings of this form cannot say different things. What is
+# written HERE is only the token shape.
 fn dsg_emit_assert(mut &toks: list[Token], at: int, c: AClaim, base: str, mut &out: list[Token]) {
 	ln := toks[at].line
 	col := toks[at].col

@@ -167,10 +167,11 @@ fn test_contains_multibyte() {
 
 # --- split ----------------------------------------------------------------------------
 #
-# A `list[str]` DOES NOT IMPLEMENT `Eq`, so `assert_eq` cannot take one (E412). Every
-# assertion about a split therefore goes back through `join` with a separator the input
-# does not contain, which is the only shape available — and which happily doubles as the
-# split/join round trip.
+# TWO LISTS CANNOT BE COMPARED — `E445 NotImplemented: `==` on a list[str]`, structural
+# equality over a container being unbuilt — so no claim here can be made about a split's
+# result directly. Every one of them goes back through `join` with a separator the input does
+# not contain, which is the only shape available and which happily doubles as the split/join
+# round trip.
 
 #[test]
 fn test_split_ordinary() {

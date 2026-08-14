@@ -239,19 +239,6 @@ fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
 		# fallback below left it, quietly: nothing downstream looks at those statements again,
 		# so the specialization carried a `fn(T) -> bool` into a position wanting `fn(int)`.
 		Stmt.SAssert(b) => Stmt.SAssert(subst_block(names, args, b))
-
-		# an `assert` holds the author's own condition, desugared, so a `T` written in it — in a
-		# closure's parameter, say — is a `T` this pass owes an argument like any other. The
-		# fallback below left it, quietly: nothing downstream looks at those statements again,
-		# so the specialization carried a `fn(T) -> bool` into a position wanting `fn(int)`.
-
-		# an `assert` holds the author's own condition, desugared, so a `T` written in it is a
-		# `T` this pass owes an argument like any other. The fallback below would have left it
-		# — quietly, since nothing else looks at those statements again
-
-		# an `assert` holds the author's own condition, desugared, so a `T` written in it is a
-		# `T` this pass owes an argument like any other. The fallback below would have left it
-		# — quietly, since nothing else looks at those statements again
 		_ => s
 	}
 }

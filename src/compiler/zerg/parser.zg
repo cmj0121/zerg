@@ -3060,9 +3060,9 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 # from the same direction — a container has no `==` either (E445) — so the two holes very
 # nearly line up. NEARLY: a `#[derive(Eq)]` struct compares and does NOT render, so
 # `assert p == q` over one is E449 against a program that is otherwise fine. That is a hole
-# `testing.assert_eq` already had for the same reason — its own `f"{a} != {b}"` is E449
-# there, reported inside src/stdlib/testing.zg — and what changes here is only that the
-# diagnostic now points at the line the reader wrote. Closing it needs a structural Display,
+# `testing.assert_eq` had for the same reason — its own `f"{a} != {b}"` was E449 too, and
+# reported inside src/stdlib/testing.zg, at a line the reader had not written. What changes
+# here is that the diagnostic points at their own. Closing it needs a structural Display,
 # which is a language feature and not this form's to invent.
 #
 # THE VALUES ARE INTERPOLATED, NEVER `str()`-ed. The two spellings are one rendering in this

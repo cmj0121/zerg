@@ -1016,7 +1016,7 @@ fn test_pkgs(root: str, mut &out: list[str]) {
 	names := __zrt_listdir(root)
 	mut has := false
 	for name in names {
-		if is_test_file(name) {
+		if zerg.is_test_file(name) {
 			has = true
 		}
 	}
@@ -1074,7 +1074,7 @@ const DRIVER_NAME := "zerg_test_driver_test.zg"
 # `zerg test` from a file `zerg build` also ships.
 fn pkg_tests(files: list[str], mut &names: list[str], mut &at: list[str]) {
 	for f in files {
-		if is_test_file(path_tail(f)) {
+		if zerg.is_test_file(path_tail(f)) {
 			tree := zerg.parse_at(read_source(f), f)
 			for fd in tree.fns {
 				if fd.is_test {
@@ -1337,7 +1337,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 # A test file is not importable from anywhere, including a sibling test file: the convention
 # says which builds compile one, and `zerg test` is what will compile them together.
 fn chk_test_import(im: zerg.ImportDecl) {
-	return if not is_test_file(path_tail(im.path) + ".zg")
+	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
 
 	place := zerg.place_line(im.at, im.line, im.col)
 	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
@@ -1615,13 +1615,9 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
 }
 
-# is_test_file reports whether a source is a TEST FILE by the build tool's convention, which
-# is its name (docs/runtime/package.md). A test is ordinary code under the ordinary visibility
-# rules — there is no test-only backdoor into privacy — so the only thing that separates it
-# from the module it sits in is which builds compile it, and this is that line.
-fn is_test_file(name: str) -> bool {
-	return name == "_test.zg" or has_suffix(name, "_test.zg")
-}
+# WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written
+# here, and moved into the module when the linter grew a rule about it (L601): two tools ask
+# the question now, and a naming convention answered in two places is one that drifts.
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
 # DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
@@ -1643,7 +1639,7 @@ fn module_at(root: str, path: str) -> list[str] {
 	if __zrt_exists(dir) {
 		mut many: list[str] = []
 		for name in __zrt_listdir(dir) {
-			if has_suffix(name, ".zg") and not is_test_file(name) {
+			if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
 				many.append(join_path(dir, name))
 			}
 		}

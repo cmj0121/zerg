@@ -2004,6 +2004,23 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 	return true
 }
 
+# strings_has_suffix is its other end, and it is written here rather than taken from the
+# `strings` module for the reason its neighbour is: this module may not IMPORT one, because
+# `strings.has_suffix` is `pub` and the driver has a private function of that name, which is
+# E705 (docs/runtime/package.md). Two small readers, module-private, beside each other.
+fn strings_has_suffix(s: str, suf: str) -> bool {
+	b := bytearray(s)
+	q := bytearray(suf)
+	return false if b.len() < q.len()
+	off := b.len() - q.len()
+	mut i := 0
+	for i < q.len() {
+		return false if b[off + i] != q[i]
+		i = i + 1
+	}
+	return true
+}
+
 # parse_import reads both forms GRAMMAR gives an import — one spec, or a parenthesized
 # group of them — and appends every path it binds.
 #

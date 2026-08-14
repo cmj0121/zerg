@@ -71,6 +71,15 @@
 # records it and lint_conversions (emit.zg) hands it back. lint_program asks both and hands
 # back one list.
 #
+# `L6xx` is SHIPPING: what the binary carries that the source suggests was not meant to be in
+# it.
+#
+#   L601  a `#[test]` function outside a `*_test.zg` file. It is LEGAL and it SHIPS — the
+#         function is compiled into the binary like any other, its `import "testing"` travels
+#         with it, and nothing calls it. So the message states that CONSEQUENCE rather than
+#         the preference: a warning that only says "move it" is style advice and gets
+#         ignored, and what the reader has to weigh is 224 bytes of dead code in the artifact
+#
 # --- severity, and the two exit codes it decides -----------------------------------------
 #
 # A finding has a SEVERITY, and there are three:
@@ -78,15 +87,15 @@
 #   a finding   the default. A rule fired on the program, which is what the tool is for, and
 #               `zerg lint` exits nonzero — so it gates a build rather than decorating one.
 #   warning     printed, and `zerg lint` still exits 0. It is what a rule says about a
-#               program that is not wrong: a suppression that will never apply harms nothing
-#               by itself.
+#               program that is not wrong: a `#[test]` that ships is legal, and a suppression
+#               that will never apply harms nothing by itself.
 #   info        printed, and nothing exits nonzero for it, ever. A stale allow is a tidying
 #               job, not a defect.
 #
 # `make lint` — this project's gate over its OWN source — passes `--strict` and fails on a
 # warning too, because the compiler's own source should not carry a suppression that will
-# never apply. A gate board stricter than the tool has precedent here: refuse-check asserts
-# more than `zerg build` requires.
+# never apply or a test that ships. A gate board stricter than the tool has precedent here:
+# refuse-check asserts more than `zerg build` requires.
 #
 # ONLY THE DEFAULT PRINTS NO ADJECTIVE. A finding is what `zerg lint` is for and needs no
 # word in front of it; the two that do NOT fail the tool say which they are, because a line
@@ -133,6 +142,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	lint_captures(f, out)
 	lint_optionals(f, out)
 	lint_idle_mut_fn(f, out)
+	lint_ships_a_test(f, out)
 	lint_with_names(srcs, paths, out)
 
 	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
@@ -260,6 +270,38 @@ fn lint_idle_mut_fn(f: File, mut &out: list[Finding]) {
 	for fd in f.fns {
 		if fd.recv != "" and lint_recv_is_mut(fd) and not writes_this(fd.body, refs) {
 			out.append(Finding("", fd.path, fd.line, fd.col, "L402", f"`{fd.recv}.{fd.name}` is a `mut fn` and never writes through `this` — every call site has to hold the instance in a `mut` binding for nothing; make it a plain `fn`"))
+		}
+	}
+}
+
+# --- L6xx: what the binary carries ---------------------------------------------------
+
+# is_test_file reports whether a source is a TEST FILE by the build tool's convention, which
+# is its name (docs/runtime/package.md). A test is ordinary code under the ordinary visibility
+# rules — there is no test-only backdoor into privacy — so the only thing that separates it
+# from the module it sits in is which builds compile it, and this is that line.
+#
+# It lives in the module rather than in the driver because two tools ask it now: `zerg test`
+# discovers what to run, and L601 below asks whether a `#[test]` is somewhere it will ship
+# from. One fact, one home.
+pub fn is_test_file(name: str) -> bool {
+	return name == "_test.zg" or strings_has_suffix(name, "_test.zg")
+}
+
+# lint_ships_a_test is L601: a `#[test]` function outside a `*_test.zg` file.
+#
+# The owner's decision is that such a function is LEGAL, so this is not an error — and what
+# makes it worth saying is measurable rather than stylistic: the function is compiled into
+# the binary like any other, it appears twice in the emitted C, it grows the artifact, and
+# nothing calls it. Its `import "testing"` travels with it too, which is how a test-only
+# dependency reaches a shipped program.
+#
+# So the sentence leads with the CONSEQUENCE. "Move it" alone is style advice about a program
+# that runs, and style advice is what a reader learns to scroll past.
+fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
+	for fd in f.fns {
+		if fd.is_test and not is_test_file(fd.path) {
+			out.append(Finding("warning", fd.path, fd.line, fd.col, "L601", f"`{fd.name}` is a `#[test]` outside a `*_test.zg` file, so it SHIPS — it is compiled into the binary like any other function, nothing calls it, and its `import \"testing\"` travels with it; move it to a `*_test.zg` file beside its module if that is not what you meant"))
 		}
 	}
 }
@@ -648,6 +690,15 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[Findi
 		# `init` is called by the generated main, the same way the runtime calls `main`
 		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
 			continue_marker()
+		} else if fd.is_test {
+			# A `#[test]` IS CALLED BY THE DRIVER `zerg test` GENERATES, which is not in the
+			# source and never will be — so every test function in the tree read as dead
+			# private code, and a test file could not be linted at all.
+			#
+			# It is exempt here even OUTSIDE a `*_test.zg` file, where nothing does call it,
+			# because that case has a rule of its own: L601 says the same thing and says the
+			# part that matters, which is that the function ships.
+			continue_marker()
 		} else if has_str(reqs, fd.name) {
 			# A METHOD THAT SATISFIES A SPEC IS AN INTERFACE, the way a `pub` function is: what
 			# calls it may be another program, or — for `Into` — the compiler, at a typed
@@ -979,7 +1030,7 @@ struct Allow {
 # directions: a code documented and not listed here can never be allowed, and a code listed
 # here and not documented is a rule with no entry to read.
 fn lint_codes() -> list[str] {
-	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502"]
+	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502", "L601"]
 }
 
 # lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that
@@ -1072,7 +1123,7 @@ fn lint_allows(srcs: list[str], paths: list[str]) -> list[Allow] {
 # `allow` item names.
 #
 # IT READS THE WHOLE DECORATOR, not just its first item. One decorator per item is the rule
-# (E613), so an item that wants an allow beside another decorator writes `#[allow(L1xx), d]` —
+# (E613), so a `#[test]` that wants an allow beside it has to write `#[allow(L601), test]` —
 # and a scan that only looked at the item after the `#[` would see nothing in exactly the
 # program the merged form was made for.
 fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {

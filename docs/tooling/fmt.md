@@ -1229,9 +1229,9 @@ is right: there is nothing to advise about the types of a program whose types ar
 
 ### `L6xx` — what the binary carries
 
-| Code   | Rule                                                 |
-| ------ | ---------------------------------------------------- |
-| `L601` | a `#[test]` outside a `*_test.zg` file — **warning** |
+| Code   | Rule                                                                 |
+| ------ | -------------------------------------------------------------------- |
+| `L601` | a `#[test]` or `#[fixture]` outside a `*_test.zg` file — **warning** |
 
 Such a function is **legal** and it **ships**: it is compiled into the binary like any other,
 it appears twice in the emitted C, nothing calls it, and its `import "testing"` travels with

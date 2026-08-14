@@ -30,7 +30,8 @@ Three rules hold for every decorator, whatever it names.
 
 ## The set
 
-`#[derive]`, `#[obj]`, `#[test]` and `#[allow]` are the decorators the compiler reads. Every other one —
+`#[derive]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler reads. Every other
+one —
 `#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
@@ -47,10 +48,17 @@ Three rules hold for every decorator, whatever it names.
   and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
   See **[Specs & Generics](specs.md)**.
 - **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
-  excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
-  fails the test (see [Modules, Packages & Programs](../runtime/package.md) on where tests live). A `#[test]`
-  **outside** a `*_test.zg` file is legal and **ships** — it is compiled into the binary like any other
-  function and nothing calls it — so `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)).
+  excluded from a normal one. It returns nothing and takes a **`testing.Context`** (by type), the **fixtures**
+  it needs (by name), or no parameter at all; a failing assertion or an abort inside it fails the test (see
+  [Modules, Packages & Programs](../runtime/package.md) on where tests live). A `#[test]` **outside** a
+  `*_test.zg` file is legal and **ships** — it is compiled into the binary like any other function and nothing
+  calls it — so `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)).
+- **`#[fixture]`** — on a `fn`, in a `*_test.zg`. Marks the function as something `zerg test` **builds for the
+  tests that name it**. It takes its tests as a **continuation**: one parameter of type `fn (T)`, identified by
+  type, which is both where those tests run and the declaration of what the fixture **produces**. Every other
+  parameter **names another fixture**. Teardown is `defer`, so the runner supplies nothing for it. The same
+  **L601** applies — a `#[fixture]` outside a `*_test.zg` ships exactly as a `#[test]` does. See
+  [Modules, Packages & Programs](../runtime/package.md).
 - **`#[allow(Lxxx, …)]`** — on any **statement**, declarations included. Suppresses the named **lint**
   findings over that statement, and over its block when it has one: the scope is the size of the statement
   it leads, which is one rule rather than a choice between a line and a scope. It does not reach the next
@@ -80,10 +88,10 @@ is a "not yet supported" **compile error**, never a silent no-op:
   [Values & Memory](memory.md)). **[not yet]**
 
 > **[not yet]** `#[repr]` is still a reserved name with no rule of its own: it falls into the
-> unknown-decorator arm and gets _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]` and
-> `#[allow(…)]`, and no other_, the same sentence a misspelled `#[frobnicate]` gets. It is refused, so nothing is silently
-> dropped; what is lost is the distinction between a name awaiting implementation and a typo —
-> `#[sealed]`, which had the same problem, now has `E496`.
+> unknown-decorator arm and gets _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`,
+> `#[fixture]` and `#[allow(…)]`, and no other_, the same sentence a misspelled `#[frobnicate]` gets.
+> It is refused, so nothing is silently dropped; what is lost is the distinction between a name
+> awaiting implementation and a typo — `#[sealed]`, which had the same problem, now has `E496`.
 >
 > `#[test]` is **read** now, by both compilers, and `zerg test` runs what it marks (see
 > [Modules, Packages & Programs](../runtime/package.md) for how far that command goes). One

@@ -314,7 +314,7 @@ else
 	while read -r f; do kind_of_field "$f"; done <"$TMPD/fields" >"$TMPD/fkinds"
 
 	# and the argument KINDS, in call order. `c_nosub()` is the only call among them, and it
-	# holds no comma, so splitting on `, ` is safe.
+	# holds no comma, so splitting on `,` and trimming each side is safe.
 	printf '%s\n' "$ctor" | tr ',' '\n' | sed 's/^ *//; s/ *$//' >"$TMPD/args"
 	while read -r a; do kind_of_arg "$a"; done <"$TMPD/args" >"$TMPD/akinds"
 

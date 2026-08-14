@@ -26,12 +26,14 @@
 #   a plain sentence     an ill-formed PROGRAM. It is permanent and it is the language's
 #                        answer, not this compiler's. Those are the rules named here.
 #
-# WHERE THEY ARE WRITTEN is the looser half of that: 64 report from this file and 26 from
-# emit.zg, at the point in the lowering that already holds the answer — a closure with a
-# parameter no position could type, an argument count only the fn-value path knows. What
-# makes them one set is not the file, it is the CHANNEL: every one goes through chk_at /
-# chk_at_place below, so every one carries a code, a place and the all-at-once behaviour,
-# and error-codes-check sees all ninety wherever they live.
+# WHERE THEY ARE WRITTEN is the looser half of that, and it is worth counting BY CODE, since
+# a code is a rule's identity: 79 codes report from this file and 35 from emit.zg, at the
+# point in the lowering that already holds the answer — a closure with a parameter no
+# position could type, an argument count only the fn-value path knows. No code reports from
+# both, which is what makes the two counts add up. What makes them one set is not the file,
+# it is the CHANNEL: every one goes through chk_at / chk_at_place below, so every one carries
+# a code, a place and the all-at-once behaviour, and error-codes-check sees all 114 wherever
+# they live.
 #
 # scripts/reject-check.sh is the gate, and it holds every rule to both halves: the compiler
 # must refuse the program, and the refusal must not come from cc.
@@ -170,26 +172,41 @@ fn c_synthetic_path(path: str) -> bool {
 	return b[0] == b'<'
 }
 
-# chk_visible is the rule. It is quiet on a `pub` declaration, on one from the module doing
-# the reading, and on one whose module is unknown — a generated declaration (a `derive`d
-# impl, a monomorphized specialization) carries the path of whatever asked for it, and a
-# rule that guessed there would refuse programs for a reason the reader cannot see.
+# chk_across_modules is the SILENCE every visibility rule keeps, and it is one function
+# because it is one rule asked of three different tables. A private thing is only worth
+# reporting when a reader outside its module is looking at it, and three of the four ways to
+# fail that test are silences rather than findings:
+#
+#   the declaring module is unknown  a GENERATED declaration — a `derive`d impl, a
+#                                    monomorphized specialization — carries the path of
+#                                    whatever asked for it, so there is no module a reader
+#                                    could have written and nothing to refuse them for
+#   it is the reader's own module    a module reads its own private names; that is what
+#                                    private means
+#   the reading module is unknown    no marker covers the code being emitted before the
+#                                    first statement of the first function. A module
+#                                    constant's initializer is NOT that case any more:
+#                                    c_const_assigns points the marker at the declaration
+#                                    itself, so its module answers like any other reader's
+#
+# A rule that guessed at either unknown would refuse programs for a reason the reader cannot
+# see, which is why both answer false rather than true.
+fn chk_across_modules(at_path: str, decl_mod: str) -> bool {
+	return false if decl_mod == ""
+
+	here := c_mod_of(at_path)
+
+	return false if here == decl_mod
+	return false if here == ""
+
+	return true
+}
+
+# chk_visible is the rule for a FUNCTION or a module binding: quiet on a `pub` declaration,
+# and otherwise reported exactly where chk_across_modules says a reader is outside.
 fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	return if is_pub
-
-	# A declaration with no module is a GENERATED one — a `derive`d impl, a monomorphized
-	# specialization — carrying the path of whatever asked for it. There is no module a
-	# reader could have written, so there is nothing to refuse them for.
-	return if decl_mod == ""
-
-	here := c_mod_of(em.at_path)
-	return if here == decl_mod
-
-	# And the reading module is unknown where no marker covers the code being emitted —
-	# before the first statement of the first function, the marker still says nothing. A
-	# module constant's initializer is NOT that case any more: c_const_assigns points the
-	# marker at the declaration itself, so its module answers here like any other reader's.
-	return if here == ""
+	return if not chk_across_modules(em.at_path, decl_mod)
 
 	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
@@ -197,9 +214,8 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
 # third caller of the first because what it reads is a different table: a function's row
 # carries its module and its marker (sig_mod / sig_pub), and a type's carries them in the
-# type registry (tk_mod / tk_pub). Everything else is the same rule, and is deliberately
-# spelled the same way — `pub` is quiet, own module is quiet, an unknown module on either
-# side is quiet.
+# type registry (tk_mod / tk_pub). The table and the sentence are the whole difference —
+# the silence is chk_across_modules', asked by all three of these rules.
 #
 # The SEED IS THE ORACLE for this one. It has refused `lib.Secret` from outside since it was
 # written (`resolveTypeRef`, src/bootstrap/internal/sema/typeref.go) with the sentence this
@@ -212,12 +228,7 @@ fn chk_ty_visible(mut &em: Emitter, nm: str) {
 	return if c_ty_pub(em, nm)
 
 	decl_mod := c_ty_mod(em, nm)
-	return if decl_mod == ""
-
-	here := c_mod_of(em.at_path)
-
-	return if here == decl_mod
-	return if here == ""
+	return if not chk_across_modules(em.at_path, decl_mod)
 
 	chk_at(em, "E508", f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
 }
@@ -264,12 +275,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 	return if c_fld_pub(em, sname, fname)
 
 	decl_mod := c_ty_mod(em, sname)
-	return if decl_mod == ""
-
-	here := c_mod_of(em.at_path)
-
-	return if here == decl_mod
-	return if here == ""
+	return if not chk_across_modules(em.at_path, decl_mod)
 
 	chk_at(em, "E510", f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
 }
@@ -436,8 +442,9 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		return
 	}
 	if c_is_index(lhs) {
-		tn := c_ident_name(chk_store_target(lhs))
-		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, chk_store_target(lhs))) {
+		tgt := chk_store_target(lhs)
+		tn := c_ident_name(tgt)
+		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, tgt)) {
 			chk_frozen(em, tn, "assign into")
 			return
 		}

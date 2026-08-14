@@ -3308,16 +3308,17 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 		c_check_type_dup(em, seen, kind, td.name, "a type declaration", td.path, td.line, td.col)
 	}
 	for sp in f.specs {
-		# a SpecDecl knows WHERE it was written, and a rule that has a place uses it: it says
-		# where, and it accumulates rather than ending the run at the first finding. A
-		# struct, an enum, a field and a variant carry no place, so those still raise —
-		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
+		# ALL SIX KINDS KNOW WHERE THEY WERE WRITTEN, so all six report the same way: they say
+		# where, and they accumulate rather than ending the run at the first finding. A
+		# StructDecl and an EnumDecl carried no place once and those two raised instead, which
+		# is the split c_dup_report's comment records as gone.
 		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
 	}
 
-	# THE FUNCTIONS AFTER THE TYPES, so the finding lands on the `fn` in EITHER source
-	# order: a FnDecl knows its path, line and column and a struct or an enum does not, so
-	# walking the types first is what turns this whole family into a rule that says where.
+	# THE FUNCTIONS AFTER THE TYPES, so the finding lands on the `fn` in EITHER source order.
+	# A collision is reported at the SECOND declaration the walk meets, and the walk's order
+	# is this one rather than the file's — so `fn A` beside `struct A` says the same thing,
+	# and says it at the function, whichever of the two the reader wrote first.
 	#
 	# FREE functions only. A method is keyed by its receiving type — `impl Bar { fn Foo() }`
 	# mangles to `zg_Bar_Foo` and lives in that type's namespace (GRAMMAR#impl-decl), which
@@ -3467,13 +3468,29 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 	kind.append(what)
 }
 
-# c_dup_report is the one place a duplicate declaration is worded, so a declaration that
-# knows its place and one that does not say the same thing about the same rule. TWO
-# SENTENCES MEANS TWO RULES, so there are two codes: colliding with a DIFFERENT kind of
-# declaration and colliding with the same kind are separate mistakes with separate answers.
+# c_dup_report is the one place a duplicate declaration is worded, so all six kinds of
+# declaration say the same thing about the same rule. TWO SENTENCES MEANS TWO RULES, so
+# there are two codes: colliding with a DIFFERENT kind of declaration and colliding with the
+# same kind are separate mistakes with separate answers.
+#
+# BOTH RECORD, and neither raises. There used to be a c_dup_say between this and the channel,
+# to CHOOSE one — a struct and an enum were registered with no place, so those two raised and
+# the other four said where — and the choice went when its reason did: a StructDecl and an
+# EnumDecl each carry the line their keyword is on now, so all six have a place to give and
+# there is nothing left for a chooser to decide.
+#
+# A FOLLOW-ON IS THE PRICE OF RECORDING, and it is paid rather than dodged. A duplicate
+# `struct A` used to end the run; now the walk carries on, so `A(7)` against the SECOND
+# declaration also reports `E370 the field `w` … has no value`. That second sentence is true
+# of the program as the compiler must read it, and it goes away when the duplicate does.
+#
+# Suppressing it would need a list of names a rule has already condemned, consulted by every
+# later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
+# is a rule going quiet about a real mistake. Reporting every finding in one run is what the
+# specification asks for (docs/conformance.md), and a cascade is what "every" costs.
 fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int) {
 	if prev != what {
-		c_dup_say(em, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}", path, line, col)
+		chk_at_place(em, path, line, col, "E381", f"`{name}` is declared twice — once as {prev}, once as {what}")
 		return
 	}
 
@@ -3486,31 +3503,7 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	# needs the first of each on the list to see it.
 	return if what == "a function" or what == "a module constant"
 
-	c_dup_say(em, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here", path, line, col)
-}
-
-# c_dup_say records the finding. It used to CHOOSE a channel — a struct and an enum were
-# registered with no place, so those two raised and the other four said where — and the
-# choice is gone because the reason for it is: a StructDecl and an EnumDecl each carry the
-# line their keyword is on now, so every one of the six declarations has a place to give.
-#
-# The code still travels as an argument, which is what keeps one rule from wearing two
-# identities. It has to stay a LITERAL where it is REPORTED, though, which is why the two
-# callers above spell it and this one does not: scripts/error-codes-check.sh reads the source
-# for the code a diagnostic opens with, and a `code` picked into a variable is invisible to
-# it — the gate said so the moment folding the two callers into one was tried.
-#
-# A FOLLOW-ON IS THE PRICE OF RECORDING, and it is paid rather than dodged. A duplicate
-# `struct A` used to end the run; now the walk carries on, so `A(7)` against the SECOND
-# declaration also reports `E370 the field `w` … has no value`. That second sentence is true
-# of the program as the compiler must read it, and it goes away when the duplicate does.
-#
-# Suppressing it would need a list of names a rule has already condemned, consulted by every
-# later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
-# is a rule going quiet about a real mistake. Reporting every finding in one run is what the
-# specification asks for (docs/conformance.md), and a cascade is what "every" costs.
-fn c_dup_say(mut &em: Emitter, code: str, msg: str, path: str, line: int, col: int) {
-	chk_at_place(em, path, line, col, code, msg)
+	chk_at_place(em, path, line, col, "E382", f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here")
 }
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
@@ -3804,8 +3797,9 @@ fn c_enum_variant_copy(mut &em: Emitter, en: str, vd: VariantDef) -> str {
 }
 
 # c_enum_drop_helper is that helper read backwards, slot by slot, in REVERSE declaration
-# order — the order docs/core/memory.md pins for an enum payload, the same one a struct's
-# fields drop in.
+# order — the order docs/core/memory.md pins for an enum payload. (A struct's drop walks its
+# fields FORWARD, which the same page pins the other way; that is a gap of c_drop_helper's
+# and not a second reading of the rule.)
 fn c_enum_drop_helper(mut &em: Emitter, ed: EnumDecl) -> str {
 	nm := "zg_" + ed.name
 	mut out := "static void zg_drop_" + ed.name + "(" + nm + " *v) {\n    switch (v->tag) {\n"
@@ -4060,7 +4054,8 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 				em.vf_variant.append(v.name)
 				em.vf_index.append(k)
 
-				# a field whose type is the enclosing enum is boxed (leak-style void*)
+				# a field whose type is the enclosing enum is boxed into a refcounted cell
+				# (void*), whose drop is the enum's own — c_refbox_helpers
 				em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
 				em.vf_ty.append(v.fields[k])
 				k = k + 1
@@ -4762,10 +4757,14 @@ fn c_deeper(mut &em: Emitter) {
 # --- the wordings reached from two sites ------------------------------------------------
 #
 # A CODE IS A RULE'S IDENTITY, so one sentence raised from two places is two rules wearing
-# one number and scripts/error-codes-check.sh reports it as such. Each pair below is one
-# rule asked twice — once by the pass that EMITS the call and once by the pass that TYPES
-# it, which is the arrangement c_meth_kind's comment explains — so each is one function
-# here rather than the same string written out twice.
+# one number and scripts/error-codes-check.sh reports it as such. Each sentence below is one
+# function here rather than the same string written out twice.
+#
+# WHICH two places differ by rule. The three method wordings are asked once by the pass that
+# EMITS the call and once by the pass that TYPES it, which is the arrangement c_meth_kind's
+# comment explains. The flat-namespace collision is asked of a declaration and of a module
+# constant, two walks over two tables. The two exhaustiveness wordings are one pass reaching
+# one rule once per side.
 
 fn c_err_method_unknown(mut &em: Emitter, meth: str) -> str {
 	return c_diag(em, "E717", f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`")
@@ -7945,7 +7944,7 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Su
 			}
 			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, en, name, i), args[i], sb)
 			if c_is_boxed(em, en, name, i) {
-				# box a self-recursive payload into a leaked ref cell
+				# box a self-recursive payload into a refcounted cell that releases it
 				val = f"zg_refnew_{en}({val})"
 			}
 			out = out + ".f" + strconv.to_string(i, 10) + " = " + val
@@ -8180,7 +8179,7 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 # `tag` — so the test COMPILED against the wrong type and compared unrelated numbers. Over a
 # `K?` it was worse than wrong: the optional's present-tag is 0 and the first variant's tag
 # is 0, so `match K.of(1) { A => … }` took the `A` arm whenever the value was present at all,
-# whichever variant it held. `c_variant_tag` answering 0 for a name it does not know made an
+# whichever variant it held. The tag lookup answering 0 for a name it does not know made an
 # undeclared variant match the same way.
 fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	chk_arm_types(em, arms, st)
@@ -8754,7 +8753,6 @@ fn c_intrinsic(name: str) -> str {
 	return str(out)
 }
 
-# c_intrinsic_ret gives the result type of the intrinsics the compiler's I/O uses.
 # c_intrinsic_ret is what a runtime leaf answers. An intrinsic carries NO SIGNATURE — it
 # is a name the emitter lowers directly — so this table is the only place its result type
 # is written down, and an entry missing here is a leaf this compiler believes answers
@@ -11957,8 +11955,10 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_c
 	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
 	# three that have their own c_let_ above say it there because they have more to say; a
 	# struct, a map and a tuple all arrive here, and c_pend_drop knows which of them owes
-	# anything. A CARRIER — `T?`, `Result[T]` — is not registered: nothing generates a drop
-	# for one, so it leaks its payload, which the README table names.
+	# anything. A CARRIER — `T?`, `Result[T]` — arrives here too and is registered like the
+	# rest: c_carrier_decl generates its drop beside its copy, so a `T?` binding gives its
+	# payload back at scope exit rather than leaking it. The typed arm above registers the
+	# one it wraps for the same reason.
 	give := c_pend_drop(em, eff, cn, ind)
 	return f"{ind}{c_type(eff)} {cn} = {val};\n" + give
 }

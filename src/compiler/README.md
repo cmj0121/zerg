@@ -236,7 +236,7 @@ seventeen concurrency cases; a one-off sweep of the other forty-eight found 47 r
 thirteen of them, in classes the concurrency cases do not reach — a chain of rvalue indexes,
 a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types.
 
-`make mem-check` is the first gate that runs anywhere else. It builds seven programs written
+`make mem-check` is the first gate that runs anywhere else. It builds nine programs written
 inside `scripts/mem-check.sh`, runs each at 5 rounds and at 200 against a counting allocator
 linked in place of `alloc.c`, and holds the two live counts equal — so it needs neither
 LeakSanitizer nor the private corpus, and runs on macOS and on a fork. The ref-box, the

@@ -148,6 +148,16 @@ expect() {
 		return
 	fi
 
+	# AND IT MUST SPEAK THE READER'S VOCABULARY: a refusal may quote any name in the file and
+	# no name the compiler minted for itself (`names_a_temp`, diag.sh). It is asserted of both
+	# compilers because both mint names, and of every case rather than by a marker, for the
+	# reason the two above are: a message naming a temporary passes every other assertion here.
+	if names_a_temp "$out"; then
+		echo "NAMES TEMP  $name — the message quotes \`$(temp_named "$out")\`, which is in no file the reader can open"
+		fail=$((fail + 1))
+		return
+	fi
+
 	if [ "$cc" = "$ZERG" ] && ! has_place "$out"; then
 		echo "NO PLACE  $name — the refusal does not say where: $(echo "$out" | head -1)"
 		fail=$((fail + 1))

@@ -1,13 +1,19 @@
 # zerg — the self-hosting Zerg compiler.
 #
-# Five commands — build, fmt, lint, desugar, lsp — and the flags every tool owes its user:
-# --help, --version, and --emit to stop after a stage. There are five because there are
-# five JOBS: compiling is one of them however far along the pipeline you stop it, so the
+# Six commands — build, test, fmt, lint, desugar, lsp — and the flags every tool owes its
+# user: --help, --version, and --emit to stop after a stage. There are six because there
+# are six JOBS: compiling is one of them however far along the pipeline you stop it, so the
 # token stream, the tree, and the C are `--emit` values rather than commands of their own.
 #
-# `lsp` is the fifth, and it is the same compiler answering an editor rather than a shell.
-# One binary and not two: a sub-command makes version skew between the compiler and the
-# server physically impossible, and an editor needs nothing on PATH that is not there.
+# `lsp` is the same compiler answering an editor rather than a shell. One binary and not
+# two: a sub-command makes version skew between the compiler and the server physically
+# impossible, and an editor needs nothing on PATH that is not there.
+#
+# `test` is a command rather than a flag on `build` because it compiles what `build` is
+# defined by LEAVING OUT. A `*_test.zg` reaches no normal build (docs/runtime/package.md),
+# and that exclusion is what keeps a test out of the shipped artifact; `zerg build --test`
+# would put the two meanings on one command, and then a release step could ask for the
+# wrong one. `build` compiles what ships, and what ships never contains a test.
 #
 # `desugar` is a command rather than a mode of `fmt` because it is the OTHER answer to the
 # same question. `zerg fmt` writes the canonical form and canonical means sugared — it

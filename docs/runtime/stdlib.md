@@ -101,13 +101,21 @@ binary was built for. The program's own arguments arrive as `fn main(args: list[
 exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
 of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
 
-| Function                | Summary                                              |
-| ----------------------- | ---------------------------------------------------- |
-| `env(key: str) -> str?` | an environment variable's value, or `nil` when unset |
-| `exit(code: int)`       | terminate the process with `code` (does not return)  |
-| `run(argv: list[str])`  | run `argv[0]` (PATH-searched), wait, `-> int` status |
-| `platform() -> str`     | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
-| `arch() -> str`         | target CPU — `"arm64"`, `"x86_64"`, …                |
+| Function                  | Summary                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `env(key: str) -> str?`   | an environment variable's value, or `nil` when unset |
+| `exit(code: int)`         | terminate the process with `code` (does not return)  |
+| `run(argv: list[str])`    | run `argv[0]` (PATH-searched), wait, `-> int` status |
+| `platform() -> str`       | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
+| `arch() -> str`           | target CPU — `"arm64"`, `"x86_64"`, …                |
+| `isatty(fd: int) -> bool` | is this descriptor a terminal (0 in, 1 out, 2 err)   |
+
+**`isatty` is about the DEVICE and nothing else.** Use it to choose a **rendering** — colour at a terminal,
+plain into a pipe — and never a **format**: output that changes shape when it is redirected cannot be read
+the same way twice, and a log file that is JSON on one machine and columns on another is worse than either.
+[`log`](#log) follows exactly that line — colour asks this, and only `ZERG_LOG` picks the format. A
+descriptor that is not open is not a terminal, so it answers `false` rather than raising; it is total, which
+matters on a path where an abort would mean dying over escape codes.
 
 ## `strings`
 

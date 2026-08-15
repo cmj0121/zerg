@@ -47,6 +47,30 @@ I/O、讀 ambient 狀態（clock、randomness、`env`）、或可能 **abort**�
 
 持有函式的 binding 其可變性就是一般的 per-instance 軸——`mut f := …` 可 rebind、`f := …` 不可——與上述一切正交。
 
+## 命名：一個屬性，與它的兩種寫入
+
+這是**慣例**，不是編譯器強制的規則——除了 `GRAMMAR` 之外，語言對識別字沒有意見。之所以寫下來，是因為它在這棵樹裡
+處處成立卻從未被記載，而一個查不到的慣例，下一位貢獻者只會不小心破壞它。
+
+> **`xxx` 讀、`set_xxx` 寫、`del_xxx` 移除。**
+
+讓它可判定的測試，也是它之所以是一條短規則而非一種品味的理由：
+
+> **這三件套適用於「屬性」——有 getter，而且名字取自那個東西、不是取自那個動作。**
+
+這句話的兩半都在做事。
+
+- **`os.env` 有 getter**，而且是名詞：`env(key)` 命名的是它回答的東西。所以環境是一個屬性，它的寫入就是 `set_env`
+  與 `del_env`——不是 `put_env`、不是 `unset_env`、也不是 `env_set`。
+- **`log` 刻意沒有 getter** 來取得已安裝的 logger。`current()` 曾被提出並被拒絕：它讀起來像是對一個承受不起的 cell
+  做飛行中重設。沒有 getter 就沒有屬性，所以 `install` 命名的是一個**動作**，不會變成 `set_logger`。
+- **`atomic.load` / `atomic.store` 命名的是動作，不是東西。** 這裡 cell 的內容沒有名字——沒有 `atomic.value`——所以
+  沒有 `xxx` 可以讓 `set_` 加在前面，這一對也就沿用了各語言 atomic 共通的詞彙。名字是動詞的 getter 不是屬性存取器。
+
+**不在涵蓋範圍內**的，而且是刻意的：回傳修改後副本、而非寫入 receiver 的 **builder** 方法（`log.Logger.level(l)`、
+`cli.Command.version(v)`）以它所填的欄位命名，不加前綴。它不是 setter——receiver 沒有變——把它叫成 `set_level`
+等於宣稱了一個並未發生的改動。
+
 ## 預設參數與具名引數
 
 Zerg **沒有 overloading**——一個名字就是一個函式——所以 overloading 通常換來的彈性，改由**呼叫端**提供：**預設

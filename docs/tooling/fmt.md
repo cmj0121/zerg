@@ -604,7 +604,7 @@ That is why the table above names a **stage** rather than a range, and why `make
 error-codes-check` answers per stage:
 
 ```text
-error-codes-check: next free code per stage — building E513, checking E399, emitting E745,
+error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
                                               lexical E112, parser E612
 ```
 
@@ -951,7 +951,7 @@ shipping compiler rather than a part of it (the line
 | `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                                           |
 | `E704` | `?` propagates a right the enclosing function does not answer                                           |
 | `E705` | two modules both define `…` and at least one is `pub` — **[not yet]**                                   |
-| `E706` | two modules both define `…` — one flat namespace — **[not yet]**                                        |
+| `E706` | `…` and `…` both define `…` — one flat namespace — **[not yet]**                                        |
 | `E707` | no type named `…` (…)                                                                                   |
 | `E708` | `!` on a … — it forces a Result[T] or a T? — **[not yet]**                                              |
 | `E709` | `??` on a … — its left side is a Result[T] or a T? — **[not yet]**                                      |
@@ -990,6 +990,7 @@ shipping compiler rather than a part of it (the line
 | `E742` | `…` has … type parameters and this gives …                                                              |
 | `E743` | `..=` with no upper bound is not a range — **[not yet]**                                                |
 | `E744` | a `spawn`/`defer` of `…`, a binding that HOLDS a function — **[not yet]**                               |
+| `E745` | `…` is declared twice in this file — one scope declares a name once                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

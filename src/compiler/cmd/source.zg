@@ -91,6 +91,8 @@ fn chk_unbuilt_module(im: zerg.ImportDecl) {
 	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
 }
 
+# --- a program's sources, entry first ------------------------------------------------------
+
 # load_sources loads every named entry with its imports, keeping one copy of a module
 # that several entries share.
 fn load_sources(files: list[str]) -> list[str] {

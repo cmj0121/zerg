@@ -44,9 +44,23 @@ be asked is one every CI reinvents.
 **It will not rewrite a file whose brackets do not close.** Reading tokens means fmt will
 reformat anything that lexes, and a file with a syntax error came back reformatted and
 exit 0 — the tokens intact, but the spacing decided by rules that had nothing true to work
-from. The gate is bracket balance rather than a parse, deliberately: a formatter has to
-work on source the compiler cannot **compile**, which is exactly when a person reaches for
-one. A file that balances and is still ill-formed is formatted as before.
+from. The gate on the INPUT is bracket balance rather than a parse, deliberately: a
+formatter has to work on source the compiler cannot **compile**, which is exactly when a
+person reaches for one. A file that balances and is still ill-formed is formatted as before.
+
+**It will not write output it cannot re-parse.** That gate is on the OUTPUT and it is a
+different question, asked one way round: **if the input parses, the result must**. `F401`
+once rewrote a binding head into source that stops at the `:=`, and `zerg fmt` destroyed
+the file, said nothing and exited 0. A formatter is only safe to run because meaning
+survives it, and a rewrite that does not parse has no meaning at all. So a file that came
+in a program goes out a program, or nothing is written and the run says which file and why.
+What fmt owes is that it never SUBTRACTS — a file that did not parse on the way in is left
+exactly as unreadable as it was found, because fmt is not what broke it.
+
+`--check` asks the same question and answers it the same way, because a safety net that
+asks less than the tool it watches is not one: a file that formatting would break is
+reported as such, and the advice `run zerg fmt` is withheld, since on that file the advice
+is what does the damage. `make fmt-roundtrip` is the gate over both.
 
 ### F1xx — layout
 
@@ -257,6 +271,13 @@ A jump that ALREADY carries its own guard keeps its block. There is no single `i
 what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
 no compiler parses — so the rule declines rather than inventing one.
 
+A **binding head** keeps its block too, for the same reason one step further on. `GRAMMAR`
+derives an if-head as `expr | identifier ':=' expr`, and the second alternative is the only
+condition in the language that DECLARES: `if s := v` unwraps the optional and binds `s` for
+the block. The postfix guard has nowhere to put a declaration, so `if s := v { return s }`
+came back as `return s if s := v` — which stops at the `:=`, and whose `s` names nothing now
+that the binding it came from is gone. The head is what declines it, not the jump.
+
 Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
 `x := if c { 1 } else { 2 }`.
@@ -285,7 +306,8 @@ It rewrites only what it can rewrite **without losing anything**, and declines o
 - exactly one statement in the block, and it is a jump;
 - no `else` — an else has a second branch the guard form cannot carry;
 - no comment anywhere inside, because a comment is something a person put there and this
-  pass has nowhere to put it back.
+  pass has nowhere to put it back;
+- a head that does not bind — the guard form carries a condition, not a declaration.
 
 `F402` is the Go convention, and for the same reason: an import list is read far more
 often than it is edited, and one that is grouped and sorted answers "does this file use X"
@@ -1264,6 +1286,12 @@ The formatter's failures are stable — a form printed wrongly is printed the sa
 on the second pass — so `make fmt-corpus` is green until some case actually contains the
 shape. Both spacing defects found so far (`chan[T]<-` and friends, then `-1`) hid in forms
 no case had.
+
+A new `F4xx` REWRITE owes `make fmt-roundtrip` as well. It is the only group that can write
+a form the grammar does not have, and it is the group `fmt-tokens` turns off to ask its own
+question — so a rewrite is measured by the round-trip gate or by nothing. State the shapes
+the rule DECLINES as corpus cases too: a decline is a claim, and a case that is already
+canonical is how one is written down.
 
 A new LINT rule needs a program in `scripts/lint-check.sh` that makes it fire, for the reason
 `make lint` cannot supply one: it runs over the compiler and the stdlib, which are clean, so a

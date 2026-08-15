@@ -1,5 +1,6 @@
 # `zerg fmt`. The rules and the rewrite are `zerg/fmt.zg`'s; what is here is the command,
-# the bracket gate a source has to pass before it is rewritten, and the `--check` answer.
+# the bracket gate a source has to pass before it is rewritten, the ROUND-TRIP gate its
+# output has to pass before it is written, and the `--check` answer.
 
 import (
 	"cli"
@@ -44,6 +45,8 @@ fn run_fmt(files: list[str], off: list[str]) {
 
 		out := zerg.fmt_src_off(src, off)
 		if out != src {
+			raise fmt_broke_it(f) if not fmt_round_trips(src, out, f)
+
 			guard {
 				io.write_file(f, bytearray(out))
 			}
@@ -52,11 +55,62 @@ fn run_fmt(files: list[str], off: list[str]) {
 	}
 }
 
+# --- the round-trip gate -------------------------------------------------------------------
+#
+# A FORMATTER THAT CANNOT GUARANTEE ITS OUTPUT PARSES IS NOT A FORMATTER. Rewriting is only
+# safe because the meaning survives it, and a rewrite that does not parse has no meaning at
+# all: F401 turned `if s := v { return s }` into `return s if s := v`, which stops at the
+# `:=`, and the `s` being returned named nothing once its binding was gone. The tool destroyed
+# the file it was asked to tidy, said nothing, and exited 0.
+#
+# The invariant is ONE-WAY, and that is the whole design: IF THE INPUT PARSES, THE OUTPUT
+# MUST. Not "the output parses" flatly — fmt has to work on source the compiler cannot read,
+# because that is exactly when a person reaches for it, and this parser still refuses a long
+# list of forms the language has and it has not built. Refusing to format those would take the
+# formatter away from the files that most need one, to no end: fmt did not break them.
+#
+# What fmt owes is that it never SUBTRACTS. A file that came in a program goes out a program,
+# or nothing is written and the user is told which file and why. Anything else, fmt leaves
+# exactly as unreadable as it found it.
+fn fmt_round_trips(src: str, out: str, path: str) -> bool {
+	return true if not fmt_parses(src, path)
+
+	return fmt_parses(out, path)
+}
+
+# fmt_parses is `does the parser accept this` and nothing more. A refusal is an abort, so the
+# question is asked with a `guard` and answered by whether the flag was ever set — the Diag
+# itself is not wanted here, only the yes or no.
+fn fmt_parses(src: str, path: str) -> bool {
+	mut ok := false
+	guard {
+		zerg.parse_at(src, path)
+		ok = true
+	}
+	return ok
+}
+
+# fmt_broke_it is the one message both the rewrite and `--check` report a round-trip failure
+# with, because it is one bug being described twice. It names fmt and not the file: the source
+# was a program on the way in, so nothing about it is the user's to fix — and it says WOULD,
+# in both, since neither path writes the result once it has seen this.
+fn fmt_broke_it(path: str) -> str {
+	return f"`{path}` parses and the formatted result would not, so `zerg fmt` would destroy it and the file is left untouched. This is a bug in the formatter, not in the file; please report it"
+}
+
 # run_fmt_check answers the question a CI job asks — is this tree already canonical — and
 # answers it without touching anything. Before it existed `make fmt-corpus` did the same
 # thing by copying each case to a temp file, formatting the copy and running `cmp`: the
 # tool knew the answer and had no way to say it, so the Makefile reimplemented it in
 # shell. A formatter that cannot be asked is a formatter every CI reinvents.
+#
+# It runs the SAME round-trip gate the rewrite does, and it has to. `--check` is the safety
+# net — the thing a CI job runs instead of trusting the tool — and a net that answers a
+# narrower question than the tool it is watching is not one. Asked about the file F401
+# destroyed, it compared the text to itself, found a fixpoint, and reported canonical: the
+# tool and its check agreed, and the file did not parse. Now the one file that would be
+# broken by formatting is REPORTED as such, with the advice `run zerg fmt` withheld, because
+# on that file the advice is what does the damage.
 fn run_fmt_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
@@ -64,9 +118,16 @@ fn run_fmt_check(files: list[str], off: list[str]) -> int {
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
 			bad = bad + 1
-		} else if zerg.fmt_src_off(src, off) != src {
-			io.ewrite(f"{f}: not in canonical form (run `zerg fmt`)\n")
-			bad = bad + 1
+		} else {
+			out := zerg.fmt_src_off(src, off)
+			if out != src {
+				if fmt_round_trips(src, out, f) {
+					io.ewrite(f"{f}: not in canonical form (run `zerg fmt`)\n")
+				} else {
+					io.ewrite(fmt_broke_it(f) + "\n")
+				}
+				bad = bad + 1
+			}
 		}
 	}
 	return 1 if bad > 0

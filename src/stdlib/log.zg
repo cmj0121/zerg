@@ -134,17 +134,17 @@ fn emit(sk: Sink, line: str) {
 
 # --- what a logger is ----------------------------------------------------------------------
 
-# Logger is one configured logger. It is a VALUE: `level`, `to` and `with_str` each answer a
-# COPY rather than mutating, so a logger handed to a component cannot reconfigure its
-# caller's. That is the shape `cli.Command` has and it is the same reason.
+# Logger is one configured logger. It is a VALUE: every method below answers a COPY rather
+# than mutating, so a logger handed to a component cannot reconfigure its caller's. That is
+# the shape `cli.Command` has and it is the same reason.
 #
-# EVERY ONE OF THEM BUILDS A FRESH VALUE RATHER THAN COPYING AND ASSIGNING A FIELD, and that
-# is a measured workaround, not a style. `cli.Command` writes `mut c := this; c.args = xs;
-# return c`, and in this compiler an assignment over a struct field that already holds a live
-# `list` DOES NOT RELEASE the buffer it replaces: a four-call chain leaks three of them,
-# counted with scripts/lib/memcount.c. `cli` gets away with it because a command line is built
-# once; a logger is built per line. The constructor form takes the new value as an argument
-# and does not leak that buffer.
+# A BUILDER DERIVES FROM `this` — `mut c := this; c.f = x; return c` — RATHER THAN LISTING
+# EVERY FIELD IN A CONSTRUCTOR. It used to list them, at seven call sites, and the defect that
+# shape has is the one no gate can see: add a sixth field and all seven must change, and
+# whichever one is missed silently RESETS the new field to its default on that path. There is
+# no assertion that could catch it, because every site still compiles and still answers a
+# Logger. `mut c := this` is a copy including through the `list` field, so there is nothing
+# left to keep in step.
 #
 # A LIVE LINE STILL LEAKS ONE ALLOCATION PER FIELD, and saying so here is better than leaving
 # a reader to find it. It is NOT this module's shape: the same count comes out of
@@ -240,26 +240,34 @@ impl Logger {
 	# true
 	# ```
 	pub fn level(n: int) -> This {
-		return Logger(n, this.fmt, this.col, this.sink, this.base)
+		mut c := this
+		c.lvl = n
+		return c
 	}
 
 	# to answers a COPY writing to `sk`.
 	pub fn to(sk: Sink) -> This {
-		return Logger(this.lvl, this.fmt, this.col, sk, this.base)
+		mut c := this
+		c.sink = sk
+		return c
 	}
 
 	# format answers a COPY writing `FMT_PRETTY` or `FMT_JSON`. It is what `ZERG_LOG` sets, and
 	# it is a function as well as an environment variable because a program that knows where
 	# its output goes should not have to be told by its own launcher.
 	pub fn format(n: int) -> This {
-		return Logger(this.lvl, n, this.col, this.sink, this.base)
+		mut c := this
+		c.fmt = n
+		return c
 	}
 
 	# colour answers a COPY with ANSI colour on or off. The default is the environment's —
 	# `NO_COLOR` first, then whether standard error is a terminal — and this is the override
 	# for a program that knows better, which is mostly a test.
 	pub fn colour(on: bool) -> This {
-		return Logger(this.lvl, this.fmt, on, this.sink, this.base)
+		mut c := this
+		c.col = on
+		return c
 	}
 
 	# enabled reports whether a line at `lvl` would be written. It is PUBLIC because the
@@ -280,16 +288,16 @@ impl Logger {
 	# true
 	# ```
 	pub fn with_str(k: str, v: str) -> This {
-		mut fs := this.base
-		json.put_str(fs, k, v)
-		return Logger(this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_str(c.base, k, v)
+		return c
 	}
 
 	# with_int is with_str for a number.
 	pub fn with_int(k: str, v: int) -> This {
-		mut fs := this.base
-		json.put_int(fs, k, v)
-		return Logger(this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_int(c.base, k, v)
+		return c
 	}
 
 	# --- one method per level, and the one the language would not let be a method ---
@@ -348,25 +356,25 @@ impl Entry {
 	# str adds `k=v` to this line. On a dead entry it is a return and nothing else.
 	pub fn str(k: str, v: str) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_str(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_str(c.fs, k, v)
+		return c
 	}
 
 	# int adds a number.
 	pub fn int(k: str, v: int) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_int(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_int(c.fs, k, v)
+		return c
 	}
 
 	# bool adds a flag.
 	pub fn bool(k: str, v: bool) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_bool(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_bool(c.fs, k, v)
+		return c
 	}
 
 	# dur adds an elapsed nanosecond count, rendered the way a person reads one. It is a

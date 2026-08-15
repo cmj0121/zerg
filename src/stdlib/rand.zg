@@ -13,10 +13,19 @@
 # For anything security-sensitive (keys, tokens) this is the wrong tool — it is
 # predictable from its seed.
 
+# GOLDEN is xorshift64*'s multiplier, and it is written down once because this module uses it
+# for two unrelated jobs: it scrambles the state in `next`, and it stands in for a zero seed in
+# `seed` — any non-zero value would do there, and reusing this one saves inventing a second.
+#
+# `uint(…)` AND NOT THE BARE LITERAL, which is `L502`: a literal that takes a type the page does
+# not show is exactly what that rule is for, and a 64-bit constant whose whole point is that it
+# does not fit an `int` is the case where the reader most wants to be told which type it is.
+const GOLDEN := uint(0x2545F4914F6CDD1D)
+
 # seed builds a generator state from n. xorshift64* requires a NON-zero state, so a zero
 # seed is mapped to a fixed non-zero constant; every other seed is used as-is.
 pub fn seed(n: uint) -> uint {
-	return 0x2545F4914F6CDD1D if n == 0
+	return GOLDEN if n == uint(0)
 	return n
 }
 
@@ -31,7 +40,7 @@ pub fn next(mut &g: uint) -> uint {
 	x = x ^ (x << 25)
 	x = x ^ (x >> 27)
 	g = x
-	return x *% 0x2545F4914F6CDD1D
+	return x *% GOLDEN
 }
 
 # below advances g and returns a value in [0, n). n must be positive; a non-positive n

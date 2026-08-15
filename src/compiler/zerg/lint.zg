@@ -142,9 +142,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	mut ids: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
-	for fd in f.fns {
-		walk_body(fd.body, ids, calls, ns)
-	}
+	walk_program(f, ids, calls, ns)
 	lint_imports(f, ns, ids, out)
 	lint_dead_fns(f, calls, ids, out)
 	lint_unread_bindings(f, out)
@@ -899,6 +897,68 @@ fn collect_binds_iflet(name: str, then_b: list[Stmt], else_b: list[Stmt], w: LWh
 	ats.append(w)
 	collect_binds_at(then_b, w, names, ats)
 	collect_binds_at(else_b, w, names, ats)
+}
+
+# walk_program records every name a WHOLE PROGRAM reaches for. The two rules that judge a
+# declaration by its uses — L101 on an import, L102 on a private function — ask this, and
+# what they are asking is "does anything in this program name it?". So the answer has to
+# come from every place a name can be written, and it used to come from one: the bodies of
+# `f.fns`.
+#
+# Three places were missing, and they are one defect rather than three — an inventory of
+# where a name can appear, with entries left out:
+#
+#   a TYPE POSITION. `ctx: testing.Context` reaches the `testing` module and writes no
+#   expression at all, so a walk over expressions cannot see it. The parser already records
+#   every module qualifier it resolved away (File.ty_quals, and chk_ty_quals reads the same
+#   list) — the fact is not recomputed here, it is asked of its owner.
+#
+#   a module-level `const` INITIALISER. It is code, it runs before `main`, and it may call a
+#   private function or reach through an import; it is simply not a statement of any
+#   function, so nothing in `f.fns` holds it.
+#
+#   a DEFAULT — a struct field's or a parameter's. Same shape as the const: an expression
+#   that is part of a DECLARATION rather than of a body.
+#
+# The three cost `src/stdlib/log.zg` three `#[allow(L102)]` that suppressed a false positive
+# for as long as the walk was short — a suppression standing in for a linter defect, which
+# is the outcome an allow must never be used for.
+fn walk_program(f: File, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for fd in f.fns {
+		walk_body(fd.body, ids, calls, ns)
+		walk_defaults(fd.params, ids, calls, ns)
+	}
+	for c in f.consts {
+		walk_expr(c.value, ids, calls, ns)
+	}
+	for sd in f.structs {
+		walk_field_defaults(sd.fields, ids, calls, ns)
+	}
+
+	# the qualifier, not the type name: `testing.Context` says the program reaches the
+	# `testing` NAMESPACE, which is the only half an import is judged by
+	for q in f.ty_quals {
+		ns.append(q.ns)
+	}
+}
+
+# walk_defaults visits the default value of every parameter that has one.
+fn walk_defaults(ps: list[Param], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for p in ps {
+		if p.has_def {
+			walk_expr(p.def, ids, calls, ns)
+		}
+	}
+}
+
+# walk_field_defaults is the same for a struct's fields. It is a second function and not a
+# generic one because `Param` and `FieldDef` are two structs, not one shape.
+fn walk_field_defaults(fields: list[FieldDef], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for fl in fields {
+		if fl.has_def {
+			walk_expr(fl.def, ids, calls, ns)
+		}
+	}
 }
 
 # walk_body records every identifier read, every called function name, and every namespace

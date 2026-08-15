@@ -1145,6 +1145,12 @@ read" is the one thing there is no point saying about it. The select-arm spellin
 redundancy is `F407`'s, because `GRAMMAR` makes that binder optional and
 dropping it leaves an arm. A statement's binder has no such spelling.
 
+`L101` and `L102` judge a declaration by its **uses**, and a use counts wherever it is
+written — not only inside a function body. A **type position** is one (`ctx: testing.Context`
+uses the `testing` import and writes no expression at all), and so is a module-level `const`
+initialiser, a struct field's default and a parameter's default. Each of those is code that
+belongs to a declaration rather than to a body.
+
 ### L2xx — null safety
 
 Nothing here is a compile error: each of these programs runs, and does something slightly
@@ -1294,10 +1300,15 @@ the rule DECLINES as corpus cases too: a decline is a claim, and a case that is 
 canonical is how one is written down.
 
 A new LINT rule needs a program in `scripts/lint-check.sh` that makes it fire, for the reason
-`make lint` cannot supply one: it runs over the compiler and the stdlib, which are clean, so a
-rule that stopped working looks exactly like a rule with nothing to say. That script also fails
-when a code documented in `lint.zg` has no case, so the pairing is checked rather than
-remembered.
+`make lint` cannot supply one: it runs over the compiler, the stdlib and the test suites, which
+are clean, so a rule that stopped working looks exactly like a rule with nothing to say. That
+script also fails when a code documented in `lint.zg` has no case, so the pairing is checked
+rather than remembered.
+
+A rule that judges a declaration by its uses owes a **second** case there: a well formed program
+it must stay **silent** on. `L101` called an import unused when the only thing reaching it was a
+type, and `L102` called a private function dead when the only thing calling it was a
+module-level `const` — and every positive case stayed green through both.
 
 Give it the next number in the group its EFFECT belongs to, add it to the table in
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg) or

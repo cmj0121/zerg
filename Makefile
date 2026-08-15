@@ -649,14 +649,51 @@ error-codes-check:              # every error code is reported once, asserted, a
 seed-gaps:                      # the seed's gap list says the same thing in both languages
 	./scripts/seed-gaps-check.sh
 
+# What this gate lints, and it is EVERY ZERG SOURCE THIS PROJECT WRITES — which is what the
+# target has always claimed and what, for a long time, it did not do: the recipe below was one
+# `zerg lint $(ZERG_ENTRY)`, so the compiler was gated and nothing else was. A stdlib module the
+# compiler does not import was unlinted, and so was every test suite. Both shipped findings —
+# `tests/stdlib/os/os_test.zg` carried an `L103` into main, hours after it was written.
+#
+# THE UNIT IS AN ENTRY, NOT A FILE, and that is the one way this list differs from SELF_SRCS
+# next door. `zerg lint` takes a program: it resolves the entry's imports and lints the merged
+# whole, because L101 and L102 are whole-program questions — a private function called from
+# another module of the same program is not dead. So the compiler contributes ONE entry and not
+# its forty files, while a stdlib module and a test suite are each a program of their own.
+#
+# `atomic` is the one exclusion and it is not a judgement about the module: it declares
+# `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
+# name (`E511`, chk_unbuilt_module) and there is no program for the linter to be handed. The
+# entry deletes itself the day a generic struct is built — the same end state CORPUS_SKIP has.
+LINT_SKIP := src/stdlib/atomic.zg
+LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg)) $(wildcard tests/stdlib/*/*_test.zg)
+
+# A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
+# carry. Two of the three globs above reach directories, and a glob that matches nothing leaves
+# a loop with nothing to iterate and a gate that exits 0 for having asked one question.
+#
+# 16 against the 20 there are today: far enough below that adding a module or retiring a suite
+# is not a chore here, far enough above that a pattern which stopped matching cannot pass.
+LINT_MIN ?= 16
+
 # `--strict`, and the tool without it exits 0 on a warning. That is not two answers to one
 # question: `zerg lint` reports on somebody else's program, where a `#[test]` that ships and a
 # suppression that will never apply are decisions they are allowed to have made. This board is
 # over THIS project's own source, where neither is. A gate stricter than the tool has
 # precedent next door — refuse-check asserts more about a refusal than `zerg build` requires.
-lint:                           # lint the compiler and stdlib with zerg itself
+#
+# EVERY ENTRY IS LINTED BEFORE THE GATE FAILS, rather than the loop stopping at the first —
+# a board that reports one finding per run makes a reader run it once per finding.
+lint:                           # lint the compiler, the stdlib and the suites with zerg itself
 	$(MAKE) build
-	./bin/zerg lint --strict $(ZERG_ENTRY)
+	@fail=0; n=0; \
+	for f in $(LINT_ENTRIES); do \
+		./bin/zerg lint --strict $$f || fail=1; \
+		n=$$((n+1)); \
+	done; \
+	[ $$fail -eq 0 ] || { echo "lint: a source this project writes has a finding"; exit 1; }; \
+	[ $$n -ge $(LINT_MIN) ] || { echo "lint: only $$n entries were linted, and the floor is $(LINT_MIN)"; exit 1; }; \
+	echo "lint: $$n entries clean"
 
 # `lint` asks whether the compiler is clean, and it is — which is exactly why it cannot tell a
 # rule that finds nothing from a rule that is gone. This one makes every rule fire.

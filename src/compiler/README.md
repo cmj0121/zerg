@@ -25,7 +25,22 @@ in the language itself. The compiler here is the one that ships; the Go seed exi
 
 ```text
 src/compiler/
-  zergc.zg        # the driver: argument parsing, module loading, cc invocation
+  zergc.zg        # the command line, declared: `main`, `root`, the version banner
+  cmd/            # what each sub-command DOES — one directory module
+    cmd.zg        # the module's own header, and no declaration (Go's `doc.go`)
+    build.zg      # `zerg build` — the pipeline, and where its product is written
+    test.zg       # `zerg test` — the run, the process per package, the report
+    test_pkg.zg   #   which directories hold a test, and what each is built from
+    test_fixture.zg #  what one package's run is: fixtures, tests, and the order
+    test_driver.zg  #  the driver source that plan is compiled as
+    fmt.zg        # `zerg fmt`
+    desugar.zg    # `zerg desugar`
+    lint.zg       # `zerg lint`
+    lsp_cmd.zg    # `zerg lsp` (not `lsp.zg`: it would shadow `import "lsp"`)
+    diag.zg       # shared: the lexical gate and the diagnostic renderer
+    source.zg     # shared: reading a source, and resolving what it imports
+    layout.zg     # shared: where things are, and what cc is called with
+    unit.zg       # shared: a unit, its cached object, and the link
   zerg/           # the compiler library — one directory module, shared scope
     token.zg      # Kind enum + Token type
     lexer.zg      # source text -> token stream (comments kept on request)
@@ -35,7 +50,15 @@ src/compiler/
     emit.zg       # AST -> C, with the minimal typecheck emit needs
     fmt.zg        # tokens -> canonical source
     lint.zg       # AST -> findings
+  lsp/            # the language server — a module of its own
 ```
+
+The four `cmd` files marked **shared** are there because more than one sub-command reaches
+them, and which ones was measured over the call graph rather than guessed: `diag`, `layout`
+and `unit` are `build` and `test`'s (and `lint` reads the first two), `source` is those
+three plus `lsp`. They sit beside the commands rather than inside any of them — a directory
+is one module, so nothing had to become `pub` for them to be shared, and nothing became
+`pub` that a second module could then collide with (`E705`).
 
 ## Using it
 
@@ -69,9 +92,9 @@ resolves to a **directory module** whose multiple files flatten into one shared 
 so `token.zg`/`lexer.zg`/`parser.zg` can share the `Kind` and AST enums; but (2)
 **enum variants are not reachable across a module boundary** (`token.Fn` is rejected).
 The library must therefore live in one directory module (`zerg/`) whose files share
-those enums, with `zergc.zg` as a thin driver that only ever calls the module's `pub`
-functions — never constructs a variant. The original `src/compiler/zerg/` instinct was
-right.
+those enums, with the driver — `zergc.zg` and the `cmd` module — only ever calling the
+module's `pub` functions and never constructing a variant. The original `src/compiler/zerg/`
+instinct was right.
 
 ## How a build is put together
 

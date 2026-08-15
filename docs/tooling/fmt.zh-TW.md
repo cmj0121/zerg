@@ -517,7 +517,7 @@ or-pattern 都等語言層面的工作。
 這也是為什麼上面那張表指名的是**階段**而不是號碼段,以及為什麼 `make error-codes-check` 是按階段回答的:
 
 ```text
-error-codes-check: next free code per stage — building E513, checking E399, emitting E745,
+error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
                                               lexical E112, parser E612
 ```
 
@@ -857,7 +857,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E703` | 在 … 上用 `?` — 它拆的是 carrier 的 Left — **[not yet]**                                              |
 | `E704` | `?` 往外傳的 right,外層函式回答不了                                                                   |
 | `E705` | 兩個模組都定義了 `…`,而且至少一個是 `pub` — **[not yet]**                                             |
-| `E706` | 兩個模組都定義了 `…` — 全部攤平成一個命名空間 — **[not yet]**                                         |
+| `E706` | `…` 和 `…` 都定義了 `…` — 全部攤平成一個命名空間 — **[not yet]**                                      |
 | `E707` | 沒有名為 `…` 的型別(…)                                                                                |
 | `E708` | 在 … 上用 `!` — 它強拆 Result[T] 或 T? — **[not yet]**                                                |
 | `E709` | 在 … 上用 `??` — 它的左邊要是 Result[T] 或 T? — **[not yet]**                                         |
@@ -896,6 +896,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E742` | `…` 有 … 個型別參數,而這裡給了 …                                                                      |
 | `E743` | 沒有上界的 `..=` 不是 range — **[not yet]**                                                           |
 | `E744` | 對 `…` 做 `spawn`/`defer`,但它是一個「持有」函式的繫結 — **[not yet]**                                |
+| `E745` | `…` 在這個檔案裡被宣告了兩次 — 一個 scope 只宣告一次同名的東西                                        |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

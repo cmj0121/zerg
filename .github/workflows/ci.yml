@@ -344,6 +344,16 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make fmt-tokens
 
+      # --- 7d''. what the formatter writes, the parser reads ---------------------
+      # The three steps above ask whether a source is already canonical and whether spacing
+      # moved a token — and `fmt-tokens` asks its question with the F4xx REWRITES off. So
+      # the rules that change the code's shape were measured by nothing, and F401 spent
+      # months turning `if s := v { return s }` into a file that does not parse while all
+      # three stayed green. This runs every rule and asks whether the output is a program.
+      - name: The formatted result still parses
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make fmt-roundtrip
+
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot
       # reach it and the fetch fails. Under `continue-on-error` that failure was reported

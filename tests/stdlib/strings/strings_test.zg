@@ -3,7 +3,7 @@
 #
 # BLACK-BOX, AND NOT BY CHOICE. docs/runtime/package.md puts a test in the module it
 # tests, and this one cannot be: `zerg test` compiles a DIRECTORY as one package, and
-# `src/stdlib` is a flat directory of sixteen independent modules. A test file dropped
+# `src/stdlib` is a flat directory of seventeen independent modules. A test file dropped
 # beside strings.zg makes every other stdlib module a source of the same unit, which
 # `atomic.zg` (E215, a generic struct) and the `pub` names two modules share (E705
 # `is_digit`, in `ascii` and `strconv`) each refuse before a single test runs. So the

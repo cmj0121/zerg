@@ -6,6 +6,17 @@
 無 garbage collector、無 pointer 語法。每個值都是 **scope-owned**（離開 scope 即釋放），且預設以**值傳遞**。
 copy-by-value 是語意；編譯器會在安全時省略複製：
 
+> **[deviation]** **釋放邏輯追蹤的是 BINDING**，所以一個不屬於任何 binding 的 heap 值，也就不屬於任何人去終結。
+> 有兩種形狀會在一個普通迴圈裡無上限地漏，而它們是同一個缺陷（[issue #11](https://github.com/cmj0121/zerg/issues/11)）：
+>
+> - **一個從某次呼叫直接交給另一次呼叫的暫存值。** `strings.count(strings.join(…), "a")` 在 50 萬輪的迴圈裡
+>   峰值 **25.7 MB**；先把中間結果綁到一個名字上，峰值 **1.7 MB**。
+> - **被寫過去的欄位所持有的舊 buffer。** `b.xs = […]` 在迴圈裡 30 萬輪峰值 **25.7 MB**、60 萬輪 **49.9 MB**
+>   ——它隨迴圈加倍，所以是無上限，而不是一筆固定成本。
+>
+> 兩者都是會正確執行、卻永遠吃記憶體的合法程式，而既有的約定——_做出來，或者具名拒絕_——沒有第三種狀態容納它。
+> 兩者在 `make mem-check` 裡都還沒有案例，而下面關於指派的段落是同一個缺陷從 binding 那一側看的樣子。
+
 - **單一執行流程**——immutable 的值可隱形地改以 by-ref 傳遞；mutable 的則 fallback 為複製。
 - **跨 coroutine**——一律複製：無共享可變狀態、無 data race；要把修改反映回去是呼叫端的責任（例如透過 channel）。
 - **取值 / 回傳**——unwrap（`?`、`!`）、`match`、`return` 都是複製出來；來源永不失效。move 只是來源之後死掉時的
@@ -144,7 +155,8 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 ——`s = s + x` 要讀 `s` 才做得出自己的右手邊。
 
 > **[deviation]** 只有遞迴 `enum` 與 carrier 這麼做。指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或
-> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;`for … in` 走訪一個 **map** 時複製出來的那份集合也是,
+> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;寫過去一個**欄位**也是(本章開頭實測的那個無上限形狀),
+> `for … in` 走訪一個 **map** 時複製出來的那份集合也是,
 > **force-unwrap** 抄出來的那份 payload 也是——`q!` 交回的是 carrier 所持有之物的一份複本,而只讀其中一個欄位
 > 的運算式會把其餘的丟掉。fn value 的部分實測過:迴圈裡 `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包
 > 的環境,以及它捕獲的那個值。force-unwrap 也實測過:迴圈裡 `p: str? = s` 之後 `q!`,每輪漏一個。每一個都是

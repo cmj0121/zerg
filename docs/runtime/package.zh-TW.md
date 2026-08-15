@@ -69,8 +69,9 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 statement**。`GRAMMAR#program` 推導得出它——`program ::= stmt-list` 就是 Zerg 的 **script mode**，而 grammar 正是
 用 `nop` 程式為這個語言開場——所以它是合法語法，編譯器會把它整句讀完。但**編譯出來**的程式沒有任何一刻可以跑它：
 執行從 `main` 開始，上面的一切都是在那之前備妥的狀態。因此它會被**具名拒絕、並帶位置**，而且是由 build 而不是由
-parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）。`nop` 是唯一的例
-外，而且其實不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
+parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）——即 _E391 `print`
+opens a statement at the top level, and a compiled program has nowhere to run it_。`nop` 是唯一的例外，而且其實
+不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
 
 頂層常數以**依賴序**
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
@@ -207,7 +208,9 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
-import 它的人；它在宣告處就被拒絕，並帶位置。要對外開放，就寫一個讀它的 `pub fn`。
+import 它的人。兩個代碼從兩側守住同一條規則：_E358 the top-level binding `x` may not be `mut` outside a
+module-level `unsafe { … }` group_，以及 _E484 the mutable global `x` may not be `pub`_。要對外開放，就寫一個讀它
+的 `pub fn`——`src/stdlib/log.zg` 是這棵樹的示範，也是出貨 stdlib 裡唯一這樣的分組。
 
 ### 匯入與引用
 
@@ -306,7 +309,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 白箱擺法在目錄的**兩種形狀**下都成立，因為 test build 解析一個測試檔屬於哪個 package，用的就是解析 import 的規則：
 **先具體、後一般**。`module_at` 先回答單一的 `<name>.zg` 檔、再回答目錄，所以一個 `.zg` 檔放在鄰居旁邊，它本身就是
-一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十八個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
+一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十五個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
 `strings.zg` 一個檔案的測試，package 就是這一對；而一個沒有同名鄰居可指的測試檔，仍然屬於**目錄**，一如既往。
 
 代價是：在一個**本身就是單一 module** 的目錄裡，名字對上該 module 某個檔案的 `*_test.zg` 只會拿到那個檔案——`a.zg`

@@ -106,14 +106,14 @@ test-runner:                    # the test runner can see a test that fails
 # `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
 # broke, a directory that moved, or a suite somebody deleted all leave this target green for
 # having asked nothing — the one failure a test gate must not have.
-STDLIB_TEST_MIN ?= 130
+STDLIB_TEST_MIN ?= 138
 
 # The modules whose comments carry runnable examples. An example nobody executes is an
 # unverified claim, which is the shape this repository has spent a span removing, so the
 # ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
 # against what came out. The list is a variable so that adding a module's examples is one
 # name here rather than a second copy of the rule.
-DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/strings.zg src/stdlib/time.zg
+DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/os.zg src/stdlib/strings.zg src/stdlib/time.zg
 
 stdlib-test:                    # the standard library's own suites, and a floor under them
 	$(MAKE) build

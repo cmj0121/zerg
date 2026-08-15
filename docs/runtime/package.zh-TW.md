@@ -301,7 +301,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 白箱擺法在目錄的**兩種形狀**下都成立，因為 test build 解析一個測試檔屬於哪個 package，用的就是解析 import 的規則：
 **先具體、後一般**。`module_at` 先回答單一的 `<name>.zg` 檔、再回答目錄，所以一個 `.zg` 檔放在鄰居旁邊，它本身就是
-一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十七個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
+一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十八個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
 `strings.zg` 一個檔案的測試，package 就是這一對；而一個沒有同名鄰居可指的測試檔，仍然屬於**目錄**，一如既往。
 
 代價是：在一個**本身就是單一 module** 的目錄裡，名字對上該 module 某個檔案的 `*_test.zg` 只會拿到那個檔案——`a.zg`

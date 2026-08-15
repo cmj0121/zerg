@@ -58,6 +58,7 @@ the form they will take.)
 | [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
 | [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
 | [`json`](#json)       | `import "json"`    | reading and writing JSON, with one escaper        |
+| [`log`](#log)         | `import "log"`     | structured logging, as a chained builder          |
 | [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
@@ -240,6 +241,88 @@ a file changed, or to key a cache; do not use it to check a password. `make sha2
 standard's known-answer vectors and to the system tool over random inputs — the oracle cannot check it,
 since both compilers would be running this same source.
 
+## `log`
+
+Structured logging, as a **chained builder**:
+
+```zerg
+log.info().str("file", path).int("line", n).msg("compiling")
+```
+
+The shape is not fashion — it is the one that works in **this** language. There are no varargs, so a field is
+one call; there is no `any`, so `str` takes a `str` and `int` takes an `int`; there is no generic struct, so
+the builder is one concrete type. Any other shape waits on at least two of the three.
+
+It is also the answer to **lazy evaluation**. `log.debug()` at a level that is off answers a **dead** entry:
+every field method returns at once, nothing is formatted, nothing is allocated, and `msg` writes nothing. The
+caller hands over typed values instead of a string it built first, so the work a disabled line would have done
+never happens rather than being thrown away.
+
+What is still paid is evaluating the **arguments** — `expensive()` in `.str("dump", expensive())` runs either
+way, because Zerg evaluates arguments before the call. That is why `enabled` is public:
+
+```zerg
+if log.enabled(log.DEBUG) {
+ log.debug().str("dump", expensive()).msg("state")
+}
+```
+
+### The two surfaces
+
+There is a **global logger**, configured by function and used with no plumbing, and a **constructor** for one
+you hold and pass. They are not two implementations: the global **is** an instance, held in this module's own
+cell, so every field method, every level check and every writer exists once.
+
+| Function                               | Summary                                              |
+| -------------------------------------- | ---------------------------------------------------- |
+| `new() -> Logger`                      | a logger at `INFO` writing to standard error         |
+| `set_level(n: int)`                    | configure the global logger                          |
+| `set_sink(sk: Sink)`                   | where the global logger's lines go                   |
+| `enabled(lvl: int) -> bool`            | would the global write a line at `lvl`               |
+| `at_level(lvl)`, `trace()` … `fatal()` | begin a line on the global logger — all six levels   |
+| `to_stderr() -> Sink`                  | the default destination — one write per line to fd 2 |
+| `to_chan(ch: chan[str]) -> Sink`       | each finished line as a value on a channel           |
+
+`Logger` answers `level(n)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and `enabled(lvl)`, each a **copy**
+— a logger handed to a component cannot reconfigure its caller's — plus `at_level(lvl)` and the level methods.
+`Entry` answers `str`, `int`, `bool`, `dur`, `err` and the terminal `msg`.
+
+**There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
+renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
+value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
+`log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
+`lg.at_level(log.DEBUG)`, which invents no new name for a level that already has one. `at_level` is spelled
+that way rather than `at` because a free `pub at` is `E705` against the compiler's own lexer, which has a
+module-private `at` — a `pub` name has no package to be unique within.
+
+### Levels
+
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF` above them all. They are `int` constants rather than
+an enum because an enum's variants cannot be constructed outside their module, so `log.set_level(log.DEBUG)`
+could not be written.
+
+`fatal` writes its line and then **exits 1**. It is not `panic` — Zerg says that with `raise`, and a logger
+competing with the error taxonomy would give a program two unrelated ways to end. The exit happens **even at a
+level where the line is not written**: silencing a logger changes what is reported, never what is done.
+
+### One line is one write
+
+The whole line, newline included, goes to a single `__zrt_write`. This is not a detail: `zrt_report` once split
+a prefix and a message into two writes, and a stress test found **830 lines in 24000** carrying one kind with
+another's message. `scripts/log-check.sh` holds the property with 24 coroutines writing 500 lines each.
+
+A value that would be ambiguous bare — empty, or carrying a space, a quote, a backslash, an `=` or a control
+character — is written through `json.encode`, the tree's one escaper. So a newline in a value is escaped rather
+than written, and one record stays one line.
+
+### The destination
+
+A `Sink` is a **value carrying a mode**, not a spec and not a closure: a spec would need `#[dyn]` (there is a
+deferred gap around non-`#[dyn]` provided methods) and a closure naming an imported module is `E735`. `to_chan`
+is what makes a logger testable — there is no reading a `write(2)` back, so this module's own suite asserts the
+bytes by receiving them. A channel sink needs capacity for what is written before it is drained, since a send
+to a full channel parks the sender.
+
 ## `time`
 
 Clocks, calendars and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed
@@ -352,7 +435,7 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**, and it is the one of the fourteen that
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the fifteen that
 > does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
 > so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
 > ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not

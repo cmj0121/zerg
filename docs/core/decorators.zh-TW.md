@@ -31,11 +31,13 @@
 layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
-  受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`（掛在**帶 payload**
-  的 `enum` 上則是 **[not yet]**）——以及 **`Ord`**、**`Hash`**、**`Encode`**、**`Decode`**,各自已規範、但
-  **[not yet]**:指名其中一個是一次乾淨的拒絕,_NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`;
-  `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt_。**沒有自動 derive 的 `Object`**。使用者 spec 不可
-  被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
+  受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`——以及 **`Ord`**、
+  **`Hash`**、**`Encode`**、**`Decode`**,各自已規範、但 **[not yet]**:指名其中一個是一次乾淨的拒絕,
+  _E436 NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode`
+  are specified and unbuilt_。掛在**帶 payload 的** `enum` 上的 `Eq` 是 **[not yet]**,而且有自己的代碼,
+  _E438 … it carries a payload (`A`), and this compiler derives equality for a fieldless enum_。
+  **沒有自動 derive 的 `Object`**。使用者 spec 不可在 **struct** 上被 derive——`E437`——而在 **`enum`** 上則任何
+  spec 都可以,因為生成的 impl 是委派給 payload、而不是讀取結構。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[obj]`** — 掛在 `spec`,不帶參數。生成一個由 function value 組成的**伴生 struct** 與一個**泛型 wrap**,這是
   在「spec 是 bound、從來不是型別」的語言裡寫出異質集合的方式。`mut fn`、收 `This` 的方法,以及任何不是 spec 的東西,
   都會被指名拒絕。見 **[Specs & Generics](specs.zh-TW.md)**。

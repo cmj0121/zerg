@@ -70,18 +70,20 @@ compiler code generator**，與上面兩層都不同。
 - **compiler**——那就不是使用者撰寫的。
 
 所以使用者自定 structural derive 是**結構上不可能**，不是漏做。可 derive 的集合是**固定且 compiler
-擁有**的；使用者 spec 永遠不在其中（`#[derive(UserSpec)]` 是編譯錯誤）。可擴充的一層是上面的
-behavioral default；結構這一層是封閉的。
+擁有**的；使用者 spec 永遠不在其中——_E437 cannot derive `Show`: on a struct the derivable specs are
+compiler-owned, and a `spec` you write is never one of them … write `impl Show for P` instead_。可擴充的
+一層是上面的 behavioral default；結構這一層是封閉的。
 
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
 **沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
+**`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E436`。
 
-> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並會被指名拒絕。它的規則需要同時比對
-> 兩側的 tag **與** payload;無欄位的 `enum` 可以 derive,因為它的 variant 差異恰好就是 discriminant 的差異。
-> 在那之前,請手寫帶 `match` 的 `impl Eq`。
+> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E438 … it
+> carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants differ
+> exactly as their discriminants do; write `impl Eq for E` with a `match`_。它的規則需要同時比對兩側的 tag
+> **與** payload。
 
 | Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
 | -------- | --------------------------------------------- | -------------- | ------------------------------ |

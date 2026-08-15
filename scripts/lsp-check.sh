@@ -492,6 +492,97 @@ then
 	fail=$((fail + 1))
 fi
 
+# --- 4. a member of a multi-file module ------------------------------------------------
+#
+# Everything above opens a file that IS a program. An editor mostly opens one that is not:
+# a member of a directory module, whose types, whose callers and whose second source root
+# all live outside it. Read as an entry, such a file reports `E707 no type named ...` for a
+# struct in the file next to it, `L102 private function ... is never called` for a function
+# its sibling calls, and `E502 cannot resolve import` for a module that sits beside its own
+# directory rather than inside it — three sentences about correct code, which is the one
+# failure that makes a person turn the server off.
+#
+# The fixture is built here rather than pointed at this repo's own sources, for the reason
+# the cases above are scripted rather than fixtured: what is asserted and what it is
+# asserted about have to be readable together. It is also the smallest program that has all
+# three shapes at once —
+#
+#   app.zg      the entry, and the only file with a `main`
+#   util.zg     a module beside the ENTRY, so `import "util"` from inside `widget/`
+#               resolves only from the entry's directory
+#   widget/     a directory module of three files, each using a name declared in another
+#
+# Each member is a different symptom read alone — `a.zg` the unresolvable import, `b.zg` the
+# name declared next door, `c.zg` the private function whose only caller is next door — and
+# the third is there because it is the only one of the three that is a LINT: an error aborts
+# the check before the linter runs, so a fixture of errors alone can never show that the
+# lint half reads the module too.
+#
+# `zerg build` is asked first and is the oracle: the program compiles, so nothing the server
+# says about any member is a finding — errors and lints alike.
+mkdir -p "$tmp/proj/widget"
+cat >"$tmp/proj/app.zg" <<'ZG'
+import "widget"
+
+fn main() {
+	widget.greet()
+}
+ZG
+cat >"$tmp/proj/util.zg" <<'ZG'
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+ZG
+cat >"$tmp/proj/widget/a.zg" <<'ZG'
+import "util"
+
+pub fn greet() {
+	print util.shout(banner())
+}
+
+fn tagged(t: Tag) -> str {
+	return t.name
+}
+ZG
+cat >"$tmp/proj/widget/b.zg" <<'ZG'
+struct Tag {
+	pub name: str
+}
+
+fn banner() -> str {
+	return tagged(Tag(stamp()))
+}
+ZG
+cat >"$tmp/proj/widget/c.zg" <<'ZG'
+fn stamp() -> str {
+	return "hello"
+}
+ZG
+
+members=0
+if ! "$ZERG" build --emit c "$tmp/proj/app.zg" >/dev/null 2>"$tmp/mod.cc"; then
+	echo "MODULE    the fixture program does not build, so there is nothing to hold the server to"
+	sed 's/^/  /' "$tmp/mod.cc"
+	fail=$((fail + 1))
+else
+	for member in "$tmp/proj/widget/a.zg" "$tmp/proj/widget/b.zg" "$tmp/proj/widget/c.zg"; do
+		got=$(session "$ZERG" diag "$member" 2>"$tmp/err") || {
+			echo "SESSION   ${member#"$tmp"/} — the server did not complete a session"
+			sed 's/^/  /' "$tmp/err"
+			fail=$((fail + 1))
+			continue
+		}
+		said=$(printf '%s' "$got" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d["errors"] + d["lints"]))')
+		if [ -n "$said" ]; then
+			echo "MODULE    ${member#"$tmp"/} — the server reports findings against a file the compiler builds clean"
+			printf '%s\n' "$said" | sed 's/^/  /'
+			fail=$((fail + 1))
+		else
+			members=$((members + 1))
+		fi
+	done
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "lsp-check: $fail case(s) where the server does not say what the compiler says"
 	exit 1
@@ -509,4 +600,12 @@ if [ "$outlined" -lt "${MIN_OUTLINES:-8}" ]; then
 	echo "lsp-check: only $outlined outlines were compared — the import filter is eating the list"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, formatting is fmt's answer, and 15 protocol cases hold"
+
+# The module members have a floor for the same reason, and it is not idle: both are opened
+# inside a branch that a fixture which stopped building would skip, and a skipped branch
+# reports nothing — which reads exactly like a server that found nothing.
+if [ "$members" -lt 3 ]; then
+	echo "lsp-check: only $members module members were opened — the fixture did not build, or the loop did not run"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, and 15 protocol cases hold"

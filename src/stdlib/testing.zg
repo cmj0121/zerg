@@ -212,14 +212,21 @@ impl Context {
 # receive, in one frame — and the cost is one logger per NOTE, which is a thing a test writes
 # when it has something to explain rather than in a loop.
 #
-# PRETTY AND UNCOLOURED WHATEVER THE ENVIRONMENT SAYS. A note is read by a person looking at a
-# failure report, and the report's shape belongs to the runner rather than to `ZERG_LOG` — a
-# suite whose notes turned into JSON because a shell exported a variable would be a suite that
-# reads differently depending on who ran it. The trailing newline comes off because the runner
-# joins notes with its own.
+# PRETTY, UNCOLOURED, AND AT A LEVEL THIS LINE IS ON, WHATEVER THE ENVIRONMENT SAYS. A note is
+# read by a person looking at a failure report, and the report's shape belongs to the runner
+# rather than to `ZERG_LOG` — a suite whose notes turned into JSON because a shell exported a
+# variable would be a suite that reads differently depending on who ran it. The trailing
+# newline comes off because the runner joins notes with its own.
+#
+# THE LEVEL IS THE ONE OF THE THREE THAT HANGS RATHER THAN LOOKS WRONG, and it was measured:
+# `log.new()` reads `ZERG_LOG_LEVEL`, so under `ZERG_LOG_LEVEL=warn` the `.info()` below is a
+# DEAD entry, `msg` writes nothing, and the receive on a one-slot channel whose only sender is
+# this same frame parks forever. Every `ctx.log(…)` in every suite in the tree would hang the
+# runner, for a variable that has nothing to do with tests. `TRACE` and not `INFO`, so that
+# there is no level at all at which a note is silently dropped.
 fn rendered(msg: str) -> str {
 	lines := chan[str](1)
-	log.new().format(log.Format.PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
+	log.new().level(log.Level.TRACE).format(log.Format.PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
 
 	# THE RESULT IS ASSIGNED RATHER THAN RETURNED FROM INSIDE THE `if`, and that is not a style
 	# choice: `zerg fmt` collapses a lone `return` in an `if` into the postfix form, and

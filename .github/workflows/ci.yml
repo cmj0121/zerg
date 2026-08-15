@@ -256,6 +256,16 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make reject-fuzz
 
+      # --- 7c'. and the two STAGES agree about all of them ------------------------
+      # `--emit check` runs the rules without lowering the program to C, which is what the
+      # language server asks on every keystroke batch. The danger of a second answer is not
+      # that it is slow but that it is SHORTER: an editor that paints a clean buffer for a
+      # file which will not build is worse than one that takes six seconds. Same corpus,
+      # same mutations, and the two stages must print the same findings byte for byte.
+      - name: The check stage finds what the build finds
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make check-equal
+
       # --- 7c'. every GRAMMAR chapter is read, or refused by name ---------------
       # test-data/conformance is one file per chapter of GRAMMAR — every form it derives,
       # written once — and no runner, no target and no test named it, so 375 lines of

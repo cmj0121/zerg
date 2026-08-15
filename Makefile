@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -463,7 +463,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
+LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -474,6 +474,16 @@ reject-fuzz:                    # break the corpus's working programs and hold t
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	./scripts/reject-fuzz.sh
+
+# `--emit check` is the same walk as `--emit c` with the C dropped instead of accumulated,
+# and this is the gate that says so. It is not a speed gate: the failure worth guarding
+# against is a check that finds LESS than the build finds, because that is an editor
+# painting a clean buffer for a file which will not compile — the one bug the language
+# server already had once. Same corpus, same mutations, byte-for-byte the same report.
+check-equal:                    # the check stage finds exactly what the build finds
+	$(MAKE) build
+	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	./scripts/check-equal.sh
 
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \

@@ -154,7 +154,7 @@ cat >"$WORK/fatal_off.zg" <<'ZG'
 import "log"
 
 fn main() {
-	log.new().level(log.OFF).fatal().msg("silenced")
+	log.new().level(log.Level.OFF).fatal().msg("silenced")
 	log.new().info().msg("unreachable")
 }
 ZG

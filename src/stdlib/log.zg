@@ -22,7 +22,7 @@
 # call and no API can change that. For a genuinely expensive one the honest answer is the
 # explicit guard, and it is why `enabled` is public:
 #
-#     if log.enabled(log.DEBUG) {
+#     if log.enabled(log.Level.DEBUG) {
 #         log.debug().str("dump", expensive()).msg("state")
 #     }
 #
@@ -43,23 +43,103 @@ import (
 # `panic`, because Zerg already says that with `raise`, and a logger that unwound would be
 # competing with the error taxonomy rather than reporting to it.
 #
-# THEY ARE `int` CONSTANTS AND NOT AN ENUM, which is not a preference: an enum's variants
-# cannot be constructed outside the module that declares them (the same bootstrap limitation
-# `json.Val` documents), so `log.set_level(log.DEBUG)` could not be written at all. Ordered
-# smallest-first, so "is this level on" is one comparison.
-pub const TRACE := 0
-pub const DEBUG := 1
-pub const INFO := 2
-pub const WARN := 3
-pub const ERROR := 4
-pub const FATAL := 5
+# IT IS AN ENUM AND NOT A SET OF `int` CONSTANTS, and the difference is what the type can
+# refuse. Against `pub const INFO := 2`, both `set_level(2)` and `set_level(99)` are legal
+# and neither says anything; the enum seals it in both directions — `E340` for an `int`
+# where a `Level` belongs and for a `Level` where an `int` does, and `E347` for comparing a
+# variant with a number.
+#
+# THE DEEPER WIN IS THE EXHAUSTIVE `match`. Every renderer below is one, so a level added
+# here cannot be added without ranking it, naming it and colouring it: `E428 non-exhaustive
+# match: missing variant Level.FATAL` is what a forgotten arm gets. The `int`-constant
+# version printed a blank and said nothing.
+#
+# OFF IS NOT A LEVEL A LINE CAN BE WRITTEN AT. It is the threshold that accepts nothing — it
+# is not in the ordering at all, which is what `rank` says by putting it OUTSIDE `0..5`. A
+# logger set to it writes nothing; `fatal` still EXITS, because silencing a logger changes
+# what is reported, never what is done.
+#[derive(Eq)]
+pub enum Level {
+	TRACE
+	DEBUG
+	INFO
+	WARN
+	ERROR
+	FATAL
+	OFF
+}
 
-# OFF is not a level a line can be written at — it is above `FATAL`, so a logger set to it
-# writes nothing at all. `fatal` still EXITS: silencing a logger changes what is reported,
-# never what is done.
-pub const OFF := 6
+# rank is the ORDERING, and it is the only thing in this module that knows one. Nothing asks
+# `int(Level)` — a variant's discriminant is not consulted anywhere, so the DECLARATION ORDER
+# ABOVE IS NOT A CONTRACT: alphabetise those seven names and every program filters exactly as
+# it did. Comparing discriminants would make that same edit compile, pass every gate, and
+# silently change what every program in the ecosystem writes.
+#
+# `OFF` IS -1 AND NOT 6, and the reason is what happens when the `< 0` guard in `enabled` is
+# lost. Both encodings are correct WITH the guard; they differ in how the loss is noticed,
+# and that was measured by deleting it:
+#
+#   guard deleted            OFF = 6                OFF = -1
+#   line at ERROR, lg OFF    still correct          PRINTS — and so does every line
+#   line at OFF, lg TRACE    prints                 still correct
+#
+# With `6` the only thing that breaks is a line written AT `OFF`, which nobody writes, so
+# losing the guard is INVISIBLE. With `-1` a logger somebody deliberately silenced starts
+# printing everything, which the first person to try it sees. Given two correct encodings,
+# take the one whose failure gets noticed.
+#
+# IT IS MODULE-PRIVATE, AND THAT IS LOAD-BEARING RATHER THAN TIDY. The `-1` encoding is only
+# safe while nothing outside can see it: a caller writing `rank(a) > rank(b)` against a
+# public `rank` would conclude that `OFF` is the most verbose level of all. The public
+# ordering question is `enabled(l) -> bool` — *will this line be written* — which is the
+# question a caller actually has.
+fn rank(l: Level) -> int {
+	return match l {
+		Level.TRACE => 0
+		Level.DEBUG => 1
+		Level.INFO  => 2
+		Level.WARN  => 3
+		Level.ERROR => 4
+		Level.FATAL => 5
+		Level.OFF   => -1
+	}
+}
+
+# parse reads a level by NAME — `debug`, not `1`. A number would pin the discriminants the
+# rest of this module is careful never to consult, and a name is what a person types into an
+# environment variable anyway. Anything else is `nil`, so a caller decides what an
+# unrecognised setting means rather than having this module guess.
+#
+# IT IS A DIVERGE CHAIN AND NOT A `match`, and both halves of that are language rules rather
+# than taste: a `match` arm is an expression and may not hold a `return` (`E605`), and every
+# arm of one must answer the SAME type (`E322`), so `Level` and `nil` do not unify.
+#
+# ```zerg
+# log.new().level(log.parse("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
+# log.new().level(log.parse("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
+# ```
+# ```output
+# true
+# false
+# ```
+pub fn parse(s: str) -> Level? {
+	return Level.TRACE if s == "trace"
+	return Level.DEBUG if s == "debug"
+	return Level.INFO if s == "info"
+	return Level.WARN if s == "warn"
+	return Level.ERROR if s == "error"
+	return Level.FATAL if s == "fatal"
+	return Level.OFF if s == "off"
+
+	return nil
+}
 
 # --- the two formats, and where each is chosen ---------------------------------------------
+#
+# A FORMAT IS AN ENUM FOR THE REASON A LEVEL IS, and it is the cleaner case: a format needs
+# no ordering and no ranking, so the enum costs nothing at all. `col` is left a `bool` — a
+# `bool` is already a real type with exactly two inhabitants, and enum-ing things for
+# symmetry is how a module grows types nobody needed.
 #
 # PRETTY IS THE DEFAULT, and that departs from zerolog, whose default is JSON. The reason is
 # who is on the other end: an unconfigured program is one somebody is running, and a readable
@@ -77,8 +157,11 @@ pub const OFF := 6
 # AN UNRECOGNISED `ZERG_LOG` IS PRETTY rather than an error. A logger that refused to start
 # over a misspelt environment variable would be a logger that takes a program down for a
 # reason that has nothing to do with it.
-pub const FMT_PRETTY := 0
-pub const FMT_JSON := 1
+#[derive(Eq)]
+pub enum Format {
+	PRETTY
+	JSON
+}
 
 # --- where a line goes ----------------------------------------------------------------------
 #
@@ -146,16 +229,22 @@ fn emit(sk: Sink, line: str) {
 # Logger. `mut c := this` is a copy including through the `list` field, so there is nothing
 # left to keep in step.
 #
-# A LIVE LINE STILL LEAKS ONE ALLOCATION PER FIELD, and saying so here is better than leaving
-# a reader to find it. It is NOT this module's shape: the same count comes out of
-# `strings.join(parts, sep)`, which leaks one per call today and has nothing to do with
-# logging — the release of a value built inside a call and consumed as a temporary is a
-# compiler defect, and it is reported rather than worked around here. What `make mem-check`
-# holds is the claim this module is responsible for, `log_dead`: a DISABLED line allocates
-# nothing at all, +0 over 195 extra rounds against +18915 for the same loop with the level on.
+# THE FIELDS ARE MODULE-PRIVATE, all of them, and that is the half of it a reader is likelier
+# to skip: a caller cannot spell `Logger(…)` positionally, so adding a field breaks nobody
+# outside, and a caller cannot write one either, so a logger somebody was handed stays what
+# they were handed.
+#
+# WHAT THE DERIVE COSTS, measured with `make mem-check` rather than guessed: a LIVE line went
+# from +18915 to +19110 allocations over 195 rounds — exactly one more per line, because an
+# assignment over a field that already holds a live `list` does not release the buffer it
+# replaces in this compiler. The disabled line, which is the claim this module is responsible
+# for, is unchanged at +0. One allocation per written line bought the removal of a defect
+# class no gate can see, and the leak itself is a compiler bug that is reported rather than
+# worked around here — the same count comes out of `strings.join`, which has nothing to do
+# with logging.
 pub struct Logger {
-	lvl: int = 2
-	fmt: int = 0
+	lvl: Level = Level.INFO
+	fmt: Format = Format.PRETTY
 	col: bool = false
 	sink: Sink = Sink(nil)
 	base: list[json.Field] = []
@@ -169,43 +258,53 @@ pub struct Logger {
 # ALLOCATED on a line that is not going to be written. `make mem-check` asserts that by
 # counting allocations at 5 rounds and at 200 and requiring the two totals to be EQUAL; it is
 # the one case in that gate whose claim is "allocated nothing" rather than "leaked nothing".
+#
 pub struct Entry {
 	live: bool = false
-	lvl: int = 0
-	fmt: int = 0
+	lvl: Level = Level.OFF
+	fmt: Format = Format.PRETTY
 	col: bool = false
 	sink: Sink = Sink(nil)
 	fs: list[json.Field] = []
 }
 
-# new answers a logger at INFO writing to standard error. It is the INSTANCE constructor, and
-# the global further down is one of these rather than a second implementation beside it.
+# new answers a logger configured from the environment, writing to standard error. It is the
+# INSTANCE constructor, and the global further down is one of these rather than a second
+# implementation beside it.
 #
 # ```zerg
-# log.new().enabled(log.INFO)
-# log.new().enabled(log.DEBUG)
+# log.new().level(log.Level.WARN).enabled(log.Level.INFO)
+# log.new().level(log.Level.WARN).enabled(log.Level.ERROR)
 # ```
 # ```output
-# true
 # false
+# true
 # ```
 pub fn new() -> Logger {
 	fs: list[json.Field] = []
-	return Logger(INFO, env_format(), env_colour(), to_stderr(), fs)
+	return Logger(env_level(), env_format(), env_colour(), to_stderr(), fs)
+}
+
+# env_level is `ZERG_LOG_LEVEL`, by name, and anything it does not recognise is `INFO`. It is
+# the one way a level is chosen without editing the program, which matters more here than it
+# would elsewhere: the only other way is a call in `main`, and the person who wants
+# a debug line is often not the person who can rebuild.
+fn env_level() -> Level {
+	return parse(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
 }
 
 # env_format is `ZERG_LOG`, and anything it does not recognise is `pretty`.
 #
-# BOTH READERS BELOW ARE WRITTEN WITH `??` RATHER THAN `if s := v { … }`, and that is not a
+# ALL THREE READERS ARE WRITTEN WITH `??` RATHER THAN `if s := v { … }`, and that is not a
 # style choice. `zerg fmt` collapses a lone `return` inside an `if` into the postfix form, and
 # `return false if s := off` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
 # CONDITION and a binding head is not one (`E205`). The formatter turns a valid program into an
 # invalid one, and `fmt --check` then calls the invalid one canonical, which is how this module
 # broke itself once. Reported; four lines reproduce it. `??` is the shorter answer anyway.
-fn env_format() -> int {
+fn env_format() -> Format {
 	v := os.env("ZERG_LOG") ?? ""
-	return FMT_JSON if v == "json"
-	return FMT_PRETTY
+	return Format.JSON if v == "json"
+	return Format.PRETTY
 }
 
 # env_colour is the two questions a rendering decision is made of, in the order the convention
@@ -229,19 +328,19 @@ fn env_colour() -> bool {
 const NO_COLOR_UNSET := "\u{1}NO_COLOR is not set"
 
 impl Logger {
-	# level answers a COPY of this logger writing at `n` and above.
+	# level answers a COPY of this logger writing at `l` and above.
 	#
 	# ```zerg
-	# log.new().level(log.WARN).enabled(log.INFO)
-	# log.new().level(log.WARN).enabled(log.ERROR)
+	# log.new().level(log.Level.OFF).enabled(log.Level.FATAL)
+	# log.new().level(log.Level.TRACE).enabled(log.Level.TRACE)
 	# ```
 	# ```output
 	# false
 	# true
 	# ```
-	pub fn level(n: int) -> This {
+	pub fn level(l: Level) -> This {
 		mut c := this
-		c.lvl = n
+		c.lvl = l
 		return c
 	}
 
@@ -252,12 +351,12 @@ impl Logger {
 		return c
 	}
 
-	# format answers a COPY writing `FMT_PRETTY` or `FMT_JSON`. It is what `ZERG_LOG` sets, and
-	# it is a function as well as an environment variable because a program that knows where
-	# its output goes should not have to be told by its own launcher.
-	pub fn format(n: int) -> This {
+	# format answers a COPY writing `Format.PRETTY` or `Format.JSON`. It is what `ZERG_LOG`
+	# sets, and it is a method as well as an environment variable because a program that knows
+	# where its output goes should not have to be told by its own launcher.
+	pub fn format(f: Format) -> This {
 		mut c := this
-		c.fmt = n
+		c.fmt = f
 		return c
 	}
 
@@ -270,11 +369,15 @@ impl Logger {
 		return c
 	}
 
-	# enabled reports whether a line at `lvl` would be written. It is PUBLIC because the
+	# enabled reports whether a line at `l` would be written. It is PUBLIC because the
 	# builder's one residual cost — evaluating the arguments — has no API answer, so a caller
 	# holding a genuinely expensive value needs a way to ask before it computes one.
-	pub fn enabled(lvl: int) -> bool {
-		return lvl >= this.lvl and lvl < OFF
+	#
+	# THE `< 0` GUARD IS WHAT MAKES `OFF` SILENT, including for a line written AT `OFF`, which
+	# is the one case a threshold comparison alone gets wrong. See `rank`.
+	pub fn enabled(l: Level) -> bool {
+		return false if rank(this.lvl) < 0
+		return rank(l) >= rank(this.lvl)
 	}
 
 	# with_str answers a copy carrying `k=v` on every line it writes from here on. It is what
@@ -282,7 +385,7 @@ impl Logger {
 	# repeating it at every call site.
 	#
 	# ```zerg
-	# log.new().with_str("component", "lexer").with_int("worker", 3).enabled(log.INFO)
+	# log.new().with_str("component", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
 	# ```
 	# ```output
 	# true
@@ -302,16 +405,16 @@ impl Logger {
 
 	# --- one method per level, and the one the language would not let be a method ---
 	#
-	# `at` IS PUBLIC AND `debug()` IS NOT WRITTEN, and that is a language rule rather than a
-	# preference. `debug` is a RESERVED METHOD NAME in Zerg: `display` and `debug` are the two
-	# renderings every value has (docs/runtime/format.md), so a method by either name must
-	# answer the `str` the value shows as — and `E361 Logger.debug() answers the str the value
-	# shows as, and this one does not` is what a level method by that name gets.
+	# `at_level` IS PUBLIC AND `debug()` IS NOT WRITTEN, and that is a language rule rather
+	# than a preference. `debug` is a RESERVED METHOD NAME in Zerg: `display` and `debug` are
+	# the two renderings every value has (docs/runtime/format.md), so a method by either name
+	# must answer the `str` the value shows as — and `E361 Logger.debug() answers the str the
+	# value shows as, and this one does not` is what a level method by that name gets.
 	#
 	# The rule is about METHODS ONLY, measured: the free `log.debug()` further down is the
 	# level's own name and is accepted, so the GLOBAL surface has all six. On an instance the
-	# sixth is `lg.at_level(log.DEBUG)`, which invents no name for a level that already has
-	# one — the alternative was a `dbg` that exists only because of a compiler rule and can
+	# sixth is `lg.at_level(log.Level.DEBUG)`, which invents no name for a level that already
+	# has one — the alternative was a `dbg` that exists only because of a compiler rule and can
 	# drift from the constant it stands for.
 	#
 	# AND IT IS `at_level` RATHER THAN `at` because of the OTHER rule: the global surface
@@ -322,33 +425,33 @@ impl Logger {
 
 	# at_level begins a line at any level. It is the general form the five below are written
 	# on, and it is what an instance writes for DEBUG.
-	pub fn at_level(lvl: int) -> Entry {
+	pub fn at_level(l: Level) -> Entry {
 		# THE ENTRY BORROWS THE LOGGER'S FIELD LIST rather than being handed a fresh one, and
 		# that is what makes the disabled path free: `[]` is an allocation, and a `list` is
 		# copy-on-write, so sharing costs a refcount and the first `.str()` pays for the copy
 		# it actually needs. A dead entry never reads `fs` at all.
-		return Entry(this.enabled(lvl), lvl, this.fmt, this.col, this.sink, this.base)
+		return Entry(this.enabled(l), l, this.fmt, this.col, this.sink, this.base)
 	}
 
 	pub fn trace() -> Entry {
-		return this.at_level(TRACE)
+		return this.at_level(Level.TRACE)
 	}
 
 	pub fn info() -> Entry {
-		return this.at_level(INFO)
+		return this.at_level(Level.INFO)
 	}
 
 	pub fn warn() -> Entry {
-		return this.at_level(WARN)
+		return this.at_level(Level.WARN)
 	}
 
 	pub fn error() -> Entry {
-		return this.at_level(ERROR)
+		return this.at_level(Level.ERROR)
 	}
 
 	# fatal writes the line and then exits with status 1.
 	pub fn fatal() -> Entry {
-		return this.at_level(FATAL)
+		return this.at_level(Level.FATAL)
 	}
 }
 
@@ -404,7 +507,7 @@ impl Entry {
 
 		# THE EXIT IS NOT INSIDE THAT `if`. A `fatal` at a silenced level still ends the
 		# program: quietening a logger changes what is REPORTED, never what is DONE.
-		if this.lvl == FATAL {
+		if this.lvl == Level.FATAL {
 			os.exit(1)
 		}
 	}
@@ -415,16 +518,16 @@ impl Entry {
 # render builds the whole line INCLUDING its newline, which is what makes `emit` one write.
 # It is a pure function of its arguments, so the suite asks it the question through a channel
 # sink rather than by capturing a stream.
-fn render(now: int, lvl: int, fmt: int, col: bool, text: str, fs: list[json.Field]) -> str {
+fn render(now: int, lvl: Level, fmt: Format, col: bool, text: str, fs: list[json.Field]) -> str {
 	stamp := time.rfc3339(now)
-	return as_json(stamp, lvl, text, fs) if fmt == FMT_JSON
+	return as_json(stamp, lvl, text, fs) if fmt == Format.JSON
 	return as_pretty(stamp, lvl, col, text, fs)
 }
 
 # as_pretty is the human line: a timestamp, a three-letter level, the message, then the
 # fields. Three letters and not the whole word so that every line is the same width here and
 # the message begins in the same column.
-fn as_pretty(stamp: str, lvl: int, col: bool, text: str, fs: list[json.Field]) -> str {
+fn as_pretty(stamp: str, lvl: Level, col: bool, text: str, fs: list[json.Field]) -> str {
 	mut out := f"{stamp} {tag(lvl, col)} {text}"
 
 	# TWO SPACES BEFORE THE FIRST FIELD and one between the rest, so the message and the
@@ -447,7 +550,7 @@ fn as_pretty(stamp: str, lvl: int, col: bool, text: str, fs: list[json.Field]) -
 # THE KEYS ARE SHORT AND FIXED — `t`, `l`, `msg` — and they come first, in that order, because
 # the field order is the order they were put and a transcript that is read by eye wants the
 # same three at the front of every line.
-fn as_json(stamp: str, lvl: int, text: str, fs: list[json.Field]) -> str {
+fn as_json(stamp: str, lvl: Level, text: str, fs: list[json.Field]) -> str {
 	mut out: list[json.Field] = []
 	json.put_str(out, "t", stamp)
 	json.put_str(out, "l", level_name(lvl))
@@ -465,48 +568,61 @@ fn as_json(stamp: str, lvl: int, text: str, fs: list[json.Field]) -> str {
 # ONLY THE LEVEL IS COLOURED. It is the field a reader scans for, and colouring the message
 # or the values would fight with whatever they contain — a diagnostic that already carries
 # escape codes, or a value that is going to be copied out of the terminal and pasted.
-fn tag(lvl: int, col: bool) -> str {
+fn tag(lvl: Level, col: bool) -> str {
 	name := short_name(lvl)
 	return name if not col
 	return colour_of(lvl) + name + "\u{1b}[0m"
 }
 
-fn short_name(lvl: int) -> str {
-	return "TRC" if lvl == TRACE
-	return "DBG" if lvl == DEBUG
-	return "INF" if lvl == INFO
-	return "WRN" if lvl == WARN
-	return "ERR" if lvl == ERROR
-	return "FTL" if lvl == FATAL
-
-	return "???"
+# short_name, level_name and colour_of are the three renderings of a level, and each is an
+# EXHAUSTIVE `match` rather than a chain of comparisons with a fallback. That is the whole
+# reason `Level` is an enum: a level added above cannot reach a program without an answer
+# here, because `E428` names the variant each of these three forgot. The chain they replaced
+# ended in `"???"` and would have shipped one silently.
+#
+# THE `OFF` ARM IS UNREACHABLE AND SAYS `"OFF"` ANYWAY. `msg` never renders one — `enabled`
+# is false for every level once the threshold is `OFF`. A blank would look like a formatting
+# bug if it ever did leak, and a name that is honest costs three characters.
+fn short_name(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "TRC"
+		Level.DEBUG => "DBG"
+		Level.INFO  => "INF"
+		Level.WARN  => "WRN"
+		Level.ERROR => "ERR"
+		Level.FATAL => "FTL"
+		Level.OFF   => "OFF"
+	}
 }
 
 # level_name is the level as a JSON line spells it — the whole word, lower case, which is what
-# every log shipper this would be read by already expects.
-fn level_name(lvl: int) -> str {
-	return "trace" if lvl == TRACE
-	return "debug" if lvl == DEBUG
-	return "info" if lvl == INFO
-	return "warn" if lvl == WARN
-	return "error" if lvl == ERROR
-	return "fatal" if lvl == FATAL
-
-	return "unknown"
+# every log shipper this would be read by already expects. It is also what `parse` reads, so
+# the two are inverses and a round trip through an environment variable is exact.
+fn level_name(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "trace"
+		Level.DEBUG => "debug"
+		Level.INFO  => "info"
+		Level.WARN  => "warn"
+		Level.ERROR => "error"
+		Level.FATAL => "fatal"
+		Level.OFF   => "off"
+	}
 }
 
 # colour_of is the SGR sequence a level opens with. They are the eight-colour codes rather
 # than 256-colour or truecolour, because those are what every terminal since the 1980s has and
 # a logger is the last place to want a capability check.
-fn colour_of(lvl: int) -> str {
-	return "\u{1b}[90m" if lvl == TRACE
-	return "\u{1b}[36m" if lvl == DEBUG
-	return "\u{1b}[32m" if lvl == INFO
-	return "\u{1b}[33m" if lvl == WARN
-	return "\u{1b}[31m" if lvl == ERROR
-	return "\u{1b}[91m" if lvl == FATAL
-
-	return "\u{1b}[0m"
+fn colour_of(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "\u{1b}[90m"
+		Level.DEBUG => "\u{1b}[36m"
+		Level.INFO  => "\u{1b}[32m"
+		Level.WARN  => "\u{1b}[33m"
+		Level.ERROR => "\u{1b}[31m"
+		Level.FATAL => "\u{1b}[91m"
+		Level.OFF   => "\u{1b}[0m"
+	}
 }
 
 # shown renders one field's value for a person. A string that would be AMBIGUOUS unquoted —
@@ -578,8 +694,8 @@ unsafe {
 
 # set_level configures the global logger. It is the whole of the "configure at startup" rule:
 # call it in `main` before anything else runs.
-pub fn set_level(n: int) {
-	process = process.level(n)
+pub fn set_level(l: Level) {
+	process = process.level(l)
 }
 
 # set_sink sends the global logger's lines somewhere else — a channel a test drains, or back
@@ -588,10 +704,11 @@ pub fn set_sink(sk: Sink) {
 	process = process.to(sk)
 }
 
-# set_format picks `FMT_PRETTY` or `FMT_JSON` for the global logger. `ZERG_LOG` sets the same
-# thing from outside; this is how a program that knows where its output goes says so itself.
-pub fn set_format(n: int) {
-	process = process.format(n)
+# set_format picks `Format.PRETTY` or `Format.JSON` for the global logger. `ZERG_LOG` sets the
+# same thing from outside; this is how a program that knows where its output goes says so
+# itself.
+pub fn set_format(f: Format) {
+	process = process.format(f)
 }
 
 # set_colour turns ANSI colour on or off for the global logger, over the default the
@@ -602,38 +719,38 @@ pub fn set_colour(on: bool) {
 
 # enabled is the global's level check, and it is public for the reason the method is: a caller
 # holding a value that costs something to compute needs to ask before it computes one.
-pub fn enabled(lvl: int) -> bool {
+pub fn enabled(lvl: Level) -> bool {
 	return process.enabled(lvl)
 }
 
 # at_level begins a line on the global logger at any level.
-pub fn at_level(lvl: int) -> Entry {
+pub fn at_level(lvl: Level) -> Entry {
 	return process.at_level(lvl)
 }
 
 pub fn trace() -> Entry {
-	return process.at_level(TRACE)
+	return process.at_level(Level.TRACE)
 }
 
 # debug is a FREE function and can therefore carry the level's own name — `debug` is reserved
 # only as a METHOD (see `Logger.at_level` above).
 pub fn debug() -> Entry {
-	return process.at_level(DEBUG)
+	return process.at_level(Level.DEBUG)
 }
 
 pub fn info() -> Entry {
-	return process.at_level(INFO)
+	return process.at_level(Level.INFO)
 }
 
 pub fn warn() -> Entry {
-	return process.at_level(WARN)
+	return process.at_level(Level.WARN)
 }
 
 pub fn error() -> Entry {
-	return process.at_level(ERROR)
+	return process.at_level(Level.ERROR)
 }
 
 # fatal writes the line and exits 1, on the global logger.
 pub fn fatal() -> Entry {
-	return process.at_level(FATAL)
+	return process.at_level(Level.FATAL)
 }

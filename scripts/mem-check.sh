@@ -192,7 +192,7 @@ measure() {
 # measure_free <label> <compiler> <name> — the OPPOSITE claim to `measure`'s, for the one
 # property in this repository that is about an allocation NOT happening: a disabled log entry.
 #
-# `lg.at_level(log.DEBUG)` at a level that is off answers a dead builder, and `log`'s whole
+# `lg.at_level(log.Level.DEBUG)` at a level that is off answers a dead builder, and `log`'s whole
 # design rests on that costing NOTHING — no field formatted, no list grown, no `[]` made.
 # "Costs nothing" is not something a test can assert and not something a benchmark can prove;
 # it is a COUNT, and this file already counts. So the two runs are made and the totals must be
@@ -659,9 +659,9 @@ import "log"
 fn level() -> int {
 	v := os.env("ZLOG_ON")
 	if s := v {
-		return log.TRACE if s == "1"
+		return log.Level.TRACE if s == "1"
 	}
-	return log.OFF
+	return log.Level.OFF
 }
 
 fn main() {
@@ -669,7 +669,7 @@ fn main() {
 	mut i := 0
 	n := rounds()
 	for i < n {
-		lg.at_level(log.DEBUG).str("k", "v").int("n", i).bool("b", true).dur("t", 5).msg("never")
+		lg.at_level(log.Level.DEBUG).str("k", "v").int("n", i).bool("b", true).dur("t", 5).msg("never")
 		i = i + 1
 	}
 	print n

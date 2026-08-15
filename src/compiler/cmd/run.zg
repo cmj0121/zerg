@@ -19,16 +19,6 @@ import (
 	"zerg"
 )
 
-pub fn fmt_cmd() -> cli.Command {
-	return (
-		cli.command("fmt", "rewrite sources in the canonical style")
-		.flag("c", "check", "report what is not canonical and change nothing")
-		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. F401; repeatable").repeated())
-		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
-		.run(do_fmt)
-	)
-}
-
 pub fn lint_cmd() -> cli.Command {
 	return (
 		cli.command("lint", "report unused imports and dead private code")
@@ -59,12 +49,6 @@ pub fn lsp_cmd() -> cli.Command {
 	)
 }
 
-fn do_fmt(c: cli.Ctx) -> int {
-	return run_fmt_check(c.args(), c.all("off")) if c.has("check")
-	run_fmt(c.args(), c.all("off"))
-	return 0
-}
-
 # do_lsp hands the server the one thing it cannot do for itself: turn a path and an unsaved
 # buffer into the whole program that buffer belongs to. Resolving an import is 60 lines of
 # environment variables, an installation root and a checkout layout, all of it here already,
@@ -90,57 +74,6 @@ fn do_desugar(c: cli.Ctx) -> int {
 
 fn do_lint(c: cli.Ctx) -> int {
 	return run_lint(c.args(), c.has("strict"))
-}
-
-# --- fmt / lint ------------------------------------------------------------------------
-
-# run_fmt rewrites each named file in place. Reading and writing the same path means a
-# formatted file is byte-identical to what it was, so running fmt twice is a no-op.
-fn run_fmt(files: list[str], off: list[str]) {
-	for f in files {
-		src := read_source(f)
-
-		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
-		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
-		# back as `fn main({` and `print("hi")` as `print ("hi")`: the tokens survive, but
-		# the spacing rules are applied to a shape they cannot mean anything about, so the
-		# user's broken file comes back broken AND misformatted, with nothing said.
-		#
-		# The gate is NOT `parse`. A formatter has to work on source the compiler cannot
-		# COMPILE — that is exactly when a person reaches for one — and this parser refuses
-		# 26 forms the language has and this compiler has not built, `src/stdlib/testing.zg`
-		# among them. Balance is what fmt's own rules actually depend on; see fmt_balanced.
-		raise f"`{f}` has unbalanced brackets, so it cannot be formatted — the file is left as it is" if not zerg.fmt_balanced(src)
-
-		out := zerg.fmt_src_off(src, off)
-		if out != src {
-			guard {
-				io.write_file(f, bytearray(out))
-			}
-			io.write(f + "\n")
-		}
-	}
-}
-
-# run_fmt_check answers the question a CI job asks — is this tree already canonical — and
-# answers it without touching anything. Before it existed `make fmt-corpus` did the same
-# thing by copying each case to a temp file, formatting the copy and running `cmp`: the
-# tool knew the answer and had no way to say it, so the Makefile reimplemented it in
-# shell. A formatter that cannot be asked is a formatter every CI reinvents.
-fn run_fmt_check(files: list[str], off: list[str]) -> int {
-	mut bad := 0
-	for f in files {
-		src := read_source(f)
-		if not zerg.fmt_balanced(src) {
-			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
-			bad = bad + 1
-		} else if zerg.fmt_src_off(src, off) != src {
-			io.ewrite(f"{f}: not in canonical form (run `zerg fmt`)\n")
-			bad = bad + 1
-		}
-	}
-	return 1 if bad > 0
-	return 0
 }
 
 # run_desugar rewrites each source into the core forms its sugar is defined as. It is

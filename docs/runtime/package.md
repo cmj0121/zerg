@@ -406,12 +406,11 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** `zerg test` is a **scaffold**. It walks a path for `*_test.zg`, compiles each
-> package — its sources, its test files and a generated driver, so a white-box test reaches the
+> **[not yet]** `zerg test` is a **scaffold**. It walks a path for the packages under it, compiles
+> each — its sources, its test files and a generated driver, so a white-box test reaches the
 > module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
 > `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
-> from passes and failures, and exiting non-zero if any did not hold. A run that finds nothing
-> says so.
+> from passes and failures, and exiting non-zero if any did not hold.
 >
 > **A package is the module the test file names**, resolved most specific first: `strings_test.zg`
 > beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if
@@ -419,10 +418,37 @@ does.
 > package. One directory may therefore hold several packages, each with its own driver and its own
 > process.
 >
+> **The path may be one `.zg` file**, and then it is the **package that file is in** that runs —
+> `zerg test src/stdlib/strings_test.zg` runs `strings.zg` + `strings_test.zg`, and not the other
+> packages of that directory. Ancestors are counted from the file's directory, exactly as they
+> would be for the directory itself. A build of the test file **alone** is a build of nothing, so
+> the file selects a package rather than a file list; `--only` is the tool for one test.
+>
+> **The exit status distinguishes a search that found nothing.** `0` every test that ran passed or
+> skipped, `1` a test failed or timed out, `2` the command could not be carried out (no such path,
+> a `--only` that matched nothing, a fixture parameter that resolves to nothing), and `3` the
+> search ran and there was no test in what it searched. `3` is not folded into `2` because the
+> reader's next move differs: a `2` is fixed by editing the command line and a `3` by looking at
+> the tree. A run that found nothing says so on stderr as well, but a sentence alone leaves a CI
+> line green forever, and the reader of a CI line is a shell.
+>
+> **A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg`. The
+> decorator may be written anywhere, so a directory whose only `#[test]` sits in an ordinary
+> module file is a test package too, and `zerg lint` goes on warning (**L601**) that such a test
+> **ships**. Both, not one: the linter says where a test ought to live and the runner runs what is
+> written. It adds no package **shape** — the package a stray `#[test]` belongs to is the one that
+> already compiles the file it is in — so the monotone rule above is untouched: which files a
+> package is built from is still decided by the `*_test.zg` names alone.
+>
+> **A `#[test]` returns nothing, and a declared return type is refused** with a place, before
+> anything is compiled: the driver calls a test as a **statement**, so the value would be dropped
+> — and `#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than
+> linted because a lint exits 0 and the run would go on saying `ok`.
+>
 > **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
 > test, a stem selects the family. It is applied before anything is generated, so a test it did not
 > select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
-> rather than reporting a green run of nothing.
+> rather than reporting a green run of nothing: the command named a test that is not there.
 >
 > **`--timeout <seconds>`** is how long one test may take before the run stops waiting on it;
 > the default is `60`. A test that goes over is reported `STUCK` and counted apart, and the run
@@ -439,7 +465,7 @@ does.
 > test that caused it. When it happens the report says so on a `NOTE` line; a run that quietly
 > changed strategy is a run whose result nobody can interpret.
 >
-> A `#[test]` returns nothing and takes either **no parameter** or one **`testing.Context`**,
+> A `#[test]` takes either **no parameter** or one **`testing.Context`**,
 > identified by its type and not by its name; the driver writes whichever call the signature
 > asks for. A context is passed **by value** and shares what matters anyway — its one field is a
 > channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,

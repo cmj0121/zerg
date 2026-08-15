@@ -6704,10 +6704,12 @@ pub fn work() -> int {
 }
 EOF
 
-# ONE module declaring a name twice, in two files. Two DIFFERENT modules each declaring a
-# private one is legal — they take a module tag in C — so what this pins is the collision
-# no tag can separate.
-reject one-module-declaring-a-function-twice E706 <<'EOF'
+# TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
+# is legal — they take a module tag in C — so what this pins is the collision no tag can
+# separate. The sentence is pinned because the case below it shares the shape and not the rule:
+# what E706 has to say here is that there are two FILES, which is the thing this compiler
+# cannot tell from two modules and used to assert it could.
+reject two-files-of-one-module-declaring-a-function E706 'both define `work`' <<'EOF'
 import "one"
 
 fn main() {
@@ -6724,6 +6726,40 @@ pub fn first() -> int {
 --- one/b.zg
 fn work() -> int {
 	return 2
+}
+EOF
+
+# ONE FILE declaring a name twice, which is the other half of the same collision and is a
+# different RULE: E706 is a `NotImplemented` the package layer retires, and this is refused by
+# every compiler there will ever be. It was reported as E706 — "two modules both define
+# `test_same`" about two `#[test]` functions in one file — and a reader following that sentence
+# goes looking for a second module.
+#
+# The sentence is pinned on the half no place carries: the marker points at the SECOND
+# declaration, so the first one's line is the thing the reader cannot see from the caret.
+reject one-file-declaring-a-function-twice E745 'the first is at line 1' <<'EOF'
+fn work() -> int {
+	return 1
+}
+
+fn work() -> int {
+	return 2
+}
+
+fn main() {
+	print work()
+}
+EOF
+
+# AND THE CONSTANT, which is the rule's other walk over its other table. The two are one rule
+# and two tables (emit.zg says so where the wording lives), so a case on the function alone
+# pins half of it — and the constant half was the half that used to LINK rather than refuse.
+reject one-file-declaring-a-constant-twice E745 'the first is at line 1' seed-gap <<'EOF'
+const N := 1
+const N := 2
+
+fn main() {
+	print N
 }
 EOF
 

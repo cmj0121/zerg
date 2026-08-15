@@ -417,7 +417,7 @@ fn jp_value(b: list[byte], mut &pos: list[int]) -> Val {
 
 	return jp_obj(b, pos) if c == b'{'
 	return jp_arr(b, pos) if c == b'['
-	return jp_str_val(b, pos) if c == b'"'
+	return Val.Str(jp_string(b, pos)) if c == b'"'
 	return jp_lit(b, pos, "true", Val.Bool(true)) if c == b't'
 	return jp_lit(b, pos, "false", Val.Bool(false)) if c == b'f'
 	return jp_lit(b, pos, "null", Val.Null) if c == b'n'
@@ -495,10 +495,6 @@ fn jp_arr(b: list[byte], mut &pos: list[int]) -> Val {
 		break
 	}
 	return Val.Arr(xs)
-}
-
-fn jp_str_val(b: list[byte], mut &pos: list[int]) -> Val {
-	return Val.Str(jp_string(b, pos))
 }
 
 fn jp_string(b: list[byte], mut &pos: list[int]) -> str {

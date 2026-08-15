@@ -656,7 +656,7 @@ ZG
 case_free log_dead <<'ZG'
 import "log"
 
-fn level() -> int {
+fn level() -> log.Level {
 	v := os.env("ZLOG_ON")
 	if s := v {
 		return log.Level.TRACE if s == "1"

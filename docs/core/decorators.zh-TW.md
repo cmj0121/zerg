@@ -20,15 +20,10 @@
 - **它自成一行。** decorator 和其他項目一樣是 statement list 的一個項目,所以有分隔符把它和它所領的項目分開;
   `#[derive(Eq)] struct P` 寫在同一行不是一種形式。
 
-> **[not yet]** `#[sealed]` 有自己的碼——_E496 NotImplemented: the decorator `#[sealed]` — it is a reserved
-> decorator … and this compiler does not build it, so the constructor stays public rather than being sealed
-> in silence_。這個字是對的,缺的是行為,而那正是寫下它的讀者需要被告知的事。
-
 ## 集合
 
 `#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與 `#[allow]` 是這個編譯器會讀的 decorator。其他每一個——
-`#[sealed]`、
-layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
+`#[sealed]`、layout 指示詞——都是 **[not yet]**,並且會被指名拒絕（見下方〈保留字，以及一個保留名實際上得到什麼〉）。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`——以及 **`Ord`**、
@@ -68,27 +63,27 @@ layout 指示詞——都是 **[not yet]**,並且會被指名拒絕。
   代表它沒有東西可壓,**L107**（**warning**）代表它指名了沒有規則對應的代碼。完全沒點名代碼的 `#[allow]` 則直接被
   拒絕——_E614_。
 
-## 已識別但尚未支援
+## 保留字，以及一個保留名實際上得到什麼
 
-另有四個 decorator 名稱被 compiler **識別**,但這個階段會**大聲拒絕**——用了就是「尚未支援」的**編譯錯誤**,絕不
-默默當作 no-op:
+有四個名稱**已規範但未建置**，而其中只有一個是編譯器認得的名字：
 
-- **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**,外部必須改走
-  公開的自訂 constructor（具名關聯 `fn`）,而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
-  **[not yet]**
-- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
-  padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
+- **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**，外部必須改走
+  公開的自訂 constructor（具名關聯 `fn`），而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
+  **[not yet]**，而且有自己的代碼：`E496`。
+- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator，用於對接外部 ABI 時控制記憶體
+  寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
-> **[not yet]** `#[repr]` 仍是一個沒有自己規則的保留名字:它落進未知 decorator 的分支,拿到
-> _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no
-> other_——與拼錯的
-> `#[frobnicate]` 同一句話。它被拒絕,所以沒有任何東西被默默丟掉;失去的是「等待實作」與「打錯字」之間的
-> 區分——`#[sealed]` 原本也有同樣的問題,現在有了 `E496`。
+> **[not yet]** layout 那三個是**保留在本頁上、而不保留在編譯器裡**。`#[repr]` 沒有自己的規則：它落進未知
+> decorator 的分支，拿到 _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and
+> `#[allow(…)]`, and no other_——與拼錯的 `#[frobnicate]` 同一句話。沒有任何東西被默默丟掉；失去的是「等待實作」
+> 與「打錯字」之間的區分，而那正是 `#[sealed]` 的 `E496` 買回來的東西。
 >
-> `#[test]` 現在**兩個編譯器都會讀**,而 `zerg test` 會把它標記的東西跑起來(那個指令走到哪裡,見
-> [模組、套件與程式](../runtime/package.zh-TW.md))。裡面還留著一個 **[deviation]**:種子在它的檢查器跑之前
-> 就把 `#[test]` 函式剝掉,所以那裡從來不曾對函式本體做型別檢查,而 `zerg` 與其他函式一視同仁。一個編不過的
-> 測試在 `zerg` 底下是編譯錯誤,在 `zerg0` 底下是沉默——記錄在 `src/bootstrap/README.md`。
+> **[deviation]** `#[test]` 兩個編譯器都會讀，但**種子在它的檢查器跑之前就把 `#[test]` 函式剝掉**，所以那裡從來
+> 不曾對函式本體做型別檢查，而 `zerg` 與其他函式一視同仁。一個編不過的測試在 `zerg` 底下是編譯錯誤、在 `zerg0`
+> 底下是沉默——記錄在 `src/bootstrap/README.md`。
+
+這個集合只在編譯器新增指令時成長；**logging** / 觀測與 **FFI** 是可能的下一批。任何**未**列在本頁的名稱根本不是
+保留的 decorator——它是編譯錯誤，所以拼錯絕不會被當成某個編譯器默默丟棄的指令。
 
 ## 不是 macro
 
@@ -101,9 +96,3 @@ decorator 的定位是**極少動用**。有兩個日常需求**不是**它的�
 `Encode` / `Decode` **spec impl** 客製（`#[repr]` 只管記憶體寬度,絕不管 wire 上的 bytes）;而**記憶體佈局**遵循
 一條可預測的預設（宣告順序、自然對齊）——只有要**偏離**去對接外部 ABI 時才加 layout decorator。走在預設路徑上、
 日常之中,你一個 decorator 都不必寫。
-
-## 保留
-
-這個集合只在 compiler 新增指令時成長。layout decorator（`#[repr]`、`#[packed]`、`#[align]`）與 `#[sealed]`
-已是**保留名稱**——會被識別並大聲拒絕（見上）直到實作為止——而 **logging** / 觀測與 **FFI** 是可能的下一批。任何
-**未**列在本頁的名稱根本不是保留的 decorator:它是**編譯錯誤**,所以拼錯絕不會被當成某個 compiler 默默丟棄的指令。

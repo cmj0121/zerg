@@ -1,15 +1,15 @@
-# What each sub-command DOES — one file per command, and the machinery more than one of
-# them needs beside it. `zergc.zg` declares the command line; nothing in it says what a
-# command does, and nothing here says what the command line accepts.
+# `zerg lsp` — the same compiler answering an editor rather than a shell.
 #
-# A command is TWO declarations that belong together: the `cli.Command` naming its flags,
-# and the function that is handed the parsed line. So each `*_cmd()` is `pub` — it is what
-# `root()` reaches for — and everything else in this module is private to it.
+# The protocol is the interface, so there is nothing to declare: an editor starts the
+# process, speaks JSON-RPC over its standard input and output, and stops it by closing
+# them. What the server cannot do for itself is turn a path and an unsaved buffer into the
+# whole program that buffer belongs to, and that is the one thing handed to it here.
 #
-# Each of those functions is handed the parsed command line and returns the process's exit
-# status. There is no argument checking in one: a missing file or an unreadable flag was
-# refused before the function was ever called, which is the point of declaring the command
-# line rather than unpicking it.
+# THE FILE IS NOT CALLED `lsp.zg`, and it is the only one here that is not named after its
+# command. A module is resolved BESIDE THE IMPORTER first, so `cmd/lsp.zg` would be what
+# `import "lsp"` resolves to from inside this directory — the language server would import
+# itself, which the cycle rule refuses as `E485 lsp -> lsp`. A file in a module directory
+# shadows the module its name spells, for every file in that directory.
 
 import (
 	"cli"

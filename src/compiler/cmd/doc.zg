@@ -1,0 +1,12 @@
+# What each sub-command DOES — one file per command, and the machinery more than one of
+# them needs beside it. `zergc.zg` declares the command line; nothing in it says what a
+# command does, and nothing here says what the command line accepts.
+#
+# A command is TWO declarations that belong together: the `cli.Command` naming its flags,
+# and the function that is handed the parsed line. So each `*_cmd()` is `pub` — it is what
+# `root()` reaches for — and everything else in this module is private to it.
+#
+# Each of those functions is handed the parsed command line and returns the process's exit
+# status. There is no argument checking in one: a missing file or an unreadable flag was
+# refused before the function was ever called, which is the point of declaring the command
+# line rather than unpicking it.

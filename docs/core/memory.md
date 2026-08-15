@@ -7,6 +7,19 @@ and the `Ref[T]` escape hatch. Part of the [Language Reference](../language.md).
 No garbage collector, no pointer syntax. Every value is **scope-owned** (freed at scope exit) and
 passed **by value**. Copy-by-value is the semantics; the compiler elides copies when safe:
 
+> **[deviation]** **What the release logic tracks is a BINDING**, so a heap value that is nobody's binding
+> is nobody's to end. Two shapes leak without bound in an ordinary loop, and they are one defect
+> ([issue #11](https://github.com/cmj0121/zerg/issues/11)):
+>
+> - **a temporary handed straight from one call into another.** `strings.count(strings.join(…), "a")` in a
+>   500 000-round loop peaks at **25.7 MB**; binding the middle result to a name first peaks at **1.7 MB**.
+> - **the old buffer of a field written over.** `b.xs = […]` in a loop peaks at **25.7 MB** over 300 000
+>   rounds and **49.9 MB** over 600 000 — it doubles with the loop, so it is unbounded, not a fixed cost.
+>
+> Both are legal programs that run correctly and consume memory forever, which the standing contract —
+> _implemented, or refused by name_ — has no third state for. Neither has a case in `make mem-check`, and
+> the section on assignment below carries the same defect from the binding side.
+
 - **Single flow** — an immutable value may pass by-ref invisibly; a mutable one falls back to a copy.
 - **Across coroutines** — always copied: no shared mutable state, no data races; propagating a change
   back is the caller's job (e.g. via a channel).
@@ -182,7 +195,8 @@ order.
 value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
 
 > **[deviation]** Only a recursive `enum` and a carrier do that. Assigning over a `str`, a `list`, a `map`,
-> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does the
+> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does
+> writing over a **field** (the unbounded shape measured at the head of this chapter), the
 > collection a `for … in` over a **map** copies to walk, and the payload a **force-unwrap** copies out:
 > `q!` hands back a copy of what the carrier holds, and an expression that reads one field of it discards
 > the rest. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two allocations a

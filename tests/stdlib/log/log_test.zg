@@ -1,0 +1,609 @@
+# The `log` suite — the level gate, the builder, and the bytes of a finished line.
+#
+# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out. `render`, `tag`,
+# `shown` and `needs_quotes` are module-private and are asked through a line that was
+# actually written.
+#
+# THE CHANNEL SINK IS WHAT MAKES THIS A SUITE AT ALL. A logger whose only destination is a
+# file descriptor can be asked nothing from inside the same process — there is no reading a
+# `write(2)` back. `log.to_chan(ch)` hands each finished line over as a value, so every test
+# below asserts the actual bytes rather than "it did not crash". The channel is buffered
+# deeply enough for the lines each test writes, because a send to a full channel parks the
+# sender and a test is its own only reader.
+#
+# WHAT THIS SUITE CANNOT REACH is in tests/stdlib/log/README-less company: `fatal` EXITS, the
+# default sink is a file descriptor, and a torn line needs several coroutines racing. Those
+# three are held by scripts/log-check.sh from the `stdlib-test` gate, which runs whole
+# programs and reads their streams — see the header there.
+import (
+	"log"
+	"strings"
+	"testing"
+	"time"
+)
+
+# --- the level gate ------------------------------------------------------------------------
+
+# `enabled` IS THE WHOLE OF THE LEVEL LOGIC and every other level question is written on it,
+# so it is asked as a table rather than as a sample: a rule that is off by one is off by one
+# at exactly one threshold, and a suite that tests INFO against DEBUG never meets it.
+#[test]
+fn test_enabled_is_at_or_above() {
+	lg := log.new().level(log.WARN)
+	assert not lg.enabled(log.TRACE)
+	assert not lg.enabled(log.DEBUG)
+	assert not lg.enabled(log.INFO)
+	assert lg.enabled(log.WARN)
+	assert lg.enabled(log.ERROR)
+	assert lg.enabled(log.FATAL)
+}
+
+#[test]
+fn test_enabled_at_the_two_ends() {
+	all := log.new().level(log.TRACE)
+	assert all.enabled(log.TRACE)
+	assert all.enabled(log.FATAL)
+
+	# OFF is above FATAL, so nothing is on — including `fatal`'s line.
+	none := log.new().level(log.OFF)
+	assert not none.enabled(log.TRACE)
+	assert not none.enabled(log.INFO)
+	assert not none.enabled(log.FATAL)
+}
+
+#[test]
+fn test_new_starts_at_info() {
+	lg := log.new()
+	assert not lg.enabled(log.DEBUG)
+	assert lg.enabled(log.INFO)
+	assert lg.enabled(log.ERROR)
+}
+
+# A LOGGER IS A VALUE and every configuration method answers a COPY. This is what lets a
+# component be handed a logger and quieten its own without quietening its caller's, and it is
+# the property a struct with methods loses the moment one of them mutates `this`.
+#[test]
+fn test_configuration_does_not_mutate_the_original(ctx: testing.Context) {
+	base := log.new()
+	quiet := base.level(log.ERROR)
+	named := base.with_str("component", "lexer")
+
+	ctx.log("the copies took the change")
+	assert not quiet.enabled(log.INFO)
+
+	ctx.log("and the original did not")
+	assert base.enabled(log.INFO)
+	assert named.enabled(log.INFO)
+}
+
+# --- a finished line -------------------------------------------------------------------------
+
+# one writes a single line through a channel sink and answers it. Every rendering test below
+# is written on this, so the plumbing appears once.
+fn one(lg: log.Logger) -> str {
+	ch := chan[str](32)
+	lg.to(log.to_chan(ch)).info().msg("hello")
+	return taken(ch)
+}
+
+# taken is the next line on `ch`, or "" when nothing has been written.
+#
+# IT IS A `select` WITH THE NON-BLOCKING ARM, and a plain `<-ch` is a HANG. A receive answers
+# `T?` and the `nil` means the stream ENDED — a channel that is merely empty is not ended, and
+# this suite holds the only sender, so `if v := <-ch` on an unwritten channel parks the test
+# forever. That is what makes `_` the arm this needs: it fires when nothing is ready, which is
+# exactly the question every "a disabled entry writes nothing" test below is asking.
+fn taken(ch: chan[str]) -> str {
+	select {
+		v := <-ch => return unwrapped(v)
+		_         => return ""
+	}
+	return ""
+}
+
+# unwrapped is the line a select arm bound. The arm binds the `str?` the receive answers, and
+# an ended stream is `nil` — which for this suite means the same as nothing ready.
+#
+# IT IS `??` AND NOT `if s := v { return s }`, and that is not a style choice: `zerg fmt`
+# rewrites the second into `return s if s := v`, which does not parse (`E205`). The trailing
+# `if` on a diverge takes a bare CONDITION and a binding head is not one, so the formatter
+# turns a valid program into an invalid one — reproduced on four lines, and reported. `??` is
+# the shorter answer here anyway.
+fn unwrapped(v: str?) -> str {
+	return v ?? ""
+}
+
+#[test]
+fn test_a_line_is_timestamp_level_message(ctx: testing.Context) {
+	line := one(log.new())
+
+	ctx.log("the timestamp is RFC 3339, which `time` renders and this only places")
+	assert strings.index_of(line, "T") == 10
+	assert strings.index_of(line, "Z ") == 19
+
+	ctx.log("then a three-letter level, then the message")
+	assert strings.contains(line, " INF hello")
+}
+
+# THE LINE ENDS IN EXACTLY ONE NEWLINE and carries no other, because the newline is part of
+# the ONE WRITE. A renderer that left it to the caller is a renderer that gets called with
+# `println` — which is two writes, and two writes is how one line ends up carrying another's
+# message under 830 lines in 24000.
+#[test]
+fn test_a_line_is_one_line() {
+	line := one(log.new())
+	assert strings.has_suffix(line, "\n")
+	assert strings.count(line, "\n") == 1
+}
+
+#[test]
+fn test_every_level_has_its_own_tag() {
+	ch := chan[str](32)
+	lg := log.new().level(log.TRACE).to(log.to_chan(ch))
+
+	lg.trace().msg("m")
+	lg.at_level(log.DEBUG).msg("m")
+	lg.info().msg("m")
+	lg.warn().msg("m")
+	lg.error().msg("m")
+
+	assert strings.contains(taken(ch), " TRC m")
+	assert strings.contains(taken(ch), " DBG m")
+	assert strings.contains(taken(ch), " INF m")
+	assert strings.contains(taken(ch), " WRN m")
+	assert strings.contains(taken(ch), " ERR m")
+}
+
+# --- the fields ------------------------------------------------------------------------------
+
+# THE WHOLE OF A LINE, minus the one part a suite cannot know. The timestamp is `time.now()`,
+# so what is compared is everything from the level onwards — every byte that is a function of
+# the arguments, including the TWO SPACES before the first field. That gap is not decoration:
+# a message is prose and may contain a single space, so without a wider one the eye has to
+# parse for the first `=` to find where the structured part begins.
+#[test]
+fn test_fields_are_key_equals_value_in_order() {
+	ch := chan[str](32)
+	log.new().to(log.to_chan(ch)).info().str("file", "a.zg").int("line", 12).bool("ok", true).msg("compiling")
+	line := taken(ch)
+	tail := " INF compiling  file=a.zg line=12 ok=true\n"
+	assert strings.has_suffix(line, tail)
+
+	# and nothing but the timestamp precedes it — 20 bytes, which is what `time.rfc3339` is.
+	assert bytearray(line).len() == 20 + bytearray(tail).len()
+}
+
+#[test]
+fn test_field_order_is_call_order() {
+	ch := chan[str](32)
+	log.new().to(log.to_chan(ch)).info().int("b", 2).int("a", 1).msg("m")
+	line := taken(ch)
+	assert strings.index_of(line, "b=2") < strings.index_of(line, "a=1")
+}
+
+# A VALUE THAT WOULD BE AMBIGUOUS BARE IS QUOTED, and one that would not is not. `file=a.zg`
+# is what a person reads; `msg=hello world` is two fields to anything that parses it, and an
+# empty `k=` is not a value at all.
+#[test]
+fn test_values_are_quoted_only_when_they_have_to_be(ctx: testing.Context) {
+	ctx.log("bare: an ordinary word, a path, a number, a bool")
+	assert strings.contains(field("k", "value"), "k=value")
+	assert strings.contains(field("k", "src/a.zg"), "k=src/a.zg")
+
+	ctx.log("quoted: a space, a quote, a backslash, an `=`, a control byte, and empty")
+	assert strings.contains(field("k", "two words"), "k=\"two words\"")
+	assert strings.contains(field("k", "say \"hi\""), "k=\"say \\\"hi\\\"\"")
+	assert strings.contains(field("k", "a\\b"), "k=\"a\\\\b\"")
+	assert strings.contains(field("k", "a=b"), "k=\"a=b\"")
+	assert strings.contains(field("k", "a\nb"), "k=\"a\\nb\"")
+	assert strings.contains(field("k", ""), "k=\"\"")
+}
+
+# A NEWLINE IN A VALUE IS ESCAPED, NOT WRITTEN, which is the same property as "a line is one
+# line" seen from the other side: a value carrying a newline would otherwise split the record
+# in two and every line-oriented tool downstream would read the second half as a new one.
+#[test]
+fn test_a_newline_in_a_value_does_not_split_the_line() {
+	line := field("trace", "first\nsecond")
+	assert strings.count(line, "\n") == 1
+	assert strings.contains(line, "\\n")
+}
+
+fn field(k: str, v: str) -> str {
+	ch := chan[str](4)
+	log.new().to(log.to_chan(ch)).info().str(k, v).msg("m")
+	return taken(ch)
+}
+
+#[test]
+fn test_dur_renders_as_a_duration_not_a_nanosecond_count() {
+	ch := chan[str](4)
+	log.new().to(log.to_chan(ch)).info().dur("took", 1500000000).msg("done")
+	assert strings.contains(taken(ch), "took=1.5s")
+
+	# And it is the same renderer `time` exports, not a second one.
+	assert strings.contains(field("x", time.duration(250000000)), "x=250ms")
+}
+
+# --- the JSON format ---------------------------------------------------------------------------
+#
+# THE POINT OF THE SECOND FORMAT IS THAT IT GOES THROUGH `json`. A logger that wrote its own
+# braces would be the second escaper in the tree, and the one that drifts is always the one
+# nobody is reading transcripts of — so the assertions below are as much about the escaper
+# being SHARED as about the shape of the line.
+
+# jline writes one line at `lvl` in JSON and answers it.
+fn jline(lvl: int, text: str) -> str {
+	ch := chan[str](4)
+	log.new().level(log.TRACE).format(log.FMT_JSON).to(log.to_chan(ch)).at_level(lvl).str("k", "v").msg(text)
+	return taken(ch)
+}
+
+# THE THREE FIXED KEYS COME FIRST AND IN ORDER — `t`, `l`, `msg` — because a field list keeps
+# the order it was built in, and a transcript read by eye wants the same three at the front of
+# every line.
+#[test]
+fn test_json_puts_time_level_and_message_first() {
+	line := jline(log.INFO, "compiling")
+	assert strings.has_prefix(line, "{\"t\":\"")
+	assert strings.contains(line, "\",\"l\":\"info\",\"msg\":\"compiling\",\"k\":\"v\"}")
+	assert strings.has_suffix(line, "}\n")
+}
+
+# THE LEVEL IS THE WHOLE WORD, lower case, which is what every log shipper this would be read
+# by already expects — and it is a different rendering from the pretty line's three letters,
+# so both are asked.
+#
+# FATAL IS NOT ASKED HERE AND CANNOT BE. `msg` on a `fatal` entry exits the process, so a test
+# that rendered one would take the test process with it — which is what happened when this was
+# first written, and the runner reported it honestly as a crash. `fatal`'s two renderings are
+# asked in scripts/log-check.sh, which runs a whole program and expects it to end.
+#[test]
+fn test_json_spells_the_level_out() {
+	assert strings.contains(jline(log.TRACE, "m"), "\"l\":\"trace\"")
+	assert strings.contains(jline(log.DEBUG, "m"), "\"l\":\"debug\"")
+	assert strings.contains(jline(log.INFO, "m"), "\"l\":\"info\"")
+	assert strings.contains(jline(log.WARN, "m"), "\"l\":\"warn\"")
+	assert strings.contains(jline(log.ERROR, "m"), "\"l\":\"error\"")
+}
+
+# A JSON LINE IS STILL ONE LINE. A message carrying a newline is the ordinary case for a
+# compiler's diagnostics, and the escaper is what keeps one record on one line — the same
+# property the pretty format has, reached a different way.
+#[test]
+fn test_json_escapes_rather_than_breaking_the_line(ctx: testing.Context) {
+	ch := chan[str](4)
+	log.new().format(log.FMT_JSON).to(log.to_chan(ch)).warn().str("m", "a \"quoted\"\nline\twith tabs").msg("escaping")
+	line := taken(ch)
+
+	ctx.log("one newline, and it is the terminator")
+	assert strings.count(line, "\n") == 1
+	assert strings.has_suffix(line, "\n")
+
+	ctx.log("the quote, the newline and the tab are all escaped — by `json`, not by hand")
+	assert strings.contains(line, "\"m\":\"a \\\"quoted\\\"\\nline\\twith tabs\"")
+}
+
+# The int and bool fields keep their JSON types rather than becoming strings, which is the
+# whole reason a machine reads this format.
+#[test]
+fn test_json_keeps_the_field_types() {
+	ch := chan[str](4)
+	log.new().format(log.FMT_JSON).to(log.to_chan(ch)).info().int("line", 12).bool("ok", false).str("s", "12").msg("m")
+	line := taken(ch)
+	assert strings.contains(line, "\"line\":12")
+	assert strings.contains(line, "\"ok\":false")
+	assert strings.contains(line, "\"s\":\"12\"")
+}
+
+# THE FORMAT IS A PROPERTY OF THE LOGGER AND NOT OF THE SINK, so switching it does not disturb
+# anything else — and a logger's copy takes the format with it.
+#[test]
+fn test_format_is_carried_by_the_copy() {
+	ch := chan[str](8)
+	base := log.new().format(log.FMT_JSON).to(log.to_chan(ch))
+
+	base.with_str("c", "lex").info().msg("one")
+	assert strings.contains(taken(ch), "\"c\":\"lex\"")
+
+	base.level(log.WARN).warn().msg("two")
+	assert strings.contains(taken(ch), "\"l\":\"warn\"")
+
+	# and back to pretty, on a copy, without touching the original
+	base.format(log.FMT_PRETTY).info().msg("three")
+	assert strings.contains(taken(ch), " INF three")
+
+	base.info().msg("four")
+	assert strings.contains(taken(ch), "\"msg\":\"four\"")
+}
+
+# --- colour ---------------------------------------------------------------------------------
+#
+# THE DEFAULT IS THE ENVIRONMENT'S — `NO_COLOR`, then `os.isatty(2)` — which a test cannot
+# pin, so `colour(on)` is the override and these assert what it does. Whether the DEFAULT is
+# right is asked in scripts/log-check.sh, which controls the streams.
+
+#[test]
+fn test_colour_wraps_the_level_and_nothing_else(ctx: testing.Context) {
+	ch := chan[str](4)
+	log.new().colour(true).to(log.to_chan(ch)).info().str("k", "v").msg("hello")
+	line := taken(ch)
+
+	ctx.log("green, then a reset, around the three letters")
+	assert strings.contains(line, f"{esc()}[32mINF{esc()}[0m")
+
+	ctx.log("and the message and the fields are untouched")
+	assert strings.contains(line, "m hello  k=v\n")
+	assert strings.count(line, esc()) == 2
+}
+
+# esc is the escape byte, built rather than written, so this file has no invisible characters
+# in it for a reader to wonder about.
+fn esc() -> str {
+	return str([byte(27)])
+}
+
+#[test]
+fn test_each_level_has_its_own_colour() {
+	assert strings.contains(coloured(log.TRACE), esc() + "[90m")
+	assert strings.contains(coloured(log.DEBUG), esc() + "[36m")
+	assert strings.contains(coloured(log.INFO), esc() + "[32m")
+	assert strings.contains(coloured(log.WARN), esc() + "[33m")
+	assert strings.contains(coloured(log.ERROR), esc() + "[31m")
+
+	# FATAL is absent for the reason `test_json_spells_the_level_out` gives: rendering one
+	# ends the process. Its colour is the one row of this table log-check.sh has to hold.
+}
+
+fn coloured(lvl: int) -> str {
+	ch := chan[str](4)
+	log.new().level(log.TRACE).colour(true).to(log.to_chan(ch)).at_level(lvl).msg("m")
+	return taken(ch)
+}
+
+#[test]
+fn test_colour_off_writes_no_escape_at_all() {
+	ch := chan[str](4)
+	log.new().colour(false).to(log.to_chan(ch)).error().msg("plain")
+	assert strings.count(taken(ch), esc()) == 0
+}
+
+# A JSON LINE IS NEVER COLOURED, whatever the logger was told. Escape codes in a field a
+# machine parses are corruption, not decoration — and this is the one place the two settings
+# meet, so it is asserted rather than assumed.
+#[test]
+fn test_json_is_never_coloured() {
+	ch := chan[str](4)
+	log.new().colour(true).format(log.FMT_JSON).to(log.to_chan(ch)).error().msg("machine")
+	line := taken(ch)
+	assert strings.count(line, esc()) == 0
+	assert strings.contains(line, "\"l\":\"error\"")
+}
+
+# --- the base fields ---------------------------------------------------------------------------
+
+#[test]
+fn test_with_str_appears_on_every_line() {
+	ch := chan[str](32)
+	lg := log.new().with_str("component", "lexer").with_int("worker", 3).to(log.to_chan(ch))
+
+	lg.info().msg("one")
+	lg.warn().msg("two")
+
+	a := taken(ch)
+	b := taken(ch)
+	assert strings.contains(a, "component=lexer worker=3")
+	assert strings.contains(b, "component=lexer worker=3")
+}
+
+# THE BASE FIELDS COME FIRST and the entry's own follow, so a grep for a component's lines
+# finds them at a stable position.
+#[test]
+fn test_base_fields_come_before_the_entry_fields() {
+	ch := chan[str](4)
+	log.new().with_str("component", "lexer").to(log.to_chan(ch)).info().str("file", "a.zg").msg("m")
+	line := taken(ch)
+	assert strings.index_of(line, "component=lexer") < strings.index_of(line, "file=a.zg")
+}
+
+# AN ENTRY'S FIELDS DO NOT LEAK INTO THE NEXT ONE, which is the bug a builder sharing one
+# mutable list would have and the reason the entry copies on write. A test that only ever
+# writes one line cannot see it.
+#[test]
+fn test_an_entrys_fields_do_not_reach_the_next_entry() {
+	ch := chan[str](32)
+	lg := log.new().to(log.to_chan(ch))
+
+	lg.info().str("only", "first").msg("one")
+	lg.info().msg("two")
+
+	assert strings.contains(taken(ch), "only=first")
+	second := taken(ch)
+	assert not strings.contains(second, "only")
+	assert strings.contains(second, "INF two")
+}
+
+# And the same for the logger the entry came from: an entry adding a field must not add it to
+# the logger's base.
+#[test]
+fn test_an_entry_does_not_write_back_into_its_logger() {
+	ch := chan[str](32)
+	lg := log.new().to(log.to_chan(ch))
+
+	lg.info().str("scratch", "x").msg("one")
+	lg.info().str("other", "y").msg("two")
+
+	assert strings.contains(taken(ch), "scratch=x")
+	line := taken(ch)
+	assert strings.contains(line, "other=y")
+	assert not strings.contains(line, "scratch")
+}
+
+# --- the disabled entry -------------------------------------------------------------------------
+
+# A DISABLED ENTRY WRITES NOTHING. Not an empty line, not a line without fields — nothing at
+# all reaches the sink, which is what makes `log.debug()` in a hot loop cost a comparison.
+#[test]
+fn test_a_disabled_entry_writes_nothing() {
+	ch := chan[str](32)
+	lg := log.new().level(log.INFO).to(log.to_chan(ch))
+
+	lg.at_level(log.DEBUG).str("k", "v").int("n", 1).msg("nope")
+	lg.trace().msg("nope")
+
+	assert taken(ch) == ""
+}
+
+# AND IT IS STILL CHAINABLE. Every field method on a dead entry answers the entry, so a call
+# site does not have to know whether its level is on — which is the entire point of the
+# builder over an `if` at each site.
+#[test]
+fn test_a_disabled_entry_chains_without_effect(ctx: testing.Context) {
+	ch := chan[str](32)
+	lg := log.new().level(log.ERROR).to(log.to_chan(ch))
+
+	ctx.log("six kinds of field on a dead entry, then the terminal")
+	lg.at_level(log.DEBUG).str("a", "1").int("b", 2).bool("c", true).dur("d", 5).str("e", "x").msg("nope")
+
+	assert taken(ch) == ""
+
+	ctx.log("and the same chain at a live level does write")
+	lg.error().str("a", "1").msg("yes")
+	assert strings.contains(taken(ch), "ERR yes  a=1")
+}
+
+# `msg` IS THE TERMINAL, so an entry nobody finishes writes nothing. That is what makes
+# `log.info()` on its own a statement with no effect rather than half a record.
+#[test]
+fn test_an_entry_without_msg_writes_nothing() {
+	ch := chan[str](32)
+	lg := log.new().to(log.to_chan(ch))
+
+	lg.info()
+	lg.info().str("k", "v")
+
+	assert taken(ch) == ""
+}
+
+# --- the global logger -----------------------------------------------------------------------
+#
+# THESE TESTS SHARE ONE CELL, and that is a fact about the thing under test rather than about
+# the suite: the global logger is module state, and `zerg test` runs one PROCESS PER PACKAGE
+# with the tests inside it one at a time. So each test below sets what it needs and puts it
+# back, and `restored()` is that ending written once. A test that left the level at `OFF`
+# would silence every test after it and none of them would say why.
+#
+# It is also the honest demonstration of the cost the module documents: shared mutable state
+# is shared, and the discipline is CONFIGURE AT STARTUP, THEN READ.
+
+# captured points the global logger at a fresh channel and answers it, so a test can read what
+# the global wrote instead of watching it go to standard error.
+fn captured() -> chan[str] {
+	ch := chan[str](32)
+	log.set_sink(log.to_chan(ch))
+	return ch
+}
+
+# restored puts the global back the way `log.new()` leaves it.
+fn restored() {
+	log.set_level(log.INFO)
+	log.set_sink(log.to_stderr())
+}
+
+# THE GLOBAL IS AN INSTANCE, and this is the test that says so: every free function writes the
+# same line the method does, at the same level, with the same fields. If the two ever became
+# separate code paths this is where they would start to differ.
+#[test]
+fn test_the_global_writes_the_same_line_as_an_instance() {
+	ch := captured()
+	log.info().str("k", "v").msg("m")
+	from_global := taken(ch)
+
+	other := chan[str](4)
+	log.new().to(log.to_chan(other)).info().str("k", "v").msg("m")
+	from_instance := taken(other)
+
+	# The timestamps may differ by a second, so what is compared is everything after them —
+	# from byte 20, which is where a 20-byte RFC 3339 stamp ends.
+	assert strings.index_of(from_global, " INF m  k=v\n") == 20
+	assert strings.index_of(from_instance, " INF m  k=v\n") == 20
+	restored()
+}
+
+# ALL SIX LEVELS ARE ON THE GLOBAL, `debug` included — it is a free function, and the reserved
+# method name is a rule about methods. This is the test that would fail if that ever stopped
+# being true and the surface quietly lost a level.
+#[test]
+fn test_the_global_has_all_six_levels() {
+	log.set_level(log.TRACE)
+	ch := captured()
+
+	log.trace().msg("m")
+	log.debug().msg("m")
+	log.info().msg("m")
+	log.warn().msg("m")
+	log.error().msg("m")
+
+	assert strings.contains(taken(ch), " TRC m")
+	assert strings.contains(taken(ch), " DBG m")
+	assert strings.contains(taken(ch), " INF m")
+	assert strings.contains(taken(ch), " WRN m")
+	assert strings.contains(taken(ch), " ERR m")
+	restored()
+}
+
+#[test]
+fn test_set_level_reaches_a_line_written_elsewhere(ctx: testing.Context) {
+	ctx.log("the line is written by another function, which was handed nothing")
+	ch := captured()
+
+	log.set_level(log.WARN)
+	writes_a_debug_and_an_error()
+	assert strings.contains(taken(ch), " ERR from elsewhere")
+	assert taken(ch) == ""
+
+	log.set_level(log.DEBUG)
+	writes_a_debug_and_an_error()
+	assert strings.contains(taken(ch), " DBG from elsewhere")
+	assert strings.contains(taken(ch), " ERR from elsewhere")
+	restored()
+}
+
+# The function the test above configures from a distance. It imports `log` and nothing else,
+# takes no logger, and is the shape every ordinary function in a program has.
+fn writes_a_debug_and_an_error() {
+	log.debug().msg("from elsewhere")
+	log.error().msg("from elsewhere")
+}
+
+#[test]
+fn test_the_global_enabled_follows_set_level() {
+	log.set_level(log.ERROR)
+	assert not log.enabled(log.WARN)
+	assert log.enabled(log.ERROR)
+
+	log.set_level(log.OFF)
+	assert not log.enabled(log.ERROR)
+	assert not log.enabled(log.FATAL)
+
+	restored()
+	assert log.enabled(log.INFO)
+	assert not log.enabled(log.DEBUG)
+}
+
+# `at_level` is the general form, and on the global it is what a caller with a level in a
+# variable uses. `at` was not available: the compiler's own lexer has a module-private `at`,
+# and `E705` refuses two modules a shared name when either is `pub`.
+#[test]
+fn test_at_level_on_both_surfaces() {
+	log.set_level(log.TRACE)
+	ch := captured()
+
+	log.at_level(log.DEBUG).msg("global")
+	assert strings.contains(taken(ch), " DBG global")
+
+	other := chan[str](4)
+	log.new().level(log.TRACE).to(log.to_chan(other)).at_level(log.DEBUG).msg("instance")
+	assert strings.contains(taken(other), " DBG instance")
+	restored()
+}

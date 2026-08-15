@@ -36,11 +36,12 @@ one —
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
-  `struct` and on a fieldless `enum` (on a **payload** `enum` it is **[not yet]**) — together with **`Ord`**,
-  **`Hash`**, **`Encode`** and **`Decode`**, each specified here and **[not yet]**: naming one is a clean
-  refusal, _NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and
-  `Decode` are specified and unbuilt_. There is **no auto-derived `Object`**. A user spec can never be
-  derived **on a struct** (`#[derive(MySpec)]` there is a compile error); on an **`enum`** any spec may be,
+  `struct` and on a fieldless `enum` — together with **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`**,
+  each specified here and **[not yet]**: naming one is a clean refusal, _E436 NotImplemented:
+  `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and
+  unbuilt_. `Eq` on a **payload** `enum` is **[not yet]** by a code of its own, _E438 … it carries a payload
+  (`A`), and this compiler derives equality for a fieldless enum_. There is **no auto-derived `Object`**.
+  A user spec can never be derived **on a struct** — `E437` — while on an **`enum`** any spec may be,
   because the generated impl is delegation to the payload rather than a reading of structure. See
   **[Derive & Default Behavior](derive.md)**.
 - **`#[obj]`** — on a `spec`, no arguments. Generates a companion **struct of function values** and a

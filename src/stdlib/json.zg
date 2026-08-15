@@ -1,0 +1,621 @@
+# json — reading and writing JSON (pure-Zerg stdlib).
+#
+# Bundled into a program that writes `import "json"`; members are reached through the
+# namespace, as `json.encode(v)` or `json.decode(line)`. It works at the byte level over
+# `bytearray(s)` / `str(bs)` and binds nothing foreign, like every other module here.
+#
+# IT WAS WRITTEN FOR THE LANGUAGE SERVER and lived at src/compiler/lsp/json.zg, with a
+# header saying a stdlib module is a promise about a surface and that promising this one
+# now was a thing to keep. It has a SECOND caller now — `log` writes JSON lines — and the
+# choice stopped being "promise it or not": it was "one escaper or two". Two implementations
+# of `\u00XX` drift, and the one that drifts is the one nobody is reading transcripts of.
+# So the promise is made, and the surface was renamed on the way in: `jput_str` had a `j`
+# because there was no namespace to put it in, and now there is.
+#
+# THE ONE THING A CALLER MUST BE TOLD: **numbers are integers**. `Val` has no float variant,
+# so `decode("1.5")` answers `Int(1)` — the fraction and any exponent are consumed and
+# DROPPED, not refused. It is the shape the language server needed (positions, counts and
+# ids are all whole numbers) and refusing instead would have dropped a session over a field
+# nobody read. It stays that way here rather than growing a `Float` variant silently, and it
+# is stated in the module header, at `decode`, and in docs/runtime/stdlib.md, because a
+# reader who is not told will find out from a wrong answer.
+#
+# A value is one enum and an object is a LIST OF FIELDS rather than a `map[str, Val]`.
+# Two reasons, and the second is the one that decided it: the objects this is used on are a
+# handful of keys, so a linear lookup is not worth a hash; and a list keeps the order the
+# fields were written in, which means the bytes this module produces are a function of the
+# value alone. A protocol that is debugged by reading a transcript wants that, and so does a
+# log line somebody greps.
+import "strconv"
+
+# Val is a JSON value. Its variants are NOT public and cannot be: a caller outside this
+# module cannot construct an enum's variants (a bootstrap limitation this compiler still
+# carries), so the way in is the constructors below and the way out is the accessors.
+pub enum Val {
+	Null
+	Bool(bool)
+	Int(int)
+	Str(str)
+	Arr(list[Val])
+	Obj(list[Field])
+}
+
+# Field is one key and its value. A caller builds an object as a `list[Field]` — declared
+# `mut fs: list[json.Field] = []` — and hands it to `of_obj`.
+pub struct Field {
+	pub key: str
+	pub val: Val
+}
+
+# --- reading a value --------------------------------------------------------------------
+#
+# The accessors are TOTAL: asking a number for its string gives "", and asking a value that
+# is not an object for a key gives `Null`. That is deliberate for a server whose input
+# comes from another program: a client that sends a field of the wrong shape should get a
+# default and a reply, not an abort that takes the session with it. Where a missing field
+# is genuinely fatal, the caller asks `has` and says so itself.
+
+# get is the value at `key`, or `Null`.
+# ```zerg
+# json.as_int(json.get(json.decode("{\"n\": 42}"), "n"))
+# json.as_str(json.get(json.decode("{\"n\": 42}"), "missing"))
+# ```
+# ```output
+# 42
+#
+# ```
+pub fn get(v: Val, key: str) -> Val {
+	return match v {
+		Val.Obj(fs) => jfield(fs, key)
+		_           => Val.Null
+	}
+}
+
+fn jfield(fs: list[Field], key: str) -> Val {
+	for f in fs {
+		return f.val if f.key == key
+	}
+	return Val.Null
+}
+
+# walk follows a path of keys — `walk3(msg, "params", "textDocument", "uri")` — which is
+# what a nested request needs and what three chained `get`s per caller would otherwise be.
+#
+# IT IS NOT NAMED `at`. `E705` refuses two modules a shared name when either is `pub`, and the
+# compiler's own lexer has a module-private `at` — so the name was not available, and `walk`
+# says what it does anyway.
+# ```zerg
+# json.as_str(json.walk(json.decode("{\"a\": {\"b\": \"z\"}}"), "a", "b"))
+# ```
+# ```output
+# z
+# ```
+pub fn walk(v: Val, a: str, b: str) -> Val {
+	return get(get(v, a), b)
+}
+
+# walk3 is the same for a three-key path.
+#
+# ```zerg
+# json.as_str(json.walk3(json.decode("{\"a\": {\"b\": {\"c\": \"z\"}}}"), "a", "b", "c"))
+# ```
+# ```output
+# z
+# ```
+pub fn walk3(v: Val, a: str, b: str, c: str) -> Val {
+	return get(walk(v, a, b), c)
+}
+
+# has reports whether `key` is present with a value that is not `null`.
+#
+# ```zerg
+# json.has(json.decode("{\"a\": 1}"), "a")
+# json.has(json.decode("{\"a\": 1}"), "b")
+# json.has(json.decode("{\"a\": null}"), "a")
+# ```
+# ```output
+# true
+# false
+# false
+# ```
+pub fn has(v: Val, key: str) -> bool {
+	return match get(v, key) {
+		Val.Null => false
+		_        => true
+	}
+}
+
+# as_str is the string a `Str` carries, and "" for anything else.
+#
+# ```zerg
+# json.as_str(json.decode("\"hi\""))
+# json.as_str(json.decode("7"))
+# ```
+# ```output
+# hi
+#
+# ```
+pub fn as_str(v: Val) -> str {
+	return match v {
+		Val.Str(s) => s
+		_          => ""
+	}
+}
+
+# as_int is the number an `Int` carries, and 0 for anything else.
+#
+# ```zerg
+# json.as_int(json.decode("-7"))
+# json.as_int(json.decode("\"7\""))
+# ```
+# ```output
+# -7
+# 0
+# ```
+pub fn as_int(v: Val) -> int {
+	return match v {
+		Val.Int(n) => n
+		_          => 0
+	}
+}
+
+# as_list is the elements an `Arr` carries, and an empty list for anything else.
+#
+# ```zerg
+# json.as_list(json.decode("[1, 2, 3]")).len()
+# json.as_list(json.decode("4")).len()
+# ```
+# ```output
+# 3
+# 0
+# ```
+pub fn as_list(v: Val) -> list[Val] {
+	return match v {
+		Val.Arr(xs) => xs
+		_           => []
+	}
+}
+
+# is_null reports whether this value is JSON `null` — which is also what a missing key
+# answers, since `get` is total.
+#
+# ```zerg
+# json.is_null(json.decode("null"))
+# json.is_null(json.get(json.decode("{}"), "nobody"))
+# json.is_null(json.decode("0"))
+# ```
+# ```output
+# true
+# true
+# false
+# ```
+pub fn is_null(v: Val) -> bool {
+	return match v {
+		Val.Null => true
+		_        => false
+	}
+}
+
+# --- building a value -------------------------------------------------------------------
+#
+# The constructors exist because an enum's VARIANTS cannot be constructed from outside the
+# module that declares them — a bootstrap limitation this compiler still carries — so a
+# consumer of this module can hold a `Val` and has no way to make one. These are that way
+# in. They are also what keeps a caller's object-building readable: `put_str(fs, "id", x)`
+# beside `fs.append(Field("id", Val.Str(x)))`.
+#
+# THERE IS NO `fields()` CONSTRUCTOR, and its absence is the rule above stated exactly: a
+# `list[Field]` is not a variant, so a caller can build one — `mut fs: list[json.Field] = []`
+# — and a function handing back an empty list would be a public name bought for nothing.
+# (It would also be `json.fields`, which `strings.fields` already is; `E705` refuses two
+# modules a `pub` name, so the surface that needed no function could not have had one.)
+
+# ```zerg
+# json.encode(json.null())
+# ```
+# ```output
+# null
+# ```
+pub fn null() -> Val {
+	return Val.Null
+}
+
+# ```zerg
+# json.encode(json.of_str("a\tb"))
+# ```
+# ```output
+# "a\tb"
+# ```
+pub fn of_str(s: str) -> Val {
+	return Val.Str(s)
+}
+
+# ```zerg
+# json.encode(json.of_list([json.of_str("a"), json.null()]))
+# ```
+# ```output
+# ["a",null]
+# ```
+pub fn of_list(xs: list[Val]) -> Val {
+	return Val.Arr(xs)
+}
+
+pub fn of_obj(fs: list[Field]) -> Val {
+	return Val.Obj(fs)
+}
+
+pub fn put(mut &fs: list[Field], key: str, v: Val) {
+	fs.append(Field(key, v))
+}
+
+pub fn put_str(mut &fs: list[Field], key: str, s: str) {
+	fs.append(Field(key, Val.Str(s)))
+}
+
+pub fn put_int(mut &fs: list[Field], key: str, n: int) {
+	fs.append(Field(key, Val.Int(n)))
+}
+
+pub fn put_bool(mut &fs: list[Field], key: str, b: bool) {
+	fs.append(Field(key, Val.Bool(b)))
+}
+
+# --- writing ------------------------------------------------------------------------------
+
+# encode renders a value as JSON text — one line, no spaces, fields in the order they were
+# put. See `jw_str` below for exactly what is escaped and what is not.
+#
+# ```zerg
+# json.encode(json.of_str("say \"hi\"\nthen go"))
+# json.encode(json.decode("[1, {\"k\": true}]"))
+# ```
+# ```output
+# "say \"hi\"\nthen go"
+# [1,{"k":true}]
+# ```
+pub fn encode(v: Val) -> str {
+	mut out: list[byte] = []
+	jw(v, out)
+	return str(out)
+}
+
+fn jw(v: Val, mut &out: list[byte]) {
+	match v {
+		Val.Null    => jw_text(out, "null")
+		Val.Bool(b) => jw_bool(out, b)
+		Val.Int(n)  => jw_text(out, strconv.to_string(n, 10))
+		Val.Str(s)  => jw_str(out, s)
+		Val.Arr(xs) => jw_arr(xs, out)
+		Val.Obj(fs) => jw_obj(fs, out)
+	}
+}
+
+fn jw_bool(mut &out: list[byte], b: bool) {
+	if b {
+		jw_text(out, "true")
+	} else {
+		jw_text(out, "false")
+	}
+}
+
+fn jw_text(mut &out: list[byte], s: str) {
+	for c in bytearray(s) {
+		out.append(c)
+	}
+}
+
+fn jw_arr(xs: list[Val], mut &out: list[byte]) {
+	out.append(b'[')
+	mut first := true
+	for x in xs {
+		if not first {
+			out.append(b',')
+		}
+		first = false
+		jw(x, out)
+	}
+	out.append(b']')
+}
+
+fn jw_obj(fs: list[Field], mut &out: list[byte]) {
+	out.append(b'{')
+	mut first := true
+	for f in fs {
+		if not first {
+			out.append(b',')
+		}
+		first = false
+		jw_str(out, f.key)
+		out.append(b':')
+		jw(f.val, out)
+	}
+	out.append(b'}')
+}
+
+# jw_str escapes what JSON says must be escaped and NOTHING ELSE. That matters here more
+# than it usually does: the strings this server sends are a person's source code and a
+# compiler's diagnostics, so a quote, a backslash and a newline all arrive routinely, and a
+# tab in a Zerg file is every indent in it.
+#
+# A byte below 0x20 with no short escape goes out as `\u00XX`. Everything at 0x20 and above
+# passes through as it is, which is what carries UTF-8 unchanged: JSON's escapes are about
+# ASCII control characters and the two delimiters, and a multi-byte code point is already
+# legal text.
+fn jw_str(mut &out: list[byte], s: str) {
+	out.append(b'"')
+	for c in bytearray(s) {
+		if c == b'"' or c == b'\\' {
+			out.append(b'\\')
+			out.append(c)
+		} else if c == b'\n' {
+			jw_text(out, "\\n")
+		} else if c == b'\r' {
+			jw_text(out, "\\r")
+		} else if c == b'\t' {
+			jw_text(out, "\\t")
+		} else if c == byte(8) {
+			jw_text(out, "\\b")
+		} else if c == byte(12) {
+			jw_text(out, "\\f")
+		} else if int(c) < 32 {
+			jw_text(out, "\\u00")
+			out.append(jw_hex(int(c) / 16))
+			out.append(jw_hex(int(c) % 16))
+		} else {
+			out.append(c)
+		}
+	}
+	out.append(b'"')
+}
+
+fn jw_hex(n: int) -> byte {
+	return byte(48 + n) if n < 10
+	return byte(97 + n - 10)
+}
+
+# --- reading ------------------------------------------------------------------------------
+#
+# A recursive-descent reader over the bytes, with the cursor carried in a one-element list
+# because this subset has no `mut &` on a scalar. It is the same trick the position is
+# threaded with everywhere below.
+#
+# It RAISES on malformed input rather than returning a partial value. A JSON-RPC frame that
+# does not parse is not a request that can be answered — there is no id to answer it with —
+# so the server catches the abort, logs it, and reads the next frame.
+
+# decode reads JSON text. It RAISES on malformed input rather than answering a partial
+# value, so a caller that can carry on writes `guard`.
+#
+# A NUMBER COMES BACK AS AN INTEGER and a fraction is dropped — `decode("1.5")` is `Int(1)`.
+# See the header. Escapes are decoded, which means a round trip is not byte-identical: the
+# text `"\u00e9"` decodes to the character and re-encodes as the UTF-8 bytes, because this
+# encoder escapes only what JSON requires.
+#
+# ```zerg
+# json.as_int(json.get(json.decode(" { \"n\" : -12 } "), "n"))
+# json.encode(json.decode("\"\\u00e9\\ud83d\\ude00\""))
+# guard { json.as_int(json.decode("{oops}")) } ?? -1
+# ```
+# ```output
+# -12
+# "é😀"
+# -1
+# ```
+pub fn decode(s: str) -> Val {
+	b := bytearray(s)
+	mut pos: list[int] = []
+	pos.append(0)
+	v := jp_value(b, pos)
+	return v
+}
+
+fn jp_value(b: list[byte], mut &pos: list[int]) -> Val {
+	jp_space(b, pos)
+	raise "json: input ended where a value was expected" if pos[0] >= b.len()
+
+	c := b[pos[0]]
+
+	return jp_obj(b, pos) if c == b'{'
+	return jp_arr(b, pos) if c == b'['
+	return jp_str_val(b, pos) if c == b'"'
+	return jp_lit(b, pos, "true", Val.Bool(true)) if c == b't'
+	return jp_lit(b, pos, "false", Val.Bool(false)) if c == b'f'
+	return jp_lit(b, pos, "null", Val.Null) if c == b'n'
+	return jp_num(b, pos) if c == b'-' or jp_isdigit(c)
+
+	raise f"json: byte {int(c)} begins no value"
+}
+
+fn jp_space(b: list[byte], mut &pos: list[int]) {
+	for pos[0] < b.len() {
+		c := b[pos[0]]
+		break if not (c == b' ' or c == b'\t' or c == b'\n' or c == b'\r')
+		pos[0] = pos[0] + 1
+	}
+}
+
+fn jp_lit(b: list[byte], mut &pos: list[int], word: str, v: Val) -> Val {
+	w := bytearray(word)
+	mut i := 0
+	for i < w.len() {
+		raise f"json: expected `{word}`" if pos[0] + i >= b.len() or b[pos[0] + i] != w[i]
+		i = i + 1
+	}
+	pos[0] = pos[0] + w.len()
+	return v
+}
+
+fn jp_obj(b: list[byte], mut &pos: list[int]) -> Val {
+	pos[0] = pos[0] + 1 # '{'
+	mut fs: list[Field] = []
+	jp_space(b, pos)
+	if pos[0] < b.len() and b[pos[0]] == b'}' {
+		pos[0] = pos[0] + 1
+		return Val.Obj(fs)
+	}
+	for {
+		jp_space(b, pos)
+		raise "json: a key must be a string" if pos[0] >= b.len() or b[pos[0]] != b'"'
+		key := jp_string(b, pos)
+		jp_space(b, pos)
+		raise "json: expected `:` after a key" if pos[0] >= b.len() or b[pos[0]] != b':'
+		pos[0] = pos[0] + 1
+		fs.append(Field(key, jp_value(b, pos)))
+		jp_space(b, pos)
+		raise "json: an object is not closed" if pos[0] >= b.len()
+		if b[pos[0]] == b',' {
+			pos[0] = pos[0] + 1
+			continue
+		}
+		raise "json: expected `,` or `}` in an object" if b[pos[0]] != b'}'
+		pos[0] = pos[0] + 1
+		break
+	}
+	return Val.Obj(fs)
+}
+
+fn jp_arr(b: list[byte], mut &pos: list[int]) -> Val {
+	pos[0] = pos[0] + 1 # '['
+	mut xs: list[Val] = []
+	jp_space(b, pos)
+	if pos[0] < b.len() and b[pos[0]] == b']' {
+		pos[0] = pos[0] + 1
+		return Val.Arr(xs)
+	}
+	for {
+		xs.append(jp_value(b, pos))
+		jp_space(b, pos)
+		raise "json: an array is not closed" if pos[0] >= b.len()
+		if b[pos[0]] == b',' {
+			pos[0] = pos[0] + 1
+			continue
+		}
+		raise "json: expected `,` or `]` in an array" if b[pos[0]] != b']'
+		pos[0] = pos[0] + 1
+		break
+	}
+	return Val.Arr(xs)
+}
+
+fn jp_str_val(b: list[byte], mut &pos: list[int]) -> Val {
+	return Val.Str(jp_string(b, pos))
+}
+
+fn jp_string(b: list[byte], mut &pos: list[int]) -> str {
+	pos[0] = pos[0] + 1 # '"'
+	mut out: list[byte] = []
+	for {
+		raise "json: a string is not closed" if pos[0] >= b.len()
+		c := b[pos[0]]
+		pos[0] = pos[0] + 1
+		break if c == b'"'
+		if c != b'\\' {
+			out.append(c)
+			continue
+		}
+		raise "json: a string ends in an escape" if pos[0] >= b.len()
+		e := b[pos[0]]
+		pos[0] = pos[0] + 1
+		if e == b'u' {
+			jp_uescape(b, pos, out)
+			continue
+		}
+		out.append(jp_escape(e))
+	}
+	return str(out)
+}
+
+fn jp_escape(e: byte) -> byte {
+	return b'\n' if e == b'n'
+	return b'\r' if e == b'r'
+	return b'\t' if e == b't'
+	return byte(8) if e == b'b'
+	return byte(12) if e == b'f'
+
+	# `"`, `\` and `/` stand for themselves, and anything else is malformed JSON that this
+	# reader passes through rather than refusing: a client is not going to send one, and a
+	# session dropped over a stray escape is worse than a byte read literally.
+	return e
+}
+
+# jp_uescape decodes `\uXXXX` and writes it as UTF-8. A SURROGATE PAIR is decoded as a pair
+# — the high half alone is not a code point, and a client that sends an emoji in a message
+# sends two escapes for it.
+fn jp_uescape(b: list[byte], mut &pos: list[int], mut &out: list[byte]) {
+	mut cp := jp_hex4(b, pos)
+	if cp >= 55296 and cp <= 56319 and pos[0] + 1 < b.len() and b[pos[0]] == b'\\' and b[pos[0] + 1] == b'u' {
+		pos[0] = pos[0] + 2
+		lo := jp_hex4(b, pos)
+		cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+	}
+	jp_utf8(cp, out)
+}
+
+fn jp_hex4(b: list[byte], mut &pos: list[int]) -> int {
+	mut n := 0
+	mut i := 0
+	for i < 4 {
+		raise "json: a `\\u` escape needs four hex digits" if pos[0] >= b.len()
+		n = n * 16 + jp_hexval(b[pos[0]])
+		pos[0] = pos[0] + 1
+		i = i + 1
+	}
+	return n
+}
+
+fn jp_hexval(c: byte) -> int {
+	return int(c) - 48 if jp_isdigit(c)
+	return int(c) - 87 if c >= b'a' and c <= b'f'
+	return int(c) - 55 if c >= b'A' and c <= b'F'
+
+	raise "json: a `\\u` escape needs four hex digits"
+}
+
+fn jp_utf8(cp: int, mut &out: list[byte]) {
+	if cp < 128 {
+		out.append(byte(cp))
+	} else if cp < 2048 {
+		out.append(byte(192 + cp / 64))
+		out.append(byte(128 + cp % 64))
+	} else if cp < 65536 {
+		out.append(byte(224 + cp / 4096))
+		out.append(byte(128 + (cp / 64) % 64))
+		out.append(byte(128 + cp % 64))
+	} else {
+		out.append(byte(240 + cp / 262144))
+		out.append(byte(128 + (cp / 4096) % 64))
+		out.append(byte(128 + (cp / 64) % 64))
+		out.append(byte(128 + cp % 64))
+	}
+}
+
+# jp_num reads a number and answers an INTEGER — see the header for why a fraction is
+# dropped rather than refused, and where that is written down for a caller to read.
+fn jp_num(b: list[byte], mut &pos: list[int]) -> Val {
+	mut neg := false
+	if b[pos[0]] == b'-' {
+		neg = true
+		pos[0] = pos[0] + 1
+	}
+	mut n := 0
+	mut any := false
+	for pos[0] < b.len() and jp_isdigit(b[pos[0]]) {
+		n = n * 10 + (int(b[pos[0]]) - 48)
+		pos[0] = pos[0] + 1
+		any = true
+	}
+	raise "json: a number needs a digit" if not any
+	for pos[0] < b.len() and jp_num_tail(b[pos[0]]) {
+		pos[0] = pos[0] + 1
+	}
+	return Val.Int(-n) if neg
+	return Val.Int(n)
+}
+
+fn jp_num_tail(c: byte) -> bool {
+	return jp_isdigit(c) or c == b'.' or c == b'e' or c == b'E' or c == b'+' or c == b'-'
+}
+
+fn jp_isdigit(c: byte) -> bool {
+	return c >= b'0' and c <= b'9'
+}

@@ -1033,6 +1033,11 @@ L104 `_ :=` in `main` — the expression is already a statement, so the binder s
 不值得對它說的事。同一件冗餘的 select arm 寫法是 `F407` 的事，因為 `GRAMMAR` 讓那個 binder 是可選的，
 刪掉它之後剩下的仍然是一個 arm；敘述形式的 binder 沒有這種寫法。
 
+`L101` 與 `L102` 是以**使用處**來判斷一個宣告，而使用處寫在哪裡都算——不是只有函式本體裡面才算。
+**型別位置**是其中一種（`ctx: testing.Context` 用到了 `testing` 這個 import，卻完全沒有寫下任何
+運算式），模組層級 `const` 的初始式、struct 欄位的預設值、參數的預設值也都是。這些都是屬於宣告而
+不屬於本體的程式碼。
+
 ### L2xx——null safety
 
 這裡沒有一條是編譯錯誤：每一支程式都跑得動，只是做的事跟它寫的略有出入。這正是它們屬於 linter

@@ -335,19 +335,17 @@ pub fn new() -> Logger {
 
 # --- the environment, read once ---------------------------------------------------------------
 #
-# THE THREE `#[allow(L102)]` BELOW ARE SUPPRESSING A FALSE POSITIVE, and that is worth stating
-# once rather than three times. Each of these functions IS called — by a module-level `const`
-# further down, which is what `Logger`'s field defaults name. `L102`'s reachability walk does
-# not visit a top-level `const` initialiser (nor a field default; both spellings were tried),
-# so it reports all three as dead. The linter is wrong and the code is right; the defect is
-# reported rather than worked around by writing the environment logic inline, which would trade
-# three named, documented functions for three unreadable const expressions.
+# THE THREE FUNCTIONS BELOW CARRIED AN `#[allow(L102)]` EACH, and they are gone. Each is called
+# by a module-level `const` further down, which is what `Logger`'s field defaults name — and
+# L102's reachability walk visited function bodies only, so it called all three dead. The
+# suppressions were standing in for a linter defect, which is the one job an allow must not
+# have. `walk_program` (lint.zg) visits a const initialiser and a field default now, L106
+# reported the three allows as suppressing nothing, and deleting them is what that says.
 
 # env_level is `ZERG_LOG_LEVEL`, by name, and anything it does not recognise is `INFO`. It is
 # the one way a level is chosen without editing the program, which matters more here than it
 # would elsewhere: the only other way is `log.install(…)` in `main`, and the person who wants
 # a debug line is often not the person who can rebuild.
-#[allow(L102)]
 fn env_level() -> Level {
 	return parse_level(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
 }
@@ -360,7 +358,6 @@ fn env_level() -> Level {
 # CONDITION and a binding head is not one (`E205`). The formatter turns a valid program into an
 # invalid one, and `fmt --check` then calls the invalid one canonical, which is how this module
 # broke itself once. Reported; four lines reproduce it. `??` is the shorter answer anyway.
-#[allow(L102)]
 fn env_format() -> Format {
 	v := os.env("ZERG_LOG") ?? ""
 	return Format.JSON if v == "json"
@@ -376,7 +373,6 @@ fn env_format() -> Format {
 # variable somebody exported. That is why the sentinel below is a string nobody sets rather
 # than `""`: coalescing to `""` would make an exported-empty `NO_COLOR` indistinguishable from
 # an unset one, which is the one distinction this variable is made of.
-#[allow(L102)]
 fn env_colour() -> bool {
 	off := os.env("NO_COLOR") ?? NO_COLOR_UNSET
 	return false if off != NO_COLOR_UNSET

@@ -98,25 +98,28 @@ pub const FMT_JSON := 1
 # A CHANNEL SINK MUST HAVE ROOM. A send to a full channel parks the sending coroutine, so a
 # test that logs into a channel it will drain later needs the capacity up front — the suite
 # uses `chan[str](32)`. A sink whose reader is another coroutine needs no such care.
-pub const TO_STDERR := 0
-pub const TO_CHAN := 1
 
-# Sink is where finished lines go. `lines` is `pub` for the reason `testing.Context.events`
-# is: a module-private field must carry a default (`E482`), and there is no default channel
-# to write — so the field is public and `to_stderr` / `to_chan` are the way one is made.
+# Sink is where finished lines go, and THE OPTIONAL IS THE MODE: a channel means send to it,
+# and `nil` means standard error. It carried an `int` tag beside the channel for one round and
+# that tag was dead — `emit` asked the optional, nothing ever read the tag, and
+# `Sink(TO_CHAN, nil)` would have been a stderr sink wearing the wrong label. One field that
+# cannot disagree with itself is the whole improvement.
+#
+# `lines` is `pub` for the reason `testing.Context.events` is: a module-private field must
+# carry a default (`E482`), and there is no default channel to write — so the field is public
+# and `to_stderr` / `to_chan` are the way one is made.
 pub struct Sink {
-	mode: int = 0
 	pub lines: chan[str]?
 }
 
 # to_stderr is the default destination: one `__zrt_write` per line to fd 2.
 pub fn to_stderr() -> Sink {
-	return Sink(TO_STDERR, nil)
+	return Sink(nil)
 }
 
 # to_chan sends each finished line, newline included, to `ch`.
 pub fn to_chan(ch: chan[str]) -> Sink {
-	return Sink(TO_CHAN, ch)
+	return Sink(ch)
 }
 
 # emit is the ONE place a line leaves this module, so "one write per line" is a property of
@@ -140,14 +143,21 @@ fn emit(sk: Sink, line: str) {
 # return c`, and in this compiler an assignment over a struct field that already holds a live
 # `list` DOES NOT RELEASE the buffer it replaces: a four-call chain leaks three of them,
 # counted with scripts/lib/memcount.c. `cli` gets away with it because a command line is built
-# once; a logger is built per line, so the same shape would leak once per field per log line
-# forever. `Logger(…)` and `Entry(…)` take the new value as an argument and leak nothing —
-# measured at zero over 200 rounds, which is what `make mem-check`'s `log_live` case holds.
+# once; a logger is built per line. The constructor form takes the new value as an argument
+# and does not leak that buffer.
+#
+# A LIVE LINE STILL LEAKS ONE ALLOCATION PER FIELD, and saying so here is better than leaving
+# a reader to find it. It is NOT this module's shape: the same count comes out of
+# `strings.join(parts, sep)`, which leaks one per call today and has nothing to do with
+# logging — the release of a value built inside a call and consumed as a temporary is a
+# compiler defect, and it is reported rather than worked around here. What `make mem-check`
+# holds is the claim this module is responsible for, `log_dead`: a DISABLED line allocates
+# nothing at all, +0 over 195 extra rounds against +18915 for the same loop with the level on.
 pub struct Logger {
 	lvl: int = 2
 	fmt: int = 0
 	col: bool = false
-	sink: Sink = Sink(0, nil)
+	sink: Sink = Sink(nil)
 	base: list[json.Field] = []
 }
 
@@ -164,7 +174,7 @@ pub struct Entry {
 	lvl: int = 0
 	fmt: int = 0
 	col: bool = false
-	sink: Sink = Sink(0, nil)
+	sink: Sink = Sink(nil)
 	fs: list[json.Field] = []
 }
 
@@ -180,7 +190,7 @@ pub struct Entry {
 # false
 # ```
 pub fn new() -> Logger {
-	mut fs: list[json.Field] = []
+	fs: list[json.Field] = []
 	return Logger(INFO, env_format(), env_colour(), to_stderr(), fs)
 }
 
@@ -365,8 +375,7 @@ impl Entry {
 	# compare at a glance.
 	pub fn dur(k: str, ns: int) -> This {
 		return this if not this.live
-		d := time.duration(ns)
-		return this.str(k, d)
+		return this.str(k, time.duration(ns))
 	}
 
 	# err adds what an `Err` said, under the key `error` — a method rather than a convention
@@ -374,8 +383,7 @@ impl Entry {
 	# of what structured logging is for.
 	pub fn err(e: Err) -> This {
 		return this if not this.live
-		text := f"{e}"
-		return this.str("error", text)
+		return this.str("error", f"{e}")
 	}
 
 	# msg finishes the line and writes it. It is the TERMINAL: an Entry has no other exit, so
@@ -420,8 +428,7 @@ fn as_pretty(stamp: str, lvl: int, col: bool, text: str, fs: list[json.Field]) -
 		out = out + sep + f.key + "=" + v
 		sep = " "
 	}
-	line := out + "\n"
-	return line
+	return out + "\n"
 }
 
 # as_json is the machine line. It is built through `json` and not by hand, which is the whole
@@ -441,10 +448,7 @@ fn as_json(stamp: str, lvl: int, text: str, fs: list[json.Field]) -> str {
 		json.put(out, f.key, f.val)
 	}
 
-	obj := json.of_obj(out)
-	body := json.encode(obj)
-	line := body + "\n"
-	return line
+	return json.encode(json.of_obj(out)) + "\n"
 }
 
 # tag is the three-letter level a pretty line is prefixed with, coloured when the destination
@@ -511,8 +515,7 @@ fn colour_of(lvl: int) -> str {
 fn shown(v: json.Val) -> str {
 	s := json.as_str(v)
 	return s if s != "" and not needs_quotes(s)
-	quoted := json.encode(v)
-	return quoted
+	return json.encode(v)
 }
 
 fn needs_quotes(s: str) -> bool {

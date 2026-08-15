@@ -286,13 +286,16 @@ cell, so every field method, every level check and every writer exists once.
 | `new() -> Logger`                      | a logger at `INFO` writing to standard error         |
 | `set_level(n: int)`                    | configure the global logger                          |
 | `set_sink(sk: Sink)`                   | where the global logger's lines go                   |
+| `set_format(n: int)`                   | `FMT_PRETTY` or `FMT_JSON`, over `ZERG_LOG`          |
+| `set_colour(on: bool)`                 | ANSI colour, over `NO_COLOR` and the terminal        |
 | `enabled(lvl: int) -> bool`            | would the global write a line at `lvl`               |
 | `at_level(lvl)`, `trace()` … `fatal()` | begin a line on the global logger — all six levels   |
 | `to_stderr() -> Sink`                  | the default destination — one write per line to fd 2 |
 | `to_chan(ch: chan[str]) -> Sink`       | each finished line as a value on a channel           |
 
 `Logger` answers `level(n)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and `enabled(lvl)`, each a **copy**
-— a logger handed to a component cannot reconfigure its caller's — plus `at_level(lvl)` and the level methods.
+— a logger handed to a component cannot reconfigure its caller's — plus `at_level(lvl)`, `format(n)`,
+`colour(on)` and the level methods.
 `Entry` answers `str`, `int`, `bool`, `dur`, `err` and the terminal `msg`.
 
 **There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
@@ -322,6 +325,36 @@ another's message. `scripts/log-check.sh` holds the property with 24 coroutines 
 A value that would be ambiguous bare — empty, or carrying a space, a quote, a backslash, an `=` or a control
 character — is written through `json.encode`, the tree's one escaper. So a newline in a value is escaped rather
 than written, and one record stays one line.
+
+### Two formats, and what picks each
+
+**`pretty` is the default** and `ZERG_LOG=json` is the only thing that changes it, `set_format` aside. That
+departs from zerolog, whose default is JSON, and the reason is who is on the other end: an unconfigured
+program is one somebody is running.
+
+```console
+$ ./myprog
+2026-08-15T10:22:31Z INF compiling  file=a.zg line=12
+
+$ ZERG_LOG=json ./myprog
+{"t":"2026-08-15T10:22:31Z","l":"info","msg":"compiling","file":"a.zg","line":12}
+```
+
+**Colour follows `isatty`; the format does not.** Colour is a rendering — it is about the device, and "is
+this a device" is exactly what [`os.isatty`](#os) answers, so a line is coloured at a terminal and plain in a
+pipe. A format is a semantic choice about who the output is for, and a program whose logs change **shape**
+when they are redirected has logs that cannot be read the same way twice. `NO_COLOR` overrides the terminal,
+by its **presence** — any value, the empty string included. An unrecognised `ZERG_LOG` is `pretty` rather
+than an error: a logger that refused to start over a misspelt variable would take a program down for a
+reason that has nothing to do with it.
+
+Only the **level** is coloured. It is what a reader scans for, and colouring the message or the values would
+fight with whatever they contain. A JSON line is never coloured at all — escape codes in a field a machine
+parses are corruption, not decoration.
+
+The JSON line is built through [`json`](#json), not by hand, which is why that module was promoted out of
+the language server: one escaper in the tree is one place for a quote, a newline or a tab to be right. Its
+three fixed keys — `t`, `l`, `msg` — come first, in that order.
 
 ### The destination
 

@@ -48,10 +48,10 @@ import (
 # competing with the error taxonomy rather than reporting to it.
 #
 # IT IS AN ENUM AND NOT A SET OF `int` CONSTANTS, and the difference is what the type can
-# refuse. Against `pub const INFO := 2`, both `set_level(2)` and `set_level(99)` are legal
-# and neither says anything; the enum seals it in both directions — `E340` for an `int`
-# where a `Level` belongs and for a `Level` where an `int` does, and `E347` for comparing a
-# variant with a number.
+# refuse. Against `pub const INFO := 2`, both `.level(2)` and `.level(99)` are legal and
+# neither says anything; the enum seals it in both directions — `E340` for an `int` where a
+# `Level` belongs and for a `Level` where an `int` does, and `E347` for comparing a variant
+# with a number.
 #
 # THE DEEPER WIN IS THE EXHAUSTIVE `match`. Every renderer below is one, so a level added
 # here cannot be added without ranking it, naming it and colouring it: `E428 non-exhaustive
@@ -191,8 +191,9 @@ pub enum Format {
 # than "it did not crash".
 #
 # A CHANNEL SINK MUST HAVE ROOM. A send to a full channel parks the sending coroutine, so a
-# test that logs into a channel it will drain later needs the capacity up front — the suite
-# uses `chan[str](32)`. A sink whose reader is another coroutine needs no such care.
+# test that logs into a channel it will drain later needs the capacity up front — each of the
+# suite's is deep enough for the lines that test writes. A sink whose reader is another
+# coroutine needs no such care.
 
 # Sink is where finished lines go, and THE OPTIONAL IS THE MODE: a channel means send to it,
 # and `nil` means standard error. It carried an `int` tag beside the channel for one round and
@@ -294,16 +295,17 @@ pub struct Logger {
 # that dropped it would have silently rendered the Entry default on every line. Now the
 # constructor takes `this`, and there is nothing to keep in step.
 #
-# It costs nothing: a `Logger` is a value whose only heap field is the copy-on-write `base`
-# this entry was already sharing, so carrying it is a refcount and not a copy. `make mem-check`
-# still puts the disabled line at +0.
+# It costs nothing: a `Logger`'s heap parts are the copy-on-write `base` this entry was
+# already sharing and the `Sink`'s channel, so carrying it is refcounts and not copies.
+# `make mem-check` still puts the disabled line at +0.
 #
-# `log.Entry()` IS REACHABLE FROM OUTSIDE and is INERT, which is why it is left alone. Every
-# field must carry a default (`E482` again), so a zero-argument construction exists whatever
-# this module wants; the two defaults that matter make it harmless — `live` is false, so every
-# method returns at once and nothing is written, and `lvl` is `OFF`, so `msg` does not exit
-# either. `Logger` closes the same hole a different way, by giving its defaults private consts
-# to name; here there is nothing to close.
+# `log.Entry()` IS REFUSED OUTSIDE THIS MODULE for the reason `Logger()` is, and it INHERITS
+# that rather than arranging it: every field must carry a default (`E482` again), so the
+# zero-argument construction exists — but `lg`'s default is `Logger()`, whose own defaults name
+# module-private consts, so the same `E301` lands here. Measured, after the opposite was
+# written down and believed for a round. Inside the module it is inert anyway: `live` is false,
+# so every method returns at once, and `lvl` is `OFF`, so `msg` writes nothing and does not
+# exit.
 pub struct Entry {
 	live: bool = false
 	lvl: Level = Level.OFF
@@ -456,7 +458,7 @@ impl Logger {
 	# repeating it at every call site.
 	#
 	# ```zerg
-	# log.new().with_str("component", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
+	# log.new().level(log.Level.INFO).with_str("c", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
 	# ```
 	# ```output
 	# true
@@ -520,7 +522,7 @@ impl Logger {
 		return this.at_level(Level.ERROR)
 	}
 
-	# fatal writes the line and then exits with status 1.
+	# fatal begins a line whose `msg` writes it and then exits with status 1.
 	pub fn fatal() -> Entry {
 		return this.at_level(Level.FATAL)
 	}
@@ -633,8 +635,9 @@ fn as_json(stamp: str, lvl: Level, text: str, fs: list[json.Field]) -> str {
 	return json.encode(json.of_obj(out)) + "\n"
 }
 
-# tag is the three-letter level a pretty line is prefixed with, coloured when the destination
-# is a terminal and `NO_COLOR` is unset.
+# tag is the three-letter level a pretty line is prefixed with, coloured when the logger's
+# `col` is set — which by default means stderr is a terminal and `NO_COLOR` is unset, and which
+# `Logger.colour` overrides.
 #
 # ONLY THE LEVEL IS COLOURED. It is the field a reader scans for, and colouring the message
 # or the values would fight with whatever they contain — a diagnostic that already carries
@@ -749,13 +752,13 @@ fn needs_quotes(s: str) -> bool {
 #
 # 1. ONE CELL, MODULE-PRIVATE, ALREADY VALID — AND NAMED AFTER THE MODULE.
 #
-#    A bare `mut` at module level is refused: `E358 the top-level binding `level` may not be
-#    `mut` outside a module-level `unsafe { … }` group — module state is immutable, and shared
-#    mutable state travels by value or through channels`. Inside the group it is allowed, and
-#    `pub` on it is refused in turn: `E484 the mutable global `log_cell` may not be `pub` — a
-#    module-level `unsafe { … }` group is one module's bargain with its own author`. So
-#    "configure by function" is not the RECOMMENDED way here, it is the ONLY way the language
-#    permits, and nothing is left for a reviewer to remember.
+#    A bare `mut` at module level is refused: `E358 the top-level binding `log_cell` may not
+#    be `mut` outside a module-level `unsafe { … }` group — module state is immutable, and
+#    shared mutable state travels by value or through channels`. Inside the group it is
+#    allowed, and `pub` on it is refused in turn: `E484 the mutable global `log_cell` may not
+#    be `pub` — a module-level `unsafe { … }` group is one module's bargain with its own
+#    author`. So "configure by function" is not the RECOMMENDED way here, it is the ONLY way
+#    the language permits, and nothing is left for a reviewer to remember.
 #
 #    IT IS INITIALISED AT ITS DECLARATION, by the same PUBLIC constructor a caller uses. There
 #    is then no before-install state and no "has anyone configured this yet" to get wrong: a
@@ -811,9 +814,11 @@ fn needs_quotes(s: str) -> bool {
 #
 #    Every public function below is one line that reaches the cell and calls a method that
 #    already exists — `log_cell.info()`, not `log_cell.at_level(Level.INFO)`, so the level a
-#    name means is written once. There is exactly one level check, one builder and one writer
-#    in this module. A global that grew its own comparison would be a second logger drifting
-#    from the first, which is the argument that keeps one JSON escaper in this tree.
+#    name means is written once. The one exception is `debug`, which has no method to call
+#    because `E361` reserves that name for a rendering, and is therefore the only global that
+#    names its own level. There is exactly one level check, one builder and one writer in this
+#    module. A global that grew its own comparison would be a second logger drifting from the
+#    first, which is the argument that keeps one JSON escaper in this tree.
 #
 #    THE RULE ASSUMES THE GLOBAL IS AN INSTANCE OF A TYPE THAT ALREADY HAS THE API. For a
 #    global that is a bare `int` or a `map`, there is no instance to delegate to and rule 3
@@ -905,7 +910,7 @@ pub fn error() -> Entry {
 	return log_cell.error()
 }
 
-# fatal writes the line and exits 1, on the global logger.
+# fatal begins a line on the global logger whose `msg` writes it and then exits 1.
 pub fn fatal() -> Entry {
 	return log_cell.fatal()
 }

@@ -149,6 +149,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Str), true
 		case "__zrt_has_env":
 			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_isatty":
+			return c.unaryIntrinsic(n, Int, Bool), true
 		case "__zrt_exit":
 			return c.unaryIntrinsic(n, Int, Nil), true
 		case "__zrt_open_write":

@@ -21,6 +21,14 @@
 #   3. A LOG LINE IS ONE WRITE — and this one is asserted over the SOURCE, for a reason that
 #      was measured rather than assumed. See below.
 #
+#   4. COLOUR FOLLOWS THE TERMINAL, and the format does not. `os.isatty(2)` answers about the
+#      real descriptor a real process was given, so the only way to ask this is to give a
+#      program a pipe and then a pty and read what came out of each. `NO_COLOR` overrides both.
+#
+#   5. `ZERG_LOG` PICKS THE FORMAT, and nothing else does. The line this module holds is that
+#      redirecting output changes its APPEARANCE and never its SHAPE — so the same program,
+#      piped and on a terminal, must produce the same FORMAT and differ only in colour.
+#
 # WHY THE ONE-WRITE CLAIM IS STRUCTURAL AND NOT A STRESS TEST.
 #
 # The obvious gate is the one this project already ran once: many writers, and every line that
@@ -132,6 +140,11 @@ if build fatal; then
 	grep -q ' FTL stopping  why=no$' "$WORK/fatal.err" || note "fatal wrote no line: $(cat "$WORK/fatal.err")"
 	grep -q ' INF before$' "$WORK/fatal.err" || note "the line before fatal is missing"
 	grep -q 'unreachable' "$WORK/fatal.err" && note "fatal returned instead of exiting"
+	# `fatal`'s own renderings, which the in-process suite cannot ask: rendering one ends the
+	# process, so this is the only place `FTL` and `"l":"fatal"` are ever seen.
+	ZERG_LOG=json "$WORK/fatal" >/dev/null 2>"$WORK/fatal.json"
+	grep -q '"l":"fatal","msg":"stopping","why":"no"' "$WORK/fatal.json" ||
+		note "fatal's JSON line is not what it should be: $(cat "$WORK/fatal.json")"
 	checks=$((checks + 1))
 fi
 
@@ -229,16 +242,84 @@ if build many; then
 	checks=$((checks + 1))
 fi
 
+# --- 6. colour follows the terminal, and the format does not --------------------------------
+#
+# `script` is what gives a program a pty on both macOS and Linux, and its argument order
+# differs between them — so the two spellings are tried and the case is SKIPPED, loudly, on a
+# host with neither. Skipped rather than passed: a check that quietly reports success on a host
+# it could not run is the shape this whole file exists to avoid.
+
+cat >"$WORK/colour.zg" <<'ZG'
+import "log"
+
+fn main() {
+	log.error().str("k", "v").msg("hello")
+}
+ZG
+
+# on_a_pty <program> — run it with a pty for stdout AND stderr, echoing what came out.
+on_a_pty() {
+	if script -q /dev/null "$1" >"$WORK/pty.out" 2>&1; then
+		return 0
+	fi
+	if script -q -c "$1" /dev/null >"$WORK/pty.out" 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+esc=$(printf '\033')
+
+if build colour; then
+	# piped: no colour, pretty
+	"$WORK/colour" >/dev/null 2>"$WORK/pipe.err"
+	grep -q "$esc" "$WORK/pipe.err" && note "a piped log line carries ANSI colour — colour must follow the terminal"
+	grep -q ' ERR hello  k=v$' "$WORK/pipe.err" || note "a piped line is not the plain pretty line: $(cat "$WORK/pipe.err")"
+
+	# piped, ZERG_LOG=json: the format changed and nothing else did
+	ZERG_LOG=json "$WORK/colour" >/dev/null 2>"$WORK/json.err"
+	grep -q '^{"t":"[^"]*","l":"error","msg":"hello","k":"v"}$' "$WORK/json.err" ||
+		note "ZERG_LOG=json did not pick the JSON format: $(cat "$WORK/json.err")"
+	grep -q "$esc" "$WORK/json.err" && note "a JSON line carries ANSI colour, which is corruption and not decoration"
+
+	# ZERG_LOG it does not know is pretty, not an error
+	ZERG_LOG=wobble "$WORK/colour" >/dev/null 2>"$WORK/odd.err"
+	status=$?
+	[ "$status" -eq 0 ] || note "an unrecognised ZERG_LOG took the program down, exit $status"
+	grep -q ' ERR hello' "$WORK/odd.err" || note "an unrecognised ZERG_LOG did not fall back to pretty"
+
+	if on_a_pty "$WORK/colour"; then
+		grep -q "$esc\[31mERR$esc\[0m" "$WORK/pty.out" ||
+			note "a line written to a TERMINAL is not coloured: $(cat "$WORK/pty.out")"
+
+		# NO_COLOR overrides the terminal
+		NO_COLOR=1 on_a_pty "$WORK/colour"
+		grep -q "$esc" "$WORK/pty.out" && note "NO_COLOR did not turn colour off at a terminal"
+
+		# and the FORMAT does not follow the terminal: a pty gets pretty, exactly as a pipe did
+		on_a_pty "$WORK/colour"
+		grep -q '"l":"error"' "$WORK/pty.out" && note "the FORMAT followed the terminal — it must not; only ZERG_LOG picks it"
+
+		# nor does ZERG_LOG stop working at one
+		ZERG_LOG=json on_a_pty "$WORK/colour"
+		grep -q '"l":"error"' "$WORK/pty.out" || note "ZERG_LOG=json was ignored at a terminal"
+		grep -q "$esc" "$WORK/pty.out" && note "a JSON line at a terminal carries colour"
+	else
+		printf 'log-check: no `script` on this host, so the terminal half of case 6 was not run\n' >&2
+	fi
+	checks=$((checks + 1))
+fi
+
 [ "$fail" -eq 0 ] || {
 	printf 'log-check: the sources and streams are kept in %s\n' "$WORK" >&2
 	trap - EXIT
 	exit 1
 }
 
-[ "$checks" -eq 5 ] || {
-	printf 'log-check: only %s of 5 cases ran — a probe stopped building\n' "$checks" >&2
+[ "$checks" -eq 6 ] || {
+	printf 'log-check: only %s of 6 cases ran — a probe stopped building\n' "$checks" >&2
 	exit 1
 }
 
-printf 'log-check: one write per line in the source, fatal exits 1 and still writes, the default stream is stderr, and %s lines from %s coroutines each arrive whole\n' \
+printf 'log-check: one write per line in the source, fatal exits 1 and still writes, the default stream is stderr, colour follows the terminal and the format does not, and %s lines from %s coroutines each arrive whole\n' \
 	"$((WRITERS * LINES))" "$WRITERS"

@@ -225,6 +225,161 @@ fn test_dur_renders_as_a_duration_not_a_nanosecond_count() {
 	assert strings.contains(field("x", time.duration(250000000)), "x=250ms")
 }
 
+# --- the JSON format ---------------------------------------------------------------------------
+#
+# THE POINT OF THE SECOND FORMAT IS THAT IT GOES THROUGH `json`. A logger that wrote its own
+# braces would be the second escaper in the tree, and the one that drifts is always the one
+# nobody is reading transcripts of — so the assertions below are as much about the escaper
+# being SHARED as about the shape of the line.
+
+# jline writes one line at `lvl` in JSON and answers it.
+fn jline(lvl: int, text: str) -> str {
+	ch := chan[str](4)
+	log.new().level(log.TRACE).format(log.FMT_JSON).to(log.to_chan(ch)).at_level(lvl).str("k", "v").msg(text)
+	return taken(ch)
+}
+
+# THE THREE FIXED KEYS COME FIRST AND IN ORDER — `t`, `l`, `msg` — because a field list keeps
+# the order it was built in, and a transcript read by eye wants the same three at the front of
+# every line.
+#[test]
+fn test_json_puts_time_level_and_message_first() {
+	line := jline(log.INFO, "compiling")
+	assert strings.has_prefix(line, "{\"t\":\"")
+	assert strings.contains(line, "\",\"l\":\"info\",\"msg\":\"compiling\",\"k\":\"v\"}")
+	assert strings.has_suffix(line, "}\n")
+}
+
+# THE LEVEL IS THE WHOLE WORD, lower case, which is what every log shipper this would be read
+# by already expects — and it is a different rendering from the pretty line's three letters,
+# so both are asked.
+#
+# FATAL IS NOT ASKED HERE AND CANNOT BE. `msg` on a `fatal` entry exits the process, so a test
+# that rendered one would take the test process with it — which is what happened when this was
+# first written, and the runner reported it honestly as a crash. `fatal`'s two renderings are
+# asked in scripts/log-check.sh, which runs a whole program and expects it to end.
+#[test]
+fn test_json_spells_the_level_out() {
+	assert strings.contains(jline(log.TRACE, "m"), "\"l\":\"trace\"")
+	assert strings.contains(jline(log.DEBUG, "m"), "\"l\":\"debug\"")
+	assert strings.contains(jline(log.INFO, "m"), "\"l\":\"info\"")
+	assert strings.contains(jline(log.WARN, "m"), "\"l\":\"warn\"")
+	assert strings.contains(jline(log.ERROR, "m"), "\"l\":\"error\"")
+}
+
+# A JSON LINE IS STILL ONE LINE. A message carrying a newline is the ordinary case for a
+# compiler's diagnostics, and the escaper is what keeps one record on one line — the same
+# property the pretty format has, reached a different way.
+#[test]
+fn test_json_escapes_rather_than_breaking_the_line(ctx: testing.Context) {
+	ch := chan[str](4)
+	log.new().format(log.FMT_JSON).to(log.to_chan(ch)).warn().str("m", "a \"quoted\"\nline\twith tabs").msg("escaping")
+	line := taken(ch)
+
+	ctx.log("one newline, and it is the terminator")
+	assert strings.count(line, "\n") == 1
+	assert strings.has_suffix(line, "\n")
+
+	ctx.log("the quote, the newline and the tab are all escaped — by `json`, not by hand")
+	assert strings.contains(line, "\"m\":\"a \\\"quoted\\\"\\nline\\twith tabs\"")
+}
+
+# The int and bool fields keep their JSON types rather than becoming strings, which is the
+# whole reason a machine reads this format.
+#[test]
+fn test_json_keeps_the_field_types() {
+	ch := chan[str](4)
+	log.new().format(log.FMT_JSON).to(log.to_chan(ch)).info().int("line", 12).bool("ok", false).str("s", "12").msg("m")
+	line := taken(ch)
+	assert strings.contains(line, "\"line\":12")
+	assert strings.contains(line, "\"ok\":false")
+	assert strings.contains(line, "\"s\":\"12\"")
+}
+
+# THE FORMAT IS A PROPERTY OF THE LOGGER AND NOT OF THE SINK, so switching it does not disturb
+# anything else — and a logger's copy takes the format with it.
+#[test]
+fn test_format_is_carried_by_the_copy() {
+	ch := chan[str](8)
+	base := log.new().format(log.FMT_JSON).to(log.to_chan(ch))
+
+	base.with_str("c", "lex").info().msg("one")
+	assert strings.contains(taken(ch), "\"c\":\"lex\"")
+
+	base.level(log.WARN).warn().msg("two")
+	assert strings.contains(taken(ch), "\"l\":\"warn\"")
+
+	# and back to pretty, on a copy, without touching the original
+	base.format(log.FMT_PRETTY).info().msg("three")
+	assert strings.contains(taken(ch), " INF three")
+
+	base.info().msg("four")
+	assert strings.contains(taken(ch), "\"msg\":\"four\"")
+}
+
+# --- colour ---------------------------------------------------------------------------------
+#
+# THE DEFAULT IS THE ENVIRONMENT'S — `NO_COLOR`, then `os.isatty(2)` — which a test cannot
+# pin, so `colour(on)` is the override and these assert what it does. Whether the DEFAULT is
+# right is asked in scripts/log-check.sh, which controls the streams.
+
+#[test]
+fn test_colour_wraps_the_level_and_nothing_else(ctx: testing.Context) {
+	ch := chan[str](4)
+	log.new().colour(true).to(log.to_chan(ch)).info().str("k", "v").msg("hello")
+	line := taken(ch)
+
+	ctx.log("green, then a reset, around the three letters")
+	assert strings.contains(line, f"{esc()}[32mINF{esc()}[0m")
+
+	ctx.log("and the message and the fields are untouched")
+	assert strings.contains(line, "m hello  k=v\n")
+	assert strings.count(line, esc()) == 2
+}
+
+# esc is the escape byte, built rather than written, so this file has no invisible characters
+# in it for a reader to wonder about.
+fn esc() -> str {
+	return str([byte(27)])
+}
+
+#[test]
+fn test_each_level_has_its_own_colour() {
+	assert strings.contains(coloured(log.TRACE), esc() + "[90m")
+	assert strings.contains(coloured(log.DEBUG), esc() + "[36m")
+	assert strings.contains(coloured(log.INFO), esc() + "[32m")
+	assert strings.contains(coloured(log.WARN), esc() + "[33m")
+	assert strings.contains(coloured(log.ERROR), esc() + "[31m")
+
+	# FATAL is absent for the reason `test_json_spells_the_level_out` gives: rendering one
+	# ends the process. Its colour is the one row of this table log-check.sh has to hold.
+}
+
+fn coloured(lvl: int) -> str {
+	ch := chan[str](4)
+	log.new().level(log.TRACE).colour(true).to(log.to_chan(ch)).at_level(lvl).msg("m")
+	return taken(ch)
+}
+
+#[test]
+fn test_colour_off_writes_no_escape_at_all() {
+	ch := chan[str](4)
+	log.new().colour(false).to(log.to_chan(ch)).error().msg("plain")
+	assert strings.count(taken(ch), esc()) == 0
+}
+
+# A JSON LINE IS NEVER COLOURED, whatever the logger was told. Escape codes in a field a
+# machine parses are corruption, not decoration — and this is the one place the two settings
+# meet, so it is asserted rather than assumed.
+#[test]
+fn test_json_is_never_coloured() {
+	ch := chan[str](4)
+	log.new().colour(true).format(log.FMT_JSON).to(log.to_chan(ch)).error().msg("machine")
+	line := taken(ch)
+	assert strings.count(line, esc()) == 0
+	assert strings.contains(line, "\"l\":\"error\"")
+}
+
 # --- the base fields ---------------------------------------------------------------------------
 
 #[test]

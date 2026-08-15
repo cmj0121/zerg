@@ -86,6 +86,42 @@ lint_info() {
 	say "$1" "$2" 0 "${3:-}"
 }
 
+# quiet <code> <name> <why> — the OTHER assertion a rule owes: a well formed program the rule
+# must stay SILENT on. The program arrives on stdin.
+#
+# Every case above asks whether a rule still fires; none of them can see a rule firing on a
+# program it has no business firing on, and that is the failure this repository has just paid
+# for twice — L101 called an import unused when the only thing reaching it was a TYPE, and
+# L102 called a private function dead when the only thing calling it was a module-level
+# `const`. Both are green boards from every angle a positive case looks from.
+#
+# It does NOT touch `seen`: a rule is covered by a program that MAKES IT FIRE, and counting a
+# silence as coverage would let the positive case be deleted.
+quiet() {
+	local code=$1 name=$2 why=$3
+	local src="$tmp/$name.zg"
+	cat >"$src"
+
+	local out status
+	out=$("$ZERG" lint "$src" 2>&1)
+	status=$?
+
+	case $out in
+	*"$code"*)
+		echo "SPOKE     $code fired on $why: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+		;;
+	esac
+
+	if [ "$status" -ne 0 ]; then
+		echo "STATUS    $name — wanted exit 0 on a clean program, got $status: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
+	pass=$((pass + 1))
+}
+
 # --- L1xx — dead code -------------------------------------------------------------
 
 lint L101 'unused import' <<'EOF'
@@ -137,6 +173,58 @@ fn main() {
 		print 1
 	}
 	print acquire().len()
+}
+EOF
+
+# --- the same two rules, on programs they must stay silent about --------------------
+#
+# L101 and L102 are the two rules that judge a DECLARATION by its uses, so both are only as
+# good as the inventory of places a use can be written. Three places were missing at once and
+# every case above stayed green through all of them; these are that inventory, asserted.
+
+quiet L101 'l101-type-only' 'an import reached only from a TYPE position' <<'EOF'
+import "testing"
+
+pub fn takes(ctx: testing.Context) -> int {
+	return 1
+}
+
+fn main() {
+	print "hi"
+}
+EOF
+
+# both rules at once, because a const initialiser is the one place that reaches both: `seed` is
+# called from there and `math` is reached from there. The exit-0 half of the assertion is what
+# covers the L101 side — no finding of any code may be printed.
+quiet L102 'l102-from-const' 'a private function called only from a module-level const' <<'EOF'
+import "math"
+
+fn seed() -> int {
+	return 7
+}
+
+const START := seed()
+const ROOT := math.sqrt(4.0)
+
+fn main() {
+	print START
+	print ROOT
+}
+EOF
+
+quiet L102 'l102-from-field-default' 'a private function called only from a struct field default' <<'EOF'
+fn seed() -> int {
+	return 7
+}
+
+struct Box {
+	n: int = seed()
+}
+
+fn main() {
+	b := Box()
+	print b.n
 }
 EOF
 

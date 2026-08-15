@@ -414,190 +414,150 @@ or a package's public surface — even a `pub` declaration in a test file in the
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** `zerg test` is a **scaffold**. It walks a path for the packages under it, compiles
-> each — its sources, its test files and a generated driver, so a white-box test reaches the
-> module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
-> `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
-> from passes and failures, and exiting non-zero if any did not hold.
->
-> **A package is the module the test file names**, resolved most specific first: `strings_test.zg`
-> beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if
-> there is one, and the driver), and a test file naming no such sibling makes the directory the
-> package. One directory may therefore hold several packages, each with its own driver and its own
-> process.
->
-> **The path may be one `.zg` file**, and then it is the **package that file is in** that runs —
-> `zerg test src/stdlib/strings_test.zg` runs `strings.zg` + `strings_test.zg`, and not the other
-> packages of that directory. Ancestors are counted from the file's directory, exactly as they
-> would be for the directory itself. A build of the test file **alone** is a build of nothing, so
-> the file selects a package rather than a file list; `--only` is the tool for one test.
->
-> **The exit status distinguishes a search that found nothing.** `0` every test that ran passed or
-> skipped, `1` a test failed or timed out, `2` the command could not be carried out (no such path,
-> a `--only` that matched nothing, a fixture parameter that resolves to nothing), and `3` the
-> search ran and there was no test in what it searched. `3` is not folded into `2` because the
-> reader's next move differs: a `2` is fixed by editing the command line and a `3` by looking at
-> the tree. A run that found nothing says so on stderr as well, but a sentence alone leaves a CI
-> line green forever, and the reader of a CI line is a shell.
->
-> **A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg`. The
-> decorator may be written anywhere, so a directory whose only `#[test]` sits in an ordinary
-> module file is a test package too, and `zerg lint` goes on warning (**L601**) that such a test
-> **ships**. Both, not one: the linter says where a test ought to live and the runner runs what is
-> written. It adds no package **shape** — the package a stray `#[test]` belongs to is the one that
-> already compiles the file it is in — so the monotone rule above is untouched: which files a
-> package is built from is still decided by the `*_test.zg` names alone.
->
-> **A `#[test]` returns nothing, and a declared return type is refused** with a place, before
-> anything is compiled: the driver calls a test as a **statement**, so the value would be dropped
-> — and `#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than
-> linted because a lint exits 0 and the run would go on saying `ok`.
->
-> **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
-> test, a stem selects the family. It is applied before anything is generated, so a test it did not
-> select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
-> rather than reporting a green run of nothing: the command named a test that is not there.
->
-> **`--timeout <seconds>`** is how long one test may take before the run stops waiting on it;
-> the default is `60`. A test that goes over is reported `STUCK` and counted apart, and the run
-> goes on to the tests after it: a timeout is not a failed assertion, because nothing was decided.
-> Without it a hung test and a slow test are indistinguishable, and the hung one takes the whole
-> run with it until CI's own timeout kills the job with nothing saying which test did it.
->
-> **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in
-> one process — which contains an assertion that does not hold and an uncaught abort alike, since
-> a `guard` catches both and a coroutine that dies without one dies alone. What no coroutine can
-> contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no
-> result when the run ends is re-run in a **process of its own** — the remainder, exactly, since
-> a result is written only after a body returns — and that is what attributes the death to the
-> test that caused it. When it happens the report says so on a `NOTE` line; a run that quietly
-> changed strategy is a run whose result nobody can interpret.
->
-> A `#[test]` takes either **no parameter** or one **`testing.Context`**,
-> identified by its type and not by its name; the driver writes whichever call the signature
-> asks for. A context is passed **by value** and shares what matters anyway — its one field is a
-> channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,
-> `ctx.log(msg)` (shown only if the test fails), `ctx.skip(reason)` and `ctx.fatal(msg)`. The
-> last two `raise` to unwind and leave the reason on the context, so nothing has to read a
-> message string to tell a skip from a failure. A claim is `assert cond`, the keyword
-> ([Grammar](../surface/grammar.md), group 8), which writes its own message and needs nothing from
-> the context; what is left for `ctx.log` is a **domain note**, a thing about the fixture rather
-> than about the expression. `testing.assert_raises` stays a free function because it is not an
-> assertion: it asks what an already-finished call raised.
->
-> **Fixtures.** A test **declares what it needs**, the framework builds it once, hands it over and
-> tears it down. A `#[fixture]` is a function that takes its tests as a **continuation**:
->
-> ```zerg
-> #[fixture]
-> fn db(use: fn (Conn)) {
->     c := connect("postgres://tmp/test")
->     defer c.close()
->     use(c)
-> }
->
-> #[fixture]
-> fn schema(db: Conn, use: fn (Schema)) {
->     s := make_schema(db)
->     defer drop_schema(s)
->     use(s)
-> }
-> ```
->
-> `use: fn (T)` is identified **by type**, and it is two things at once: the continuation the tests
-> run inside, and the declaration of what this fixture **produces**. Every other parameter is a
-> **dependency matched by name** against another fixture — one rule for test-to-fixture and
-> fixture-to-fixture both. Teardown is `defer`, the language's own idiom, and needs nothing from the
-> runner.
->
-> A test resolves its parameters the same way: a `testing.Context` **by type**, a fixture **by
-> name**, and no parameter meaning a direct call.
->
-> ```zerg
-> #[test]
-> fn test_insert(schema: Schema) { … }
->
-> #[test]
-> fn test_query(db: Conn, ctx: testing.Context) { … }
->
-> #[test]
-> fn test_pure() { … }
-> ```
->
-> The framework **composes by nesting** — `db(fn (c) { … schema(c, fn (s) { … }) })` — so dependency
-> order, teardown order (an inner `defer` fires first), and "only when needed" are all consequences
-> of where the calls were written. There is no topological sort at runtime and no teardown registry,
-> and a level no test goes through is never generated at all.
->
-> **Everything is resolved before anything runs.** A parameter naming no fixture, a parameter whose
-> type is not what the fixture produces, and a **circle** among fixtures are each reported with a
-> **place**, for the whole tree at once, and the run exits `2` having executed nothing.
->
-> **A fixture that cannot be built fails every test that needed it** — `FAIL test_query` with
-> _fixture `db` could not be built: …_ under it, and the run exits non-zero: a test that could not
-> run must never look like one that passed. If the raise arrives when every test under it has
-> already answered for itself, what broke was the **teardown**, and the failure is recorded against
-> the fixture instead of against anybody's test.
->
-> **Where a fixture lives, and what inherits it.** A fixture is declared in a `*_test.zg`, so it
-> reaches no shipping build, and it serves the tests of **its own directory**. One that is to serve
-> the directories **below** as well goes in **`fixtures_test.zg`** — the one file an ancestor
-> contributes downward, to **every** level below it and not merely the next one. That is pytest's
-> `conftest.py` model, and the fixed name is load-bearing twice: an ordinary `*_test.zg` is a file
-> **of** its module and reads that module's private names, so carrying it into a directory below
-> would put it in a scope where those names are not; and an ancestor's own tests would otherwise run
-> once per descendant directory. A `#[test]` written in a `fixtures_test.zg` runs in its own
-> directory, once, like any other. Ancestors are counted from the path `zerg test` was **given**.
->
-> An inherited file is **copied into the package** for the length of the run, because a module is a
-> **directory** — the same reason the generated driver is written there. The copy is byte for byte,
-> so a diagnostic inside one points at the right line, and it is taken away when the run ends. A
-> package therefore cannot **shadow** an inherited fixture: two declarations of one name in one
-> scope are refused as the collision they are.
->
-> **The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own**
-> instance of an inherited fixture, because each is one driver in one process. That is pytest's
-> `scope="package"`. Session scope is deliberately not wanted and is anyway unreachable: `E705`
-> refuses two modules both defining a `pub` name, so one driver over a whole tree cannot be built,
-> and a live value does not cross a process boundary.
->
-> A fixture value reaches a test the way any value reaches a call — **by value** — and the test body
-> runs on the far side of a `spawn`, so a `Ref` inside it (a channel, a boxed handle) is shared and
-> the rest is copied. Tests are **serial**; `ctx.parallel()` is **[not yet]**, and when it lands,
+### `zerg test`
+
+`zerg test <path>` walks a path for the packages under it, compiles each — its sources, its test files and
+a generated driver, so a white-box test reaches the module's internals with no import and no `pub` — and
+runs every `#[test]` it finds, reporting `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file,
+counting skips and timeouts apart from passes and failures, and exiting non-zero if any did not hold.
+
+**A package is the module the test file names**, by the most-specific-first rule above: `strings_test.zg`
+beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if there is
+one, and the driver), and a test file naming no such sibling makes the directory the package. One
+directory may therefore hold several packages, each with its own driver and its own process.
+
+**The path may be one `.zg` file**, and then it is the **package that file is in** that runs — ancestors
+counted from the file's directory, exactly as for the directory itself. A build of the test file **alone**
+is a build of nothing, so the file selects a package rather than a file list; `--only` is the tool for one
+test.
+
+**The exit status distinguishes a search that found nothing.** `0` every test that ran passed or skipped,
+`1` a test failed or timed out, `2` the command could not be carried out (no such path, a `--only` that
+matched nothing, a fixture parameter that resolves to nothing), and `3` the search ran and there was no
+test in what it searched. `3` is not folded into `2` because the reader's next move differs: a `2` is
+fixed by editing the command line and a `3` by looking at the tree. A run that found nothing says so on
+stderr as well, but a sentence alone leaves a CI line green forever, and the reader of a CI line is a
+shell.
+
+**A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg` — so a directory whose
+only `#[test]` sits in an ordinary module file is a test package too, and `zerg lint` goes on warning
+(**L601**) that such a test **ships**. Both, not one: the linter says where a test ought to live and the
+runner runs what is written. It adds no package **shape** — the package a stray `#[test]` belongs to is
+the one that already compiles the file it is in — so the monotone rule above is untouched.
+
+**A `#[test]` returns nothing, and a declared return type is refused** with a place, before anything is
+compiled: the driver calls a test as a **statement**, so the value would be dropped — and
+`#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than linted because a
+lint exits 0 and the run would go on saying `ok`.
+
+**`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one test, a
+stem selects the family. It is applied before anything is generated, so a test it did not select is not
+compiled and its fixtures are never built. A filter that selected nothing exits `2` rather than reporting
+a green run of nothing.
+
+**`--timeout <seconds>`** is how long one test may take before the run stops waiting on it; the default is
+`60`. A test that goes over is reported `STUCK` and counted apart, and the run goes on: a timeout is not a
+failed assertion, because nothing was decided. Without it a hung test and a slow test are
+indistinguishable, and the hung one takes the whole run with it until CI's own timeout kills the job with
+nothing saying which test did it.
+
+**Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in one process
+— which contains an assertion that does not hold and an uncaught abort alike. What no coroutine can
+contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no result when
+the run ends is re-run in a **process of its own** — the remainder, exactly, since a result is written only
+after a body returns — and that is what attributes the death to the test that caused it. When it happens
+the report says so on a `NOTE` line; a run that quietly changed strategy is a run whose result nobody can
+interpret.
+
+#### What a test declares it needs
+
+A `#[test]`'s parameters are resolved by two rules: a **`testing.Context` by type**, and every other
+parameter **by name** against a fixture. No parameter means a direct call. A context is passed **by value**
+and shares what matters anyway — its one field is a channel, and a channel is a `Ref` value, so a copy
+shares it; what it carries is in [Standard Library](stdlib.md). A claim is `assert cond`, the keyword
+([Grammar](../surface/grammar.md), group 8), which writes its own message and needs nothing from the
+context.
+
+A **`#[fixture]`** takes its tests as a **continuation** — one parameter of type `fn (T)`, identified by
+type, which is both where those tests run and the declaration of what the fixture **produces**. Every
+other parameter names another fixture, by the same rule a test's does. Teardown is `defer`, the language's
+own idiom, so the runner supplies nothing for it.
+
+```zerg
+#[fixture]
+fn db(use: fn (Conn)) {
+    c := connect("postgres://tmp/test")
+    defer c.close()
+    use(c)
+}
+
+#[test]
+fn test_query(db: Conn, ctx: testing.Context) { … }
+```
+
+The framework **composes by nesting** — `db(fn (c) { … schema(c, fn (s) { … }) })` — so dependency order,
+teardown order (an inner `defer` fires first), and "only when needed" are all consequences of where the
+calls were written. There is no topological sort at runtime and no teardown registry, and a level no test
+goes through is never generated at all.
+
+**Everything is resolved before anything runs.** A parameter naming no fixture, a parameter whose type is
+not what the fixture produces, and a **circle** among fixtures are each reported with a **place**, for the
+whole tree at once, and the run exits `2` having executed nothing.
+
+**A fixture that cannot be built fails every test that needed it** — `FAIL test_query` with _fixture `db`
+could not be built: …_ under it, and the run exits non-zero: a test that could not run must never look
+like one that passed. If the raise arrives when every test under it has already answered for itself, what
+broke was the **teardown**, and the failure is recorded against the fixture instead of against anybody's
+test.
+
+#### Where a fixture lives, and what inherits it
+
+A fixture serves the tests of **its own directory**. One that is to serve the directories **below** as well
+goes in **`fixtures_test.zg`** — the one file an ancestor contributes downward, to **every** level below it
+and not merely the next one. That is pytest's `conftest.py` model, and the fixed name is load-bearing
+twice: an ordinary `*_test.zg` is a file **of** its module and reads that module's private names, so
+carrying it into a directory below would put it in a scope where those names are not; and an ancestor's own
+tests would otherwise run once per descendant directory. Ancestors are counted from the path `zerg test`
+was **given**.
+
+An inherited file is **copied into the package** for the length of the run, because a module is a
+**directory** — the same reason the generated driver is written there. The copy is byte for byte, so a
+diagnostic inside one points at the right line. A package therefore cannot **shadow** an inherited
+fixture: two declarations of one name in one scope are refused as the collision they are.
+
+**The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own** instance
+of an inherited fixture, because each is one driver in one process — pytest's `scope="package"`. Session
+scope is deliberately not wanted and is anyway unreachable: `E705` refuses two modules both defining a
+`pub` name, so one driver over a whole tree cannot be built, and a live value does not cross a process
+boundary. Likewise, when a test ends the process and the remainder is re-run one process each, each of
+those processes enters only the levels its own test is under.
+
+The generated driver and the copy of an inherited fixture file come **off disk as soon as they have been
+read**, before the build can emit, compile, link or report anything — so a run that fails leaves a source
+directory exactly as it found it. That matters most where it is least visible: the compiler resolves the
+standard library by **listing** `src/stdlib`, and a driver left behind there is a file every later build
+reads.
+
+#### The exclusion
+
+A normal build compiles no `*_test.zg` — the name is matched where a module's directory is read, in both
+compilers — so nothing a test declares reaches the shipped artifact or joins a module's surface, and a name
+it repeats or a file that does not parse costs a normal build nothing. Naming one of its declarations is
+_E388 module `lib` has no `only_in_test`_, and naming the file is _E512 `lib/lib_test` names a test file,
+and a normal build compiles none_, both with a place. E388 does not go on to say that a test file declares
+one: that fact is the loader's, and the rule that reports it is in the checker.
+
+A test file is not importable from anywhere, a sibling test file included — a white-box test shares its
+module's namespace and reaches its internals with no import at all, which is what makes `zerg test` a
+matter of compiling more files rather than of relaxing a visibility rule.
+
+> **[not yet]** Four things past the above: a doc comment (`##`), a doc example run as a test, benchmarks,
+> and **running two tests at once** — tests are serial, `ctx.parallel()` is unbuilt, and when it lands
 > tests sharing a fixture will share one instance of it.
 >
-> **The fallback rebuilds what it needs.** When a test ends the process and the remainder is re-run
-> one process each, each of those processes enters only the levels the test it was asked for is
-> under — so it stands that test's fixtures up again, and no others.
->
-> The generated driver and the copy of an inherited fixture file come **off disk as soon as they
-> have been read**, before the build can emit, compile, link or report anything — so a run that
-> fails leaves a source directory exactly as it found it. That matters most where it is least
-> visible: the compiler resolves the standard library by **listing** `src/stdlib`, and a driver
-> left behind there is a file every later build reads.
->
-> What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
-> test, benchmarks, and running two tests at once. A failing assertion `raise`s, and a raise is
-> control flow, so it unwinds out of the test body on its own.
->
-> The **assertion** side has since been filled in, and it is a KEYWORD rather than a library.
-> `assert cond` raises `AssertionError` with the file, the line, the claim's own source text and
-> the value of each operand a comparison came apart into. `testing.assert_raises` answers the
-> `Err` a `guard`ed call raised and is the one helper left. What is still not there is a rendering for a **composite**,
-> so `assert xs == ys` over two lists is `E445` and a claim about a list is made through something
-> that reduces it to a scalar.
->
-> The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
-> module's directory is read, in both compilers — so nothing a test declares reaches the shipped
-> artifact or joins a module's surface, and a name it repeats or a file that does not parse costs a
-> normal build nothing. Naming one of its declarations is _E388 module `lib` has no `only_in_test`_,
-> and naming the file is _E512 `lib/lib_test` names a test file, and a normal build compiles none_,
-> both with a place. E388 does not go on to say that a test file declares one: that fact is the
-> loader's, and the rule that reports it is in the checker.
->
-> A test file is not importable from anywhere, a sibling test file included — a white-box test shares
-> its module's namespace and reaches its internals with no import at all, which is what makes `zerg
-test` a matter of compiling more files rather than of relaxing a visibility rule.
+> A claim over a **composite** is the one gap inside what is built: `assert xs == ys` over two lists is
+> `E445`, so such a claim is made through something that reduces it to a scalar
+> ([Specs & Generics](../core/specs.md)).
 
 ### Target-conditional files
 

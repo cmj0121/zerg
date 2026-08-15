@@ -6,8 +6,9 @@
 # the builder, the bytes of a rendered line, the global. It reaches them through a `chan[str]`
 # sink, which is what makes a logger testable at all — there is no reading a `write(2)` back.
 #
-# Seven claims are outside that reach, and each is the kind nobody notices until it is an
-# incident:
+# Seven claims are outside that reach, spread over the eight cases below — this numbering is
+# the CLAIMS and not the sections, because the one-write rule is asserted in two places. Each
+# is the kind nobody notices until it is an incident:
 #
 #   1. `fatal` EXITS. A test that called it would take the test process with it, so the claim
 #      is made about a whole program: it writes its line, and it exits 1. And it exits even at
@@ -36,9 +37,9 @@
 #      does not take the program down.
 #
 #   7. THE PATTERN THIS MODULE IS THE REFERENCE FOR — one private cell, one writer, readers
-#      that only delegate — is a property of the SOURCE. Two of its rules the compiler
-#      enforces (`E358`, `E484`); the rest had nothing but a reader checking them, and this
-#      is that reader. Its fourth rule is about the caller and cannot be checked here at all.
+#      that only delegate — is a property of the SOURCE. The compiler enforces its rule 1 and
+#      nothing else; rules 2 and 3 had nothing but a reader checking them, and this is that
+#      reader. Rule 4 is about the caller and cannot be checked here at all.
 #
 # WHY THE ONE-WRITE CLAIM IS STRUCTURAL AND NOT A STRESS TEST.
 #
@@ -83,6 +84,10 @@ LOG_SRC="${LOG_SRC:-src/stdlib/log.zg}"
 WRITERS="${WRITERS:-24}"
 LINES="${LINES:-500}"
 
+# How long a `ctx.log` note gets before case 7 calls it a hang. Generous — the run compiles a
+# suite first — and it only has to be finite.
+NOTE_TIMEOUT="${NOTE_TIMEOUT:-120}"
+
 [ -x "$ZERG" ] || {
 	printf 'log-check: %s is not built — run `make build` first\n' "$ZERG" >&2
 	exit 2
@@ -91,6 +96,13 @@ LINES="${LINES:-500}"
 	printf 'log-check: %s is not there, and this gate reads it\n' "$LOG_SRC" >&2
 	exit 2
 }
+
+# EVERY PROGRAM BELOW STARTS UNCONFIGURED. `log` reads these three at module init, and this
+# gate is the only place a claim about a DEFAULT can be made — so a developer with
+# `ZERG_LOG_LEVEL=debug` exported must not be able to make "the default writes no debug line"
+# pass or fail for a reason that is about their shell. A case that wants a value sets it on
+# the command line, one run at a time.
+unset ZERG_LOG ZERG_LOG_LEVEL NO_COLOR
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-logcheck.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
@@ -313,7 +325,7 @@ if build colour; then
 		# call is the ZERO value if it is declared later, silently, so a `NO_COLOR_UNSET` that
 		# moved below `ENV_COLOUR` would become "" — and an exported-empty NO_COLOR would then
 		# be indistinguishable from an unset one and colour would come back on.
-		NO_COLOR= on_a_pty "$WORK/colour"
+		NO_COLOR='' on_a_pty "$WORK/colour"
 		grep -q "$esc" "$WORK/pty.out" &&
 			note "an exported-empty NO_COLOR did not turn colour off — see no-color.org, and check the const order in $LOG_SRC"
 
@@ -381,16 +393,45 @@ if build level; then
 	# and the case of a name is not guessed at either
 	ZERG_LOG_LEVEL=DEBUG "$WORK/level" >/dev/null 2>"$WORK/lvl.upper"
 	grep -q 'a debug line' "$WORK/lvl.upper" && note "ZERG_LOG_LEVEL=DEBUG was accepted — the names are lower case, as a JSON line spells them"
+
+	# AND IT DOES NOT REACH A TEST NOTE, which is this variable's blast radius rather than its
+	# meaning. `testing.rendered` builds a `log.Logger` for every `ctx.log(…)`, and while that
+	# logger inherited the level a `ZERG_LOG_LEVEL=warn` made the entry DEAD: nothing went into
+	# a one-slot channel and the receive on it — whose only sender was the same frame — parked
+	# forever. Every note in every suite in the tree hung the runner, over a variable that has
+	# nothing to do with tests. A hang is not a failure any exit status reports, so this one is
+	# asked with a deadline.
+	mkdir -p "$WORK/note"
+	cat >"$WORK/note/note_test.zg" <<'ZG'
+import "testing"
+
+#[test]
+fn test_a_note_is_written_at_any_level(ctx: testing.Context) {
+	ctx.log("a note")
+	assert true
+}
+ZG
+	ZERG_LOG_LEVEL=warn "$ZERG" test "$WORK/note" >"$WORK/note.out" 2>&1 &
+	notepid=$!
+	(
+		sleep "$NOTE_TIMEOUT"
+		kill -9 "$notepid" 2>/dev/null
+	) >/dev/null 2>&1 &
+	killer=$!
+	wait "$notepid"
+	kill "$killer" 2>/dev/null
+	grep -q '1 passed' "$WORK/note.out" ||
+		note "a ctx.log note under ZERG_LOG_LEVEL=warn hung or failed: $(tail -3 "$WORK/note.out")"
 	checks=$((checks + 1))
 fi
 
 # --- 8. the pattern: one cell, one writer, readers that only delegate ------------------------
 #
 # `log` is this tree's REFERENCE for process-wide mutable state, so the shape is a claim it
-# makes and not merely how it happens to be written today. Two of the pattern's four rules are
-# enforced by the compiler (`E358` and `E484` between them make the cell private and mutable
-# only inside the group); the third is a property of this source and nothing but a reader was
-# checking it. This is that reader.
+# makes and not merely how it happens to be written today. The compiler enforces RULE 1 and
+# only rule 1 — `E358` puts the cell inside the group and `E484` keeps it private, which is two
+# codes for one rule rather than two rules. Rules 2 and 3 were properties of this source with
+# nothing but a reader checking them. This is that reader.
 #
 # The fourth rule — configure at startup, then read — is about the CALLER and cannot be read
 # off this file at all. It is stated in the comment, and nothing here can enforce it; saying so

@@ -640,3 +640,40 @@ fn test_pad_refuses_a_bad_fill_even_when_no_padding_is_needed() {
 	e := testing.assert_raises(guard { pad_end("hello", 2, "ab") })
 	assert e is ValueError
 }
+
+# --- the module's own helpers ---------------------------------------------------------
+
+# WHAT THE SURFACE CANNOT ASK. Every `pub` function bounds its own window before calling
+# `match_at`, so no caller ever hands it one that is out of range — and the comment on it
+# PROMISES that case answers false, which is what lets a scan walk to the end with no
+# length test of its own. The claim was unmeasurable until this file moved beside the
+# module.
+#[test]
+fn test_match_at_never_reads_outside_the_haystack() {
+	hay := bytearray("hello")
+	assert not match_at(hay, bytearray("he"), -1)
+	assert not match_at(hay, bytearray("lo"), 4)
+	assert match_at(hay, bytearray("lo"), 3)
+}
+
+# AN EMPTY NEEDLE MATCHES ANYWHERE IN RANGE, and the offset EQUAL to the length is in range
+# while the one past it is not. That boundary is what makes `index_of(s, "")` answer 0 for
+# every string, the empty one included.
+#[test]
+fn test_match_at_takes_an_empty_needle_up_to_the_end_and_no_further() {
+	hay := bytearray("hello")
+	assert match_at(hay, bytearray(""), 0)
+	assert match_at(hay, bytearray(""), 5)
+	assert not match_at(hay, bytearray(""), 6)
+}
+
+# THE COUNT IS NEVER NEGATIVE, which is the whole reason it is a function of its own:
+# `repeat` with a negative count is a different question, and a string already past the
+# width would be asking it. Through `pad_start` all three of these look alike — nothing was
+# added — and only one of them is the case that could have gone wrong.
+#[test]
+fn test_pad_count_is_never_negative() {
+	assert pad_count("abc", 5, " ") == 2
+	assert pad_count("abc", 3, " ") == 0
+	assert pad_count("abc", 1, " ") == 0
+}

@@ -32,8 +32,8 @@
 # to a SINGLE `__zrt_write`. Nothing here calls `io.eprintln`, which is two.
 #
 # THIS MODULE IS ALSO THE TREE'S REFERENCE FOR PROCESS-WIDE MUTABLE STATE. The pattern, and
-# the four rules that make it safe to copy, are written above the `unsafe { }` group at the
-# foot of this file.
+# the rules that make it safe to copy, are written above the `unsafe { }` group at the foot of
+# this file.
 import (
 	"io"
 	"json"
@@ -249,16 +249,31 @@ fn emit(sk: Sink, line: str) {
 # WHAT THE DERIVE COSTS, measured with `make mem-check` rather than guessed: a LIVE line went
 # from +18915 to +19110 allocations over 195 rounds — exactly one more per line, because an
 # assignment over a field that already holds a live `list` does not release the buffer it
-# replaces in this compiler. The disabled line, which is the claim this module is responsible
-# for, is unchanged at +0. One allocation per written line bought the removal of a defect
-# class no gate can see, and the leak itself is a compiler bug that is reported rather than
-# worked around here — the same count comes out of `strings.join`, which has nothing to do
-# with logging.
+# replaces in this compiler. (Moving the environment to the module-level consts below then took
+# it to +18330, so the derive is paid for; the figures are kept because the middle one is what
+# the shape itself costs.) The DISABLED line, which is the claim this module is responsible
+# for, is +0 throughout. One allocation per written line bought the removal of a defect class
+# no gate can see, and the leak itself is a compiler bug that is reported rather than worked
+# around here — the same count comes out of `strings.join`, which has nothing to do with
+# logging.
+#
+# THE DEFAULTS ARE THE ENVIRONMENT, AND THEY ARE WRITTEN HERE RATHER THAN IN `new`, which is
+# one line that constructs this. A module-private field MUST carry a default (`E482`), so
+# `Logger()` exists whatever this module wants; writing the environment into `new` as well
+# would have made it a SECOND constructor that silently ignores `ZERG_LOG` — the kind of thing
+# nobody finds until a `ZERG_LOG=json` is quietly dropped on the floor.
+#
+# AND BECAUSE THE THREE CONSTS ARE PRIVATE, `log.Logger()` IS REFUSED OUTSIDE THIS MODULE —
+# `E301 ENV_LEVEL is not a public member`, three times, at the construction. So the accidental
+# second constructor is not merely made to agree with `new`; it is gone, and `log.new()` is
+# the only way a Logger is built from outside. (The message names consts the caller cannot see,
+# and calls the module `stdlib` rather than `log`. Both are compiler defects worth reporting;
+# neither is a reason to prefer a silent second constructor over a loud refusal.)
 pub struct Logger {
-	lvl: Level = Level.INFO
-	fmt: Format = Format.PRETTY
-	col: bool = false
-	sink: Sink = Sink(nil)
+	lvl: Level = ENV_LEVEL
+	fmt: Format = ENV_FORMAT
+	col: bool = ENV_COLOUR
+	sink: Sink = to_stderr()
 	base: list[json.Field] = []
 }
 
@@ -271,6 +286,12 @@ pub struct Logger {
 # counting allocations at 5 rounds and at 200 and requiring the two totals to be EQUAL; it is
 # the one case in that gate whose claim is "allocated nothing" rather than "leaked nothing".
 #
+# `log.Entry()` IS REACHABLE FROM OUTSIDE and is INERT, which is why it is left alone. Every
+# field must carry a default (`E482` again), so a zero-argument construction exists whatever
+# this module wants; the two defaults that matter make it harmless — `live` is false, so every
+# method returns at once and nothing is written, and `lvl` is `OFF`, so `msg` does not exit
+# either. `Logger` closes the same hole a different way, by giving its defaults private consts
+# to name; here there is nothing to close.
 pub struct Entry {
 	live: bool = false
 	lvl: Level = Level.OFF
@@ -284,6 +305,11 @@ pub struct Entry {
 # INSTANCE constructor, and the global further down is one of these rather than a second
 # implementation beside it.
 #
+# IT IS ONE LINE ONTO THE ZERO VALUE, which is what makes it the ONLY constructor rather than
+# the first of two: `Logger()` carries the same defaults because they are the same defaults,
+# and outside this module it is refused outright (see the struct above). `new` exists to be
+# the NAME a caller and this file's own documentation use.
+#
 # ```zerg
 # log.new().level(log.Level.WARN).enabled(log.Level.INFO)
 # log.new().level(log.Level.WARN).enabled(log.Level.ERROR)
@@ -293,14 +319,24 @@ pub struct Entry {
 # true
 # ```
 pub fn new() -> Logger {
-	fs: list[json.Field] = []
-	return Logger(env_level(), env_format(), env_colour(), to_stderr(), fs)
+	return Logger()
 }
+
+# --- the environment, read once ---------------------------------------------------------------
+#
+# THE THREE `#[allow(L102)]` BELOW ARE SUPPRESSING A FALSE POSITIVE, and that is worth stating
+# once rather than three times. Each of these functions IS called — by a module-level `const`
+# further down, which is what `Logger`'s field defaults name. `L102`'s reachability walk does
+# not visit a top-level `const` initialiser (nor a field default; both spellings were tried),
+# so it reports all three as dead. The linter is wrong and the code is right; the defect is
+# reported rather than worked around by writing the environment logic inline, which would trade
+# three named, documented functions for three unreadable const expressions.
 
 # env_level is `ZERG_LOG_LEVEL`, by name, and anything it does not recognise is `INFO`. It is
 # the one way a level is chosen without editing the program, which matters more here than it
 # would elsewhere: the only other way is `log.install(…)` in `main`, and the person who wants
 # a debug line is often not the person who can rebuild.
+#[allow(L102)]
 fn env_level() -> Level {
 	return parse_level(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
 }
@@ -313,6 +349,7 @@ fn env_level() -> Level {
 # CONDITION and a binding head is not one (`E205`). The formatter turns a valid program into an
 # invalid one, and `fmt --check` then calls the invalid one canonical, which is how this module
 # broke itself once. Reported; four lines reproduce it. `??` is the shorter answer anyway.
+#[allow(L102)]
 fn env_format() -> Format {
 	v := os.env("ZERG_LOG") ?? ""
 	return Format.JSON if v == "json"
@@ -328,6 +365,7 @@ fn env_format() -> Format {
 # variable somebody exported. That is why the sentinel below is a string nobody sets rather
 # than `""`: coalescing to `""` would make an exported-empty `NO_COLOR` indistinguishable from
 # an unset one, which is the one distinction this variable is made of.
+#[allow(L102)]
 fn env_colour() -> bool {
 	off := os.env("NO_COLOR") ?? NO_COLOR_UNSET
 	return false if off != NO_COLOR_UNSET
@@ -338,6 +376,17 @@ fn env_colour() -> bool {
 # a value anybody exports — it opens with U+0001, which is the whole requirement. (U+0000 is
 # not available:  refuses a NUL in a string literal.)
 const NO_COLOR_UNSET := "\u{1}NO_COLOR is not set"
+
+# The three answers, read ONCE. A module-level `const` may call a function, and these are the
+# defaults `Logger`'s fields carry — so the environment is asked at module init rather than at
+# every construction. That is not a micro-optimisation: `env_colour` calls `os.isatty(2)`,
+# which is a SYSCALL, and `testing.zg` builds a fresh logger for every note a test writes.
+#
+# They are declared AFTER `NO_COLOR_UNSET` because a top-level `const` is evaluated in source
+# order, and `env_colour` reads that sentinel.
+const ENV_LEVEL := env_level()
+const ENV_FORMAT := env_format()
+const ENV_COLOUR := env_colour()
 
 impl Logger {
 	# level answers a COPY of this logger writing at `l` and above.

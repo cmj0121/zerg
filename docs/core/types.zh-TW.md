@@ -273,8 +273,9 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制
 （見 [模式比對](../code/control-flow.zh-TW.md)）。
 
-> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——上面的
-> 組成繼承規則已是規格,而無名形式上的衍生尚未建置(出貨的訊息仍把原因怪在沒有宣告可掛上)。
+> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
+> _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
 > **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E205 expected a newline or `;` to separate
 > statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E238`)。
 > 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。

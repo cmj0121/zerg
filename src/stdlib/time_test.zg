@@ -1,12 +1,12 @@
 # The `time` suite — the calendar and the duration renderer, each asked the ordinary case,
 # its boundary, and the place its arithmetic could go wrong.
 #
-# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out at length: `zerg
-# test` compiles a DIRECTORY as one package and `src/stdlib` is a flat directory of
-# independent modules, so a suite dropped beside time.zg would drag every other module into
-# the same unit. This one sits in a package of its own and reaches the module the way a user
-# does, through `import "time"`. `pad`, `scaled` and `fraction` are module-private and are
-# asked through `rfc3339` and `duration`.
+# WHITE-BOX, for the reason src/stdlib/strings_test.zg sets out at length: this file is a
+# file of the `time` module rather than a package that imports it, so `pad`, `scaled` and
+# `fraction` are in scope. `rfc3339` and `duration` are still where most of the claims are
+# asked, because that is what a caller has — but `pad` is a width rule and `fraction` is a
+# truncation rule, and each is one function of one argument that the renderers can only show
+# a sample of.
 #
 # THE CLOCKS THEMSELVES ARE BARELY TESTED AND CANNOT BE. `now()` and `monotonic()` answer
 # whatever the host says; a suite can assert that they move forward and that they are in the
@@ -23,7 +23,6 @@
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 # --- the property everything else rests on --------------------------------------------
@@ -51,7 +50,7 @@ fn test_division_floors_which_is_what_the_calendar_needs() {
 
 #[test]
 fn test_utc_epoch() {
-	d := time.utc(0)
+	d := utc(0)
 	assert d.year == 1970
 	assert d.month == 1
 	assert d.day == 1
@@ -62,7 +61,7 @@ fn test_utc_epoch() {
 
 #[test]
 fn test_utc_ordinary() {
-	d := time.utc(1755253351)
+	d := utc(1755253351)
 	assert d.year == 2025
 	assert d.month == 8
 	assert d.day == 15
@@ -75,13 +74,13 @@ fn test_utc_ordinary() {
 # is the first of the next — an off-by-one in the day split shows up on exactly this pair.
 #[test]
 fn test_utc_day_boundaries() {
-	last := time.utc(86399)
+	last := utc(86399)
 	assert last.day == 1
 	assert last.hour == 23
 	assert last.minute == 59
 	assert last.second == 59
 
-	next := time.utc(86400)
+	next := utc(86400)
 	assert next.day == 2
 	assert next.hour == 0
 }
@@ -89,7 +88,7 @@ fn test_utc_day_boundaries() {
 # Before the epoch, which is where truncating division would put a date that does not exist.
 #[test]
 fn test_utc_before_the_epoch() {
-	d := time.utc(-1)
+	d := utc(-1)
 	assert d.year == 1969
 	assert d.month == 12
 	assert d.day == 31
@@ -98,7 +97,7 @@ fn test_utc_before_the_epoch() {
 	assert d.second == 59
 
 	# A whole day back lands on midnight, not on 23:59:59 of the day before that.
-	m := time.utc(-86400)
+	m := utc(-86400)
 	assert m.year == 1969
 	assert m.month == 12
 	assert m.day == 31
@@ -113,7 +112,7 @@ fn test_utc_before_the_epoch() {
 #[test]
 fn test_utc_leap_day_2000(ctx: testing.Context) {
 	ctx.log("2000 is a leap year: divisible by 400")
-	d := time.utc(951782400)
+	d := utc(951782400)
 	assert d.year == 2000
 	assert d.month == 2
 	assert d.day == 29
@@ -122,20 +121,20 @@ fn test_utc_leap_day_2000(ctx: testing.Context) {
 #[test]
 fn test_utc_1900_is_not_a_leap_year(ctx: testing.Context) {
 	ctx.log("1900-03-01, one second-count after where a wrong Feb 29 would sit")
-	d := time.utc(-2203891200)
+	d := utc(-2203891200)
 	assert d.year == 1900
 	assert d.month == 3
 	assert d.day == 1
 
 	# And the day before it is the 28th of February, not the 29th.
-	before := time.utc(-2203891200 - 86400)
+	before := utc(-2203891200 - 86400)
 	assert before.month == 2
 	assert before.day == 28
 }
 
 #[test]
 fn test_utc_leap_day_2024() {
-	d := time.utc(1709164800)
+	d := utc(1709164800)
 	assert d.year == 2024
 	assert d.month == 2
 	assert d.day == 29
@@ -144,13 +143,13 @@ fn test_utc_leap_day_2024() {
 # The year rolls at the right second and not one either side of it.
 #[test]
 fn test_utc_year_boundary() {
-	last := time.utc(1735689599)
+	last := utc(1735689599)
 	assert last.year == 2024
 	assert last.month == 12
 	assert last.day == 31
 	assert last.second == 59
 
-	first := time.utc(1735689600)
+	first := utc(1735689600)
 	assert first.year == 2025
 	assert first.month == 1
 	assert first.day == 1
@@ -161,9 +160,9 @@ fn test_utc_year_boundary() {
 
 #[test]
 fn test_rfc3339_ordinary() {
-	assert time.rfc3339(0) == "1970-01-01T00:00:00Z"
-	assert time.rfc3339(1755253351) == "2025-08-15T10:22:31Z"
-	assert time.rfc3339(2147483647) == "2038-01-19T03:14:07Z"
+	assert rfc3339(0) == "1970-01-01T00:00:00Z"
+	assert rfc3339(1755253351) == "2025-08-15T10:22:31Z"
+	assert rfc3339(2147483647) == "2038-01-19T03:14:07Z"
 }
 
 # EVERY FIELD IS ZERO-FILLED to its own width — a date the reader can sort as a string, and
@@ -171,10 +170,10 @@ fn test_rfc3339_ordinary() {
 # sortable, and it is what dropping the padding gives.
 #[test]
 fn test_rfc3339_pads_every_field() {
-	assert time.rfc3339(-2208988800) == "1900-01-01T00:00:00Z"
-	assert time.rfc3339(1) == "1970-01-01T00:00:01Z"
-	assert time.rfc3339(3600 + 120 + 3) == "1970-01-01T01:02:03Z"
-	assert time.rfc3339(-1) == "1969-12-31T23:59:59Z"
+	assert rfc3339(-2208988800) == "1900-01-01T00:00:00Z"
+	assert rfc3339(1) == "1970-01-01T00:00:01Z"
+	assert rfc3339(3600 + 120 + 3) == "1970-01-01T01:02:03Z"
+	assert rfc3339(-1) == "1969-12-31T23:59:59Z"
 }
 
 # The rendered string is exactly 20 bytes for every year the format has, which is the
@@ -183,9 +182,9 @@ fn test_rfc3339_pads_every_field() {
 # column is measured in what gets written.
 #[test]
 fn test_rfc3339_is_fixed_width() {
-	assert bytearray(time.rfc3339(0)).len() == 20
-	assert bytearray(time.rfc3339(1755253351)).len() == 20
-	assert bytearray(time.rfc3339(-2208988800)).len() == 20
+	assert bytearray(rfc3339(0)).len() == 20
+	assert bytearray(rfc3339(1755253351)).len() == 20
+	assert bytearray(rfc3339(-2208988800)).len() == 20
 }
 
 # A YEAR THE FORMAT HAS NO ROOM FOR keeps its own digits and its sign rather than being
@@ -195,7 +194,7 @@ fn test_rfc3339_is_fixed_width() {
 #[test]
 fn test_rfc3339_out_of_range_year_is_not_truncated(ctx: testing.Context) {
 	ctx.log("year 12921 — five digits, and none of them dropped")
-	assert time.rfc3339(345600000000) == "12921-08-18T00:00:00Z"
+	assert rfc3339(345600000000) == "12921-08-18T00:00:00Z"
 
 	# THE SIGN GOES IN FRONT OF THE FILLING, not inside it. This needs a year with FEWER than
 	# four digits to see at all: `-471` is already four characters wide, so it comes out the
@@ -203,29 +202,29 @@ fn test_rfc3339_out_of_range_year_is_not_truncated(ctx: testing.Context) {
 	# only on it asserts nothing about the sign. Year -5 is where the two differ — `-005`
 	# against `00-5`, and the second is not a number.
 	ctx.log("year -5, the width where padding the rendered string would corrupt it")
-	small := time.rfc3339(-62319610433)
+	small := rfc3339(-62319610433)
 	assert small == "-005-03-04T05:06:07Z"
 	assert strings.has_prefix(small, "-")
 
 	ctx.log("year 7 — the same width, filled without a sign")
-	assert time.rfc3339(-61940919233) == "0007-03-04T05:06:07Z"
+	assert rfc3339(-61940919233) == "0007-03-04T05:06:07Z"
 
 	# It is still not RFC 3339: the format has no negative year, and `-471-12-20` needs a
 	# reader who knows that. Every digit of the year survives, which is all that was on offer.
-	assert time.rfc3339(-77000000000) == "-471-12-20T07:06:40Z"
+	assert rfc3339(-77000000000) == "-471-12-20T07:06:40Z"
 }
 
 # --- duration ---------------------------------------------------------------------------
 
 #[test]
 fn test_duration_picks_the_unit() {
-	assert time.duration(0) == "0ns"
-	assert time.duration(999) == "999ns"
-	assert time.duration(1000) == "1µs"
-	assert time.duration(999999) == "999.999µs"
-	assert time.duration(1000000) == "1ms"
-	assert time.duration(999999999) == "999.999ms"
-	assert time.duration(1000000000) == "1s"
+	assert duration(0) == "0ns"
+	assert duration(999) == "999ns"
+	assert duration(1000) == "1µs"
+	assert duration(999999) == "999.999µs"
+	assert duration(1000000) == "1ms"
+	assert duration(999999999) == "999.999ms"
+	assert duration(1000000000) == "1s"
 }
 
 # A WHOLE VALUE CARRIES NO FRACTION AT ALL — `250ms`, not `250.000ms`. The trailing zeros
@@ -233,11 +232,11 @@ fn test_duration_picks_the_unit() {
 # renderer.
 #[test]
 fn test_duration_drops_trailing_zeros() {
-	assert time.duration(1500000000) == "1.5s"
-	assert time.duration(1050000000) == "1.05s"
-	assert time.duration(1005000000) == "1.005s"
-	assert time.duration(250000000) == "250ms"
-	assert time.duration(1234) == "1.234µs"
+	assert duration(1500000000) == "1.5s"
+	assert duration(1050000000) == "1.05s"
+	assert duration(1005000000) == "1.005s"
+	assert duration(250000000) == "250ms"
+	assert duration(1234) == "1.234µs"
 }
 
 # The fraction is TRUNCATED to three digits rather than rounded, and it never grows a
@@ -245,22 +244,22 @@ fn test_duration_drops_trailing_zeros() {
 # a reader can act on: a duration that reads under a threshold really was under it.
 #[test]
 fn test_duration_fraction_stops_at_three_digits() {
-	assert time.duration(1001000000) == "1.001s"
-	assert time.duration(1999999999) == "1.999s"
+	assert duration(1001000000) == "1.001s"
+	assert duration(1999999999) == "1.999s"
 
 	# Under a thousandth of the chosen unit there is no fraction at all — this is a second
 	# and a microsecond, and the microsecond does not survive being shown in seconds.
-	assert time.duration(1000000001) == "1s"
-	assert time.duration(1000999999) == "1s"
+	assert duration(1000000001) == "1s"
+	assert duration(1000999999) == "1s"
 }
 
 # A negative elapsed time is a wall clock that went backwards, which `time.now()` is
 # documented to be able to do. It renders with a sign rather than as a huge positive.
 #[test]
 fn test_duration_negative() {
-	assert time.duration(-1500000000) == "-1.5s"
-	assert time.duration(-999) == "-999ns"
-	assert time.duration(-1000000) == "-1ms"
+	assert duration(-1500000000) == "-1.5s"
+	assert duration(-999) == "-999ns"
+	assert duration(-1000000) == "-1ms"
 }
 
 # --- the clocks -------------------------------------------------------------------------
@@ -269,9 +268,9 @@ fn test_duration_negative() {
 # and it agrees with the calendar built on top of it.
 #[test]
 fn test_now_is_a_plausible_date() {
-	t := time.now()
+	t := now()
 	assert t > 1700000000
-	assert time.utc(t).year >= 2023
+	assert utc(t).year >= 2023
 }
 
 # `monotonic` is only ever read as a difference, so that is what is asserted.
@@ -283,11 +282,11 @@ fn test_now_is_a_plausible_date() {
 # The loop is also what makes the second claim possible: time really did pass.
 #[test]
 fn test_monotonic_never_goes_backwards() {
-	first := time.monotonic()
+	first := monotonic()
 	mut prev := first
 	mut i := 0
 	for i < 1000 {
-		now := time.monotonic()
+		now := monotonic()
 		assert now >= prev
 		prev = now
 		i = i + 1

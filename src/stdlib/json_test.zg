@@ -1,9 +1,11 @@
 # The `json` suite — every `pub` function, and the two properties this module is used FOR.
 #
-# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out: `zerg test`
-# compiles a directory as one package and `src/stdlib` is a flat directory of independent
-# modules. The private writer and reader (`jw_str`, `jp_uescape`, `jp_num`) are reached
-# through `encode` and `decode`, which is how a caller reaches them too.
+# WHITE-BOX, for the reason src/stdlib/strings_test.zg sets out: this file is a file of the
+# `json` module, so the private writer and reader (`jw_str`, `jp_uescape`, `jp_num`) are in
+# scope. Most of what is below still goes through `encode` and `decode`, because that is the
+# path a caller takes and a property asserted at the surface is a property the module HAS —
+# but the escaper's own table is asked directly, where the surface can only show it a
+# character at a time.
 #
 # THE MODULE HAD NO SUITE FOR ITS WHOLE LIFE. It was `src/compiler/lsp/json.zg`, and what
 # held it was `make lsp` — 15 protocol cases going through a server, which exercises the
@@ -22,7 +24,6 @@
 #   NOT are stated rather than discovered: a fraction is dropped, and an escape decodes to
 #   the character it stands for.
 import (
-	"json"
 	"strings"
 	"testing"
 )
@@ -34,9 +35,9 @@ import (
 # failure mode that turns a log line into a syntax error in somebody's pipeline.
 #[test]
 fn test_encode_escapes_quote_and_backslash() {
-	assert json.encode(json.of_str("say \"hi\"")) == "\"say \\\"hi\\\"\""
-	assert json.encode(json.of_str("C:\\tmp")) == "\"C:\\\\tmp\""
-	assert json.encode(json.of_str("\\\"")) == "\"\\\\\\\"\""
+	assert encode(of_str("say \"hi\"")) == "\"say \\\"hi\\\"\""
+	assert encode(of_str("C:\\tmp")) == "\"C:\\\\tmp\""
+	assert encode(of_str("\\\"")) == "\"\\\\\\\"\""
 }
 
 # THE FIVE SHORT ESCAPES, each on its own so a failure names the byte. `\b` and `\f` are the
@@ -45,26 +46,26 @@ fn test_encode_escapes_quote_and_backslash() {
 #[test]
 fn test_encode_short_escapes(ctx: testing.Context) {
 	ctx.log("newline, return, tab — the three a source file and a diagnostic carry routinely")
-	assert json.encode(json.of_str("\n")) == "\"\\n\""
-	assert json.encode(json.of_str("\r")) == "\"\\r\""
-	assert json.encode(json.of_str("\t")) == "\"\\t\""
+	assert encode(of_str("\n")) == "\"\\n\""
+	assert encode(of_str("\r")) == "\"\\r\""
+	assert encode(of_str("\t")) == "\"\\t\""
 
 	ctx.log("backspace (8) and form feed (12) — the two with short forms nobody writes")
-	assert json.encode(json.of_str(str([byte(8)]))) == "\"\\b\""
-	assert json.encode(json.of_str(str([byte(12)]))) == "\"\\f\""
+	assert encode(of_str(str([byte(8)]))) == "\"\\b\""
+	assert encode(of_str(str([byte(12)]))) == "\"\\f\""
 }
 
 # A CONTROL BYTE WITH NO SHORT FORM goes out as `\u00XX`, lower-case hex, four digits. The
 # boundary is what this is really asking: 0x1F must be escaped and 0x20 (a space) must not.
 #[test]
 fn test_encode_control_bytes_as_u00xx() {
-	assert json.encode(json.of_str(str([byte(1)]))) == "\"\\u0001\""
-	assert json.encode(json.of_str(str([byte(15)]))) == "\"\\u000f\""
-	assert json.encode(json.of_str(str([byte(26)]))) == "\"\\u001a\""
-	assert json.encode(json.of_str(str([byte(31)]))) == "\"\\u001f\""
+	assert encode(of_str(str([byte(1)]))) == "\"\\u0001\""
+	assert encode(of_str(str([byte(15)]))) == "\"\\u000f\""
+	assert encode(of_str(str([byte(26)]))) == "\"\\u001a\""
+	assert encode(of_str(str([byte(31)]))) == "\"\\u001f\""
 
 	# 0x20 is a space and is ordinary text. One byte higher and the rule changes.
-	assert json.encode(json.of_str(str([byte(32)]))) == "\" \""
+	assert encode(of_str(str([byte(32)]))) == "\" \""
 }
 
 # ESCAPING TOO MUCH IS ALSO WRONG, and it is the half a test suite usually leaves out. JSON
@@ -74,39 +75,39 @@ fn test_encode_control_bytes_as_u00xx() {
 #[test]
 fn test_encode_leaves_alone_what_json_does_not_reserve(ctx: testing.Context) {
 	ctx.log("a solidus is ordinary; escaping it is legal JSON and is not what this does")
-	assert json.encode(json.of_str("a/b")) == "\"a/b\""
+	assert encode(of_str("a/b")) == "\"a/b\""
 
 	ctx.log("UTF-8 passes through as its own bytes — this is what carries a diagnostic's em-dash")
-	assert json.encode(json.of_str("日本語")) == "\"日本語\""
-	assert json.encode(json.of_str("café — 😀")) == "\"café — 😀\""
+	assert encode(of_str("日本語")) == "\"日本語\""
+	assert encode(of_str("café — 😀")) == "\"café — 😀\""
 }
 
 # --- encode: the shapes ------------------------------------------------------------------
 
 #[test]
 fn test_encode_scalars() {
-	assert json.encode(json.null()) == "null"
-	assert json.encode(json.of_str("")) == "\"\""
-	assert json.encode(json.decode("true")) == "true"
-	assert json.encode(json.decode("false")) == "false"
-	assert json.encode(json.decode("0")) == "0"
-	assert json.encode(json.decode("-9007199254740993")) == "-9007199254740993"
+	assert encode(null()) == "null"
+	assert encode(of_str("")) == "\"\""
+	assert encode(decode("true")) == "true"
+	assert encode(decode("false")) == "false"
+	assert encode(decode("0")) == "0"
+	assert encode(decode("-9007199254740993")) == "-9007199254740993"
 }
 
 #[test]
 fn test_encode_list() {
-	mut xs: list[json.Val] = []
-	assert json.encode(json.of_list(xs)) == "[]"
+	mut xs: list[Val] = []
+	assert encode(of_list(xs)) == "[]"
 
-	xs.append(json.of_str("a"))
-	xs.append(json.null())
-	assert json.encode(json.of_list(xs)) == "[\"a\",null]"
+	xs.append(of_str("a"))
+	xs.append(null())
+	assert encode(of_list(xs)) == "[\"a\",null]"
 
 	# Nesting, because an array of arrays is where a comma-placement bug shows up.
-	mut outer: list[json.Val] = []
-	outer.append(json.of_list(xs))
-	outer.append(json.of_list(xs))
-	assert json.encode(json.of_list(outer)) == "[[\"a\",null],[\"a\",null]]"
+	mut outer: list[Val] = []
+	outer.append(of_list(xs))
+	outer.append(of_list(xs))
+	assert encode(of_list(outer)) == "[[\"a\",null],[\"a\",null]]"
 }
 
 # THE FIELD ORDER IS THE ORDER THEY WERE PUT, and that is the module's stated reason for a
@@ -115,51 +116,51 @@ fn test_encode_list() {
 # untrue.
 #[test]
 fn test_encode_object_keeps_field_order() {
-	mut fs: list[json.Field] = []
-	assert json.encode(json.of_obj(fs)) == "{}"
+	mut fs: list[Field] = []
+	assert encode(of_obj(fs)) == "{}"
 
-	json.put_str(fs, "b", "1")
-	json.put_int(fs, "a", 2)
-	json.put_bool(fs, "c", true)
-	assert json.encode(json.of_obj(fs)) == "{\"b\":\"1\",\"a\":2,\"c\":true}"
+	put_str(fs, "b", "1")
+	put_int(fs, "a", 2)
+	put_bool(fs, "c", true)
+	assert encode(of_obj(fs)) == "{\"b\":\"1\",\"a\":2,\"c\":true}"
 
 	# Reversed input, reversed output — which is the claim. Same three keys.
-	mut rev: list[json.Field] = []
-	json.put_bool(rev, "c", true)
-	json.put_int(rev, "a", 2)
-	json.put_str(rev, "b", "1")
-	assert json.encode(json.of_obj(rev)) == "{\"c\":true,\"a\":2,\"b\":\"1\"}"
+	mut rev: list[Field] = []
+	put_bool(rev, "c", true)
+	put_int(rev, "a", 2)
+	put_str(rev, "b", "1")
+	assert encode(of_obj(rev)) == "{\"c\":true,\"a\":2,\"b\":\"1\"}"
 }
 
 # A KEY IS ESCAPED LIKE A VALUE. It is the same writer, and it is worth one test because a
 # key is the string an implementation is most tempted to write out raw.
 #[test]
 fn test_encode_escapes_keys_too() {
-	mut fs: list[json.Field] = []
-	json.put_int(fs, "a\"b\n", 1)
-	assert json.encode(json.of_obj(fs)) == "{\"a\\\"b\\n\":1}"
+	mut fs: list[Field] = []
+	put_int(fs, "a\"b\n", 1)
+	assert encode(of_obj(fs)) == "{\"a\\\"b\\n\":1}"
 }
 
 #[test]
 fn test_put_builds_a_nested_value() {
-	mut inner: list[json.Field] = []
-	json.put_str(inner, "k", "v")
+	mut inner: list[Field] = []
+	put_str(inner, "k", "v")
 
-	mut fs: list[json.Field] = []
-	json.put(fs, "o", json.of_obj(inner))
-	assert json.encode(json.of_obj(fs)) == "{\"o\":{\"k\":\"v\"}}"
+	mut fs: list[Field] = []
+	put(fs, "o", of_obj(inner))
+	assert encode(of_obj(fs)) == "{\"o\":{\"k\":\"v\"}}"
 }
 
 # --- decode -------------------------------------------------------------------------------
 
 #[test]
 fn test_decode_scalars() {
-	assert json.is_null(json.decode("null"))
-	assert json.as_int(json.decode("42")) == 42
-	assert json.as_int(json.decode("-42")) == -42
-	assert json.as_int(json.decode("0")) == 0
-	assert json.as_str(json.decode("\"hi\"")) == "hi"
-	assert json.as_str(json.decode("\"\"")) == ""
+	assert is_null(decode("null"))
+	assert as_int(decode("42")) == 42
+	assert as_int(decode("-42")) == -42
+	assert as_int(decode("0")) == 0
+	assert as_str(decode("\"hi\"")) == "hi"
+	assert as_str(decode("\"\"")) == ""
 }
 
 # WHITESPACE IS SKIPPED EVERYWHERE a value can begin or end — around the whole document,
@@ -167,17 +168,17 @@ fn test_decode_scalars() {
 # machine-written document and fails on the first hand-written one.
 #[test]
 fn test_decode_skips_whitespace_everywhere() {
-	v := json.decode(" \t\r\n { \"a\" : [ 1 , 2 ] , \"b\" : { \"c\" : 3 } } \n ")
-	assert json.as_list(json.get(v, "a")).len() == 2
-	assert json.as_int(json.walk(v, "b", "c")) == 3
+	v := decode(" \t\r\n { \"a\" : [ 1 , 2 ] , \"b\" : { \"c\" : 3 } } \n ")
+	assert as_list(get(v, "a")).len() == 2
+	assert as_int(walk(v, "b", "c")) == 3
 }
 
 #[test]
 fn test_decode_empty_object_and_array() {
-	assert json.encode(json.decode("{}")) == "{}"
-	assert json.encode(json.decode("[]")) == "[]"
-	assert json.encode(json.decode("[ ]")) == "[]"
-	assert json.as_list(json.decode("[]")).len() == 0
+	assert encode(decode("{}")) == "{}"
+	assert encode(decode("[]")) == "[]"
+	assert encode(decode("[ ]")) == "[]"
+	assert as_list(decode("[]")).len() == 0
 }
 
 # THE ESCAPES COME BACK AS THE CHARACTERS THEY STAND FOR, which is what makes the round trip
@@ -190,18 +191,18 @@ fn test_decode_empty_object_and_array() {
 # whole suite green — which is the reason each is now its own line.)
 #[test]
 fn test_decode_string_escapes() {
-	assert json.as_str(json.decode("\"a\\nb\"")) == "a\nb"
-	assert json.as_str(json.decode("\"a\\rb\"")) == "a\rb"
-	assert json.as_str(json.decode("\"a\\tb\"")) == "a\tb"
-	assert json.as_str(json.decode("\"a\\bb\"")) == f"a{str([byte(8)])}b"
-	assert json.as_str(json.decode("\"a\\fb\"")) == f"a{str([byte(12)])}b"
-	assert json.as_str(json.decode("\"a\\\"b\"")) == "a\"b"
-	assert json.as_str(json.decode("\"a\\\\b\"")) == "a\\b"
-	assert json.as_str(json.decode("\"a\\/b\"")) == "a/b"
-	assert json.as_str(json.decode("\"\\u0041\"")) == "A"
+	assert as_str(decode("\"a\\nb\"")) == "a\nb"
+	assert as_str(decode("\"a\\rb\"")) == "a\rb"
+	assert as_str(decode("\"a\\tb\"")) == "a\tb"
+	assert as_str(decode("\"a\\bb\"")) == f"a{str([byte(8)])}b"
+	assert as_str(decode("\"a\\fb\"")) == f"a{str([byte(12)])}b"
+	assert as_str(decode("\"a\\\"b\"")) == "a\"b"
+	assert as_str(decode("\"a\\\\b\"")) == "a\\b"
+	assert as_str(decode("\"a\\/b\"")) == "a/b"
+	assert as_str(decode("\"\\u0041\"")) == "A"
 
 	# The writer's output is the reader's input: every short escape survives a round trip.
-	assert json.encode(json.decode("\"\\r\\n\\t\\b\\f\"")) == "\"\\r\\n\\t\\b\\f\""
+	assert encode(decode("\"\\r\\n\\t\\b\\f\"")) == "\"\\r\\n\\t\\b\\f\""
 }
 
 # A SURROGATE PAIR IS ONE CODE POINT. A client sending an emoji sends `\ud83d\ude00`, and a
@@ -211,12 +212,12 @@ fn test_decode_string_escapes() {
 #[test]
 fn test_decode_surrogate_pair(ctx: testing.Context) {
 	ctx.log("U+1F600, written as the two halves JSON requires")
-	assert json.as_str(json.decode("\"\\ud83d\\ude00\"")) == "😀"
+	assert as_str(decode("\"\\ud83d\\ude00\"")) == "😀"
 
 	ctx.log("and the three shorter UTF-8 widths, so every branch of the encoder is asked")
-	assert json.as_str(json.decode("\"\\u0041\"")) == "A"
-	assert json.as_str(json.decode("\"\\u00e9\"")) == "é"
-	assert json.as_str(json.decode("\"\\u65e5\"")) == "日"
+	assert as_str(decode("\"\\u0041\"")) == "A"
+	assert as_str(decode("\"\\u00e9\"")) == "é"
+	assert as_str(decode("\"\\u65e5\"")) == "日"
 }
 
 # A NUMBER IS AN INTEGER AND THE FRACTION IS DROPPED. This is the module's one silent
@@ -226,17 +227,17 @@ fn test_decode_surrogate_pair(ctx: testing.Context) {
 #[test]
 fn test_decode_number_is_an_integer(ctx: testing.Context) {
 	ctx.log("a fraction is consumed and dropped, NOT rounded and NOT refused")
-	assert json.as_int(json.decode("1.9")) == 1
-	assert json.as_int(json.decode("-1.9")) == -1
-	assert json.as_int(json.decode("0.5")) == 0
+	assert as_int(decode("1.9")) == 1
+	assert as_int(decode("-1.9")) == -1
+	assert as_int(decode("0.5")) == 0
 
 	ctx.log("an exponent goes the same way — `1e3` is one, not a thousand")
-	assert json.as_int(json.decode("1e3")) == 1
-	assert json.as_int(json.decode("2E+8")) == 2
+	assert as_int(decode("1e3")) == 1
+	assert as_int(decode("2E+8")) == 2
 
 	ctx.log("and the tail is CONSUMED, so what follows it still parses")
-	assert json.as_list(json.decode("[1.5, 2]")).len() == 2
-	assert json.as_int(json.walk(json.decode("{\"a\":{\"b\":1.25}}"), "a", "b")) == 1
+	assert as_list(decode("[1.5, 2]")).len() == 2
+	assert as_int(walk(decode("{\"a\":{\"b\":1.25}}"), "a", "b")) == 1
 }
 
 # --- decode: what it refuses ---------------------------------------------------------------
@@ -247,29 +248,29 @@ fn test_decode_number_is_an_integer(ctx: testing.Context) {
 #[test]
 fn test_decode_refuses_malformed_input(ctx: testing.Context) {
 	ctx.log("nothing at all, and nothing but space")
-	testing.assert_raises(guard { json.decode("") })
-	testing.assert_raises(guard { json.decode("   ") })
+	testing.assert_raises(guard { decode("") })
+	testing.assert_raises(guard { decode("   ") })
 
 	ctx.log("a byte that begins no value")
-	testing.assert_raises(guard { json.decode("oops") })
-	testing.assert_raises(guard { json.decode("]") })
+	testing.assert_raises(guard { decode("oops") })
+	testing.assert_raises(guard { decode("]") })
 
 	ctx.log("an unfinished container")
-	testing.assert_raises(guard { json.decode("{") })
-	testing.assert_raises(guard { json.decode("[1,") })
-	testing.assert_raises(guard { json.decode("{\"a\":1") })
+	testing.assert_raises(guard { decode("{") })
+	testing.assert_raises(guard { decode("[1,") })
+	testing.assert_raises(guard { decode("{\"a\":1") })
 
 	ctx.log("an object whose key is not a string, and one with no colon")
-	testing.assert_raises(guard { json.decode("{a:1}") })
-	testing.assert_raises(guard { json.decode("{\"a\" 1}") })
+	testing.assert_raises(guard { decode("{a:1}") })
+	testing.assert_raises(guard { decode("{\"a\" 1}") })
 
 	ctx.log("a string that never closes, and one ending inside an escape")
-	testing.assert_raises(guard { json.decode("\"abc") })
-	testing.assert_raises(guard { json.decode("\"abc\\") })
+	testing.assert_raises(guard { decode("\"abc") })
+	testing.assert_raises(guard { decode("\"abc\\") })
 
 	ctx.log("a sign with no digit, and a literal that is only a prefix")
-	testing.assert_raises(guard { json.decode("-") })
-	testing.assert_raises(guard { json.decode("tru") })
+	testing.assert_raises(guard { decode("-") })
+	testing.assert_raises(guard { decode("tru") })
 }
 
 # --- the accessors are TOTAL ----------------------------------------------------------------
@@ -280,63 +281,63 @@ fn test_decode_refuses_malformed_input(ctx: testing.Context) {
 
 #[test]
 fn test_accessors_are_total() {
-	n := json.decode("42")
-	assert json.as_str(n) == ""
-	assert json.as_list(n).len() == 0
-	assert json.is_null(json.get(n, "anything"))
+	n := decode("42")
+	assert as_str(n) == ""
+	assert as_list(n).len() == 0
+	assert is_null(get(n, "anything"))
 
-	s := json.decode("\"text\"")
-	assert json.as_int(s) == 0
-	assert json.as_list(s).len() == 0
+	s := decode("\"text\"")
+	assert as_int(s) == 0
+	assert as_list(s).len() == 0
 
-	empty := json.decode("{}")
-	assert json.as_int(empty) == 0
-	assert json.as_str(empty) == ""
-	assert json.is_null(json.get(empty, "missing"))
-	assert not json.has(empty, "missing")
+	empty := decode("{}")
+	assert as_int(empty) == 0
+	assert as_str(empty) == ""
+	assert is_null(get(empty, "missing"))
+	assert not has(empty, "missing")
 }
 
 #[test]
 fn test_get_and_has() {
-	v := json.decode("{\"a\": 1, \"b\": null, \"c\": \"\"}")
-	assert json.as_int(json.get(v, "a")) == 1
-	assert json.has(v, "a")
+	v := decode("{\"a\": 1, \"b\": null, \"c\": \"\"}")
+	assert as_int(get(v, "a")) == 1
+	assert has(v, "a")
 
 	# A KEY PRESENT WITH A `null` READS AS ABSENT, because `get` is total and `has` is
 	# written on top of it. That is a real limit of a total accessor and it is asserted here
 	# rather than left for a caller to trip over.
-	assert json.is_null(json.get(v, "b"))
-	assert not json.has(v, "b")
+	assert is_null(get(v, "b"))
+	assert not has(v, "b")
 
 	# An empty string, by contrast, is present — absence is `null`, not falseness.
-	assert json.has(v, "c")
-	assert json.as_str(json.get(v, "c")) == ""
+	assert has(v, "c")
+	assert as_str(get(v, "c")) == ""
 
 	# The FIRST field of a repeated key wins, which is what a linear scan gives.
-	assert json.as_int(json.get(json.decode("{\"k\":1,\"k\":2}"), "k")) == 1
+	assert as_int(get(decode("{\"k\":1,\"k\":2}"), "k")) == 1
 }
 
 #[test]
 fn test_walk_and_walk3() {
-	v := json.decode("{\"a\": {\"b\": {\"c\": \"z\"}}}")
-	assert json.as_str(json.walk3(v, "a", "b", "c")) == "z"
-	assert json.as_str(json.get(json.walk(v, "a", "b"), "c")) == "z"
+	v := decode("{\"a\": {\"b\": {\"c\": \"z\"}}}")
+	assert as_str(walk3(v, "a", "b", "c")) == "z"
+	assert as_str(get(walk(v, "a", "b"), "c")) == "z"
 
 	# A path that leaves the object part way through answers `null` rather than aborting —
 	# the totality of `get`, one level up.
-	assert json.is_null(json.walk(v, "a", "nope"))
-	assert json.is_null(json.walk3(v, "nope", "b", "c"))
-	assert json.is_null(json.walk3(v, "a", "b", "nope"))
+	assert is_null(walk(v, "a", "nope"))
+	assert is_null(walk3(v, "nope", "b", "c"))
+	assert is_null(walk3(v, "a", "b", "nope"))
 }
 
 #[test]
 fn test_as_list_elements() {
-	xs := json.as_list(json.decode("[1, \"two\", null, [3]]"))
+	xs := as_list(decode("[1, \"two\", null, [3]]"))
 	assert xs.len() == 4
-	assert json.as_int(xs[0]) == 1
-	assert json.as_str(xs[1]) == "two"
-	assert json.is_null(xs[2])
-	assert json.as_list(xs[3]).len() == 1
+	assert as_int(xs[0]) == 1
+	assert as_str(xs[1]) == "two"
+	assert is_null(xs[2])
+	assert as_list(xs[3]).len() == 1
 }
 
 # --- the round trip -------------------------------------------------------------------------
@@ -346,14 +347,14 @@ fn test_as_list_elements() {
 # the text is the thing callers actually depend on anyway.
 #[test]
 fn test_round_trip_is_stable() {
-	mut fs: list[json.Field] = []
-	json.put_str(fs, "msg", "a \"quoted\" line\nwith\ttabs")
-	json.put_int(fs, "n", -12)
-	json.put_bool(fs, "ok", false)
-	json.put(fs, "xs", json.of_list([json.of_str("日本語"), json.null()]))
+	mut fs: list[Field] = []
+	put_str(fs, "msg", "a \"quoted\" line\nwith\ttabs")
+	put_int(fs, "n", -12)
+	put_bool(fs, "ok", false)
+	put(fs, "xs", of_list([of_str("日本語"), null()]))
 
-	once := json.encode(json.of_obj(fs))
-	assert json.encode(json.decode(once)) == once
+	once := encode(of_obj(fs))
+	assert encode(decode(once)) == once
 
 	# And the text is what a reader would write by hand.
 	assert strings.contains(once, "\"msg\":\"a \\\"quoted\\\" line\\nwith\\ttabs\"")
@@ -367,9 +368,9 @@ fn test_round_trip_is_stable() {
 #[test]
 fn test_round_trip_normalises_escapes_and_drops_fractions(ctx: testing.Context) {
 	ctx.log("an escape decodes to its character and re-encodes as UTF-8")
-	assert json.encode(json.decode("\"\\u00e9\"")) == "\"é\""
-	assert json.encode(json.decode("\"\\u0041\"")) == "\"A\""
+	assert encode(decode("\"\\u00e9\"")) == "\"é\""
+	assert encode(decode("\"\\u0041\"")) == "\"A\""
 
 	ctx.log("a fraction is gone for good — text to value is lossy, value to text is not")
-	assert json.encode(json.decode("1.5")) == "1"
+	assert encode(decode("1.5")) == "1"
 }

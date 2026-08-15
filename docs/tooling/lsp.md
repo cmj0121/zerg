@@ -440,12 +440,17 @@ the **emitter's**, not the protocol's: the compiler's checks live inside the low
 only way to reach them was `emit_files_diag`, which lowers the whole program to C first.
 
 `check_files_diag` is that walk with the C dropped rather than accumulated, and the same check now
-takes **4.9 s and peaks at 0.32 GB**. Twenty checks in one session: before, SIGKILL after the third;
-after, twenty published and 0.59 GB. The saving is not the size of the C — 3.6 MB — but the shape of
-building it: `defs = defs + c_fn(…)` copies everything emitted so far on every one of ~1500 steps.
-`make check-equal` is what keeps the two paths honest, and it compares their diagnostics byte for
-byte because a check that finds LESS than the build finds is an editor showing a clean buffer for a
-file that will not compile.
+takes **4.9 s and peaks at 0.32 GB**. In one session: before, SIGKILL after the third check; after,
+sixty published, 2.9 GB, and no slowdown across them. The saving is not the size of the C — 3.6 MB —
+but the shape of building it: `defs = defs + c_fn(…)` copies everything emitted so far on every one
+of ~1500 steps. `make check-equal` is what keeps the two paths honest, and it compares their
+diagnostics byte for byte because a check that finds LESS than the build finds is an editor showing a
+clean buffer for a file that will not compile.
+
+A residual remains and is worth writing down rather than rediscovering: the server still grows by
+roughly 25 MB per check — 0.32 GB after one, 2.0 GB after twenty, 2.9 GB after sixty — so a session
+of several hundred would reach the same ceiling by a slower road. That is retention per check and not
+the accumulation this closed; it is a different measurement and a different fix.
 
 **The time half is not.** Five seconds is still a check per keystroke-batch, and roughly half of it
 is that `publishDiagnostics` walks the program TWICE — once for the errors and once for the `L5xx`

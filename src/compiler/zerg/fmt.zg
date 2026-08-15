@@ -2958,7 +2958,7 @@ fn fmt_sorted(paths: list[str]) -> list[str] {
 # what the driver's resolver does, so the test is on that segment.
 fn fmt_is_stdlib(path: str) -> bool {
 	name := last_segment(path)
-	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "strconv", "strings", "testing", "time"] {
+	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "sha256", "strconv", "strings", "testing", "time"] {
 		return true if m == name
 	}
 	return false

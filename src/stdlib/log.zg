@@ -109,24 +109,32 @@ fn rank(l: Level) -> int {
 	}
 }
 
-# parse reads a level by NAME — `debug`, not `1`. A number would pin the discriminants the
-# rest of this module is careful never to consult, and a name is what a person types into an
-# environment variable anyway. Anything else is `nil`, so a caller decides what an
+# parse_level reads a level by NAME — `debug`, not `1`. A number would pin the discriminants
+# the rest of this module is careful never to consult, and a name is what a person types into
+# an environment variable anyway. Anything else is `nil`, so a caller decides what an
 # unrecognised setting means rather than having this module guess.
+#
+# IT IS `parse_level` AND NOT `parse` for the reason `at_level` is not `at`, and this one was
+# measured after the shorter name was written: a `pub` name has no package to be unique
+# within, so `pub fn parse` here is `E705` against a module-PRIVATE `fn parse` anywhere in the
+# program. A standard library module that exported `parse` would take that word away from
+# every program importing it, and `parse` is the commonest private helper name there is. (The
+# module already spends `new`, `info`, `warn` and `error` the same way, which is a language
+# gap rather than a choice — but it is not a reason to spend one more.)
 #
 # IT IS A DIVERGE CHAIN AND NOT A `match`, and both halves of that are language rules rather
 # than taste: a `match` arm is an expression and may not hold a `return` (`E605`), and every
 # arm of one must answer the SAME type (`E322`), so `Level` and `nil` do not unify.
 #
 # ```zerg
-# log.new().level(log.parse("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
-# log.new().level(log.parse("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
+# log.new().level(log.parse_level("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
+# log.new().level(log.parse_level("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
 # ```
 # ```output
 # true
 # false
 # ```
-pub fn parse(s: str) -> Level? {
+pub fn parse_level(s: str) -> Level? {
 	return Level.TRACE if s == "trace"
 	return Level.DEBUG if s == "debug"
 	return Level.INFO if s == "info"
@@ -294,7 +302,7 @@ pub fn new() -> Logger {
 # would elsewhere: the only other way is `log.install(…)` in `main`, and the person who wants
 # a debug line is often not the person who can rebuild.
 fn env_level() -> Level {
-	return parse(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
+	return parse_level(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
 }
 
 # env_format is `ZERG_LOG`, and anything it does not recognise is `pretty`.
@@ -600,8 +608,8 @@ fn short_name(lvl: Level) -> str {
 }
 
 # level_name is the level as a JSON line spells it — the whole word, lower case, which is what
-# every log shipper this would be read by already expects. It is also what `parse` reads, so
-# the two are inverses and a round trip through an environment variable is exact.
+# every log shipper this would be read by already expects. It is also what `parse_level` reads,
+# so the two are inverses and a round trip through an environment variable is exact.
 fn level_name(lvl: Level) -> str {
 	return match lvl {
 		Level.TRACE => "trace"

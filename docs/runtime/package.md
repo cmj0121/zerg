@@ -97,9 +97,17 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 **source order** within a module. This whole ordering — topological, with the module-name-then-source
 tie-break — holds.
 
-Both halves of that are built. A constant whose initializer reads one declared **after** it gets the
-value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields `A == 11` — and a cycle is a
-named refusal: _these constants depend on each other and none can be given a value first_.
+Both halves of that are built for a **direct** read. A constant whose initializer names one declared
+**after** it gets the value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields
+`A == 11` — and a cycle is a named refusal: _E732 these constants depend on each other and none can be
+given a value first_.
+
+> **[deviation]** The reads-from graph is built from the names an initializer **writes**, so a read that
+> goes **through a call** is not an edge. `const A: str = mk()` above `const B: str = "x"`, with `mk()`
+> reading `B`, leaves `A` holding the **zero value** with no diagnostic at all — measured, `A` prints
+> empty. It is the ordering rule's one silent-wrong, and the reason `src/stdlib/log.zg` declares the
+> constants its own initializers reach **above** them and has `scripts/log-check.sh` hold that order:
+> nothing in the language does.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent

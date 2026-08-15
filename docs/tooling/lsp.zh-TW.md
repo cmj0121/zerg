@@ -29,7 +29,7 @@ runtime bounded leaf 一次讀取量的 body。那是另一種、也更安靜的
 ## 它住在哪裡
 
 `src/compiler/lsp/`——自成一個 module,像任何其他消費者一樣跨 `pub` 邊界 import `src/compiler/zerg/`,由 `zergc.zg`
-裡多一行 `.sub(lsp_cmd())` 接上。
+裡多一行 `.sub(cmd.lsp_cmd())` 接上。啟動它的那個命令是 `src/compiler/cmd/lsp_cmd.zg`,跟另外五個放在一起。
 
 **一個 binary,不是兩個。** 子命令讓編譯器與 server 之間的版本歪斜**物理上不可能**——它們是同一個檔案——而且編輯器不
 需要 PATH 上多任何東西。

@@ -2,8 +2,8 @@
 # the terminal is told.
 #
 # The other three quarters of the runner are beside it, one per question: which directories
-# hold a test (`test_pkg.zg`), what one package's run is (`test_fixture.zg`), and the driver
-# source that plan is compiled as (`test_driver.zg`).
+# hold a test (`test_pkg.zg`), the plan one package's run is (`test_fixture.zg`), and the
+# driver source that plan is compiled as (`test_driver.zg`).
 
 import (
 	"cli"

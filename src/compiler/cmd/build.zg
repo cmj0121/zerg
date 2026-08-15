@@ -4,8 +4,8 @@
 #
 # Loading the program, keying a unit's cached object, and the batched compile-and-link are
 # `unit.zg`'s, because `zerg test` is a build too; the argument vectors cc is handed are
-# `layout.zg`'s. What is left here is the one-shot `compile_to`, which `--emit lib` and
-# `--emit bin` reach and nothing else does.
+# `layout.zg`'s. What is left here is the one-shot `compile_to`, which only `--emit lib`
+# reaches — `--emit bin` goes through `link_program`, for the reason written beside it.
 
 import (
 	"cli"

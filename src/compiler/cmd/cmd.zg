@@ -12,6 +12,6 @@
 # line rather than unpicking it.
 #
 # THE FILE IS THE MODULE'S NAME AND DECLARES NOTHING, which is `doc.go`'s job in Go. It is
-# not called `doc.zg` because `zerg doc` is a command this tool is going to grow, and every
-# other file here is named after the command it holds — the one name a header may not take
-# is one a command will want.
+# not called `doc.zg` because `zerg doc` is a command this tool is going to grow, and a file
+# that holds a command here is named after it — the one name a header may not take is one a
+# command will want.

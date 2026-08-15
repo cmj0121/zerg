@@ -544,10 +544,16 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 | `positional(name, help) -> Argument`                    | a positional argument                            |
 | `Command.opt` / `.required` / `.flag` / `.pos`          | declare an argument inline, without building one |
 | `Command.add(a)` / `.sub(c)` / `.run(f)`                | attach an argument, a sub-command, its function  |
+| `Command.exclusive(xs)` / `.one_of(xs)`                 | at most one of a set / exactly one               |
 | `Command.version` / `.usage` / `.epilog` / `.no_help`   | what `--help` and `--version` say                |
-| `Command.exec(args: list[str]) -> int`                  | parse, dispatch, and answer the process's status |
+| `Command.render() -> str`                               | the help text, for a program that places it      |
+| `Command.exec(argv: list[str]) -> int`                  | parse, dispatch, and answer the process's status |
 | `Ctx.has` / `.get` / `.all` / `.int_of` / `.args`       | read what the parse produced                     |
+| `Ctx.path() -> str`                                     | the command names that led here, joined          |
 | `Argument.required` / `.repeated` / `.env` / `.section` | narrow a declared argument                       |
+
+`one_of` is a name rather than a flag on `exclusive` because "at most one" and "exactly one" are two
+constraints, and `.exclusive(xs, true)` says neither of them at a call site.
 
 ## `atomic`
 
@@ -558,7 +564,8 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 > does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
 > so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
 > ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
-> exist either. Share state across coroutines with a channel until this lands.
+> exist either, and the module carries a second, `Atomic[T]`-shaped surface (`new_atomic`) waiting on the
+> same thing. Share state across coroutines with a channel until this lands.
 >
 > It stays in the table rather than being taken out of the shipped set, because this compiler resolves
 > the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
@@ -593,6 +600,11 @@ A failed claim raises `AssertionError`, and nothing else does — which is how `
 | Function                                | Summary                                  |
 | --------------------------------------- | ---------------------------------------- |
 | `assert_raises[T](r: Result[T]) -> Err` | answer the `Err` a `guard`ed call raised |
+
+**The rest of the module is the runner's, not a test's.** `Event`, `Outcome`, `context`, `finished` and
+`collect` are `pub` because the driver `zerg test` generates is a file **in the package under test**, so it
+reaches them the way any importer would. A test body calls none of them; they are on this page so that a
+reader who meets one in the module does not take it for a helper they were meant to use.
 
 `assert_raises` is not an assertion and stays a function: it asks what an already-finished call raised. It
 takes the **`guard` written at the point of the call** and hands back the error, so the kind is asked with

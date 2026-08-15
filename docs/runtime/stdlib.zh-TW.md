@@ -493,10 +493,16 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 | `positional(name, help) -> Argument`                    | 位置引數                            |
 | `Command.opt` / `.required` / `.flag` / `.pos`          | 就地宣告引數，不必先建一個          |
 | `Command.add(a)` / `.sub(c)` / `.run(f)`                | 掛上引數、子命令、它的函式          |
+| `Command.exclusive(xs)` / `.one_of(xs)`                 | 一組之中至多一個 / 恰好一個         |
 | `Command.version` / `.usage` / `.epilog` / `.no_help`   | `--help` 與 `--version` 說什麼      |
-| `Command.exec(args: list[str]) -> int`                  | parse、dispatch，並回答程序的狀態碼 |
+| `Command.render() -> str`                               | help 文字，給想自己安排位置的程式   |
+| `Command.exec(argv: list[str]) -> int`                  | parse、dispatch，並回答程序的狀態碼 |
 | `Ctx.has` / `.get` / `.all` / `.int_of` / `.args`       | 讀出這次 parse 的結果               |
+| `Ctx.path() -> str`                                     | 一路走到這裡的命令名，串起來        |
 | `Argument.required` / `.repeated` / `.env` / `.section` | 收窄一個已宣告的引數                |
+
+`one_of` 是一個名字、而不是 `exclusive` 上的一個旗標，因為「至多一個」與「恰好一個」是兩個約束，而
+`.exclusive(xs, true)` 在呼叫處哪一個都沒說出來。
 
 ## `atomic`
 
@@ -506,7 +512,8 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 > **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十五個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
 > ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
-> 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。
+> 也不存在；模組裡另有一組 `Atomic[T]` 形狀的表面（`new_atomic`），等的是同一件事。在這件事落地之前，跨 coroutine
+> 的共享狀態請走 channel。
 >
 > 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
 > `src/stdlib/` 的模組同時也離開了 `zerg fmt --check` 與其餘的 self-source 集合，會在 generics 到來之前無人閱讀
@@ -537,6 +544,11 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 | 函式                                    | 摘要                                         |
 | --------------------------------------- | -------------------------------------------- |
 | `assert_raises[T](r: Result[T]) -> Err` | 交回一次 `guard` 包住的呼叫所 raise 的 `Err` |
+
+**模組其餘的部分屬於 runner，不屬於一個測試。** `Event`、`Outcome`、`context`、`finished` 與 `collect` 之所以是
+`pub`，是因為 `zerg test` 產生的那個 driver 是一個**位於受測 package 內**的檔案，所以它像任何 importer 一樣構得到
+它們。測試本體不會呼叫其中任何一個；它們列在這裡，是為了讓在模組裡遇上它們的讀者，不會誤以為那是給自己用的輔助
+函式。
 
 `assert_raises` 不是斷言,所以它仍是函式:它問的是一個**已經結束**的呼叫 raise 了什麼。它拿的是**呼叫當下寫的那個
 `guard`**,並把錯誤交回來,所以種類是用語言自己的 `is` 去問,而不是傳進去——在 Zerg 裡型別不是值,

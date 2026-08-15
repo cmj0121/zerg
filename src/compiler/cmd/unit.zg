@@ -1,0 +1,327 @@
+# A UNIT is what gets compiled to one object, and this is everything that happens to one:
+# loading a program's units in dependency order, keying a unit's cached object by the C it
+# emitted, compiling the units that have no object yet in parallel, and linking the result.
+#
+# `build` and `test` are both builds — a test build is a build of MORE FILES, not of a
+# relaxed language — so the emit-cache-link sequence is written once here rather than twice
+# beside them.
+
+import (
+	"io"
+	"sha256"
+
+	"zerg"
+)
+
+# unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
+# renderer looks a source up in. A unit knows its own files; a finding knows one path.
+fn unit_srcs(units: list[Unit]) -> list[str] {
+	mut out: list[str] = []
+	for u in units {
+		for s in u.srcs {
+			out.append(s)
+		}
+	}
+	return out
+}
+
+fn unit_paths(units: list[Unit]) -> list[str] {
+	mut out: list[str] = []
+	for u in units {
+		for p in u.paths {
+			out.append(p)
+		}
+	}
+	return out
+}
+
+# link_program builds a program the way a project is built: every unit compiled to its
+# own object, then one link. A unit whose object is already in the cache is not compiled
+# again — which is the whole point of splitting the build up, since most rebuilds change
+# one module and leave the rest exactly as they were.
+fn link_program(entry: str, output: str, jobs: int) {
+	link_units(load_units(entry), entry, output, jobs)
+}
+
+# link_units is link_program with the units already in hand, and it is split out for the ONE
+# caller that does not get them from an entry file: a test build's entry unit is a directory's
+# files plus a generated driver, which no import path names. Everything after the load is the
+# same work on the same values, so it is the same function rather than a second copy of the
+# emit-cache-link sequence that would drift the moment one of them changed.
+#
+# `entry` is still passed, because the no-`fn main` finding below is about a FILE and has to
+# name one.
+fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
+	# BEFORE anything is parsed: a token the lexer could not read is an error about text,
+	# and a parser handed the wreckage can only say something untrue about it
+	mut lex: list[zerg.Diag] = []
+	lex_diags_of(unit_srcs(units), unit_paths(units), lex)
+	report_diags(lex, unit_srcs(units), unit_paths(units))
+
+	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
+	# units used to re-parse the whole program N times, which cost more than the C
+	# compiler did.
+	mut trees: list[zerg.File] = []
+	for u in units {
+		trees.append(zerg.merge_files_at(u.srcs, u.paths))
+	}
+
+	prog := zerg.merge_asts(trees)
+	mut diags: list[zerg.Diag] = []
+	mut objs: list[str] = []
+	mut todo_c: list[str] = []
+	mut todo_o: list[str] = []
+	mut ui := 0
+	for ui < units.len() {
+		code := zerg.emit_unit_at(prog, trees[ui], diags)
+		obj := cache_path(unit_key(code))
+		objs.append(obj)
+		if not __zrt_exists(obj) {
+			cpath := obj + ".c"
+			guard {
+				io.write_file(cpath, bytearray(code))
+			}
+			todo_c.append(cpath)
+			todo_o.append(obj)
+		}
+		ui = ui + 1
+	}
+
+	# every unit is emitted before anything is reported, so one run answers for the whole
+	# program rather than for its first bad module
+	report_diags(diags, unit_srcs(units), unit_paths(units))
+
+	# A program is a build rooted at an entry file that DEFINES `fn main`
+	# (docs/runtime/package.md; GRAMMAR group 10) — grammatically a main-less source is
+	# still Zerg, so no earlier stage objects to it, and nothing used to enforce the build
+	# rule: the emitter wrote no wrapper and the first complaint was the linker's
+	# `undefined symbol _main`, against generated code nobody wrote. The finding is about
+	# the FILE, not a line in it, so it points at 1:1 — where a `fn main` would begin.
+	# `--emit lib` stays main-less on purpose: an object file is what a module is for.
+	#
+	# It is asked HERE because here is where the answer already is: `trees` holds every
+	# unit parsed once, and the entry is the LAST of them — load_unit appends a unit after
+	# the ones it imports, which is the same fact `--emit lib` reads it by. Asked in the
+	# driver it cost a second read of the entry off disk and a second parse of it.
+	if not zerg.c_has_main(trees[trees.len() - 1]) {
+		mut nomain: list[zerg.Diag] = []
+		nomain.append(zerg.diag_at(entry, 1, 1, "E501", "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		report_diags(nomain, unit_srcs(units), unit_paths(units))
+	}
+
+	# The runtime is compiled the same way, and cached the same way. It changes far less
+	# often than the program does, so recompiling its ten translation units on every link
+	# was the largest thing a rebuild was paying for.
+	for rc in rt_sources() {
+		obj := cache_path(file_key(rc))
+		objs.append(obj)
+		if not __zrt_exists(obj) {
+			todo_c.append(rc)
+			todo_o.append(obj)
+		}
+	}
+	compile_batch(todo_c, todo_o, jobs)
+	if __zrt_exec(link_objs_argv(objs, output)) != 0 {
+		io.ewrite("zerg: link failed\n")
+		__zrt_exit(1)
+	}
+}
+
+# file_key hashes a file the cache is keyed on. The runtime header goes into the key
+# beside the source, because every runtime unit includes it and a change there changes
+# what the object means.
+fn file_key(path: str) -> str {
+	mut body := ""
+	guard {
+		body = str(io.read_file(path)) + str(io.read_file(rt_dir() + "/zergrt.h"))
+	}
+	return unit_key(body)
+}
+
+# link_objs_argv links objects only — everything was compiled beforehand.
+fn link_objs_argv(objs: list[str], output: str) -> list[str] {
+	mut argv: list[str] = []
+	argv.append(cc_bin())
+	argv.append(cc_std())
+
+	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
+	# invocations that compile, not to this one.
+	argv.append("-o")
+	argv.append(output)
+	for o in objs {
+		argv.append(o)
+	}
+	return argv
+}
+
+# compile_batch runs the cc invocations, `jobs` of them at a time. Each unit is
+# independent — separate compilation is what made that true — so the only ordering that
+# matters is that they all finish before the link.
+#
+# It fills a batch, waits for the batch, then starts the next. A sliding window would keep
+# every core busy at the edges; batching keeps the bookkeeping to two lists, and with a
+# handful of units per build the difference is not what anyone is waiting on.
+fn compile_batch(cpaths: list[str], opaths: list[str], jobs: int) {
+	mut running: list[int] = []
+	mut i := 0
+	for i < cpaths.len() {
+		pid := __zrt_proc_spawn(cc_object_argv(cpaths[i], opaths[i]))
+		if pid < 0 {
+			io.ewrite("zerg: cannot start cc\n")
+			__zrt_exit(1)
+		}
+		running.append(pid)
+		i = i + 1
+		if running.len() >= jobs {
+			reap(running)
+			running = []
+		}
+	}
+	reap(running)
+}
+
+# reap waits for every child in the batch and fails the build if any cc did.
+fn reap(pids: list[int]) {
+	mut bad := false
+	for p in pids {
+		if __zrt_proc_wait(p) != 0 {
+			bad = true
+		}
+	}
+	if bad {
+		io.ewrite("zerg: cc failed\n")
+		__zrt_exit(1)
+	}
+}
+
+# --- the build cache -----------------------------------------------------------------------
+#
+# The cache is keyed on CONTENT, not on timestamps: the same emitted C always compiles to
+# the same object, which is a property the self-host fixpoint already proves. So a unit's
+# key is a hash of the C it emitted — which folds in its own source, everything it can see,
+# and the compiler that produced it, since a change to any of those changes the C.
+#
+# And of the two inputs to `cc` that are not downstream of the C, so are the two things the
+# C cannot stand in for. The DIALECT: without it, building the same program under c99 after
+# building it under c17 is a cache hit that hands back the c17 objects and reports success —
+# a dialect gate that never compiled anything in the dialect it names. The COMPILER itself:
+# `cc` is a name, and the file it resolves to changes when $CC changes, when $PATH changes,
+# and when a toolchain is installed beside the old one — without it, switching compilers
+# reads back the objects the other one built.
+#
+# What goes in is the RESOLVED PATH (cc_bin), not the compiler's version string: a version
+# needs the child's stdout, and this runtime spawns a child without reading one back. So an
+# upgrade IN PLACE — same path, new build — is the case this key still cannot see.
+
+# cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
+# cannot be created is not fatal: the build carries on without one.
+fn cache_dir() -> str {
+	dir := env_or("ZERG_CACHE", join_path(zerg_root(), ".zerg-cache"))
+	__zrt_mkdir(dir)
+	return dir
+}
+
+fn cache_path(key: str) -> str {
+	return join_path(cache_dir(), key + ".o")
+}
+
+# unit_key names a unit's cached object by the SHA-256 of everything that decides what
+# that object is: the C, and the compiler and dialect it will be compiled by.
+#
+# It was FNV-1a over the same bytes, with the LENGTH glued on beside it — a 32-bit hash is
+# a cheap guard and not a proof, and the length was there to make the guard less bad. Two
+# units colliding link the WRONG OBJECT, which is a build that succeeds and a program that
+# is not the program: the failure a cache key exists to make impossible, answered with
+# "far less likely". A digest is the answer, and the standard library has one now
+# (`sha256`, pure Zerg, checked against FIPS 180-4's vectors and against the system tool).
+fn unit_key(code: str) -> str {
+	return sha256.hex(bytearray(f"{cc_bin()}\n{cc_std()}\n{code}"))
+}
+
+# --- compilation units --------------------------------------------------------------------
+#
+# A UNIT is what gets compiled to one object: a module. A file module is one unit of one
+# file; a directory module is one unit of several, because its files share a scope and
+# cannot be split. Separate compilation is unit-by-unit, which is what makes a build
+# cacheable (a unit's object survives a change elsewhere) and parallelizable (units with
+# no dependency between them can compile at once).
+
+# Unit is one module: the name it is known by (its import path, or the entry file's path)
+# and the sources that make it up.
+struct Unit {
+	pub name: str
+	pub srcs: list[str]
+
+	# paths is where each of `srcs` was read from, in the same order. A unit is what a
+	# build compiles, so this is the only place the file a statement came from is still
+	# known — by the time the trees are merged into a whole-program view, nothing else
+	# remembers.
+	pub paths: list[str]
+}
+
+# load_units returns every unit of the program, dependencies before dependents, the entry
+# last. A unit is loaded once however many modules import it.
+fn load_units(entry: str) -> list[Unit] {
+	mut one: list[str] = []
+	one.append(entry)
+	return load_units_of(one, entry, dir_of(entry))
+}
+
+# load_units_of is load_units for an entry unit whose FILES are named directly rather than
+# resolved from one path. A test build is the only caller: its entry unit is a directory's
+# sources — the `*_test.zg` included, which is the whole of what a test build is — plus the
+# driver `zerg test` generated, and no import path names that set.
+fn load_units_of(files: list[str], name: str, from_dir: str) -> list[Unit] {
+	mut seen: list[str] = []
+	mut units: list[Unit] = []
+	mut root: list[str] = []
+	load_unit(files, name, from_dir, seen, root, units)
+	return units
+}
+
+# `stack` is the path DOWN to this unit, and it is a separate list from `seen` because the two
+# answer different questions — see chk_import_cycle. It arrives BY VALUE, which is what saves
+# a pop: each frame appends its own name to its own copy, so unwinding is the return.
+fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+	mut here := stack
+	here.append(name)
+
+	for s in seen {
+		return if s == name
+	}
+	seen.append(name)
+	mut srcs: list[str] = []
+	mut paths: list[str] = []
+
+	# NO `guard` HERE. It used to wrap this, so a file that could not be READ or could not
+	# be LEXED was silently dropped from the unit — and a unit whose only source was dropped
+	# is an empty program, which emits nothing and succeeds. `zerg build -o app prog.zg` on a
+	# file with a bad f-string exited 0, wrote no binary, and said not one word; a Makefile or
+	# a CI step reads that as a build.
+	#
+	# Both failures already carry their own sentence — io.read_file names the path, lex_check
+	# names the lexical rule and where — so letting them out is what puts the real reason in
+	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
+	for f in files {
+		src := read_source(f)
+		lex_check(src, f)
+		srcs.append(src)
+		paths.append(f)
+	}
+
+	# indexed, because the import scan is a full parse and so the FIRST one a source
+	# meets: a refusal raised in it must already carry the file the place names, and
+	# `paths` rides beside `srcs` row for row
+	mut si := 0
+	for si < srcs.len() {
+		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
+			im := imd.path
+			chk_test_import(imd)
+			chk_unbuilt_module(imd)
+			chk_import_cycle(here, im)
+			load_unit(module_files(imd, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
+		}
+		si = si + 1
+	}
+	units.append(Unit(name, srcs, paths))
+}

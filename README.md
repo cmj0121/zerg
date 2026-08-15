@@ -91,7 +91,7 @@ platform C library and nothing else — is fixed by both the specification and i
 **standard library** (`src/stdlib/*.zg`) is **pure Zerg** over that floor, bound only by its interface:
 `io.read_file` loops the runtime's syscall leaves, and `math.sqrt` is a Zerg algorithm, never a libm
 binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`, `ascii`, `cli`,
-`strconv`, `time`, `math`, `rand`, `testing` — are reached with `import "<name>"`.
+`strconv`, `json`, `log`, `sha256`, `time`, `math`, `rand`, `testing` — are reached with `import "<name>"`.
 
 ## Documentation
 

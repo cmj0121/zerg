@@ -57,6 +57,8 @@ the form they will take.)
 | [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`            |
 | [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
 | [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
+| [`json`](#json)       | `import "json"`    | reading and writing JSON, with one escaper        |
+| [`log`](#log)         | `import "log"`     | structured logging, as a chained builder          |
 | [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
@@ -99,13 +101,21 @@ binary was built for. The program's own arguments arrive as `fn main(args: list[
 exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
 of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
 
-| Function                | Summary                                              |
-| ----------------------- | ---------------------------------------------------- |
-| `env(key: str) -> str?` | an environment variable's value, or `nil` when unset |
-| `exit(code: int)`       | terminate the process with `code` (does not return)  |
-| `run(argv: list[str])`  | run `argv[0]` (PATH-searched), wait, `-> int` status |
-| `platform() -> str`     | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
-| `arch() -> str`         | target CPU — `"arm64"`, `"x86_64"`, …                |
+| Function                  | Summary                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `env(key: str) -> str?`   | an environment variable's value, or `nil` when unset |
+| `exit(code: int)`         | terminate the process with `code` (does not return)  |
+| `run(argv: list[str])`    | run `argv[0]` (PATH-searched), wait, `-> int` status |
+| `platform() -> str`       | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
+| `arch() -> str`           | target CPU — `"arm64"`, `"x86_64"`, …                |
+| `isatty(fd: int) -> bool` | is this descriptor a terminal (0 in, 1 out, 2 err)   |
+
+**`isatty` is about the DEVICE and nothing else.** Use it to choose a **rendering** — colour at a terminal,
+plain into a pipe — and never a **format**: output that changes shape when it is redirected cannot be read
+the same way twice, and a log file that is JSON on one machine and columns on another is worse than either.
+[`log`](#log) follows exactly that line — colour asks this, and only `ZERG_LOG` picks the format. A
+descriptor that is not open is not a terminal, so it answers `false` rather than raising; it is total, which
+matters on a path where an abort would mean dying over escape codes.
 
 ## `strings`
 
@@ -186,6 +196,44 @@ separately diagnosed this phase (parse bounded text).
 | `to_string(n: int, base: int) -> str`   | render `n` in `base`, lowercase, INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`, else `ValueError`        |
 
+## `json`
+
+Reading and writing JSON. It is **one implementation on purpose**: the language server and the logger both
+write JSON, and two escapers drift — the one that drifts is the one nobody is reading transcripts of. It
+lived at `src/compiler/lsp/json.zg` until it had a second caller.
+
+A value is a `Val`, and an object is a **`list[Field]`** rather than a map. A list keeps the order the fields
+were put in, so the bytes are a function of the value alone — which is what makes a transcript diffable and a
+log line greppable. `Val`'s variants are not public (an enum's variants cannot be constructed from outside
+its module), so the way in is the constructors and the way out is the accessors. There is no `fields()`: a
+`list[Field]` is not a variant, so a caller writes `mut fs: list[json.Field] = []`.
+
+| Function                                              | Summary                                             |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `encode(v: Val) -> str`                               | the value as JSON text — one line, fields in order  |
+| `decode(s: str) -> Val`                               | JSON text as a value; **raises** on malformed input |
+| `get(v: Val, key: str) -> Val`                        | the value at `key`, or `Null`                       |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | a two- or three-key path in one call                |
+| `has(v: Val, key: str) -> bool`                       | present, and not `null`                             |
+| `as_str` / `as_int` / `as_list`                       | the payload, or `""` / `0` / `[]`                   |
+| `is_null(v: Val) -> bool`                             | this value is JSON `null`                           |
+| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | build a `Val`                                       |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | append a field to a `list[Field]`                   |
+
+**The accessors are TOTAL.** Asking a number for its string gives `""`, and asking a non-object for a key
+gives `Null` — deliberate for input that comes from another program, where a field of the wrong shape should
+get a default and a reply rather than an abort. Where a missing field is genuinely fatal, ask `has`. One
+consequence to know: a key present with a `null` reads as **absent**, because `has` is written on `get`.
+
+**Numbers are integers.** `Val` has no float variant, so `decode("1.5")` is `Int(1)` — the fraction and any
+exponent are consumed and **dropped**, not refused. That was the shape the language server needed and it has
+not changed; it is written here because a reader who is not told will find out from a wrong answer.
+
+**`encode` escapes what JSON reserves and nothing else** — the two delimiters, the five short escapes, and a
+control byte below `0x20` as `\u00XX`. Everything at `0x20` and above passes through, which is what carries
+UTF-8 unchanged: a multi-byte code point is already legal JSON text. So `decode` then `encode` is not
+byte-identical — `"\u00e9"` comes back as the character — while `encode` then `decode` is stable.
+
 ## `sha256`
 
 SHA-256 as specified by **FIPS 180-4**, in pure Zerg over `uint` and the bitwise operators — no libcrypto,
@@ -201,19 +249,153 @@ a file changed, or to key a cache; do not use it to check a password. `make sha2
 standard's known-answer vectors and to the system tool over random inputs — the oracle cannot check it,
 since both compilers would be running this same source.
 
+## `log`
+
+Structured logging, as a **chained builder**:
+
+```zerg
+log.info().str("file", path).int("line", n).msg("compiling")
+```
+
+The shape is not fashion — it is the one that works in **this** language. There are no varargs, so a field is
+one call; there is no `any`, so `str` takes a `str` and `int` takes an `int`; there is no generic struct, so
+the builder is one concrete type. Any other shape waits on at least two of the three.
+
+It is also the answer to **lazy evaluation**. `log.debug()` at a level that is off answers a **dead** entry:
+every field method returns at once, nothing is formatted, nothing is allocated, and `msg` writes nothing. The
+caller hands over typed values instead of a string it built first, so the work a disabled line would have done
+never happens rather than being thrown away.
+
+What is still paid is evaluating the **arguments** — `expensive()` in `.str("dump", expensive())` runs either
+way, because Zerg evaluates arguments before the call. That is why `enabled` is public:
+
+```zerg
+if log.enabled(log.DEBUG) {
+ log.debug().str("dump", expensive()).msg("state")
+}
+```
+
+### The two surfaces
+
+There is a **global logger**, configured by function and used with no plumbing, and a **constructor** for one
+you hold and pass. They are not two implementations: the global **is** an instance, held in this module's own
+cell, so every field method, every level check and every writer exists once.
+
+| Function                               | Summary                                              |
+| -------------------------------------- | ---------------------------------------------------- |
+| `new() -> Logger`                      | a logger at `INFO` writing to standard error         |
+| `set_level(n: int)`                    | configure the global logger                          |
+| `set_sink(sk: Sink)`                   | where the global logger's lines go                   |
+| `set_format(n: int)`                   | `FMT_PRETTY` or `FMT_JSON`, over `ZERG_LOG`          |
+| `set_colour(on: bool)`                 | ANSI colour, over `NO_COLOR` and the terminal        |
+| `enabled(lvl: int) -> bool`            | would the global write a line at `lvl`               |
+| `at_level(lvl)`, `trace()` … `fatal()` | begin a line on the global logger — all six levels   |
+| `to_stderr() -> Sink`                  | the default destination — one write per line to fd 2 |
+| `to_chan(ch: chan[str]) -> Sink`       | each finished line as a value on a channel           |
+
+`Logger` answers `level(n)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and `enabled(lvl)`, each a **copy**
+— a logger handed to a component cannot reconfigure its caller's — plus `at_level(lvl)`, `format(n)`,
+`colour(on)` and the level methods.
+`Entry` answers `str`, `int`, `bool`, `dur`, `err` and the terminal `msg`.
+
+**There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
+renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
+value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
+`log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
+`lg.at_level(log.DEBUG)`, which invents no new name for a level that already has one. `at_level` is spelled
+that way rather than `at` because a free `pub at` is `E705` against the compiler's own lexer, which has a
+module-private `at` — a `pub` name has no package to be unique within.
+
+### Levels
+
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF` above them all. They are `int` constants rather than
+an enum because an enum's variants cannot be constructed outside their module, so `log.set_level(log.DEBUG)`
+could not be written.
+
+`fatal` writes its line and then **exits 1**. It is not `panic` — Zerg says that with `raise`, and a logger
+competing with the error taxonomy would give a program two unrelated ways to end. The exit happens **even at a
+level where the line is not written**: silencing a logger changes what is reported, never what is done.
+
+### One line is one write
+
+The whole line, newline included, goes to a single `__zrt_write`. This is not a detail: `zrt_report` once split
+a prefix and a message into two writes, and a stress test found **830 lines in 24000** carrying one kind with
+another's message. `scripts/log-check.sh` holds the property with 24 coroutines writing 500 lines each.
+
+A value that would be ambiguous bare — empty, or carrying a space, a quote, a backslash, an `=` or a control
+character — is written through `json.encode`, the tree's one escaper. So a newline in a value is escaped rather
+than written, and one record stays one line.
+
+### Two formats, and what picks each
+
+**`pretty` is the default** and `ZERG_LOG=json` is the only thing that changes it, `set_format` aside. That
+departs from zerolog, whose default is JSON, and the reason is who is on the other end: an unconfigured
+program is one somebody is running.
+
+```console
+$ ./myprog
+2026-08-15T10:22:31Z INF compiling  file=a.zg line=12
+
+$ ZERG_LOG=json ./myprog
+{"t":"2026-08-15T10:22:31Z","l":"info","msg":"compiling","file":"a.zg","line":12}
+```
+
+**Colour follows `isatty`; the format does not.** Colour is a rendering — it is about the device, and "is
+this a device" is exactly what [`os.isatty`](#os) answers, so a line is coloured at a terminal and plain in a
+pipe. A format is a semantic choice about who the output is for, and a program whose logs change **shape**
+when they are redirected has logs that cannot be read the same way twice. `NO_COLOR` overrides the terminal,
+by its **presence** — any value, the empty string included. An unrecognised `ZERG_LOG` is `pretty` rather
+than an error: a logger that refused to start over a misspelt variable would take a program down for a
+reason that has nothing to do with it.
+
+Only the **level** is coloured. It is what a reader scans for, and colouring the message or the values would
+fight with whatever they contain. A JSON line is never coloured at all — escape codes in a field a machine
+parses are corruption, not decoration.
+
+The JSON line is built through [`json`](#json), not by hand, which is why that module was promoted out of
+the language server: one escaper in the tree is one place for a quote, a newline or a tab to be right. Its
+three fixed keys — `t`, `l`, `msg` — come first, in that order.
+
+### The destination
+
+A `Sink` is a **value carrying a mode**, not a spec and not a closure: a spec would need `#[dyn]` (there is a
+deferred gap around non-`#[dyn]` provided methods) and a closure naming an imported module is `E735`. `to_chan`
+is what makes a logger testable — there is no reading a `write(2)` back, so this module's own suite asserts the
+bytes by receiving them. A channel sink needs capacity for what is written before it is drained, since a send
+to a full channel parks the sender.
+
 ## `time`
 
-Clocks and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed time) and
-never runs backwards. **A timer is a channel** — `after` and `ticker` answer receive-only channels, so a
-`select` arm on one is a timeout or a tick with no new syntax (see [Coroutines](../code/coroutine.md)).
-Durations are **nanoseconds**, the unit `monotonic` reads; a duration `<= 0` fires at once.
+Clocks, calendars and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed
+time) and never runs backwards. **A timer is a channel** — `after` and `ticker` answer receive-only
+channels, so a `select` arm on one is a timeout or a tick with no new syntax (see
+[Coroutines](../code/coroutine.md)). Durations are **nanoseconds**, the unit `monotonic` reads; a duration
+`<= 0` fires at once.
 
 | Function                   | Summary                                                       |
 | -------------------------- | ------------------------------------------------------------- |
 | `now() -> int`             | wall-clock time, whole seconds since the Unix epoch           |
 | `monotonic() -> int`       | a monotonic reading in nanoseconds (use differences)          |
+| `utc(t: int) -> Date`      | a Unix second count broken into its UTC calendar fields       |
+| `rfc3339(t: int) -> str`   | the same instant as `2025-08-15T10:22:31Z`                    |
+| `duration(ns: int) -> str` | a nanosecond count a person can read — `1.5s`, `250ms`        |
 | `after(d) -> <-chan[int]`  | one value once `d` nanoseconds have passed                    |
 | `ticker(d) -> <-chan[int]` | a value every `d` nanoseconds; the channel holds **one** tick |
+
+**`Date` is UTC and nothing else**, and that is a decision rather than a gap: local time needs the zone
+database, a host file a zero-external-dependency stdlib will not read. Its fields are `year`, `month`
+(1..12), `day` (1..31), `hour`, `minute`, `second`. The conversion is the civil-from-days algorithm — exact,
+no month table, no leap-year branch — and it is correct **before 1970 too**, because Zerg divides toward
+negative infinity (`-1 / 86400` is `-1`, not `0`) and takes the modulo's sign from the divisor.
+
+`rfc3339` renders seconds of precision, which is all `now()` has. A year outside `0000`–`9999` keeps the
+digits it has, with a leading `-` if negative — that is **no longer RFC 3339**, and it is preferred to
+truncation because a clock that far out is a bug the reader has to be able to see.
+
+`duration` picks the largest unit that leaves a whole part (`s`, `ms`, `µs`, `ns`), then up to three
+fraction digits with trailing zeros dropped and **truncated, not rounded**, so a duration that reads under
+a threshold really was under it. Seconds are the largest unit: there are no minutes, because `1.5m` invites
+being read as milli-anything.
 
 The value delivered is the **monotonic reading at the moment the timer fired**, not a placeholder: a tick
 may arrive arbitrarily later than it fired, and the reading is how a receiver that cares tells how late it
@@ -294,7 +476,7 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**, and it is the one of the thirteen that
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the fifteen that
 > does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
 > so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
 > ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not

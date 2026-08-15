@@ -390,7 +390,7 @@ privacy. That decides where a test lives:
 White-box placement works in **either** shape a directory can have, because a test build resolves a test
 file's package the way an import is resolved: **most specific first**. `module_at` answers a single
 `<name>.zg` file before it answers a directory, so a `.zg` file beside its neighbours is a module in its
-own right — which is what `src/stdlib` is, sixteen independent modules in one flat directory. A
+own right — which is what `src/stdlib` is, eighteen independent modules in one flat directory. A
 `strings_test.zg` there is therefore the test of `strings.zg` alone, and its package is that pair; a test
 file that names no such sibling belongs to the **directory**, as before.
 

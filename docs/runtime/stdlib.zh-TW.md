@@ -51,6 +51,8 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
 | [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
 | [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
+| [`json`](#json)       | `import "json"`    | JSON 的讀與寫,只有一份跳脫實作     |
+| [`log`](#log)         | `import "log"`     | 結構化 logging,寫成鏈式 builder    |
 | [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -92,13 +94,19 @@ leaf。
 也沒有 pipe，回來的是 exit status（死於信號時為 128+信號，無法執行時為 127）。有 shell 也有 pipe 的命令字面量見
 [Process 與 I/O](io.zh-TW.md)，仍是 **[not yet]**。
 
-| 函式                    | 摘要                                           |
-| ----------------------- | ---------------------------------------------- |
-| `env(key: str) -> str?` | 環境變數的值，未設為 `nil`                     |
-| `exit(code: int)`       | 以 `code` 結束程序（不返回）                   |
-| `run(argv: list[str])`  | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
-| `platform() -> str`     | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
-| `arch() -> str`         | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
+| 函式                      | 摘要                                           |
+| ------------------------- | ---------------------------------------------- |
+| `env(key: str) -> str?`   | 環境變數的值，未設為 `nil`                     |
+| `exit(code: int)`         | 以 `code` 結束程序（不返回）                   |
+| `run(argv: list[str])`    | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
+| `platform() -> str`       | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
+| `arch() -> str`           | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
+| `isatty(fd: int) -> bool` | 這個描述子是不是終端機（0 入、1 出、2 錯）     |
+
+**`isatty` 只關於裝置，別無其他。** 用它來挑**算繪方式**——在終端機上加色、進 pipe 就不加——而永遠不要用它挑
+**格式**：輸出的形狀會因為被重導而改變，就沒辦法用同一種方式讀第二次，而一台機器上是 JSON、另一台是欄位的
+log 檔比兩者都糟。[`log`](#log) 走的正是這條線——顏色問它，而只有 `ZERG_LOG` 決定格式。沒有開啟的描述子不是
+終端機，所以它回 `false` 而不是 raise；它是 total 的,這在「abort 等於為了跳脫碼而死」的路徑上很重要。
 
 ## `strings`
 
@@ -174,6 +182,39 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `to_string(n: int, base: int) -> str`   | 以 `base` 輸出 `n`，小寫，INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`，否則 `ValueError` |
 
+## `json`
+
+JSON 的讀與寫。它**刻意只有一份實作**:language server 與 logger 都會寫 JSON,而兩份跳脫實作會漂移——會漂移的
+那一份,正好是沒人在讀 transcript 的那一份。在它有第二個呼叫者之前,它住在 `src/compiler/lsp/json.zg`。
+
+一個值是 `Val`,而 object 是 **`list[Field]`** 而不是 map。list 會保留欄位被放進去的順序,所以輸出的位元組只是
+值的函數——這正是讓 transcript 可以 diff、讓 log 行可以 grep 的性質。`Val` 的 variant 不是 public(enum 的
+variant 無法在它的 module 之外建構),所以進去的路是 constructor、出來的路是 accessor。沒有 `fields()`:
+`list[Field]` 不是 variant,所以呼叫端自己寫 `mut fs: list[json.Field] = []`。
+
+| 函式                                                  | 摘要                                 |
+| ----------------------------------------------------- | ------------------------------------ |
+| `encode(v: Val) -> str`                               | 值寫成 JSON 文字——單行,欄位照原順序  |
+| `decode(s: str) -> Val`                               | JSON 文字讀成值;格式錯誤會 **raise** |
+| `get(v: Val, key: str) -> Val`                        | `key` 上的值,不存在則 `Null`         |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | 一次走兩層或三層 key                 |
+| `has(v: Val, key: str) -> bool`                       | 存在,而且不是 `null`                 |
+| `as_str` / `as_int` / `as_list`                       | 裡面的東西,否則 `""` / `0` / `[]`    |
+| `is_null(v: Val) -> bool`                             | 這個值是 JSON `null`                 |
+| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | 建一個 `Val`                         |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | 往 `list[Field]` 追加一個欄位        |
+
+**accessor 都是 TOTAL 的。** 跟數字要字串會得到 `""`,跟非 object 要 key 會得到 `Null`——這對「輸入來自另一個
+程式」是刻意的:形狀不對的欄位應該得到預設值與一個回覆,而不是一個把整個 session 帶走的 abort。真正致命的缺欄位,
+呼叫端自己問 `has`。有一個後果要知道:key 存在但值是 `null` 會被讀成**不存在**,因為 `has` 是寫在 `get` 上的。
+
+**數字是整數。** `Val` 沒有 float variant,所以 `decode("1.5")` 是 `Int(1)`——小數與指數會被吃掉並**丟棄**,
+不是拒絕。這是 language server 需要的形狀,至今沒變;寫在這裡是因為沒被告知的讀者,只會從一個錯的答案得知。
+
+**`encode` 只跳脫 JSON 保留的東西。** 兩個分隔符、五個短跳脫,以及 `0x20` 以下的控制位元組寫成 `\u00XX`。
+`0x20` 以上一律原樣通過,這正是 UTF-8 得以原封不動的原因:多位元組的碼點本來就是合法的 JSON 文字。所以先
+`decode` 再 `encode` 不是逐位元組相同——`"\u00e9"` 會變回那個字元——而先 `encode` 再 `decode` 是穩定的。
+
 ## `sha256`
 
 FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算子——沒有 libcrypto,也沒有 runtime leaf。
@@ -188,9 +229,111 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 檢查密碼。`make sha256` 拿標準的 known-answer vectors 與系統工具(隨機輸入)來釘它——oracle 對它無效,因為兩個
 編譯器跑的是同一份原始碼。
 
+## `log`
+
+結構化 logging，寫成一條**鏈式 builder**：
+
+```zerg
+log.info().str("file", path).int("line", n).msg("compiling")
+```
+
+這個形狀不是流行，而是**在這個語言裡**唯一行得通的那一個。沒有 varargs，所以一個欄位就是一次呼叫；沒有 `any`，
+所以 `str` 收 `str`、`int` 收 `int`；沒有 generic struct，所以 builder 是一個具體型別。任何其他形狀都至少要等其中兩件。
+
+它同時也是**延遲求值**的答案。等級關掉時 `log.debug()` 回傳一個**死的** entry：每個欄位方法立刻返回、什麼都不格式化、
+什麼都不配置，`msg` 也不寫。呼叫端交出的是有型別的值，而不是自己先組好的字串——所以被關掉的那一行本來要做的工，
+是「從未發生」而不是「做完丟掉」。
+
+還是要付的是**引數的求值**：`.str("dump", expensive())` 裡的 `expensive()` 兩種情況都會跑，因為 Zerg 在呼叫前先求值。
+這正是 `enabled` 必須公開的原因：
+
+```zerg
+if log.enabled(log.DEBUG) {
+ log.debug().str("dump", expensive()).msg("state")
+}
+```
+
+### 兩個介面
+
+有一個**全域 logger**，用函式設定、不需要任何管線；也有一個**建構子**讓你自己持有並傳遞。它們不是兩份實作：全域的那個
+**就是**一個 instance，放在這個模組自己的 cell 裡——所以每個欄位方法、每次等級判斷、每個 writer 都只存在一份。
+
+| 函式                                   | 摘要                                        |
+| -------------------------------------- | ------------------------------------------- |
+| `new() -> Logger`                      | 一個 `INFO` 等級、寫到標準錯誤的 logger     |
+| `set_level(n: int)`                    | 設定全域 logger                             |
+| `set_sink(sk: Sink)`                   | 全域 logger 的行要送去哪裡                  |
+| `set_format(n: int)`                   | `FMT_PRETTY` 或 `FMT_JSON`，蓋過 `ZERG_LOG` |
+| `set_colour(on: bool)`                 | ANSI 顏色，蓋過 `NO_COLOR` 與終端機         |
+| `enabled(lvl: int) -> bool`            | 全域在 `lvl` 會不會寫                       |
+| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有      |
+| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2          |
+| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel              |
+
+`Logger` 有 `level(n)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與 `enabled(lvl)`，每一個都回傳**複本**
+——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(lvl)`、`format(n)`、`colour(on)` 與等級方法。`Entry` 有 `str`、`int`、
+`bool`、`dur`、`err`，以及終結用的 `msg`。
+
+**沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
+（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕
+一個叫 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、
+而且被接受；在 instance 上第六個等級寫成 `lg.at_level(log.DEBUG)`，不為一個已經有名字的等級再發明一個。
+它叫 `at_level` 而不是 `at`，是因為自由的 `pub at` 會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的
+`at`,而 `pub` 名字沒有 package 可以讓它唯一。
+
+### 等級
+
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`，以及在它們之上的 `OFF`。它們是 `int` 常數而不是 enum，因為 enum 的
+variant 不能在它自己的模組之外建構，那樣 `log.set_level(log.DEBUG)` 根本寫不出來。
+
+`fatal` 寫完它那一行之後**以 1 結束程式**。它不是 panic——Zerg 用 `raise` 說那件事，而一個跟 error taxonomy 競爭的
+logger 會讓程式有兩種互不相干的結束方式。而且**即使在那一行不會被寫出的等級**它也照樣結束：把 logger 調安靜改變的是
+「回報了什麼」，永遠不是「做了什麼」。
+
+### 一行就是一次 write
+
+整行（含換行）交給單一一次 `__zrt_write`。這不是細節：`zrt_report` 曾經把 prefix 與訊息拆成兩次 write，而一支壓力測試
+在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 用 24 條 coroutine 各寫 500 行來釘住這件事。
+
+不加引號就有歧義的值——空字串，或帶有空白、引號、反斜線、`=`、控制字元的——會走 `json.encode`，也就是這棵樹裡唯一的
+跳脫實作。所以值裡的換行是被跳脫而不是被寫出來的，一筆記錄仍然是一行。
+
+### 兩種格式，以及各由什麼決定
+
+**預設是 `pretty`**，而除了 `set_format` 之外，只有 `ZERG_LOG=json` 會換掉它。這跟預設是 JSON 的 zerolog 不同，
+理由是另一端坐著誰：一支沒被設定過的程式，就是有人正在跑的那一支。
+
+```console
+$ ./myprog
+2026-08-15T10:22:31Z INF compiling  file=a.zg line=12
+
+$ ZERG_LOG=json ./myprog
+{"t":"2026-08-15T10:22:31Z","l":"info","msg":"compiling","file":"a.zg","line":12}
+```
+
+**顏色跟著 `isatty`，格式不跟。** 顏色是一種算繪——它關於裝置，而「這是不是一個裝置」正是
+[`os.isatty`](#os) 回答的問題，所以在終端機上有顏色、進 pipe 就沒有。格式是一個關於「這輸出是給誰看的」的語意
+選擇，而一支「輸出被重導時形狀就會變」的程式，它的 log 沒辦法用同一種方式讀第二次。`NO_COLOR` 會蓋過終端機，
+而且是靠它的**存在**——任何值都算，包括空字串。`ZERG_LOG` 認不得的值一律當 `pretty`，而不是報錯：一個因為變數
+拼錯就不肯啟動的 logger，會為了一件跟它無關的事把程式帶走。
+
+只有**等級**會上色。那是讀的人在掃視的欄位，而替訊息或值上色會跟它們本身的內容打架。JSON 行則完全不上色——
+在一個給機器 parse 的欄位裡放跳脫碼是損毀，不是裝飾。
+
+JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的,這正是那個模組要從 language server 裡拉出來的原因:
+整棵樹只有一份跳脫實作,引號、換行與 tab 就只有一個地方要弄對。它固定的三個 key——`t`、`l`、`msg`——依這個
+順序排在最前面。
+
+### 目的地
+
+`Sink` 是一個**帶著 mode 的值**，不是 spec 也不是 closure：spec 需要 `#[dyn]`（non-`#[dyn]` 的 provided method 有一個
+已知延後的缺口），而 closure 只要提到被 import 的模組就是 `E735`。`to_chan` 是讓 logger 可測的關鍵——`write(2)` 寫出去
+就讀不回來了，所以這個模組自己的 suite 是把那些位元組收下來斷言的。channel sink 需要事先有足夠的容量，因為送進滿的
+channel 會把送出的 coroutine 停住。
+
 ## `time`
 
-時鐘與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
+時鐘、日曆與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
 channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它們的一條 `select` arm 就是 timeout 或一次 tick，
 不需要任何新語法（見 [Coroutines](../code/coroutine.zh-TW.md)）。duration 的單位是**奈秒**，與 `monotonic` 的讀數
 同單位；`<= 0` 的 duration 會立刻觸發。
@@ -199,8 +342,23 @@ channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它�
 | -------------------------- | ---------------------------------------------- |
 | `now() -> int`             | 牆鐘時間，Unix epoch 起算的整數秒              |
 | `monotonic() -> int`       | 單調時鐘讀數（奈秒；請取差值）                 |
+| `utc(t: int) -> Date`      | 把 Unix 秒數拆成 UTC 的日曆欄位                |
+| `rfc3339(t: int) -> str`   | 同一個時刻，寫成 `2025-08-15T10:22:31Z`        |
+| `duration(ns: int) -> str` | 人讀得懂的奈秒數——`1.5s`、`250ms`              |
 | `after(d) -> <-chan[int]`  | `d` 奈秒過後送出一個值，僅一次                 |
 | `ticker(d) -> <-chan[int]` | 每 `d` 奈秒送出一個值；channel 只裝**一** tick |
+
+**`Date` 只有 UTC**，這是決定而不是缺口：本地時間需要時區資料庫，那是一個 host 上的檔案，而 zero-external-dependency
+的 stdlib 不會去讀它。欄位是 `year`、`month`（1..12）、`day`（1..31）、`hour`、`minute`、`second`。轉換用的是
+civil-from-days 演算法——精確、沒有月份表、沒有閏年分支——而且**1970 之前也對**，因為 Zerg 的除法朝負無窮取整
+（`-1 / 86400` 是 `-1`，不是 `0`），取模的正負號跟著除數走。
+
+`rfc3339` 只有秒的精度，因為 `now()` 就只有這麼多。年份落在 `0000`–`9999` 之外時，有幾位就印幾位、負數帶一個前導
+`-`——那**已經不是 RFC 3339**，而之所以優於截斷，是因為差這麼遠的時鐘是一個「讀的人必須看得見」的 bug。
+
+`duration` 會挑「還留得下整數部分」的最大單位（`s`、`ms`、`µs`、`ns`），再給最多三位小數、去掉尾端的零，而且是
+**截斷不是四捨五入**——所以讀起來低於某個門檻的 duration，真的就低於它。最大單位是秒：沒有分鐘，因為 `1.5m` 會被
+讀成 milli 什麼的。
 
 送出的值是 **timer 觸發當下的 monotonic 讀數**，不是佔位符：一次 tick 可能比它觸發的時刻晚任意久才送達，而這個讀數
 正是「在乎的接收者」用來判斷自己遲了多少的依據。接收者跟不上的 `ticker` 會**停在 send 上**、而不是把 tick 排隊起來，
@@ -277,7 +435,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十三個模組中唯一如此的一個。`Atomic[T]` 是 generic
+> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十五個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
 > ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
 > 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。

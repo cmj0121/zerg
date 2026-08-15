@@ -84,7 +84,8 @@ struct Point { x: int; y: int }
 Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、別無其他的那一小塊 C 底層——由 spec 與其實作共同
 框定。**標準函式庫**（`src/stdlib/*.zg`）是站在該底層上的**純 Zerg**，只受其 interface 約束：`io.read_file`
 走的是 runtime 的 syscall leaf 迴圈，`math.sqrt` 是純 Zerg 演算法，絕非綁 libm。今天可正常 import 的套件——`io`、
-`fs`、`os`、`strings`、`ascii`、`cli`、`strconv`、`time`、`math`、`rand`、`testing`——以 `import "<name>"` 取得。
+`fs`、`os`、`strings`、`ascii`、`cli`、`strconv`、`json`、`log`、`sha256`、`time`、`math`、`rand`、`testing`——以
+`import "<name>"` 取得。
 
 ## 文件
 

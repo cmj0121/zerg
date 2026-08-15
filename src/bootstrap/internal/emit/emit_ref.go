@@ -398,6 +398,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_exe_path":   true,
 	"__zrt_getenv":     true,
 	"__zrt_has_env":    true,
+	"__zrt_isatty":     true,
 	"__zrt_exit":       true,
 	"__zrt_exists":     true,
 	"__zrt_remove":     true,
@@ -662,6 +663,8 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_getenv(%s)", arg), true
 		case "__zrt_has_env":
 			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_isatty":
+			return fmt.Sprintf("zrt_isatty(%s)", arg), true
 		case "__zrt_exit":
 			return fmt.Sprintf("zrt_exit(%s)", arg), true
 		case "__zrt_exists":

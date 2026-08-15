@@ -20,6 +20,11 @@
 # not hold is `AssertionError`, raised by the keyword, and the runner tells that from a
 # crash by the KIND rather than by the text.
 
+import (
+	"log"
+	"strings"
+)
+
 # not_raised is what assert_raises does when the call it was handed came back. It is a
 # function rather than a `raise` written into the match arm because both arms of a match
 # answer one type, and this one has to answer an `Err` it never gets to build.
@@ -154,10 +159,19 @@ impl Context {
 	}
 
 	# log records a message to show ONLY IF this test fails. A test that logs its way
-	# through a passing run is a test whose output nobody reads; the note earns its
-	# place at the moment there is something to explain.
+	# through a passing run is a test whose output nobody reads; the note earns its place at
+	# the moment there is something to explain.
+	#
+	# IT IS THE LOGGER SAYING IT. The message goes through this context's own `log.Logger`, so
+	# a note carries the same timestamp and the same level marker every other line in this
+	# tree does, and there is one renderer rather than two. The rendered line's trailing
+	# newline comes off because the runner joins notes with its own.
+	#
+	# `log` IS BOTH A METHOD HERE AND AN IMPORTED MODULE, and that is not a collision: `E705`
+	# keys a name by its receiver, so `Context.log` and the namespace `log` never meet. It was
+	# checked before the module was written.
 	pub fn log(msg: str) {
-		this.events <- Event(EV_LOG, msg)
+		this.events <- Event(EV_LOG, rendered(msg))
 	}
 
 	# skip says this test does not apply here — a platform it is not for, a resource that
@@ -182,6 +196,41 @@ impl Context {
 		this.events <- Event(EV_FATAL, msg)
 		raise "test failed"
 	}
+}
+
+# rendered is `msg` as a LOG LINE — the same line `log` writes everywhere else in this tree,
+# with the same timestamp and the same level marker, rather than a second idea of what a line
+# looks like. Two unconnected notions of "a log line" is the drift that put the JSON escaper in
+# one place, and this is that argument applied to the other one.
+#
+# THE LOGGER IS BUILT HERE AND NOT HELD ON THE CONTEXT, and that was measured rather than
+# preferred: a `log.Logger` stored in the Context and reached through `this` deadlocked — the
+# line went into the sink's channel and the receive on the Context's copy of it never saw it.
+# A Context is copied by value at every frame and every `spawn`, and this module's own header
+# explains that a copy shares its `Ref`s and deep-copies the rest; something in that path does
+# not hold for a channel two structs down. Built locally it is one channel, one send, one
+# receive, in one frame — and the cost is one logger per NOTE, which is a thing a test writes
+# when it has something to explain rather than in a loop.
+#
+# PRETTY AND UNCOLOURED WHATEVER THE ENVIRONMENT SAYS. A note is read by a person looking at a
+# failure report, and the report's shape belongs to the runner rather than to `ZERG_LOG` — a
+# suite whose notes turned into JSON because a shell exported a variable would be a suite that
+# reads differently depending on who ran it. The trailing newline comes off because the runner
+# joins notes with its own.
+fn rendered(msg: str) -> str {
+	lines := chan[str](1)
+	log.new().format(log.FMT_PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
+
+	# THE RESULT IS ASSIGNED RATHER THAN RETURNED FROM INSIDE THE `if`, and that is not a style
+	# choice: `zerg fmt` collapses a lone `return` in an `if` into the postfix form, and
+	# `return … if line := <-lines` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
+	# CONDITION and a binding head is not one (`E205`). An assignment is not a diverge, so the
+	# formatter leaves this shape alone. Reported; four lines reproduce it.
+	mut out := msg
+	if line := <-lines {
+		out = strings.trim_suffix(line, "\n")
+	}
+	return out
 }
 
 # finished is what the driver says after the body is out of its hands: `ok` when it

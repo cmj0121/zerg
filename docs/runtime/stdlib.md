@@ -57,6 +57,7 @@ the form they will take.)
 | [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`            |
 | [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
 | [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
+| [`json`](#json)       | `import "json"`    | reading and writing JSON, with one escaper        |
 | [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
@@ -186,6 +187,44 @@ separately diagnosed this phase (parse bounded text).
 | `to_string(n: int, base: int) -> str`   | render `n` in `base`, lowercase, INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`, else `ValueError`        |
 
+## `json`
+
+Reading and writing JSON. It is **one implementation on purpose**: the language server and the logger both
+write JSON, and two escapers drift — the one that drifts is the one nobody is reading transcripts of. It
+lived at `src/compiler/lsp/json.zg` until it had a second caller.
+
+A value is a `Val`, and an object is a **`list[Field]`** rather than a map. A list keeps the order the fields
+were put in, so the bytes are a function of the value alone — which is what makes a transcript diffable and a
+log line greppable. `Val`'s variants are not public (an enum's variants cannot be constructed from outside
+its module), so the way in is the constructors and the way out is the accessors. There is no `fields()`: a
+`list[Field]` is not a variant, so a caller writes `mut fs: list[json.Field] = []`.
+
+| Function                                              | Summary                                             |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `encode(v: Val) -> str`                               | the value as JSON text — one line, fields in order  |
+| `decode(s: str) -> Val`                               | JSON text as a value; **raises** on malformed input |
+| `get(v: Val, key: str) -> Val`                        | the value at `key`, or `Null`                       |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | a two- or three-key path in one call                |
+| `has(v: Val, key: str) -> bool`                       | present, and not `null`                             |
+| `as_str` / `as_int` / `as_list`                       | the payload, or `""` / `0` / `[]`                   |
+| `is_null(v: Val) -> bool`                             | this value is JSON `null`                           |
+| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | build a `Val`                                       |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | append a field to a `list[Field]`                   |
+
+**The accessors are TOTAL.** Asking a number for its string gives `""`, and asking a non-object for a key
+gives `Null` — deliberate for input that comes from another program, where a field of the wrong shape should
+get a default and a reply rather than an abort. Where a missing field is genuinely fatal, ask `has`. One
+consequence to know: a key present with a `null` reads as **absent**, because `has` is written on `get`.
+
+**Numbers are integers.** `Val` has no float variant, so `decode("1.5")` is `Int(1)` — the fraction and any
+exponent are consumed and **dropped**, not refused. That was the shape the language server needed and it has
+not changed; it is written here because a reader who is not told will find out from a wrong answer.
+
+**`encode` escapes what JSON reserves and nothing else** — the two delimiters, the five short escapes, and a
+control byte below `0x20` as `\u00XX`. Everything at `0x20` and above passes through, which is what carries
+UTF-8 unchanged: a multi-byte code point is already legal JSON text. So `decode` then `encode` is not
+byte-identical — `"\u00e9"` comes back as the character — while `encode` then `decode` is stable.
+
 ## `sha256`
 
 SHA-256 as specified by **FIPS 180-4**, in pure Zerg over `uint` and the bitwise operators — no libcrypto,
@@ -313,7 +352,7 @@ it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**, and it is the one of the thirteen that
+> **[not yet]** The module ships and **cannot be imported**, and it is the one of the fourteen that
 > does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
 > so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
 > ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not

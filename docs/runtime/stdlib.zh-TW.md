@@ -51,6 +51,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
 | [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
 | [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
+| [`json`](#json)       | `import "json"`    | JSON 的讀與寫,只有一份跳脫實作     |
 | [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -174,6 +175,39 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `to_string(n: int, base: int) -> str`   | 以 `base` 輸出 `n`，小寫，INT_MIN-safe  |
 | `parse_bool(s: str) -> bool`            | `"true"` / `"false"`，否則 `ValueError` |
 
+## `json`
+
+JSON 的讀與寫。它**刻意只有一份實作**:language server 與 logger 都會寫 JSON,而兩份跳脫實作會漂移——會漂移的
+那一份,正好是沒人在讀 transcript 的那一份。在它有第二個呼叫者之前,它住在 `src/compiler/lsp/json.zg`。
+
+一個值是 `Val`,而 object 是 **`list[Field]`** 而不是 map。list 會保留欄位被放進去的順序,所以輸出的位元組只是
+值的函數——這正是讓 transcript 可以 diff、讓 log 行可以 grep 的性質。`Val` 的 variant 不是 public(enum 的
+variant 無法在它的 module 之外建構),所以進去的路是 constructor、出來的路是 accessor。沒有 `fields()`:
+`list[Field]` 不是 variant,所以呼叫端自己寫 `mut fs: list[json.Field] = []`。
+
+| 函式                                                  | 摘要                                 |
+| ----------------------------------------------------- | ------------------------------------ |
+| `encode(v: Val) -> str`                               | 值寫成 JSON 文字——單行,欄位照原順序  |
+| `decode(s: str) -> Val`                               | JSON 文字讀成值;格式錯誤會 **raise** |
+| `get(v: Val, key: str) -> Val`                        | `key` 上的值,不存在則 `Null`         |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | 一次走兩層或三層 key                 |
+| `has(v: Val, key: str) -> bool`                       | 存在,而且不是 `null`                 |
+| `as_str` / `as_int` / `as_list`                       | 裡面的東西,否則 `""` / `0` / `[]`    |
+| `is_null(v: Val) -> bool`                             | 這個值是 JSON `null`                 |
+| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | 建一個 `Val`                         |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | 往 `list[Field]` 追加一個欄位        |
+
+**accessor 都是 TOTAL 的。** 跟數字要字串會得到 `""`,跟非 object 要 key 會得到 `Null`——這對「輸入來自另一個
+程式」是刻意的:形狀不對的欄位應該得到預設值與一個回覆,而不是一個把整個 session 帶走的 abort。真正致命的缺欄位,
+呼叫端自己問 `has`。有一個後果要知道:key 存在但值是 `null` 會被讀成**不存在**,因為 `has` 是寫在 `get` 上的。
+
+**數字是整數。** `Val` 沒有 float variant,所以 `decode("1.5")` 是 `Int(1)`——小數與指數會被吃掉並**丟棄**,
+不是拒絕。這是 language server 需要的形狀,至今沒變;寫在這裡是因為沒被告知的讀者,只會從一個錯的答案得知。
+
+**`encode` 只跳脫 JSON 保留的東西。** 兩個分隔符、五個短跳脫,以及 `0x20` 以下的控制位元組寫成 `\u00XX`。
+`0x20` 以上一律原樣通過,這正是 UTF-8 得以原封不動的原因:多位元組的碼點本來就是合法的 JSON 文字。所以先
+`decode` 再 `encode` 不是逐位元組相同——`"\u00e9"` 會變回那個字元——而先 `encode` 再 `decode` 是穩定的。
+
 ## `sha256`
 
 FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算子——沒有 libcrypto,也沒有 runtime leaf。
@@ -292,7 +326,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十三個模組中唯一如此的一個。`Atomic[T]` 是 generic
+> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十四個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
 > ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
 > 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。

@@ -97,7 +97,7 @@ test-runner:                    # the test runner can see a test that fails
 # THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md puts
 # a white-box test. They no longer HAVE to be out here — a test build resolves a test file's
 # package the way an import is resolved, so a `strings_test.zg` beside `strings.zg` is a package
-# of that pair and none of `src/stdlib`'s other fifteen modules is compiled with it — but moving
+# of that pair and none of `src/stdlib`'s other sixteen modules is compiled with it — but moving
 # a suite is a change of its own, and this one stays where it was written until somebody makes
 # it. What it costs meanwhile is the white-box position: a suite here reaches its module the way
 # a user does, through `import`, so a module-private name is out of its reach.
@@ -106,14 +106,14 @@ test-runner:                    # the test runner can see a test that fails
 # `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
 # broke, a directory that moved, or a suite somebody deleted all leave this target green for
 # having asked nothing — the one failure a test gate must not have.
-STDLIB_TEST_MIN ?= 85
+STDLIB_TEST_MIN ?= 105
 
 # The modules whose comments carry runnable examples. An example nobody executes is an
 # unverified claim, which is the shape this repository has spent a span removing, so the
 # ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
 # against what came out. The list is a variable so that adding a module's examples is one
 # name here rather than a second copy of the rule.
-DOC_EXAMPLE_SRCS := src/stdlib/strings.zg src/stdlib/time.zg
+DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/strings.zg src/stdlib/time.zg
 
 stdlib-test:                    # the standard library's own suites, and a floor under them
 	$(MAKE) build

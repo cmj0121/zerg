@@ -18,6 +18,12 @@
 # value frozen before `main` cannot be varied by a test inside the process, so the whole
 # question moved to the one gate that can set an environment and start a program.
 #
+# THAT SENTENCE IS NOW A TEST RATHER THAN A COMMENT. `os.set_env` exists, so a program can
+# write its own environment — and the last case in this file writes all three variables and
+# asserts that nothing moved. It is the only claim about them a suite can make, and it is the
+# one that keeps log-check.sh honest: the day `log` reads the environment lazily, that gate
+# starts measuring its own shell instead of the module, and this is what fails.
+#
 # WHICH IS WHY NOTHING HERE ASSERTS AGAINST AN UNPINNED LOGGER. `pinned` below is the only
 # reader of `log.new()` a test builds on — `restored` is the other caller and nothing is
 # asserted through it — and it fixes the level, the format and the colour, so a suite run under
@@ -27,6 +33,7 @@
 # something.
 import (
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -766,4 +773,103 @@ fn test_at_level_on_both_surfaces() {
 	lg := pinned(log.Level.TRACE).to(log.to_chan(other))
 	lg.at_level(log.Level.DEBUG).msg("instance")
 	assert strings.contains(taken(other), " DBG instance")
+}
+
+# --- the boundary with scripts/log-check.sh --------------------------------------------------
+
+# THE ENVIRONMENT IS READ ONCE, BEFORE `main`, AND A WRITE AFTERWARDS MOVES NOTHING. That one
+# sentence is why every claim about a DEFAULT lives in scripts/log-check.sh and not here, and
+# until `os.set_env` existed it could only be asserted by a comment: no program could write a
+# variable, so no test could show that writing one made no difference.
+#
+# NOTHING FROM THAT GATE CAME HOME, and this is the case that says why rather than a note in a
+# header saying it. Its seven claims divide into three kinds, and a writable environment
+# reaches none of them: `fatal` EXITS and the default sink is a FILE DESCRIPTOR, neither of
+# which a test in the same process can observe; a torn line needs several coroutines racing at
+# a real `write(2)`; and every remaining one is about `ZERG_LOG`, `ZERG_LOG_LEVEL` or
+# `NO_COLOR`, which `log` reads into module-level consts before `main` runs. The third kind is
+# the one that looked movable, and this is the measurement that it is not.
+#
+# IT IS ASKED AS A DIFFERENCE AND NEVER AS AN ABSOLUTE. What this run's environment made the
+# default is the developer's business — the header above says why nothing here asserts against
+# an unpinned logger — so the claim is that the answer does not MOVE. A suite run with
+# `ZERG_LOG_LEVEL=debug` exported asks exactly the same question as one run without.
+#
+# A REGRESSION HERE WOULD BE SILENT AND EXPENSIVE. If `log` ever read the environment at
+# `new()` instead of at module init, every default assertion in log-check.sh would begin
+# measuring the gate's own shell rather than the module, and it would keep passing. This is the
+# test that would not: both claims below were seen fail, by giving `Logger`'s `lvl` and then
+# its `fmt` a default that CALLS the reader instead of naming the frozen const.
+#
+# `NO_COLOR` IS DELIBERATELY NOT AMONG THEM, and it was written and then removed rather than
+# never tried. Colour is `NO_COLOR`-unset AND `isatty(2)`, so under the pipe a test run is
+# given it is already off — setting `NO_COLOR` cannot move an answer that is `false` either
+# way, and the assertion passed against a `log` that read the variable lazily. A gate that
+# cannot fail is worse than no gate, and turning it into one needs a terminal, which is
+# log-check case 6 and its `script`-provided pty.
+#[test]
+fn test_the_environment_is_read_once_and_a_later_write_moves_nothing(ctx: testing.Context) {
+	was_level := os.env("ZERG_LOG_LEVEL")
+	was_format := os.env("ZERG_LOG")
+	defer restore("ZERG_LOG_LEVEL", was_level)
+	defer restore("ZERG_LOG", was_format)
+
+	before := gates()
+	shape := unpinned_line()
+
+	ctx.log("the loudest level there is, written after the module was initialised")
+	os.set_env("ZERG_LOG_LEVEL", "trace")
+	assert gates() == before
+
+	ctx.log("and the quietest")
+	os.set_env("ZERG_LOG_LEVEL", "off")
+	assert gates() == before
+
+	ctx.log("the format does not move either")
+	os.set_env("ZERG_LOG", "json")
+	assert unpinned_line() == shape
+}
+
+# gates is `log.new()`'s threshold read as one on/off answer per level. It is a value that can
+# be compared, which is what makes "it did not move" a single assertion rather than six.
+fn gates() -> str {
+	lg := log.new()
+	mut out := ""
+	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR, log.Level.FATAL] {
+		if lg.enabled(l) {
+			out = out + "1"
+		} else {
+			out = out + "0"
+		}
+	}
+	return out
+}
+
+# unpinned_line is the SHAPE of a line `log.new()` writes, with everything that varies between
+# one run and the next taken out of it: whether it is JSON, and whether it carries an escape.
+# The LEVEL is pinned and nothing else is, so a line is always written whatever the ambient
+# threshold is — comparing two empty strings is not the claim this is making.
+fn unpinned_line() -> str {
+	ch := chan[str](4)
+	log.new().level(log.Level.TRACE).to(log.to_chan(ch)).info().msg("shape")
+	line := taken(ch)
+	mut out := "pretty"
+	if strings.has_prefix(line, "{") {
+		out = "json"
+	}
+	if strings.contains(line, "\u{1b}[") {
+		out = out + "+colour"
+	}
+	return out
+}
+
+# restore puts a variable back the way this test found it — set again when it was there,
+# removed when it was not. It is `env`'s `str?` used for exactly what a `str?` is answered for,
+# and it is the reason a suite may write the environment at all: what it changes, it undoes.
+fn restore(key: str, was: str?) {
+	if v := was {
+		os.set_env(key, v)
+	} else {
+		os.del_env(key)
+	}
 }

@@ -296,6 +296,15 @@ own cell, so every field method, every level check and every writer exists once.
 `at_level(l)` and the level methods.
 `Entry` answers `str`, `int`, `bool`, `dur`, `err` and the terminal `msg`.
 
+**There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
+renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
+value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
+`log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
+`lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at` because a free `pub at` is
+`E705` against the compiler's own lexer, which has a module-private `at` — a `pub` name has no package to be
+unique within. `parse_level` is not `parse` for the same reason, reached from the other side: a `pub parse`
+here would collide with a module-private `parse` in any program that imports `log`.
+
 **There is one mutating function and it takes a whole logger.** The `set_level` / `set_format` / `set_colour`
 / `set_sink` family was **deleted**, not renamed: the module already had four pure builders, so the setters
 were a second way to say the same thing that happened to mutate shared state four times where one would do.
@@ -321,9 +330,10 @@ silently ignores the environment.
 ### Configuring is a startup act
 
 The global logger lives in the standard library's only module-level `unsafe { … }` group, and `log.zg` carries
-the full pattern above it — this is the summary. The language does two thirds of the enforcing: a top-level
-`mut` outside such a group is `E358`, and `pub` on one inside it is `E484`. So configuration-by-function is
-not the recommended way, it is the only way the language permits.
+the full pattern above it — this is the summary. The language enforces the first of its four rules and only
+that one: a top-level `mut` outside such a group is `E358` and `pub` on one inside it is `E484`, which is two
+codes for one rule. So configuration-by-function is not the recommended way, it is the only way the language
+permits — and the rest of the shape is held by `scripts/log-check.sh`, which reads the module.
 
 What it costs, stated without rounding it up: a `Logger` holds a `list` and a `Sink`, so installing one is
 several machine stores and not one, and a read that runs while `install` runs is a data race. **The rule is
@@ -359,7 +369,11 @@ level where the line is not written**: silencing a logger changes what is report
 
 The whole line, newline included, goes to a single `__zrt_write`. This is not a detail: `zrt_report` once split
 a prefix and a message into two writes, and a stress test found **830 lines in 24000** carrying one kind with
-another's message. `scripts/log-check.sh` holds the property with 24 coroutines writing 500 lines each.
+another's message. `scripts/log-check.sh` holds it by reading the module — exactly one `io.ewrite(line)`, and
+no `eprintln`, which is two writes. It does **not** hold it with a stress test, and says why: the same script
+mutated `emit` into two writes and could not make 12000 lines from 24 coroutines tear, because coroutines are
+cooperative and there is no parking point between two adjacent writes. That program still runs, for the claim
+it can make — every line arrives, and arrives whole.
 
 A value that would be ambiguous bare — empty, or carrying a space, a quote, a backslash, an `=` or a control
 character — is written through `json.encode`, the tree's one escaper. So a newline in a value is escaped rather

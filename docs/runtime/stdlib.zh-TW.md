@@ -272,6 +272,14 @@ if log.enabled(log.Level.DEBUG) {
 `enabled(l)`，每一個都回傳**複本**——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(l)` 與等級方法。
 `Entry` 有 `str`、`int`、`bool`、`dur`、`err`，以及終結用的 `msg`。
 
+**沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
+（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕一個叫
+`debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、而且被接受；
+在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`，是因為自由的 `pub at`
+會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的 `at`，而 `pub` 名字沒有 package 可以讓它唯一。
+`parse_level` 不叫 `parse` 是同一條規則的另一面：這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module
+私有的 `parse` 相撞。
+
 **只有一個會改狀態的函式，而且它收下一整個 logger。** `set_level` / `set_format` / `set_colour` / `set_sink`
 這一家是被**刪掉**而不是改名的：模組本來就有四個純 builder，所以那些 setter 只是把同一件事再說一次，順便把共享狀態
 改了四次——而一次就夠。
@@ -294,8 +302,9 @@ log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
 ### 設定是啟動時的動作
 
 全域 logger 住在標準函式庫唯一一個 module 層級的 `unsafe { … }` group 裡，完整的 pattern 就寫在 `log.zg` 那個 group
-上方——這裡只是摘要。語言本身做掉了三分之二的把關：group 之外的頂層 `mut` 是 `E358`，group 之內的 `pub` 是 `E484`。
-所以「用函式設定」不是建議做法，而是語言允許的唯一做法。
+上方——這裡只是摘要。語言本身把關的是四條規則裡的第一條，而且只有那一條：group 之外的頂層 `mut` 是 `E358`，
+group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所以「用函式設定」不是建議做法，而是語言允許的唯一做法；
+形狀的其餘部分由讀這個模組原始碼的 `scripts/log-check.sh` 把關。
 
 它的代價，不打折地說：`Logger` 帶著一個 `list` 與一個 `Sink`，所以安裝一個是好幾次機器寫入而不是一次，而在 `install`
 執行期間發生的讀取就是 data race。**規則是啟動時設定一次、由單一 coroutine 設定，然後只讀**——這是一條規則，不是保證。
@@ -326,7 +335,10 @@ logger 會讓程式有兩種互不相干的結束方式。而且**即使在那�
 ### 一行就是一次 write
 
 整行（含換行）交給單一一次 `__zrt_write`。這不是細節：`zrt_report` 曾經把 prefix 與訊息拆成兩次 write，而一支壓力測試
-在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 用 24 條 coroutine 各寫 500 行來釘住這件事。
+在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 是靠**讀原始碼**釘住它的：剛好一個
+`io.ewrite(line)`、沒有 `eprintln`（那是兩次 write）。它**不是**用壓力測試釘住的，而且說明了原因：同一支腳本曾把
+`emit` 改成兩次 write，24 條 coroutine 寫 12000 行也撕不出來——coroutine 是協作式的，兩次相鄰的 write 之間沒有
+停泊點。那支程式仍然會跑，只負責它能負責的宣稱：每一行都到了，而且是完整的。
 
 不加引號就有歧義的值——空字串，或帶有空白、引號、反斜線、`=`、控制字元的——會走 `json.encode`，也就是這棵樹裡唯一的
 跳脫實作。所以值裡的換行是被跳脫而不是被寫出來的，一筆記錄仍然是一行。

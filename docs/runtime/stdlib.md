@@ -270,47 +270,96 @@ What is still paid is evaluating the **arguments** — `expensive()` in `.str("d
 way, because Zerg evaluates arguments before the call. That is why `enabled` is public:
 
 ```zerg
-if log.enabled(log.DEBUG) {
+if log.enabled(log.Level.DEBUG) {
  log.debug().str("dump", expensive()).msg("state")
 }
 ```
 
 ### The two surfaces
 
-There is a **global logger**, configured by function and used with no plumbing, and a **constructor** for one
-you hold and pass. They are not two implementations: the global **is** an instance, held in this module's own
-cell, so every field method, every level check and every writer exists once.
+There is a **global logger**, configured by one function and used with no plumbing, and a **constructor** for
+one you hold and pass. They are not two implementations: the global **is** an instance, held in this module's
+own cell, so every field method, every level check and every writer exists once.
 
 | Function                               | Summary                                              |
 | -------------------------------------- | ---------------------------------------------------- |
-| `new() -> Logger`                      | a logger at `INFO` writing to standard error         |
-| `set_level(n: int)`                    | configure the global logger                          |
-| `set_sink(sk: Sink)`                   | where the global logger's lines go                   |
-| `set_format(n: int)`                   | `FMT_PRETTY` or `FMT_JSON`, over `ZERG_LOG`          |
-| `set_colour(on: bool)`                 | ANSI colour, over `NO_COLOR` and the terminal        |
-| `enabled(lvl: int) -> bool`            | would the global write a line at `lvl`               |
+| `new() -> Logger`                      | a logger configured from the environment, to stderr  |
+| `install(lg: Logger)`                  | replace the global logger — the one mutation         |
+| `parse_level(s: str) -> Level?`        | a level by name (`debug`), or `nil`                  |
+| `enabled(lvl: Level) -> bool`          | would the global write a line at `lvl`               |
 | `at_level(lvl)`, `trace()` … `fatal()` | begin a line on the global logger — all six levels   |
 | `to_stderr() -> Sink`                  | the default destination — one write per line to fd 2 |
 | `to_chan(ch: chan[str]) -> Sink`       | each finished line as a value on a channel           |
 
-`Logger` answers `level(n)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and `enabled(lvl)`, each a **copy**
-— a logger handed to a component cannot reconfigure its caller's — plus `at_level(lvl)`, `format(n)`,
-`colour(on)` and the level methods.
+`Logger` answers `level(l)`, `format(f)`, `colour(on)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and
+`enabled(l)`, each a **copy** — a logger handed to a component cannot reconfigure its caller's — plus
+`at_level(l)` and the level methods.
 `Entry` answers `str`, `int`, `bool`, `dur`, `err` and the terminal `msg`.
 
 **There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
 renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
 value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
 `log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
-`lg.at_level(log.DEBUG)`, which invents no new name for a level that already has one. `at_level` is spelled
-that way rather than `at` because a free `pub at` is `E705` against the compiler's own lexer, which has a
-module-private `at` — a `pub` name has no package to be unique within.
+`lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at` because a free `pub at` is
+`E705` against the compiler's own lexer, which has a module-private `at` — a `pub` name has no package to be
+unique within. `parse_level` is not `parse` for the same reason, reached from the other side: a `pub parse`
+here would collide with a module-private `parse` in any program that imports `log`.
+
+**There is one mutating function and it takes a whole logger.** The `set_level` / `set_format` / `set_colour`
+/ `set_sink` family was **deleted**, not renamed: the module already had four pure builders, so the setters
+were a second way to say the same thing that happened to mutate shared state four times where one would do.
+
+```zerg
+log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+```
+
+It is `install` and not `level` because `level` already means _derive a logger at this level_, and one word
+may not be pure on an instance and effectful on the module. `enabled` lives in both places precisely because
+it means the same in both.
+
+**There is no `current()`.** Deriving from the installed logger would read as mid-flight reconfiguration, and
+the cell is not safe for that (see [Configuring is a startup act](#configuring-is-a-startup-act)). Restoring
+the default is `log.install(log.new())` — the cell is initialised at its declaration by that same public
+constructor, so nothing needs to read it back, which is also how a test suite isolates itself.
+
+**`log.new()` is the only way to build a `Logger` from outside.** Every field carries a default, which a
+module-private field must (`E482`), so `Logger()` exists whatever the module wants — and its defaults name
+module-private consts, so a caller writing `log.Logger()` gets `E301` rather than a second constructor that
+silently ignores the environment.
+
+### Configuring is a startup act
+
+The global logger lives in the standard library's only module-level `unsafe { … }` group, and `log.zg` carries
+the full pattern above it — this is the summary. The language enforces the first of its four rules and only
+that one: a top-level `mut` outside such a group is `E358` and `pub` on one inside it is `E484`, which is two
+codes for one rule. So configuration-by-function is not the recommended way, it is the only way the language
+permits — and the rest of the shape is held by `scripts/log-check.sh`, which reads the module.
+
+What it costs, stated without rounding it up: a `Logger` holds a `list` and a `Sink`, so installing one is
+several machine stores and not one, and a read that runs while `install` runs is a data race. **The rule is
+configure at startup, from one coroutine, then read** — a rule, not a guarantee. `log.new()` is the answer for
+anything that has to change while the program runs; an instance is a value, and a value handed to a component
+races with nobody. Installing twice is legal and the last one wins, silently.
 
 ### Levels
 
-`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF` above them all. They are `int` constants rather than
-an enum because an enum's variants cannot be constructed outside their module, so `log.set_level(log.DEBUG)`
-could not be written.
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF`, as the variants of an **enum**. They were `int`
+constants, and the type is what an `int` cannot be: `log.new().level(2)` and `log.new().level(99)` were both
+legal and neither said anything, where `E340` now refuses an `int` where a `Level` belongs and a `Level` where
+an `int` does, and `E347` refuses comparing a variant with a number.
+
+The deeper win is that every renderer is an **exhaustive `match`**, so a level cannot be added without ranking
+it, naming it and colouring it — `E428` names the arm that was forgotten. The `int` version printed a blank
+and said nothing.
+
+**`OFF` is not in the ordering at all.** It is the threshold that accepts nothing: a logger set to it writes
+nothing, including a line written _at_ `OFF`. The ordering itself is one private function, and the enum's
+declaration order is deliberately **not** a contract — nothing in the module consults a discriminant, so
+alphabetising the variants would change nothing about what any program filters.
+
+**`ZERG_LOG_LEVEL` picks the level, by name.** `ZERG_LOG_LEVEL=debug`, never `=1`: a number would pin the
+discriminants the module refuses to consult. An unrecognised name is `INFO`, for the reason an unrecognised
+`ZERG_LOG` is `pretty`. `log.parse_level(s)` is the same reader, public, for a program with a flag of its own.
 
 `fatal` writes its line and then **exits 1**. It is not `panic` — Zerg says that with `raise`, and a logger
 competing with the error taxonomy would give a program two unrelated ways to end. The exit happens **even at a
@@ -320,7 +369,11 @@ level where the line is not written**: silencing a logger changes what is report
 
 The whole line, newline included, goes to a single `__zrt_write`. This is not a detail: `zrt_report` once split
 a prefix and a message into two writes, and a stress test found **830 lines in 24000** carrying one kind with
-another's message. `scripts/log-check.sh` holds the property with 24 coroutines writing 500 lines each.
+another's message. `scripts/log-check.sh` holds it by reading the module — exactly one `io.ewrite(line)`, and
+no `eprintln`, which is two writes. It does **not** hold it with a stress test, and says why: the same script
+mutated `emit` into two writes and could not make 12000 lines from 24 coroutines tear, because coroutines are
+cooperative and there is no parking point between two adjacent writes. That program still runs, for the claim
+it can make — every line arrives, and arrives whole.
 
 A value that would be ambiguous bare — empty, or carrying a space, a quote, a backslash, an `=` or a control
 character — is written through `json.encode`, the tree's one escaper. So a newline in a value is escaped rather
@@ -328,7 +381,7 @@ than written, and one record stays one line.
 
 ### Two formats, and what picks each
 
-**`pretty` is the default** and `ZERG_LOG=json` is the only thing that changes it, `set_format` aside. That
+**`pretty` is the default** and `ZERG_LOG=json` is the only thing that changes it, `Logger.format` aside. That
 departs from zerolog, whose default is JSON, and the reason is who is on the other end: an unconfigured
 program is one somebody is running.
 

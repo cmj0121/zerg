@@ -118,10 +118,11 @@ DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/os.zg src/st
 stdlib-test:                    # the standard library's own suites, and a floor under them
 	$(MAKE) build
 	./scripts/doc-examples-check.sh $(DOC_EXAMPLE_SRCS)
-	@# `log`'s three claims a suite inside the process cannot make — `fatal` exits, the default
-	@# stream is stderr, and one line is one write. It rides here rather than on the board of
-	@# its own because it is the same question this target already asks: does the standard
-	@# library do what it says.
+	@# `log`'s claims a suite inside the process cannot make — `fatal` exits, the default stream
+	@# is stderr, one line is one write, colour follows the terminal, `ZERG_LOG_LEVEL` names a
+	@# level, and the pattern `log` is the tree's reference for is still the shape of its
+	@# source. It rides here rather than on the board of its own because it is the same question
+	@# this target already asks: does the standard library do what it says.
 	./scripts/log-check.sh
 	@out=$$(./bin/zerg test tests/stdlib); status=$$?; \
 	printf '%s\n' "$$out"; \

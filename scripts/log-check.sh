@@ -41,6 +41,18 @@
 #      nothing else; rules 2 and 3 had nothing but a reader checking them, and this is that
 #      reader. Rule 4 is about the caller and cannot be checked here at all.
 #
+# A PROGRAM CAN NOW WRITE ITS OWN ENVIRONMENT, AND IT MOVES NONE OF THE ABOVE. `os.set_env`
+# landed, and the obvious question was which of these claims could come home to the in-process
+# suite. None of them: 1, 3, 7 and 8 are about the source text, process death or a file
+# descriptor, and every environment claim among 2, 4, 5 and 6 is about INITIALISATION — `log`
+# reads `ZERG_LOG`, `ZERG_LOG_LEVEL` and `NO_COLOR` into module-level consts before `main`
+# runs, so a write afterwards changes nothing and only a fresh process can vary them.
+#
+# THAT FREEZE IS WHAT EVERY CASE HERE RESTS ON, and it is now asserted from inside rather than
+# assumed: tests/stdlib/log/log_test.zg writes the variables itself and holds the answers
+# still. The day `log` reads one lazily, this file starts measuring its own shell rather than
+# the module — while still passing — and that test is what says so.
+#
 # WHY THE ONE-WRITE CLAIM IS STRUCTURAL AND NOT A STRESS TEST.
 #
 # The obvious gate is the one this project already ran once: many writers, and every line that

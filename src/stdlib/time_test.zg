@@ -293,3 +293,39 @@ fn test_monotonic_never_goes_backwards() {
 	}
 	assert prev > first
 }
+
+# --- the module's own helpers ---------------------------------------------------------
+
+# THE SIGN GOES IN FRONT OF THE FILLING, and `pad` says so in a comment because padding the
+# rendered string instead gives `00-5`, which is not a number at all. `rfc3339` can only
+# show the case through a year, and a NEGATIVE year is the one input this renderer's own
+# suite establishes it does not truncate — so the rule itself is asked here, once, on the
+# function that has it.
+#[test]
+fn test_pad_keeps_the_sign_in_front_of_the_filling() {
+	assert pad(-5, 4) == "-005"
+	assert pad(5, 4) == "0005"
+	assert pad(-5, 2) == "-5"
+}
+
+# A NUMBER WIDER THAN THE WIDTH IS NOT TRUNCATED. Every caller in the module hands `pad` a
+# field it has already ranged, so a value that overflows the width reaches it only from a
+# date outside the calendar — and losing a digit there would render a plausible wrong date
+# rather than an obviously wrong one.
+#[test]
+fn test_pad_never_drops_a_digit() {
+	assert pad(12345, 4) == "12345"
+	assert pad(-12345, 4) == "-12345"
+}
+
+# THE TRAILING ZEROS COME OFF AND THE LEADING ONES STAY, which is one rule with two halves
+# and a `%` on each. `duration` reaches `fraction` only through `scaled`, and only for a
+# remainder that is not zero, so three of these four values cannot be produced through the
+# surface at all.
+#[test]
+fn test_fraction_drops_trailing_zeros_and_keeps_leading_ones() {
+	assert fraction(456) == "456"
+	assert fraction(500) == "5"
+	assert fraction(50) == "05"
+	assert fraction(5) == "005"
+}

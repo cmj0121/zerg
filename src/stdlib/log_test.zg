@@ -874,3 +874,36 @@ fn restore(key: str, was: str?) {
 		os.del_env(key)
 	}
 }
+
+# --- the module's own helpers ---------------------------------------------------------
+
+# THE FOUR BYTES THAT FORCE A QUOTE, asked one at a time. `needs_quotes` is what decides
+# whether a pretty line reads `k=v` or `k="v"`, and it is a predicate over EVERY byte of the
+# value — so a wrong bound produces a line that parses as two fields, or one that quotes
+# everything and reads like JSON that lost its braces. A rendered line can only show the
+# verdict for whatever value a test happened to pick.
+#
+# THE BOUND IS `<= 32` AND SO INCLUDES THE SPACE, which is the byte the rule exists for; 33
+# is `!` and is ordinary. Both sides of that comparison are asked, because an off-by-one
+# there is the difference between quoting a space and not.
+#[test]
+fn test_needs_quotes_names_every_byte_that_forces_one() {
+	assert needs_quotes("a b")
+	assert needs_quotes("a=b")
+	assert needs_quotes("a\"b")
+	assert needs_quotes("a\\b")
+	assert needs_quotes("a\nb")
+	assert not needs_quotes("plain")
+	assert not needs_quotes("!~")
+}
+
+# COLOUR IS THE LEVEL AND NOTHING ELSE, and `tag` is where that is decided: uncoloured it is
+# the three-letter name unchanged, and coloured it is the name WRAPPED — a prefix and a
+# reset, with nothing of the message inside. A line can show that the reset is present; only
+# the function can show that the uncoloured form is the same string the coloured one wraps.
+#[test]
+fn test_tag_wraps_the_name_and_leaves_it_alone_uncoloured() {
+	assert tag(Level.INFO, false) == "INF"
+	assert tag(Level.ERROR, false) == "ERR"
+	assert tag(Level.INFO, true) == f"{colour_of(Level.INFO)}INF{esc()}[0m"
+}

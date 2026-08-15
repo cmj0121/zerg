@@ -374,3 +374,21 @@ fn test_round_trip_normalises_escapes_and_drops_fractions(ctx: testing.Context) 
 	ctx.log("a fraction is gone for good — text to value is lossy, value to text is not")
 	assert encode(decode("1.5")) == "1"
 }
+
+# --- the module's own helpers ---------------------------------------------------------
+
+# THE HEX DIGIT IS TWO ARITHMETIC RULES WITH A BOUNDARY BETWEEN THEM — `48 + n` below ten
+# and `97 + n - 10` at and above it — and JSON's `\u00XX` escape is where a wrong one would
+# show. `encode` reaches it only for a control character, so the surface can show four of
+# the sixteen digits and never the pair that straddles the boundary; both ends of both
+# rules are asked here.
+#
+# LOWERCASE IS THE CHOICE, not an accident of the constant: `97` is `a`. An encoder that
+# wrote the uppercase digits would still decode, and every transcript in the tree would change.
+#[test]
+fn test_jw_hex_is_lowercase_across_both_of_its_rules() {
+	assert jw_hex(0) == b'0'
+	assert jw_hex(9) == b'9'
+	assert jw_hex(10) == b'a'
+	assert jw_hex(15) == b'f'
+}

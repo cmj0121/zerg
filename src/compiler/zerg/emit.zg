@@ -12193,18 +12193,42 @@ pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]
 	return c_emit_file_at(merge_files_at(srcs, paths), diags)
 }
 
+# check_files_diag answers "is this a program" WITHOUT answering "what C does it become".
+#
+# It is the same walk emit_files_diag runs, with the one difference the name says: the C
+# each step produced is dropped instead of accumulated (c_lowered, and c_emit_unit's
+# `check` parameter). Every rule still runs, in the same order, over the same tables, so
+# the findings are the same findings — which is the property that matters here, because a
+# second checker that missed one would paint a clean buffer for a file that will not build.
+# scripts/check-equal.sh is what holds the two to each other.
+#
+# WHY IT IS WORTH HAVING is measurement, not tidiness. On this compiler's own 27k lines the
+# emit path peaks at 2.8 GB and the check path at 0.22 GB, because `defs = defs + c_fn(…)`
+# over ~1500 functions allocates a fresh copy of everything emitted so far on each step —
+# the finished C is 3.6 MB and the walk that builds it touches a thousand times that. The
+# language server asks this question on every keystroke-batch, and it was being SIGKILLed
+# for asking it three times.
+pub fn check_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) {
+	mut lints: list[Diag] = []
+	f := merge_files_at(srcs, paths)
+	c_emit_unit(f, f, true, false, true, diags, lints)
+}
+
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
 pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(prog, own, false, false, diags, lints)
+	return c_emit_unit(prog, own, false, false, false, diags, lints)
 }
 
 # lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
 # the parsed tree: a conversion is a fact about TYPES. So the linter asks the lowering walk,
-# which has them — the C it produces is thrown away, and what is kept is what the walk noticed
-# on the way past. A program that does not compile answers nothing, which is right: there is
-# no point advising about the types of a program whose types are wrong.
+# which has them — and what is kept is what the walk noticed on the way past. A program that
+# does not compile answers nothing, which is right: there is no point advising about the
+# types of a program whose types are wrong.
+#
+# It walks in CHECK mode. The C was always thrown away here — that is what this comment used
+# to say — and building it first cost the caller a gigabyte for a string nobody read.
 pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
 	mut diags: list[Diag] = []
 	mut lints: list[Diag] = []
@@ -12213,7 +12237,7 @@ pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
 	# whole program per unit "is where its time went", and two calls in one argument list is
 	# that mistake at its smallest.
 	f := merge_files_at(srcs, paths)
-	c_emit_unit(f, f, true, true, diags, lints)
+	c_emit_unit(f, f, true, true, true, diags, lints)
 
 	return [] if diags.len() > 0
 
@@ -12276,7 +12300,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(f, f, true, false, diags, lints)
+	return c_emit_unit(f, f, true, false, false, diags, lints)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -12674,7 +12698,31 @@ fn c_into_user_from(mut &em: Emitter, src: str) -> bool {
 	return false
 }
 
-fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+# c_lowered is the C a step produced — or NOTHING, when this walk is checking rather than
+# emitting. It is the whole of what `check` mode is, and the shape is the point: the step is
+# still CALLED, because the argument is evaluated before this function is, so every rule the
+# lowering runs still runs and reports through the same channel. What is dropped is only the
+# text, at the moment it would have been appended to a section.
+#
+# One walk with the text suppressed, rather than a checker beside the emitter, because two
+# walks are two sets of rules and the second one drifts. There is nothing here to keep in
+# step: a rule added anywhere in the lowering is in both modes the day it is written, and a
+# rule that somehow were not would have to be one that fires on the CONTENTS of a string no
+# caller reads.
+#
+# Why dropping the text is worth a function at all: the accumulations it feeds are quadratic
+# — `defs = defs + c_fn(…)` copies everything emitted so far on every one of ~1500 steps —
+# so the C is 3.6 MB and the walk that builds it peaks at 2.8 GB. Suppressing the append
+# leaves the accumulators empty and each step O(1), which is 0.22 GB for the same findings.
+fn c_lowered(check: bool, s: str) -> str {
+	return "" if check
+	return s
+}
+
+# `check` is the walk that answers whether this is a program without answering what C it
+# becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
+# (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
+fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, check: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -12758,18 +12806,18 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# wherever that is — here when a declaration named one, with the on-demand carriers
 	# below otherwise. Exactly one of the two writes it.
 	if carriers.len() > 0 {
-		types = types + c_carrier_prelude()
+		types = types + c_lowered(check, c_carrier_prelude())
 	}
-	types = types + c_type_decls(em, f, carriers, tuples)
+	types = types + c_lowered(check, c_type_decls(em, f, carriers, tuples))
 	mut i := 0
 	for i < f.enums.len() {
-		types = types + c_refbox_helpers(f.enums[i])
+		types = types + c_lowered(check, c_refbox_helpers(f.enums[i]))
 		i = i + 1
 	}
 
 	# after the typedefs, because a helper names the struct it copies, and before the
 	# prototypes and bodies, which are what call them
-	types = types + c_copy_helpers(em, f)
+	types = types + c_lowered(check, c_copy_helpers(em, f))
 
 	# the top level is immutable: a `mut` module binding is refused at its own declaration
 	# (over `own`, so a multi-unit build reports it once), before c_const_globals walks
@@ -12781,17 +12829,17 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	chk_top_stmts(em, own)
 
 	# the constants are declared before the prototypes, so a body may name one
-	globals := c_const_globals(em, f, own, whole)
+	globals := c_lowered(check, c_const_globals(em, f, own, whole))
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
-		protos = protos + c_proto(em, f.fns[i])
+		protos = protos + c_lowered(check, c_proto(em, f.fns[i]))
 		i = i + 1
 	}
 	mut defs := ""
 	i = 0
 	for i < own.fns.len() {
-		defs = defs + c_fn(em, own.fns[i])
+		defs = defs + c_lowered(check, c_fn(em, own.fns[i]))
 		i = i + 1
 	}
 
@@ -12815,8 +12863,8 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# The cost is a copy per unit, which is what a C header carrying an inline function
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
-		protos = protos + "static " + c_proto(em, inst)
-		defs = defs + "static " + c_fn(em, inst)
+		protos = protos + c_lowered(check, "static " + c_proto(em, inst))
+		defs = defs + c_lowered(check, "static " + c_fn(em, inst))
 		done = done + 1
 	}
 	mut mainw := ""
@@ -12833,7 +12881,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		# translation unit makes `own` and `f` the same file.
 		inits := c_const_assigns(em, f) + c_init_calls(em, f)
 
-		mainw = c_main_entry(em, own, inits)
+		mainw = c_lowered(check, c_main_entry(em, own, inits))
 	}
 
 	# A separately-compiled unit declares the WHOLE program's prototypes, and any of them
@@ -12879,7 +12927,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 		ress = c_carrier_prelude()
 	}
 	for d in em.res_decls {
-		ress = ress + d
+		ress = ress + c_lowered(check, d)
 	}
 
 	# the map vtables AFTER the typedef stream: a vtable's initializer names the copy thunk
@@ -12887,17 +12935,17 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# landed in
 	mut mvts := ""
 	for d in em.mvt_decls {
-		mvts = mvts + d
+		mvts = mvts + c_lowered(check, d)
 	}
 
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
 	for d in em.rcv_decls {
-		dfns = dfns + d
+		dfns = dfns + c_lowered(check, d)
 	}
 	for d in em.dfn_decls {
-		dfns = dfns + d
+		dfns = dfns + c_lowered(check, d)
 	}
 
 	# a lifted lambda is a whole function, emitted BEFORE the bodies that name it: the
@@ -12905,7 +12953,7 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# the definition has to be what the use sees
 	mut lams := ""
 	for d in em.lam_defs {
-		lams = lams + d
+		lams = lams + c_lowered(check, d)
 	}
 	for d in em.diags {
 		diags.append(d)
@@ -12913,5 +12961,10 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	for d in em.lints {
 		lints.append(d)
 	}
+
+	# and the header, which is the one section built from literals rather than from a
+	# lowering step, so it is the one c_lowered never sees. A check-only walk returns
+	# the empty string, not a file with nothing but includes in it.
+	return "" if check
 	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }

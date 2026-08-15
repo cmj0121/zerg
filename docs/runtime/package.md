@@ -87,7 +87,8 @@ stmt-list` is Zerg's **script mode**, and the grammar opens the language with th
 well-formed syntax and a compiler reads it whole. A **compiled** program has no moment at which to run it:
 execution begins at `main`, and everything above is state readied before that. It is therefore **refused by
 name, with a place**, by the build rather than by the parse — the same split a program with no `fn main`
-takes ([Conformance](../conformance.md)). `nop` is the one exception, and not really an exception: it does
+takes ([Conformance](../conformance.md)) — as _E391 `print` opens a statement at the top level, and a
+compiled program has nowhere to run it_. `nop` is the one exception, and not really an exception: it does
 nothing and yields nothing, so running nothing for it is running it.
 
 Top-level constants are initialized in **dependency order** — a
@@ -271,8 +272,10 @@ collide — that refusal is about the name, not about the visibility.
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
 group 12). A group is one module's bargain with its own author, and `pub` on it would offer that bargain
-to everyone who imports the module; it is refused at the declaration, with a place. Expose a `pub fn`
-that reads the binding instead.
+to everyone who imports the module. Two codes hold the one rule from its two sides: _E358 the top-level
+binding `x` may not be `mut` outside a module-level `unsafe { … }` group_, and _E484 the mutable global
+`x` may not be `pub`_. Expose a `pub fn` that reads the binding instead — `src/stdlib/log.zg` is the
+tree's worked example, and the only such group in the shipping stdlib.
 
 ### Importing & referencing
 
@@ -398,7 +401,7 @@ privacy. That decides where a test lives:
 White-box placement works in **either** shape a directory can have, because a test build resolves a test
 file's package the way an import is resolved: **most specific first**. `module_at` answers a single
 `<name>.zg` file before it answers a directory, so a `.zg` file beside its neighbours is a module in its
-own right — which is what `src/stdlib` is, eighteen independent modules in one flat directory. A
+own right — which is what `src/stdlib` is, fifteen independent modules in one flat directory. A
 `strings_test.zg` there is therefore the test of `strings.zg` alone, and its package is that pair; a test
 file that names no such sibling belongs to the **directory**, as before.
 

@@ -2008,6 +2008,33 @@ fn main() {
 }
 EOF
 
+# AND A TWO-OPERAND LEAF IS A DIFFERENT SHAPE, which is why `__zrt_set_env` gets its own three
+# rather than riding on the unary ones above. `__zrt_write` has been two-operand since the `io`
+# floor was written and no case ever exercised that row, so until the environment became
+# writable nothing here asked whether an arity above one is checked at all — or whether the
+# SECOND operand's type is, which is a different index into a different list.
+#
+# The seed grew a `binaryIntrinsic` for the same leaf, and it is the operand half of it that
+# does not fire, exactly as `unaryIntrinsic`'s does not: hence `seed-gap` on the two type cases
+# and not on the arity one.
+reject a-two-operand-primitive-given-one E397 'takes 2 arguments and this gives 1' <<'EOF'
+fn main() {
+	__zrt_set_env("K")
+}
+EOF
+
+reject a-two-operand-primitives-second-operand E398 'operand 2 of the compiler primitive `__zrt_set_env` is str, and this gives int' seed-gap <<'EOF'
+fn main() {
+	__zrt_set_env("K", 1)
+}
+EOF
+
+reject the-environment-removal-given-an-int E398 'is str, and this gives int' seed-gap <<'EOF'
+fn main() {
+	print __zrt_del_env(2)
+}
+EOF
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise. The conditional `return` is here on its own because it takes a

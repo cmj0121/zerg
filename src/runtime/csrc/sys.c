@@ -482,6 +482,49 @@ bool zrt_has_env(const char *key) {
 	return getenv(key) != NULL;
 }
 
+/*
+ * The two WRITES to the environment, and the one hazard neither of them can close.
+ *
+ * POSIX'S `environ` IS NOT THREAD-SAFE, AND THAT IS NOT THIS RUNTIME'S RACE TO FIX. setenv(3)
+ * may REALLOC the `environ` array and free the old one; getenv(3) hands back a pointer INTO
+ * it. So a setenv on one thread while another is inside getenv is a use-after-free in libc,
+ * where this project's memory model does not reach — POSIX.1-2024 says as much, and neither
+ * glibc nor Darwin locks the two against each other. It is categorically unlike the `log`
+ * cell, which is this runtime's own state and could be made atomic one day: no amount of work
+ * HERE can make these safe, because the data structure belongs to the C library.
+ *
+ * The rule is therefore about WHEN and not about how: set the environment at startup, before
+ * any coroutine is spawned. This runtime already runs several OS worker threads (sched.c), so
+ * two coroutines are two real threads often enough that "it worked on my machine" means
+ * nothing. See docs/runtime/stdlib.md for the same sentence aimed at a caller.
+ */
+
+/* zrt_set_env sets environment variable key to value, replacing any current one.
+ *
+ * IT RAISES RATHER THAN FAILING QUIETLY. setenv(3) refuses a name that is empty or contains
+ * `=` (EINVAL), and can run out of memory (ENOMEM); in every one of those cases the caller
+ * believes it wrote a variable that is not there, which is the class of defect this tree
+ * spends its gates on. ValueError is the kind: the argument is what was wrong. */
+void zrt_set_env(const char *key, const char *value) {
+	if (setenv(key, value, 1) != 0) {
+		zrt_abort_kind(ZRT_ERR_VALUE, "cannot set environment variable");
+	}
+}
+
+/* zrt_del_env removes environment variable key and answers WHETHER IT WAS THERE — the one
+ * thing a caller cannot find out for itself, because zrt_has_env followed by this is two
+ * queries with a window between them. unsetenv(3) reports success either way, so this reads
+ * before it removes and hands back what it saw.
+ *
+ * IT IS TOTAL, unlike its sibling above. unsetenv refuses the same names setenv does, and a
+ * name that cannot exist WAS NOT SET — `false` is the true answer rather than an absence of
+ * one, so there is nothing here to raise about. */
+bool zrt_del_env(const char *key) {
+	bool had = getenv(key) != NULL;
+	unsetenv(key);
+	return had;
+}
+
 /* zrt_isatty answers whether fd is a terminal — the one question a program has to ask
  * before it decides to colour its output, and the one the stdlib could not ask at all.
  *

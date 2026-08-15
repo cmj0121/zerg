@@ -14,8 +14,8 @@ import (
 #
 # THERE ARE TWO SHAPES BECAUSE THE LANGUAGE HAS TWO. `module_at` resolves an import to a
 # single `<name>.zg` file BEFORE it resolves one to a directory, so a `.zg` file beside its
-# neighbours is a module in its own right — which is what `src/stdlib` is: sixteen
-# independent one-file modules in one flat directory, not one module of sixteen files.
+# neighbours is a module in its own right — which is what `src/stdlib` is: eighteen
+# independent one-file modules in one flat directory, not one module of eighteen files.
 #
 # A test build used to know only the second shape, and that made a white-box test of a
 # stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other

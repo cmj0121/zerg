@@ -219,7 +219,7 @@ impl Context {
 # joins notes with its own.
 fn rendered(msg: str) -> str {
 	lines := chan[str](1)
-	log.new().format(log.FMT_PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
+	log.new().format(log.Format.PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
 
 	# THE RESULT IS ASSIGNED RATHER THAN RETURNED FROM INSIDE THE `if`, and that is not a style
 	# choice: `zerg fmt` collapses a lone `return` in an `if` into the postfix form, and

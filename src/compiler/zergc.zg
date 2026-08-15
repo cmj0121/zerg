@@ -70,7 +70,7 @@ fn root() -> cli.Command {
 fn build_cmd() -> cli.Command {
 	return (
 		cli.command("build", "compile a program (see --emit)")
-		.opt("e", "emit", "stop after a stage: tokens, ast, c, lib, bin — bin when the entry declares `main`, else lib", "")
+		.opt("e", "emit", "stop after a stage: tokens, ast, check, c, lib, bin — bin when the entry declares `main`, else lib", "")
 		.opt("o", "output", "where to write the result (default: stdout for tokens/ast/c, the source name for lib/bin)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
@@ -123,6 +123,7 @@ fn env_help() -> str {
 	return "Stages (--emit):\n" +
 		"  tokens             the token stream, on stdout\n" +
 		"  ast                the parsed tree, on stdout\n" +
+		"  check              the diagnostics only — no C, no artifact\n" +
 		"  c                  the emitted C, on stdout\n" +
 		"  lib                compile the C to an object file (default)\n" +
 		"  bin                link an executable\n" +
@@ -309,7 +310,28 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		}
 		return
 	}
-	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
+
+	# `check` is `c` without the C: the same load, the same lexical pass, the same walk over
+	# the same whole-program view, reporting through the same renderer — and no artifact, so
+	# there is nothing for `-o` to name.
+	#
+	# It is an `--emit` value rather than a flag of its own because that is what this command
+	# line already says a stage is: how FAR the build goes. `--emit c … -o /dev/null` was the
+	# way to stop at the front end before this existed, and it is a poor one — it lowers the
+	# whole program to C in memory and throws the string away, which on a program this size is
+	# 2.8 GB against 0.22 GB for the same answer. The editor integrations asked exactly that
+	# question, on every save.
+	if emit == "check" {
+		mut paths: list[str] = []
+		srcs := load_sources_at(files, paths)
+		mut diags: list[zerg.Diag] = []
+		lex_diags_of(srcs, paths, diags)
+		report_diags(diags, srcs, paths)
+		zerg.check_files_diag(srcs, paths, diags)
+		report_diags(diags, srcs, paths)
+		return
+	}
+	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, check, c, lib, or bin)\n")
 	__zrt_exit(2)
 }
 

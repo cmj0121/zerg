@@ -93,10 +93,10 @@ fn build_cmd() -> cli.Command {
 # somebody scripts `zerg build --test` into a release step there is nothing left to say no.
 fn test_cmd() -> cli.Command {
 	return (
-		cli.command("test", "build and run the `#[test]` functions in every `*_test.zg` under a path")
+		cli.command("test", "build and run the `#[test]` functions under a path, wherever they are written")
 		.opt("k", "only", "run only the tests whose name begins with this", "")
 		.opt("t", "timeout", "seconds one test may take before it is reported STUCK", "60")
-		.add(cli.positional("path", "the directory to search (default: the current one)"))
+		.add(cli.positional("path", "the directory to search, or one `.zg` file — its package runs (default: the current directory)"))
 		.run(do_test)
 	)
 }
@@ -992,9 +992,33 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 # run_tests is the whole command: find the packages, run each one's tests, and say what
 # happened. It answers 0 only when nothing failed.
 #
-# A RUN THAT FOUND NOTHING SAYS SO. Discovering no test and printing nothing is
-# indistinguishable from a run where everything passed, which is the one failure a test runner
-# must not have — every gate in this repository is written against it.
+# A RUN THAT FOUND NOTHING SAYS SO, on stderr and in the STATUS. Discovering no test and
+# printing nothing is indistinguishable from a run where everything passed, which is the one
+# failure a test runner must not have — every gate in this repository is written against it —
+# and a sentence alone is not enough, because the reader of a CI line is a shell.
+
+# NOTHING_FOUND is what `zerg test` answers when the search succeeded and turned up no test,
+# and it is a status of its own because that is a DIFFERENT ANSWER from the three already
+# spoken here. Rename a directory, move a suite, edit a glob or mistype a path into a CI line,
+# and a runner that answers 0 leaves the board green forever while running nothing — the shape
+# this repository has already been bitten by and written down: a gate measuring nothing looks
+# like a gate finding nothing. pytest reserves a status for exactly this.
+#
+# The ladder `zerg test` now answers on, and why this is 3 rather than 2:
+#
+#   0  every test that ran passed, or skipped
+#   1  a test failed, or timed out — the tests said no
+#   2  the COMMAND was wrong: no such path, a `--only` that matched nothing, a fixture
+#      parameter that resolves to nothing. Nothing ran, and nothing was going to
+#   3  the command was right, the search ran, and there was no test in what it searched
+#
+# 2 was already taken and taking it again would be the same erasure one level up: the reader's
+# next move differs, and that is the whole test of whether two answers are one. A 2 is fixed by
+# editing the command line; a 3 is fixed by looking at the tree. pytest's own number for this
+# is 5, which is an artifact of its history (2 interrupted, 3 internal error, 4 usage) and not
+# a thing to copy — this ladder is dense, and 3 is the next rung.
+const NOTHING_FOUND := 3
+
 fn run_tests(root: str, only: str, secs: int) -> int {
 	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
 	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
@@ -1006,8 +1030,28 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 		return 2
 	}
 
+	# A FILE PATH NAMES THE PACKAGE IT IS IN. Iterating on one file is the commonest thing
+	# anybody does with a test runner, and a walk that only knows directories answered it with
+	# "no tests" — a wrong answer delivered calmly, which is the one thing this project's
+	# standing rule forbids of any form. There is nothing to invent for it: the package model
+	# already answers "which build is this file compiled in" (docs/runtime/package.md), so a
+	# file is resolved to its package and that package is what runs.
+	#
+	# THE PACKAGE, NOT THE FILE'S TESTS. `strings_test.zg` names the package `strings.zg` +
+	# `strings_test.zg`, and running that pair is what a white-box test of `strings` IS — a run
+	# of the test file alone is not a build of anything. `--only` is the tool for one test.
+	#
+	# A `.zg` NAME IS WHAT MARKS A FILE, which is the convention this walk already uses one
+	# function down: `test_pkgs` does not descend into a `.zg` name either. There is no `isdir`
+	# under this runtime, and inventing one for this would put a second answer to "is this a
+	# source file" in the tree.
+	base := search_root(root)
 	mut pkgs: list[Pkg] = []
-	test_pkgs(root, pkgs)
+	if base == root {
+		test_pkgs(root, pkgs)
+	} else {
+		file_pkgs(root, pkgs)
+	}
 
 	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
 	# parameter whose type is not what the fixture produces, and a circle among fixtures are
@@ -1020,7 +1064,7 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	for p in pkgs {
 		mut fixts: list[Fixt] = []
 		mut tests: list[Tst] = []
-		plan_pkg(root, p, only, fixts, tests, errs)
+		plan_pkg(base, p, only, fixts, tests, errs)
 		chosen = chosen + tests.len()
 	}
 	if errs.len() > 0 {
@@ -1044,12 +1088,12 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	mut skipped := 0
 	mut stuck := 0
 	for p in pkgs {
-		run_pkg(root, p, only, secs, passed, failed, skipped, stuck)
+		run_pkg(base, p, only, secs, passed, failed, skipped, stuck)
 	}
 
 	if passed + failed + skipped + stuck == 0 {
-		io.println(f"no tests: nothing under `{root}` declares a `#[test]` in a `*_test.zg`")
-		return 0
+		io.ewrite(f"zerg: no tests: nothing under `{root}` declares a `#[test]`\n")
+		return NOTHING_FOUND
 	}
 	io.println("")
 
@@ -1107,24 +1151,125 @@ struct Pkg {
 # looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
 # `opendir` per source file otherwise.
 fn test_pkgs(root: str, mut &out: list[Pkg]) {
-	names := __zrt_listdir(root)
+	dir_pkgs(root, out)
+	for name in __zrt_listdir(root) {
+		if not is_hidden(name) and not has_suffix(name, ".zg") {
+			test_pkgs(join_path(root, name), out)
+		}
+	}
+}
+
+# dir_pkgs is the packages of ONE directory, and it is separate from the walk above because
+# the walk is not the only caller: a run pointed at a file asks the same question of that
+# file's directory alone.
+#
+# A `#[test]` OUTSIDE A `*_test.zg` STILL FORMS A PACKAGE. The decorator may be written
+# anywhere — that is the language's answer and both compilers read it there — so discovery
+# finds one wherever it is, and L601 goes on warning that a `#[test]` in an ordinary file
+# SHIPS. Both, not one: the linter's job is to say where a test ought to live and the runner's
+# is to run what is written, and a runner that quietly skipped a `#[test]` because of its
+# file's NAME was reporting a green run of a suite it had not run.
+#
+# IT INTRODUCES NO PACKAGE SHAPE. The package a stray `#[test]` belongs to is the one that
+# ALREADY compiles the file it is written in: a file claimed by a one-file module is in that
+# module's package, which the test file above already made, and an unclaimed file is among the
+# directory package's sources. So all this adds is the directory package APPEARING where no
+# `*_test.zg` would have made one — `pkg_sources` is untouched, and the monotone property
+# docs/runtime/package.md states holds for the same reason it did before: which files a
+# package is built from is decided by the `*_test.zg` names alone.
+fn dir_pkgs(dir: str, mut &out: list[Pkg]) {
+	names := __zrt_listdir(dir)
 	mut whole := false
 	for name in names {
 		if zerg.is_test_file(name) and not is_own_file(name) {
-			m := test_module(root, name)
+			m := test_module(dir, name)
 			if m == "" {
 				whole = true
 			} else {
-				out.append(Pkg(root, m))
+				out.append(Pkg(dir, m))
 			}
 		}
 	}
-	if whole {
-		out.append(Pkg(root, ""))
+
+	# ASKED ONLY WHILE THE ANSWER IS STILL OPEN. A directory a test file already made a package
+	# of needs no second reason to be one, and this is the expensive question of the two — so
+	# the cost stays off every directory that has a test file at all.
+	if not whole {
+		whole = a_source_declares_a_test(dir)
 	}
-	for name in names {
-		if not is_hidden(name) and not has_suffix(name, ".zg") {
-			test_pkgs(join_path(root, name), out)
+	if whole {
+		out.append(Pkg(dir, ""))
+	}
+}
+
+# a_source_declares_a_test is whether any file the DIRECTORY's own package would be compiled
+# from holds a `#[test]`.
+#
+# IT ASKS pkg_sources, which is the list that package is built from, rather than re-deriving
+# which of a directory's names belong to it. The two questions are one — "is this file in the
+# directory package" — and the paragraph above claims this adds no package SHAPE, which is a
+# claim about those two agreeing; written out twice, nothing would hold them to it.
+#
+# It stops at the first, because one is the whole answer and each of these is a parse.
+fn a_source_declares_a_test(dir: str) -> bool {
+	for f in pkg_sources(Pkg(dir, "")) {
+		return true if file_declares_a_test(f)
+	}
+	return false
+}
+
+# file_declares_a_test parses one source and answers whether it declares a `#[test]`.
+#
+# IT PARSES, because the decorator is a declaration's and a grep for the text would be a
+# second answer to what a `#[test]` is — one that a comment or a string literal satisfies. The
+# parse is one this run was going to do anyway for a directory that turns out to be a package.
+#
+# A FILE THAT DOES NOT PARSE IS NOT A TEST PACKAGE, and the guard is what says so rather than
+# ending the run: discovery walks files nobody named, and a broken source somewhere under the
+# path is the BUILD's finding, reported with a place by whichever package compiles it.
+fn file_declares_a_test(path: str) -> bool {
+	mut found := false
+	guard {
+		found = has_a_test(zerg.parse_at(read_source(path), path))
+	}
+	return found
+}
+
+# has_a_test is whether a parsed file declares a `#[test]` at all. It is its own function
+# because the walk above runs inside a `guard`, and a `guard` block cannot carry the early
+# return that stops this one at the first hit.
+fn has_a_test(tree: zerg.File) -> bool {
+	for fd in tree.fns {
+		return true if fd.is_test
+	}
+	return false
+}
+
+# search_root is the directory a run searches from: the path itself, or its directory when the
+# path names a `.zg` file. Ancestors — the `fixtures_test.zg` of each level — are counted from
+# it, which keeps the rule the one docs/runtime/package.md already states: they are counted
+# from the path `zerg test` was GIVEN, and the directory a named file sits in is that path.
+fn search_root(path: str) -> str {
+	return dir_of(path) if has_suffix(path, ".zg")
+
+	return path
+}
+
+# file_pkgs is the packages that COMPILE `path`. It is the package model's own answer read
+# backwards — `pkg_sources` says which files a package is built from, and this asks which
+# package a file is in — so the two can never disagree about a file.
+#
+# The directory is `search_root`'s answer and is derived here rather than passed: two arguments
+# that have to agree are one argument, and the caller had nothing else to give.
+#
+# There may be no package, which is a run that found nothing and is reported as one: a `.zg`
+# file with no `#[test]` in it and no test file naming it is in none.
+fn file_pkgs(path: str, mut &out: list[Pkg]) {
+	mut all: list[Pkg] = []
+	dir_pkgs(search_root(path), all)
+	for p in all {
+		if has_str(pkg_sources(p), path) {
+			out.append(p)
 		}
 	}
 }
@@ -1448,24 +1593,32 @@ fn ancestors_of(root: str, dir: str) -> list[str] {
 	return out
 }
 
-# pkg_decls collects the `#[test]` and `#[fixture]` declarations of a package's test files.
+# pkg_decls collects the `#[test]` and `#[fixture]` declarations of a package's sources.
 #
-# ONLY A `*_test.zg` IS READ FOR ONE. A `#[test]` elsewhere in the package is compiled like
-# any other function and nothing calls it — the file's NAME is what makes a source a test
-# file (docs/runtime/package.md), and a second answer here would mean a function that runs
-# under `zerg test` from a file `zerg build` also ships.
+# EVERY FILE OF THE PACKAGE IS READ FOR ONE, and not only its `*_test.zg`. A decorator may be
+# written anywhere — the language says so and both compilers read it there — so a `#[test]` in
+# an ordinary module file is a test this runner runs, and `zerg lint` goes on warning (L601)
+# that such a test SHIPS. Skipping it here meant a suite could be green having never run a
+# function its author wrote as a test, which is the linter's finding turned into a silence.
+#
+# WHAT DOES NOT CHANGE is which files a package is compiled from: the file was already among
+# this package's sources, so it was already compiled. What moved is which functions the
+# generated driver CALLS.
+#
+# AN INHERITED FILE CONTRIBUTES FIXTURES AND NOTHING ELSE, which is `own` and is the one rule
+# here that reads the list: an ancestor's `fixtures_test.zg` is copied into every package below
+# it, and its `#[test]` functions would otherwise run once per descendant directory instead of
+# once, in the directory that wrote them.
 fn pkg_decls(files: list[str], own: list[bool], mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
 	mut i := 0
 	for i < files.len() {
 		f := files[i]
-		if zerg.is_test_file(path_tail(f)) {
-			tree := zerg.parse_at(read_source(f), f)
-			for fd in tree.fns {
-				if fd.is_fixture {
-					fixts.append(mk_fixture(fd, errs))
-				} else if fd.is_test and own[i] {
-					tests.append(mk_test(fd))
-				}
+		tree := zerg.parse_at(read_source(f), f)
+		for fd in tree.fns {
+			if fd.is_fixture {
+				fixts.append(mk_fixture(fd, errs))
+			} else if fd.is_test and own[i] {
+				tests.append(mk_test(fd, errs))
 			}
 		}
 		i = i + 1
@@ -1510,7 +1663,28 @@ fn mk_fixture(fd: zerg.FnDecl, mut &errs: list[str]) -> Fixt {
 # one. The qualifier is resolved away at the parse — `testing.Context` and a local `Context`
 # are one name by then — which is the same ambiguity this compiler already has everywhere
 # else.
-fn mk_test(fd: zerg.FnDecl) -> Tst {
+#
+# A `#[test]` DECLARES NO RETURN TYPE, and that is REFUSED here rather than warned about.
+# `#[test] fn t() -> bool { return false }` was reported `ok`: the driver writes the call as a
+# statement, so the value went nowhere, and the one reader who could have been told — a person
+# who believes the value is the verdict — was told the opposite. Go refuses the same shape
+# outright (`wrong signature for TestX`).
+#
+# WHY A REFUSAL AND NOT A LINT. A lint is advice and exits 0, so `zerg test` would go on
+# printing `ok` for that function while a second command elsewhere disagreed — which is this
+# whole class of defect, one tool answering calmly and wrongly about what another can see. It
+# is refused where the decorator MEANS something, beside the fixture rules and through the same
+# channel: reported with a place, for the whole tree, before anything is compiled or run.
+#
+# IT IS ABOUT `#[test]` AND NOT ABOUT `#[fixture]`. A fixture hands its value over by CALLING
+# its `use: fn (T)` continuation, so what it produces is already declared and a return type
+# there is a separate question.
+fn mk_test(fd: zerg.FnDecl, mut &errs: list[str]) -> Tst {
+	at := f"{fd.path}:{fd.line}:{fd.col}"
+	if fd.has_ret {
+		errs.append(f"{at}: the test `{fd.name}` declares `-> {zerg.ty_name(fd.ret)}` and nothing reads it — a `#[test]` answers with an `assert`, and the driver calls it as a statement, so the value would be dropped; drop the return type, or `assert` what you were going to return")
+	}
+
 	mut pnames: list[str] = []
 	mut ptys: list[str] = []
 	mut isctx: list[bool] = []

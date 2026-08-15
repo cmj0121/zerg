@@ -45,10 +45,23 @@
 #     refused   no such fixture / a circle / a type that is not what the fixture produces —
 #               each reported with a place BEFORE anything runs, and nothing runs
 #
-#   none    a directory with no test files     exit 0, and it SAYS so rather than printing
+#   none    a directory with no test in it     exit 3, and it SAYS so rather than printing
 #                                              nothing — a silent run that found nothing is
-#                                              indistinguishable from one where all passed
+#                                              indistinguishable from one where all passed,
+#                                              and 3 is told from the 2 a bad path gets
 #   skips   a package that only passes and skips   exit 0: a skip is not a failure
+#
+#   the path it is GIVEN, and what a declaration is found by
+#     file      `zerg test <file.zg>`             runs the package that file is in, and only
+#                                                 that one — the commonest thing anybody asks
+#                                                 a runner for, and it used to answer "no
+#                                                 tests" about a file holding three
+#     anywhere  a `#[test]` in an ordinary file   runs, wherever it is written, while `zerg
+#                                                 lint` goes on warning (L601) that it SHIPS.
+#                                                 Both, not one
+#     returns   a `#[test]` declaring `-> T`      refused with a place, and nothing in its
+#                                                 package runs: the value would be dropped,
+#                                                 and it was reported `ok`
 #
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
 # package checked into the repository is a package every other gate then has to know about —
@@ -336,15 +349,32 @@ after=$(ls "$tmp/pkg/lib" "$tmp/pkg/edge")
 [ "$before" = "$after" ]
 say "the run left a generated file behind in the package" $?
 
-# 13. a directory with no test files: exit 0, and NOT silence.
+# 13. a directory with no test in it: it SAYS so, and it says so in the STATUS.
+#
+#     A RUN THAT FOUND NOTHING IS NOT A RUN THAT PASSED. Rename a directory, move a suite,
+#     edit a glob, or mistype a path into a CI line, and a runner answering 0 leaves the board
+#     green forever while running nothing — this repository's own sentence for it is that a
+#     gate measuring nothing looks like a gate finding nothing. The sentence alone does not
+#     close it, because the reader of a CI line is a shell, so 3 is asserted here.
+#
+#     3 AND NOT 2, asserted as the exact number rather than as "non-zero": 2 is already "the
+#     command was wrong" — no such path, a `--only` that matched nothing — and a gate that
+#     accepted either could not tell a search that found nothing from a command line nobody
+#     can run.
 none=$("$ZERG" test "$tmp/none" 2>&1)
 status=$?
 
-[ "$status" -eq 0 ]
-say "a tree with no test files did not exit 0" $?
+[ "$status" -eq 3 ]
+say "a tree with no test in it did not exit 3 — a run that found nothing is not a run that passed" $?
 
 printf '%s\n' "$none" | grep -qF 'no tests'
-say "a tree with no test files said nothing — a silent run is indistinguishable from one where everything passed" $?
+say "a tree with no test in it said nothing — a silent run is indistinguishable from one where everything passed" $?
+
+# and the two non-zero answers are TOLD APART. A path that is not there is a command nobody
+# can run; a path that is there and holds no test is a tree to go and look at.
+"$ZERG" test "$tmp/none/nosuchdir" >/dev/null 2>&1
+[ $? -eq 2 ]
+say "a path that does not exist did not exit 2 — a bad command line and an empty search are not one answer" $?
 
 # 14. a skip is not a failure, said in the one place it decides something: the exit status.
 skips=$("$ZERG" test "$tmp/skips" 2>&1)
@@ -1060,6 +1090,193 @@ say "a run holding a test that never finished exited 0" $?
 grep -qE '^  ok    test_b_after_it$' "$tmp/slow.out"
 say "the tests after a hung one did not run" $?
 
+# --- a run pointed at one file --------------------------------------------------------------
+#
+# ITERATING ON ONE FILE IS THE COMMONEST THING ANYBODY DOES WITH A TEST RUNNER, and a walk that
+# knew only directories answered it with "no tests" and exited 0 — a wrong answer delivered
+# calmly, about a file holding three of them. What a file path names is the PACKAGE it is in,
+# which the package model already answers, so both halves are measured here: the package runs,
+# and only that package does.
+
+mkdir -p "$tmp/one"
+
+cat >"$tmp/one/mod.zg" <<'EOF'
+fn secret() -> int {
+	return 4
+}
+
+pub fn twice_secret() -> int {
+	return secret() * 2
+}
+EOF
+
+cat >"$tmp/one/mod_test.zg" <<'EOF'
+#[test]
+fn test_mod_sees_its_private_name() {
+	assert secret() == 4
+}
+EOF
+
+cat >"$tmp/one/loose_test.zg" <<'EOF'
+#[test]
+fn test_the_other_package() {
+	assert true
+}
+EOF
+
+file_out=$("$ZERG" test "$tmp/one/mod_test.zg" 2>&1)
+status=$?
+
+[ "$status" -eq 0 ]
+say "a run pointed at one file did not exit 0" $?
+
+printf '%s\n' "$file_out" | grep -qE '^  ok    test_mod_sees_its_private_name$'
+say "a run pointed at a test file did not run the test in it" $?
+
+# and it is the PACKAGE that runs, not the file: `mod_test.zg` names the module `mod.zg`, so
+# the private name it reaches has to have been compiled beside it. A driver built from the test
+# file alone would not compile at all.
+printf '%s\n' "$file_out" | grep -qF 'no tests'
+[ $? -ne 0 ]
+say "a run pointed at a file that holds a test still reported an empty search" $?
+
+# the OTHER package of that directory is not swept in. A file names one package, and a runner
+# that ran the whole directory would make `--only` the only way to narrow anything.
+printf '%s\n' "$file_out" | grep -qF 'test_the_other_package'
+[ $? -ne 0 ]
+say "a run pointed at one file ran another package of the same directory" $?
+
+# pointed at the MODULE file rather than at the test file, which is the same package read from
+# its other end
+"$ZERG" test "$tmp/one/mod.zg" 2>&1 | grep -qE '^  ok    test_mod_sees_its_private_name$'
+say "a run pointed at a module's own file did not run that module's tests" $?
+
+# a `.zg` file whose directory holds no test package at all is an EMPTY SEARCH, not a green
+# run. `none/quiet/quiet.zg` is that file: no `#[test]` in it, and no test file beside it.
+"$ZERG" test "$tmp/none/quiet/quiet.zg" >/dev/null 2>&1
+[ $? -eq 3 ]
+say "a file that is in no test package did not report an empty search" $?
+
+# --- a `#[test]` outside a `*_test.zg` --------------------------------------------------------
+#
+# THE DECORATOR MAY BE WRITTEN ANYWHERE, so discovery finds one wherever it is — and `zerg
+# lint` goes on warning (L601) that a `#[test]` in an ordinary file SHIPS. BOTH, not one: the
+# linter says where a test ought to live and the runner runs what is written, and a runner that
+# skipped a `#[test]` because of its file's NAME reported a green suite it had not run.
+
+mkdir -p "$tmp/anywhere/mixed" "$tmp/anywhere/bare"
+
+cat >"$tmp/anywhere/mixed/ships.zg" <<'EOF'
+#[test]
+fn test_written_in_an_ordinary_file() {
+	assert helper() == 3
+}
+
+fn helper() -> int {
+	return 3
+}
+EOF
+
+cat >"$tmp/anywhere/mixed/ships_test.zg" <<'EOF'
+#[test]
+fn test_written_where_it_belongs() {
+	assert helper() == 3
+}
+EOF
+
+# bare — a directory with NO `*_test.zg` at all, which is the strongest form of the claim: the
+# only thing making this a test package is a declaration inside an ordinary module file.
+#
+# AND ITS FIXTURE IS READ THERE TOO, which is not a second feature but the same one: a package's
+# declarations are collected from the files it is built from, so a `#[fixture]` beside a
+# `#[test]` in one ordinary file serves it. Reading one decorator and not the other would leave
+# the test refused for a fixture that is written three lines above it.
+cat >"$tmp/anywhere/bare/only.zg" <<'EOF'
+struct Bag {
+	n: int = 0
+}
+
+#[fixture]
+fn bag(use: fn (Bag)) {
+	use(Bag(5))
+}
+
+#[test]
+fn test_no_test_file_in_this_directory(bag: Bag) {
+	assert bag.n == 5
+}
+EOF
+
+any_out=$("$ZERG" test "$tmp/anywhere" 2>&1)
+status=$?
+
+[ "$status" -eq 0 ]
+say "a run over a tree whose tests are outside a \`*_test.zg\` did not exit 0" $?
+
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_written_in_an_ordinary_file$'
+say "a \`#[test]\` in an ordinary file beside a test file was not run" $?
+
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_written_where_it_belongs$'
+say 'the test in the `*_test.zg` beside it stopped running' $?
+
+# it PASSES, which is two claims in one line: the directory formed a package on the strength of
+# a declaration in an ordinary file, and the `#[fixture]` written beside it was read from there
+# too — an unresolved parameter would have ended the whole run with status 2 before this.
+printf '%s\n' "$any_out" | grep -qE '^  ok    test_no_test_file_in_this_directory$'
+say "a directory whose only \`#[test]\` is in an ordinary file did not form a test package, or the \`#[fixture]\` beside it was not read" $?
+
+# the report names the file the test came from, which for these is not a `*_test.zg`
+printf '%s\n' "$any_out" | grep -qF 'mixed/ships.zg'
+say "the report did not name the ordinary file a test was written in" $?
+
+# AND THE LINTER STILL WARNS. This is the half a runner change could silently take away: if
+# running it were taken as blessing it, the rule that says such a test SHIPS would be the next
+# thing deleted.
+"$ZERG" lint "$tmp/anywhere/mixed/ships.zg" 2>&1 | grep -qF 'L601'
+say "L601 stopped warning that a \`#[test]\` outside a \`*_test.zg\` ships" $?
+
+# --- a `#[test]` with a return type -----------------------------------------------------------
+#
+# `#[test] fn t() -> bool { return false }` was reported `ok`. The driver calls a test as a
+# STATEMENT, so the value goes nowhere — and the one person who could be told, the one who
+# believes the value is the verdict, was told the opposite. It is refused where the decorator
+# means something, with a place, before anything is compiled or run.
+
+mkdir -p "$tmp/returns"
+
+cat >"$tmp/returns/ret_test.zg" <<'EOF'
+#[test]
+fn test_returns_false() -> bool {
+	return false
+}
+
+#[test]
+fn test_beside_it() {
+	assert true
+}
+EOF
+
+ret_out=$("$ZERG" test "$tmp/returns" 2>&1)
+status=$?
+
+[ "$status" -eq 2 ]
+say "a \`#[test]\` declaring a return type was not refused" $?
+
+printf '%s\n' "$ret_out" | grep -qE 'ret_test\.zg:[0-9]+:[0-9]+: the test `test_returns_false` declares `-> bool`'
+say "the refusal does not name the test, its return type, or where it was written" $?
+
+# NOTHING RAN. A refusal that reported a verdict for the test beside it would have compiled and
+# executed a package it had already found a fault in — which is the arrangement every other
+# resolution error here is refused before.
+printf '%s\n' "$ret_out" | grep -qE '^  ok    test_beside_it$'
+[ $? -ne 0 ]
+say "a package holding a test with a return type ran its other tests anyway" $?
+
+# and it is NOT reported `ok` itself, which is the measured defect
+printf '%s\n' "$ret_out" | grep -qF 'ok    test_returns_false'
+[ $? -ne 0 ]
+say "a test that returned \`false\` was still reported \`ok\`" $?
+
 # 42. THE SOURCES THIS GATE WRITES ARE CANONICAL. They are the example a reader copies out of
 #     here, and a gate whose examples `zerg fmt` would rewrite teaches a spelling the toolchain
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
@@ -1071,9 +1288,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 79 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 98 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-79}
+MIN_ASSERTS=${MIN_ASSERTS:-98}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \
@@ -1087,4 +1304,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"
+printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"

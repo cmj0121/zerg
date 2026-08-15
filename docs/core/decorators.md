@@ -47,17 +47,24 @@ one —
   **generic wrap**, which is how a heterogeneous collection is written in a language where a spec is a bound
   and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
   See **[Specs & Generics](specs.md)**.
-- **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
-  excluded from a normal one. It returns nothing and takes a **`testing.Context`** (by type), the **fixtures**
-  it needs (by name), or no parameter at all; a failing assertion or an abort inside it fails the test (see
-  [Modules, Packages & Programs](../runtime/package.md) on where tests live). A `#[test]` **outside** a
-  `*_test.zg` file is legal and **ships** — it is compiled into the binary like any other function and nothing
-  calls it — so `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)).
-- **`#[fixture]`** — on a `fn`, in a `*_test.zg`. Marks the function as something `zerg test` **builds for the
-  tests that name it**. It takes its tests as a **continuation**: one parameter of type `fn (T)`, identified by
-  type, which is both where those tests run and the declaration of what the fixture **produces**. Every other
-  parameter **names another fixture**. Teardown is `defer`, so the runner supplies nothing for it. The same
-  **L601** applies — a `#[fixture]` outside a `*_test.zg` ships exactly as a `#[test]` does. See
+- **`#[test]`** — on a `fn`. Marks the function as a test case, run by `zerg test` and by nothing else. It
+  **returns nothing** and takes a **`testing.Context`** (by type), the **fixtures** it needs (by name), or no
+  parameter at all; a failing assertion or an abort inside it fails the test (see
+  [Modules, Packages & Programs](../runtime/package.md) on where tests live). A declared return type is
+  **refused** by `zerg test`, with a place: the driver calls a test as a statement, so the value would be
+  dropped, and a reader who thinks it is the verdict has to be told it is not. It may be written
+  **anywhere**, and `zerg test` **discovers it wherever it is** — a directory whose only `#[test]` sits in an
+  ordinary module file is still a test package. Written outside a `*_test.zg` it is legal and it **ships**:
+  it is compiled into the binary like any other function and nothing in the **program** calls it, so
+  `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)). Both, not one — the linter says
+  where a test ought to live, and the runner runs what is written.
+- **`#[fixture]`** — on a `fn`, and it belongs in a `*_test.zg`. Marks the function as something `zerg test`
+  **builds for the tests that name it**. It takes its tests as a **continuation**: one parameter of type
+  `fn (T)`, identified by type, which is both where those tests run and the declaration of what the fixture
+  **produces**. Every other parameter **names another fixture**. Teardown is `defer`, so the runner supplies
+  nothing for it. It is read **wherever it is written**, exactly as a `#[test]` is — a fixture beside a test in
+  an ordinary module file serves that test rather than being silently absent from it — and the same **L601**
+  applies, since a `#[fixture]` outside a `*_test.zg` ships exactly as a `#[test]` does. See
   [Modules, Packages & Programs](../runtime/package.md).
 - **`#[allow(Lxxx, …)]`** — on any **statement**, declarations included. Suppresses the named **lint**
   findings over that statement, and over its block when it has one: the scope is the size of the statement

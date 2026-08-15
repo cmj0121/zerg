@@ -30,6 +30,10 @@
 # prefix and a message into two writes and a stress test found 830 lines in 24000 pairing one
 # kind with another's message. So `msg` builds the whole line, newline included, and hands it
 # to a SINGLE `__zrt_write`. Nothing here calls `io.eprintln`, which is two.
+#
+# THIS MODULE IS ALSO THE TREE'S REFERENCE FOR PROCESS-WIDE MUTABLE STATE. The pattern, and
+# the four rules that make it safe to copy, are written above the `unsafe { }` group at the
+# foot of this file.
 import (
 	"io"
 	"json"
@@ -144,7 +148,7 @@ pub fn parse(s: str) -> Level? {
 # PRETTY IS THE DEFAULT, and that departs from zerolog, whose default is JSON. The reason is
 # who is on the other end: an unconfigured program is one somebody is running, and a readable
 # line is worth more to them than a parseable one. A program whose output is being collected
-# says so with `ZERG_LOG=json` or with `set_format`, which is one line in `main` and is a
+# says so with `ZERG_LOG=json` or with `log.install(…)`, which is one line in `main` and is a
 # decision somebody made rather than one the library guessed.
 #
 # `ZERG_LOG` PICKS THE FORMAT AND `isatty` DOES NOT, which is the line this module holds and
@@ -287,7 +291,7 @@ pub fn new() -> Logger {
 
 # env_level is `ZERG_LOG_LEVEL`, by name, and anything it does not recognise is `INFO`. It is
 # the one way a level is chosen without editing the program, which matters more here than it
-# would elsewhere: the only other way is a call in `main`, and the person who wants
+# would elsewhere: the only other way is `log.install(…)` in `main`, and the person who wants
 # a debug line is often not the person who can rebuild.
 fn env_level() -> Level {
 	return parse(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
@@ -649,72 +653,108 @@ fn needs_quotes(s: str) -> bool {
 	return false
 }
 
-# --- the global logger -----------------------------------------------------------------------
+# --- the global logger, and the pattern to copy for any other one ------------------------------
 #
 # THE PACKAGE PROVIDES TWO SURFACES AND NEITHER REPLACES THE OTHER: a logger you hold and pass
 # (`log.new()`, above) and a system-wide one that works with no plumbing (`log.info()`, below).
 # That is zerolog's shape, and the reason is that a component with its own level or its own
 # fields wants the first while everything else wants the second.
 #
-# THE GLOBAL IS AN INSTANCE, not a second implementation beside one. Every function below is
-# one line that reaches the cell and calls the method that already exists, so there is exactly
-# one level check, one builder and one writer in this module. Anything else grows two loggers
-# that drift, which is the same argument that put the JSON escaper in one place.
-
-# THE STANDARD LIBRARY'S FIRST `unsafe` GROUP, and this is the note saying why it is here and
-# what would take it away.
+# ============================================================================================
+# THE PATTERN — process-wide mutable state in Zerg.
 #
-# THE POSITION IT IS AN EXCEPTION TO IS `E358`'s OWN: *module state is immutable, and shared
-# mutable state travels by value or through channels*. That rule is right for almost
-# everything and it cannot serve a logger. `log.info()` has to work inside a function that was
-# handed no logger, in a module that imports nothing but this one — and threading a value to
-# every call site means a parameter on every function between `main` and the line. A program
-# that does that does not have a logger; it has a logger-shaped argument.
+# This is the tree's reference for a global somebody has to be able to REPLACE while the
+# program is running. Everything needed to copy it correctly is in this comment and the forty
+# lines under it; nothing else in this module has to be read.
 #
-# WHAT IT COSTS, exactly: a read while another coroutine writes is a data race. This project
-# has already found four real ones with `ZRT_SEED` and `REPS 150`, so that is measured rather
-# than theoretical. The rule is CONFIGURE AT STARTUP, THEN READ — which is how zerolog is used
-# in practice — and it is a rule, not a guarantee. `log.new()` is the answer for anything that
-# has to be reconfigured while the program runs.
+#     unsafe {
+#         mut process := new()                 # 1. one cell, private, already valid
+#     }
 #
-# WHAT WOULD TAKE IT AWAY, and neither is a rewrite of this module:
+#     pub fn install(lg: Logger) {             # 2. one writer, taking a value already built
+#         process = lg
+#     }
 #
-#   - an atomic cell holding a `Logger`. `atomic` today is `Atomic[int]` and cannot be
-#     imported at all (`E511`: a generic struct is a form this compiler has not built), so
-#     this one is waiting on generic structs and on `Atomic[T]` reaching a struct payload.
-#   - module state the language itself makes safe to share — a `const` set once, with the
-#     parts that change travelling through a channel or an atomic.
+#     pub fn info() -> Entry {                 # 3. every reader, one line onto the instance
+#         return process.at_level(Level.INFO)
+#     }
 #
-# UNTIL THEN THE DISCIPLINE IS NOT A CONVENTION. The cell is module-PRIVATE, so configuring
-# by function is not the recommended way, it is the only way the language permits: visibility
-# does the enforcing, and there is no rule for a reviewer to remember.
+# 1. ONE CELL, MODULE-PRIVATE, AND ALREADY VALID.
+#
+#    A bare `mut` at module level is `E358 the top-level binding `level` may not be `mut`
+#    outside a module-level `unsafe { … }` group — module state is immutable, and shared
+#    mutable state travels by value or through channels`. Inside the group it is allowed, and
+#    `pub` on it is refused in turn: `E484 the mutable global `process` may not be `pub` — a
+#    module-level `unsafe { … }` group is one module's bargain with its own author`. So
+#    "configure by function" is not the RECOMMENDED way here, it is the ONLY way the language
+#    permits. Nothing is left for a reviewer to remember.
+#
+#    IT IS INITIALISED AT ITS DECLARATION, by the same constructor a caller would use. There
+#    is therefore no before-install state and no "has anyone configured this yet" to get
+#    wrong: a program that never calls `install` logs at the default, and reading the cell is
+#    total on the first line of `main`.
+#
+# 2. ONE WRITER, AND IT TAKES A VALUE THAT IS ALREADY BUILT.
+#
+#    This replaced a `set_level` / `set_format` / `set_colour` / `set_sink` family, and the
+#    replacement is a DELETION rather than a rename: the module already had four pure
+#    builders, so the setters were a second way to say the same thing that happened to mutate
+#    shared state four times instead of once. `install(new().level(…).format(…))` assembles
+#    the value off to one side and stores it once — four windows for a reader to see a
+#    half-configured logger become one.
+#
+#    THE NAME IS `install` AND NOT `level`, because `level` already means *derive a logger at
+#    this level*, and one word may not be pure on an instance and effectful on the module.
+#    (`enabled` lives in both places precisely because it means the same thing in both.)
+#
+#    THERE IS NO `current()`. A `current().level(…).install()` interface would read as
+#    mid-flight reconfiguration, and rule 4 is why the cell is not safe for that. Not offering
+#    a way to start from the current value is what makes configuring read as the startup act
+#    it is.
+#
+# 3. THE GLOBAL IS AN INSTANCE, NEVER A SECOND CODE PATH.
+#
+#    Every public function below is one line that reaches the cell and calls a method that
+#    already exists. There is exactly one level check, one builder and one writer in this
+#    module. A global that grew its own comparison would be a second logger drifting from the
+#    first, which is the argument that keeps one JSON escaper in this tree.
+#
+# 4. WHAT IT COSTS, WITHOUT ROUNDING IT UP.
+#
+#    A `Logger` holds a `list` and a `Sink`, so `process = lg` is SEVERAL machine stores and
+#    not one. GUARANTEED: nothing whatever about a read that runs while `install` runs — a
+#    reader can see this level with that sink, or a field list mid-swap. This project has
+#    found four real races with `ZRT_SEED` and `REPS 150`, so that is measured behaviour and
+#    not a theoretical caveat.
+#
+#    THE RULE, WHICH IS A RULE AND NOT A GUARANTEE: CONFIGURE AT STARTUP, FROM ONE COROUTINE,
+#    THEN READ. Under it every read happens after the only write and there is no race left to
+#    have. `log.new()` is the answer for anything that must change while the program runs — an
+#    instance is a value, and a value handed to a component races with nobody.
+#
+# WHEN NOT TO COPY THIS. A module-level `const` may CALL A FUNCTION — `const P := mk()`
+# compiles — so a global that never changes after startup needs no `unsafe` at all and should
+# not have one. This shape is only for a value that must be REPLACED once the program is
+# running, and `log` is that case only because a level has to be settable from `main` in a
+# program whose functions were handed no logger.
+#
+# WHAT WOULD TAKE THE `unsafe` AWAY, and neither is a rewrite of this module:
+#
+#   - an immutable binding holding a stdlib `Atomic[T]`, which is the safe alternative GRAMMAR
+#     names for exactly this. `atomic` today is `Atomic[int]` and cannot be imported at all
+#     (`E511`: a generic struct is a form this compiler has not built), so this waits on
+#     generic structs and on `Atomic[T]` reaching a struct payload.
+#   - a language in which a whole struct store is one atomic operation, which would make
+#     rule 4's window close rather than merely be avoided.
+# ============================================================================================
 unsafe {
 	mut process := new()
 }
 
-# set_level configures the global logger. It is the whole of the "configure at startup" rule:
-# call it in `main` before anything else runs.
-pub fn set_level(l: Level) {
-	process = process.level(l)
-}
-
-# set_sink sends the global logger's lines somewhere else — a channel a test drains, or back
-# to standard error.
-pub fn set_sink(sk: Sink) {
-	process = process.to(sk)
-}
-
-# set_format picks `Format.PRETTY` or `Format.JSON` for the global logger. `ZERG_LOG` sets the
-# same thing from outside; this is how a program that knows where its output goes says so
-# itself.
-pub fn set_format(f: Format) {
-	process = process.format(f)
-}
-
-# set_colour turns ANSI colour on or off for the global logger, over the default the
-# environment gave it.
-pub fn set_colour(on: bool) {
-	process = process.colour(on)
+# install replaces the global logger, and it is the only thing in this module that writes the
+# cell. Call it in `main`, before anything else runs; see rule 4 above for why "before".
+pub fn install(lg: Logger) {
+	process = lg
 }
 
 # enabled is the global's level check, and it is public for the reason the method is: a caller

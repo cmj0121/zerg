@@ -30,11 +30,13 @@ fn do_lsp(c: cli.Ctx) -> int {
 	return lsp.serve(lsp_program)
 }
 
+# lsp_program is that function. The work is `source.zg`'s `load_buffer`, because finding the
+# program a file belongs to is the same question `module_files` answers one import at a time
+# — and a copy of it here would be the server's own opinion about what a module is, which is
+# the one thing this split exists to prevent.
 fn lsp_program(path: str, text: str) -> lsp.Program {
-	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
-	mut root: list[str] = []
-	load_with(path, dir_of(path), seen, root, srcs, paths, Buffer(path, text))
+	load_buffer(path, text, srcs, paths)
 	return lsp.program(paths, srcs)
 }

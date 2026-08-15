@@ -59,7 +59,8 @@ fn test_enabled_at_the_two_ends() {
 	assert all.enabled(log.Level.TRACE)
 	assert all.enabled(log.Level.FATAL)
 
-	# OFF is above FATAL, so nothing is on — including `fatal`'s line.
+	# OFF is not in the ordering at all — it is the threshold that accepts nothing, so nothing
+	# is on, `fatal`'s line included.
 	none := pinned(log.Level.OFF)
 	assert not none.enabled(log.Level.TRACE)
 	assert not none.enabled(log.Level.INFO)
@@ -571,8 +572,8 @@ fn test_an_entry_without_msg_writes_nothing() {
 # — behaviour is the contract — and it is why every test below asserts BYTES.
 
 # installed puts a logger at `lvl` writing into a fresh channel in the cell, and answers the
-# channel. Colour and format are pinned rather than inherited so that a suite run under
-# `ZERG_LOG=json` or on a terminal asks the same question as one run in a pipe.
+# channel. It builds on `pinned`, so the global under test is shut off from the environment
+# exactly as an instance under test is.
 fn installed(lvl: log.Level) -> chan[str] {
 	ch := chan[str](32)
 	log.install(pinned(lvl).to(log.to_chan(ch)))

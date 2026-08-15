@@ -1,10 +1,10 @@
-# The driver source `zerg test` writes for one package, and removes when the run ends.
+# The driver source `zerg test` writes for one package, and removes when the run ends. What
+# it is to say was decided in `test_fixture.zg`; this is where it is written out.
 #
-# It is GENERATED rather than fixed because the only part that varies is the tests and what
-# they asked for — and generated as TEXT, so every call in it is an ordinary call in the
-# package's own scope that the compiler checks like any other.
-
-import "io"
+# IT IMPORTS NOTHING. Every `io.` in here is inside a string literal — the driver's own
+# source, which imports `io` when it is compiled. `zerg lint`'s L101 cannot see the
+# difference: it judges an import against the names used anywhere in the merged program, and
+# three files of this module do use `io`.
 
 # gen_driver writes the driver source for one package: the fixed half below, one trio of
 # functions per test, and the NESTING that stands the fixtures up around them.

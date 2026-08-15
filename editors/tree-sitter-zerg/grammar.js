@@ -155,15 +155,27 @@ module.exports = grammar({
 		block: ($) => seq("{", optional($._statement_list), "}"),
 
 		// GRAMMAR#binding — `mut`/`const` and the inferred `:=`, or a typed `x: T = e`.
+		//
+		// THE LEADING `pub` IS NOT IN GRAMMAR#binding AND THE COMPILER ACCEPTS IT. A module
+		// const is exported that way — `examples/1g/modconst/unit/unit.zg` writes
+		// `pub const SEED: int = 5` and has since module constants landed, and `src/stdlib`'s
+		// `log` writes six of them for its levels. GRAMMAR's production carries only
+		// `mut`/`const`, so this is a form the specification does not derive and the
+		// implementation has always taken; that gap is reported rather than settled here.
+		// What this file must do either way is read every Zerg file in the tree, which is the
+		// `treesitter` gate's whole contract — a highlighter that cannot parse the standard
+		// library is a highlighter that stops colouring at the first `pub const`.
 		binding: ($) =>
 			choice(
 				seq(
+					optional("pub"),
 					optional(choice("mut", "const")),
 					field("name", $._bind_target),
 					":=",
 					field("value", $._expression),
 				),
 				seq(
+					optional("pub"),
 					optional(choice("mut", "const")),
 					field("name", $.identifier),
 					":",

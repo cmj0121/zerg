@@ -40,12 +40,16 @@ for src in "$@"; do
 
 	# Pull the pairs out. A code line and an output line are written to their own file, in
 	# source order; the `# ` prefix every comment carries is stripped, and nothing else is.
+	# THE FENCES MAY BE INDENTED. A doc comment inside an `impl` block carries that block's
+	# indentation, and an anchored `^# ` missed every one of them — silently, which is the
+	# exact failure this gate exists to remove: `log.zg` had three examples inside
+	# `impl Logger` and the gate ran none of them while reporting success.
 	awk '
-		/^# ```zerg$/  { mode = "code"; next }
-		/^# ```output$/ { mode = "out";  next }
-		/^# ```$/       { mode = "";     next }
-		mode == "code" { sub(/^# ?/, ""); print > (T "/code") }
-		mode == "out"  { sub(/^# ?/, ""); print > (T "/want") }
+		/^[ \t]*# ```zerg$/   { mode = "code"; next }
+		/^[ \t]*# ```output$/ { mode = "out";  next }
+		/^[ \t]*# ```$/       { mode = "";     next }
+		mode == "code" { sub(/^[ \t]*# ?/, ""); print > (T "/code") }
+		mode == "out"  { sub(/^[ \t]*# ?/, ""); print > (T "/want") }
 	' T="$tmp" "$src"
 
 	[ -s "$tmp/code" ] || {

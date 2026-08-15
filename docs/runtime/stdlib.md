@@ -49,23 +49,23 @@ the form they will take.)
 
 ## Packages
 
-| Package               | Import             | Provides                                          |
-| --------------------- | ------------------ | ------------------------------------------------- |
-| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write  |
-| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal         |
-| [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch   |
-| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`            |
-| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser  |
-| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base      |
-| [`json`](#json)       | `import "json"`    | reading and writing JSON, with one escaper        |
-| [`log`](#log)         | `import "log"`     | structured logging, as a chained builder          |
-| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                    |
-| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals     |
-| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator      |
-| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity   |
-| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders  |
-| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                 |
-| [`testing`](#testing) | `import "testing"` | what a `#[test]` needs that the language does not |
+| Package               | Import             | Provides                                           |
+| --------------------- | ------------------ | -------------------------------------------------- |
+| [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write   |
+| [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal          |
+| [`os`](#os)           | `import "os"`      | environment read/write, exit, target platform/arch |
+| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`             |
+| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser   |
+| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base       |
+| [`json`](#json)       | `import "json"`    | reading and writing JSON, with one escaper         |
+| [`log`](#log)         | `import "log"`     | structured logging, as a chained builder           |
+| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                     |
+| [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals      |
+| [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator       |
+| [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity    |
+| [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders   |
+| [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                  |
+| [`testing`](#testing) | `import "testing"` | what a `#[test]` needs that the language does not  |
 
 ## `io`
 
@@ -101,14 +101,39 @@ binary was built for. The program's own arguments arrive as `fn main(args: list[
 exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
 of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
 
-| Function                  | Summary                                              |
-| ------------------------- | ---------------------------------------------------- |
-| `env(key: str) -> str?`   | an environment variable's value, or `nil` when unset |
-| `exit(code: int)`         | terminate the process with `code` (does not return)  |
-| `run(argv: list[str])`    | run `argv[0]` (PATH-searched), wait, `-> int` status |
-| `platform() -> str`       | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
-| `arch() -> str`           | target CPU — `"arm64"`, `"x86_64"`, …                |
-| `isatty(fd: int) -> bool` | is this descriptor a terminal (0 in, 1 out, 2 err)   |
+| Function                        | Summary                                              |
+| ------------------------------- | ---------------------------------------------------- |
+| `env(key: str) -> str?`         | an environment variable's value, or `nil` when unset |
+| `set_env(key: str, value: str)` | set `key` to `value`, replacing any current one      |
+| `del_env(key: str) -> bool`     | remove `key`; answers whether it WAS there           |
+| `exit(code: int)`               | terminate the process with `code` (does not return)  |
+| `run(argv: list[str])`          | run `argv[0]` (PATH-searched), wait, `-> int` status |
+| `platform() -> str`             | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
+| `arch() -> str`                 | target CPU — `"arm64"`, `"x86_64"`, …                |
+| `isatty(fd: int) -> bool`       | is this descriptor a terminal (0 in, 1 out, 2 err)   |
+
+The three environment functions are the
+[`xxx` / `set_xxx` / `del_xxx`](../code/functions.md#naming-a-property-and-its-two-writes) trio: `env`
+reads, `set_env` writes, `del_env` removes. **`del_env` answers whether the key was there**,
+which is the one thing a caller cannot find out for itself — `env` then `del_env` is two questions with a
+window between them, and C's `unsetenv` reports success either way. **`set_env` raises `ValueError`** on a
+name the host will not take (empty, or containing `=`); `del_env` is **total**, because a name that cannot
+exist was not set and `false` is a true answer rather than a missing one.
+
+> **Set the environment at startup, before any coroutine is spawned.** This is not a convention — it is the
+> only safe use of these two functions, because they mutate **C runtime state rather than this language's**.
+> POSIX's `environ` has no lock on it: `setenv` may reallocate the array and free the old one while `getenv`
+> holds a pointer into it, so a write racing an `os.env` on another coroutine is a use-after-free inside
+> libc. Zerg runs real OS worker threads ([Coroutines](../code/coroutine.md)), so two coroutines are two
+> threads often enough that a program which happens to work proves nothing.
+>
+> That makes it **categorically unlike** the shared-state hazard [`log`](#log) documents. The logger's cell
+> is state this project owns, and one day an atomic could close that race. `environ` is not ours, and
+> nothing done here can make it safe — there is no fix to wait for, only a time to call it.
+>
+> The compiler does **not** enforce it, and could not do so honestly: the workers exist before `main`'s
+> first statement, so a rule keyed on "has anything been spawned yet" would report safety in a process that
+> already has sixteen threads, and would refuse the write inside every `#[test]` (a test is a coroutine).
 
 **`isatty` is about the DEVICE and nothing else.** Use it to choose a **rendering** — colour at a terminal,
 plain into a pipe — and never a **format**: output that changes shape when it is redirected cannot be read

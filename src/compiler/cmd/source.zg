@@ -182,9 +182,9 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
 }
 
-# WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written
-# here, and moved into the module when the linter grew a rule about it (L601): two tools ask
-# the question now, and a naming convention answered in two places is one that drifts.
+# WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written in
+# the driver, and moved into the module when the linter grew a rule about it (L601): two tools
+# ask the question now, and a naming convention answered in two places is one that drifts.
 
 # module_at resolves one import path under one root: a single `<path>.zg` file, or a
 # DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
@@ -237,6 +237,8 @@ fn path_tail(path: str) -> str {
 	return str(out)
 }
 
+# --- reading a source ---------------------------------------------------------------------
+
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
 	mut root: list[str] = []
 	load_with(file, from_dir, seen, root, srcs, paths, Buffer("", ""))
@@ -258,7 +260,7 @@ struct Buffer {
 # and exits. In a server there is no exiting — the session is the process — so the unreadable
 # source is skipped and `lex_diags` reports it to the editor instead.
 # `stack` is the chain of MODULES on the way down to this file, and the cycle rule is asked of
-# it for the reason load_unit's is: this loader recurses per FILE and dedupes per file, so a
+# it for the reason `load_unit`'s is (unit.zg): this loader recurses per FILE and dedupes per file, so a
 # module reached a second time is skipped and the loop never runs — which terminates the walk
 # without noticing what it walked. The two loaders ask ONE function, so the rule and its
 # sentence are in one place and cannot drift apart the way the walks themselves have to.
@@ -308,7 +310,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 #
 # THE READ IS OUTSIDE THE GUARD ON PURPOSE. A file that cannot be opened is a DIFFERENT
 # failure and raises its own `IOError`, and a `guard` around both would report it as an
-# encoding complaint about a file nobody could read — the swallowing `load_unit` above has a
+# encoding complaint about a file nobody could read — which `load_unit`, in `unit.zg`, has a
 # paragraph about. The guard covers the conversion alone, which is the only thing in here
 # that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
 # failed on, which is a gap in `io` rather than one here.)

@@ -1,15 +1,12 @@
 # FIXTURES, and the plan one package's run is: which `#[fixture]` and `#[test]` a package
 # declares, which fixtures each test needs, and the order they have to stand up in.
 #
-# A test declares what it needs and the framework builds it. Everything about HOW that is
-# written out is `test_driver.zg`; what is decided here is WHAT — the closure of each
-# test's dependencies, and the refusal when that closure has a cycle or a name nothing
-# declares.
+# What is decided here is WHAT — the closure of each test's dependencies, and the refusal
+# when that closure has a cycle or names a fixture nothing declares. HOW it is written out
+# is `test_driver.zg`.
 
 import "zerg"
 
-# --- fixtures --------------------------------------------------------------------------
-#
 # A TEST DECLARES WHAT IT NEEDS AND THE FRAMEWORK BUILDS IT. A `#[fixture]` is a function
 # that takes its tests as a CONTINUATION:
 #

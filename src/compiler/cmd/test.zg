@@ -1,11 +1,9 @@
-# `zerg test` — build the `#[test]` functions a normal build leaves out, run them, and
-# report.
+# `zerg test` — the run itself: the walk over packages, the process per package, and what
+# the terminal is told.
 #
-# A TEST BUILD IS A BUILD OF MORE FILES, not of a relaxed language, so everything under
-# `--emit bin` happens here as well; what is added is the discovery (`test_pkg.zg`), the
-# plan one package's fixtures and tests make (`test_fixture.zg`), and the driver source
-# that plan is compiled as (`test_driver.zg`). This file is the run itself: the walk over
-# packages, the process per package, and what the terminal is told.
+# The other three quarters of the runner are beside it, one per question: which directories
+# hold a test (`test_pkg.zg`), what one package's run is (`test_fixture.zg`), and the driver
+# source that plan is compiled as (`test_driver.zg`).
 
 import (
 	"cli"
@@ -71,8 +69,8 @@ fn do_test(c: cli.Ctx) -> int {
 # apart, and THAT is what makes the fallback exact: the records present after a run that died
 # are a prefix, so the tests with no record are precisely the ones left to run.
 #
-# THE RECORD FILE is line-oriented, one record per test, written by the driver and read by
-# `take_records` below — the only two readers there are, and they sit in this file together:
+# THE RECORD FILE is line-oriented, one record per test, written by the driver (`zt_append`,
+# in test_driver.zg) and read by `take_records` below — the only two readers there are:
 #
 #   T <name>        this record is about test <name>
 #   V <verdict>     `ok`, `fail`, `skip` or `crash`
@@ -112,7 +110,7 @@ fn do_test(c: cli.Ctx) -> int {
 const NOTHING_FOUND := 3
 
 fn run_tests(root: str, only: str, secs: int) -> int {
-	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk below reads a missing directory as
+	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk (test_pkg.zg) reads a missing directory as
 	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
 	# because its other caller is probing a search path — so `zerg test tset/` would report "no
 	# tests", exit 0, and leave a typo looking exactly like a package nobody has written tests
@@ -133,8 +131,8 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	# `strings_test.zg`, and running that pair is what a white-box test of `strings` IS — a run
 	# of the test file alone is not a build of anything. `--only` is the tool for one test.
 	#
-	# A `.zg` NAME IS WHAT MARKS A FILE, which is the convention this walk already uses one
-	# function down: `test_pkgs` does not descend into a `.zg` name either. There is no `isdir`
+	# A `.zg` NAME IS WHAT MARKS A FILE, which is the convention the walk itself already uses:
+	# `test_pkgs` (test_pkg.zg) does not descend into a `.zg` name either. There is no `isdir`
 	# under this runtime, and inventing one for this would put a second answer to "is this a
 	# source file" in the tree.
 	base := search_root(root)

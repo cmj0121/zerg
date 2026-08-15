@@ -1,5 +1,5 @@
-# `zerg lint` — report unused imports and dead private code, and return a status a build
-# can be gated on.
+# `zerg lint`. The rules are `zerg/lint.zg`'s and the loader is `source.zg`'s; what is here
+# is the command, how a finding is printed, and what a run of them exits with.
 
 import (
 	"cli"
@@ -53,7 +53,7 @@ fn run_lint(files: list[str], strict: bool) -> int {
 }
 
 # lint_sev is the adjective a finding's line opens with, and the empty string for the default
-# — see lint.zg's header for why only two of the three are named out loud.
+# — see `zerg/lint.zg`'s header for why only two of the three are named out loud.
 fn lint_sev(f: zerg.Finding) -> str {
 	return "" if f.sev == ""
 

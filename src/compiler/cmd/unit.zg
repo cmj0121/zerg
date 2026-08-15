@@ -1,6 +1,6 @@
-# A UNIT is what gets compiled to one object, and this is everything that happens to one:
-# loading a program's units in dependency order, keying a unit's cached object by the C it
-# emitted, compiling the units that have no object yet in parallel, and linking the result.
+# Everything that happens to a unit: loading a program's units in dependency order, keying a
+# unit's cached object by the C it emitted, compiling the units that have no object yet in
+# parallel, and linking the result. What a unit IS is under `compilation units`, below.
 #
 # `build` and `test` are both builds — a test build is a build of MORE FILES, not of a
 # relaxed language — so the emit-cache-link sequence is written once here rather than twice
@@ -144,8 +144,8 @@ fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	argv.append(cc_bin())
 	argv.append(cc_std())
 
-	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
-	# invocations that compile, not to this one.
+	# LINK ONLY — no source is read here, so the dialect flags (cc_dialect, layout.zg) belong
+	# to the two invocations that compile, not to this one.
 	argv.append("-o")
 	argv.append(output)
 	for o in objs {
@@ -280,7 +280,7 @@ fn load_units_of(files: list[str], name: str, from_dir: str) -> list[Unit] {
 }
 
 # `stack` is the path DOWN to this unit, and it is a separate list from `seen` because the two
-# answer different questions — see chk_import_cycle. It arrives BY VALUE, which is what saves
+# answer different questions — see `chk_import_cycle` in source.zg. It arrives BY VALUE, which saves
 # a pop: each frame appends its own name to its own copy, so unwinding is the return.
 fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
 	mut here := stack
@@ -301,7 +301,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 	#
 	# Both failures already carry their own sentence — io.read_file names the path, lex_check
 	# names the lexical rule and where — so letting them out is what puts the real reason in
-	# front of the reader. `load_with`, the loader beside this one, has read them so all along.
+	# front of the reader. `load_with`, the loader in `source.zg`, has read them so all along.
 	for f in files {
 		src := read_source(f)
 		lex_check(src, f)

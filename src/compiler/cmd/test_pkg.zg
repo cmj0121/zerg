@@ -1,7 +1,6 @@
-# WHAT A PACKAGE IS, for `zerg test`: one directory, one driver, one process.
-#
-# This is the discovery half — which directories hold a test, which files each of them is
-# built from, and the names the generated files wear so a run can take them away again.
+# WHAT A PACKAGE IS, for `zerg test`: one directory, one driver, one process. This is the
+# discovery half — which directories hold a test, which sources each package compiles, and
+# the names the generated files wear so a run can take them away again.
 
 import (
 	"sha256"
@@ -9,8 +8,6 @@ import (
 	"zerg"
 )
 
-# --- what a package is ------------------------------------------------------------------
-#
 # Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE
 # module rather than the directory itself — the name of that module. `mod` is `""` for the
 # directory.

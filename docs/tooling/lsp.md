@@ -429,15 +429,25 @@ facts** the section above exists to prevent. The vim syntax file already highlig
 gated.
 
 The last row is a cost, not a gap. The scheduler is cooperative and non-preemptive, so a long check
-occupies its worker until it finishes; `emit.zg` at 9264 lines is the worst case in this repository
-and is the number to measure against before designing anything here.
+occupies its worker until it finishes; `emit.zg` is the worst case in this repository and is the
+number to measure against before designing anything here.
 
-Measured, on this compiler's own sources: one check of the 24-file program rooted at
+**The memory half of that cost is closed.** One check of the 24-file program rooted at
 `src/compiler/zergc.zg` — which is what opening **any** file under `src/compiler/` asks for, now that
-a module member is checked against its module — takes about 6.5 s and peaks near 3.7 GB, and a
-long-lived session is killed by the operating system after three or four of them. The ceiling is the
-**emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so
-`emit_files_diag` lowers the whole program to C to reach them and there is no check-only entry point
-to ask instead. It is reached by `zerg build` too and simply survives there, because a build is a
-process that then exits. A debounce would hide it; a check that stops before code generation would
-end it.
+a module member is checked against its module — used to take 6.7 s and peak at **6.7 GB**, and a
+long-lived session was killed by the operating system after three or four of them. The ceiling was
+the **emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so the
+only way to reach them was `emit_files_diag`, which lowers the whole program to C first.
+
+`check_files_diag` is that walk with the C dropped rather than accumulated, and the same check now
+takes **4.9 s and peaks at 0.32 GB**. Twenty checks in one session: before, SIGKILL after the third;
+after, twenty published and 0.59 GB. The saving is not the size of the C — 3.6 MB — but the shape of
+building it: `defs = defs + c_fn(…)` copies everything emitted so far on every one of ~1500 steps.
+`make check-equal` is what keeps the two paths honest, and it compares their diagnostics byte for
+byte because a check that finds LESS than the build finds is an editor showing a clean buffer for a
+file that will not compile.
+
+**The time half is not.** Five seconds is still a check per keystroke-batch, and roughly half of it
+is that `publishDiagnostics` walks the program TWICE — once for the errors and once for the `L5xx`
+conversion lints, which `lint_program` asks for with its own merge and its own walk. One walk
+answering both is the next thing to measure. A debounce would hide what is left.

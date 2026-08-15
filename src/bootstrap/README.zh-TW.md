@@ -107,6 +107,19 @@ docs/code/errors.zh-TW.md），而只有其中一個在這裡——這件事值�
 對這個運算子什麼也沒說。第二層說的是**指名拒絕**，而這不是；記在這裡而不修掉，是因為自舉源碼從來
 不問這個問題。
 
+同樣是**用錯句子的拒絕**，而且是寫 stdlib 的人真的會碰到的那一個：**`str(x)` 的 `x` 是一個型別參數**。
+種子把 `fn show[T](x: T) -> str { return str(x) }` 擋下來，說的是
+`cannot build a str from T; str(x) takes a scalar or a list[byte]/list[rune]`——一句在講轉換定義域的
+話，講得像是程式遞了一個壞引數，但真正發生的事情是這個問題問得早了一步。
+`internal/sema/strbridge.go` 檢查 `str(x)` 的方式是對引數問 `ScalarOf`，而在泛型函式體裡，引數的型別
+還是 `T`；種子是**抽象地**檢查那個函式體，所以拒絕落在宣告處，不管那支函式有沒有被呼叫過。同一個
+rendering 換成 `f"{x}"`，兩個編譯器都建得起來：`inferFStr` 只 synth 洞裡的運算式並回傳 `str`，把
+rendering 留給 lowering，而 lowering 是在代入之後才跑的。`zerg` 兩種拼法都在代入之後才問——`show(7)`
+建得起來，`show(p)` 傳一個 struct 則是指名 `P` 的 `E449`，那才是讀者能據以行動的診斷。這個落差的代價，
+是每個由種子編譯的模組都得遵守的一條規矩：`src/stdlib/testing.zg` 用插值而不用轉換
+（`raise f"assert_eq failed: {a} != {b}"`），而 stdlib 裡任何一個泛型函式體只要伸手去用 `str(x)`，
+壞掉的就不是一支程式，是整條自舉鏈。
+
 其餘語言有的，種子都有：`defer`、`del`、`with`、tuple 與 `t.0`、range 當值與當可迭代對象、optional
 與整組 group-8 運算子、`init()`、`spec` / `impl`（含 provided method）、泛型函式定義、
 `#[derive(Eq, Ord)]`、`Ref[T]`、struct 與 tuple pattern、block 當 `match` arm body、
@@ -168,6 +181,16 @@ src/bootstrap/
   thunk，而那裡該放的是指標。`zerg` 在呼叫處拒絕它。
 - **裝不進自己參數的預設值會被接受。** `fn f(a: int, b: str = 1)` 照寫出來的樣子被 emit 出去，然後由 cc
   來報那個型別。`zerg` 在宣告處就判定一個預設值。
+- **會呼叫任何東西的預設值會被拒絕，而且那句話宣稱是語言禁止它。** `struct C { c: chan[int] =
+chan[int]() }`——或任何不是字面值、模組常數，或它們之間算術的預設值——都會被以「_a default value must be
+  a constant expression that does not reference a parameter/field_」擋下來。語言說的正好相反：一個預設值
+  「是**每次建構**時求值，而不是在宣告處求一次——裡面的運算式（一個呼叫、一個對模組常數的求和）會在每一次
+  省略該欄位的建構中重跑一遍」（`docs/core/types.md`，"Field defaults"），而 `zerg` 接受它。種子是把預設值
+  **逐字**回填到每一個呼叫處與建構處，而且根本不會對那個運算式做**型別判定**——`checkConstDefault` 只驗形狀，
+  所以一個預設值沒有被記錄的 `ExprType`，一個呼叫會以壞掉的 C 抵達 cc。因此那個拒絕對種子而言是對的、對
+  Zerg 而言是錯的：一個穿著語言規則外衣的 `NotImplemented`。這也是 `src/stdlib/testing.zg` 裡的
+  `Context.events` 是 `pub` 且不帶預設值的原因——模組私有欄位必須帶一個，而一個全新 channel 唯一能有的預設值
+  就是一個呼叫。
 - **頂層 binding 的型別標註不會拿來對照它的值。** `answer: bool = 42` 建得起來，那個全域變數就是種子隨手
   做出來的樣子；同樣的不相符若發生在**區域** binding 上，種子是會拒絕的。`zerg` 對待頂層標註的方式與對待
   區域的一致——全域採用宣告的型別，不相符在宣告處被拒絕。
@@ -307,6 +330,33 @@ src/bootstrap/
   `1`，而 `__zrt_trunc("hello")` 則被 emit 出去，讓 cc 對著一個沒有人寫過的暫存 C 檔提出抱怨。`zerg` 在呼叫
   處就回答這兩者（`E398`）：primitive 是按**名字**降階成一個帶有真實簽章的 C 函式，所以錯的運算元不是變成
   cc 的診斷，就是在 C 悄悄替你轉型的地方變成一個安靜的錯答案。`reject-check.sh` 裡有兩個 case 帶著這個標記。
+- **`#[test]` 函式不會被型別檢查。** 種子在 `sema.Check` 跑之前，就把每個 `#[test]` 從項目清單裡剝掉
+  （`internal/build/build.go` 的 `dropTestItems`），所以 `#[test] fn t() { x: int = "no" }` 建得起來也跑得
+  動，呼叫一個根本不存在的函式也一樣。`zerg` 把 `#[test]` 當成一個普通宣告上的普通 decorator，函式本體與
+  其他函式一視同仁地檢查：一個編不過的測試就是編譯錯誤，在一般建置裡如此，在 `zerg test` 底下也如此。種子
+  這樣剝掉對種子而言並沒有錯——它讓一般建置產生的 C 不論有沒有 `#[test]` 都逐位元組相同——但這也代表：唯一
+  會跑測試的那個編譯器，也是唯一會看測試一眼的那個。
+- **`assert` 不是種子認得的字，而它說出來的話點錯了 token。** `assert cond` 是出貨語言的一個敘述
+  （`GRAMMAR#assert-stmt`），也是 `zerg` 獨有的關鍵字。種子的 lexer 把 `assert` 讀成普通識別字，於是整條
+  敘述變成兩個接連的運算式，回來的是 _expected a newline or ';' to separate statements, found an
+  identifier_——指著**條件**、而不是指著那個字——一句讀起來像「少了分號」的話，而少分號正是它唯一不是的
+  問題。靠這個形狀辨認它:欄位號差了那個字加一個空格的寬度。`src/stdlib` 底下刻意沒有任何一條，因為那棵樹是
+  種子編的；但它 raise 的那個**錯誤種類**（`AssertionError`，11）在這裡照樣鏡射，因為種類編號是與 runtime
+  共用的 ABI，一份停在 10 的表會讓後來的種類佔走 11。
+- **module 層的 `unsafe { … }` 群組不是種子讀得懂的形式，所以種子建的程式 `import "log"` 會失敗。** 它跟這裡
+  其他每一條都相反:不是種子接受了 `zerg` 拒絕的東西,而是種子拒絕了 `zerg` 接受的東西——而且那個拒絕是標準
+  函式庫裡的一個 parse 錯誤,跟提出 import 的那支程式本身無關。回來的是 _module "log": log.zg failed to
+  parse: expected an expression, found 'unsafe'_,指在 import 的那一行,而不是指在那個群組。
+
+  那個群組就是 `log` 的全域 logger,而它沒有別的寫法:module 狀態是不可變的（`E358`）,而一個系統層級的
+  logger 依定義就是 module 狀態。`src/stdlib` 其餘部分遵守的那條規則——待在種子讀得懂的子集裡,這也是那裡
+  沒有任何 `assert` 的原因——被剛好一個模組刻意打破,而且只有那一個。其他每個 stdlib 模組仍然兩個編譯器都
+  建得起來,而種子自己編的東西沒有一個 import 它。
+
+  因此用 `bin/zerg0` 建的程式沒辦法 log——而且因為 `testing` 會 import `log`(好讓 `ctx.log` 的註記就是
+  其他每一行同樣的那種行),它也沒辦法 import `testing`。兩者都不構成代價:種子只有 `build` 一個命令,
+  所以它從來不跑測試,而它看得到的 `#[test]` 也在檢查前就被剝掉了(見上一條)。用 `bin/zerg` 建的兩件事
+  都做得到——而除了自舉本身,這條工具鏈產出的每一支程式都是後者。
 
 ## 修改種子時
 

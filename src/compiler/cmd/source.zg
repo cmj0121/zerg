@@ -1,0 +1,337 @@
+# Reading a source, and resolving what it imports: the loader every walk goes through, the
+# three rules an import is held to, and the resolver that turns one import path into files.
+#
+# `build`, `test`, `lint` and `lsp` all need it — the first three to load a program, the
+# last to load the program an unsaved buffer belongs to — so it belongs to none of them.
+# Resolution in particular is the part that decides WHAT A PROGRAM IS, and a second copy of
+# it kept in step by hand is the one thing this module exists to prevent.
+
+import (
+	"io"
+
+	"zerg"
+)
+
+# --- import cycles ---------------------------------------------------------------------
+#
+# "Import cycles between modules are rejected" (docs/runtime/package.md), and nothing
+# detected one, at either layer: `ca` importing `cb` importing `ca` compiled and ran.
+#
+# A cycle that BUILDS is worse than a cycle that is refused, which is why this is enforced
+# rather than documented away. Two mutually importing modules each have to be initialized
+# before the other — their `init()` blocks and their module constants both — and there is no
+# order that satisfies both, so whatever the build settles on is an order no chapter defines
+# and nothing can be written against.
+#
+# THE QUESTION IS ASKED OF THE PATH DOWN, not of what has been loaded. A module that two
+# others import is the ordinary case — a diamond — and `seen` is what answers that one, by
+# loading it once. What has no order is a module that comes up again while it is still ON the
+# way down, and only a stack can tell the two apart. The self-import is the one-node case of
+# exactly the same test, which is why it needs no branch of its own.
+#
+# The chain is reported from the first appearance, so what the reader is shown is the LOOP
+# and not the walk that reached it.
+fn chk_import_cycle(stack: list[str], im: str) {
+	mut at := -1
+	mut i := 0
+	for i < stack.len() {
+		if at < 0 and stack[i] == im {
+			at = i
+		}
+		i = i + 1
+	}
+	return if at < 0
+
+	mut chain := ""
+	mut j := at
+	for j < stack.len() {
+		chain = chain + path_tail(stack[j]) + " -> "
+		j = j + 1
+	}
+	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
+}
+
+# chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
+# the line that asked for it.
+#
+# `atomic` is the whole list, and it earns the entry the hard way: the module is written, it
+# is formatted and checked with the rest of the stdlib, and it declares `Atomic[T]`, a generic
+# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E215
+# NotImplemented: a generic struct` pointing INTO `src/stdlib/atomic.zg`, a file the reader
+# did not write and cannot fix. That is the same shape as a cc error against generated C, and
+# it is the shape this repo's gates exist to turn away.
+#
+# THE MODULE STAYS SHIPPED rather than being taken out of the stdlib directory. Unshipping it
+# means moving the source out of `src/stdlib/`, because this compiler resolves the stdlib by
+# LISTING that directory — and the moment it leaves, `zerg fmt --check` and the rest of
+# SELF_SRCS stop reading it, so a hundred lines of Zerg rot quietly until generics land. What
+# is left behind would be `E502 cannot resolve import`, which is a sentence about a module
+# that is right there. Between a listing that needs a marker and a diagnostic that is false,
+# the marker is the honest one, and docs/runtime/stdlib.md carries it.
+#
+# This function deletes itself the day a generic struct is built.
+# chk_test_import turns away an import that NAMES a test file. `import "lib/lib_test"` reaches
+# module_at's single-file arm, which the directory arm's filter does not cover, and dropping it
+# there instead would resolve the import to an empty module and move the complaint to whatever
+# name the program went on to write.
+#
+# A test file is not importable from anywhere, including a sibling test file: the convention
+# says which builds compile one, and `zerg test` is what will compile them together.
+fn chk_test_import(im: zerg.ImportDecl) {
+	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
+}
+
+fn chk_unbuilt_module(im: zerg.ImportDecl) {
+	return if path_tail(im.path) != "atomic"
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
+}
+
+# --- a program's sources, entry first ------------------------------------------------------
+
+# load_sources loads every named entry with its imports, keeping one copy of a module
+# that several entries share.
+fn load_sources(files: list[str]) -> list[str] {
+	mut paths: list[str] = []
+	return load_sources_at(files, paths)
+}
+
+# load_sources_at is load_sources with the PATH of each source collected beside it, in the
+# same order. A diagnostic names the file it is about, and by the time anything is emitted
+# the whole program is one merged tree — so the path has to travel with the source from
+# here, or nothing downstream can say where a statement came from.
+fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
+	mut seen: list[str] = []
+	mut srcs: list[str] = []
+	for f in files {
+		load_into(f, dir_of(f), seen, srcs, paths)
+	}
+	return srcs
+}
+
+# --- module resolution ------------------------------------------------------------------
+
+# module_files resolves one import path to the source files that make up that module,
+# searched BESIDE THE IMPORTER first — the directory of the file that wrote the import —
+# then in the entry program's own directory, then the standard library. A module is either
+# a single `<path>.zg` file or a DIRECTORY
+# of them — the compiler's own `zerg` module is the second kind, and its files are read in
+# the sorted order the runtime guarantees so the emitted C never depends on the
+# filesystem.
+#
+# AN IMPORT THAT RESOLVES TO NOTHING IS REFUSED HERE, and it used to yield an empty list that
+# both loaders skipped: each read the files the import resolved to, found none, and moved on.
+# `import "nope"` compiled and ran, and the first USE of the module reported "the method
+# `thing` on a ?", naming neither the module nor the import. A dependency that is not there is
+# the one thing a loader cannot work around, and the seed has said so since 1g; the two
+# compilers now agree, in the same words.
+#
+# The refusal is the RESOLVER's rather than each caller's, because both callers want the same
+# answer and a third would have to remember to ask for it.
+# `near` is the directory of the FILE that wrote this import, and it is searched first.
+# Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
+# own imports were resolved against a directory that module knows nothing about: `api/api.zg`
+# importing `"util/text"` was refused with E502 while `api/util/text/` sat right beside it,
+# and the same import resolved once the directory was moved next to the entry file instead.
+# E502's own sentence — "a module is a directory of `.zg` files beside the importer" — was
+# describing the layout it turned away.
+#
+# The entry directory STAYS as the second root rather than being replaced: a nested module
+# reaching a module beside the program resolved before this and still does. So the change
+# only ever adds a place to look.
+#
+# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E502 was the last
+# import rule with no place: the two beside it (E511, E512) are handed the `ImportDecl` and
+# spell `place_line` from it, and this one was handed the path alone — a string that knows
+# what was written and not which line wrote it. A reader told an import resolves nowhere and
+# not which import is left grepping their own program for the quoted path.
+fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
+	path := im.path
+	mut roots: list[str] = []
+	roots.append(near)
+
+	# a plain `if` and not a trailing one: this file is compiled BY THE SEED, which does not
+	# read a postfix `if` on a call statement
+	if from_dir != near {
+		roots.append(from_dir)
+	}
+	roots.append(stdlib_dir())
+	for root in roots {
+		found := module_at(root, path)
+		return found if found.len() > 0
+	}
+
+	# The LAST-SEGMENT alias. A module is named by the last segment of its path — `import
+	# "std/time"` and `import "time"` are the same module (docs/tooling/fmt.md) — and the
+	# stdlib is one flat directory, so a path that resolves nowhere is retried at its last
+	# segment. The seed has done this since 1g; without it here the two compilers disagree
+	# about what a program imports, and the disagreement is SILENT until use: the namespace
+	# is bound from the path either way, so `import "std/time"` loaded no files at all and
+	# `time.now()` read as a method on nothing.
+	seg := path_tail(path)
+	if seg != path {
+		for root in roots {
+			found := module_at(root, seg)
+			return found if found.len() > 0
+		}
+	}
+
+	place := zerg.place_line(im.at, im.line, im.col)
+	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
+}
+
+# WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written in
+# the driver, and moved into the module when the linter grew a rule about it (L601): two tools
+# ask the question now, and a naming convention answered in two places is one that drifts.
+
+# module_at resolves one import path under one root: a single `<path>.zg` file, or a
+# DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
+#
+# A `*_test.zg` IS NOT IN EITHER ANSWER. A normal build compiled them like every other file,
+# so a test's declarations reached the shipped artifact and its `pub` ones joined the module's
+# surface — `lib.only_in_test()` resolved and ran from a program that never asked for a test.
+# The directory case drops them; the single-file case refuses, because `import "lib/lib_test"`
+# names one deliberately and dropping it would leave the module empty and the complaint about
+# some name much later.
+fn module_at(root: str, path: str) -> list[str] {
+	file := join_path(root, path + ".zg")
+	if __zrt_exists(file) {
+		mut one: list[str] = []
+		one.append(file)
+		return one
+	}
+	dir := join_path(root, path)
+	if __zrt_exists(dir) {
+		mut many: list[str] = []
+		for name in __zrt_listdir(dir) {
+			if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+				many.append(join_path(dir, name))
+			}
+		}
+		return many
+	}
+	mut none: list[str] = []
+	return none
+}
+
+# path_tail is the last '/'-separated segment of an import path, which is the module's
+# name.
+fn path_tail(path: str) -> str {
+	b := bytearray(path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# --- reading a source ---------------------------------------------------------------------
+
+fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
+	mut root: list[str] = []
+	load_with(file, from_dir, seen, root, srcs, paths, Buffer("", ""))
+}
+
+# Buffer is the one source the loader must NOT read from disk: the file a language server
+# holds unsaved. An empty path means there is none, which is every build.
+struct Buffer {
+	pub path: str
+	pub text: str
+}
+
+# load_with is load_into with that substitution, and it is the same function because the
+# alternative is a second copy of the resolution rules — the part that actually decides what
+# a program is — kept in step by hand.
+#
+# The buffer also decides whether a LEXICAL error is fatal. On a command line it is: nothing
+# downstream can say anything true about text that does not tokenize, so `lex_check` reports
+# and exits. In a server there is no exiting — the session is the process — so the unreadable
+# source is skipped and `lex_diags` reports it to the editor instead.
+# `stack` is the chain of MODULES on the way down to this file, and the cycle rule is asked of
+# it for the reason `load_unit`'s is (unit.zg): this loader recurses per FILE and dedupes per file, so a
+# module reached a second time is skipped and the loop never runs — which terminates the walk
+# without noticing what it walked. The two loaders ask ONE function, so the rule and its
+# sentence are in one place and cannot drift apart the way the walks themselves have to.
+fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
+	for s in seen {
+		return if s == file
+	}
+	seen.append(file)
+	src := buffer_src(file, buf)
+	if buf.path == "" {
+		lex_check(src, file)
+	} else if zerg.lex_diags(src, file).len() > 0 {
+		return
+	}
+
+	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
+	# no file — the loader is the first parse a source meets
+	for imd in zerg.import_decls_at(src, file) {
+		im := imd.path
+		chk_test_import(imd)
+		chk_unbuilt_module(imd)
+		chk_import_cycle(stack, im)
+		mut here := stack
+		here.append(im)
+		for dep in module_files(imd, dir_of(file), from_dir) {
+			load_with(dep, from_dir, seen, here, srcs, paths, buf)
+		}
+	}
+	srcs.append(src)
+
+	# appended HERE, not beside `seen`: a module's imports are loaded first, so `seen` is
+	# in discovery order and `srcs` in dependency order, and only the second is the one a
+	# path has to line up with
+	paths.append(file)
+}
+
+# read_source is the ONE place a file on disk becomes source text, and it exists because
+# that step could KILL the compiler. `str(bytes)` checks the str invariant and aborts on a
+# violation — `EncodingError: bytes are not valid UTF-8 for a str`, from the runtime, with no
+# code, no place and no file named — so a single stray byte in any file the toolchain was
+# pointed at ended the process before the lexer had read a character. `zerg build`, `zerg
+# fmt`, `zerg desugar` and the language server all went the same way.
+#
+# GRAMMAR#letter says the source is UTF-8, so a file that is not is not a Zerg source file, and
+# saying which file is the whole of the answer. That is why this carries no `-->` trailer:
+# there is no line to name yet, the thing that would read one being what refused.
+#
+# THE READ IS OUTSIDE THE GUARD ON PURPOSE. A file that cannot be opened is a DIFFERENT
+# failure and raises its own `IOError`, and a `guard` around both would report it as an
+# encoding complaint about a file nobody could read — which `load_unit`, in `unit.zg`, has a
+# paragraph about. The guard covers the conversion alone, which is the only thing in here
+# that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
+# failed on, which is a gap in `io` rather than one here.)
+fn read_source(path: str) -> str {
+	b := io.read_file(path)
+
+	mut src := ""
+	mut ok := false
+	guard {
+		src = str(b)
+		ok = true
+	}
+	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
+
+	return src
+}
+
+# buffer_src is the text of `file`: what the server is holding for it, or what the disk has.
+fn buffer_src(file: str, buf: Buffer) -> str {
+	return buf.text if file == buf.path
+	return read_source(file)
+}

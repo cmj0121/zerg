@@ -243,6 +243,24 @@ pub enum Stmt {
 	# expression, the way every other optional part of a statement does here — the subset's
 	# flat enums cannot hold an optional.
 	SRaise(Expr, bool, Expr)
+
+	# SAssert is `assert cond` (GRAMMAR#assert-stmt), ALREADY DESUGARED: what it carries is
+	# the statements the claim is defined as — the operand temporaries, and the guarded
+	# raise that tests them — which the emitter runs in the enclosing block, in order, like
+	# any other statement list.
+	#
+	# It is a NODE and not the bare list because the tree is asked what the SOURCE said —
+	# `--emit ast` renders the word, and flattened into the enclosing block what is left is an
+	# `if` somebody could equally have typed out by hand.
+	#
+	# It is TRANSPARENT, and every walk over a statement list owes it an arm: what it holds is
+	# ordinary code, so a walk that skips it is a walk that has not seen the whole function.
+	# An import reached only from a condition is a used import, a name bound in there is a name
+	# the closure analysis must not call free, and a `T` in there is one monomorphization has
+	# to substitute. Each of those is a `_ =>` fallback away from being wrong, and one of them
+	# was: a closure holding an `assert` was refused as capturing a temporary the desugar had
+	# just introduced.
+	SAssert(list[Stmt])
 	SBreak
 	SContinue
 	SNop
@@ -383,6 +401,26 @@ pub struct FnDecl {
 	# A method, a lambda and a monomorphized specialization each take the flag from whatever
 	# they were written in or made for, so the context is not lost by being copied.
 	pub in_unsafe: bool
+
+	# is_test is whether this function was declared under `#[test]` — the decorator that marks
+	# a function `zerg test` runs (docs/core/decorators.md). It rides on the declaration and
+	# not on a list beside it, the way a derive does, because a derive is read BEFORE the
+	# declaration it names exists while this one is taken by the `fn` arm that just built the
+	# declaration, and because the one thing that reads it — the test runner's discovery —
+	# walks the functions.
+	#
+	# The flag changes nothing about a normal build: the function is type-checked and emitted
+	# like any other, and nothing calls it. What calls it is the driver `zerg test` generates.
+	pub is_test: bool
+
+	# is_fixture is whether this function was declared under `#[fixture]` — the decorator that
+	# marks a function `zerg test` BUILDS for the tests that name it (docs/runtime/package.md).
+	# It rides here for every reason `is_test` does, and it is a SECOND flag rather than one
+	# field holding which of the two: a `#[test]` and a `#[fixture]` are different declarations
+	# that the same discovery walk reads, and an item takes one decorator (E613), so nothing
+	# can ever be both — a single field would encode that fact a second time, where it could
+	# drift from the rule that enforces it.
+	pub is_fixture: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -979,6 +1017,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		Stmt.SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForSelect(arms) => ind + "for-select\n"
 		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
+		Stmt.SAssert(body_b) => ind + "assert\n" + dump_block(body_b, ind + "\t")
 		Stmt.SBreak => ind + "break\n"
 		Stmt.SContinue => ind + "continue\n"
 		_ => ind + "nop\n"
@@ -1248,7 +1287,11 @@ fn ty_eq_all(xs: list[Ty], ys: list[Ty]) -> bool {
 	return true
 }
 
-fn ty_name(t: Ty) -> str {
+# ty_name spells a type the way a program writes it. It is `pub` for one reader outside
+# this module: `zerg test` decides whether a `#[test]` takes a `testing.Context` by the
+# TYPE in its parameter slot and not by the parameter's name, and a qualifier is resolved
+# away at the parse — so what it has to compare is the name this function gives.
+pub fn ty_name(t: Ty) -> str {
 	return match t {
 		Ty.TInt          => "int"
 		Ty.TFloat        => "float"
@@ -1287,6 +1330,39 @@ fn ty_tuple_elems(t: Ty) -> list[Ty] {
 		Ty.TTuple(es) => es
 		_             => []
 	}
+}
+
+# ty_fn1_arg is the type a one-parameter, result-less function type takes — the spelling of
+# `T` in `fn (T)` — and "" for every other type, a `fn` of another arity included.
+#
+# It is here rather than in `zerg test` because it answers a question about a TYPE, and the
+# runner is not the place a type is taken apart. What the runner does with the answer is its
+# own: a `#[fixture]`'s continuation parameter is identified by this shape, and the type it
+# takes is what that fixture PRODUCES — so this one function is what makes `use: fn (Conn)`
+# both the continuation and the declaration of the value the tests receive.
+#
+# A NAME AND NOT A `Ty`, because the only thing asked of the answer is whether it is the same
+# type a test's parameter was declared with, and `ty_name` is what both sides are compared by
+# everywhere else in the toolchain.
+pub fn ty_fn1_arg(t: Ty) -> str {
+	return match t {
+		Ty.TFn(ps, r) => fn1_arg_of(ps, r)
+		_             => ""
+	}
+}
+
+fn fn1_arg_of(ps: list[Ty], r: Ty) -> str {
+	return "" if ps.len() != 1
+
+	# a result makes it something other than a continuation: `fn(Conn) -> int` is a function
+	# whose value somebody wants, and a fixture has no caller to hand one to
+	is_void := match r {
+		Ty.TVoid => true
+		_        => false
+	}
+	return "" if not is_void
+
+	return ty_name(ps[0])
 }
 
 fn ty_is_chan(t: Ty) -> bool {

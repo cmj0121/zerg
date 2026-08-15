@@ -40,3 +40,24 @@ pub fn platform() -> str {
 pub fn arch() -> str {
 	return __zrt_arch()
 }
+
+# isatty reports whether the file descriptor `fd` is a terminal — 0 standard input, 1 standard
+# output, 2 standard error. A descriptor that is not open is not a terminal, so it answers
+# false rather than raising.
+#
+# IT IS ABOUT THE DEVICE AND ABOUT NOTHING ELSE, and that boundary is the whole reason it is
+# worth having. A program uses it to choose a RENDERING — colour at a terminal, plain into a
+# pipe — and never a FORMAT: output that changes SHAPE when it is redirected is output that
+# cannot be read the same way twice, and a log file that is JSON on one machine and columns on
+# another is worse than either. `log` follows exactly that line: colour asks this, and
+# `ZERG_LOG` is the only thing that picks the format.
+#
+# ```zerg
+# os.isatty(-1)
+# ```
+# ```output
+# false
+# ```
+pub fn isatty(fd: int) -> bool {
+	return __zrt_isatty(fd)
+}

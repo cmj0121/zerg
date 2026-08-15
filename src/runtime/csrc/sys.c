@@ -482,6 +482,18 @@ bool zrt_has_env(const char *key) {
 	return getenv(key) != NULL;
 }
 
+/* zrt_isatty answers whether fd is a terminal — the one question a program has to ask
+ * before it decides to colour its output, and the one the stdlib could not ask at all.
+ *
+ * IT IS ABOUT THE DEVICE AND NOTHING ELSE. A caller uses it to choose a RENDERING (colour
+ * or no colour), never a FORMAT: a program whose output changes shape when it is piped is
+ * a program whose logs cannot be read the same way twice. isatty(3) is POSIX.1-2001 and
+ * <unistd.h> is already included above; a bad fd answers false, which is the right answer
+ * here — a descriptor that is not open is not a terminal. */
+bool zrt_isatty(int64_t fd) {
+	return isatty((int)fd) == 1;
+}
+
 /* zrt_exit terminates the process with the given status code; it does not return. */
 void zrt_exit(int64_t code) {
 	exit((int)code);

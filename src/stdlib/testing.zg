@@ -1,38 +1,300 @@
-# testing — minimal assertion helpers (Phase 1f, bundle MVP).
+# testing — what a test needs that the LANGUAGE does not give it.
 #
-# Bundled into a program that writes `import "testing"`; its members are reached
-# through the namespace, as `testing.assert_eq(a, b)`. Each assertion returns
-# `Result[nil]` — a satisfied assertion is `nil` (Ok), a violated one `raise`s so an
-# enclosing `guard` recovers it as a value (or, uncaught, aborts with the message).
-# This is the library the `#[test]` discovery + `zerg test` runner (Phase 1i) builds
-# on; `#[test]` discovery itself is 1i, not this module.
+# Bundled into a program that writes `import "testing"`; its members are reached through
+# the namespace, as `testing.assert_raises(…)`. This is the library the `#[test]` discovery
+# + `zerg test` runner builds on.
 #
-# WHAT IT RAISES IS A GENERIC Err, deliberately, and it is the only stdlib module that
-# still does. The other pure-Zerg modules raise a taxonomy kind because they are refusing
-# a VALUE — `ValueError`, a value was not one this could accept (docs/code/errors.md).
-# A failed assertion is not that: it is a claim about the program that did not hold, and
-# the six built-in kinds have no member for it. Naming it `ValueError` would put it in a
-# subtree a handler catches for another reason, so it stays the untyped Err a bare
-# `raise` builds until the taxonomy has a name for a broken claim.
+# THE ASSERTION IS NOT HERE ANY MORE, and its absence is the module's shape. `assert cond`
+# is a keyword (GRAMMAR#assert-stmt): the compiler writes the failure message, and it can
+# say the three things a function never could — the file and line the claim was written at,
+# the claim's own source text, and the value of each operand a comparison came apart into.
+# A function cannot know any of them. Zerg has no `__FILE__` and no caller attribution, and
+# a condition arrives here as a `bool` with its shape already compiled away; `assert_eq`
+# bought back two of those values by taking the operands apart at the CALL, which is why it
+# existed and why it no longer has to.
+#
+# WHAT IS LEFT IS WHAT A KEYWORD CANNOT DO. `assert_raises` takes the outcome of a `guard`
+# and hands back the `Err`, which is a value-level question about a call that already
+# happened. The Context is the channel a running test says things over. Neither is an
+# assertion, and nothing in this module raises a message a reader parses: a claim that did
+# not hold is `AssertionError`, raised by the keyword, and the runner tells that from a
+# crash by the KIND rather than by the text.
 
-# assert succeeds when cond holds; otherwise it raises so the failure is observable
-# (an enclosing `guard` catches it, or it aborts the program).
-pub fn assert(cond: bool) -> Result[nil] {
-	raise "assertion failed" if not cond
-	return nil
+import (
+	"log"
+	"strings"
+)
+
+# not_raised is what assert_raises does when the call it was handed came back. It is a
+# function rather than a `raise` written into the match arm because both arms of a match
+# answer one type, and this one has to answer an `Err` it never gets to build.
+fn not_raised() -> Err {
+	raise "assert_raises failed: the call returned instead of raising"
 }
 
-# assert_eq succeeds when a and b compare equal under their Eq impl (the blessed Eq
-# spec / a `#[derive(Eq)]` from Phase 1c); otherwise it raises. Generic over any
-# `T: Eq`, so it serves the primitive scalars and any user type that derives Eq.
-pub fn assert_eq[T: Eq](a: T, b: T) -> Result[nil] {
-	raise "assert_eq failed: values are not equal" if a != b
-	return nil
+# assert_raises answers the `Err` a call raised; it FAILS when the call returned instead.
+# What it takes is the `guard` the caller writes at the point of the call:
+#
+#   e := testing.assert_raises(guard { strings.split("a,b", "") })
+#   assert e is ValueError
+#
+# THE ERROR COMES BACK RATHER THAN THE KIND GOING IN, and that is not a preference: a type
+# is not a value in `zerg`, so `assert_raises(f, ValueError)` cannot be spelled at all. The
+# form that is left is also the better half of the trade — the caller asks with the
+# language's own `is`, and this module never has to learn the error taxonomy it is
+# deliberately outside of (see the header).
+#
+# A `guard` AND NOT AN `fn ()`, and the difference was measured rather than preferred. The
+# closure reads better — `assert_raises(fn () { strings.split("a,b", "") })` says what it
+# does — and this compiler cannot compile it: a closure body naming an imported module is
+# _E735 a closure captures `strings`, and this compiler cannot work out what it holds_,
+# because a namespace is a free name and a capture needs a type. Every test that reaches
+# its module through `import` is exactly that shape, so the closure form would be a form
+# that works only for the tests that need it least. The `guard` is evaluated at the CALL
+# SITE, where the namespace is in scope, and hands the outcome over as an ordinary value.
+#
+# IT IS GENERIC BECAUSE THE CARRIER IS — `split` raises out of a `list[str]`, `repeat` out
+# of a `str`, `count` out of an `int` — which is what a suite that hand-rolled this helper
+# found and had to write for itself. `T` is never inspected here; the whole body is about
+# the Right.
+pub fn assert_raises[T](r: Result[T]) -> Err {
+	return match r {
+		Either.Left(_)  => not_raised()
+		Either.Right(e) => e
+	}
 }
 
-# assert_ne is the negation: it succeeds when a and b differ, and raises when they
-# compare equal.
-pub fn assert_ne[T: Eq](a: T, b: T) -> Result[nil] {
-	raise "assert_ne failed: values are equal" if a == b
-	return nil
+# --- the test context ---------------------------------------------------------------
+#
+# THE CHAIN IS GONE, AND THE ASSERTION IS WHAT TOOK IT. `t.str("file", path).assert(cond,
+# "…")` existed for one reason: an assertion that said only "assertion failed" needed
+# somewhere to hang the facts that would make it readable, and the chain was that place.
+# The keyword now reports the position, the claim's own text and the operand values, which
+# is most of what a chain was ever loaded with — and its terminal is FORCED out anyway,
+# since `assert` is a keyword and cannot name a method.
+#
+# What a chain was genuinely for beyond that is a DOMAIN NOTE, a thing about the fixture
+# rather than about the expression: which row, which fixture file, which platform. `log` is
+# already that and is better at it — it is printed only when the test fails, it is not
+# attached to one assertion, and it needs no builder to be finished. So a suite that used
+# to write the chain writes `ctx.log("row 42")` above its asserts and loses nothing.
+#
+# A Context is taken BY VALUE — `fn my_test(ctx: testing.Context)` — and by value is not
+# a copy of what matters. The one field that carries anything out is a channel, and a
+# channel is a `Ref` value: copying a value refcount-bumps the `Ref`s it contains and
+# deep-copies the rest (docs/code/coroutine.md). So the copy the parameter makes shares
+# the one thing that must be shared, and a test says what it has to say without `mut &`
+# — measured: a Context passed by value through two frames and a `spawn` delivered every
+# event to the runner holding the receiving end.
+#
+# WHAT A TEST SAYS TRAVELS AS AN EVENT, not as a field it sets, and that is the same
+# reasoning one step on: a `bool` field set by the test would be set on the COPY, and the
+# runner would never see it. The channel is the only field, so it is the only mechanism.
+
+# Event is one thing a running test told its runner. It is `pub` because the generated
+# driver names the channel's type; its fields are the module's own, because nothing
+# outside reads one — `collect` below is the only reader there is.
+pub struct Event {
+	kind: int = 0
+	text: str = ""
+}
+
+# The kinds an Event carries. LOG / SKIP / FATAL are what the test itself says; DONE, RAISE
+# and CRASH are what the driver says about the body afterwards, over the same channel, so
+# that one receive loop sees the whole of a test's life and there is no second route for
+# a runner to get wrong.
+#
+# RAISE AND CRASH ARE THE SAME EVENT ASKED A DIFFERENT QUESTION, and the question is the
+# error's KIND. A claim that did not hold is `AssertionError` and is a FAILED TEST; anything
+# else that reached the top of the body is a program that fell over, and calling that a
+# failed assertion sends the reader looking for an assertion that does not exist. The driver
+# asks with the language's own `is`, which is why this needs a kind rather than a message.
+const EV_LOG := 0
+const EV_SKIP := 1
+const EV_FATAL := 2
+const EV_DONE := 3
+const EV_RAISE := 4
+const EV_CRASH := 5
+
+# Outcome is what one test came to, as the runner reports it — `ok`, `fail`, `skip` or
+# `crash`, which is the set `zergc.zg`'s report format lists — and the text that goes under
+# it: a skip's reason, or a failure's notes and message. (`timeout` is the driver's own and
+# never comes from here: a test that never finished said nothing to collect.)
+pub struct Outcome {
+	pub verdict: str = ""
+	pub text: str = ""
+}
+
+pub struct Context {
+	# `name` is the method, so the field cannot be
+	tname: str = ""
+
+	# THE CHANNEL IS BIDIRECTIONAL, and the direction is what makes the runner's loop
+	# end: a channel closes when its last SEND-capable holder goes, and the runner holds
+	# a `<-chan[Event]` which is not one. So the context — held only by the coroutine
+	# running the test — is the last sender, and the body returning is what ends the
+	# stream.
+	#
+	# THE FIELD IS `pub` BECAUSE THE ALTERNATIVE IS A DEFAULT NOBODY CAN WRITE. A
+	# module-private field must carry one (`E482`), and the only value that would serve is
+	# a FRESH channel per construction — `chan[Event]()`, a call. `zerg` takes that: a
+	# default is evaluated per construction and may be a call (docs/core/types.md, "Field
+	# defaults"). The bootstrap SEED does not, and `testing` is a module the seed's own
+	# suite compiles, so the module has to stay inside the subset the seed reads. `pub`
+	# is what drops the requirement instead of working around it: `context` below hands
+	# every Context its channel, so the default was dead the day it was written.
+	pub events: chan[Event]
+}
+
+# context builds the Context for one test. It is the generated driver's entry point and
+# not something a test writes: a test is HANDED one.
+pub fn context(name: str, events: chan[Event]) -> Context {
+	return Context(name, events)
+}
+
+impl Context {
+	# name is which test this is — the function's own name, as the report prints it.
+	pub fn name() -> str {
+		return this.tname
+	}
+
+	# log records a message to show ONLY IF this test fails. A test that logs its way
+	# through a passing run is a test whose output nobody reads; the note earns its place at
+	# the moment there is something to explain.
+	#
+	# IT IS THE LOGGER SAYING IT. The message goes through this context's own `log.Logger`, so
+	# a note carries the same timestamp and the same level marker every other line in this
+	# tree does, and there is one renderer rather than two. The rendered line's trailing
+	# newline comes off because the runner joins notes with its own.
+	#
+	# `log` IS BOTH A METHOD HERE AND AN IMPORTED MODULE, and that is not a collision: `E705`
+	# keys a name by its receiver, so `Context.log` and the namespace `log` never meet. It was
+	# checked before the module was written.
+	pub fn log(msg: str) {
+		this.events <- Event(EV_LOG, rendered(msg))
+	}
+
+	# skip says this test does not apply here — a platform it is not for, a resource that
+	# is not present — and stops it. IT IS NOT A FAILURE, and the report counts it apart
+	# from both.
+	#
+	# THE UNWIND SAYS "STOPPED" AND THE CONTEXT SAYS "WHY", which is the whole reason
+	# there is no error KIND for either of these. `testing` is deliberately outside the
+	# taxonomy (see the header): a claim that did not hold is not a value that was
+	# refused, and a runner that told a skip from a failure by matching on a message
+	# string would be reading prose as a protocol. So the raise carries nothing anyone
+	# reads, the event carries everything, and the runner asks the context.
+	pub fn skip(reason: str) -> Result[nil] {
+		this.events <- Event(EV_SKIP, reason)
+		raise "test skipped"
+	}
+
+	# fatal stops this test now, failed. It is what a test says when going on would only
+	# produce noise — a fixture that did not open, a parse that returned nothing to
+	# assert about.
+	pub fn fatal(msg: str) -> Result[nil] {
+		this.events <- Event(EV_FATAL, msg)
+		raise "test failed"
+	}
+}
+
+# rendered is `msg` as a LOG LINE — the same line `log` writes everywhere else in this tree,
+# with the same timestamp and the same level marker, rather than a second idea of what a line
+# looks like. Two unconnected notions of "a log line" is the drift that put the JSON escaper in
+# one place, and this is that argument applied to the other one.
+#
+# THE LOGGER IS BUILT HERE AND NOT HELD ON THE CONTEXT, and that was measured rather than
+# preferred: a `log.Logger` stored in the Context and reached through `this` deadlocked — the
+# line went into the sink's channel and the receive on the Context's copy of it never saw it.
+# A Context is copied by value at every frame and every `spawn`, and this module's own header
+# explains that a copy shares its `Ref`s and deep-copies the rest; something in that path does
+# not hold for a channel two structs down. Built locally it is one channel, one send, one
+# receive, in one frame — and the cost is one logger per NOTE, which is a thing a test writes
+# when it has something to explain rather than in a loop.
+#
+# PRETTY AND UNCOLOURED WHATEVER THE ENVIRONMENT SAYS. A note is read by a person looking at a
+# failure report, and the report's shape belongs to the runner rather than to `ZERG_LOG` — a
+# suite whose notes turned into JSON because a shell exported a variable would be a suite that
+# reads differently depending on who ran it. The trailing newline comes off because the runner
+# joins notes with its own.
+fn rendered(msg: str) -> str {
+	lines := chan[str](1)
+	log.new().format(log.FMT_PRETTY).colour(false).to(log.to_chan(lines)).info().msg(msg)
+
+	# THE RESULT IS ASSIGNED RATHER THAN RETURNED FROM INSIDE THE `if`, and that is not a style
+	# choice: `zerg fmt` collapses a lone `return` in an `if` into the postfix form, and
+	# `return … if line := <-lines` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
+	# CONDITION and a binding head is not one (`E205`). An assignment is not a diverge, so the
+	# formatter leaves this shape alone. Reported; four lines reproduce it.
+	mut out := msg
+	if line := <-lines {
+		out = strings.trim_suffix(line, "\n")
+	}
+	return out
+}
+
+# finished is what the driver says after the body is out of its hands: `ok` when it
+# returned, and otherwise the message it raised. It is the last event on the channel.
+#
+# `claim` is whether what came out was an `AssertionError` — a claim the test made that did
+# not hold — as against any other Err, which is the program falling over. The driver asks it
+# with `e is AssertionError` at the point it holds the Err, because that is the only place
+# the Err exists: by here there is a message, and telling the two apart from a message is
+# reading prose as a protocol.
+pub fn finished(ctx: Context, ok: bool, msg: str, claim: bool) {
+	if ok {
+		ctx.events <- Event(EV_DONE, "")
+	} else if claim {
+		ctx.events <- Event(EV_RAISE, msg)
+	} else {
+		ctx.events <- Event(EV_CRASH, msg)
+	}
+}
+
+# collect drains one test's channel and says what the test came to.
+#
+# A MISSING TERMINAL EVENT IS A CRASH, and it is the default rather than a branch: the
+# loop ends either because the sender finished — which it does only after `finished` —
+# or because the coroutine died, and only the first can have said DONE, RAISE or CRASH. A death
+# also raises out of the receive (the channel closes carrying the producer's Err, or the
+# runtime finds nothing left to run), which is what the `guard` is for; both routes land
+# on the same verdict.
+pub fn collect(rx: <-chan[Event]) -> Outcome {
+	mut notes := ""
+	mut verdict := "crash"
+	mut text := ""
+	mut why := ""
+	mut skipped := false
+
+	guard {
+		for ev in rx {
+			if ev.kind == EV_LOG {
+				notes = notes + ev.text + "\n"
+			} else if ev.kind == EV_SKIP {
+				skipped = true
+				why = ev.text
+			} else if ev.kind == EV_FATAL {
+				why = ev.text
+			} else if ev.kind == EV_DONE {
+				verdict = "ok"
+			} else if ev.kind == EV_RAISE {
+				verdict = "fail"
+				text = ev.text
+			} else if ev.kind == EV_CRASH {
+				verdict = "crash"
+				text = ev.text
+			}
+		}
+	}
+
+	return Outcome("ok", text) if verdict == "ok"
+
+	# `skip` and `fatal` both arrive as a raise that is NOT a claim, so both land on CRASH —
+	# and the context is what tells them from each other and from a program that really did
+	# fall over. Neither is a crash, and `fatal` is a failure the test itself declared, so each
+	# takes its own verdict back here.
+	return Outcome("skip", why) if skipped
+	return Outcome("fail", notes + why) if why != ""
+
+	return Outcome(verdict, notes + text)
 }

@@ -30,6 +30,12 @@ const (
 var knownDecorators = map[string]decoratorStatus{
 	"derive": decoKnown,
 	"test":   decoKnown,
+
+	// `allow` names LINT codes to suppress. The seed has no linter, so it reads the
+	// name and attributes no meaning to it — which is what the shipping compiler does
+	// too, for the same reason: the catalogue of codes belongs to the tool that owns
+	// the rules, and a second copy of it is a fact that goes stale where nobody looks.
+	"allow":  decoKnown,
 	"dyn":    decoReserved,
 	"sealed": decoReserved,
 	"align":  decoReserved,

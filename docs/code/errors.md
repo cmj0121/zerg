@@ -118,12 +118,16 @@ answers the text alone, and the kind is rendered in front of it when the error r
 > `unwrap()` are.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, ten reify as `is`-testable **kinds** today:
+expected failure. Of the fault names this chapter uses, eleven reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
-plus the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration`.
+the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` — and
+`AssertionError`, which is what a failed `assert` (see [Grammar](../surface/grammar.md), group 8) raises
+and which nothing else raises. That exclusivity is the point of giving it a kind rather than a message:
+`zerg test` reports a claim that did not hold as a **failure** and anything else that reached the top of
+a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
 **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both** compilers, the
-name not being one of the ten — and the abort carries no distinct reified kind for them, only a generic
+name not being one of the eleven — and the abort carries no distinct reified kind for them, only a generic
 message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right

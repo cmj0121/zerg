@@ -40,6 +40,7 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 | Command               | What it does                                                        |
 | --------------------- | ------------------------------------------------------------------- |
 | `zerg build <file>`   | compile — an executable when the entry declares `main`, else object |
+| `zerg test [path]`    | run the `#[test]` functions under a path, or in one file's package  |
 | `zerg fmt <file>`     | rewrite source in the one canonical style                           |
 | `zerg lint <file>`    | report unused imports and dead private declarations                 |
 | `zerg desugar <file>` | rewrite source into the core forms its sugar stands for             |
@@ -90,7 +91,7 @@ platform C library and nothing else — is fixed by both the specification and i
 **standard library** (`src/stdlib/*.zg`) is **pure Zerg** over that floor, bound only by its interface:
 `io.read_file` loops the runtime's syscall leaves, and `math.sqrt` is a Zerg algorithm, never a libm
 binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`, `ascii`, `cli`,
-`strconv`, `time`, `math`, `rand`, `testing` — are reached with `import "<name>"`.
+`strconv`, `json`, `log`, `sha256`, `time`, `math`, `rand`, `testing` — are reached with `import "<name>"`.
 
 ## Documentation
 

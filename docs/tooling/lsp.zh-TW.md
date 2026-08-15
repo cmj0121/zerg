@@ -18,8 +18,8 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 > **如果 server 和 `zerg build` 對一個程式的看法不同,錯的是 server。** 它沒有自己的分析。
 
 `make lsp` 就是這句話變成的 gate。它為每個 example 與 40 個 corpus 程式在 stdio 上跑一次真的 session,把 server 發布
-的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,information 對上會回報
-它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
+的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,lint findings 對上會
+回報它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
 
 除此之外它還帶了**十個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變
 更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位,以及大於
@@ -29,7 +29,7 @@ runtime bounded leaf 一次讀取量的 body。那是另一種、也更安靜的
 ## 它住在哪裡
 
 `src/compiler/lsp/`——自成一個 module,像任何其他消費者一樣跨 `pub` 邊界 import `src/compiler/zerg/`,由 `zergc.zg`
-裡多一行 `.sub(lsp_cmd())` 接上。
+裡多一行 `.sub(cmd.lsp_cmd())` 接上。啟動它的那個命令是 `src/compiler/cmd/lsp_cmd.zg`,跟另外五個放在一起。
 
 **一個 binary,不是兩個。** 子命令讓編譯器與 server 之間的版本歪斜**物理上不可能**——它們是同一個檔案——而且編輯器不
 需要 PATH 上多任何東西。
@@ -43,14 +43,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 ## 已經做好的
 
-| 請求                                                          | 由誰回答                                           |
-| ------------------------------------------------------------- | -------------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | session 本身                                       |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                           |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_conversions` |
-| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式         |
-| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix       |
-| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告               |
+| 請求                                                          | 由誰回答                                       |
+| ------------------------------------------------------------- | ---------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | session 本身                                   |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                       |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_program` |
+| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式     |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix   |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告           |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -66,9 +66,21 @@ module 擁有協定;driver 擁有檔案系統。
 **診斷是對整個程式檢查的**,不是只對 buffer。一個 import 了別的 module 的檔案必須連同那個 module 一起檢查,否則它借來
 的每個名字都會讀成 undefined——會在正確的程式碼底下畫線的 server,是人會關掉的那種。
 
-**兩種嚴重度,來自兩個地方。** **error** 是 `emit_files_diag` 回報、`zerg build` 會為此拒絕的東西。`L5xx` conversion
-findings 是關於**合法**程式的——一個取了紙面上看不出來之型別的字面值——所以它們以 **information** 抵達。把一個能動的
-程式塗成紅色的 server,是在教它的使用者忽略紅色。
+**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是 `emit_files_diag` 回報、`zerg build` 會為此拒絕的東西,
+也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
+所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
+——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
+([linter 的嚴重度](fmt.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
+
+| `Finding.sev` | `zerg lint` 印出  | LSP 嚴重度      |
+| ------------- | ----------------- | --------------- |
+| `""`          | `L103 …`          | 2 — warning     |
+| `"warning"`   | `warning: L601 …` | 3 — information |
+| `"info"`      | `info: L106 …`    | 4 — hint        |
+
+這兩欄的字面意思對不上,而且本來就不該對上:左欄決定的是一個**命令的 exit status**,右欄是**編輯器**要畫多大聲。這個
+對映只寫在一個地方,也就是 `ls_severity`,而 `make lsp` held 住它——gate 會把每一則發布出去的診斷重組成 `zerg lint`
+本來會印的那一行,連形容詞一起,所以一個把三個層級壓成同一個嚴重度的 server 會失敗,而不是在每個數字上都同意。
 
 **代碼是以代碼的身分傳遞的。** `Diag` 用一個自己的欄位帶著規則的身分——`E307`、`L502`——所以 server 送出 LSP 的
 `Diagnostic.code`,編輯器可以據此過濾、分組與連結。那正是這一頁講的規則套用在它自己身上:只拼在句子裡的代碼,是每個
@@ -310,9 +322,7 @@ diff 把兩邊綁在一起。**
 | `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                      |
 | `completion`                                  | 同一套 query surface                                |
 | `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| `zerg lint` 發現的 **code** 作為資料          | 那些規則回答 `list[str]`,把代碼渲染進字串裡         |
 | 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
-| `lint_files` 的 findings                      | 它們回答 `list[str]`,沒有位置可以放                 |
 | 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
 
 第一列是真正的缺口,所有互動功能都卡在它後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。需要

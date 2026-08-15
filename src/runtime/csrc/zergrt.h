@@ -330,6 +330,7 @@ enum {
 	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
+	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
 typedef struct zrt_err {
@@ -782,6 +783,9 @@ const char *zrt_arch(void);
 const char *zrt_exe_path(void);
 const char *zrt_getenv(const char *key);
 bool        zrt_has_env(const char *key);
+/* zrt_isatty is whether fd is a terminal — what `os.isatty` lowers onto, and what lets a
+ * program colour its output at a terminal and not into a pipe. */
+bool zrt_isatty(int64_t fd);
 void        zrt_exit(int64_t code);
 
 /* Filesystem-write leaves (sys.c): the stdlib `io.write_file` drives zrt_open_write (an

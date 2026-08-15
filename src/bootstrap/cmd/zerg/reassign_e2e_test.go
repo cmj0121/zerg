@@ -120,6 +120,13 @@ func buildASan(t *testing.T, cc, src string) string {
 	if err != nil {
 		t.Fatalf("materialize runtime: %v", err)
 	}
+	// the same decision `zerg0 build` makes (cmd/zerg/main.go): a program that spawns or
+	// holds a channel links the scheduler and the host's context switch too. A helper that
+	// linked only the core set would fail any such program at the linker rather than in the
+	// compiler, which says nothing about the program.
+	if manifest.Concurrency {
+		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
+	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
 		t.Fatalf("write C: %v", err)

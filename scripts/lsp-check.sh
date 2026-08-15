@@ -8,7 +8,7 @@
 # the same compiler one question, held to the same answer.
 #
 # It matters because the invariant is only structurally true while nobody adds a rule. The
-# server calls `emit_files_diag`, `lex_diags`, `lint_program` and `fmt_src_off` and
+# server calls `check_files_diag`, `lex_diags`, `lint_program` and `fmt_src_off` and
 # owns none of them; the day one handler grows a shortcut — a special case for an empty
 # buffer, a filter that drops a finding the author thought was noise — an editor starts
 # reporting a language that the compiler does not implement, and no other gate here can

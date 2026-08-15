@@ -43,7 +43,8 @@ ZG
 | `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
 | `zerg lsp`            | language server，走 stdio（JSON-RPC）                  |
 
-`--emit` 則是停在某個階段：`tokens`、`ast`、`c`、`lib`（object）、`bin`（執行檔）。程式是逐模組建置的——`-j`
+`--emit` 則是停在某個階段：`tokens`、`ast`、`check`（只出診斷）、`c`、`lib`（object）、`bin`（執行檔）。程式是逐模組
+建置的——`-j`
 可同時編譯多個單元，結果以內容為鍵快取在 `.zerg-cache/`，所以只改一個模組的重建就只重編那一個模組。
 
 **`-o` 指定的就是要寫出的檔案**，每個階段都一樣——`--emit c f.zg -o f.c` 寫出 `f.c`，
@@ -52,6 +53,7 @@ ZG
 | 階段                 | 沒給 `-o` 時                                          |
 | -------------------- | ----------------------------------------------------- |
 | `tokens`、`ast`、`c` | stdout，所以這些階段仍可接管線——`--emit c f.zg > f.c` |
+| `--emit check`       | 什麼都沒有——它只產生診斷，不產生任何檔案              |
 | `--emit lib`         | 原始碼名稱加上 `.o`——`f.zg` 得到 `f.o`                |
 | `--emit bin`         | 原始碼名稱——`f.zg` 得到 `f`                           |
 

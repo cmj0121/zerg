@@ -10,7 +10,7 @@ zerg lsp        # 在 stdin/stdout 上講 JSON-RPC 2.0;由編輯器啟動與關�
 ## 主張
 
 language server **不是一個新程式**。它就是已經存在的那個編譯器,被問了另一個問題:不是*「把這個 lower 成 C」*,而是
-_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`emit_files_diag` 正是 `zerg build` 呼叫的東西——所以這裡
+_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`check_files_diag` 正是 `zerg build --emit check`——所以這裡
 交付的是把答案送到人正在看的地方的那段管線。
 
 這同時也是不變式,而且它是被**強制**的,不是被宣稱的:
@@ -43,14 +43,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 ## 已經做好的
 
-| 請求                                                          | 由誰回答                                       |
-| ------------------------------------------------------------- | ---------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | session 本身                                   |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                       |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_program` |
-| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式     |
-| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix   |
-| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告           |
+| 請求                                                          | 由誰回答                                        |
+| ------------------------------------------------------------- | ----------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | session 本身                                    |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                        |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_files_diag`、`lint_program` |
+| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式      |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix    |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告            |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -79,7 +79,7 @@ module 與測試檔正好都是這一類。
 `src/stdlib/` 是一個目錄,裡面每個 `.zg` 檔各自是一個 module;`examples/` 是一個目錄,裡面是二十個各自獨立的程式。一
 個目錄是在有東西 import 它的時候才成為 module,而只有從 entry 走一遍才知道這件事。
 
-**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是 `emit_files_diag` 回報、`zerg build` 會為此拒絕的東西,
+**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是 `check_files_diag` 回報、`zerg build` 會為此拒絕的東西,
 也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
 所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
 ——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
@@ -139,12 +139,12 @@ quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己
 `ftplugin/zerg.vim` 是「在完全沒裝 toolchain 時也必須成立」的編輯行為,所以它不問任何正在跑的 `zerg`。它做的是陳述
 編譯器擁有的事實——而 `make editor-align` 把其中每一條都held 回它的來源。
 
-| 設定                       | 是什麼                                     | held 到什麼      |
-| -------------------------- | ------------------------------------------ | ---------------- |
-| `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                      | `F101`、`F403`   |
-| `colorcolumn=121`          | `F403` 換行預算之後的第一欄                | `fmt_wrap_max()` |
-| `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                 | 同一個掃描器     |
-| `makeprg` / `errorformat`  | `:make` 跑 `--emit c`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
+| 設定                       | 是什麼                                         | held 到什麼      |
+| -------------------------- | ---------------------------------------------- | ---------------- |
+| `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                          | `F101`、`F403`   |
+| `colorcolumn=121`          | `F403` 換行預算之後的第一欄                    | `fmt_wrap_max()` |
+| `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                     | 同一個掃描器     |
+| `makeprg` / `errorformat`  | `:make` 跑 `--emit check`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
 
 **摺疊與縮排是同一條規則,問了兩次。** 一行的層級是它觸及的最低分隔符深度——這讓一個區塊被摺起來時,包住它的兩行都
 留在畫面上(上面的 `fn f() {` 與下面的 `}`),也讓 `}` 在打出來的當下就自己 dedent。差別在分隔符:摺疊只數大括號,
@@ -303,7 +303,7 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問
-`emit_files_diag`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
+`check_files_diag`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
 從一份寫在 vimscript 裡的關鍵字清單上色的,而 nvim 必須在任何 Zerg 工具跑起來之前就知道怎麼縮排。
 
 所以那些事實有自己的 gate——`make editor-align`:
@@ -345,12 +345,24 @@ diff 把兩邊綁在一起。**
 `semanticTokens` 是另一種缺,值得這樣點名:它會需要一張把 token kind 對映到 LSP token type 的表,而那正是上一節存在
 就是為了防止的那種**重複的語言事實清單**。vim 語法檔已經在為 Zerg 上色,而且它有 gate。
 
-最後一列是成本,不是缺口。scheduler 是協作式且非搶佔的,所以一次長檢查會佔住它的 worker 直到做完;`emit.zg` 的 9264
-行是這個 repository 裡最壞的情況,也是在這裡設計任何東西之前該拿來量的數字。
+最後一列是成本,不是缺口。scheduler 是協作式且非搶佔的,所以一次長檢查會佔住它的 worker 直到做完;`emit.zg` 是這個
+repository 裡最壞的情況,也是在這裡設計任何東西之前該拿來量的數字。
 
-在這個編譯器自己的原始碼上量到的數字:以 `src/compiler/zergc.zg` 為根的 24 檔程式檢查一次——現在只要打開
-`src/compiler/` 底下**任何一個**檔案就會要求這件事,因為一個 module 成員是對著它的 module 檢查的——大約 6.5 秒,峰值
-接近 3.7 GB,而一個長時間存活的 session 在三到四次之後會被作業系統殺掉。這個上限是**emitter 的**,不是協定的:編譯器
-的檢查住在 lowering 的走訪裡,所以 `emit_files_diag` 得把整個程式降到 C 才碰得到它們,而沒有一個只做檢查的進入點可以
-改問。`zerg build` 也會碰到同一個上限,只是它活得下來,因為一次 build 是一個做完就結束的行程。debounce 只會把它藏起
-來;一個在產生程式碼之前就停下來的檢查才會終結它。
+**這個成本的記憶體那一半已經關掉了。** 以 `src/compiler/zergc.zg` 為根的 24 檔程式檢查一次——現在只要打開
+`src/compiler/` 底下**任何一個**檔案就會要求這件事,因為一個 module 成員是對著它的 module 檢查的——以前要 6.7 秒,峰
+值 **6.7 GB**,而一個長時間存活的 session 在三到四次之後會被作業系統殺掉。這個上限是 **emitter 的**,不是協定的:編
+譯器的檢查住在 lowering 的走訪裡,所以唯一碰得到它們的路是 `emit_files_diag`,而它會先把整個程式降到 C。
+
+`check_files_diag` 就是同一趟走訪,只是把 C 丟掉而不是累積起來,同一次檢查現在是 **4.9 秒、峰值 0.32 GB**。同一個
+session 裡:改之前在第三次檢查就被 SIGKILL,改之後六十次都發出診斷,峰值 2.9 GB,而且每次的時間沒有變慢。省下來的不
+是 C 的大小——它只有 3.6 MB——而是把它組起來的形狀:`defs = defs + c_fn(…)` 在大約 1500 個步驟裡,每一步都把先前產出
+的全部再抄一份。`make check-equal` 負責讓這兩條路誠實,而且它是逐位元組比對兩者的診斷的,因為一個比 build 找得少的檢
+查,就是一個對著一份根本編不過的檔案顯示乾淨 buffer 的編輯器。
+
+還剩下一件事,值得寫下來而不是等人再發現一次:server 每檢查一次仍會長大約 25 MB——一次 0.32 GB、二十次 2.0 GB、六十
+次 2.9 GB——所以幾百次的 session 還是會用比較慢的路走到同一個上限。那是每次檢查的殘留,不是這次關掉的那種累積;它是另
+一個量測,也是另一個修法。
+
+**時間那一半還沒。** 五秒對一次按鍵批次的檢查來說仍然是慢的,而其中大約一半是因為 `publishDiagnostics` 把程式走了
+**兩趟**——一趟拿錯誤,一趟拿 `L5xx` conversion lint,而 `lint_program` 是用自己的 merge、自己的走訪去問的。用一趟走
+訪同時回答兩者,是下一件該量的事。debounce 只會把剩下的藏起來。

@@ -18,11 +18,13 @@
 # value frozen before `main` cannot be varied by a test inside the process, so the whole
 # question moved to the one gate that can set an environment and start a program.
 #
-# WHICH IS WHY NOTHING HERE CALLS `log.new()` DIRECTLY. `pinned` below fixes the level, the
-# format and the colour, so a suite run under `ZERG_LOG=json`, or on a terminal, or by somebody
-# who exports `ZERG_LOG_LEVEL=debug`, asks exactly the same question as one run in a pipe. A
-# test that asserted a rendered line against an inherited default would be a test that fails
-# for the developer who was already debugging something.
+# WHICH IS WHY NOTHING HERE ASSERTS AGAINST AN UNPINNED LOGGER. `pinned` below is the only
+# reader of `log.new()` a test builds on — `restored` is the other caller and nothing is
+# asserted through it — and it fixes the level, the format and the colour, so a suite run under
+# `ZERG_LOG=json`, or on a terminal, or by somebody who exports `ZERG_LOG_LEVEL=debug`, asks
+# exactly the same question as one run in a pipe. A test that asserted a rendered line against
+# an inherited default would be a test that fails for the developer who was already debugging
+# something.
 import (
 	"log"
 	"strings"
@@ -129,6 +131,13 @@ fn test_configuration_does_not_mutate_the_original(ctx: testing.Context) {
 	ctx.log("and the original did not")
 	assert base.enabled(log.Level.INFO)
 	assert named.enabled(log.Level.INFO)
+}
+
+# a_failure is an `Err` this suite can hand to `Entry.err`. There is no way to mint one
+# directly — an error is what a `raise` produced — so it comes from the cheapest real failure
+# in the tree, turned into a value by `testing.assert_raises`.
+fn a_failure() -> Err {
+	return testing.assert_raises(guard { strings.split("a,b", "") })
 }
 
 # --- a finished line -------------------------------------------------------------------------
@@ -268,6 +277,18 @@ fn field(k: str, v: str) -> str {
 	ch := chan[str](4)
 	pinned(log.Level.INFO).to(log.to_chan(ch)).info().str(k, v).msg("m")
 	return taken(ch)
+}
+
+# `err` PUTS A FAILURE UNDER ONE KEY, and that key is `error` in every program in this
+# ecosystem — which is most of what structured logging is for, and which a convention rather
+# than a method would leave to each call site.
+#[test]
+fn test_err_writes_the_failure_under_the_key_error() {
+	ch := chan[str](4)
+	pinned(log.Level.INFO).to(log.to_chan(ch)).error().err(a_failure()).msg("failed")
+	line := taken(ch)
+	assert strings.contains(line, " ERR failed  error=")
+	assert strings.count(line, "\n") == 1
 }
 
 #[test]
@@ -517,8 +538,8 @@ fn test_a_disabled_entry_chains_without_effect(ctx: testing.Context) {
 	ch := chan[str](32)
 	lg := pinned(log.Level.ERROR).to(log.to_chan(ch))
 
-	ctx.log("six kinds of field on a dead entry, then the terminal")
-	lg.at_level(log.Level.DEBUG).str("a", "1").int("b", 2).bool("c", true).dur("d", 5).str("e", "x").msg("nope")
+	ctx.log("all five kinds of field on a dead entry, then the terminal")
+	lg.at_level(log.Level.DEBUG).str("a", "1").int("b", 2).bool("c", true).dur("d", 5).err(a_failure()).msg("nope")
 
 	assert taken(ch) == ""
 
@@ -607,10 +628,12 @@ fn test_the_global_writes_the_same_line_as_an_instance() {
 }
 
 # ALL SIX LEVELS ARE ON THE GLOBAL, `debug` included — it is a free function, and the reserved
-# method name is a rule about methods. This is the test that would fail if that ever stopped
-# being true and the surface quietly lost a level.
+# method name is a rule about methods. Five of them are asked here; `fatal` is asked in
+# scripts/log-check.sh for the reason `test_json_spells_the_level_out` gives, so the name says
+# five and the claim about the sixth is where it can be made. This is the test that would fail
+# if the surface quietly lost one.
 #[test]
-fn test_the_global_has_all_six_levels() {
+fn test_the_global_has_the_five_levels_a_test_can_write() {
 	defer restored()
 	ch := installed(log.Level.TRACE)
 
@@ -717,9 +740,15 @@ fn test_restoring_the_default_needs_no_current() {
 	log.install(pinned(log.Level.OFF))
 	assert not log.enabled(log.Level.FATAL)
 
+	# WHAT the default is is not asked here and cannot be — it comes from `ZERG_LOG_LEVEL`,
+	# which is frozen before `main`. What IS asked is the claim the pattern makes: rebuilding
+	# with the public constructor puts back exactly what a program that never called `install`
+	# would have had, at every level, without anything ever reading the cell.
 	log.install(log.new())
-	assert log.enabled(log.Level.INFO)
-	assert not log.enabled(log.Level.DEBUG)
+	fresh := log.new()
+	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR, log.Level.FATAL] {
+		assert log.enabled(l) == fresh.enabled(l)
+	}
 }
 
 # `at_level` is the general form, and on the global it is what a caller with a level in a

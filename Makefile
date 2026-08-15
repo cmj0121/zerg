@@ -106,7 +106,7 @@ test-runner:                    # the test runner can see a test that fails
 # `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
 # broke, a directory that moved, or a suite somebody deleted all leave this target green for
 # having asked nothing — the one failure a test gate must not have.
-STDLIB_TEST_MIN ?= 138
+STDLIB_TEST_MIN ?= 147
 
 # The modules whose comments carry runnable examples. An example nobody executes is an
 # unverified claim, which is the shape this repository has spent a span removing, so the

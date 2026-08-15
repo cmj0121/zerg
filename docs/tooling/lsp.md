@@ -11,7 +11,7 @@ zerg lsp        # speak JSON-RPC 2.0 over stdin/stdout; the editor starts and st
 
 The language server is **not a new program**. It is the compiler that already exists, asked a
 different question: not _"lower this to C"_ but _"what is wrong with this buffer, right now"_. The
-compiler has always answered that one — `emit_files_diag` is what `zerg build` calls — so what ships
+compiler has always answered that one — `check_files_diag` is `zerg build --emit check` — so what ships
 here is the plumbing that carries the answer to where a person is looking.
 
 That is also the invariant, and it is enforced rather than asserted:
@@ -56,7 +56,7 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | ------------------------------------------------------------- | -------------------------------------------------- |
 | `initialize` / `shutdown` / `exit`                            | the session                                        |
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_program`     |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_files_diag`, `lint_program`    |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
@@ -98,7 +98,7 @@ local to a directory says whether it is one: `src/stdlib/` is a directory of `.z
 file is a module of its own, and `examples/` is a directory of twenty separate programs. A directory
 is a module when something imports it, and only a walk from an entry knows that.
 
-**Four severities, from two places.** An **error** — LSP severity 1 — is what `emit_files_diag`
+**Four severities, from two places.** An **error** — LSP severity 1 — is what `check_files_diag`
 reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
 use. Everything else on the wire came from `lint_program`, and every one of those is a **legal**
 program that builds, so none of them is ever an error: a server that paints a working program red
@@ -169,12 +169,12 @@ nvim binds them to `gra` by default, and `gO` to the outline.
 it asks a running `zerg` anything. What it does instead is state facts the compiler owns — and
 [`make editor-align`](#keeping-the-editor-honest) holds every one of them to their source.
 
-| Setting                    | Is                                                       | Held to            |
-| -------------------------- | -------------------------------------------------------- | ------------------ |
-| `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                     | `F101`, `F403`     |
-| `colorcolumn=121`          | the first column past the budget `F403` wraps at         | `fmt_wrap_max()`   |
-| `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                | one shared scanner |
-| `makeprg` / `errorformat`  | `:make` runs `--emit c` and reads both diagnostic shapes | the compiler's own |
+| Setting                    | Is                                                           | Held to            |
+| -------------------------- | ------------------------------------------------------------ | ------------------ |
+| `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                         | `F101`, `F403`     |
+| `colorcolumn=121`          | the first column past the budget `F403` wraps at             | `fmt_wrap_max()`   |
+| `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                    | one shared scanner |
+| `makeprg` / `errorformat`  | `:make` runs `--emit check` and reads both diagnostic shapes | the compiler's own |
 
 **Folding and indenting are one rule, asked twice.** A line's level is the lowest delimiter depth it
 reaches, which leaves both lines that bracket a block on screen when it is folded — `fn f() {` above
@@ -375,7 +375,7 @@ further than any string rule and swallowed the closing quote. Neither a token pr
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
-and the server asks `emit_files_diag` rather than checking anything itself, so there is no second copy
+and the server asks `check_files_diag` rather than checking anything itself, so there is no second copy
 to drift. The editor files are the one exception and cannot be anything else: vim highlights from a
 keyword list written in vimscript, and nvim has to know how to indent before any Zerg tool has run.
 
@@ -429,15 +429,30 @@ facts** the section above exists to prevent. The vim syntax file already highlig
 gated.
 
 The last row is a cost, not a gap. The scheduler is cooperative and non-preemptive, so a long check
-occupies its worker until it finishes; `emit.zg` at 9264 lines is the worst case in this repository
-and is the number to measure against before designing anything here.
+occupies its worker until it finishes; `emit.zg` is the worst case in this repository and is the
+number to measure against before designing anything here.
 
-Measured, on this compiler's own sources: one check of the 24-file program rooted at
+**The memory half of that cost is closed.** One check of the 24-file program rooted at
 `src/compiler/zergc.zg` — which is what opening **any** file under `src/compiler/` asks for, now that
-a module member is checked against its module — takes about 6.5 s and peaks near 3.7 GB, and a
-long-lived session is killed by the operating system after three or four of them. The ceiling is the
-**emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so
-`emit_files_diag` lowers the whole program to C to reach them and there is no check-only entry point
-to ask instead. It is reached by `zerg build` too and simply survives there, because a build is a
-process that then exits. A debounce would hide it; a check that stops before code generation would
-end it.
+a module member is checked against its module — used to take 6.7 s and peak at **6.7 GB**, and a
+long-lived session was killed by the operating system after three or four of them. The ceiling was
+the **emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so the
+only way to reach them was `emit_files_diag`, which lowers the whole program to C first.
+
+`check_files_diag` is that walk with the C dropped rather than accumulated, and the same check now
+takes **4.9 s and peaks at 0.32 GB**. In one session: before, SIGKILL after the third check; after,
+sixty published, 2.9 GB, and no slowdown across them. The saving is not the size of the C — 3.6 MB —
+but the shape of building it: `defs = defs + c_fn(…)` copies everything emitted so far on every one
+of ~1500 steps. `make check-equal` is what keeps the two paths honest, and it compares their
+diagnostics byte for byte because a check that finds LESS than the build finds is an editor showing a
+clean buffer for a file that will not compile.
+
+A residual remains and is worth writing down rather than rediscovering: the server still grows by
+roughly 25 MB per check — 0.32 GB after one, 2.0 GB after twenty, 2.9 GB after sixty — so a session
+of several hundred would reach the same ceiling by a slower road. That is retention per check and not
+the accumulation this closed; it is a different measurement and a different fix.
+
+**The time half is not.** Five seconds is still a check per keystroke-batch, and roughly half of it
+is that `publishDiagnostics` walks the program TWICE — once for the errors and once for the `L5xx`
+conversion lints, which `lint_program` asks for with its own merge and its own walk. One walk
+answering both is the next thing to measure. A debounce would hide what is left.

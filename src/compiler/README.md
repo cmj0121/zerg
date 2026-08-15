@@ -66,6 +66,7 @@ is one module, so nothing had to become `pub` for them to be shared, and nothing
 zerg build <file.zg>    # a program when the entry declares `main`, else an object
 zerg build -j8 app.zg   # the same, with eight units compiling at once
 zerg build --emit c <file.zg>      # stop at the C; likewise `tokens` and `ast`
+zerg build --emit check <file.zg>  # the diagnostics alone — no C, no artifact
 zerg fmt <file.zg>...   # rewrite sources in the canonical style, in place
 zerg lint <file.zg>...  # report unused imports and dead private code; nonzero if any
 zerg --help             # commands, flags, and the environment variables below

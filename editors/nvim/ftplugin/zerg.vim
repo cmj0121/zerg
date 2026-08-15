@@ -217,10 +217,15 @@ setlocal indentkeys=0{,0},0),0],!^F,o,O
 " and no line — which is the same answer the language server gives it, and better than a
 " position somebody invented.
 "
-" `--emit c` and not a full build: it runs everything that can report a diagnostic and stops
-" before `cc`, so `:make` costs the front end and leaves no binary beside the source.
-" `-o /dev/null` because `--emit c` writes the file it is told to.
-let &l:makeprg = 'zerg build --emit c % -o /dev/null'
+" `--emit check` and not a full build: it runs everything that can report a diagnostic and
+" stops before the program is lowered to C at all, so `:make` costs the front end, writes
+" nothing, and leaves no binary beside the source.
+"
+" It was `--emit c % -o /dev/null`, which asked the same question the expensive way: the C
+" was built in memory and thrown at /dev/null, and on a large program that is gigabytes of
+" string for an answer measured in lines. `check` is the same walk with the text dropped,
+" and `make check-equal` is what holds the two to the same findings.
+let &l:makeprg = 'zerg build --emit check %'
 let &l:errorformat = join([
       \ '%Eerror: %m',
       \ '%ENotImplemented: %m',

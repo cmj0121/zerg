@@ -84,6 +84,7 @@ fn env_help() -> str {
 	return "Stages (--emit):\n" +
 		"  tokens             the token stream, on stdout\n" +
 		"  ast                the parsed tree, on stdout\n" +
+		"  check              the diagnostics only — no C, no artifact\n" +
 		"  c                  the emitted C, on stdout\n" +
 		"  lib                compile the C to an object file (default)\n" +
 		"  bin                link an executable\n" +

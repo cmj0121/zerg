@@ -2,7 +2,7 @@
 #
 # The claim LSP.md makes, and the reason this file is short: the language server is NOT a
 # new program. It is the compiler that already exists, asked "what is wrong with this
-# buffer" instead of "lower this to C". The first question `emit_files_diag` has always
+# buffer" instead of "lower this to C". The first question `check_files_diag` has always
 # answered; everything here is the plumbing that carries the answer to where a person is
 # looking.
 #
@@ -431,9 +431,20 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	# THE WHOLE PROGRAM, not the buffer alone. A file that imports another module is checked
 	# against that module or every name it borrowed reads as undefined — which is a server
 	# that underlines correct code, the one failure that makes a person turn it off.
+	#
+	# AND NOT `emit_files_diag`. The two run the same walk and report the same findings —
+	# scripts/check-equal.sh is what says so — but only one of them also builds the C, and
+	# building it is what was killing this process: 2.8 GB per check against 0.22 GB, on a
+	# program the size of the compiler's own source, for a string this function never had a
+	# use for. A long session was SIGKILLed on the third or fourth keystroke batch.
+	#
+	# The block ends in `ds.len()` because a `guard` carries a value and this call answers
+	# through its out-parameter. The count is not read; what is read is whether the walk
+	# reached the end of it at all.
 	mut ds: list[zerg.Diag] = []
 	err := match guard {
-		zerg.emit_files_diag(prog.srcs, prog.paths, ds)
+		zerg.check_files_diag(prog.srcs, prog.paths, ds)
+		ds.len()
 	} {
 		Either.Left(_)  => ""
 		Either.Right(e) => e.message()

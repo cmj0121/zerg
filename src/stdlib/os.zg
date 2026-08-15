@@ -45,7 +45,7 @@ pub fn env(key: str) -> str? {
 # THAT ILLUSTRATION IS NOT A ` ```zerg ` EXAMPLE, and the reason is the gate rather than the
 # code: `scripts/doc-examples-check.sh` renders every example line with `print`, and this
 # function answers nothing, which is `E390`. The round trip is asserted in
-# tests/stdlib/os/os_test.zg instead, where a claim about a write can be made in full.
+# src/stdlib/os_test.zg instead, where a claim about a write can be made in full.
 pub fn set_env(key: str, value: str) {
 	__zrt_set_env(key, value)
 }

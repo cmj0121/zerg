@@ -319,7 +319,7 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # notice, so a whole directory of the compiler was outside the rule that every other line
 # of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
 # size of whatever was added last.
-SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg tests/stdlib/*/*.zg
+SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg tests/stdlib/*/*.zg
 
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build

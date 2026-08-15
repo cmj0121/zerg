@@ -456,8 +456,12 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   other stdlib module still builds under both compilers, and nothing the seed itself compiles
   imports this one.
 
-  A program built with `bin/zerg0` therefore cannot log. A program built with `bin/zerg` can,
-  which is every program this toolchain produces for anybody but its own bootstrap.
+  A program built with `bin/zerg0` therefore cannot log — and, since `testing` imports `log`
+  so that a `ctx.log` note is the same line as every other, cannot import `testing` either.
+  Neither costs anything: the seed has ONE command, `build`, so it never runs a test, and the
+  `#[test]` items it does see it strips before checking (see the entry above). A program built
+  with `bin/zerg` can do both, and that is every program this toolchain produces for anybody
+  but its own bootstrap.
 
 ## Changing the seed
 

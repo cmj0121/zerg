@@ -23,16 +23,10 @@ Three rules hold for every decorator, whatever it names.
 - **It stands on its own line.** A decorator is an item of the statement list like any other, so a
   separator divides it from what it leads; `#[derive(Eq)] struct P` on one line is not a form.
 
-> **[not yet]** `#[sealed]` is refused with a code of its own — _E496 NotImplemented: the decorator
-> `#[sealed]` — it is a reserved decorator … and this compiler does not build it, so the constructor stays
-> public rather than being sealed in silence_. The word is the right one; what is missing is the behaviour,
-> which is exactly what a reader who wrote it needs to be told.
-
 ## The set
 
-`#[derive]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler reads. Every other
-one —
-`#[sealed]`, the layout directives — is **[not yet]** and refused by name.
+`#[derive]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler reads. Every
+other one — `#[sealed]`, the layout directives — is **[not yet]** and refused by name (Reserved, below).
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
@@ -82,30 +76,32 @@ one —
   itself: **L106** (**info**) when it had nothing to suppress, and **L107** (**warning**) when it names a
   code no rule has. An `#[allow]` naming no code at all is refused outright — _E614_.
 
-## Recognized but not yet supported
+## Reserved, and what a reserved name actually gets
 
-Four more decorator names are **recognized** by the compiler but **rejected loudly** this phase — using one
-is a "not yet supported" **compile error**, never a silent no-op:
+Four names are **specified and unbuilt**, and only one of them is a name the compiler knows:
 
 - **`#[sealed]`** — on a `struct`. _Intended_ to demote the default field-wise `T(…)` constructor to
   **module-private**, so external code must build through a public custom constructor (a named associated
   `fn`) while the module still builds with `T(…)` internally — pairing with private, defaulted fields to
-  enforce an invariant. **[not yet]**
-- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators. Reserved for
-  controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
+  enforce an invariant. **[not yet]**, with a code of its own: `E496`.
+- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators, for in-memory
+  width, padding and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
 
-> **[not yet]** `#[repr]` is still a reserved name with no rule of its own: it falls into the
-> unknown-decorator arm and gets _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`,
-> `#[fixture]` and `#[allow(…)]`, and no other_, the same sentence a misspelled `#[frobnicate]` gets.
-> It is refused, so nothing is silently dropped; what is lost is the distinction between a name
-> awaiting implementation and a typo — `#[sealed]`, which had the same problem, now has `E496`.
+> **[not yet]** The layout three are **reserved on this page and nowhere in the compiler**. `#[repr]` has
+> no rule of its own: it falls into the unknown-decorator arm and gets _E217 … this compiler reads
+> `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other_ — the same sentence a
+> misspelled `#[frobnicate]` gets. Nothing is silently dropped; what is lost is the distinction between a
+> name awaiting implementation and a typo, which is exactly what `#[sealed]`'s `E496` bought back.
 >
-> `#[test]` is **read** now, by both compilers, and `zerg test` runs what it marks (see
-> [Modules, Packages & Programs](../runtime/package.md) for how far that command goes). One
-> **[deviation]** is left in it: the seed strips a `#[test]` function before its checker runs, so the body
-> is never type-checked there, while `zerg` checks it like any other. A test that does not compile is a
-> compile error under `zerg` and silence under `zerg0` — recorded in `src/bootstrap/README.md`.
+> **[deviation]** `#[test]` is read by both compilers, but the **seed strips a `#[test]` function before
+> its checker runs**, so the body is never type-checked there while `zerg` checks it like any other. A test
+> that does not compile is a compile error under `zerg` and silence under `zerg0` — recorded in
+> `src/bootstrap/README.md`.
+
+The set grows only as the compiler gains directives; **logging** / instrumentation and **FFI** are the
+likely next entries. Any name **not** listed on this page is not a reserved decorator at all — it is a
+compile error, so a typo can never pass as a directive the compiler silently drops.
 
 ## Not a macro
 
@@ -120,11 +116,3 @@ Decorators are meant to be reached for **seldom**. Two everyday concerns are **n
 `#[repr]` controls in-memory width, never the bytes on a wire); and **memory layout** follows one predictable
 default (declaration order, natural alignment) — you add a layout decorator only to **deviate** for an
 external ABI. On the default path, day to day, you write no decorators at all.
-
-## Reserved
-
-The set grows only as the compiler gains directives. The layout decorators (`#[repr]`, `#[packed]`,
-`#[align]`) and `#[sealed]` are already **reserved names** — recognized and rejected loudly (above) until
-implemented — and **logging** / instrumentation and **FFI** are the likely next entries. Any name **not**
-listed on this page is not a reserved decorator at all: it is a **compile error**, so a typo can never pass
-as a directive the compiler silently drops.

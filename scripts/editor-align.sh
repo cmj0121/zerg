@@ -192,8 +192,8 @@ else
 	fi
 
 	# The WIDTH is a second claim and a real one. F403 decides whether a line has run past
-	# column 80 by counting a tab as `fmt_wrap_tab()`, so an editor displaying it as anything
-	# else is applying a different 80-column rule than the formatter did. One number, and the
+	# column 120 by counting a tab as `fmt_wrap_tab()`, so an editor displaying it as anything
+	# else is applying a different 120-column rule than the formatter did. One number, and the
 	# three places that hold it have to hold the same one.
 	want_width=$(fmt_return_int fmt_wrap_tab)
 	if [ -z "$want_width" ]; then
@@ -283,7 +283,7 @@ done
 #
 # The ftplugin draws a 'colorcolumn' so a person can see where F403's budget ends, and that
 # budget is `fmt_wrap_max()` — the column a flat group must END BEFORE. So the ruler is drawn
-# one past it: at 80 the group still fits, and 81 is the first column it does not.
+# one past it: at 120 the group still fits, and 121 is the first column it does not.
 #
 # The same argument as the width above. A number the formatter owns, written a second time in
 # a file the formatter never reads, is a number that drifts — and this one drifts silently,

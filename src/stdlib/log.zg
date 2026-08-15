@@ -286,6 +286,18 @@ pub struct Logger {
 # counting allocations at 5 rounds and at 200 and requiring the two totals to be EQUAL; it is
 # the one case in that gate whose claim is "allocated nothing" rather than "leaked nothing".
 #
+# IT CARRIES THE LOGGER IT CAME FROM, and not a copy of that logger's settings. It held `fmt`,
+# `col` and `sink` beside `lvl` for one round, and `at_level` hand-listed all four into the
+# constructor — which is the SAME defect the builders above stopped having, one level down and
+# on the path every written line takes. A sixth rendering setting would have had to be threaded
+# through the Logger field, the Entry field, that positional list and `render`, and the site
+# that dropped it would have silently rendered the Entry default on every line. Now the
+# constructor takes `this`, and there is nothing to keep in step.
+#
+# It costs nothing: a `Logger` is a value whose only heap field is the copy-on-write `base`
+# this entry was already sharing, so carrying it is a refcount and not a copy. `make mem-check`
+# still puts the disabled line at +0.
+#
 # `log.Entry()` IS REACHABLE FROM OUTSIDE and is INERT, which is why it is left alone. Every
 # field must carry a default (`E482` again), so a zero-argument construction exists whatever
 # this module wants; the two defaults that matter make it harmless — `live` is false, so every
@@ -295,10 +307,7 @@ pub struct Logger {
 pub struct Entry {
 	live: bool = false
 	lvl: Level = Level.OFF
-	fmt: Format = Format.PRETTY
-	col: bool = false
-	sink: Sink = Sink(nil)
-	fs: list[json.Field] = []
+	lg: Logger = Logger()
 }
 
 # new answers a logger configured from the environment, writing to standard error. It is the
@@ -491,7 +500,7 @@ impl Logger {
 		# that is what makes the disabled path free: `[]` is an allocation, and a `list` is
 		# copy-on-write, so sharing costs a refcount and the first `.str()` pays for the copy
 		# it actually needs. A dead entry never reads `fs` at all.
-		return Entry(this.enabled(l), l, this.fmt, this.col, this.sink, this.base)
+		return Entry(this.enabled(l), l, this)
 	}
 
 	pub fn trace() -> Entry {
@@ -521,7 +530,7 @@ impl Entry {
 	pub fn str(k: str, v: str) -> This {
 		return this if not this.live
 		mut c := this
-		json.put_str(c.fs, k, v)
+		json.put_str(c.lg.base, k, v)
 		return c
 	}
 
@@ -529,7 +538,7 @@ impl Entry {
 	pub fn int(k: str, v: int) -> This {
 		return this if not this.live
 		mut c := this
-		json.put_int(c.fs, k, v)
+		json.put_int(c.lg.base, k, v)
 		return c
 	}
 
@@ -537,7 +546,7 @@ impl Entry {
 	pub fn bool(k: str, v: bool) -> This {
 		return this if not this.live
 		mut c := this
-		json.put_bool(c.fs, k, v)
+		json.put_bool(c.lg.base, k, v)
 		return c
 	}
 
@@ -562,8 +571,8 @@ impl Entry {
 	# a `log.debug()` nobody finishes writes nothing rather than half a line.
 	pub fn msg(text: str) {
 		if this.live {
-			line := render(time.now(), this.lvl, this.fmt, this.col, text, this.fs)
-			emit(this.sink, line)
+			line := render(time.now(), this.lvl, this.lg, text)
+			emit(this.lg.sink, line)
 		}
 
 		# THE EXIT IS NOT INSIDE THAT `if`. A `fatal` at a silenced level still ends the
@@ -579,10 +588,10 @@ impl Entry {
 # render builds the whole line INCLUDING its newline, which is what makes `emit` one write.
 # It is a pure function of its arguments, so the suite asks it the question through a channel
 # sink rather than by capturing a stream.
-fn render(now: int, lvl: Level, fmt: Format, col: bool, text: str, fs: list[json.Field]) -> str {
+fn render(now: int, lvl: Level, lg: Logger, text: str) -> str {
 	stamp := time.rfc3339(now)
-	return as_json(stamp, lvl, text, fs) if fmt == Format.JSON
-	return as_pretty(stamp, lvl, col, text, fs)
+	return as_json(stamp, lvl, text, lg.base) if lg.fmt == Format.JSON
+	return as_pretty(stamp, lvl, lg.col, text, lg.base)
 }
 
 # as_pretty is the human line: a timestamp, a three-letter level, the message, then the

@@ -81,6 +81,23 @@ not redundant with an empty string, since a client clearing a file to nothing se
 another module has to be checked with that module or every name it borrowed reads as undefined —
 a server that underlines correct code is one a person turns off.
 
+**And which program that is, is found rather than assumed.** An editor says only which file is open,
+and an open file is usually not an entry: it is one member of a directory module, whose types, whose
+callers and whose second source root all live outside it. Read as an entry it reports `E707` for a
+struct declared in the file beside it, `L102` for a private function its sibling calls, and `E502`
+for a module that sits beside its own directory rather than inside it — three sentences about correct
+code. So the driver **searches for an entry that reaches the buffer**: the `.zg` files directly in
+the parent of the buffer's directory, then its parent, stopping at the first level that holds any
+source at all, and taking the first one whose program contains the buffer. What counts as reaching it
+is the loader itself — the same `module_files`, the same `module_at` — so the server never grows a
+second answer to what a module is. When nothing reaches the buffer, the buffer **is** its own entry,
+which is what a single-file program, a stdlib module and a test file all are.
+
+That search is why "the buffer's directory is a module" is not the rule, tempting as it is. Nothing
+local to a directory says whether it is one: `src/stdlib/` is a directory of `.zg` files where each
+file is a module of its own, and `examples/` is a directory of twenty separate programs. A directory
+is a module when something imports it, and only a walk from an entry knows that.
+
 **Four severities, from two places.** An **error** — LSP severity 1 — is what `emit_files_diag`
 reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
 use. Everything else on the wire came from `lint_program`, and every one of those is a **legal**
@@ -414,3 +431,13 @@ gated.
 The last row is a cost, not a gap. The scheduler is cooperative and non-preemptive, so a long check
 occupies its worker until it finishes; `emit.zg` at 9264 lines is the worst case in this repository
 and is the number to measure against before designing anything here.
+
+Measured, on this compiler's own sources: one check of the 24-file program rooted at
+`src/compiler/zergc.zg` — which is what opening **any** file under `src/compiler/` asks for, now that
+a module member is checked against its module — takes about 6.5 s and peaks near 3.7 GB, and a
+long-lived session is killed by the operating system after three or four of them. The ceiling is the
+**emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so
+`emit_files_diag` lowers the whole program to C to reach them and there is no check-only entry point
+to ask instead. It is reached by `zerg build` too and simply survives there, because a build is a
+process that then exits. A debounce would hide it; a check that stops before code generation would
+end it.

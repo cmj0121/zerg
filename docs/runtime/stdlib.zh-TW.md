@@ -258,18 +258,20 @@ if log.enabled(log.DEBUG) {
 有一個**全域 logger**，用函式設定、不需要任何管線；也有一個**建構子**讓你自己持有並傳遞。它們不是兩份實作：全域的那個
 **就是**一個 instance，放在這個模組自己的 cell 裡——所以每個欄位方法、每次等級判斷、每個 writer 都只存在一份。
 
-| 函式                                   | 摘要                                    |
-| -------------------------------------- | --------------------------------------- |
-| `new() -> Logger`                      | 一個 `INFO` 等級、寫到標準錯誤的 logger |
-| `set_level(n: int)`                    | 設定全域 logger                         |
-| `set_sink(sk: Sink)`                   | 全域 logger 的行要送去哪裡              |
-| `enabled(lvl: int) -> bool`            | 全域在 `lvl` 會不會寫                   |
-| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有  |
-| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2      |
-| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel          |
+| 函式                                   | 摘要                                        |
+| -------------------------------------- | ------------------------------------------- |
+| `new() -> Logger`                      | 一個 `INFO` 等級、寫到標準錯誤的 logger     |
+| `set_level(n: int)`                    | 設定全域 logger                             |
+| `set_sink(sk: Sink)`                   | 全域 logger 的行要送去哪裡                  |
+| `set_format(n: int)`                   | `FMT_PRETTY` 或 `FMT_JSON`，蓋過 `ZERG_LOG` |
+| `set_colour(on: bool)`                 | ANSI 顏色，蓋過 `NO_COLOR` 與終端機         |
+| `enabled(lvl: int) -> bool`            | 全域在 `lvl` 會不會寫                       |
+| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有      |
+| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2          |
+| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel              |
 
 `Logger` 有 `level(n)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與 `enabled(lvl)`，每一個都回傳**複本**
-——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(lvl)` 與等級方法。`Entry` 有 `str`、`int`、
+——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(lvl)`、`format(n)`、`colour(on)` 與等級方法。`Entry` 有 `str`、`int`、
 `bool`、`dur`、`err`，以及終結用的 `msg`。
 
 **沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
@@ -295,6 +297,32 @@ logger 會讓程式有兩種互不相干的結束方式。而且**即使在那�
 
 不加引號就有歧義的值——空字串，或帶有空白、引號、反斜線、`=`、控制字元的——會走 `json.encode`，也就是這棵樹裡唯一的
 跳脫實作。所以值裡的換行是被跳脫而不是被寫出來的，一筆記錄仍然是一行。
+
+### 兩種格式，以及各由什麼決定
+
+**預設是 `pretty`**，而除了 `set_format` 之外，只有 `ZERG_LOG=json` 會換掉它。這跟預設是 JSON 的 zerolog 不同，
+理由是另一端坐著誰：一支沒被設定過的程式，就是有人正在跑的那一支。
+
+```console
+$ ./myprog
+2026-08-15T10:22:31Z INF compiling  file=a.zg line=12
+
+$ ZERG_LOG=json ./myprog
+{"t":"2026-08-15T10:22:31Z","l":"info","msg":"compiling","file":"a.zg","line":12}
+```
+
+**顏色跟著 `isatty`，格式不跟。** 顏色是一種算繪——它關於裝置，而「這是不是一個裝置」正是
+[`os.isatty`](#os) 回答的問題，所以在終端機上有顏色、進 pipe 就沒有。格式是一個關於「這輸出是給誰看的」的語意
+選擇，而一支「輸出被重導時形狀就會變」的程式，它的 log 沒辦法用同一種方式讀第二次。`NO_COLOR` 會蓋過終端機，
+而且是靠它的**存在**——任何值都算，包括空字串。`ZERG_LOG` 認不得的值一律當 `pretty`，而不是報錯：一個因為變數
+拼錯就不肯啟動的 logger，會為了一件跟它無關的事把程式帶走。
+
+只有**等級**會上色。那是讀的人在掃視的欄位，而替訊息或值上色會跟它們本身的內容打架。JSON 行則完全不上色——
+在一個給機器 parse 的欄位裡放跳脫碼是損毀，不是裝飾。
+
+JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的,這正是那個模組要從 language server 裡拉出來的原因:
+整棵樹只有一份跳脫實作,引號、換行與 tab 就只有一個地方要弄對。它固定的三個 key——`t`、`l`、`msg`——依這個
+順序排在最前面。
 
 ### 目的地
 

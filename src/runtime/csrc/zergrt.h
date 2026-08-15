@@ -783,6 +783,13 @@ const char *zrt_arch(void);
 const char *zrt_exe_path(void);
 const char *zrt_getenv(const char *key);
 bool        zrt_has_env(const char *key);
+/* The two WRITES, which `os.set_env` / `os.del_env` lower onto. zrt_set_env replaces any
+ * current value and RAISES ValueError when setenv(3) refuses the name; zrt_del_env removes
+ * the variable and answers whether it WAS there, which unsetenv(3) will not say. Both are
+ * only safe BEFORE any coroutine is spawned: `environ` belongs to libc and libc does not lock
+ * it, so a write racing a read is a use-after-free this runtime cannot fix. See sys.c. */
+void zrt_set_env(const char *key, const char *value);
+bool zrt_del_env(const char *key);
 /* zrt_isatty is whether fd is a terminal — what `os.isatty` lowers onto, and what lets a
  * program colour its output at a terminal and not into a pipe. */
 bool zrt_isatty(int64_t fd);

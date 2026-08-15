@@ -5,6 +5,10 @@
 # runtime leaf (`getenv` / `exit`, or a compile-time `#ifdef` for platform/arch); the
 # null-safety logic (an unset variable is `nil`) is pure Zerg above them. The program's
 # own arguments arrive as `fn main(args: list[str])`, not from here.
+#
+# THE ENVIRONMENT IS READ FREELY AND WRITTEN ONLY AT STARTUP. `env` is safe anywhere; `set_env`
+# and `del_env` mutate a C-library structure with no lock on it, so they belong before the
+# first `spawn` and nowhere else. Each says so at length.
 
 # env returns the value of environment variable key, or nil when it is unset. (An unset
 # variable and one set to the empty string are told apart here — both a plain lookup and
@@ -12,6 +16,69 @@
 pub fn env(key: str) -> str? {
 	return __zrt_getenv(key) if __zrt_has_env(key)
 	return nil
+}
+
+# set_env sets environment variable key to value, replacing any current one, and raises
+# `ValueError` when the host refuses the name — a key that is empty or contains `=`, which
+# `setenv(3)` will not accept. It answers nothing, because there is nothing a successful write
+# knows that the caller did not already know.
+#
+# SET THE ENVIRONMENT AT STARTUP, BEFORE ANY COROUTINE IS SPAWNED. This is not a convention to
+# be traded off against convenience — it is the ONLY safe use of this function, and the reason
+# is that the state being mutated is not this language's. POSIX's `environ` is a C-library data
+# structure with no lock on it: `setenv` may reallocate the array and free the old one, while
+# `getenv` hands back a pointer INTO it, so a write on one coroutine racing an `os.env` on
+# another is a use-after-free inside libc. Zerg runs real OS worker threads, so "two
+# coroutines" is "two threads" often enough that a program which happens to work proves
+# nothing.
+#
+# THAT MAKES IT UNLIKE EVERY OTHER SHARED-STATE HAZARD IN THIS LIBRARY. `log`'s installed
+# logger is one cell this project owns, and one day an atomic could close it; `environ` is not
+# ours and no amount of work here can make it safe. There is nothing to wait for.
+#
+# The two callers this is for are the whole of it: a program configuring itself before it does
+# any work, and a program configuring the environment a child will INHERIT from `os.run`.
+#
+#     os.set_env("TZ", "UTC")            # before anything else runs
+#     os.run(["sh", "-c", "echo $TZ"])   # the child inherits it
+#
+# THAT ILLUSTRATION IS NOT A ` ```zerg ` EXAMPLE, and the reason is the gate rather than the
+# code: `scripts/doc-examples-check.sh` renders every example line with `print`, and this
+# function answers nothing, which is `E390`. The round trip is asserted in
+# tests/stdlib/os/os_test.zg instead, where a claim about a write can be made in full.
+pub fn set_env(key: str, value: str) {
+	__zrt_set_env(key, value)
+}
+
+# del_env removes environment variable key and answers WHETHER IT WAS THERE — `true` when the
+# variable existed and has now gone, `false` when there was nothing to remove.
+#
+# THAT ANSWER IS THE ONE THING A CALLER CANNOT WORK OUT FOR ITSELF. `env` then `del_env` is two
+# queries with a window between them, and C's `unsetenv` reports success either way, so it
+# cannot be asked afterwards either. Reading and removing under one call is a deliberate
+# improvement on the leaf rather than a passthrough of it.
+#
+# It is TOTAL: a name the host would refuse was not set, so `false` is a true answer rather
+# than a missing one, and there is nothing here to raise about. `set_env` raises on such a name
+# because a write to it has no answer at all.
+#
+# The startup rule above governs this one exactly as it governs `set_env` — a removal is a
+# write to `environ` like any other.
+#
+# The example removes `PATH`, which every process on this platform is given, so the first call
+# finds it and the second has nothing left to remove. That difference is the whole of what this
+# function adds over the leaf it lowers onto.
+#
+# ```zerg
+# os.del_env("PATH")
+# os.del_env("PATH")
+# ```
+# ```output
+# true
+# false
+# ```
+pub fn del_env(key: str) -> bool {
+	return __zrt_del_env(key)
 }
 
 # exit terminates the process immediately with status code. It does not return, and it

@@ -149,6 +149,10 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Str), true
 		case "__zrt_has_env":
 			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_set_env":
+			return c.binaryIntrinsic(n, Str, Str, Nil), true
+		case "__zrt_del_env":
+			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_isatty":
 			return c.unaryIntrinsic(n, Int, Bool), true
 		case "__zrt_exit":
@@ -380,6 +384,21 @@ func (c *checker) unaryIntrinsic(n *ast.Call, arg, ret Type) Type {
 		return ret
 	}
 	c.check(n.Args[0].Value, arg)
+	return ret
+}
+
+// binaryIntrinsic checks a two-argument runtime floor intrinsic of type `(a, b) -> ret` —
+// today the environment WRITE, `__zrt_set_env` str,str->nil, that the `os` module drives.
+// The io write leaves are two-argument too and keep their own checkers because their second
+// operand is not a plain type (a str payload versus a borrowed list[byte]).
+func (c *checker) binaryIntrinsic(n *ast.Call, a, b, ret Type) Type {
+	if len(n.Args) != 2 {
+		c.errorf(n.Span(), "intrinsic takes 2 arguments, got %d", len(n.Args))
+		c.synthArgs(n)
+		return ret
+	}
+	c.check(n.Args[0].Value, a)
+	c.check(n.Args[1].Value, b)
 	return ret
 }
 

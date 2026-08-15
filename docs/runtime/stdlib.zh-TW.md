@@ -43,23 +43,23 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 
 ## 套件
 
-| 套件                  | Import             | 提供                               |
-| --------------------- | ------------------ | ---------------------------------- |
-| [`io`](#io)           | `import "io"`      | 標準串流輸出，以及整檔讀／寫       |
-| [`fs`](#fs)           | `import "fs"`      | 檔案系統結構——存在與否、刪除       |
-| [`os`](#os)           | `import "os"`      | 環境變數、程序結束、目標平台／架構 |
-| [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
-| [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
-| [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
-| [`json`](#json)       | `import "json"`    | JSON 的讀與寫,只有一份跳脫實作     |
-| [`log`](#log)         | `import "log"`     | 結構化 logging,寫成鏈式 builder    |
-| [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
-| [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
-| [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
-| [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性 |
-| [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help  |
-| [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                 |
-| [`testing`](#testing) | `import "testing"` | `#[test]` 要而語言不給的東西       |
+| 套件                  | Import             | 提供                                   |
+| --------------------- | ------------------ | -------------------------------------- |
+| [`io`](#io)           | `import "io"`      | 標準串流輸出，以及整檔讀／寫           |
+| [`fs`](#fs)           | `import "fs"`      | 檔案系統結構——存在與否、刪除           |
+| [`os`](#os)           | `import "os"`      | 環境變數讀寫、程序結束、目標平台／架構 |
+| [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具                |
+| [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類      |
+| [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換               |
+| [`json`](#json)       | `import "json"`    | JSON 的讀與寫,只有一份跳脫實作         |
+| [`log`](#log)         | `import "log"`     | 結構化 logging,寫成鏈式 builder        |
+| [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer      |
+| [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals      |
+| [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器               |
+| [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性     |
+| [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help      |
+| [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                     |
+| [`testing`](#testing) | `import "testing"` | `#[test]` 要而語言不給的東西           |
 
 ## `io`
 
@@ -94,14 +94,37 @@ leaf。
 也沒有 pipe，回來的是 exit status（死於信號時為 128+信號，無法執行時為 127）。有 shell 也有 pipe 的命令字面量見
 [Process 與 I/O](io.zh-TW.md)，仍是 **[not yet]**。
 
-| 函式                      | 摘要                                           |
-| ------------------------- | ---------------------------------------------- |
-| `env(key: str) -> str?`   | 環境變數的值，未設為 `nil`                     |
-| `exit(code: int)`         | 以 `code` 結束程序（不返回）                   |
-| `run(argv: list[str])`    | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
-| `platform() -> str`       | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
-| `arch() -> str`           | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
-| `isatty(fd: int) -> bool` | 這個描述子是不是終端機（0 入、1 出、2 錯）     |
+| 函式                            | 摘要                                           |
+| ------------------------------- | ---------------------------------------------- |
+| `env(key: str) -> str?`         | 環境變數的值，未設為 `nil`                     |
+| `set_env(key: str, value: str)` | 把 `key` 設為 `value`，取代原有的值            |
+| `del_env(key: str) -> bool`     | 移除 `key`；回答它原本**在不在**               |
+| `exit(code: int)`               | 以 `code` 結束程序（不返回）                   |
+| `run(argv: list[str])`          | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
+| `platform() -> str`             | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
+| `arch() -> str`                 | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
+| `isatty(fd: int) -> bool`       | 這個描述子是不是終端機（0 入、1 出、2 錯）     |
+
+這三個環境函式就是
+[`xxx` / `set_xxx` / `del_xxx`](../code/functions.zh-TW.md#命名一個屬性與它的兩種寫入) 三件套：`env` 讀、
+`set_env` 寫、`del_env` 移除。**`del_env` 回答那個 key 原本在不在**，而這正是呼叫端無法自己查出來的一件事——先
+`env` 再 `del_env` 是兩次詢問，中間有一個窗口，而 C 的 `unsetenv` 不論如何都回報成功。**`set_env` 在主機不接受的
+名字上 raise `ValueError`**（空的、或含有 `=`）；`del_env` 則是 **total** 的，因為一個不可能存在的名字本來就沒被
+設過，`false` 是真的答案而不是缺席的答案。
+
+> **在啟動時設好環境，在任何 coroutine 被 spawn 之前。** 這不是慣例——這是這兩個函式**唯一**安全的用法，因為它們
+> 改動的是 **C runtime 的狀態，而不是這個語言的**。POSIX 的 `environ` 上沒有鎖：`setenv` 可能重新配置整個陣列並
+> 釋放舊的，而 `getenv` 交回的是指進去的指標，所以一次寫入與另一個 coroutine 的 `os.env` 相撞，就是 libc 內部的
+> use-after-free。Zerg 會跑真正的 OS worker 執行緒（[Coroutine](../code/coroutine.zh-TW.md)），兩個 coroutine
+> 常常就是兩條執行緒，因此「在我機器上會動」什麼也證明不了。
+>
+> 這讓它與 [`log`](#log) 記載的共享狀態危害**在類別上就不同**。logger 的那個 cell 是本專案自己的狀態，總有一天
+> 一個 atomic 可以關掉那個競爭；`environ` 不是我們的，這裡做再多也無法讓它安全——沒有什麼修正可以等，只有一個
+> 該呼叫它的時機。
+>
+> 編譯器**不會**強制它，而且也無法誠實地強制：workers 在 `main` 的第一行之前就存在了，所以一條以「到目前為止有沒有
+> spawn 過」為準的規則，會在一個已經有十六條執行緒的程序裡回報安全，也會在每一個 `#[test]` 裡拒絕這個寫入（一個
+> test 就是一個 coroutine）。
 
 **`isatty` 只關於裝置，別無其他。** 用它來挑**算繪方式**——在終端機上加色、進 pipe 就不加——而永遠不要用它挑
 **格式**：輸出的形狀會因為被重導而改變，就沒辦法用同一種方式讀第二次，而一台機器上是 JSON、另一台是欄位的

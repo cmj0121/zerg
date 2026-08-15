@@ -1,0 +1,61 @@
+# The environment: read anywhere, written only at startup.
+#
+# `os.env` answers `str?` because an unset variable and one set to the empty string are
+# different things, and a caller has to be able to tell them apart. `os.set_env` and
+# `os.del_env` are the other direction, and `del_env` answers whether the key WAS there —
+# the one thing a caller cannot find out for itself, since `env` then `del_env` is two
+# questions with a window between them.
+#
+# WRITE THE ENVIRONMENT BEFORE THE FIRST `spawn` AND NOWHERE ELSE. POSIX's `environ` belongs
+# to the C library and has no lock on it: a write may move the array while a read holds a
+# pointer into it, and Zerg runs real worker threads. That is not this language's race to
+# fix, which is why the rule is about WHEN rather than about how. This program spawns
+# nothing, and that is the shape to copy.
+
+import "os"
+
+# a name chosen so no host is likely to have set it
+const KEY := "ZERG_EXAMPLE_19"
+
+# what the child is asked to do: end with the value it inherited, or 9 when there is none.
+# `run` is `execvp` and has no shell of its own, so `sh` is here as the observer.
+const ASK := "exit ${ZERG_EXAMPLE_19:-9}"
+
+fn show(label: str) {
+	v := os.env(KEY) ?? "(unset)"
+	print f"{label}: {v}"
+}
+
+fn main() {
+	show("before")
+
+	# a write, and the read that sees it
+	os.set_env(KEY, "one")
+	show("after set")
+
+	# a second write REPLACES; there is never a second entry under one name
+	os.set_env(KEY, "two")
+	show("after replace")
+
+	# empty is a VALUE and not an absence — this is why `env` answers `str?`
+	os.set_env(KEY, "")
+	empty := os.env(KEY) ?? "(unset)"
+	print f"empty is present: |{empty}|"
+
+	# the removal says whether there was anything to remove
+	first := os.del_env(KEY)
+	second := os.del_env(KEY)
+	print f"first removal: {first}"
+	print f"second removal: {second}"
+	show("after remove")
+
+	# and a child INHERITS the environment as it stands at the `run`
+	os.set_env(KEY, "7")
+	saw := os.run(["sh", "-c", ASK])
+	print f"child saw: {saw}"
+
+	gone := os.del_env(KEY)
+	after := os.run(["sh", "-c", ASK])
+	print f"removed: {gone}"
+	print f"child saw: {after}"
+}

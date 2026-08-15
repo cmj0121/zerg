@@ -6,8 +6,9 @@
 # the builder, the bytes of a rendered line, the global. It reaches them through a `chan[str]`
 # sink, which is what makes a logger testable at all — there is no reading a `write(2)` back.
 #
-# Three claims are outside that reach, and each is the kind nobody notices until it is an
-# incident:
+# Seven claims are outside that reach, spread over the eight cases below — this numbering is
+# the CLAIMS and not the sections, because the one-write rule is asserted in two places. Each
+# is the kind nobody notices until it is an incident:
 #
 #   1. `fatal` EXITS. A test that called it would take the test process with it, so the claim
 #      is made about a whole program: it writes its line, and it exits 1. And it exits even at
@@ -28,6 +29,17 @@
 #   5. `ZERG_LOG` PICKS THE FORMAT, and nothing else does. The line this module holds is that
 #      redirecting output changes its APPEARANCE and never its SHAPE — so the same program,
 #      piped and on a terminal, must produce the same FORMAT and differ only in colour.
+#
+#   6. `ZERG_LOG_LEVEL` PICKS THE LEVEL, BY NAME. `new()` reads the environment through
+#      module-level consts, so the answer is frozen before `main` and a test inside the
+#      process cannot vary it. Every claim about a DEFAULT therefore lives here — including
+#      that an unset variable means INFO, that `1` is not a level, and that a misspelt one
+#      does not take the program down.
+#
+#   7. THE PATTERN THIS MODULE IS THE REFERENCE FOR — one private cell, one writer, readers
+#      that only delegate — is a property of the SOURCE. The compiler enforces its rule 1 and
+#      nothing else; rules 2 and 3 had nothing but a reader checking them, and this is that
+#      reader. Rule 4 is about the caller and cannot be checked here at all.
 #
 # WHY THE ONE-WRITE CLAIM IS STRUCTURAL AND NOT A STRESS TEST.
 #
@@ -72,6 +84,10 @@ LOG_SRC="${LOG_SRC:-src/stdlib/log.zg}"
 WRITERS="${WRITERS:-24}"
 LINES="${LINES:-500}"
 
+# How long a `ctx.log` note gets before case 7 calls it a hang. Generous — the run compiles a
+# suite first — and it only has to be finite.
+NOTE_TIMEOUT="${NOTE_TIMEOUT:-120}"
+
 [ -x "$ZERG" ] || {
 	printf 'log-check: %s is not built — run `make build` first\n' "$ZERG" >&2
 	exit 2
@@ -80,6 +96,13 @@ LINES="${LINES:-500}"
 	printf 'log-check: %s is not there, and this gate reads it\n' "$LOG_SRC" >&2
 	exit 2
 }
+
+# EVERY PROGRAM BELOW STARTS UNCONFIGURED. `log` reads these three at module init, and this
+# gate is the only place a claim about a DEFAULT can be made — so a developer with
+# `ZERG_LOG_LEVEL=debug` exported must not be able to make "the default writes no debug line"
+# pass or fail for a reason that is about their shell. A case that wants a value sets it on
+# the command line, one run at a time.
+unset ZERG_LOG ZERG_LOG_LEVEL NO_COLOR
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-logcheck.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
@@ -154,7 +177,7 @@ cat >"$WORK/fatal_off.zg" <<'ZG'
 import "log"
 
 fn main() {
-	log.new().level(log.OFF).fatal().msg("silenced")
+	log.new().level(log.Level.OFF).fatal().msg("silenced")
 	log.new().info().msg("unreachable")
 }
 ZG
@@ -296,6 +319,16 @@ if build colour; then
 		NO_COLOR=1 on_a_pty "$WORK/colour"
 		grep -q "$esc" "$WORK/pty.out" && note "NO_COLOR did not turn colour off at a terminal"
 
+		# AND AN EXPORTED-EMPTY `NO_COLOR` COUNTS, which is the whole reason `env_colour` uses a
+		# sentinel nobody exports rather than coalescing to "". It is also the one assertion
+		# that catches the ORDER of `log.zg`'s module-level consts: a `const` reached through a
+		# call is the ZERO value if it is declared later, silently, so a `NO_COLOR_UNSET` that
+		# moved below `ENV_COLOUR` would become "" — and an exported-empty NO_COLOR would then
+		# be indistinguishable from an unset one and colour would come back on.
+		NO_COLOR='' on_a_pty "$WORK/colour"
+		grep -q "$esc" "$WORK/pty.out" &&
+			note "an exported-empty NO_COLOR did not turn colour off — see no-color.org, and check the const order in $LOG_SRC"
+
 		# and the FORMAT does not follow the terminal: a pty gets pretty, exactly as a pipe did
 		on_a_pty "$WORK/colour"
 		grep -q '"l":"error"' "$WORK/pty.out" && note "the FORMAT followed the terminal — it must not; only ZERG_LOG picks it"
@@ -310,16 +343,175 @@ if build colour; then
 	checks=$((checks + 1))
 fi
 
+# --- 7. ZERG_LOG_LEVEL picks the level, by name ---------------------------------------------
+#
+# THE SUITE CANNOT ASK THIS AT ALL, which is why it is here rather than there. `log.new()`
+# reads the environment through module-level consts, so the answer is frozen before `main`
+# runs and no test inside the process can vary it. Only a gate that sets an environment and
+# then STARTS A PROGRAM can, and a claim nothing can ask is a claim nobody is keeping.
+#
+# It is read by NAME and never by number: `ZERG_LOG_LEVEL=debug`, not `=1`. A number would pin
+# the enum's discriminants, which `log.zg` consults nowhere.
+
+cat >"$WORK/level.zg" <<'ZG'
+import "log"
+
+fn main() {
+	log.debug().msg("a debug line")
+	log.info().msg("an info line")
+	log.error().msg("an error line")
+}
+ZG
+
+if build level; then
+	# unset: the documented default is INFO — the debug line is absent and the other two are not
+	"$WORK/level" >/dev/null 2>"$WORK/lvl.default"
+	grep -q 'a debug line' "$WORK/lvl.default" && note "the default level wrote a DEBUG line — an unconfigured logger starts at INFO"
+	grep -q ' INF an info line$' "$WORK/lvl.default" || note "the default level did not write an INFO line: $(cat "$WORK/lvl.default")"
+
+	# by name, turning a level ON without touching the program
+	ZERG_LOG_LEVEL=debug "$WORK/level" >/dev/null 2>"$WORK/lvl.debug"
+	grep -q ' DBG a debug line$' "$WORK/lvl.debug" || note "ZERG_LOG_LEVEL=debug did not turn the debug line on: $(cat "$WORK/lvl.debug")"
+
+	# and OFF, which writes nothing at all
+	ZERG_LOG_LEVEL=off "$WORK/level" >/dev/null 2>"$WORK/lvl.off"
+	[ -s "$WORK/lvl.off" ] && note "ZERG_LOG_LEVEL=off wrote a line: $(cat "$WORK/lvl.off")"
+
+	# BY NAME AND NOT BY NUMBER. `1` is DEBUG's discriminant and must mean nothing here, or the
+	# declaration order of the enum has quietly become a contract with every user's shell.
+	ZERG_LOG_LEVEL=1 "$WORK/level" >/dev/null 2>"$WORK/lvl.num"
+	grep -q 'a debug line' "$WORK/lvl.num" && note "ZERG_LOG_LEVEL=1 was read as a level — it must be a NAME, never a discriminant"
+
+	# an unrecognised name is the default, not an error: a logger does not take a program down
+	# over a misspelt variable
+	ZERG_LOG_LEVEL=wobble "$WORK/level" >/dev/null 2>"$WORK/lvl.odd"
+	status=$?
+	[ "$status" -eq 0 ] || note "an unrecognised ZERG_LOG_LEVEL took the program down, exit $status"
+	grep -q ' INF an info line$' "$WORK/lvl.odd" || note "an unrecognised ZERG_LOG_LEVEL did not fall back to INFO"
+	grep -q 'a debug line' "$WORK/lvl.odd" && note "an unrecognised ZERG_LOG_LEVEL turned a level ON"
+
+	# and the case of a name is not guessed at either
+	ZERG_LOG_LEVEL=DEBUG "$WORK/level" >/dev/null 2>"$WORK/lvl.upper"
+	grep -q 'a debug line' "$WORK/lvl.upper" && note "ZERG_LOG_LEVEL=DEBUG was accepted — the names are lower case, as a JSON line spells them"
+
+	# AND IT DOES NOT REACH A TEST NOTE, which is this variable's blast radius rather than its
+	# meaning. `testing.rendered` builds a `log.Logger` for every `ctx.log(…)`, and while that
+	# logger inherited the level a `ZERG_LOG_LEVEL=warn` made the entry DEAD: nothing went into
+	# a one-slot channel and the receive on it — whose only sender was the same frame — parked
+	# forever. Every note in every suite in the tree hung the runner, over a variable that has
+	# nothing to do with tests. A hang is not a failure any exit status reports, so this one is
+	# asked with a deadline.
+	mkdir -p "$WORK/note"
+	cat >"$WORK/note/note_test.zg" <<'ZG'
+import "testing"
+
+#[test]
+fn test_a_note_is_written_at_any_level(ctx: testing.Context) {
+	ctx.log("a note")
+	assert true
+}
+ZG
+	ZERG_LOG_LEVEL=warn "$ZERG" test "$WORK/note" >"$WORK/note.out" 2>&1 &
+	notepid=$!
+	(
+		sleep "$NOTE_TIMEOUT"
+		kill -9 "$notepid" 2>/dev/null
+	) >/dev/null 2>&1 &
+	killer=$!
+	wait "$notepid"
+	kill "$killer" 2>/dev/null
+	grep -q '1 passed' "$WORK/note.out" ||
+		note "a ctx.log note under ZERG_LOG_LEVEL=warn hung or failed: $(tail -3 "$WORK/note.out")"
+	checks=$((checks + 1))
+fi
+
+# --- 8. the pattern: one cell, one writer, readers that only delegate ------------------------
+#
+# `log` is this tree's REFERENCE for process-wide mutable state, so the shape is a claim it
+# makes and not merely how it happens to be written today. The compiler enforces RULE 1 and
+# only rule 1 — `E358` puts the cell inside the group and `E484` keeps it private, which is two
+# codes for one rule rather than two rules. Rules 2 and 3 were properties of this source with
+# nothing but a reader checking them. This is that reader.
+#
+# The fourth rule — configure at startup, then read — is about the CALLER and cannot be read
+# off this file at all. It is stated in the comment, and nothing here can enforce it; saying so
+# is part of stating it.
+
+# The source with every comment line removed, so a `#` example cannot satisfy an assertion
+# about code. (`[[:space:]]` and not `[ \t]`: POSIX grep reads the latter as a literal `t`,
+# which silently left every indented doc comment in — exactly the shape of gate this file's
+# own header warns about.)
+code="$WORK/log.code"
+grep -vE '^[[:space:]]*#' "$LOG_SRC" >"$code"
+
+# ...and the module-level `unsafe { … }` group on its own, which is where the cell lives. A
+# `mut` inside a function body is indented identically, so the group has to be carved out
+# rather than matched by shape.
+awk '/^unsafe \{$/ { inside = 1; next } inside && /^\}$/ { inside = 0; next } inside' "$code" >"$WORK/log.cell"
+
+n_groups=$(grep -cE '^unsafe \{$' "$code")
+[ "$n_groups" -eq 1 ] || note "$LOG_SRC has $n_groups module-level unsafe groups and the pattern has ONE"
+
+n_cells=$(grep -cE '^	mut [a-z_]+ := ' "$WORK/log.cell")
+[ "$n_cells" -eq 1 ] || note "$LOG_SRC holds $n_cells mutable globals and the pattern has ONE"
+
+cell=$(sed -n 's/^	mut \([a-z_]*\) := .*/\1/p' "$WORK/log.cell")
+case "$cell" in
+log_*) ;;
+*) note "the cell is called \`$cell\`; name it after the module — two modules that both call theirs \`process\` are E706, private or not" ;;
+esac
+
+# EVERY MENTION OF THE CELL IS ONE OF THREE THINGS: the declaration, the ONE assignment inside
+# `install`, or a `return <cell>.…` delegation. A `log_cell.lvl = x` anywhere, or a second
+# writer, or a reader that does something other than delegate, fails here — which is what turns
+# rule 2 and rule 3 from a convention into a check.
+bad=$(grep -nE "\\b$cell\\b" "$code" |
+	grep -vE "^[0-9]+:	mut $cell := " |
+	grep -vE "^[0-9]+:	$cell = lg$" |
+	grep -vE "^[0-9]+:	return $cell\.[a-z_]+\(")
+[ -z "$bad" ] || note "the cell is touched somewhere that is not the declaration, \`install\`, or a delegation:
+$bad"
+
+n_writes=$(grep -cE "^	$cell = " "$code")
+[ "$n_writes" -eq 1 ] || note "the cell is written in $n_writes places — \`install\` is the one writer"
+
+n_setters=$(grep -cE '^pub fn set_' "$code")
+[ "$n_setters" -eq 0 ] || note "$LOG_SRC exports $n_setters \`set_*\` functions — the family was DELETED for one \`install\`, not renamed"
+
+grep -qE '^pub fn rank\(' "$code" && note "\`rank\` is public — \`rank(OFF)\` is -1, and a caller comparing two of them reads OFF as the most verbose level there is"
+grep -qE '^pub fn current\(' "$code" && note "\`current()\` is back — deriving from the installed logger reads as mid-flight reconfiguration, which the cell is not safe for"
+
+# AND THE ONE CONSTRUCTOR IS `new`. `Logger()` exists whatever this module wants (`E482` makes
+# every private field carry a default), and it is out of a caller's reach only for as long as
+# the consts its defaults name stay private. Publishing one would silently re-open a second
+# constructor, so the refusal is compiled here rather than described in a comment.
+cat >"$WORK/ctor.zg" <<'ZG'
+import "log"
+
+fn main() {
+	print(log.Logger().enabled(log.Level.INFO))
+}
+ZG
+
+rm -f "$WORK/ctor"
+if "$ZERG" build "$WORK/ctor.zg" -o "$WORK/ctor" >"$WORK/ctor.log" 2>&1; then
+	note "log.Logger() built outside the module — it is a second constructor that skips \`new\`"
+else
+	grep -q 'E301' "$WORK/ctor.log" ||
+		note "log.Logger() was refused, but not by E301: $(head -2 "$WORK/ctor.log")"
+fi
+checks=$((checks + 1))
+
 [ "$fail" -eq 0 ] || {
 	printf 'log-check: the sources and streams are kept in %s\n' "$WORK" >&2
 	trap - EXIT
 	exit 1
 }
 
-[ "$checks" -eq 6 ] || {
-	printf 'log-check: only %s of 6 cases ran — a probe stopped building\n' "$checks" >&2
+[ "$checks" -eq 8 ] || {
+	printf 'log-check: only %s of 8 cases ran — a probe stopped building\n' "$checks" >&2
 	exit 1
 }
 
-printf 'log-check: one write per line in the source, fatal exits 1 and still writes, the default stream is stderr, colour follows the terminal and the format does not, and %s lines from %s coroutines each arrive whole\n' \
+printf 'log-check: one write per line in the source, fatal exits 1 and still writes, the default stream is stderr, colour follows the terminal and the format does not, ZERG_LOG_LEVEL names a level, the cell has one writer and %s lines from %s coroutines each arrive whole\n' \
 	"$((WRITERS * LINES))" "$WRITERS"

@@ -22,7 +22,7 @@
 # call and no API can change that. For a genuinely expensive one the honest answer is the
 # explicit guard, and it is why `enabled` is public:
 #
-#     if log.enabled(log.DEBUG) {
+#     if log.enabled(log.Level.DEBUG) {
 #         log.debug().str("dump", expensive()).msg("state")
 #     }
 #
@@ -30,6 +30,10 @@
 # prefix and a message into two writes and a stress test found 830 lines in 24000 pairing one
 # kind with another's message. So `msg` builds the whole line, newline included, and hands it
 # to a SINGLE `__zrt_write`. Nothing here calls `io.eprintln`, which is two.
+#
+# THIS MODULE IS ALSO THE TREE'S REFERENCE FOR PROCESS-WIDE MUTABLE STATE. The pattern, and
+# the four rules that make it safe to copy, are written above the `unsafe { }` group at the
+# foot of this file.
 import (
 	"io"
 	"json"
@@ -43,28 +47,116 @@ import (
 # `panic`, because Zerg already says that with `raise`, and a logger that unwound would be
 # competing with the error taxonomy rather than reporting to it.
 #
-# THEY ARE `int` CONSTANTS AND NOT AN ENUM, which is not a preference: an enum's variants
-# cannot be constructed outside the module that declares them (the same bootstrap limitation
-# `json.Val` documents), so `log.set_level(log.DEBUG)` could not be written at all. Ordered
-# smallest-first, so "is this level on" is one comparison.
-pub const TRACE := 0
-pub const DEBUG := 1
-pub const INFO := 2
-pub const WARN := 3
-pub const ERROR := 4
-pub const FATAL := 5
+# IT IS AN ENUM AND NOT A SET OF `int` CONSTANTS, and the difference is what the type can
+# refuse. Against `pub const INFO := 2`, both `.level(2)` and `.level(99)` are legal and
+# neither says anything; the enum seals it in both directions — `E340` for an `int` where a
+# `Level` belongs and for a `Level` where an `int` does, and `E347` for comparing a variant
+# with a number.
+#
+# THE DEEPER WIN IS THE EXHAUSTIVE `match`. Every renderer below is one, so a level added
+# here cannot be added without ranking it, naming it and colouring it: `E428 non-exhaustive
+# match: missing variant Level.FATAL` is what a forgotten arm gets. The `int`-constant
+# version printed a blank and said nothing.
+#
+# OFF IS NOT A LEVEL A LINE CAN BE WRITTEN AT. It is the threshold that accepts nothing — it
+# is not in the ordering at all, which is what `rank` says by putting it OUTSIDE `0..5`. A
+# logger set to it writes nothing; `fatal` still EXITS, because silencing a logger changes
+# what is reported, never what is done.
+#[derive(Eq)]
+pub enum Level {
+	TRACE
+	DEBUG
+	INFO
+	WARN
+	ERROR
+	FATAL
+	OFF
+}
 
-# OFF is not a level a line can be written at — it is above `FATAL`, so a logger set to it
-# writes nothing at all. `fatal` still EXITS: silencing a logger changes what is reported,
-# never what is done.
-pub const OFF := 6
+# rank is the ORDERING, and it is the only thing in this module that knows one. Nothing asks
+# `int(Level)` — a variant's discriminant is not consulted anywhere, so the DECLARATION ORDER
+# ABOVE IS NOT A CONTRACT: alphabetise those seven names and every program filters exactly as
+# it did. Comparing discriminants would make that same edit compile, pass every gate, and
+# silently change what every program in the ecosystem writes.
+#
+# `OFF` IS -1 AND NOT 6, and the reason is what happens when the `< 0` guard in `enabled` is
+# lost. Both encodings are correct WITH the guard; they differ in how the loss is noticed,
+# and that was measured by deleting it:
+#
+#   guard deleted            OFF = 6                OFF = -1
+#   line at ERROR, lg OFF    still correct          PRINTS — and so does every line
+#   line at OFF, lg TRACE    prints                 still correct
+#
+# With `6` the only thing that breaks is a line written AT `OFF`, which nobody writes, so
+# losing the guard is INVISIBLE. With `-1` a logger somebody deliberately silenced starts
+# printing everything, which the first person to try it sees. Given two correct encodings,
+# take the one whose failure gets noticed.
+#
+# IT IS MODULE-PRIVATE, AND THAT IS LOAD-BEARING RATHER THAN TIDY. The `-1` encoding is only
+# safe while nothing outside can see it: a caller writing `rank(a) > rank(b)` against a
+# public `rank` would conclude that `OFF` is the most verbose level of all. The public
+# ordering question is `enabled(l) -> bool` — *will this line be written* — which is the
+# question a caller actually has.
+fn rank(l: Level) -> int {
+	return match l {
+		Level.TRACE => 0
+		Level.DEBUG => 1
+		Level.INFO  => 2
+		Level.WARN  => 3
+		Level.ERROR => 4
+		Level.FATAL => 5
+		Level.OFF   => -1
+	}
+}
+
+# parse_level reads a level by NAME — `debug`, not `1`. A number would pin the discriminants
+# the rest of this module is careful never to consult, and a name is what a person types into
+# an environment variable anyway. Anything else is `nil`, so a caller decides what an
+# unrecognised setting means rather than having this module guess.
+#
+# IT IS `parse_level` AND NOT `parse` for the reason `at_level` is not `at`, and this one was
+# measured after the shorter name was written: a `pub` name has no package to be unique
+# within, so `pub fn parse` here is `E705` against a module-PRIVATE `fn parse` anywhere in the
+# program. A standard library module that exported `parse` would take that word away from
+# every program importing it, and `parse` is the commonest private helper name there is. (The
+# module already spends `new`, `info`, `warn` and `error` the same way, which is a language
+# gap rather than a choice — but it is not a reason to spend one more.)
+#
+# IT IS A DIVERGE CHAIN AND NOT A `match`, and both halves of that are language rules rather
+# than taste: a `match` arm is an expression and may not hold a `return` (`E605`), and every
+# arm of one must answer the SAME type (`E322`), so `Level` and `nil` do not unify.
+#
+# ```zerg
+# log.new().level(log.parse_level("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
+# log.new().level(log.parse_level("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
+# ```
+# ```output
+# true
+# false
+# ```
+pub fn parse_level(s: str) -> Level? {
+	return Level.TRACE if s == "trace"
+	return Level.DEBUG if s == "debug"
+	return Level.INFO if s == "info"
+	return Level.WARN if s == "warn"
+	return Level.ERROR if s == "error"
+	return Level.FATAL if s == "fatal"
+	return Level.OFF if s == "off"
+
+	return nil
+}
 
 # --- the two formats, and where each is chosen ---------------------------------------------
+#
+# A FORMAT IS AN ENUM FOR THE REASON A LEVEL IS, and it is the cleaner case: a format needs
+# no ordering and no ranking, so the enum costs nothing at all. `col` is left a `bool` — a
+# `bool` is already a real type with exactly two inhabitants, and enum-ing things for
+# symmetry is how a module grows types nobody needed.
 #
 # PRETTY IS THE DEFAULT, and that departs from zerolog, whose default is JSON. The reason is
 # who is on the other end: an unconfigured program is one somebody is running, and a readable
 # line is worth more to them than a parseable one. A program whose output is being collected
-# says so with `ZERG_LOG=json` or with `set_format`, which is one line in `main` and is a
+# says so with `ZERG_LOG=json` or with `log.install(…)`, which is one line in `main` and is a
 # decision somebody made rather than one the library guessed.
 #
 # `ZERG_LOG` PICKS THE FORMAT AND `isatty` DOES NOT, which is the line this module holds and
@@ -77,8 +169,11 @@ pub const OFF := 6
 # AN UNRECOGNISED `ZERG_LOG` IS PRETTY rather than an error. A logger that refused to start
 # over a misspelt environment variable would be a logger that takes a program down for a
 # reason that has nothing to do with it.
-pub const FMT_PRETTY := 0
-pub const FMT_JSON := 1
+#[derive(Eq)]
+pub enum Format {
+	PRETTY
+	JSON
+}
 
 # --- where a line goes ----------------------------------------------------------------------
 #
@@ -96,8 +191,9 @@ pub const FMT_JSON := 1
 # than "it did not crash".
 #
 # A CHANNEL SINK MUST HAVE ROOM. A send to a full channel parks the sending coroutine, so a
-# test that logs into a channel it will drain later needs the capacity up front — the suite
-# uses `chan[str](32)`. A sink whose reader is another coroutine needs no such care.
+# test that logs into a channel it will drain later needs the capacity up front — each of the
+# suite's is deep enough for the lines that test writes. A sink whose reader is another
+# coroutine needs no such care.
 
 # Sink is where finished lines go, and THE OPTIONAL IS THE MODE: a channel means send to it,
 # and `nil` means standard error. It carried an `int` tag beside the channel for one round and
@@ -134,30 +230,51 @@ fn emit(sk: Sink, line: str) {
 
 # --- what a logger is ----------------------------------------------------------------------
 
-# Logger is one configured logger. It is a VALUE: `level`, `to` and `with_str` each answer a
-# COPY rather than mutating, so a logger handed to a component cannot reconfigure its
-# caller's. That is the shape `cli.Command` has and it is the same reason.
+# Logger is one configured logger. It is a VALUE: every method below answers a COPY rather
+# than mutating, so a logger handed to a component cannot reconfigure its caller's. That is
+# the shape `cli.Command` has and it is the same reason.
 #
-# EVERY ONE OF THEM BUILDS A FRESH VALUE RATHER THAN COPYING AND ASSIGNING A FIELD, and that
-# is a measured workaround, not a style. `cli.Command` writes `mut c := this; c.args = xs;
-# return c`, and in this compiler an assignment over a struct field that already holds a live
-# `list` DOES NOT RELEASE the buffer it replaces: a four-call chain leaks three of them,
-# counted with scripts/lib/memcount.c. `cli` gets away with it because a command line is built
-# once; a logger is built per line. The constructor form takes the new value as an argument
-# and does not leak that buffer.
+# A BUILDER DERIVES FROM `this` — `mut c := this; c.f = x; return c` — RATHER THAN LISTING
+# EVERY FIELD IN A CONSTRUCTOR. It used to list them, at seven call sites, and the defect that
+# shape has is the one no gate can see: add a sixth field and all seven must change, and
+# whichever one is missed silently RESETS the new field to its default on that path. There is
+# no assertion that could catch it, because every site still compiles and still answers a
+# Logger. `mut c := this` is a copy including through the `list` field, so there is nothing
+# left to keep in step.
 #
-# A LIVE LINE STILL LEAKS ONE ALLOCATION PER FIELD, and saying so here is better than leaving
-# a reader to find it. It is NOT this module's shape: the same count comes out of
-# `strings.join(parts, sep)`, which leaks one per call today and has nothing to do with
-# logging — the release of a value built inside a call and consumed as a temporary is a
-# compiler defect, and it is reported rather than worked around here. What `make mem-check`
-# holds is the claim this module is responsible for, `log_dead`: a DISABLED line allocates
-# nothing at all, +0 over 195 extra rounds against +18915 for the same loop with the level on.
+# THE FIELDS ARE MODULE-PRIVATE, all of them, and that is the half of it a reader is likelier
+# to skip: a caller cannot spell `Logger(…)` positionally, so adding a field breaks nobody
+# outside, and a caller cannot write one either, so a logger somebody was handed stays what
+# they were handed.
+#
+# WHAT THE DERIVE COSTS, measured with `make mem-check` rather than guessed: a LIVE line went
+# from +18915 to +19110 allocations over 195 rounds — exactly one more per line, because an
+# assignment over a field that already holds a live `list` does not release the buffer it
+# replaces in this compiler. (Moving the environment to the module-level consts below then took
+# it to +18330, so the derive is paid for; the figures are kept because the middle one is what
+# the shape itself costs.) The DISABLED line, which is the claim this module is responsible
+# for, is +0 throughout. One allocation per written line bought the removal of a defect class
+# no gate can see, and the leak itself is a compiler bug that is reported rather than worked
+# around here — the same count comes out of `strings.join`, which has nothing to do with
+# logging.
+#
+# THE DEFAULTS ARE THE ENVIRONMENT, AND THEY ARE WRITTEN HERE RATHER THAN IN `new`, which is
+# one line that constructs this. A module-private field MUST carry a default (`E482`), so
+# `Logger()` exists whatever this module wants; writing the environment into `new` as well
+# would have made it a SECOND constructor that silently ignores `ZERG_LOG` — the kind of thing
+# nobody finds until a `ZERG_LOG=json` is quietly dropped on the floor.
+#
+# AND BECAUSE THE THREE CONSTS ARE PRIVATE, `log.Logger()` IS REFUSED OUTSIDE THIS MODULE —
+# `E301 ENV_LEVEL is not a public member`, three times, at the construction. So the accidental
+# second constructor is not merely made to agree with `new`; it is gone, and `log.new()` is
+# the only way a Logger is built from outside. (The message names consts the caller cannot see,
+# and calls the module `stdlib` rather than `log`. Both are compiler defects worth reporting;
+# neither is a reason to prefer a silent second constructor over a loud refusal.)
 pub struct Logger {
-	lvl: int = 2
-	fmt: int = 0
-	col: bool = false
-	sink: Sink = Sink(nil)
+	lvl: Level = ENV_LEVEL
+	fmt: Format = ENV_FORMAT
+	col: bool = ENV_COLOUR
+	sink: Sink = to_stderr()
 	base: list[json.Field] = []
 }
 
@@ -169,43 +286,85 @@ pub struct Logger {
 # ALLOCATED on a line that is not going to be written. `make mem-check` asserts that by
 # counting allocations at 5 rounds and at 200 and requiring the two totals to be EQUAL; it is
 # the one case in that gate whose claim is "allocated nothing" rather than "leaked nothing".
+#
+# IT CARRIES THE LOGGER IT CAME FROM, and not a copy of that logger's settings. It held `fmt`,
+# `col` and `sink` beside `lvl` for one round, and `at_level` hand-listed all four into the
+# constructor — which is the SAME defect the builders above stopped having, one level down and
+# on the path every written line takes. A sixth rendering setting would have had to be threaded
+# through the Logger field, the Entry field, that positional list and `render`, and the site
+# that dropped it would have silently rendered the Entry default on every line. Now the
+# constructor takes `this`, and there is nothing to keep in step.
+#
+# It costs nothing: a `Logger`'s heap parts are the copy-on-write `base` this entry was
+# already sharing and the `Sink`'s channel, so carrying it is refcounts and not copies.
+# `make mem-check` still puts the disabled line at +0.
+#
+# `log.Entry()` IS REFUSED OUTSIDE THIS MODULE for the reason `Logger()` is, and it INHERITS
+# that rather than arranging it: every field must carry a default (`E482` again), so the
+# zero-argument construction exists — but `lg`'s default is `Logger()`, whose own defaults name
+# module-private consts, so the same `E301` lands here. Measured, after the opposite was
+# written down and believed for a round. Inside the module it is inert anyway: `live` is false,
+# so every method returns at once, and `lvl` is `OFF`, so `msg` writes nothing and does not
+# exit.
 pub struct Entry {
 	live: bool = false
-	lvl: int = 0
-	fmt: int = 0
-	col: bool = false
-	sink: Sink = Sink(nil)
-	fs: list[json.Field] = []
+	lvl: Level = Level.OFF
+	lg: Logger = Logger()
 }
 
-# new answers a logger at INFO writing to standard error. It is the INSTANCE constructor, and
-# the global further down is one of these rather than a second implementation beside it.
+# new answers a logger configured from the environment, writing to standard error. It is the
+# INSTANCE constructor, and the global further down is one of these rather than a second
+# implementation beside it.
+#
+# IT IS ONE LINE ONTO THE ZERO VALUE, which is what makes it the ONLY constructor rather than
+# the first of two: `Logger()` carries the same defaults because they are the same defaults,
+# and outside this module it is refused outright (see the struct above). `new` exists to be
+# the NAME a caller and this file's own documentation use.
 #
 # ```zerg
-# log.new().enabled(log.INFO)
-# log.new().enabled(log.DEBUG)
+# log.new().level(log.Level.WARN).enabled(log.Level.INFO)
+# log.new().level(log.Level.WARN).enabled(log.Level.ERROR)
 # ```
 # ```output
-# true
 # false
+# true
 # ```
 pub fn new() -> Logger {
-	fs: list[json.Field] = []
-	return Logger(INFO, env_format(), env_colour(), to_stderr(), fs)
+	return Logger()
+}
+
+# --- the environment, read once ---------------------------------------------------------------
+#
+# THE THREE `#[allow(L102)]` BELOW ARE SUPPRESSING A FALSE POSITIVE, and that is worth stating
+# once rather than three times. Each of these functions IS called — by a module-level `const`
+# further down, which is what `Logger`'s field defaults name. `L102`'s reachability walk does
+# not visit a top-level `const` initialiser (nor a field default; both spellings were tried),
+# so it reports all three as dead. The linter is wrong and the code is right; the defect is
+# reported rather than worked around by writing the environment logic inline, which would trade
+# three named, documented functions for three unreadable const expressions.
+
+# env_level is `ZERG_LOG_LEVEL`, by name, and anything it does not recognise is `INFO`. It is
+# the one way a level is chosen without editing the program, which matters more here than it
+# would elsewhere: the only other way is `log.install(…)` in `main`, and the person who wants
+# a debug line is often not the person who can rebuild.
+#[allow(L102)]
+fn env_level() -> Level {
+	return parse_level(os.env("ZERG_LOG_LEVEL") ?? "") ?? Level.INFO
 }
 
 # env_format is `ZERG_LOG`, and anything it does not recognise is `pretty`.
 #
-# BOTH READERS BELOW ARE WRITTEN WITH `??` RATHER THAN `if s := v { … }`, and that is not a
+# ALL THREE READERS ARE WRITTEN WITH `??` RATHER THAN `if s := v { … }`, and that is not a
 # style choice. `zerg fmt` collapses a lone `return` inside an `if` into the postfix form, and
 # `return false if s := off` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
 # CONDITION and a binding head is not one (`E205`). The formatter turns a valid program into an
 # invalid one, and `fmt --check` then calls the invalid one canonical, which is how this module
 # broke itself once. Reported; four lines reproduce it. `??` is the shorter answer anyway.
-fn env_format() -> int {
+#[allow(L102)]
+fn env_format() -> Format {
 	v := os.env("ZERG_LOG") ?? ""
-	return FMT_JSON if v == "json"
-	return FMT_PRETTY
+	return Format.JSON if v == "json"
+	return Format.PRETTY
 }
 
 # env_colour is the two questions a rendering decision is made of, in the order the convention
@@ -217,6 +376,7 @@ fn env_format() -> int {
 # variable somebody exported. That is why the sentinel below is a string nobody sets rather
 # than `""`: coalescing to `""` would make an exported-empty `NO_COLOR` indistinguishable from
 # an unset one, which is the one distinction this variable is made of.
+#[allow(L102)]
 fn env_colour() -> bool {
 	off := os.env("NO_COLOR") ?? NO_COLOR_UNSET
 	return false if off != NO_COLOR_UNSET
@@ -228,45 +388,69 @@ fn env_colour() -> bool {
 # not available:  refuses a NUL in a string literal.)
 const NO_COLOR_UNSET := "\u{1}NO_COLOR is not set"
 
+# The three answers, read ONCE. A module-level `const` may call a function, and these are the
+# defaults `Logger`'s fields carry — so the environment is asked at module init rather than at
+# every construction. That is not a micro-optimisation: `env_colour` calls `os.isatty(2)`,
+# which is a SYSCALL, and `testing.zg` builds a fresh logger for every note a test writes.
+#
+# They are declared AFTER `NO_COLOR_UNSET` because a top-level `const` is evaluated in source
+# order, and `env_colour` reads that sentinel.
+const ENV_LEVEL := env_level()
+const ENV_FORMAT := env_format()
+const ENV_COLOUR := env_colour()
+
 impl Logger {
-	# level answers a COPY of this logger writing at `n` and above.
+	# level answers a COPY of this logger writing at `l` and above.
 	#
 	# ```zerg
-	# log.new().level(log.WARN).enabled(log.INFO)
-	# log.new().level(log.WARN).enabled(log.ERROR)
+	# log.new().level(log.Level.OFF).enabled(log.Level.FATAL)
+	# log.new().level(log.Level.TRACE).enabled(log.Level.TRACE)
 	# ```
 	# ```output
 	# false
 	# true
 	# ```
-	pub fn level(n: int) -> This {
-		return Logger(n, this.fmt, this.col, this.sink, this.base)
+	pub fn level(l: Level) -> This {
+		mut c := this
+		c.lvl = l
+		return c
 	}
 
 	# to answers a COPY writing to `sk`.
 	pub fn to(sk: Sink) -> This {
-		return Logger(this.lvl, this.fmt, this.col, sk, this.base)
+		mut c := this
+		c.sink = sk
+		return c
 	}
 
-	# format answers a COPY writing `FMT_PRETTY` or `FMT_JSON`. It is what `ZERG_LOG` sets, and
-	# it is a function as well as an environment variable because a program that knows where
-	# its output goes should not have to be told by its own launcher.
-	pub fn format(n: int) -> This {
-		return Logger(this.lvl, n, this.col, this.sink, this.base)
+	# format answers a COPY writing `Format.PRETTY` or `Format.JSON`. It is what `ZERG_LOG`
+	# sets, and it is a method as well as an environment variable because a program that knows
+	# where its output goes should not have to be told by its own launcher.
+	pub fn format(f: Format) -> This {
+		mut c := this
+		c.fmt = f
+		return c
 	}
 
 	# colour answers a COPY with ANSI colour on or off. The default is the environment's —
 	# `NO_COLOR` first, then whether standard error is a terminal — and this is the override
 	# for a program that knows better, which is mostly a test.
 	pub fn colour(on: bool) -> This {
-		return Logger(this.lvl, this.fmt, on, this.sink, this.base)
+		mut c := this
+		c.col = on
+		return c
 	}
 
-	# enabled reports whether a line at `lvl` would be written. It is PUBLIC because the
+	# enabled reports whether a line at `l` would be written. It is PUBLIC because the
 	# builder's one residual cost — evaluating the arguments — has no API answer, so a caller
 	# holding a genuinely expensive value needs a way to ask before it computes one.
-	pub fn enabled(lvl: int) -> bool {
-		return lvl >= this.lvl and lvl < OFF
+	#
+	# THE `< 0` GUARD IS WHAT MAKES `OFF` SILENT, including for a line written AT `OFF`, which
+	# is the one case a threshold comparison alone gets wrong. See `rank`.
+	pub fn enabled(l: Level) -> bool {
+		floor := rank(this.lvl)
+		return false if floor < 0
+		return rank(l) >= floor
 	}
 
 	# with_str answers a copy carrying `k=v` on every line it writes from here on. It is what
@@ -274,36 +458,36 @@ impl Logger {
 	# repeating it at every call site.
 	#
 	# ```zerg
-	# log.new().with_str("component", "lexer").with_int("worker", 3).enabled(log.INFO)
+	# log.new().level(log.Level.INFO).with_str("c", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
 	# ```
 	# ```output
 	# true
 	# ```
 	pub fn with_str(k: str, v: str) -> This {
-		mut fs := this.base
-		json.put_str(fs, k, v)
-		return Logger(this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_str(c.base, k, v)
+		return c
 	}
 
 	# with_int is with_str for a number.
 	pub fn with_int(k: str, v: int) -> This {
-		mut fs := this.base
-		json.put_int(fs, k, v)
-		return Logger(this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_int(c.base, k, v)
+		return c
 	}
 
 	# --- one method per level, and the one the language would not let be a method ---
 	#
-	# `at` IS PUBLIC AND `debug()` IS NOT WRITTEN, and that is a language rule rather than a
-	# preference. `debug` is a RESERVED METHOD NAME in Zerg: `display` and `debug` are the two
-	# renderings every value has (docs/runtime/format.md), so a method by either name must
-	# answer the `str` the value shows as — and `E361 Logger.debug() answers the str the value
-	# shows as, and this one does not` is what a level method by that name gets.
+	# `at_level` IS PUBLIC AND `debug()` IS NOT WRITTEN, and that is a language rule rather
+	# than a preference. `debug` is a RESERVED METHOD NAME in Zerg: `display` and `debug` are
+	# the two renderings every value has (docs/runtime/format.md), so a method by either name
+	# must answer the `str` the value shows as — and `E361 Logger.debug() answers the str the
+	# value shows as, and this one does not` is what a level method by that name gets.
 	#
 	# The rule is about METHODS ONLY, measured: the free `log.debug()` further down is the
 	# level's own name and is accepted, so the GLOBAL surface has all six. On an instance the
-	# sixth is `lg.at_level(log.DEBUG)`, which invents no name for a level that already has
-	# one — the alternative was a `dbg` that exists only because of a compiler rule and can
+	# sixth is `lg.at_level(log.Level.DEBUG)`, which invents no name for a level that already
+	# has one — the alternative was a `dbg` that exists only because of a compiler rule and can
 	# drift from the constant it stands for.
 	#
 	# AND IT IS `at_level` RATHER THAN `at` because of the OTHER rule: the global surface
@@ -314,33 +498,33 @@ impl Logger {
 
 	# at_level begins a line at any level. It is the general form the five below are written
 	# on, and it is what an instance writes for DEBUG.
-	pub fn at_level(lvl: int) -> Entry {
-		# THE ENTRY BORROWS THE LOGGER'S FIELD LIST rather than being handed a fresh one, and
-		# that is what makes the disabled path free: `[]` is an allocation, and a `list` is
-		# copy-on-write, so sharing costs a refcount and the first `.str()` pays for the copy
-		# it actually needs. A dead entry never reads `fs` at all.
-		return Entry(this.enabled(lvl), lvl, this.fmt, this.col, this.sink, this.base)
+	pub fn at_level(l: Level) -> Entry {
+		# THE ENTRY BORROWS THIS LOGGER rather than being handed a fresh field list, and that is
+		# what makes the disabled path free: `[]` is an allocation, and `base` is copy-on-write,
+		# so carrying the logger costs a refcount and the first `.str()` pays for the copy it
+		# actually needs. A dead entry never reads the list at all.
+		return Entry(this.enabled(l), l, this)
 	}
 
 	pub fn trace() -> Entry {
-		return this.at_level(TRACE)
+		return this.at_level(Level.TRACE)
 	}
 
 	pub fn info() -> Entry {
-		return this.at_level(INFO)
+		return this.at_level(Level.INFO)
 	}
 
 	pub fn warn() -> Entry {
-		return this.at_level(WARN)
+		return this.at_level(Level.WARN)
 	}
 
 	pub fn error() -> Entry {
-		return this.at_level(ERROR)
+		return this.at_level(Level.ERROR)
 	}
 
-	# fatal writes the line and then exits with status 1.
+	# fatal begins a line whose `msg` writes it and then exits with status 1.
 	pub fn fatal() -> Entry {
-		return this.at_level(FATAL)
+		return this.at_level(Level.FATAL)
 	}
 }
 
@@ -348,25 +532,25 @@ impl Entry {
 	# str adds `k=v` to this line. On a dead entry it is a return and nothing else.
 	pub fn str(k: str, v: str) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_str(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_str(c.lg.base, k, v)
+		return c
 	}
 
 	# int adds a number.
 	pub fn int(k: str, v: int) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_int(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_int(c.lg.base, k, v)
+		return c
 	}
 
 	# bool adds a flag.
 	pub fn bool(k: str, v: bool) -> This {
 		return this if not this.live
-		mut fs := this.fs
-		json.put_bool(fs, k, v)
-		return Entry(true, this.lvl, this.fmt, this.col, this.sink, fs)
+		mut c := this
+		json.put_bool(c.lg.base, k, v)
+		return c
 	}
 
 	# dur adds an elapsed nanosecond count, rendered the way a person reads one. It is a
@@ -390,13 +574,13 @@ impl Entry {
 	# a `log.debug()` nobody finishes writes nothing rather than half a line.
 	pub fn msg(text: str) {
 		if this.live {
-			line := render(time.now(), this.lvl, this.fmt, this.col, text, this.fs)
-			emit(this.sink, line)
+			line := render(time.now(), this.lvl, this.lg, text)
+			emit(this.lg.sink, line)
 		}
 
 		# THE EXIT IS NOT INSIDE THAT `if`. A `fatal` at a silenced level still ends the
 		# program: quietening a logger changes what is REPORTED, never what is DONE.
-		if this.lvl == FATAL {
+		if this.lvl == Level.FATAL {
 			os.exit(1)
 		}
 	}
@@ -407,16 +591,16 @@ impl Entry {
 # render builds the whole line INCLUDING its newline, which is what makes `emit` one write.
 # It is a pure function of its arguments, so the suite asks it the question through a channel
 # sink rather than by capturing a stream.
-fn render(now: int, lvl: int, fmt: int, col: bool, text: str, fs: list[json.Field]) -> str {
+fn render(now: int, lvl: Level, lg: Logger, text: str) -> str {
 	stamp := time.rfc3339(now)
-	return as_json(stamp, lvl, text, fs) if fmt == FMT_JSON
-	return as_pretty(stamp, lvl, col, text, fs)
+	return as_json(stamp, lvl, text, lg.base) if lg.fmt == Format.JSON
+	return as_pretty(stamp, lvl, lg.col, text, lg.base)
 }
 
 # as_pretty is the human line: a timestamp, a three-letter level, the message, then the
 # fields. Three letters and not the whole word so that every line is the same width here and
 # the message begins in the same column.
-fn as_pretty(stamp: str, lvl: int, col: bool, text: str, fs: list[json.Field]) -> str {
+fn as_pretty(stamp: str, lvl: Level, col: bool, text: str, fs: list[json.Field]) -> str {
 	mut out := f"{stamp} {tag(lvl, col)} {text}"
 
 	# TWO SPACES BEFORE THE FIRST FIELD and one between the rest, so the message and the
@@ -439,7 +623,7 @@ fn as_pretty(stamp: str, lvl: int, col: bool, text: str, fs: list[json.Field]) -
 # THE KEYS ARE SHORT AND FIXED — `t`, `l`, `msg` — and they come first, in that order, because
 # the field order is the order they were put and a transcript that is read by eye wants the
 # same three at the front of every line.
-fn as_json(stamp: str, lvl: int, text: str, fs: list[json.Field]) -> str {
+fn as_json(stamp: str, lvl: Level, text: str, fs: list[json.Field]) -> str {
 	mut out: list[json.Field] = []
 	json.put_str(out, "t", stamp)
 	json.put_str(out, "l", level_name(lvl))
@@ -451,54 +635,68 @@ fn as_json(stamp: str, lvl: int, text: str, fs: list[json.Field]) -> str {
 	return json.encode(json.of_obj(out)) + "\n"
 }
 
-# tag is the three-letter level a pretty line is prefixed with, coloured when the destination
-# is a terminal and `NO_COLOR` is unset.
+# tag is the three-letter level a pretty line is prefixed with, coloured when the logger's
+# `col` is set — which by default means stderr is a terminal and `NO_COLOR` is unset, and which
+# `Logger.colour` overrides.
 #
 # ONLY THE LEVEL IS COLOURED. It is the field a reader scans for, and colouring the message
 # or the values would fight with whatever they contain — a diagnostic that already carries
 # escape codes, or a value that is going to be copied out of the terminal and pasted.
-fn tag(lvl: int, col: bool) -> str {
+fn tag(lvl: Level, col: bool) -> str {
 	name := short_name(lvl)
 	return name if not col
 	return colour_of(lvl) + name + "\u{1b}[0m"
 }
 
-fn short_name(lvl: int) -> str {
-	return "TRC" if lvl == TRACE
-	return "DBG" if lvl == DEBUG
-	return "INF" if lvl == INFO
-	return "WRN" if lvl == WARN
-	return "ERR" if lvl == ERROR
-	return "FTL" if lvl == FATAL
-
-	return "???"
+# short_name, level_name and colour_of are the three renderings of a level, and each is an
+# EXHAUSTIVE `match` rather than a chain of comparisons with a fallback. That is the whole
+# reason `Level` is an enum: a level added above cannot reach a program without an answer
+# here, because `E428` names the variant each of these three forgot. The chain they replaced
+# ended in `"???"` and would have shipped one silently.
+#
+# THE `OFF` ARM IS UNREACHABLE AND SAYS `"OFF"` ANYWAY. `msg` never renders one — `enabled`
+# is false for every level once the threshold is `OFF`. A blank would look like a formatting
+# bug if it ever did leak, and a name that is honest costs three characters.
+fn short_name(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "TRC"
+		Level.DEBUG => "DBG"
+		Level.INFO  => "INF"
+		Level.WARN  => "WRN"
+		Level.ERROR => "ERR"
+		Level.FATAL => "FTL"
+		Level.OFF   => "OFF"
+	}
 }
 
 # level_name is the level as a JSON line spells it — the whole word, lower case, which is what
-# every log shipper this would be read by already expects.
-fn level_name(lvl: int) -> str {
-	return "trace" if lvl == TRACE
-	return "debug" if lvl == DEBUG
-	return "info" if lvl == INFO
-	return "warn" if lvl == WARN
-	return "error" if lvl == ERROR
-	return "fatal" if lvl == FATAL
-
-	return "unknown"
+# every log shipper this would be read by already expects. It is also what `parse_level` reads,
+# so the two are inverses and a round trip through an environment variable is exact.
+fn level_name(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "trace"
+		Level.DEBUG => "debug"
+		Level.INFO  => "info"
+		Level.WARN  => "warn"
+		Level.ERROR => "error"
+		Level.FATAL => "fatal"
+		Level.OFF   => "off"
+	}
 }
 
 # colour_of is the SGR sequence a level opens with. They are the eight-colour codes rather
 # than 256-colour or truecolour, because those are what every terminal since the 1980s has and
 # a logger is the last place to want a capability check.
-fn colour_of(lvl: int) -> str {
-	return "\u{1b}[90m" if lvl == TRACE
-	return "\u{1b}[36m" if lvl == DEBUG
-	return "\u{1b}[32m" if lvl == INFO
-	return "\u{1b}[33m" if lvl == WARN
-	return "\u{1b}[31m" if lvl == ERROR
-	return "\u{1b}[91m" if lvl == FATAL
-
-	return "\u{1b}[0m"
+fn colour_of(lvl: Level) -> str {
+	return match lvl {
+		Level.TRACE => "\u{1b}[90m"
+		Level.DEBUG => "\u{1b}[36m"
+		Level.INFO  => "\u{1b}[32m"
+		Level.WARN  => "\u{1b}[33m"
+		Level.ERROR => "\u{1b}[31m"
+		Level.FATAL => "\u{1b}[91m"
+		Level.OFF   => "\u{1b}[0m"
+	}
 }
 
 # shown renders one field's value for a person. A string that would be AMBIGUOUS unquoted —
@@ -525,107 +723,194 @@ fn needs_quotes(s: str) -> bool {
 	return false
 }
 
-# --- the global logger -----------------------------------------------------------------------
+# --- the global logger, and the pattern to copy for any other one ------------------------------
 #
 # THE PACKAGE PROVIDES TWO SURFACES AND NEITHER REPLACES THE OTHER: a logger you hold and pass
 # (`log.new()`, above) and a system-wide one that works with no plumbing (`log.info()`, below).
 # That is zerolog's shape, and the reason is that a component with its own level or its own
 # fields wants the first while everything else wants the second.
 #
-# THE GLOBAL IS AN INSTANCE, not a second implementation beside one. Every function below is
-# one line that reaches the cell and calls the method that already exists, so there is exactly
-# one level check, one builder and one writer in this module. Anything else grows two loggers
-# that drift, which is the same argument that put the JSON escaper in one place.
-
-# THE STANDARD LIBRARY'S FIRST `unsafe` GROUP, and this is the note saying why it is here and
-# what would take it away.
+# ================================================================================================
+# THE PATTERN — process-wide mutable state in Zerg.
 #
-# THE POSITION IT IS AN EXCEPTION TO IS `E358`'s OWN: *module state is immutable, and shared
-# mutable state travels by value or through channels*. That rule is right for almost
-# everything and it cannot serve a logger. `log.info()` has to work inside a function that was
-# handed no logger, in a module that imports nothing but this one — and threading a value to
-# every call site means a parameter on every function between `main` and the line. A program
-# that does that does not have a logger; it has a logger-shaped argument.
+# This is the tree's reference for a global that has to be REPLACEABLE once the program is
+# running. Everything needed to copy it correctly is in this comment; nothing else in this
+# module has to be read. It is the only module-level `unsafe { mut … }` in the shipping tree,
+# and the normative rule it is an exception to is in docs/runtime/package.md.
 #
-# WHAT IT COSTS, exactly: a read while another coroutine writes is a data race. This project
-# has already found four real ones with `ZRT_SEED` and `REPS 150`, so that is measured rather
-# than theoretical. The rule is CONFIGURE AT STARTUP, THEN READ — which is how zerolog is used
-# in practice — and it is a rule, not a guarantee. `log.new()` is the answer for anything that
-# has to be reconfigured while the program runs.
+#     unsafe {
+#         mut log_cell := new()                # 1. one cell, private, named, already valid
+#     }
 #
-# WHAT WOULD TAKE IT AWAY, and neither is a rewrite of this module:
+#     pub fn install(lg: Logger) {             # 2. one writer, taking a value already built
+#         log_cell = lg
+#     }
 #
-#   - an atomic cell holding a `Logger`. `atomic` today is `Atomic[int]` and cannot be
-#     imported at all (`E511`: a generic struct is a form this compiler has not built), so
-#     this one is waiting on generic structs and on `Atomic[T]` reaching a struct payload.
-#   - module state the language itself makes safe to share — a `const` set once, with the
-#     parts that change travelling through a channel or an atomic.
+#     pub fn info() -> Entry {                 # 3. every reader, one line onto the instance
+#         return log_cell.info()
+#     }
 #
-# UNTIL THEN THE DISCIPLINE IS NOT A CONVENTION. The cell is module-PRIVATE, so configuring
-# by function is not the recommended way, it is the only way the language permits: visibility
-# does the enforcing, and there is no rule for a reviewer to remember.
+# 1. ONE CELL, MODULE-PRIVATE, ALREADY VALID — AND NAMED AFTER THE MODULE.
+#
+#    A bare `mut` at module level is refused: `E358 the top-level binding `log_cell` may not
+#    be `mut` outside a module-level `unsafe { … }` group — module state is immutable, and
+#    shared mutable state travels by value or through channels`. Inside the group it is
+#    allowed, and `pub` on it is refused in turn: `E484 the mutable global `log_cell` may not
+#    be `pub` — a module-level `unsafe { … }` group is one module's bargain with its own
+#    author`. So "configure by function" is not the RECOMMENDED way here, it is the ONLY way
+#    the language permits, and nothing is left for a reviewer to remember.
+#
+#    IT IS INITIALISED AT ITS DECLARATION, by the same PUBLIC constructor a caller uses. There
+#    is then no before-install state and no "has anyone configured this yet" to get wrong: a
+#    program that never calls `install` logs at the default, reading the cell is total on the
+#    first line of `main`, and a test restores the default by REBUILDING it — which is why no
+#    `current()` is needed to have a suite.
+#
+#    THE INITIALISER MUST BE TOTAL, and this is the constraint the sentence above is really
+#    making. It runs at module init, before `main`, where there is no `guard` and no place to
+#    report from: a cell whose constructor RAISES kills the program with a bare
+#    `IOError: cannot open file` and exit 1, before the line in `main` that would have
+#    installed a good value can run — measured. If your constructor can fail, initialise the
+#    cell with the default and do the fallible construction in `main`, under a `guard`, and
+#    `install` only what came back.
+#
+#    AND THE ORDER OF WHAT IT READS IS A SILENT TRAP. A top-level `const` may call a function,
+#    and a `const` reached THROUGH such a call is not yet assigned if it is declared later:
+#    `const A := mk()` above `const B := "x"`, with `mk()` reading `B`, gives the ZERO value
+#    with no diagnostic at all — an empty string in the probe that measured it, and a SEGV
+#    (exit 139) when the same shape is moved inside this module. A compiler defect worth
+#    reporting. What defends this module is not the comment: `NO_COLOR_UNSET` is declared above
+#    the `ENV_*` consts that read it, and `scripts/log-check.sh` fails loudly if that is ever
+#    swapped — measured by swapping it.
+#
+#    NAME THE CELL AFTER THE MODULE — `log_cell`, `settings_cell` — and not `process` or
+#    `state`. This compiler flattens every module into one namespace, so two modules that copy
+#    this pattern and both name their cell `process` cannot be linked, PRIVATE OR NOT:
+#    `E706 … both define `process` — this compiler flattens every module into one namespace`.
+#    Measured with a second module built on this shape.
+#
+# 2. ONE WRITER, AND IT TAKES A VALUE THAT IS ALREADY BUILT.
+#
+#    This replaced a `set_level` / `set_format` / `set_colour` / `set_sink` family, and the
+#    replacement is a DELETION rather than a rename: the module already had four pure builders,
+#    so the setters were a second way to say the same thing that happened to mutate shared
+#    state four times instead of once. `install(new().level(…).format(…))` assembles the value
+#    off to one side and stores it once — four windows for a reader to see a half-configured
+#    logger become one. The rule that keeps it one writer is not visible in the source, so
+#    `scripts/log-check.sh` reads this file and asserts it: every mention of the cell is the
+#    declaration, that one assignment, or a `return log_cell.…` delegation.
+#
+#    THE NAME IS `install` AND NOT `level`, because `level` already means *derive a logger at
+#    this level*, and one word may not be pure on an instance and effectful on the module.
+#    (`enabled` lives in both places precisely because it means the same thing in both.)
+#    Note that the writer's name is program-global too, by `E705` rather than `E706`: a second
+#    module cannot also call its writer `install`, so this one is a word `log` is spending.
+#
+#    THERE IS NO `current()`. A `current().level(…)` interface would read as mid-flight
+#    reconfiguration, and rule 4 is why the cell is not safe for that. Not offering a way to
+#    start from the current value is what makes configuring read as the startup act it is.
+#
+# 3. THE GLOBAL IS AN INSTANCE, NEVER A SECOND CODE PATH.
+#
+#    Every public function below is one line that reaches the cell and calls a method that
+#    already exists — `log_cell.info()`, not `log_cell.at_level(Level.INFO)`, so the level a
+#    name means is written once. The one exception is `debug`, which has no method to call
+#    because `E361` reserves that name for a rendering, and is therefore the only global that
+#    names its own level. There is exactly one level check, one builder and one writer in this
+#    module. A global that grew its own comparison would be a second logger drifting from the
+#    first, which is the argument that keeps one JSON escaper in this tree.
+#
+#    THE RULE ASSUMES THE GLOBAL IS AN INSTANCE OF A TYPE THAT ALREADY HAS THE API. For a
+#    global that is a bare `int` or a `map`, there is no instance to delegate to and rule 3
+#    says nothing; and for one whose whole point is being MUTATED as the program runs — a
+#    counter, a registry — this pattern does not apply at all. That case wants one owning
+#    coroutine and a channel, which is what `E358`'s own message points at.
+#
+# 4. WHAT IT COSTS, WITHOUT ROUNDING IT UP.
+#
+#    A `Logger` holds a `list` and a `Sink`, so `log_cell = lg` is SEVERAL machine stores and
+#    not one. GUARANTEED: nothing whatever about a read that runs while `install` runs — a
+#    reader can see this level with that sink, or a field list mid-swap. This project has found
+#    four real races with `ZRT_SEED` and `REPS 150`, so that is measured behaviour and not a
+#    theoretical caveat.
+#
+#    THE RULE, WHICH IS A RULE AND NOT A GUARANTEE: CONFIGURE AT STARTUP, FROM ONE COROUTINE,
+#    THEN READ. Under it every read happens after the only write and there is no race left to
+#    have. `log.new()` is the answer for anything that must change while the program runs — an
+#    instance is a value, and a value handed to a component races with nobody.
+#
+#    NO GATE HOLDS THIS ONE, and saying so is part of stating it. A stress case was considered
+#    and is not shipped: coroutines here are cooperative and there is no parking point inside
+#    `install`, so many-readers-one-installer comes back clean whether the property holds or
+#    not — the same reason scripts/log-check.sh gives for asserting "one write per line" over
+#    the source instead. A gate that cannot fail is worse than an absent one.
+#
+# INSTALLING TWICE IS LEGAL AND THE LAST ONE WINS, silently. It is the pattern's one silent
+# failure mode: two `install` calls in two startup helpers leave the second, and nothing
+# anywhere says the first happened. Refusing a second install was considered and rejected — a
+# test suite installs per test, and a rule that only `main` may configure is not one the
+# language can check.
+#
+# WHEN NOT TO COPY THIS AT ALL. A module-level `const` may CALL A FUNCTION — `const P := mk()`
+# compiles — so a global that never changes after startup needs no `unsafe`, and should not
+# have one. This shape is only for a value that must be REPLACED once the program is running,
+# and `log` is that case only because a level has to be settable from `main` in a program whose
+# functions were handed no logger.
+#
+# WHAT WOULD TAKE THE `unsafe` AWAY, and neither is a rewrite of this module:
+#
+#   - an immutable binding holding a stdlib `Atomic[T]`, which is the safe alternative GRAMMAR
+#     names for exactly this. `atomic` today is `Atomic[int]` and cannot be imported at all
+#     (`E511`: a generic struct is a form this compiler has not built), so this waits on
+#     generic structs and on `Atomic[T]` reaching a struct payload.
+#   - a language in which a whole struct store is one atomic operation, which would make
+#     rule 4's window close rather than merely be avoided.
+# ================================================================================================
 unsafe {
-	mut process := new()
+	mut log_cell := new()
 }
 
-# set_level configures the global logger. It is the whole of the "configure at startup" rule:
-# call it in `main` before anything else runs.
-pub fn set_level(n: int) {
-	process = process.level(n)
-}
-
-# set_sink sends the global logger's lines somewhere else — a channel a test drains, or back
-# to standard error.
-pub fn set_sink(sk: Sink) {
-	process = process.to(sk)
-}
-
-# set_format picks `FMT_PRETTY` or `FMT_JSON` for the global logger. `ZERG_LOG` sets the same
-# thing from outside; this is how a program that knows where its output goes says so itself.
-pub fn set_format(n: int) {
-	process = process.format(n)
-}
-
-# set_colour turns ANSI colour on or off for the global logger, over the default the
-# environment gave it.
-pub fn set_colour(on: bool) {
-	process = process.colour(on)
+# install replaces the global logger, and it is the only thing in this module that writes the
+# cell. Call it in `main`, before anything else runs; rule 4 above is why "before".
+pub fn install(lg: Logger) {
+	log_cell = lg
 }
 
 # enabled is the global's level check, and it is public for the reason the method is: a caller
 # holding a value that costs something to compute needs to ask before it computes one.
-pub fn enabled(lvl: int) -> bool {
-	return process.enabled(lvl)
+pub fn enabled(lvl: Level) -> bool {
+	return log_cell.enabled(lvl)
 }
 
 # at_level begins a line on the global logger at any level.
-pub fn at_level(lvl: int) -> Entry {
-	return process.at_level(lvl)
+pub fn at_level(lvl: Level) -> Entry {
+	return log_cell.at_level(lvl)
 }
 
 pub fn trace() -> Entry {
-	return process.at_level(TRACE)
+	return log_cell.trace()
 }
 
 # debug is a FREE function and can therefore carry the level's own name — `debug` is reserved
-# only as a METHOD (see `Logger.at_level` above).
+# only as a METHOD (see `Logger.at_level` above). It is also the one global level function with
+# no method to delegate to, which is why it is the only one that names its level here.
 pub fn debug() -> Entry {
-	return process.at_level(DEBUG)
+	return log_cell.at_level(Level.DEBUG)
 }
 
 pub fn info() -> Entry {
-	return process.at_level(INFO)
+	return log_cell.info()
 }
 
 pub fn warn() -> Entry {
-	return process.at_level(WARN)
+	return log_cell.warn()
 }
 
 pub fn error() -> Entry {
-	return process.at_level(ERROR)
+	return log_cell.error()
 }
 
-# fatal writes the line and exits 1, on the global logger.
+# fatal begins a line on the global logger whose `msg` writes it and then exits 1.
 pub fn fatal() -> Entry {
-	return process.at_level(FATAL)
+	return log_cell.fatal()
 }

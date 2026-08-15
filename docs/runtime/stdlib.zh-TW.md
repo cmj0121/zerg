@@ -248,43 +248,85 @@ log.info().str("file", path).int("line", n).msg("compiling")
 這正是 `enabled` 必須公開的原因：
 
 ```zerg
-if log.enabled(log.DEBUG) {
+if log.enabled(log.Level.DEBUG) {
  log.debug().str("dump", expensive()).msg("state")
 }
 ```
 
 ### 兩個介面
 
-有一個**全域 logger**，用函式設定、不需要任何管線；也有一個**建構子**讓你自己持有並傳遞。它們不是兩份實作：全域的那個
-**就是**一個 instance，放在這個模組自己的 cell 裡——所以每個欄位方法、每次等級判斷、每個 writer 都只存在一份。
+有一個**全域 logger**，用一個函式設定、不需要任何管線；也有一個**建構子**讓你自己持有並傳遞。它們不是兩份實作：
+全域的那個**就是**一個 instance，放在這個模組自己的 cell 裡——所以每個欄位方法、每次等級判斷、每個 writer 都只存在一份。
 
-| 函式                                   | 摘要                                        |
-| -------------------------------------- | ------------------------------------------- |
-| `new() -> Logger`                      | 一個 `INFO` 等級、寫到標準錯誤的 logger     |
-| `set_level(n: int)`                    | 設定全域 logger                             |
-| `set_sink(sk: Sink)`                   | 全域 logger 的行要送去哪裡                  |
-| `set_format(n: int)`                   | `FMT_PRETTY` 或 `FMT_JSON`，蓋過 `ZERG_LOG` |
-| `set_colour(on: bool)`                 | ANSI 顏色，蓋過 `NO_COLOR` 與終端機         |
-| `enabled(lvl: int) -> bool`            | 全域在 `lvl` 會不會寫                       |
-| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有      |
-| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2          |
-| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel              |
+| 函式                                   | 摘要                                          |
+| -------------------------------------- | --------------------------------------------- |
+| `new() -> Logger`                      | 依環境設定、寫到標準錯誤的 logger             |
+| `install(lg: Logger)`                  | 換掉全域 logger——唯一的一次變更               |
+| `parse_level(s: str) -> Level?`        | 依名字（`debug`）讀一個等級，不認得就是 `nil` |
+| `enabled(lvl: Level) -> bool`          | 全域在 `lvl` 會不會寫                         |
+| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有        |
+| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2            |
+| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel                |
 
-`Logger` 有 `level(n)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與 `enabled(lvl)`，每一個都回傳**複本**
-——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(lvl)`、`format(n)`、`colour(on)` 與等級方法。`Entry` 有 `str`、`int`、
-`bool`、`dur`、`err`，以及終結用的 `msg`。
+`Logger` 有 `level(l)`、`format(f)`、`colour(on)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與
+`enabled(l)`，每一個都回傳**複本**——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(l)` 與等級方法。
+`Entry` 有 `str`、`int`、`bool`、`dur`、`err`，以及終結用的 `msg`。
 
 **沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
-（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕
-一個叫 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、
-而且被接受；在 instance 上第六個等級寫成 `lg.at_level(log.DEBUG)`，不為一個已經有名字的等級再發明一個。
-它叫 `at_level` 而不是 `at`，是因為自由的 `pub at` 會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的
-`at`,而 `pub` 名字沒有 package 可以讓它唯一。
+（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕一個叫
+`debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、而且被接受；
+在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`，是因為自由的 `pub at`
+會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的 `at`，而 `pub` 名字沒有 package 可以讓它唯一。
+`parse_level` 不叫 `parse` 是同一條規則的另一面：這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module
+私有的 `parse` 相撞。
+
+**只有一個會改狀態的函式，而且它收下一整個 logger。** `set_level` / `set_format` / `set_colour` / `set_sink`
+這一家是被**刪掉**而不是改名的：模組本來就有四個純 builder，所以那些 setter 只是把同一件事再說一次，順便把共享狀態
+改了四次——而一次就夠。
+
+```zerg
+log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+```
+
+它叫 `install` 而不是 `level`，因為 `level` 已經表示*衍生一個在這個等級的 logger*，而同一個詞不能在 instance 上是純的、
+在模組上卻有副作用。`enabled` 之所以兩邊都有，正是因為它兩邊的意思一樣。
+
+**沒有 `current()`。** 從已安裝的 logger 衍生會讀起來像「執行中重新設定」，而這個 cell 還不適合那樣用
+（見[設定是啟動時的動作](#設定是啟動時的動作)）。要還原預設就是 `log.install(log.new())`——cell 在宣告處就是用同一個
+公開建構子初始化的，所以不需要把它讀回來，測試套件也正是靠這一點把自己隔離開。
+
+**`log.new()` 是模組外唯一能造出 `Logger` 的方法。** 每個欄位都帶預設值（module 私有欄位必須帶，`E482`），
+所以 `Logger()` 不管模組願不願意都存在——而它的預設值指名的是 module 私有的 const，所以外面寫 `log.Logger()` 得到的是
+`E301`，而不是一個會默默忽略環境變數的第二個建構子。
+
+### 設定是啟動時的動作
+
+全域 logger 住在標準函式庫唯一一個 module 層級的 `unsafe { … }` group 裡，完整的 pattern 就寫在 `log.zg` 那個 group
+上方——這裡只是摘要。語言本身把關的是四條規則裡的第一條，而且只有那一條：group 之外的頂層 `mut` 是 `E358`，
+group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所以「用函式設定」不是建議做法，而是語言允許的唯一做法；
+形狀的其餘部分由讀這個模組原始碼的 `scripts/log-check.sh` 把關。
+
+它的代價，不打折地說：`Logger` 帶著一個 `list` 與一個 `Sink`，所以安裝一個是好幾次機器寫入而不是一次，而在 `install`
+執行期間發生的讀取就是 data race。**規則是啟動時設定一次、由單一 coroutine 設定，然後只讀**——這是一條規則，不是保證。
+需要在程式執行中改變的東西，答案是 `log.new()`：instance 是值，而交給元件的值不會跟任何人競爭。安裝兩次是合法的，
+最後一次贏，而且沒有任何地方會說出來。
 
 ### 等級
 
-`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`，以及在它們之上的 `OFF`。它們是 `int` 常數而不是 enum，因為 enum 的
-variant 不能在它自己的模組之外建構，那樣 `log.set_level(log.DEBUG)` 根本寫不出來。
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant。它們原本是 `int` 常數，而型別
+能做到的正是 `int` 做不到的：`log.new().level(2)` 與 `log.new().level(99)` 兩者都合法而且什麼都不會說；現在 `E340`
+會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 則擋下拿 variant 跟數字比較。
+
+更深的收穫是每個算繪函式都是**窮盡的 `match`**：新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的
+那一條 arm。`int` 版本只會印出空白，然後什麼都不說。
+
+**`OFF` 根本不在那個順序裡。** 它是「什麼都不收」的門檻：設到它的 logger 什麼都不寫，包括寫*在* `OFF` 上的那一行。
+順序本身是一個私有函式，而 enum 的宣告順序刻意**不是**契約——模組裡沒有任何地方讀 discriminant，所以把 variant
+依字母排序不會改變任何程式過濾掉什麼。
+
+**`ZERG_LOG_LEVEL` 決定等級，依名字。** 是 `ZERG_LOG_LEVEL=debug`，永遠不是 `=1`：數字會把模組拒絕查閱的
+discriminant 釘死。不認得的名字就是 `INFO`，理由跟不認得的 `ZERG_LOG` 就是 `pretty` 一樣。`log.parse_level(s)`
+是同一個讀取器，公開出來給有自己旗標的程式用。
 
 `fatal` 寫完它那一行之後**以 1 結束程式**。它不是 panic——Zerg 用 `raise` 說那件事，而一個跟 error taxonomy 競爭的
 logger 會讓程式有兩種互不相干的結束方式。而且**即使在那一行不會被寫出的等級**它也照樣結束：把 logger 調安靜改變的是
@@ -293,14 +335,17 @@ logger 會讓程式有兩種互不相干的結束方式。而且**即使在那�
 ### 一行就是一次 write
 
 整行（含換行）交給單一一次 `__zrt_write`。這不是細節：`zrt_report` 曾經把 prefix 與訊息拆成兩次 write，而一支壓力測試
-在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 用 24 條 coroutine 各寫 500 行來釘住這件事。
+在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 是靠**讀原始碼**釘住它的：剛好一個
+`io.ewrite(line)`、沒有 `eprintln`（那是兩次 write）。它**不是**用壓力測試釘住的，而且說明了原因：同一支腳本曾把
+`emit` 改成兩次 write，24 條 coroutine 寫 12000 行也撕不出來——coroutine 是協作式的，兩次相鄰的 write 之間沒有
+停泊點。那支程式仍然會跑，只負責它能負責的宣稱：每一行都到了，而且是完整的。
 
 不加引號就有歧義的值——空字串，或帶有空白、引號、反斜線、`=`、控制字元的——會走 `json.encode`，也就是這棵樹裡唯一的
 跳脫實作。所以值裡的換行是被跳脫而不是被寫出來的，一筆記錄仍然是一行。
 
 ### 兩種格式，以及各由什麼決定
 
-**預設是 `pretty`**，而除了 `set_format` 之外，只有 `ZERG_LOG=json` 會換掉它。這跟預設是 JSON 的 zerolog 不同，
+**預設是 `pretty`**，而除了 `Logger.format` 之外，只有 `ZERG_LOG=json` 會換掉它。這跟預設是 JSON 的 zerolog 不同，
 理由是另一端坐著誰：一支沒被設定過的程式，就是有人正在跑的那一支。
 
 ```console

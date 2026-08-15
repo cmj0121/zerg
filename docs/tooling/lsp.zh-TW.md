@@ -10,7 +10,7 @@ zerg lsp        # 在 stdin/stdout 上講 JSON-RPC 2.0;由編輯器啟動與關�
 ## 主張
 
 language server **不是一個新程式**。它就是已經存在的那個編譯器,被問了另一個問題:不是*「把這個 lower 成 C」*,而是
-_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`emit_files_diag` 正是 `zerg build` 呼叫的東西——所以這裡
+_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`check_files_diag` 就是 `zerg build --emit c` 扣掉 C——所以這裡
 交付的是把答案送到人正在看的地方的那段管線。
 
 這同時也是不變式,而且它是被**強制**的,不是被宣稱的:
@@ -43,14 +43,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 ## 已經做好的
 
-| 請求                                                          | 由誰回答                                           |
-| ------------------------------------------------------------- | -------------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | session 本身                                       |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                           |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`emit_files_diag`、`lint_conversions` |
-| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式         |
-| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix       |
-| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告               |
+| 請求                                                          | 由誰回答                                            |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | session 本身                                        |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                            |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_files_diag`、`lint_conversions` |
+| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式          |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix        |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告                |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -66,7 +66,7 @@ module 擁有協定;driver 擁有檔案系統。
 **診斷是對整個程式檢查的**,不是只對 buffer。一個 import 了別的 module 的檔案必須連同那個 module 一起檢查,否則它借來
 的每個名字都會讀成 undefined——會在正確的程式碼底下畫線的 server,是人會關掉的那種。
 
-**兩種嚴重度,來自兩個地方。** **error** 是 `emit_files_diag` 回報、`zerg build` 會為此拒絕的東西。`L5xx` conversion
+**兩種嚴重度,來自兩個地方。** **error** 是 `check_files_diag` 回報、`zerg build` 會為此拒絕的東西。`L5xx` conversion
 findings 是關於**合法**程式的——一個取了紙面上看不出來之型別的字面值——所以它們以 **information** 抵達。把一個能動的
 程式塗成紅色的 server,是在教它的使用者忽略紅色。
 
@@ -114,12 +114,12 @@ quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己
 `ftplugin/zerg.vim` 是「在完全沒裝 toolchain 時也必須成立」的編輯行為,所以它不問任何正在跑的 `zerg`。它做的是陳述
 編譯器擁有的事實——而 `make editor-align` 把其中每一條都held 回它的來源。
 
-| 設定                       | 是什麼                                     | held 到什麼      |
-| -------------------------- | ------------------------------------------ | ---------------- |
-| `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                      | `F101`、`F403`   |
-| `colorcolumn=81`           | `F403` 換行預算之後的第一欄                | `fmt_wrap_max()` |
-| `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                 | 同一個掃描器     |
-| `makeprg` / `errorformat`  | `:make` 跑 `--emit c`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
+| 設定                       | 是什麼                                         | held 到什麼      |
+| -------------------------- | ---------------------------------------------- | ---------------- |
+| `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                          | `F101`、`F403`   |
+| `colorcolumn=81`           | `F403` 換行預算之後的第一欄                    | `fmt_wrap_max()` |
+| `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                     | 同一個掃描器     |
+| `makeprg` / `errorformat`  | `:make` 跑 `--emit check`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
 
 **摺疊與縮排是同一條規則,問了兩次。** 一行的層級是它觸及的最低分隔符深度——這讓一個區塊被摺起來時,包住它的兩行都
 留在畫面上(上面的 `fn f() {` 與下面的 `}`),也讓 `}` 在打出來的當下就自己 dedent。差別在分隔符:摺疊只數大括號,
@@ -278,7 +278,7 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問
-`emit_files_diag`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
+`check_files_diag`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
 從一份寫在 vimscript 裡的關鍵字清單上色的,而 nvim 必須在任何 Zerg 工具跑起來之前就知道怎麼縮排。
 
 所以那些事實有自己的 gate——`make editor-align`:

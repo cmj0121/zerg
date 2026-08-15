@@ -39,6 +39,7 @@ src/compiler/
 zerg build <file.zg>    # entry 宣告 `main` 時產生程式，否則產生 object
 zerg build -j8 app.zg   # 同上，並同時編八個單元
 zerg build --emit c <file.zg>      # 停在 C；`tokens` 與 `ast` 同理
+zerg build --emit check <file.zg>  # 只出診斷——不產生 C，也不產生任何檔案
 zerg fmt <file.zg>...   # 就地把原始碼重寫成標準形式
 zerg lint <file.zg>...  # 回報未使用的 import 與死掉的私有程式碼；有發現則非零結束
 zerg --help             # 命令、旗標，以及下面那些環境變數

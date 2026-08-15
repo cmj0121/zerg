@@ -1,0 +1,61 @@
+# `zerg lint` — report unused imports and dead private code, and return a status a build
+# can be gated on.
+
+import (
+	"cli"
+	"io"
+
+	"zerg"
+)
+
+pub fn lint_cmd() -> cli.Command {
+	return (
+		cli.command("lint", "report unused imports and dead private code")
+		.flag("s", "strict", "fail on a warning too, not only on a finding")
+		.add(cli.positional("file.zg", "the sources to check").required().repeated())
+		.run(do_lint)
+	)
+}
+
+fn do_lint(c: cli.Ctx) -> int {
+	return run_lint(c.args(), c.has("strict"))
+}
+
+# run_lint reports every finding in the loaded program and RETURNS a nonzero status when
+# there is one, so `zerg lint` can gate a build rather than merely inform. It returns the
+# status rather than exiting on it because a sub-command's function is what decides the
+# process's exit, and it is the only thing that knows what the finding meant.
+#
+# THE SEVERITIES DECIDE THE STATUS, and there are two answers rather than one. A FINDING
+# fails, always: a rule fired on the program. A WARNING prints and does not, because what it
+# reports is legal — a `#[test]` that ships is a decision somebody may have made on purpose —
+# and `strict` is what turns those into failures for a caller that has decided otherwise.
+# `make lint`, over this project's own source, is that caller. INFO never fails anything.
+fn run_lint(files: list[str], strict: bool) -> int {
+	mut paths: list[str] = []
+	srcs := load_sources_at(files, paths)
+
+	mut bad := 0
+	mut warned := 0
+	for f in zerg.lint_program(srcs, paths) {
+		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
+		if f.sev == "" {
+			bad = bad + 1
+		} else if f.sev == "warning" {
+			warned = warned + 1
+		}
+	}
+
+	return 1 if bad > 0
+	return 1 if strict and warned > 0
+
+	return 0
+}
+
+# lint_sev is the adjective a finding's line opens with, and the empty string for the default
+# — see lint.zg's header for why only two of the three are named out loud.
+fn lint_sev(f: zerg.Finding) -> str {
+	return "" if f.sev == ""
+
+	return f"{f.sev}: "
+}

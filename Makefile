@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens fmt-roundtrip linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -341,6 +341,28 @@ fmt-tokens:                     # formatting changes spacing, never the token st
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./scripts/fmt-tokens.sh
 
+# The third question about the same cases, and the one that was missing. `fmt-corpus` and
+# `fmt-self` ask whether a source is ALREADY canonical, which every rule that does not fire
+# on it passes; `fmt-tokens` asks that spacing does not move a token, and turns the F4xx
+# REWRITES off to ask it. So the rules that change the code's shape — the only ones that can
+# write a form the grammar does not have — were measured by nothing, and F401 turned
+# `if s := v { return s }` into `return s if s := v` for months while all three stayed green.
+#
+# This asks whether the formatter's output is still a PROGRAM. See the script for why the
+# question is one-way — if the input parses, the output must — and for the two halves, since
+# a module's file is not an entry point and cannot be parsed on its own.
+#
+# FMT_ROUNDTRIP_MIN is the floor, and the reason is fmt-corpus's: the directory guard below
+# catches an ABSENT submodule and nothing else, while a partial or wrong-commit checkout
+# leaves test-data/ there with a handful of cases in it and every assertion here satisfied.
+# 180 against the 214 measured today.
+FMT_ROUNDTRIP_MIN ?= 180
+
+fmt-roundtrip:                  # what the formatter writes, the parser reads
+	$(MAKE) build
+	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@MIN_SOURCES=$(FMT_ROUNDTRIP_MIN) ./scripts/fmt-roundtrip.sh
+
 # A case's EXIT STATUS is checked as well as its stdout, against `<name>.rc` where there is
 # one and against 0 where there is not. Only stdout was compared before, so a program that
 # stopped aborting — or started — passed unchanged: the abort contract's third step (exit 1)
@@ -525,7 +547,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

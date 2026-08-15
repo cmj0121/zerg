@@ -77,9 +77,14 @@ parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Confo
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
 
-這兩件事都已經實作。初始化式讀到一個宣告在它**後面**的常數時,拿到的是那個值、不是零——`const A: int = B + 1`
-寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
-_these constants depend on each other and none can be given a value first_。
+對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
+——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
+_E732 these constants depend on each other and none can be given a value first_。
+
+> **[deviation]** reads-from 圖是由初始化式**寫出來**的名字建的,所以一個**穿過呼叫**的讀取不是一條邊。
+> `const A: str = mk()` 寫在 `const B: str = "x"` 上面、而 `mk()` 讀 `B`,會讓 `A` 持有**零值**,而且完全沒有
+> 任何診斷——實測,`A` 印出來是空的。這是這條排序規則唯一的 silent-wrong,也是 `src/stdlib/log.zg` 把自己
+> 初始化式會碰到的常數宣告在**它們上面**、並由 `scripts/log-check.sh` 守住那個順序的原因:語言本身不守。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依

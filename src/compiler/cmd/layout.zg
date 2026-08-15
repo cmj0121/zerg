@@ -4,16 +4,6 @@
 #
 # `build`, `test` and `lint` all ask these questions, so they are answered once here.
 
-# rt_sources are the runtime translation units, as paths.
-fn rt_sources() -> list[str] {
-	rt := rt_dir()
-	mut out: list[str] = []
-	for u in rt_units() {
-		out.append(f"{rt}/{u}")
-	}
-	return out
-}
-
 # --- installation layout -------------------------------------------------------------
 #
 # The compiler has to work from any directory, so nothing below is a relative path the
@@ -134,6 +124,16 @@ fn rt_dir() -> str {
 	return join_path(root, "src/runtime/csrc")
 }
 
+# rt_sources are the runtime translation units, as paths.
+fn rt_sources() -> list[str] {
+	rt := rt_dir()
+	mut out: list[str] = []
+	for u in rt_units() {
+		out.append(f"{rt}/{u}")
+	}
+	return out
+}
+
 # stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
 fn stdlib_dir() -> str {
 	return __zrt_getenv("ZERG_STDLIB") if __zrt_has_env("ZERG_STDLIB")
@@ -187,6 +187,8 @@ fn has_suffix(s: str, suffix: str) -> bool {
 	}
 	return true
 }
+
+# --- the runtime units, and what cc is called with -----------------------------------------
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,
 # non-concurrent runtime units, found under rt_dir().

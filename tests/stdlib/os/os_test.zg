@@ -105,19 +105,22 @@ fn test_env_of_something_nobody_sets_is_absent(ctx: testing.Context) {
 	assert (v ?? "fallback") == "fallback"
 }
 
+# ABSENT is what `present` coalesces to in order to mean "there was nothing here". It is not a
+# value any environment holds — it opens with U+0001, which is the whole requirement — so a
+# variable that is set can never be mistaken for one that is not. (U+0000 is not available:
+# `zerg` refuses a NUL in a string literal.) `src/stdlib/log.zg` spells `NO_COLOR`'s presence
+# the same way, for the same reason.
+const ABSENT := "\u{1}nothing set this"
+
 # present is "this optional holds something", as a bool an assertion can render.
 #
-# IT IS WRITTEN WITH AN ASSIGNMENT RATHER THAN A `return` INSIDE THE `if`, and that is not a
-# style choice either: `zerg fmt` collapses `if s := v { return true }` into
-# `return true if s := v`, which does not parse (`E205`) — the trailing `if` on a diverge takes
-# a bare CONDITION and a binding head is not one. An assignment is not a diverge, so the
-# formatter leaves this shape alone. Reported; four lines reproduce it.
+# THE UNWRAPPING FORM IS NOT AVAILABLE, and neither is the obvious one. `v == nil` is `E341` —
+# an optional is not an operand of `==` — and the unwrap the compiler suggests in its place,
+# `if s := v { ok = true }`, BINDS A NAME NOTHING READS, which is `L103`. That is the whole of
+# what a presence test needs to say, and both spellings of it cost a finding. Coalescing to a
+# sentinel and comparing the plain `str` says it in one line and reads nothing it did not bind.
 fn present(v: str?) -> bool {
-	mut ok := false
-	if s := v {
-		ok = true
-	}
-	return ok
+	return (v ?? ABSENT) != ABSENT
 }
 
 # And PATH is the one variable a process on this platform always has, so it is the half of

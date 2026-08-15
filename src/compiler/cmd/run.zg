@@ -28,18 +28,6 @@ pub fn lint_cmd() -> cli.Command {
 	)
 }
 
-# desugar takes the same two flags `fmt` does, and they mean the same things: `--check`
-# asks the question without touching anything, and `--off` names a rule to leave alone.
-pub fn desugar_cmd() -> cli.Command {
-	return (
-		cli.command("desugar", "rewrite sources into the core forms their sugar is defined as")
-		.flag("c", "check", "report what is not already core and change nothing")
-		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. D103; repeatable").repeated())
-		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
-		.run(do_desugar)
-	)
-}
-
 # lsp takes no arguments and no flags. The protocol is the interface: an editor starts the
 # process, speaks JSON-RPC over its standard input and output, and stops it by closing them.
 pub fn lsp_cmd() -> cli.Command {
@@ -66,58 +54,8 @@ fn lsp_program(path: str, text: str) -> lsp.Program {
 	return lsp.program(paths, srcs)
 }
 
-fn do_desugar(c: cli.Ctx) -> int {
-	return run_desugar_check(c.args(), c.all("off")) if c.has("check")
-	run_desugar(c.args(), c.all("off"))
-	return 0
-}
-
 fn do_lint(c: cli.Ctx) -> int {
 	return run_lint(c.args(), c.has("strict"))
-}
-
-# run_desugar rewrites each source into the core forms its sugar is defined as. It is
-# `run_fmt` with the other pass, down to the bracket gate: desugar reads the same token
-# stream from the same lexer, so a file whose brackets do not close is one it would rewrite
-# from a shape that means nothing.
-#
-# It writes IN PLACE, like `zerg fmt`, because the thing that runs it is a gate over a
-# whole tree rather than a person over one file — `make desugar` copies the corpus and
-# desugars the copy. Undoing the sugar in a source somebody is keeping is not what this is
-# for, and the docs say so.
-fn run_desugar(files: list[str], off: list[str]) {
-	for f in files {
-		src := read_source(f)
-		raise f"`{f}` has unbalanced brackets, so it cannot be desugared — the file is left as it is" if not zerg.fmt_balanced(src)
-
-		out := zerg.desugar_src_off(src, off, f)
-		if out != src {
-			guard {
-				io.write_file(f, bytearray(out))
-			}
-			io.write(f + "\n")
-		}
-	}
-}
-
-# run_desugar_check is the question `make desugar`'s fixpoint gate asks: is there any sugar
-# left in this file. A desugared source that desugars again to something else would mean
-# one of these rules produces what another one rewrites, which is the one way a pass like
-# this can be wrong without any program behaving differently.
-fn run_desugar_check(files: list[str], off: list[str]) -> int {
-	mut bad := 0
-	for f in files {
-		src := read_source(f)
-		if not zerg.fmt_balanced(src) {
-			io.ewrite(f"{f}: unbalanced brackets, so it cannot be desugared\n")
-			bad = bad + 1
-		} else if zerg.desugar_src_off(src, off, f) != src {
-			io.ewrite(f"{f}: still holds sugar (run `zerg desugar`)\n")
-			bad = bad + 1
-		}
-	}
-	return 1 if bad > 0
-	return 0
 }
 
 # run_lint reports every finding in the loaded program and RETURNS a nonzero status when

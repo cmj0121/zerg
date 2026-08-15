@@ -398,6 +398,8 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_exe_path":   true,
 	"__zrt_getenv":     true,
 	"__zrt_has_env":    true,
+	"__zrt_set_env":    true,
+	"__zrt_del_env":    true,
 	"__zrt_isatty":     true,
 	"__zrt_exit":       true,
 	"__zrt_exists":     true,
@@ -663,6 +665,8 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_getenv(%s)", arg), true
 		case "__zrt_has_env":
 			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_del_env":
+			return fmt.Sprintf("zrt_del_env(%s)", arg), true
 		case "__zrt_isatty":
 			return fmt.Sprintf("zrt_isatty(%s)", arg), true
 		case "__zrt_exit":
@@ -673,6 +677,14 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_remove(%s)", arg), true
 		case "__zrt_trunc":
 			return fmt.Sprintf("zrt_trunc(%s)", arg), true
+		}
+	}
+	if len(n.Args) == 2 {
+		switch id.Name {
+		case "__zrt_set_env":
+			// void call used as a nil statement; both operands are borrowed str cells the
+			// runtime copies into `environ`, so the caller keeps ownership of each.
+			return fmt.Sprintf("zrt_set_env(%s, %s)", e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)), true
 		}
 	}
 	return "", false

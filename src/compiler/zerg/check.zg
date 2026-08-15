@@ -1416,7 +1416,7 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 # chk_intrinsic_params IS THE SET of compiler primitives, spelled as what each one TAKES. It
 # answers all three questions asked of that set — whether a `__zrt_…` name is one at all, how
 # many operands it takes, and what type each operand is — because an arity is this list's LENGTH
-# and two lists of the same 28 names is the drift this file refuses everywhere else.
+# and two lists of the same 31 names is the drift this file refuses everywhere else.
 #
 # THE FIVE NULLARY PRIMITIVES CANNOT BE TOLD FROM A NON-PRIMITIVE BY THIS LIST, since both take
 # nothing. They are named in chk_intrinsic_nullary and nowhere else, which is five names rather
@@ -1446,7 +1446,7 @@ fn chk_intrinsic_params(name: str) -> list[Ty] {
 	mut none: list[Ty] = []
 
 	return [Ty.TStr] if name == "__zrt_open" or name == "__zrt_open_write"
-	return [Ty.TStr] if name == "__zrt_getenv" or name == "__zrt_has_env"
+	return [Ty.TStr] if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_del_env"
 	return [Ty.TStr] if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
 
 	return [Ty.TInt] if name == "__zrt_read" or name == "__zrt_close" or name == "__zrt_isatty"
@@ -1455,6 +1455,8 @@ fn chk_intrinsic_params(name: str) -> list[Ty] {
 	return [Ty.TFloat] if name == "__zrt_trunc"
 
 	return [Ty.TList(Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn"
+
+	return [Ty.TStr, Ty.TStr] if name == "__zrt_set_env"
 
 	return [Ty.TInt, Ty.TStr] if name == "__zrt_write"
 	return [Ty.TInt, Ty.TList(Ty.TByte)] if name == "__zrt_write_bytes"

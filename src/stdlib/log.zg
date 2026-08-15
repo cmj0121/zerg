@@ -32,8 +32,8 @@
 # to a SINGLE `__zrt_write`. Nothing here calls `io.eprintln`, which is two.
 #
 # THIS MODULE IS ALSO THE TREE'S REFERENCE FOR PROCESS-WIDE MUTABLE STATE. The pattern, and
-# the rules that make it safe to copy, are written above the `unsafe { }` group at the foot of
-# this file.
+# the four rules that make it safe to copy, are written above the `unsafe { }` group at the
+# foot of this file.
 import (
 	"io"
 	"json"
@@ -446,8 +446,9 @@ impl Logger {
 	# THE `< 0` GUARD IS WHAT MAKES `OFF` SILENT, including for a line written AT `OFF`, which
 	# is the one case a threshold comparison alone gets wrong. See `rank`.
 	pub fn enabled(l: Level) -> bool {
-		return false if rank(this.lvl) < 0
-		return rank(l) >= rank(this.lvl)
+		floor := rank(this.lvl)
+		return false if floor < 0
+		return rank(l) >= floor
 	}
 
 	# with_str answers a copy carrying `k=v` on every line it writes from here on. It is what
@@ -726,83 +727,130 @@ fn needs_quotes(s: str) -> bool {
 # That is zerolog's shape, and the reason is that a component with its own level or its own
 # fields wants the first while everything else wants the second.
 #
-# ============================================================================================
+# ================================================================================================
 # THE PATTERN — process-wide mutable state in Zerg.
 #
-# This is the tree's reference for a global somebody has to be able to REPLACE while the
-# program is running. Everything needed to copy it correctly is in this comment and the forty
-# lines under it; nothing else in this module has to be read.
+# This is the tree's reference for a global that has to be REPLACEABLE once the program is
+# running. Everything needed to copy it correctly is in this comment; nothing else in this
+# module has to be read. It is the only module-level `unsafe { mut … }` in the shipping tree,
+# and the normative rule it is an exception to is in docs/runtime/package.md.
 #
 #     unsafe {
-#         mut process := new()                 # 1. one cell, private, already valid
+#         mut log_cell := new()                # 1. one cell, private, named, already valid
 #     }
 #
 #     pub fn install(lg: Logger) {             # 2. one writer, taking a value already built
-#         process = lg
+#         log_cell = lg
 #     }
 #
 #     pub fn info() -> Entry {                 # 3. every reader, one line onto the instance
-#         return process.at_level(Level.INFO)
+#         return log_cell.info()
 #     }
 #
-# 1. ONE CELL, MODULE-PRIVATE, AND ALREADY VALID.
+# 1. ONE CELL, MODULE-PRIVATE, ALREADY VALID — AND NAMED AFTER THE MODULE.
 #
-#    A bare `mut` at module level is `E358 the top-level binding `level` may not be `mut`
-#    outside a module-level `unsafe { … }` group — module state is immutable, and shared
+#    A bare `mut` at module level is refused: `E358 the top-level binding `level` may not be
+#    `mut` outside a module-level `unsafe { … }` group — module state is immutable, and shared
 #    mutable state travels by value or through channels`. Inside the group it is allowed, and
-#    `pub` on it is refused in turn: `E484 the mutable global `process` may not be `pub` — a
+#    `pub` on it is refused in turn: `E484 the mutable global `log_cell` may not be `pub` — a
 #    module-level `unsafe { … }` group is one module's bargain with its own author`. So
 #    "configure by function" is not the RECOMMENDED way here, it is the ONLY way the language
-#    permits. Nothing is left for a reviewer to remember.
+#    permits, and nothing is left for a reviewer to remember.
 #
-#    IT IS INITIALISED AT ITS DECLARATION, by the same constructor a caller would use. There
-#    is therefore no before-install state and no "has anyone configured this yet" to get
-#    wrong: a program that never calls `install` logs at the default, and reading the cell is
-#    total on the first line of `main`.
+#    IT IS INITIALISED AT ITS DECLARATION, by the same PUBLIC constructor a caller uses. There
+#    is then no before-install state and no "has anyone configured this yet" to get wrong: a
+#    program that never calls `install` logs at the default, reading the cell is total on the
+#    first line of `main`, and a test restores the default by REBUILDING it — which is why no
+#    `current()` is needed to have a suite.
+#
+#    THE INITIALISER MUST BE TOTAL, and this is the constraint the sentence above is really
+#    making. It runs at module init, before `main`, where there is no `guard` and no place to
+#    report from: a cell whose constructor RAISES kills the program with a bare
+#    `IOError: cannot open file` and exit 1, before the line in `main` that would have
+#    installed a good value can run — measured. If your constructor can fail, initialise the
+#    cell with the default and do the fallible construction in `main`, under a `guard`, and
+#    `install` only what came back.
+#
+#    AND THE ORDER OF WHAT IT READS IS A SILENT TRAP. A top-level `const` may call a function,
+#    and a `const` reached THROUGH such a call is not yet assigned if it is declared later:
+#    `const A := mk()` above `const B := "x"`, with `mk()` reading `B`, gives the ZERO value
+#    with no diagnostic at all — an empty string in the probe that measured it, and a SEGV
+#    (exit 139) when the same shape is moved inside this module. A compiler defect worth
+#    reporting. What defends this module is not the comment: `NO_COLOR_UNSET` is declared above
+#    the `ENV_*` consts that read it, and `scripts/log-check.sh` fails loudly if that is ever
+#    swapped — measured by swapping it.
+#
+#    NAME THE CELL AFTER THE MODULE — `log_cell`, `settings_cell` — and not `process` or
+#    `state`. This compiler flattens every module into one namespace, so two modules that copy
+#    this pattern and both name their cell `process` cannot be linked, PRIVATE OR NOT:
+#    `E706 … both define `process` — this compiler flattens every module into one namespace`.
+#    Measured with a second module built on this shape.
 #
 # 2. ONE WRITER, AND IT TAKES A VALUE THAT IS ALREADY BUILT.
 #
 #    This replaced a `set_level` / `set_format` / `set_colour` / `set_sink` family, and the
-#    replacement is a DELETION rather than a rename: the module already had four pure
-#    builders, so the setters were a second way to say the same thing that happened to mutate
-#    shared state four times instead of once. `install(new().level(…).format(…))` assembles
-#    the value off to one side and stores it once — four windows for a reader to see a
-#    half-configured logger become one.
+#    replacement is a DELETION rather than a rename: the module already had four pure builders,
+#    so the setters were a second way to say the same thing that happened to mutate shared
+#    state four times instead of once. `install(new().level(…).format(…))` assembles the value
+#    off to one side and stores it once — four windows for a reader to see a half-configured
+#    logger become one. The rule that keeps it one writer is not visible in the source, so
+#    `scripts/log-check.sh` reads this file and asserts it: every mention of the cell is the
+#    declaration, that one assignment, or a `return log_cell.…` delegation.
 #
 #    THE NAME IS `install` AND NOT `level`, because `level` already means *derive a logger at
 #    this level*, and one word may not be pure on an instance and effectful on the module.
 #    (`enabled` lives in both places precisely because it means the same thing in both.)
+#    Note that the writer's name is program-global too, by `E705` rather than `E706`: a second
+#    module cannot also call its writer `install`, so this one is a word `log` is spending.
 #
-#    THERE IS NO `current()`. A `current().level(…).install()` interface would read as
-#    mid-flight reconfiguration, and rule 4 is why the cell is not safe for that. Not offering
-#    a way to start from the current value is what makes configuring read as the startup act
-#    it is.
+#    THERE IS NO `current()`. A `current().level(…)` interface would read as mid-flight
+#    reconfiguration, and rule 4 is why the cell is not safe for that. Not offering a way to
+#    start from the current value is what makes configuring read as the startup act it is.
 #
 # 3. THE GLOBAL IS AN INSTANCE, NEVER A SECOND CODE PATH.
 #
 #    Every public function below is one line that reaches the cell and calls a method that
-#    already exists. There is exactly one level check, one builder and one writer in this
-#    module. A global that grew its own comparison would be a second logger drifting from the
-#    first, which is the argument that keeps one JSON escaper in this tree.
+#    already exists — `log_cell.info()`, not `log_cell.at_level(Level.INFO)`, so the level a
+#    name means is written once. There is exactly one level check, one builder and one writer
+#    in this module. A global that grew its own comparison would be a second logger drifting
+#    from the first, which is the argument that keeps one JSON escaper in this tree.
+#
+#    THE RULE ASSUMES THE GLOBAL IS AN INSTANCE OF A TYPE THAT ALREADY HAS THE API. For a
+#    global that is a bare `int` or a `map`, there is no instance to delegate to and rule 3
+#    says nothing; and for one whose whole point is being MUTATED as the program runs — a
+#    counter, a registry — this pattern does not apply at all. That case wants one owning
+#    coroutine and a channel, which is what `E358`'s own message points at.
 #
 # 4. WHAT IT COSTS, WITHOUT ROUNDING IT UP.
 #
-#    A `Logger` holds a `list` and a `Sink`, so `process = lg` is SEVERAL machine stores and
+#    A `Logger` holds a `list` and a `Sink`, so `log_cell = lg` is SEVERAL machine stores and
 #    not one. GUARANTEED: nothing whatever about a read that runs while `install` runs — a
-#    reader can see this level with that sink, or a field list mid-swap. This project has
-#    found four real races with `ZRT_SEED` and `REPS 150`, so that is measured behaviour and
-#    not a theoretical caveat.
+#    reader can see this level with that sink, or a field list mid-swap. This project has found
+#    four real races with `ZRT_SEED` and `REPS 150`, so that is measured behaviour and not a
+#    theoretical caveat.
 #
 #    THE RULE, WHICH IS A RULE AND NOT A GUARANTEE: CONFIGURE AT STARTUP, FROM ONE COROUTINE,
 #    THEN READ. Under it every read happens after the only write and there is no race left to
 #    have. `log.new()` is the answer for anything that must change while the program runs — an
 #    instance is a value, and a value handed to a component races with nobody.
 #
-# WHEN NOT TO COPY THIS. A module-level `const` may CALL A FUNCTION — `const P := mk()`
-# compiles — so a global that never changes after startup needs no `unsafe` at all and should
-# not have one. This shape is only for a value that must be REPLACED once the program is
-# running, and `log` is that case only because a level has to be settable from `main` in a
-# program whose functions were handed no logger.
+#    NO GATE HOLDS THIS ONE, and saying so is part of stating it. A stress case was considered
+#    and is not shipped: coroutines here are cooperative and there is no parking point inside
+#    `install`, so many-readers-one-installer comes back clean whether the property holds or
+#    not — the same reason scripts/log-check.sh gives for asserting "one write per line" over
+#    the source instead. A gate that cannot fail is worse than an absent one.
+#
+# INSTALLING TWICE IS LEGAL AND THE LAST ONE WINS, silently. It is the pattern's one silent
+# failure mode: two `install` calls in two startup helpers leave the second, and nothing
+# anywhere says the first happened. Refusing a second install was considered and rejected — a
+# test suite installs per test, and a rule that only `main` may configure is not one the
+# language can check.
+#
+# WHEN NOT TO COPY THIS AT ALL. A module-level `const` may CALL A FUNCTION — `const P := mk()`
+# compiles — so a global that never changes after startup needs no `unsafe`, and should not
+# have one. This shape is only for a value that must be REPLACED once the program is running,
+# and `log` is that case only because a level has to be settable from `main` in a program whose
+# functions were handed no logger.
 #
 # WHAT WOULD TAKE THE `unsafe` AWAY, and neither is a rewrite of this module:
 #
@@ -812,51 +860,52 @@ fn needs_quotes(s: str) -> bool {
 #     generic structs and on `Atomic[T]` reaching a struct payload.
 #   - a language in which a whole struct store is one atomic operation, which would make
 #     rule 4's window close rather than merely be avoided.
-# ============================================================================================
+# ================================================================================================
 unsafe {
-	mut process := new()
+	mut log_cell := new()
 }
 
 # install replaces the global logger, and it is the only thing in this module that writes the
-# cell. Call it in `main`, before anything else runs; see rule 4 above for why "before".
+# cell. Call it in `main`, before anything else runs; rule 4 above is why "before".
 pub fn install(lg: Logger) {
-	process = lg
+	log_cell = lg
 }
 
 # enabled is the global's level check, and it is public for the reason the method is: a caller
 # holding a value that costs something to compute needs to ask before it computes one.
 pub fn enabled(lvl: Level) -> bool {
-	return process.enabled(lvl)
+	return log_cell.enabled(lvl)
 }
 
 # at_level begins a line on the global logger at any level.
 pub fn at_level(lvl: Level) -> Entry {
-	return process.at_level(lvl)
+	return log_cell.at_level(lvl)
 }
 
 pub fn trace() -> Entry {
-	return process.at_level(Level.TRACE)
+	return log_cell.trace()
 }
 
 # debug is a FREE function and can therefore carry the level's own name — `debug` is reserved
-# only as a METHOD (see `Logger.at_level` above).
+# only as a METHOD (see `Logger.at_level` above). It is also the one global level function with
+# no method to delegate to, which is why it is the only one that names its level here.
 pub fn debug() -> Entry {
-	return process.at_level(Level.DEBUG)
+	return log_cell.at_level(Level.DEBUG)
 }
 
 pub fn info() -> Entry {
-	return process.at_level(Level.INFO)
+	return log_cell.info()
 }
 
 pub fn warn() -> Entry {
-	return process.at_level(Level.WARN)
+	return log_cell.warn()
 }
 
 pub fn error() -> Entry {
-	return process.at_level(Level.ERROR)
+	return log_cell.error()
 }
 
 # fatal writes the line and exits 1, on the global logger.
 pub fn fatal() -> Entry {
-	return process.at_level(Level.FATAL)
+	return log_cell.fatal()
 }

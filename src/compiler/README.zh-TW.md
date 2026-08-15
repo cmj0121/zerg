@@ -22,7 +22,22 @@
 
 ```text
 src/compiler/
-  zergc.zg        # driver：參數解析、模組載入、呼叫 cc
+  zergc.zg        # 宣告出來的命令列：`main`、`root`、版本橫幅
+  cmd/            # 每個子命令「做什麼」——一個目錄模組
+    cmd.zg        # 這個模組自己的標頭，不宣告任何東西（Go 的 `doc.go`）
+    build.zg      # `zerg build`——pipeline，以及產物寫到哪裡
+    test.zg       # `zerg test`——執行、每個 package 一個行程、回報
+    test_pkg.zg   #   哪些目錄有測試，以及各自由哪些檔案組成
+    test_fixture.zg #  一次 package 執行的計畫：fixture、測試、順序
+    test_driver.zg  #  那份計畫被編譯成的 driver 原始碼
+    fmt.zg        # `zerg fmt`
+    desugar.zg    # `zerg desugar`
+    lint.zg       # `zerg lint`
+    lsp_cmd.zg    # `zerg lsp`（不是 `lsp.zg`：那會遮蔽 `import "lsp"`）
+    diag.zg       # 共用：詞法關卡與診斷算繪
+    source.zg     # 共用：讀一份原始碼，並解析它 import 什麼
+    layout.zg     # 共用：東西在哪裡，以及 cc 用什麼參數呼叫
+    unit.zg       # 共用：一個 unit、它的快取 object，以及連結
   zerg/           # 編譯器函式庫——一個目錄模組，共用同一個 scope
     token.zg      # Kind enum + Token 型別
     lexer.zg      # 原始碼文字 -> token 串（可要求保留註解）
@@ -31,7 +46,13 @@ src/compiler/
     emit.zg       # AST -> C，含 emit 所需的最小型別檢查
     fmt.zg        # token -> 標準形式的原始碼
     lint.zg       # AST -> 發現
+  lsp/            # language server——自成一個模組
 ```
+
+`cmd` 裡標成**共用**的那四個檔案之所以在那裡，是因為不只一個子命令會用到它們，而且「是哪些」是在 call graph 上量出來的，
+不是猜的：`diag`、`layout`、`unit` 是 `build` 與 `test` 的（`lint` 也讀前兩個），`source` 則是這三個再加上 `lsp`。
+它們放在命令旁邊而不是放進其中任何一個裡面——一個目錄就是一個模組，所以沒有任何東西為了共用而變成 `pub`，
+也就沒有任何東西變成 `pub` 之後可能跟第二個模組相撞（`E705`）。
 
 ## 怎麼使用
 
@@ -62,8 +83,8 @@ zerg --help             # 命令、旗標，以及下面那些環境變數
 事實逼出來的：(1) `import "x"` 解析到的是一個**目錄模組**，它的多個檔案會攤平進同一個共用
 scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的那些 enum；但
 (2) **enum 的 variant 跨不過模組邊界**（`token.Fn` 會被拒絕）。因此函式庫必須住在**一個**目錄
-模組（`zerg/`）裡讓那些檔案共用 enum，而 `zergc.zg` 只是一層薄薄的 driver，永遠只呼叫該模組的
-`pub` 函式——從不自己建構 variant。當初 `src/compiler/zerg/` 這個直覺是對的。
+模組（`zerg/`）裡讓那些檔案共用 enum，而 driver——`zergc.zg` 與 `cmd` 模組——永遠只呼叫該模組的
+`pub` 函式，從不自己建構 variant。當初 `src/compiler/zerg/` 這個直覺是對的。
 
 ## 一次 build 是怎麼組起來的
 

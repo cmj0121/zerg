@@ -356,6 +356,14 @@ else is a spec a type **opts into**, a generic bound gating on it:
   `impl Eq`; a channel or `fn` field compares by identity. A type with **no `Eq` impl cannot be
   compared** — `==` on it is a compile error, never a silent structural default.
 
+  > **[not yet]** A **container** cannot gain one at all, which is the rule met from a direction it has no
+  > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E445 NotImplemented: `==` on a
+  > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
+  > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
+  > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
+  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E449`,
+  > one operator over.
+
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
 too narrow to earn an operator. Equality, where a type opts into it, is the **structural** `Eq`. The

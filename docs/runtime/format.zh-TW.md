@@ -20,9 +20,15 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > **狀態。** 渲染一個**純量**、一個 **`str`**，或一個 **`Err`**——透過純 `{x}` 洞、`print`，或 f-string——可
 > 用，而且任何宣告了 override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。一個 `Err`
 > 渲染為它的**訊息**；它的 kind 是拿來比較的（`e is IOError`），不是拿來讀出的。**沒有 override 的複合值**
-> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日格式洞裡這樣的複合值會在**編譯期被拒
-> 絕**，所以「每個值都能渲染」對純量、字串與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構
-> 化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
+> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日這樣的複合值會在**編譯期被拒絕**，而且
+> 是兩個門口兩個代碼——_E449 NotImplemented: rendering a `P` as text — a composite needs the structural
+> `Display` this compiler does not generate; render its fields_ 用於 `print`、格式洞與 `str(x)`，而
+> _E417 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。所以「每個值都能渲染」
+> 對純量、字串、錯誤與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切
+> 拼法**尚未被釘定**（[not yet]）。
+>
+> 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E445`
+> （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

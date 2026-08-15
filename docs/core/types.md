@@ -322,8 +322,9 @@ result is **first-class** — stored, passed, or destructured — so multiple re
 mechanism ([Pattern matching](../code/control-flow.md)).
 
 > **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
-> is refused by name — the parts-inheritance rule above is specified and the derivation over an unnamed
-> form is unbuilt (the shipped message still blames the missing declaration).
+> is _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
+> derivation over an unnamed form is what is missing.
 > **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E205 expected
 > a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
 > name (the parenthesized `(a, b) := two()` does say it, as `E238`). Either way a tuple result is stored

@@ -279,6 +279,13 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
   比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
 
+  > **[not yet]** 一個**容器**根本取得不到它,而這正是那條規則從一個它答不上來的方向被碰到:兩個 `list`、兩個
+  > `map` 或兩個 tuple 的 `xs == ys` 是 _E445 NotImplemented: `==` on a `list[int]` — structural equality over
+  > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
+  > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
+  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E449` 的是
+  > 同一個洞,只差一個運算子。
+
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
 **`is`** 關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體

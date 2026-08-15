@@ -52,6 +52,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
 | [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
 | [`json`](#json)       | `import "json"`    | JSON 的讀與寫,只有一份跳脫實作     |
+| [`log`](#log)         | `import "log"`     | 結構化 logging,寫成鏈式 builder    |
 | [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -222,6 +223,80 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 檢查密碼。`make sha256` 拿標準的 known-answer vectors 與系統工具(隨機輸入)來釘它——oracle 對它無效,因為兩個
 編譯器跑的是同一份原始碼。
 
+## `log`
+
+結構化 logging，寫成一條**鏈式 builder**：
+
+```zerg
+log.info().str("file", path).int("line", n).msg("compiling")
+```
+
+這個形狀不是流行，而是**在這個語言裡**唯一行得通的那一個。沒有 varargs，所以一個欄位就是一次呼叫；沒有 `any`，
+所以 `str` 收 `str`、`int` 收 `int`；沒有 generic struct，所以 builder 是一個具體型別。任何其他形狀都至少要等其中兩件。
+
+它同時也是**延遲求值**的答案。等級關掉時 `log.debug()` 回傳一個**死的** entry：每個欄位方法立刻返回、什麼都不格式化、
+什麼都不配置，`msg` 也不寫。呼叫端交出的是有型別的值，而不是自己先組好的字串——所以被關掉的那一行本來要做的工，
+是「從未發生」而不是「做完丟掉」。
+
+還是要付的是**引數的求值**：`.str("dump", expensive())` 裡的 `expensive()` 兩種情況都會跑，因為 Zerg 在呼叫前先求值。
+這正是 `enabled` 必須公開的原因：
+
+```zerg
+if log.enabled(log.DEBUG) {
+ log.debug().str("dump", expensive()).msg("state")
+}
+```
+
+### 兩個介面
+
+有一個**全域 logger**，用函式設定、不需要任何管線；也有一個**建構子**讓你自己持有並傳遞。它們不是兩份實作：全域的那個
+**就是**一個 instance，放在這個模組自己的 cell 裡——所以每個欄位方法、每次等級判斷、每個 writer 都只存在一份。
+
+| 函式                                   | 摘要                                    |
+| -------------------------------------- | --------------------------------------- |
+| `new() -> Logger`                      | 一個 `INFO` 等級、寫到標準錯誤的 logger |
+| `set_level(n: int)`                    | 設定全域 logger                         |
+| `set_sink(sk: Sink)`                   | 全域 logger 的行要送去哪裡              |
+| `enabled(lvl: int) -> bool`            | 全域在 `lvl` 會不會寫                   |
+| `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有  |
+| `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2      |
+| `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel          |
+
+`Logger` 有 `level(n)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與 `enabled(lvl)`，每一個都回傳**複本**
+——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(lvl)` 與等級方法。`Entry` 有 `str`、`int`、
+`bool`、`dur`、`err`，以及終結用的 `msg`。
+
+**沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
+（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕
+一個叫 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、
+而且被接受；在 instance 上第六個等級寫成 `lg.at_level(log.DEBUG)`，不為一個已經有名字的等級再發明一個。
+它叫 `at_level` 而不是 `at`，是因為自由的 `pub at` 會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的
+`at`,而 `pub` 名字沒有 package 可以讓它唯一。
+
+### 等級
+
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`，以及在它們之上的 `OFF`。它們是 `int` 常數而不是 enum，因為 enum 的
+variant 不能在它自己的模組之外建構，那樣 `log.set_level(log.DEBUG)` 根本寫不出來。
+
+`fatal` 寫完它那一行之後**以 1 結束程式**。它不是 panic——Zerg 用 `raise` 說那件事，而一個跟 error taxonomy 競爭的
+logger 會讓程式有兩種互不相干的結束方式。而且**即使在那一行不會被寫出的等級**它也照樣結束：把 logger 調安靜改變的是
+「回報了什麼」，永遠不是「做了什麼」。
+
+### 一行就是一次 write
+
+整行（含換行）交給單一一次 `__zrt_write`。這不是細節：`zrt_report` 曾經把 prefix 與訊息拆成兩次 write，而一支壓力測試
+在 24000 行裡找到 **830 行**帶著另一種 kind 的訊息。`scripts/log-check.sh` 用 24 條 coroutine 各寫 500 行來釘住這件事。
+
+不加引號就有歧義的值——空字串，或帶有空白、引號、反斜線、`=`、控制字元的——會走 `json.encode`，也就是這棵樹裡唯一的
+跳脫實作。所以值裡的換行是被跳脫而不是被寫出來的，一筆記錄仍然是一行。
+
+### 目的地
+
+`Sink` 是一個**帶著 mode 的值**，不是 spec 也不是 closure：spec 需要 `#[dyn]`（non-`#[dyn]` 的 provided method 有一個
+已知延後的缺口），而 closure 只要提到被 import 的模組就是 `E735`。`to_chan` 是讓 logger 可測的關鍵——`write(2)` 寫出去
+就讀不回來了，所以這個模組自己的 suite 是把那些位元組收下來斷言的。channel sink 需要事先有足夠的容量，因為送進滿的
+channel 會把送出的 coroutine 停住。
+
 ## `time`
 
 時鐘、日曆與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
@@ -326,7 +401,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十四個模組中唯一如此的一個。`Atomic[T]` 是 generic
+> **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十五個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
 > ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
 > 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。

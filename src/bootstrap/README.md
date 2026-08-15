@@ -442,6 +442,22 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `src/stdlib` writes one, deliberately, since the seed compiles that tree; the ERROR KIND it
   raises (`AssertionError`, 11) is mirrored here all the same, because the kind numbering is an
   ABI shared with the runtime and a table that stopped at 10 would let a later kind take 11.
+- **A MODULE-LEVEL `unsafe { … }` GROUP IS NOT A FORM THE SEED PARSES, so `import "log"` fails
+  in a seed-built program.** It is the reverse of every other entry here: not the seed
+  accepting what `zerg` refuses, but the seed refusing what `zerg` accepts — and the refusal is
+  a parse error inside the standard library rather than anything about the program that asked.
+  What comes back is _module "log": log.zg failed to parse: expected an expression, found
+  'unsafe'_, at the importer's line and not at the group.
+
+  The group is `log`'s global logger, and it cannot be written any other way: module state is
+  immutable (`E358`) and a system-wide logger is module state by definition. The rule the rest
+  of `src/stdlib` follows — stay inside the subset the seed reads, which is why nothing there
+  writes `assert` — is broken by exactly one module, deliberately, and only that module. Every
+  other stdlib module still builds under both compilers, and nothing the seed itself compiles
+  imports this one.
+
+  A program built with `bin/zerg0` therefore cannot log. A program built with `bin/zerg` can,
+  which is every program this toolchain produces for anybody but its own bootstrap.
 
 ## Changing the seed
 

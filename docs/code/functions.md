@@ -58,6 +58,34 @@ untracked **by design** — Zerg is procedural-first here — not by omission.
 The mutability of the binding that _holds_ a function is the ordinary per-instance axis — `mut f := …`
 is rebindable, `f := …` is not — and is orthogonal to everything above.
 
+## Naming: a property, and its two writes
+
+A **convention**, not a rule the compiler enforces — the language has no opinion about identifiers beyond
+`GRAMMAR`. It is written down because it had become a coincidence that held everywhere in this tree and
+was stated nowhere, and a convention nobody can look up is one the next contributor breaks by accident.
+
+> **`xxx` reads, `set_xxx` writes, `del_xxx` removes.**
+
+The test that makes it decidable, and the reason it is a short rule rather than a taste:
+
+> **The trio applies to a PROPERTY — something with a getter, named for the thing rather than for the act.**
+
+Both halves of that sentence do work.
+
+- **`os.env` has a getter**, and it is a noun: `env(key)` names what it answers. So the environment is a
+  property, and its writes are `set_env` and `del_env` — not `put_env`, not `unset_env`, not `env_set`.
+- **`log` deliberately has no getter** for its installed logger. `current()` was proposed and refused: it
+  would read as mid-flight reconfiguration of a cell that is not safe for it. With no getter there is no
+  property, so `install` is the name of an **act** and does not become `set_logger`.
+- **`atomic.load` / `atomic.store` name the act, not the thing.** A cell's contents have no name here —
+  there is no `atomic.value` — so there is no `xxx` for `set_` to prefix, and the pair keeps the vocabulary
+  every atomic in every language uses. A getter whose name is a verb is not a property accessor.
+
+What is **not** covered, and deliberately: a **builder** method that returns a modified copy rather than
+writing to its receiver (`log.Logger.level(l)`, `cli.Command.version(v)`) is named for the field it fills
+and takes no prefix. It is not a setter — the receiver is unchanged — so calling it `set_level` would claim
+a mutation that does not happen.
+
 ## Default parameters & named arguments
 
 Zerg has **no overloading** — one name is one function — so the flexibility overloading usually buys comes
@@ -122,14 +150,11 @@ refcount-bumped, and a **non-POD immutable value** is **retained into the closur
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
 carries its own captures and can never dangle.
 
-> **[deviation]** The environment is **never freed**. This is not a form the compiler turns away — the
-> closure compiles and runs, and the emitted C holds one `zrt_alloc` per construction and no matching free
-> anywhere in the translation unit — so it is a program that behaves differently from what is written here
-> rather than a debt with a name. Every other value this implementation allocates is released at the scope
-> that made it; a closure's cannot be by that rule, because the closure may outlive that scope, which is
-> what closing over a value is for. Freeing it correctly needs the fn value to carry copy and drop
-> functions of its own, which is a change to the type rather than to the lambda. A program that makes
-> closures in a loop grows.
+The environment is **refcounted**, not scope-owned — that is the one place the copy rule above is realised by
+the implementation rather than by the scope. A closure may outlive the scope that made it, so the fn value
+counts as a holder of its environment and the last holder frees it, tearing the captures down in reverse
+declaration order like any other aggregate. A named function held as a value has no environment at all, and
+costs nothing for the rule.
 
 Because every capture is immutable, retaining versus cloning is unobservable. Equivalently:
 
@@ -166,10 +191,11 @@ for x in xs {
 
 > **[not yet]** The coroutine spelling of that loop is not available. A closure **literal** is not one of
 > `spawn`'s three callee forms — `spawn fn () { … }()` is _E222 NotImplemented: calling fn-expr_ — and
-> `spawn work()` on the **named** closure above is worse: it emits a call to a C function nobody declared
-> and the build dies inside `cc` (**[deviation]**, since that is the one outcome the standing rule forbids).
-> `spawn handle(x)` is the form that works, and it snapshots its argument at the `spawn`, which gets the
-> same per-iteration value by the other route. See [Coroutines & Channels](coroutine.md).
+> `spawn work()` on the **named** closure above is _E744_, with a place: both keywords lower to a C thunk
+> whose body names a symbol, and a function value has none. (It used to emit `zg_work()` into that thunk
+> and die inside `cc`, which is the one outcome the standing rule forbids.) `spawn handle(x)` is the form
+> that works, and it snapshots its argument at the `spawn`, which gets the same per-iteration value by the
+> other route. See [Coroutines & Channels](coroutine.md).
 
 And because captures are always immutable copies, "captured the variable or the value?" has no
 observable answer — the captured value can never change, so the question disappears.

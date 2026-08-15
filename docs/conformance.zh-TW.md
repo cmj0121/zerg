@@ -101,38 +101,74 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 格式不良的程式**應該**在一次執行中報出所有找得到的診斷，而不是停在第一個 —— `zerg` 對它所檢查的規則就是如
 此；而一個拒絕會在第一個就結束整趟執行，那正是兩種形狀的另一半意義。
 
+診斷只能說出**原始碼裡有的東西**。實作可以綁定屬於自己的名字——`zerg` 就會，為的是把 `assert` 的運算元留住，
+好讓失敗時報出條件當下真正看到的值——但沒有任何規則可以引用其中之一：讀者被告知一個在他們打得開的檔案裡都
+找不到的綁定，等於拿到一個名字卻無處可去。這就是下方那條「絕不由生成的、沒人寫過的程式碼來回答」的常設規則
+再往裡一層——一個沒人打得開的位置，和一個沒人找得到的名字。`scripts/reject-check.sh` 與
+`scripts/refuse-check.sh` 對它們持有的每一個案例都斷言這一點。
+
 > **[deviation]** 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒
-> 絕。走檢查通道回報的規則永遠兩者俱全。用 `raise` 回報的規則，只有在它 raise 的字串本身寫上碼時才有碼、只有
-> 在該處自己接上後綴時才有位置——於是 parser 與 emitter 的拒絕就此分成兩半，而少數幾條**真正在檢查**的規則也
-> 跟著掉到分界線錯的那一邊。
+> 絕。三個回答**程式**問題的階段如今都有通道了——check.zg 的 `chk_at`、parser.zg 的 `p_diag`、emit.zg 的
+> `c_diag`——每一條都把碼當成引數收下、位置自己讀，所以一處不可能帶了其中一個卻忘掉另一個。本 deviation 剩下的
+> 是 **lexer**，它的兩處拒絕兩者皆無。
 >
 > ---
 >
-> 今日量測：在由 `raise` 回報的碼裡，約四分之三不接位置——`E210`、`E217`、`E223`、`E236`、`E446`、`E465` 這一
-> 族——其餘則接（`E224`、`E244`、`E285`、`E286`、`E404`、`E454`、`E247`–`E256` 這一組巢狀家族、`E483`）。約有
-> **七十**處診斷完全沒有**碼**，遠多於本段曾經點名的那兩則：它們就是每一個訊息寫成散文、而非以 `E###` 開頭的
-> `raise`，從 parser 的萬用兜底 _NotImplemented: `X` is not an expression this compiler reads_，一路經過
-> emitter 的 carrier、method、module 與 match 幾個家族，到 lexer 的 _f-string: a bare '}' is not text_。
-> `scripts/error-codes-check.sh` 看不見它們：它比對的是已經存在的碼與 gate、catalogue 三者，而一條沒有碼的規則
-> 在三者裡都不存在。
+> 今日量測。**parser 這一半做完了。** 它 **103** 處 raise 中，除了一處以外都走它的通道。九條原本完全沒有碼的規則——包括萬用兜
+> 底 _`X` is not an expression this compiler reads_——拿到了 `E601`–`E609`，每一條各配一個 gate 案例與一列
+> catalogue。剩下一處 raise 刻意兩者皆無：`p_impossible`，那是任何程式都到不了的分支，給它一個碼等於給出一個沒
+> 有任何案例能斷言的身分。那次改動看得見的形狀是：`scripts/reject-check.sh` 退掉 **31** 個 `no-place` 標記，而
+> `reject-fuzz` 的 `write-immutable` 上限，也就是 parser 最後一處沒有位置的拒絕，降到了零。
+>
+> **emitter 這一半也做完了。** 它原本有 **126** 個 raise 語句，其中 **76** 個以碼開頭、**13** 個接上位置；如今
+> 的 **123** 個全部走 `c_diag` / `c_diag_at`，少掉的三個都是不再 raise 的規則——struct 與 enum 現在各自記錄自己
+> 的位置，所以重複宣告和另外四種宣告一樣走檢查通道；而「subject 拿不到的 variant」那兩條（`E456`、`E457`）也
+> 因為同一個理由改成由檢查通道記錄。四十三條原本沒有碼的規則拿到了 `E701`–`E743`，每一條各
+> 配一個 gate 案例與一列 catalogue；`E4xx` 收在 `E498`、`E499` 未發出就退場，和 parser 關掉 `E2xx` 的做法一模一
+> 樣。**這裡沒有任何一處 raise 是例外。** 曾有兩處被寫成 ICE，理由是「唯一能走到它的形式已被 parser 擋下」，而
+> 兩個理由都錯了——`p_builtin_type_ctor` 把六個名字排除在 `E275` 之外，其中四個不是保留字，所以
+> `fn set[T](…)` 與 `set[int, str](1)` 走得到那條 arity 規則；而 `1..=nil` 是把裸 `..=` 從前留下的形狀親手寫出
+> 來。一條不可達的規則必須被證明不可達，而這兩條都沒有。這次改動看得見的形狀是：再退掉 **18** 個 `no-place`
+> 標記，而 `scripts/refuse-check.sh` 的 `place` 標記整個消失了——那裡的每一個 `zerg` 案例現在都被斷言帶著位置，
+> 因為已經沒有可以不帶的案例了。
+>
+> **剩下的是 lexer**，共兩處：_f-string: unterminated literal_ 與 _f-string: a bare '}' is not text_。兩者都是
+> 從驅動器 raise 的，而不是從某個有通道的階段。
+>
+> `scripts/error-codes-check.sh` 靠比對三個集合是看不見一條沒有碼的規則的：它比對的是已經存在的碼與 gate、
+> catalogue 三者，而一條沒有碼的規則在三者裡都不存在。它改用另一個問題同時看見 parser 與 emitter 這兩半——這兩
+> 個檔案裡若有一個 `raise` 自己寫訊息、而不是向通道要一則，就會被指名報出來——這個斷言正是讓通道不會被一處一處
+> 繞過去的東西。它是一道棘輪、不是一個證明：它看見的是字串**字面量**，所以先把訊息接到一個變數上就會通過，而且
+> 它必須放行 `raise anything(…)`，因為這兩個檔案裡的每一處 raise 的都是一個呼叫。
 >
 > ---
 >
-> **檢查的規則並不豁免**，這正是舊文字說反了的地方。有兩條 `zerg` 真正**檢查**的規則回報時沒有位置：常數環
-> （_these constants depend on each other and none can be given a value first_），它連碼也沒有；以及 `E382`，
-> 一個名字被宣告兩次，它有碼而沒有位置，因為 struct 與 enum 是在任何東西記下位置之前就被登記的。
+> **檢查的規則並不豁免**，這正是舊文字說反了的地方，而原本被指名的那兩條都已經搬走了。常數環（`E732`）回報時
+> 沒有位置也沒有碼；如今它以自己的碼開頭，並指向第一個拿不到值的常數。`E382`——一個名字被宣告兩次——原本是有些
+> 宣告形式帶位置、有些不帶：重複的 `type A = …` 帶位置，重複的 `struct` 不帶，因為 struct 與 enum 是在任何東西
+> 記下位置之前就被登記的。兩者如今都帶著宣告自己的行號，而那條在 raise 與記錄之間做選擇的通道，也隨著它存在的
+> 理由一起消失了。
 >
 > 還有兩條曾經在這份名單上、現在不在了：`` `x` is used after del `` 與它 on-some-paths 的手足，如今是 `E297`
 > 與 `E298`。規則本身沒有任何改變——它們從 `raise` 搬到了檢查通道，而那正是唯一決定這個問題的東西，
 > 這一搬就是整個修正。
 >
 > `zerg` 記錄的位置是**逐語句**的，所以欄位指的是語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到
-> 那個 token。
+> 那個 token。跑在**宣告**上的規則——欄位的預設值、重複的 variant 名字、被宣告兩次的方法——改為帶宣告自己的位
+> 置，因為它們跑在任何語句被產出之前，那時標記還沒有東西可指。
 
 本專案要求自己遵守的規則比上面幾段更強，而且值得單獨寫出來——因為它是本規格裡每一個發現被衡量時所用的尺：
 
 **一個形式要嘛被正確下降、要嘛被具名拒絕。** 它永遠不是崩潰、永遠不是靜默的錯誤答案，也永遠不是 C 編譯器或
 linker 對著沒人寫過的產生碼所報的錯。
+
+> **[deviation]** 在一個**沒有人實例化的 template** 裡，一個形式兩者皆非。這個編譯器強制的每一條規則，都由「把
+> body **下降**」那趟走訪驅動，而 template 在那趟走訪之前就被移除了——只有呼叫端要求的 specialization 會被下降
+> ——所以沒有任何呼叫抵達的 `fn f[T](xs: list[T], v: T) { xs.append(v) }` 安靜地編得過，同一個 body 去寫一個
+> immutable binding 也一樣，而那是 `E307`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷，因為它的語意
+> pass 走的是**宣告**而不是下降。這是欠一次的一個缺口，不是任何單一規則的性質。要補上它，body 必須對型別參數的
+> **bound** 檢查、而不是對具體型別——`T: Show` 上的 `x.show()` 在 `T` 還不是某個具體型別以前沒有 method 可解析，
+> 而下降只定義在具體型別上——那是這個編譯器還沒有的檢查器。
 
 有一個推論值得寫在這裡，因為沒有任何單一章節擁有它：沒有 `fn main` 的程式在文法上是合法的——
 `program ::= stmt-list`，也就是 grammar 開場的那個 `nop` 程式——所以拒絕它的是**建置**。`--emit bin` 會在任何
@@ -174,15 +210,24 @@ module 的用途。
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
 一個沒有 `guard`/`?` 復原的內建 runtime fault（見 [Errors](code/errors.zh-TW.md)）。abort 時 runtime：
 
-1. 把錯誤訊息寫到**標準錯誤**，後接一個換行；
+1. 把描述該錯誤的**一行**寫到**標準錯誤**，後接一個換行；
 2. 執行被展開路徑上待決的 `defer`（與正常 return 路徑用的是同一個 cleanup stack）；並
 3. 以 exit 狀態 **1** 終止行程。
 
-一個內建錯誤的訊息形式為 `Kind: text`（例如 `IndexError: list index out of range`）。確切的 `text` 非 normative；
-taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
+一個 **taxonomy** 錯誤寫出的那一行形式為 `Kind: text`，其中 `text` 是該錯誤的 `message()`——例如
+`IndexError: index out of range`。確切的 `text` 非 normative；`Kind:` 前綴則是。它屬於**那一行**、不屬於訊息：
+`message()` 只回答 `text` 本身，而前綴會對**任何**被 raise 的 taxonomy `Err` 渲染——程式自己寫的
+`raise ValueError("bad input")` 與 runtime 自己引發的 fault 報出同一種形狀。**不帶**種類的錯誤（一個裸的
+`raise "…"` 建出來的那種）則只寫它的訊息。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
-> **[deviation]** runtime 無法攔截的硬體 fault——今天是 coroutine stack 溢出越過其 guard page，或 `main` 未受保護
-> 的原生 stack——會以 signal 終止行程、不執行 `defer`，而非乾淨的 `StackOverflowError` abort。見 [Errors](code/errors.zh-TW.md)。
+> **[deviation]** stack 溢位——coroutine 越過其 guard page，或 `main` 越過其原生 stack——如今會帶著名字死去：
+> runtime 的 fault handler 將 `StackOverflowError: stack overflow` 寫到標準錯誤、並以 exit 狀態 **1** 終止，
+> 即上述契約的第 1、3 步。仍偏離的是第 2 步：出錯的 stack 已耗盡、無法從 signal handler 展開，所以待決的
+> `defer` 被**跳過**、不執行；而且與一般 abort（coroutine 會把它包住）不同，溢位無論發生在哪裡都結束整個行程。
+> handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action（sanitizer 的 handler，或預設處置），
+> 因此它仍以其本來的 signal 死去、該 handler 的診斷完整保留。它真正宣稱的兩個窗口**各為一頁**——coroutine 的
+> guard page 恰好一頁，以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍：落在 `main`
+> 下方那一頁的存取會被讀成溢位。見 [Errors](code/errors.zh-TW.md)。
 
 ## 參考實作 emit 出來的 C
 
@@ -203,8 +248,8 @@ object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 obje
 
 - **Undefined behavior（UB）**——規格對結果不作任何要求。conforming 程式必須避免它；conforming implementation 則
   可做任何事，包含崩潰。Zerg 的設計目標是**從 safe code 無法觸及任何 UB**；凡 bootstrap 目前仍容許 UB 之處，該章
-  會標為 **[deviation]**（例如 coroutine 的 stack overflow 今天是一次硬體 fault、而非乾淨的
-  `StackOverflowError`——見 [Errors](code/errors.zh-TW.md)）。
+  會標為 **[deviation]**（例如 stack overflow 是一次硬體 fault，runtime 將其命名為 `StackOverflowError`
+  並以 exit 1 結束，而非一次會跑待決 `defer` 的乾淨 unwind——見 [Errors](code/errors.zh-TW.md)）。
 - **Implementation-defined**——結果是實作所記錄的一組選項之一，但規格不釘死。conforming 程式不應依賴特定選擇。
   目前的 implementation-defined 點（各於其章節詳述）包含：`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](code/coroutine.zh-TW.md)）；
   浮點渲染的精度與拼法（[Format](runtime/format.zh-TW.md)）；以及超出「送出→接收 happens-before」保證之外的任何 coroutine 排序

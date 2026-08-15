@@ -1,0 +1,42 @@
+# `zerg lsp` — the same compiler answering an editor rather than a shell. The server itself
+# is `src/compiler/lsp`; what is here is the command that starts it, and the one thing it
+# cannot do for itself.
+#
+# THE FILE IS NOT CALLED `lsp.zg`, and it is the only one here that is not named after its
+# command. A module is resolved BESIDE THE IMPORTER first, so `cmd/lsp.zg` would be what
+# `import "lsp"` resolves to from inside this directory — the language server would import
+# itself, which the cycle rule refuses as `E485 lsp -> lsp`. A file in a module directory
+# shadows the module its name spells, for every file in that directory.
+
+import (
+	"cli"
+	"lsp"
+)
+
+# lsp takes no arguments and no flags. The protocol is the interface: an editor starts the
+# process, speaks JSON-RPC over its standard input and output, and stops it by closing them.
+pub fn lsp_cmd() -> cli.Command {
+	return (
+		cli.command("lsp", "run the language server over stdio (JSON-RPC)")
+		.run(do_lsp)
+	)
+}
+
+# do_lsp hands the server the one thing it cannot do for itself: turn a path and an unsaved
+# buffer into the whole program that buffer belongs to. Resolving an import is 60 lines of
+# environment variables, an installation root and a checkout layout — `source.zg` and
+# `layout.zg` beside this file — and none of it the protocol's business.
+fn do_lsp(c: cli.Ctx) -> int {
+	return lsp.serve(lsp_program)
+}
+
+# lsp_program is that function. The work is `source.zg`'s `load_buffer`, because finding the
+# program a file belongs to is the same question `module_files` answers one import at a time
+# — and a copy of it here would be the server's own opinion about what a module is, which is
+# the one thing this split exists to prevent.
+fn lsp_program(path: str, text: str) -> lsp.Program {
+	mut srcs: list[str] = []
+	mut paths: list[str] = []
+	load_buffer(path, text, srcs, paths)
+	return lsp.program(paths, srcs)
+}

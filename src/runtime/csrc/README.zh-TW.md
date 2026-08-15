@@ -43,8 +43,8 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 ### Header & tests
 
 - **`zergrt.h`**——**唯一**的公開 header；編譯器 emit 的 C 只 include 這一個，且僅在程式需要 runtime 時。
-- **`zrt_test.c` / `zrt_test.h`**——`#[test]` runner harness。目前無人引用：沒有編譯器會產生測試
-  binary，因此沒有任何建置會連結它們。
+- **`zrt_test.c` / `zrt_test.h`**——`#[test]` runner harness。目前無人引用：`zerg test` 產生的 driver 用 Zerg
+  自己回報，因此沒有任何建置會連結它們。
 
 ## 慣例
 

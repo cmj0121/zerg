@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -30,6 +31,20 @@ func findCC() string {
 // spelling them out each time buries what the test is actually about.
 func buildConcurrent(t *testing.T, name, src string) string {
 	t.Helper()
+	return buildUnits(t, name, src, true)
+}
+
+// buildCore is buildConcurrent without the scheduler: a driver that runs on the one thread
+// it started on links the core runtime and nothing else. That is the shape of a
+// non-concurrent program, whose user code runs on main's native stack through the entry.c
+// shims — which is what the stack-overflow tests need in order to fault there.
+func buildCore(t *testing.T, name, src string) string {
+	t.Helper()
+	return buildUnits(t, name, src, false)
+}
+
+func buildUnits(t *testing.T, name, src string, conc bool) string {
+	t.Helper()
 	cc := findCC()
 	if cc == "" {
 		t.Skip("no C compiler found")
@@ -39,7 +54,9 @@ func buildConcurrent(t *testing.T, name, src string) string {
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	if conc {
+		cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	}
 	driver := filepath.Join(dir, name+".c")
 	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
 		t.Fatalf("write driver: %v", err)
@@ -70,8 +87,9 @@ func runBounded(t *testing.T, bin, workers string, d time.Duration) (string, int
 }
 
 // runBoundedStreams is runBounded with the abort diagnostic KEPT. The `Kind: text` line
-// the abort contract makes normative lands on stderr, so the one test that reads it needs
-// the stream every other test here deliberately drops.
+// the abort contract makes normative lands on stderr, so the tests that read it — the ones
+// asserting a kind, and the two stack-overflow ones — need the stream every other test here
+// deliberately drops.
 func runBoundedStreams(t *testing.T, bin, workers string, d time.Duration) (string, string, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
@@ -840,12 +858,14 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
-// TestBuiltinAbortsNameTheirKind pins the message shape the abort contract makes normative
-// (docs/conformance.md, "Runtime abort contract"): a built-in error's message is
-// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. Every
-// other zrt_abort_kind site was written that way from the start; the two the concurrency
-// work added were not, and a taxonomy error whose own message will not say which kind it is
-// makes the conformance claim false for the reader who only ever sees stderr.
+// TestBuiltinAbortsNameTheirKind pins the line shape the abort contract makes normative
+// (docs/conformance.md, "Runtime abort contract"): a built-in error's abort LINE is
+// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. It
+// used to be spelled into each `zrt_abort_kind` literal, and the two the concurrency work
+// added were the two that forgot — which is what this caught. `zrt_report` builds the prefix
+// now, from the kind, for every site at once; a taxonomy error whose own line will not say
+// which kind it is makes the conformance claim false for the reader who only ever sees
+// stderr, and this is the half of that contract the runtime's own aborts owe.
 func TestBuiltinAbortsNameTheirKind(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -875,6 +895,55 @@ func TestBuiltinAbortsNameTheirKind(t *testing.T) {
 		})
 	}
 }
+
+// TestRaisedErrRendersItsKind pins the other half of that contract: the `Kind: ` prefix is
+// a property of the abort LINE and not of the message, so an Err a program built and raised
+// itself reports exactly as an intrinsic one does.
+//
+// The two paths used to differ, and the difference was invisible from here because every
+// runtime literal spelled the prefix into itself — `zrt_abort_kind(ZRT_ERR_INDEX,
+// "IndexError: index out of range")`. A program's own `raise ValueError("bad input")` built
+// the same kind with a message that had no prefix in it, so it reached stderr as `bad
+// input` and docs/conformance.md's claim held only for errors the runtime raised itself.
+//
+// The untyped case is the reason the prefix cannot simply always be there: a bare
+// `raise "…"` builds an Err with NO kind, and there is nothing to name.
+func TestRaisedErrRendersItsKind(t *testing.T) {
+	cases := []struct {
+		name string
+		stmt string
+		want string
+	}{
+		{"constructed", `zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "bad input"));`, "ValueError: bad input\n"},
+		{"intrinsic", `zrt_abort_kind(ZRT_ERR_INDEX, "index out of range");`, "IndexError: index out of range\n"},
+		{"untyped", `zrt_abort("boom");`, "boom\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := buildCore(t, "raise_"+tc.name, fmt.Sprintf(abortLineC, tc.stmt))
+			_, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+			if code != 1 {
+				t.Errorf("exit=%d, want 1", code)
+			}
+			// The WHOLE line, unlike the concurrency cases above: these messages are
+			// this test's own, so there is no non-normative text to leave room for.
+			if errOut != tc.want {
+				t.Errorf("stderr=%q, want %q", errOut, tc.want)
+			}
+		})
+	}
+}
+
+// abortLineC aborts once, with no handler anywhere: the last-resort arm of the abort core,
+// which is the shape a program that raises out of main has.
+const abortLineC = `
+#include "zergrt.h"
+
+int main(void) {
+    %s
+    return 0;
+}
+`
 
 // sendOnClosedC: main gives up the only send end, which closes the channel cleanly, then
 // sends on the receive handle it kept. Nothing can take that value and nothing ever will,
@@ -1410,3 +1479,267 @@ func splitArgs(s string) []string {
 	}
 	return append(out, s[start:])
 }
+
+// TestStackOverflowNamedOnMainStack pins the narrowed runtime-abort deviation
+// (docs/conformance.md): a runaway recursion on main's native stack no longer dies as
+// a bare signal. The fault is named — `StackOverflowError: stack overflow` on stderr —
+// and the process exits 1, the message-then-status shape every other abort has. The
+// pending `defer`s are still skipped; that half of the deviation stands, and nothing
+// here asserts otherwise.
+func TestStackOverflowNamedOnMainStack(t *testing.T) {
+	bin := buildCore(t, "so_main", stackOverflowMainC)
+	_, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+	if code != 1 {
+		t.Fatalf("main-stack overflow exit=%d, want 1 (stderr %q)", code, errOut)
+	}
+	if !strings.Contains(errOut, "StackOverflowError: stack overflow") {
+		t.Fatalf("main-stack overflow stderr = %q, want the StackOverflowError line", errOut)
+	}
+}
+
+const stackOverflowMainC = `
+#include "zergrt.h"
+
+/* the volatile pad forces a real frame per call, so no compiler turns the
+ * recursion into a loop that never grows the stack */
+static void boom(void) {
+    volatile char pad[512];
+    pad[0] = 1;
+    boom();
+}
+
+int main(void) { return zrt_main_run_nil(boom); }
+`
+
+// TestStackOverflowNamedInCoroutine is the guard-page half of the same contract: a
+// runaway recursion inside a `spawn`ed coroutine runs into its stack's PROT_NONE
+// guard page, and that fault too is named and exits 1 rather than dying by signal.
+func TestStackOverflowNamedInCoroutine(t *testing.T) {
+	bin := buildConcurrent(t, "so_coro", stackOverflowCoroC)
+	for _, w := range workerModes {
+		_, errOut, code := runBoundedStreams(t, bin, w, 20*time.Second)
+		if code != 1 {
+			t.Fatalf("ZRT_WORKERS=%q: coroutine overflow exit=%d, want 1 (stderr %q)", w, code, errOut)
+		}
+		if !strings.Contains(errOut, "StackOverflowError: stack overflow") {
+			t.Fatalf("ZRT_WORKERS=%q: coroutine overflow stderr = %q, want the StackOverflowError line", w, errOut)
+		}
+	}
+}
+
+const stackOverflowCoroC = `
+#include "zergrt.h"
+
+static void boom(void) {
+    volatile char pad[512];
+    pad[0] = 1;
+    boom();
+}
+
+static void spawned(void *env) {
+    (void)env;
+    boom();
+}
+
+static void prog(void) {
+    /* main parks on a channel it is itself the only sender of, so the program can
+     * only end the way the spawned coroutine ends it: no deadlock is declared
+     * while the recursion is RUNNING, and the overflow's _exit(1) is the exit. */
+    zrt_chan *never = zrt_chan_new(sizeof(long), 0);
+    zrt_spawn(spawned, NULL);
+    long v;
+    zrt_chan_recv(never, &v);
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestGenuineSegvUndisguised is the other edge of the naming: a wild pointer is NOT a
+// stack overflow, and the handler must not dress it as one. It puts back the action that
+// was installed before it and lets the fault re-fire, so the process still dies by the
+// genuine signal — observable here as a signal death, with no StackOverflowError line.
+// Which action that is, is what TestUnclaimedFaultReachesThePreviousHandler pins below;
+// here the previous action IS the default, which is why this dies by the signal.
+func TestGenuineSegvUndisguised(t *testing.T) {
+	bin := buildCore(t, "wild", wildPointerC)
+	var stderr bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("wild-pointer run: expected a signal death, got err=%v", err)
+	}
+	ws, ok := exit.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		t.Fatalf("wild-pointer run: expected a signal death, got status %d", exit.ExitCode())
+	}
+	if sig := ws.Signal(); sig != syscall.SIGSEGV && sig != syscall.SIGBUS {
+		t.Fatalf("wild-pointer run: died by %v, want SIGSEGV or SIGBUS", sig)
+	}
+	if strings.Contains(stderr.String(), "StackOverflowError") {
+		t.Fatalf("wild-pointer death was disguised as a stack overflow: stderr %q", stderr.String())
+	}
+}
+
+const wildPointerC = `
+#include "zergrt.h"
+
+/* address 16: inside the never-mapped NULL page, far from every stack bound */
+static void wild(void) { *(volatile int *)16 = 7; }
+
+int main(void) { return zrt_main_run_nil(wild); }
+`
+
+// TestUnclaimedFaultReachesThePreviousHandler pins the CHAINING: a fault the runtime
+// does not claim must reach whoever held the signal before it, not the default
+// disposition. The loss this guards against is invisible in a plain build — where the
+// previous action IS the default — and shows only under a sanitizer, whose SEGV report
+// (`SEGV on unknown address 0x10`, with the stack trace) simply vanished when the
+// handler restored SIG_DFL instead of what it replaced. No gate here runs a sanitizer
+// over a faulting program, so the driver stands in for one: it installs a handler of
+// its own BEFORE the runtime's, and that handler is what must run.
+func TestUnclaimedFaultReachesThePreviousHandler(t *testing.T) {
+	bin := buildCore(t, "chained", chainedHandlerC)
+	var stdout bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Fatalf("unclaimed fault did not reach the previous handler: err=%v stdout=%q", err, stdout.String())
+	}
+	if stdout.String() != "chained\n" {
+		t.Fatalf("previous handler output = %q, want %q", stdout.String(), "chained\n")
+	}
+}
+
+const chainedHandlerC = `
+/* sigaction/sigemptyset — and write/_exit below — are POSIX, which a strict '-std=c11'
+ * glibc hides from <signal.h> unless a feature-test macro asks for them; macOS exposes
+ * them regardless, so the omission was invisible from there. src/runtime/csrc/sys.c
+ * carries the same pair for the same reason, including the _DARWIN_C_SOURCE that puts
+ * back what _POSIX_C_SOURCE narrows away on macOS. Both must precede EVERY #include:
+ * a feature-test macro is read at the first one. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
+#include "zergrt.h"
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
+
+/* stands in for the sanitizer's handler: whatever held SIGSEGV before the runtime did */
+static void previous(int sig) {
+    (void)sig;
+    (void)write(1, "chained\n", 8);
+    _exit(3);
+}
+
+static void wild(void) { *(volatile int *)16 = 7; }
+
+int main(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = previous;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    return zrt_main_run_nil(wild); /* installs the runtime's over this one */
+}
+`
+
+// TestNearMissBelowMainStackNotClaimed measures the WIDTH of the overflow window, which
+// the two tests above cannot see: they only ask whether a real overflow is named and
+// whether a fault at address 16 is left alone, and both stay true however much ground
+// below main's stack the runtime claims. The first version of this handler claimed 64KB
+// of it, so a wild write 8 pages under the bound was reported as a StackOverflowError —
+// a genuine memory bug renamed AND stripped of its sanitizer diagnostic, with nothing on
+// the board able to say so.
+//
+// The driver faults at a deliberate distance below the bound (32KB), on a page it maps
+// PROT_NONE itself so the fault is certain and its address exact. That must die as the
+// signal it is: the window is ONE page, and this is eight.
+func TestNearMissBelowMainStackNotClaimed(t *testing.T) {
+	bin := buildCore(t, "near_miss", nearMissC)
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if strings.Contains(stdout.String(), "skip") {
+		t.Skip("host answered no stack bounds, or refused the fixed mapping")
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("near-miss run: expected a signal death, got err=%v (stderr %q)", err, stderr.String())
+	}
+	ws, ok := exit.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		t.Fatalf("near-miss run: expected a signal death, got status %d (stderr %q)", exit.ExitCode(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "StackOverflowError") {
+		t.Fatalf("a fault 32KB below main's stack was claimed as an overflow: stderr %q", stderr.String())
+	}
+}
+
+const nearMissC = `
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#include "zergrt.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
+/* the same low bound the runtime records for main, asked the same way */
+static uintptr_t stack_lo(void) {
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self);
+    return hi - (uintptr_t)pthread_get_stacksize_np(self);
+#elif defined(__linux__)
+    pthread_attr_t attr;
+    uintptr_t lo = 0;
+    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+        void *p = NULL; size_t n = 0;
+        if (pthread_attr_getstack(&attr, &p, &n) == 0) { lo = (uintptr_t)p; }
+        pthread_attr_destroy(&attr);
+    }
+    return lo;
+#else
+    return 0;
+#endif
+}
+
+static void near_miss(void) {
+    uintptr_t lo = stack_lo();
+    long pg = sysconf(_SC_PAGESIZE);
+    uintptr_t page = (pg > 0) ? (uintptr_t)pg : 4096;
+    if (lo == 0) { printf("skip\n"); fflush(stdout); return; }
+    uintptr_t at = (lo - 32768) & ~(page - 1);
+    /* map it PROT_NONE ourselves so the fault is certain and lands exactly here */
+    if (mmap((void *)at, page, PROT_NONE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED) {
+        printf("skip\n"); fflush(stdout); return;
+    }
+    *(volatile int *)at = 7;
+}
+
+int main(void) { return zrt_main_run_nil(near_miss); }
+`

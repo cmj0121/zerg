@@ -1,0 +1,26 @@
+# lib — what a module PUTS on its surface, beside what it keeps.
+#
+# `Counter` is `pub`, so another module may name the type; `label` is `pub`, so another
+# module may read that field. `seen` is neither, and GRAMMAR#field therefore requires it to
+# carry a DEFAULT — which is what lets a reader outside construct a `Counter` without
+# naming a value it may not read. That default is only worth requiring because the value it
+# stands in for is genuinely unreadable from outside, which is the rule this example is the
+# accepting half of (examples/1g/private is the refusing half).
+pub struct Counter {
+	pub label: str
+	seen: int = 0
+}
+
+# INSIDE the module, `seen` is an ordinary field. The boundary is the DIRECTORY, not the
+# type, so a private field is private to `lib/` and not to `Counter`.
+pub fn bumped(label: str) -> Counter {
+	mut c := Counter(label)
+	c.seen = c.seen + 1
+	return c
+}
+
+# and this is how the count leaves the module: a `pub fn` reading a private field, which is
+# the mechanism the field's privacy exists to force.
+pub fn seen_of(c: Counter) -> int {
+	return c.seen
+}

@@ -45,6 +45,12 @@ the box itself is unaffected.
 value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-1)`, or a narrowing that
 loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
 
+**Which pairs `T(x)` accepts is a closed table**, and `int` is the hub every one of them has on a side.
+A pair that is not on it is not a conversion — `float(b)` on a `byte` is `E395`, and the two steps
+through the hub are written instead (`float(int(b))`). A `float` SOURCE is the one absence that is a
+decision rather than a missing step: `int(x)` on a float is `E394`, and the fraction is dropped by a verb
+— `math.trunc` / `floor` / `ceil` / `round`, each answering an `int` — or by `//`.
+
 > **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
 > types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E465
 > NotImplemented: `i32` is part of the fixed-width ladder — … the built-in widths are `int`, `uint`, `byte`,
@@ -82,12 +88,6 @@ The **fixed** set `ValueError` / `OverflowError` / `IOError` / `EncodingError` /
 each called as `Kind(msg: str) -> Err`, builds an `Err` of that kind carrying the message. Use one with
 `raise` to abort, or in an `Either` value; test an erased `Err` with `e is IOError`. The set is
 compiler-owned — a program cannot define a new kind this phase. See [Null-safety & Errors](../code/errors.md).
-
-> **[deviation]** The kind survives in the TYPE and is lost in the MESSAGE. `e is IOError` answers correctly
-> on a constructed `Err`, but a `raise ValueError("bad input")` that reaches the top writes only _bad input_
-> to standard error, where the [abort contract](../conformance.md) specifies `Kind: message` — which is the
-> shape a runtime-raised one does use (_IndexError: index out of range_). One kind, two output shapes,
-> depending on who raised it.
 
 ## Raw pointers (`unsafe`)
 

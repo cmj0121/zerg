@@ -108,27 +108,26 @@ failure an `IOError`, a `str` bridge over invalid UTF-8 an `EncodingError`, an o
 `IndexError`, a missing `map` key a `KeyError`. A `Result` / `Either` carries them and `?` / `??` / `guard`
 thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes the kind. The abort
 contract itself — the message written to stderr, exit status 1, the `Kind: message` line — is
-[Conformance](../conformance.md).
+[Conformance](../conformance.md). The prefix belongs to that **line**, not to the message: `message()`
+answers the text alone, and the kind is rendered in front of it when the error reaches the top, for a
+`raise ValueError("bad input")` exactly as for the runtime's own `IndexError`.
 
 > **[not yet]** `code()` answers `byte?` and answers it **absent**, always. No `Err` this compiler can
 > construct carries a code: the errors that exist are the built-in kinds, and a code belongs to a
 > user-defined error type, which is the part of this paragraph that is not built. `message()` and
 > `unwrap()` are.
->
-> **[deviation]** A hand-written `raise` of a built-in kind loses the **`Kind:` prefix** the abort contract
-> specifies. `raise ValueError("bad input")` writes `bad input` and nothing else to stderr, while the same
-> kind raised by the runtime writes `IndexError: index out of range`. The kind is in the value either way;
-> only the runtime's own path renders it into the line. One kind thus has two output shapes decided by who
-> raised it, and nothing about the compile is wrong, so the mismatch shows only in a program's stderr — a
-> place no gate reads for a `raise` a test wrote on purpose.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, ten reify as `is`-testable **kinds** today:
+expected failure. Of the fault names this chapter uses, eleven reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
-plus the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration`.
+the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` — and
+`AssertionError`, which is what a failed `assert` (see [Grammar](../surface/grammar.md), group 8) raises
+and which nothing else raises. That exclusivity is the point of giving it a kind rather than a message:
+`zerg test` reports a claim that did not hold as a **failure** and anything else that reached the top of
+a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
 **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both** compilers, the
-name not being one of the ten — and the abort carries no distinct reified kind for them, only a generic
+name not being one of the eleven — and the abort carries no distinct reified kind for them, only a generic
 message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
@@ -156,10 +155,16 @@ runs `defer`s) the instant a call would exceed the stack, so runaway recursion *
 stack smash. Zerg does **not** optimize tail calls — `for` is the loop, so a bounded stack is enough —
 which makes an unbounded recursion a definite `StackOverflowError`, never a silent hang.
 
-> **[deviation]** The bootstrap does **not** yet own or depth-check the stack: a stack overflow is an
-> unrecoverable `SIGSEGV` / stack-smash that terminates the process **without** running `defer`s, not a
-> clean `StackOverflowError` unwind (see [Conformance](../conformance.md), the runtime-abort deviation). The
-> intended safety net stands; it is not built this phase.
+> **[deviation]** The bootstrap does **not** yet own or depth-check the stack; the overflow is still the
+> hardware fault the guard page turns it into. The fault now carries its name: the runtime's signal
+> handler reports `StackOverflowError: stack overflow` on stderr and the process exits with status **1**,
+> like every other abort — on both stacks a program can overflow today, a coroutine's guard page and
+> `main`'s native stack. But the faulting stack is exhausted and cannot be unwound from a signal handler,
+> so the pending `defer`s are **skipped**, no `guard` can demote it, and `err is StackOverflowError` stays
+> unwritable. It is also the one abort a coroutine does **not** contain: an ordinary abort with no handler
+> ends only that coroutine, while an overflow ends the process (see [Conformance](../conformance.md), the
+> runtime-abort deviation). The intended depth-checked safety net — a clean unwind that runs `defer`s —
+> stands; it is not built this phase.
 
 A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
 asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s

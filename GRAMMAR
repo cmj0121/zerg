@@ -54,13 +54,18 @@ stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
 
 # A statement is either simple (no block — fits on one line), compound (it owns a
-# '{ … }' block), or a declaration (introduces a name, and may carry a decorator
-# prefix). 'nop' is the smallest simple statement; the rest are filled in by later
-# groups.
-statement      ::= simple-stmt | compound-stmt | decorated-decl
+# '{ … }' block), or a declaration (introduces a name). 'nop' is the smallest simple
+# statement; the rest are filled in by later groups.
+#
+# ANY of the three may carry ONE decorator (group 7) in front of it. Which decorator is
+# valid in which position is a SEMANTIC rule like every other one about a decorator:
+# 'derive'/'obj'/'test' are about a DECLARATION and are refused above a simple or compound
+# statement, and '#[allow(…)]' — which suppresses a lint finding over the statement it
+# leads — is the one that belongs there.
+statement      ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt    ::= nop | binding | reassign | print | return | raise-stmt | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
-                 | del-stmt | close-stmt | expr-stmt
+                 | del-stmt | close-stmt | assert-stmt | expr-stmt
 compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-select
 
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
@@ -69,7 +74,7 @@ compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-se
 # only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' is the one declaration
 # with no block; the rest own one. 'unsafe-group' is a module-level 'unsafe { … }' that GROUPS
 # declarations in an unsafe context (group 12) — the home of a mutable global.
-decorated-decl ::= decorator* declaration
+decorated-decl ::= decorator? declaration
 declaration    ::= type-decl | unsafe-group | fn-decl | struct-decl | enum-decl
                  | spec-decl | impl-decl | init-decl
 nop            ::= 'nop'
@@ -99,15 +104,33 @@ nop            ::= 'nop'
 # begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached
 # to the declaration that follows — consecutive '##' lines form one doc block; there is NO
 # inner/trailing doc and NO block comment); any other '#' begins an ordinary line comment.
-# A decorator binds to the declaration that follows it; a line break between a decorator and
-# its target does not separate them (no ASI ';' applies there).
+# A decorator binds to the item that follows it, and it STANDS ON ITS OWN LINE: it is an item
+# of the 'stmt-list' like any other, so a 'stmt-sep' separates it from what it leads, and
+# '#[derive(Eq)] struct P' — both on one line — is not a form. What it binds to is the next
+# item and not the next line, so blank lines and comments between them change nothing.
 
 letter     ::= [a-zA-Z]
+upper      ::= [A-Z]
 digit      ::= [0-9]
 
 # An identifier names a binding, function, type, field, ...; a reserved keyword is
 # never an identifier.
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
+
+# A type-ident is the name a DECLARATION gives a type — a struct, an enum, a spec, a
+# 'type X = Y' (group 6). It begins with an UPPER-CASE LETTER, and that is the whole of
+# how the language separates its two namespaces: a name in a value position is a type's
+# when it is capitalized and a function's or a binding's when it is not. 'Point(1, 2)'
+# constructs and 'point(1, 2)' calls; 'cli.Opt' qualifies a module and 'It.Item'
+# projects an associated type; a bound names a spec or a concrete type by the same
+# letter. Those are decided BEFORE anything is resolved, so the rule is lexical and
+# belongs here rather than to a later pass.
+# A leading '_' is refused by that same rule and needs none of its own: '_' has no case,
+# so a name beginning with one is in neither namespace.
+# A USE is not constrained (type-name, group 4): the built-in type names — 'int',
+# 'uint', 'float', 'str', 'list', 'map', the fixed-width members — are stdlib names in
+# lower case, and no declaration in a program introduces them.
+type-ident ::= upper ( letter | digit | '_' )*
 
 NEWLINE    ::= '\r'? '\n'          # a line break, LF or CRLF; terminates a statement (group 1)
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens — a '\r' is NOT one
@@ -130,6 +153,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'chan'  | 'type'  | 'impl'   | 'init'
              | 'defer' | 'del'   | 'close'  | 'raise'   | 'guard' | 'is'
+             | 'assert'
              | 'not'   | 'and'   | 'or'     | 'print'   | 'this'  | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
              | 'unsafe'| 'ptr'   | 'asm'   | 'const'
@@ -296,6 +320,8 @@ mul-op       ::= '*' | '/' | '//' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
 type-name    ::= identifier            # a type, a spec, or an enum's name (groups 6, 7)
+                                       # a USE, so it also covers the lower-case built-in
+                                       # names; what a DECLARATION may spell is type-ident
 
 # ==================================================================================
 # 5. Functions
@@ -514,10 +540,10 @@ chan-type    ::= 'chan' '[' type ']'           # bidirectional
                | 'chan' '[' type ']' '<-'       # send-only (a sender), Go-style
 
 # --- declarations (compound: struct/enum/spec/impl; simple: type) ---
-struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
-type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
-spec-decl    ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+struct-decl  ::= 'pub'? 'struct' type-ident generics? '{' field-list? '}'
+enum-decl    ::= 'pub'? 'enum' type-ident generics? '{' variant-list? '}'
+type-decl    ::= 'pub'? 'type' type-ident generics? '=' type      # strong typedef
+spec-decl    ::= 'pub'? 'spec' type-ident generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # a spec impl
              | 'impl' generics? type '{' impl-item* '}'                              # inherent
              # 'impl[T] Spec for list[T]' — the impl's type params sit after 'impl', so a
@@ -564,10 +590,17 @@ const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see 
 # constructor — the module still builds with 'T(...)' internally.
 
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
-# ones — Zerg has no macros). A decorator prefix leads any declaration (the
-# 'decorator*' on 'decorated-decl', group 1) and binds to it. 'derive' asks the
-# compiler to generate the canonical impls of the named blessed specs by reading the
-# type's structure; other decorators (layout, logging, FFI, …) slot in here later.
+# ones — Zerg has no macros). A decorator prefix leads any statement, declarations
+# included (the 'decorator?' on 'statement' and on 'decorated-decl', group 1), and
+# binds to it. 'derive' asks the compiler to generate the canonical impls of the named
+# blessed specs by reading the type's structure; 'allow' names lint codes to suppress
+# over the statement it leads; other decorators (layout, logging, FFI, …) slot in here
+# later.
+#
+# ONE PER ITEM, and the comma list is how an item takes several: '#[a(x), b(y)]', never
+# '#[a(x)]' stacked over '#[b(y)]'. Two spellings for one thing is what a formatter exists
+# to remove, and it cannot remove one once both are legal — so 'decorator?' rather than
+# 'decorator*' on both productions above, and the stacked form is refused.
 decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg     ::= type-name | const-expr        # derive(Eq, Ord), align(16), align(SIZE*2), …
@@ -661,6 +694,33 @@ diverge       ::= 'break' | 'continue' | return | raise
 raise-stmt    ::= raise ( 'if' expr )?               # the postfix guard, as on every other diverge
 raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's cause
 guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
+
+# 'assert' states a claim about the program and raises AssertionError when it does not
+# hold. It takes a CONDITION AND NOTHING ELSE — no message operand — because the compiler
+# writes the message: the source text of the condition, the position it was written at, and
+# the value of each operand a comparison came apart into. A claim that needs explaining
+# rather than showing is 'raise ValueError("why") if not cond', which is the production
+# form; 'assert' is for the claim whose own text is the explanation.
+#
+# It is DEFINED AS a raise, and the definition is what the leaves have to be bound for: the
+# message names the operands, so evaluating them a second time to render them would make
+# 'assert next(it) == 3' advance the iterator twice and print a value the test never saw.
+# So the operands are bound to temporaries ONCE, before the condition is tested, which is
+# why this is a statement-level sugar and not an expression rewrite:
+#
+#     assert a == b   ==   t0 := a
+#                          t1 := b
+#                          raise AssertionError(<message>) if not (t0 == t1)
+#
+# 'assert a and b' is two asserts, one per conjunct — which preserves short-circuit and
+# evaluation count exactly, and says which half failed. A leaf may NOT be lifted across a
+# short-circuiting operator, so under 'or' / '??' only the left operand is bound.
+#
+# It is COMPILED IN ALWAYS. There is no flag that strips it, because a program with and
+# without its assertions would be two programs, and an assertion nobody can rely on running
+# is one nobody writes anything load-bearing into. Outside a '*_test.zg' file it is legal
+# and the linter says what it costs (L602).
+assert-stmt   ::= 'assert' expr
 
 # ==================================================================================
 # 9. Concurrency — coroutines & channels

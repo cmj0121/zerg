@@ -29,11 +29,25 @@ fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
 }
 
 # has_prefix reports whether s begins with prefix. An empty prefix is always a prefix.
+#
+# ```zerg
+# strings.has_prefix("hello", "he")
+# ```
+# ```output
+# true
+# ```
 pub fn has_prefix(s: str, prefix: str) -> bool {
 	return match_at(bytearray(s), bytearray(prefix), 0)
 }
 
 # has_suffix reports whether s ends with suffix. An empty suffix is always a suffix.
+#
+# ```zerg
+# strings.has_suffix("hello", "lo")
+# ```
+# ```output
+# true
+# ```
 pub fn has_suffix(s: str, suffix: str) -> bool {
 	hay := bytearray(s)
 	suf := bytearray(suffix)
@@ -42,6 +56,20 @@ pub fn has_suffix(s: str, suffix: str) -> bool {
 
 # index_of returns the BYTE offset of the first occurrence of sub in s, or -1 when sub
 # is absent. An empty sub is found at 0. The offset is a byte index, not a rune count.
+#
+# The second line is the one to read twice: `本` is the SECOND character of `日本語` and
+# its FOURTH byte, so a rune-counting answer would be 1.
+#
+# ```zerg
+# strings.index_of("hello", "lo")
+# strings.index_of("日本語", "本")
+# strings.index_of("hello", "z")
+# ```
+# ```output
+# 3
+# 3
+# -1
+# ```
 pub fn index_of(s: str, sub: str) -> int {
 	hay := bytearray(s)
 	nee := bytearray(sub)
@@ -55,6 +83,15 @@ pub fn index_of(s: str, sub: str) -> int {
 }
 
 # contains reports whether sub occurs anywhere in s. An empty sub is always contained.
+#
+# ```zerg
+# strings.contains("hello world", "o w")
+# strings.contains("hello", "z")
+# ```
+# ```output
+# true
+# false
+# ```
 pub fn contains(s: str, sub: str) -> bool {
 	return index_of(s, sub) >= 0
 }
@@ -62,11 +99,29 @@ pub fn contains(s: str, sub: str) -> bool {
 # split breaks s into the pieces separated by sep, returning every piece between
 # occurrences (so N separators yield N+1 pieces, and a piece may be empty). Splitting on
 # an empty separator raises ValueError — demote it with `guard { strings.split(s, x) }`.
+#
+# THE EXAMPLE GOES BACK THROUGH `join` because `print` cannot render a `list[str]` at all
+# (E449: a composite needs a structural `Display` this compiler does not generate). So an
+# example of a list-answering function has to reduce it to something printable, and the
+# round trip is the honest reduction — it shows the pieces AND that join inverts split.
+#
+# ```zerg
+# strings.join(strings.split("a,b,c", ","), "|")
+# strings.join(strings.split("a,,b", ","), "|")
+# strings.split("a,b,c", ",").len()
+# guard { strings.split("a,b", "").len() } ?? -1
+# ```
+# ```output
+# a|b|c
+# a||b
+# 3
+# -1
+# ```
 pub fn split(s: str, sep: str) -> list[str] {
 	hay := bytearray(s)
 	sepb := bytearray(sep)
 	m := sepb.len()
-	raise "strings.split: empty separator" if m == 0
+	raise ValueError("strings.split: empty separator") if m == 0
 
 	mut out: list[str] = []
 	mut cur: list[byte] = []
@@ -90,6 +145,13 @@ pub fn split(s: str, sep: str) -> list[str] {
 # split); an empty list yields the empty string, a single part yields that part. It
 # accumulates in a byte list (decoding sep once) so the whole build is linear, not the
 # quadratic re-copy a chain of `+` concatenations would cost.
+#
+# ```zerg
+# strings.join(["usr", "local", "bin"], "/")
+# ```
+# ```output
+# usr/local/bin
+# ```
 pub fn join(parts: list[str], sep: str) -> str {
 	sepb := bytearray(sep)
 	mut out: list[byte] = []
@@ -112,8 +174,15 @@ pub fn join(parts: list[str], sep: str) -> str {
 # repeat returns s concatenated with itself count times (count 0 yields the empty
 # string). A negative count raises ValueError. It decodes s once and appends its bytes,
 # so the build is linear in the output length rather than the quadratic re-copy of `+`.
+#
+# ```zerg
+# strings.repeat("ab", 3)
+# ```
+# ```output
+# ababab
+# ```
 pub fn repeat(s: str, count: int) -> str {
-	raise "strings.repeat: negative count" if count < 0
+	raise ValueError("strings.repeat: negative count") if count < 0
 
 	sb := bytearray(s)
 	mut out: list[byte] = []
@@ -143,6 +212,13 @@ fn slice_str(b: list[byte], lo: int, hi: int) -> str {
 
 # trim removes leading and trailing ASCII whitespace (the `ascii.is_space` set — space,
 # tab, LF, VT, FF, CR) from s.
+#
+# ```zerg
+# strings.trim("  hi  ")
+# ```
+# ```output
+# hi
+# ```
 pub fn trim(s: str) -> str {
 	b := bytearray(s)
 	n := b.len()
@@ -160,6 +236,18 @@ pub fn trim(s: str) -> str {
 # to_upper returns s with every ASCII lowercase letter folded to uppercase; every other
 # byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
 # `ascii.fold_upper`.
+#
+# The second line is the ASCII-only rule showing its edge: `é` is C3 A9, both bytes above
+# 0x7F, so it comes out of the fold exactly as it went in.
+#
+# ```zerg
+# strings.to_upper("Hello World")
+# strings.to_upper("héllo")
+# ```
+# ```output
+# HELLO WORLD
+# HéLLO
+# ```
 pub fn to_upper(s: str) -> str {
 	mut out: list[byte] = []
 	for c in bytearray(s) {
@@ -171,6 +259,15 @@ pub fn to_upper(s: str) -> str {
 # to_lower returns s with every ASCII uppercase letter folded to lowercase; every other
 # byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
 # `ascii.fold_lower`.
+#
+# ```zerg
+# strings.to_lower("Hello World")
+# strings.to_lower("HÉLLO")
+# ```
+# ```output
+# hello world
+# hÉllo
+# ```
 pub fn to_lower(s: str) -> str {
 	mut out: list[byte] = []
 	for c in bytearray(s) {
@@ -181,11 +278,23 @@ pub fn to_lower(s: str) -> str {
 
 # count returns the number of non-overlapping occurrences of sub in s. An empty sub
 # raises ValueError.
+#
+# The second line is what NON-OVERLAPPING costs: "aaaa" holds three overlapping "aa" and
+# only two that do not overlap.
+#
+# ```zerg
+# strings.count("banana", "a")
+# strings.count("aaaa", "aa")
+# ```
+# ```output
+# 3
+# 2
+# ```
 pub fn count(s: str, sub: str) -> int {
 	hay := bytearray(s)
 	nee := bytearray(sub)
 	m := nee.len()
-	raise "strings.count: empty substring" if m == 0
+	raise ValueError("strings.count: empty substring") if m == 0
 
 	n := hay.len()
 	mut c := 0
@@ -203,10 +312,19 @@ pub fn count(s: str, sub: str) -> int {
 
 # replace returns s with every non-overlapping occurrence of old replaced by new,
 # scanning left to right. An empty old raises ValueError.
+#
+# ```zerg
+# strings.replace("banana", "a", "o")
+# strings.replace("hello", "l", "")
+# ```
+# ```output
+# bonono
+# heo
+# ```
 pub fn replace(s: str, old: str, new: str) -> str {
 	oldb := bytearray(old)
 	m := oldb.len()
-	raise "strings.replace: empty target" if m == 0
+	raise ValueError("strings.replace: empty target") if m == 0
 
 	hay := bytearray(s)
 	newb := bytearray(new)
@@ -230,6 +348,19 @@ pub fn replace(s: str, old: str, new: str) -> str {
 # trim_prefix returns s without a single leading prefix; if s does not start with
 # prefix, s is returned unchanged. It decodes s and prefix once and checks with match_at
 # directly (rather than re-decoding through has_prefix).
+#
+# ONE prefix and not every one of them, which is the second line.
+#
+# ```zerg
+# strings.trim_prefix("/usr/bin", "/")
+# strings.trim_prefix("aaab", "a")
+# strings.trim_prefix("hello", "xy")
+# ```
+# ```output
+# usr/bin
+# aab
+# hello
+# ```
 pub fn trim_prefix(s: str, prefix: str) -> str {
 	b := bytearray(s)
 	p := bytearray(prefix)
@@ -241,6 +372,15 @@ pub fn trim_prefix(s: str, prefix: str) -> str {
 # trim_suffix returns s without a single trailing suffix; if s does not end with
 # suffix, s is returned unchanged. It decodes s and suffix once and checks with match_at
 # directly (rather than re-decoding through has_suffix).
+#
+# ```zerg
+# strings.trim_suffix("main.zg", ".zg")
+# strings.trim_suffix("abbb", "b")
+# ```
+# ```output
+# main
+# abb
+# ```
 pub fn trim_suffix(s: str, suffix: str) -> str {
 	b := bytearray(s)
 	sf := bytearray(suffix)
@@ -253,6 +393,19 @@ pub fn trim_suffix(s: str, suffix: str) -> str {
 # fields splits s around each run of ASCII whitespace, returning the non-empty pieces
 # (so leading, trailing, and repeated whitespace never yield an empty field). An all-
 # whitespace or empty s yields an empty list.
+#
+# Through `join` for the reason split's example gives — a `list[str]` does not print.
+#
+# ```zerg
+# strings.join(strings.fields("  a   b  "), "|")
+# strings.fields("  a   b  ").len()
+# strings.fields("   ").len()
+# ```
+# ```output
+# a|b
+# 2
+# 0
+# ```
 pub fn fields(s: str) -> list[str] {
 	b := bytearray(s)
 	n := b.len()
@@ -279,6 +432,17 @@ pub fn fields(s: str) -> list[str] {
 # last_index_of returns the BYTE offset of the LAST occurrence of sub in s, or -1 when
 # sub is absent. An empty sub is found at the end, which is where the last one is — the
 # mirror of index_of finding it at 0.
+#
+# ```zerg
+# strings.last_index_of("abcabc", "abc")
+# strings.last_index_of("hello", "")
+# strings.last_index_of("hello", "z")
+# ```
+# ```output
+# 3
+# 5
+# -1
+# ```
 pub fn last_index_of(s: str, sub: str) -> int {
 	hay := bytearray(s)
 	nee := bytearray(sub)
@@ -292,6 +456,21 @@ pub fn last_index_of(s: str, sub: str) -> int {
 
 # trim_left removes leading ASCII whitespace only; trim_right removes trailing only.
 # `trim` is both, and is the one to reach for unless a side matters.
+#
+# THE `|` IS PART OF THE EXAMPLE, not part of the answer. What these two functions do is
+# LEAVE the whitespace on the other side, and an `output` line that ended in a space
+# would be trimmed by this repository's own pre-commit hook — turning a true example into
+# a false one, silently. So the expression appends a terminator the eye can see, and the
+# suite asserts the same two facts in that same form.
+#
+# ```zerg
+# strings.trim_left("  hi  ") + "|"
+# strings.trim_right("  hi  ") + "|"
+# ```
+# ```output
+# hi  |
+#   hi|
+# ```
 pub fn trim_left(s: str) -> str {
 	b := bytearray(s)
 	n := b.len()
@@ -314,6 +493,19 @@ pub fn trim_right(s: str) -> str {
 # equal_fold reports whether a and b are equal ignoring ASCII case. Not `to_lower(a) ==
 # to_lower(b)`: that builds two strings to answer a question about bytes, and it stops at
 # the first difference rather than after two allocations.
+#
+# ASCII-ONLY DECIDES AN ANSWER HERE rather than a rendering: `é` and `É` are two code
+# points ASCII folding cannot bring together, so the second line is false while the ASCII
+# letters around them fold fine.
+#
+# ```zerg
+# strings.equal_fold("héllo", "HéLLO")
+# strings.equal_fold("héllo", "HÉLLO")
+# ```
+# ```output
+# true
+# false
+# ```
 pub fn equal_fold(a: str, b: str) -> bool {
 	x := bytearray(a)
 	y := bytearray(b)
@@ -334,6 +526,25 @@ pub fn equal_fold(a: str, b: str) -> bool {
 #
 # The padding itself is `repeat`, which is what it is: the early return is what keeps the
 # count it is given non-negative, so nothing here has to restate that rule.
+#
+# THE WIDTH IS BYTES, which is the whole reason the fill has to be one. `日` is three
+# bytes and one character, so padding it to five adds TWO fill bytes and not four — the
+# third line — and a string already that wide comes back untouched, the fourth.
+#
+# ```zerg
+# strings.pad_start("7", 3, "0")
+# strings.pad_end("ab", 5, ".")
+# strings.pad_start("日", 5, "-")
+# strings.pad_start("hello", 3, "-")
+# guard { strings.pad_start("x", 4, "ab") } ?? "refused"
+# ```
+# ```output
+# 007
+# ab...
+# --日
+# hello
+# refused
+# ```
 pub fn pad_start(s: str, width: int, fill: str) -> str {
 	n := pad_count(s, width, fill)
 	return s if n == 0
@@ -351,7 +562,7 @@ pub fn pad_end(s: str, width: int, fill: str) -> str {
 # pad_count validates the fill and answers how many of it are missing — never negative, so
 # a string already at or past the width pads with none.
 fn pad_count(s: str, width: int, fill: str) -> int {
-	raise "strings.pad: the fill is one byte" if bytearray(fill).len() != 1
+	raise ValueError("strings.pad: the fill is one byte") if bytearray(fill).len() != 1
 
 	n := width - bytearray(s).len()
 	return 0 if n < 0

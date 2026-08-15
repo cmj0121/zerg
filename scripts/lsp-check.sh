@@ -8,7 +8,7 @@
 # the same compiler one question, held to the same answer.
 #
 # It matters because the invariant is only structurally true while nobody adds a rule. The
-# server calls `check_files_diag`, `lex_diags`, `lint_conversions` and `fmt_src_off` and
+# server calls `check_files_diag`, `lex_diags`, `lint_program` and `fmt_src_off` and
 # owns none of them; the day one handler grows a shortcut — a special case for an empty
 # buffer, a filter that drops a finding the author thought was noise — an editor starts
 # reporting a language that the compiler does not implement, and no other gate here can
@@ -29,6 +29,11 @@ trap 'rm -rf "$tmp"' EXIT
 fail=0
 ran=0
 outlined=0
+
+# A literal tab, for the outline's patterns further down. See the comment there: `\t` written
+# inside a pattern is a tab to BSD grep and the letter `t` to GNU grep, which is a gate that
+# asks one question on a developer's machine and a different one in CI.
+TAB=$(printf '\t')
 
 # A session is scripted here rather than in a fixture file so the request and the assertion
 # about its reply sit next to each other.
@@ -109,11 +114,11 @@ if diags is None:
     print("DIAG the server published no diagnostics for the buffer", file=sys.stderr)
     sys.exit(2)
 
-# The two severities are counted apart, because they answer to two different commands:
-# an ERROR is what `zerg build` refuses over, and an INFORMATION is an L5xx conversion
-# finding about a program that builds — which `zerg lint` reports and `zerg build` does
-# not. Comparing the total against the build was this gate's own first bug, and it read
-# as the server inventing findings.
+# The compiler's diagnostics and the linter's are counted apart, because they answer to
+# two different commands: an ERROR (severity 1) is what `zerg build` refuses over, and
+# everything else is a lint finding about a program that BUILDS — which `zerg lint`
+# reports and `zerg build` does not. Comparing the total against the build was this
+# gate's own first bug, and it read as the server inventing findings.
 #
 # A finding is put back together as `code message` before it is compared, because that is
 # how the COMMANDS print one and the server is what has them apart. Comparing the sentence
@@ -123,9 +128,18 @@ def said(d):
     c = d.get("code", "")
     return "%s %s" % (c, d["message"]) if c else d["message"]
 
+# THE SEVERITY IS PART OF WHAT IS SAID, so it is put back too. The linter has three levels
+# and `zerg lint` prints the two that do not gate the build with an adjective in front of
+# the code; the server sends them as LSP severities, in the same order. This table is the
+# one place the two spellings meet, and it exists so a server that quietly flattened all
+# three into one severity would be caught rather than agreeing about every count. An
+# UNKNOWN severity renders as itself, so it fails the comparison instead of the script.
+SEV = {2: "", 3: "warning: ", 4: "info: "}
+
 result = {
     "errors": [said(d) for d in diags if d["severity"] == 1],
-    "infos": [said(d) for d in diags if d["severity"] == 3],
+    "lints": [SEV.get(d["severity"], "severity-%s " % d["severity"]) + said(d)
+              for d in diags if d["severity"] != 1],
     "ranges": [(d["range"]["start"]["line"], d["range"]["start"]["character"]) for d in diags],
 }
 if edits is not None:
@@ -175,11 +189,12 @@ for src in "$@"; do
 		fail=$((fail + 1))
 	fi
 
-	# the INFORMATION half, against the command that reports one. `zerg lint` prints a
-	# conversion finding as `path:line:col: message`; the tree-only rules it also prints
-	# carry no position and are not the server's to place, so only the positioned lines are
-	# compared. This is the assertion that keeps the two families from swapping severity —
-	# a server that painted L5xx red would still agree about every count.
+	# the LINT half, against the command that reports one. `zerg lint` prints every finding
+	# as `path:line:col: [severity: ]code message`, so the whole line after the place is
+	# what the server has to have said — severity included. Only this file's lines are
+	# compared, because a program is linted whole and the server publishes per document.
+	# This is the assertion that keeps the two families from swapping severity — a server
+	# that painted a lint finding red would still agree about every count.
 	"$ZERG" lint "$src" >"$tmp/lint" 2>/dev/null || true
 	if ! "$PY" - "$src" "$tmp/lint" "$got" <<'PYEOF'
 import json, sys, re
@@ -190,13 +205,13 @@ for line in open(lintfile, encoding="utf-8"):
     m = re.match(r"^(.*?):(\d+):(\d+): (.*)$", line.rstrip("\n"))
     if m and m.group(1) == src:
         want.append(m.group(4))
-if sorted(got["infos"]) != sorted(want):
-    print("  server: %s" % sorted(got["infos"]))
+if sorted(got["lints"]) != sorted(want):
+    print("  server: %s" % sorted(got["lints"]))
     print("  lint:   %s" % sorted(want))
     sys.exit(1)
 PYEOF
 	then
-		echo "DISAGREE  $src — the server's information findings are not what zerg lint reports"
+		echo "DISAGREE  $src — the server's lint findings are not what zerg lint reports"
 		fail=$((fail + 1))
 	fi
 
@@ -215,16 +230,30 @@ PYEOF
 		# A METHOD is dumped as `fn P.get(this: P)`, so the optional `Type.` in the pattern is
 		# not decoration: without it the name read out of the dump was the RECEIVER, and the
 		# gate reported a struct declared twice and a method that did not exist.
+		#
+		# The indent is a LITERAL tab built by printf, never `\t` inside the pattern, for the
+		# reason editor-align.sh carries in full and layering-check.sh repeats: BSD grep reads
+		# `\t` as a tab and GNU grep reads it as an undefined escape, i.e. the letter `t`. This
+		# is the THIRD gate to walk into it. Here the pattern matched every declaration on
+		# macOS and none at all on Linux, so `ast.names` came back empty against an outline
+		# that was right — 55 files reported as the server having grown a view of the program,
+		# on the one platform nobody was reading the dump on.
 		"$ZERG" build --emit ast "$src" >"$tmp/ast" 2>/dev/null || true
-		grep -E '^\t(pub )?(fn|struct|enum|spec) ' "$tmp/ast" |
-			sed -E 's/^\t(pub )?(fn|struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*).*/\4/' |
+		grep -E "^$TAB(pub )?(fn|struct|enum|spec) " "$tmp/ast" |
+			sed -E "s/^$TAB(pub )?(fn|struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*).*/\4/" |
 			LC_ALL=C sort >"$tmp/ast.names"
 		# LC_ALL=C, because the other side of this diff is sorted by Python and Python sorts by
 		# CODE POINT. A UTF-8 locale puts `answer` before `Cmd` and a C locale puts `Cmd` first,
 		# so without it the gate reported a disagreement about ORDER as a disagreement about
 		# which declarations a file has.
 		printf '%s' "$got" | "$PY" -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin).get("symbols", []))))' >"$tmp/sym.names"
-		if ! diff -q "$tmp/ast.names" "$tmp/sym.names" >/dev/null; then
+		# An EMPTY dump is not a disagreement about declarations, it is this side of the
+		# comparison having failed to be read — and saying so is the difference between one
+		# line naming a broken extraction and 55 identical accusations against the server.
+		if [ ! -s "$tmp/ast.names" ] && [ -s "$tmp/sym.names" ]; then
+			echo "DISAGREE  $src — the parser dump named no declarations, so the outline was compared against nothing"
+			fail=$((fail + 1))
+		elif ! diff -q "$tmp/ast.names" "$tmp/sym.names" >/dev/null; then
 			echo "DISAGREE  $src — the outline is not the declarations the parser read"
 			diff "$tmp/ast.names" "$tmp/sym.names" | sed 's/^/  /'
 			fail=$((fail + 1))
@@ -463,6 +492,97 @@ then
 	fail=$((fail + 1))
 fi
 
+# --- 4. a member of a multi-file module ------------------------------------------------
+#
+# Everything above opens a file that IS a program. An editor mostly opens one that is not:
+# a member of a directory module, whose types, whose callers and whose second source root
+# all live outside it. Read as an entry, such a file reports `E707 no type named ...` for a
+# struct in the file next to it, `L102 private function ... is never called` for a function
+# its sibling calls, and `E502 cannot resolve import` for a module that sits beside its own
+# directory rather than inside it — three sentences about correct code, which is the one
+# failure that makes a person turn the server off.
+#
+# The fixture is built here rather than pointed at this repo's own sources, for the reason
+# the cases above are scripted rather than fixtured: what is asserted and what it is
+# asserted about have to be readable together. It is also the smallest program that has all
+# three shapes at once —
+#
+#   app.zg      the entry, and the only file with a `main`
+#   util.zg     a module beside the ENTRY, so `import "util"` from inside `widget/`
+#               resolves only from the entry's directory
+#   widget/     a directory module of three files, each using a name declared in another
+#
+# Each member is a different symptom read alone — `a.zg` the unresolvable import, `b.zg` the
+# name declared next door, `c.zg` the private function whose only caller is next door — and
+# the third is there because it is the only one of the three that is a LINT: an error aborts
+# the check before the linter runs, so a fixture of errors alone can never show that the
+# lint half reads the module too.
+#
+# `zerg build` is asked first and is the oracle: the program compiles, so nothing the server
+# says about any member is a finding — errors and lints alike.
+mkdir -p "$tmp/proj/widget"
+cat >"$tmp/proj/app.zg" <<'ZG'
+import "widget"
+
+fn main() {
+	widget.greet()
+}
+ZG
+cat >"$tmp/proj/util.zg" <<'ZG'
+pub fn shout(s: str) -> str {
+	return s + "!"
+}
+ZG
+cat >"$tmp/proj/widget/a.zg" <<'ZG'
+import "util"
+
+pub fn greet() {
+	print util.shout(banner())
+}
+
+fn tagged(t: Tag) -> str {
+	return t.name
+}
+ZG
+cat >"$tmp/proj/widget/b.zg" <<'ZG'
+struct Tag {
+	pub name: str
+}
+
+fn banner() -> str {
+	return tagged(Tag(stamp()))
+}
+ZG
+cat >"$tmp/proj/widget/c.zg" <<'ZG'
+fn stamp() -> str {
+	return "hello"
+}
+ZG
+
+members=0
+if ! "$ZERG" build --emit c "$tmp/proj/app.zg" >/dev/null 2>"$tmp/mod.cc"; then
+	echo "MODULE    the fixture program does not build, so there is nothing to hold the server to"
+	sed 's/^/  /' "$tmp/mod.cc"
+	fail=$((fail + 1))
+else
+	for member in "$tmp/proj/widget/a.zg" "$tmp/proj/widget/b.zg" "$tmp/proj/widget/c.zg"; do
+		got=$(session "$ZERG" diag "$member" 2>"$tmp/err") || {
+			echo "SESSION   ${member#"$tmp"/} — the server did not complete a session"
+			sed 's/^/  /' "$tmp/err"
+			fail=$((fail + 1))
+			continue
+		}
+		said=$(printf '%s' "$got" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d["errors"] + d["lints"]))')
+		if [ -n "$said" ]; then
+			echo "MODULE    ${member#"$tmp"/} — the server reports findings against a file the compiler builds clean"
+			printf '%s\n' "$said" | sed 's/^/  /'
+			fail=$((fail + 1))
+		else
+			members=$((members + 1))
+		fi
+	done
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "lsp-check: $fail case(s) where the server does not say what the compiler says"
 	exit 1
@@ -480,4 +600,12 @@ if [ "$outlined" -lt "${MIN_OUTLINES:-8}" ]; then
 	echo "lsp-check: only $outlined outlines were compared — the import filter is eating the list"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, formatting is fmt's answer, and 15 protocol cases hold"
+
+# The module members have a floor for the same reason, and it is not idle: both are opened
+# inside a branch that a fixture which stopped building would skip, and a skipped branch
+# reports nothing — which reads exactly like a server that found nothing.
+if [ "$members" -lt 3 ]; then
+	echo "lsp-check: only $members module members were opened — the fixture did not build, or the loop did not run"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, and 15 protocol cases hold"

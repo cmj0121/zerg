@@ -22,7 +22,22 @@
 
 ```text
 src/compiler/
-  zergc.zg        # driver：參數解析、模組載入、呼叫 cc
+  zergc.zg        # 宣告出來的命令列：`main`、`root`、版本橫幅
+  cmd/            # 每個子命令「做什麼」——一個目錄模組
+    cmd.zg        # 這個模組自己的標頭，不宣告任何東西（Go 的 `doc.go`）
+    build.zg      # `zerg build`——pipeline，以及產物寫到哪裡
+    test.zg       # `zerg test`——執行、每個 package 一個行程、回報
+    test_pkg.zg   #   哪些目錄有測試，以及各自由哪些檔案組成
+    test_fixture.zg #  一次 package 執行的計畫：fixture、測試、順序
+    test_driver.zg  #  那份計畫被編譯成的 driver 原始碼
+    fmt.zg        # `zerg fmt`
+    desugar.zg    # `zerg desugar`
+    lint.zg       # `zerg lint`
+    lsp_cmd.zg    # `zerg lsp`（不是 `lsp.zg`：那會遮蔽 `import "lsp"`）
+    diag.zg       # 共用：詞法關卡與診斷算繪
+    source.zg     # 共用：讀一份原始碼，並解析它 import 什麼
+    layout.zg     # 共用：東西在哪裡，以及 cc 用什麼參數呼叫
+    unit.zg       # 共用：一個 unit、它的快取 object，以及連結
   zerg/           # 編譯器函式庫——一個目錄模組，共用同一個 scope
     token.zg      # Kind enum + Token 型別
     lexer.zg      # 原始碼文字 -> token 串（可要求保留註解）
@@ -31,7 +46,13 @@ src/compiler/
     emit.zg       # AST -> C，含 emit 所需的最小型別檢查
     fmt.zg        # token -> 標準形式的原始碼
     lint.zg       # AST -> 發現
+  lsp/            # language server——自成一個模組
 ```
+
+`cmd` 裡標成**共用**的那四個檔案之所以在那裡，是因為不只一個子命令會用到它們，而且「是哪些」是在 call graph 上量出來的，
+不是猜的：`diag`、`layout`、`unit` 是 `build` 與 `test` 的（`lint` 也讀前兩個），`source` 則是這三個再加上 `lsp`。
+它們放在命令旁邊而不是放進其中任何一個裡面——一個目錄就是一個模組，所以沒有任何東西為了共用而變成 `pub`，
+也就沒有任何東西變成 `pub` 之後可能跟第二個模組相撞（`E705`）。
 
 ## 怎麼使用
 
@@ -63,8 +84,8 @@ zerg --help             # 命令、旗標，以及下面那些環境變數
 事實逼出來的：(1) `import "x"` 解析到的是一個**目錄模組**，它的多個檔案會攤平進同一個共用
 scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的那些 enum；但
 (2) **enum 的 variant 跨不過模組邊界**（`token.Fn` 會被拒絕）。因此函式庫必須住在**一個**目錄
-模組（`zerg/`）裡讓那些檔案共用 enum，而 `zergc.zg` 只是一層薄薄的 driver，永遠只呼叫該模組的
-`pub` 函式——從不自己建構 variant。當初 `src/compiler/zerg/` 這個直覺是對的。
+模組（`zerg/`）裡讓那些檔案共用 enum，而 driver——`zergc.zg` 與 `cmd` 模組——永遠只呼叫該模組的
+`pub` 函式，從不自己建構 variant。當初 `src/compiler/zerg/` 這個直覺是對的。
 
 ## 一次 build 是怎麼組起來的
 
@@ -145,16 +166,19 @@ Go emit 大部分的複雜度。決定性（M5 唯一需要的性質）不受洩
 
 每個擁有者今天做到哪裡，還剩下什麼：
 
-| 擁有者         | 今天                                                  | 還剩下什麼                   |
-| -------------- | ----------------------------------------------------- | ---------------------------- |
-| `chan`         | binding，以及沒被 bind 的 handle                      | ——                           |
-| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值             | ——                           |
-| `str`          | refcount cell；binding、參數、每一次 join             | ——                           |
-| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位 | ——                           |
-| carrier        | `!` / `??` 讀進來的那個暫存值有 drop 了               | 還缺 copy，binding 才能 drop |
-| tuple          | 有 copy helper，沒有 drop                             | 在 copy 旁邊補上 drop        |
-| ref-box        | 每個節點一次 `zrt_ref_alloc`，從來不釋放              | 遞迴型別的 drop              |
-| 以上全部       | 在宣告處註冊，靠 unwind 還回去                        | ——                           |
+| 擁有者         | 今天                                                   | 還剩下什麼         |
+| -------------- | ------------------------------------------------------ | ------------------ |
+| `chan`         | binding，以及沒被 bind 的 handle                       | ——                 |
+| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值              | ——                 |
+| `str`          | refcount cell；binding、參數、每一次 join              | ——                 |
+| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位  | ——                 |
+| carrier        | copy 加 drop；binding、參數、元素 vtable               | `Either` 的 Right  |
+| enum           | `zg_drop_<E>` 就寫在 `zg_copy_<E>` 旁邊，逐個 variant  | ——                 |
+| ref-box        | cell 的 drop 就是 enum 自己的 drop                     | 改成迭代式的鏈拆解 |
+| fn value       | 捕獲環境是一個 cell；一組 `zg_*_fnptr`                 | ——                 |
+| tuple          | `_drop` 就寫在 `_copy` 旁邊，按形狀產生，含元素 vtable | ——                 |
+| assignment     | enum 與 carrier 的舊值會被 drop                        | 其他每一種擁有型別 |
+| 以上全部       | 在宣告處註冊，靠 unwind 還回去                         | ——                 |
 
 concurrency corpus 現在是 **0 筆洩漏報告**（從 39 筆），而 `scripts/sanitize-conc.sh` 已經打開
 `detect_leaks=1`——那裡再出現洩漏就是 regression，不是已知欠債。`str` 那一列本來不是「多 emit
@@ -170,9 +194,14 @@ mark 還回去——那本來就是其他每一條出口都會走的同一條路
 
 **還沒被量到的**是 corpus 的其餘部分。`sanitize-conc` 跑的是 17 個 concurrency case；我對另外 48
 個做了一次性的掃描，13 個裡面總共 47 筆，而且都是 concurrency case 碰不到的類別——一連串的
-rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box 的遞迴型別（就是 `ref-box`
-那一列，它從設計上就沒有被釋放過）。下一步需要的是一個涵蓋整個 corpus 的洩漏 gate，因為沒有東西
-在跑的類別，就是沒有東西在量的類別。
+rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box 的遞迴型別。
+
+`make mem-check` 是第一個能跑在別處的 gate。它建起寫在 `scripts/mem-check.sh` 裡面的 9 支程式，
+每一支各跑 5 輪與 200 輪，連結的是取代 `alloc.c` 的計數配置器，並要求兩次的存活筆數相等——所以它
+既不需要 LeakSanitizer 也不需要私有 corpus，在 macOS 上、在 fork 上都跑得起來。ref-box、carrier
+與 closure 環境就是它被寫出來要抓的那三個，而它在三個關掉之前都是紅的。它自己聲明的限制是：一個
+**有界**的洩漏——每支程式一筆，或每個位置一筆而不是每次建構一筆——在兩個輪數下是同一個數字，它看
+不見。
 
 **通往 M5 的增量階梯**（每一階都端到端測過，然後才 commit）：
 

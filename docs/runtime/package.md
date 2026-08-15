@@ -234,17 +234,31 @@ surface** (whether module-private, or package-internal and never re-exported), b
 not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
 its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
 
-> **[deviation]** **Enforced on functions and module constants, and on nothing else yet.** Naming another
-> module's module-private FUNCTION is a compile error, reported with a place — both as a bare call and as
-> the namespaced `lib.helper()` — and so is reading its module-private CONSTANT, in the same two shapes:
-> the bare `FLOOR` and the namespaced `lib.FLOOR`. A
-> module-private TYPE and a module-private FIELD are still readable across the boundary: a `pub fn` may
-> return a private struct and a dependent may read a private field of it, with no finding. Every module is
-> flattened into one namespace, which is also why two modules that declare the same
-> name collide — that refusal is about the name, not about the visibility. What the rule compares is the
-> DIRECTORY a declaration was read from against the directory doing the reading, which is the module
-> boundary and not the package one; **package-internal** and **package-public** above still need a package
-> to exist.
+**Enforced on every declaration a module can name.** Naming another module's module-private FUNCTION is a
+compile error, reported with a place — both as a bare call and as the namespaced `lib.helper()` — and so
+is reading its module-private CONSTANT, in the same two shapes: the bare `FLOOR` and the namespaced
+`lib.FLOOR`. A module-private TYPE is refused the same way, whether it is written bare (`s: Secret`, a
+`Secret(…)` construction) or through the namespace (`lib.Secret`); a module-private FIELD is refused on
+read and on write alike, which is the other half of the rule requiring one to carry a default. And the
+normative sentence above is a rule of its own: a **`pub` declaration that names a type which is not
+`pub`** is refused **at the declaration**, so a `pub fn` cannot return, take, or hold in a `pub` field a
+type its dependents could never spell.
+
+Two findings are reported where both are true — the export that leaks and the read that reaches in —
+because they are two mistakes in two files and one message cannot point at both. The export is the one
+with a fix available: the module that wrote `pub` decided to hand the type out and is the only party who
+can mark the type `pub` or stop returning it, where a dependent reading a private field can do neither.
+
+Every module is still flattened into one namespace, which is why two modules that declare the same name
+collide — that refusal is about the name, not about the visibility.
+
+> **[deviation]** What the rule compares is the DIRECTORY a declaration was read from against the
+> directory doing the reading, which is the **module** boundary and not the package one. So
+> **package-internal** and **package-public** above are still one tier as far as the compiler is
+> concerned: a `pub` declaration is nameable by every other module of the build that imports it, and
+> nothing narrows that to a package's root surface, because no package exists yet to be the unit that
+> narrowing is measured against. Re-export (`import pub`) builds a surface; nothing yet requires a name to
+> be on one.
 
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
@@ -282,19 +296,29 @@ package **cycles be rejected**.
 > whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
 > is how both are resolved.
 >
-> **[deviation]** **The binding is the BUILD's, and so is the member.** Two halves of one flatten, and
-> both are visible to a program:
+> **The "no transitivity" rule is enforced.** A binding belongs to the MODULE of the file that wrote the
+> `import` — module-grained and not file-grained, because a module's files share one namespace — so the
+> namespaces a module may name are the ones its own files bound, its `as` aliases included and another
+> module's excluded. Naming a module this one never imported is a compile error with a place, at every
+> position that can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant
+> read, and a TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The
+> import graph decides what is compiled into the build AND what is nameable inside it, and the two answers
+> are told apart from a third: an invented prefix (`bogus.f()`) names nothing anywhere and stays an
+> **undefined name**, because sending a reader to add an import for a module that does not exist would be
+> worse than the hole.
 >
-> - **No transitivity is not enforced.** The namespaces in scope are every namespace every module of the
->   build bound — including another module's `as` alias — so a module this one never imported is one it
->   can still name. The import graph decides what is COMPILED into the build, not what is nameable inside
->   it.
-> - **The member is looked up program-wide.** Once the prefix resolves, the name after the `.` is found in
->   the one flattened namespace rather than in the module the prefix named, so with `a` and `b` both
->   imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked against the
->   module that DECLARED the member, which is why a private one is refused naming its real owner rather
->   than the module the program wrote. The seed compiler resolves this half correctly, and answers
->   `module "b" has no public member "helper"`.
+> > **[deviation]** **A type position discards a qualifier it cannot resolve.** `c: bogus.Counter` builds,
+> > and reads as `Counter`: a qualified type name resolves to its last segment — the flatten this chapter
+> > documents — and an unknown qualifier is dropped there rather than reported. So the three-way answer
+> > above is complete only at the expression positions; a type position tells "this module did not import
+> > it" from "this is a real namespace", and neither of those from a typo.
+>
+> **[deviation]** **The member is looked up program-wide.** Once the prefix resolves, the name after the
+> `.` is found in the one flattened namespace rather than in the module the prefix named, so with `a` and
+> `b` both imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked
+> against the module that DECLARED the member, which is why a private one is refused naming its real owner
+> rather than the module the program wrote. The seed compiler resolves this half correctly, and answers
+> `module "b" has no public member "helper"`.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section
@@ -329,9 +353,27 @@ exception.
 > `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
 >
-> **[deviation]** Prelude names are **not reserved**. A program may declare `struct list`, `struct
-Result`, `struct Ref` or `spec Eq` and none of it is refused, so the names the operators desugar to can
-> in fact be knocked out from under the language.
+> **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
+> this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
+> — _E611 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
+> — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
+> the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
+> `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
+> there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
+> the day it is bound.
+>
+> The **function slot takes a narrower set than the type slots**, and `map` is the whole of the
+> difference: `fn map(xs, f)` is legal, every other name in the set is not. A type declaration's name
+> lands in the namespace all of them are bound in, while a function's lands where only the ones a
+> **call can spell** are — and `map[…](…)` as a constructor is built by neither compiler, so the name
+> has no value form to take. The rest do: a callee spelling `int`, `byte`, `bytearray` or `list` is read
+> as a conversion, and one spelling `Either`, `Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a
+> construction, before any user symbol is looked for.
+>
+> Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
+> not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
+> constant, which are one form in the parser — may still take a prelude name; shadowing one inside a
+> scope is a loud error at its first use, which is the thing a declaration was not.
 
 ### Testing & visibility
 
@@ -345,20 +387,209 @@ privacy. That decides where a test lives:
   surface, and a separate package that depends on this one sees exactly the package-public surface — a
   true external view.
 
+White-box placement works in **either** shape a directory can have, because a test build resolves a test
+file's package the way an import is resolved: **most specific first**. `module_at` answers a single
+`<name>.zg` file before it answers a directory, so a `.zg` file beside its neighbours is a module in its
+own right — which is what `src/stdlib` is, eighteen independent modules in one flat directory. A
+`strings_test.zg` there is therefore the test of `strings.zg` alone, and its package is that pair; a test
+file that names no such sibling belongs to the **directory**, as before.
+
+What that costs: in a directory that _is_ one module, a `*_test.zg` whose name matches one of the module's
+files takes that file alone — `a_test.zg` in a directory of `a.zg` and `b.zg` no longer sees `b.zg`. It is
+a loud failure (an undeclared name, at the line that used it) and never a silent one, and the way out is to
+name the test file for the module rather than for one of its parts. In exchange the rule is **monotone**:
+adding a test file never changes what another package is built from.
+
 Test files are recognized **by the build tool's convention** (e.g. a `*_test.zg` name) and included
 only in a test build, never in a normal one. So a test's declarations never reach the shipped artifact
 or a package's public surface — even a `pub` declaration in a test file in the root module stays out of
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
 
-> **[not yet]** **No part of the convention is recognized.** There is no `zerg test` command, and a
-> `*_test.zg` file is not kept out of anything: it is compiled into an ordinary build like every other
-> file in its module, so its declarations DO reach the shipped artifact and a `pub` one DOES join the
-> module's surface — `lib.only_in_test()` resolves and runs from a program that never asked for a test.
-> A name it repeats collides with its siblings, and a syntactically broken one fails a normal build. So
-> the white-box and black-box positions above are places to put a file rather than a way to run one, and
-> the file is not inert while it waits. The `testing` module's `assert` family is callable from an
-> ordinary program in the meantime.
+> **[not yet]** `zerg test` is a **scaffold**. It walks a path for the packages under it, compiles
+> each — its sources, its test files and a generated driver, so a white-box test reaches the
+> module's internals with no import and no `pub` — and runs every `#[test]` it finds, reporting
+> `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file, counting skips and timeouts apart
+> from passes and failures, and exiting non-zero if any did not hold.
+>
+> **A package is the module the test file names**, resolved most specific first: `strings_test.zg`
+> beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if
+> there is one, and the driver), and a test file naming no such sibling makes the directory the
+> package. One directory may therefore hold several packages, each with its own driver and its own
+> process.
+>
+> **The path may be one `.zg` file**, and then it is the **package that file is in** that runs —
+> `zerg test src/stdlib/strings_test.zg` runs `strings.zg` + `strings_test.zg`, and not the other
+> packages of that directory. Ancestors are counted from the file's directory, exactly as they
+> would be for the directory itself. A build of the test file **alone** is a build of nothing, so
+> the file selects a package rather than a file list; `--only` is the tool for one test.
+>
+> **The exit status distinguishes a search that found nothing.** `0` every test that ran passed or
+> skipped, `1` a test failed or timed out, `2` the command could not be carried out (no such path,
+> a `--only` that matched nothing, a fixture parameter that resolves to nothing), and `3` the
+> search ran and there was no test in what it searched. `3` is not folded into `2` because the
+> reader's next move differs: a `2` is fixed by editing the command line and a `3` by looking at
+> the tree. A run that found nothing says so on stderr as well, but a sentence alone leaves a CI
+> line green forever, and the reader of a CI line is a shell.
+>
+> **A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg`. The
+> decorator may be written anywhere, so a directory whose only `#[test]` sits in an ordinary
+> module file is a test package too, and `zerg lint` goes on warning (**L601**) that such a test
+> **ships**. Both, not one: the linter says where a test ought to live and the runner runs what is
+> written. It adds no package **shape** — the package a stray `#[test]` belongs to is the one that
+> already compiles the file it is in — so the monotone rule above is untouched: which files a
+> package is built from is still decided by the `*_test.zg` names alone.
+>
+> **A `#[test]` returns nothing, and a declared return type is refused** with a place, before
+> anything is compiled: the driver calls a test as a **statement**, so the value would be dropped
+> — and `#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than
+> linted because a lint exits 0 and the run would go on saying `ok`.
+>
+> **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one
+> test, a stem selects the family. It is applied before anything is generated, so a test it did not
+> select is not compiled and its fixtures are never built. A filter that selected nothing exits `2`
+> rather than reporting a green run of nothing: the command named a test that is not there.
+>
+> **`--timeout <seconds>`** is how long one test may take before the run stops waiting on it;
+> the default is `60`. A test that goes over is reported `STUCK` and counted apart, and the run
+> goes on to the tests after it: a timeout is not a failed assertion, because nothing was decided.
+> Without it a hung test and a slow test are indistinguishable, and the hung one takes the whole
+> run with it until CI's own timeout kills the job with nothing saying which test did it.
+>
+> **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in
+> one process — which contains an assertion that does not hold and an uncaught abort alike, since
+> a `guard` catches both and a coroutine that dies without one dies alone. What no coroutine can
+> contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no
+> result when the run ends is re-run in a **process of its own** — the remainder, exactly, since
+> a result is written only after a body returns — and that is what attributes the death to the
+> test that caused it. When it happens the report says so on a `NOTE` line; a run that quietly
+> changed strategy is a run whose result nobody can interpret.
+>
+> A `#[test]` takes either **no parameter** or one **`testing.Context`**,
+> identified by its type and not by its name; the driver writes whichever call the signature
+> asks for. A context is passed **by value** and shares what matters anyway — its one field is a
+> channel, and a channel is a `Ref` value, so a copy shares it — and carries `ctx.name()`,
+> `ctx.log(msg)` (shown only if the test fails), `ctx.skip(reason)` and `ctx.fatal(msg)`. The
+> last two `raise` to unwind and leave the reason on the context, so nothing has to read a
+> message string to tell a skip from a failure. A claim is `assert cond`, the keyword
+> ([Grammar](../surface/grammar.md), group 8), which writes its own message and needs nothing from
+> the context; what is left for `ctx.log` is a **domain note**, a thing about the fixture rather
+> than about the expression. `testing.assert_raises` stays a free function because it is not an
+> assertion: it asks what an already-finished call raised.
+>
+> **Fixtures.** A test **declares what it needs**, the framework builds it once, hands it over and
+> tears it down. A `#[fixture]` is a function that takes its tests as a **continuation**:
+>
+> ```zerg
+> #[fixture]
+> fn db(use: fn (Conn)) {
+>     c := connect("postgres://tmp/test")
+>     defer c.close()
+>     use(c)
+> }
+>
+> #[fixture]
+> fn schema(db: Conn, use: fn (Schema)) {
+>     s := make_schema(db)
+>     defer drop_schema(s)
+>     use(s)
+> }
+> ```
+>
+> `use: fn (T)` is identified **by type**, and it is two things at once: the continuation the tests
+> run inside, and the declaration of what this fixture **produces**. Every other parameter is a
+> **dependency matched by name** against another fixture — one rule for test-to-fixture and
+> fixture-to-fixture both. Teardown is `defer`, the language's own idiom, and needs nothing from the
+> runner.
+>
+> A test resolves its parameters the same way: a `testing.Context` **by type**, a fixture **by
+> name**, and no parameter meaning a direct call.
+>
+> ```zerg
+> #[test]
+> fn test_insert(schema: Schema) { … }
+>
+> #[test]
+> fn test_query(db: Conn, ctx: testing.Context) { … }
+>
+> #[test]
+> fn test_pure() { … }
+> ```
+>
+> The framework **composes by nesting** — `db(fn (c) { … schema(c, fn (s) { … }) })` — so dependency
+> order, teardown order (an inner `defer` fires first), and "only when needed" are all consequences
+> of where the calls were written. There is no topological sort at runtime and no teardown registry,
+> and a level no test goes through is never generated at all.
+>
+> **Everything is resolved before anything runs.** A parameter naming no fixture, a parameter whose
+> type is not what the fixture produces, and a **circle** among fixtures are each reported with a
+> **place**, for the whole tree at once, and the run exits `2` having executed nothing.
+>
+> **A fixture that cannot be built fails every test that needed it** — `FAIL test_query` with
+> _fixture `db` could not be built: …_ under it, and the run exits non-zero: a test that could not
+> run must never look like one that passed. If the raise arrives when every test under it has
+> already answered for itself, what broke was the **teardown**, and the failure is recorded against
+> the fixture instead of against anybody's test.
+>
+> **Where a fixture lives, and what inherits it.** A fixture is declared in a `*_test.zg`, so it
+> reaches no shipping build, and it serves the tests of **its own directory**. One that is to serve
+> the directories **below** as well goes in **`fixtures_test.zg`** — the one file an ancestor
+> contributes downward, to **every** level below it and not merely the next one. That is pytest's
+> `conftest.py` model, and the fixed name is load-bearing twice: an ordinary `*_test.zg` is a file
+> **of** its module and reads that module's private names, so carrying it into a directory below
+> would put it in a scope where those names are not; and an ancestor's own tests would otherwise run
+> once per descendant directory. A `#[test]` written in a `fixtures_test.zg` runs in its own
+> directory, once, like any other. Ancestors are counted from the path `zerg test` was **given**.
+>
+> An inherited file is **copied into the package** for the length of the run, because a module is a
+> **directory** — the same reason the generated driver is written there. The copy is byte for byte,
+> so a diagnostic inside one points at the right line, and it is taken away when the run ends. A
+> package therefore cannot **shadow** an inherited fixture: two declarations of one name in one
+> scope are refused as the collision they are.
+>
+> **The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own**
+> instance of an inherited fixture, because each is one driver in one process. That is pytest's
+> `scope="package"`. Session scope is deliberately not wanted and is anyway unreachable: `E705`
+> refuses two modules both defining a `pub` name, so one driver over a whole tree cannot be built,
+> and a live value does not cross a process boundary.
+>
+> A fixture value reaches a test the way any value reaches a call — **by value** — and the test body
+> runs on the far side of a `spawn`, so a `Ref` inside it (a channel, a boxed handle) is shared and
+> the rest is copied. Tests are **serial**; `ctx.parallel()` is **[not yet]**, and when it lands,
+> tests sharing a fixture will share one instance of it.
+>
+> **The fallback rebuilds what it needs.** When a test ends the process and the remainder is re-run
+> one process each, each of those processes enters only the levels the test it was asked for is
+> under — so it stands that test's fixtures up again, and no others.
+>
+> The generated driver and the copy of an inherited fixture file come **off disk as soon as they
+> have been read**, before the build can emit, compile, link or report anything — so a run that
+> fails leaves a source directory exactly as it found it. That matters most where it is least
+> visible: the compiler resolves the standard library by **listing** `src/stdlib`, and a driver
+> left behind there is a file every later build reads.
+>
+> What is **not** built is everything past that: a doc comment (`##`), a doc example run as a
+> test, benchmarks, and running two tests at once. A failing assertion `raise`s, and a raise is
+> control flow, so it unwinds out of the test body on its own.
+>
+> The **assertion** side has since been filled in, and it is a KEYWORD rather than a library.
+> `assert cond` raises `AssertionError` with the file, the line, the claim's own source text and
+> the value of each operand a comparison came apart into. `testing.assert_raises` answers the
+> `Err` a `guard`ed call raised and is the one helper left. What is still not there is a rendering for a **composite**,
+> so `assert xs == ys` over two lists is `E445` and a claim about a list is made through something
+> that reduces it to a scalar.
+>
+> The **exclusion** is built. A normal build compiles no `*_test.zg` — the name is matched where a
+> module's directory is read, in both compilers — so nothing a test declares reaches the shipped
+> artifact or joins a module's surface, and a name it repeats or a file that does not parse costs a
+> normal build nothing. Naming one of its declarations is _E388 module `lib` has no `only_in_test`_,
+> and naming the file is _E512 `lib/lib_test` names a test file, and a normal build compiles none_,
+> both with a place. E388 does not go on to say that a test file declares one: that fact is the
+> loader's, and the rule that reports it is in the checker.
+>
+> A test file is not importable from anywhere, a sibling test file included — a white-box test shares
+> its module's namespace and reaches its internals with no import at all, which is what makes `zerg
+test` a matter of compiling more files rather than of relaxing a visibility rule.
 
 ### Target-conditional files
 

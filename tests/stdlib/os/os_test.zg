@@ -1,0 +1,258 @@
+# The `os` suite — the questions about the host that have an answer a test can know.
+#
+# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out.
+#
+# MOST OF THIS MODULE CANNOT BE TESTED HERE AND SHOULD NOT PRETEND TO BE. `exit` ends the
+# process and `env` answers whatever the host was started with — a suite that asserted a value
+# for `HOME` would be asserting the machine. What IS testable is the part that is a function of
+# its argument, and the part where the module makes a CLAIM: `platform` and `arch` resolve at
+# compile time, so they name the target rather than the host, and `isatty` answers about a
+# descriptor.
+#
+# THAT LIST GOT SHORTER WHEN THE ENVIRONMENT BECAME WRITABLE. A suite that can `set_env` no
+# longer has to assert the machine: it makes the variable it is about to ask about, so the
+# claim is about the module and not about whoever started the run. `run` comes with it — a
+# child's exit status is the one thing a parent can read without a pipe, so a shell that exits
+# with the value it was handed is how "the child inherited the environment" is asked.
+#
+# EVERY NAME THIS SUITE WRITES IS PREFIXED `ZERG_OS_SUITE_`, and every test removes what it
+# made. Tests run one at a time (the generated driver awaits each before starting the next),
+# but they share one process and therefore one `environ`, so a leftover variable is a test
+# writing into its successor's world.
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+# --- isatty ------------------------------------------------------------------------------
+
+# A DESCRIPTOR THAT IS NOT OPEN IS NOT A TERMINAL, and it answers false rather than raising.
+# That is the whole of what a suite can say about `isatty` without asserting how the suite
+# itself was started: whether fd 2 is a terminal depends on the shell, the CI runner and
+# whether somebody redirected it, and a test that asserted either way would fail for a reason
+# that is not about the code. The environment-dependent half is held by scripts/log-check.sh,
+# which runs whole programs and controls their streams.
+#[test]
+fn test_isatty_says_no_to_a_descriptor_that_is_not_one(ctx: testing.Context) {
+	ctx.log("a negative fd cannot be open at all")
+	assert not os.isatty(-1)
+	assert not os.isatty(-99)
+
+	ctx.log("and one far above what this process opened")
+	assert not os.isatty(4096)
+}
+
+# IT IS TOTAL: every fd is a question with an answer, and none of them raises. A logger asks
+# this before it decides to colour, on a path where an abort would be absurd — the program
+# would die because it could not work out whether to use escape codes.
+#[test]
+fn test_isatty_never_raises() {
+	mut fd := 0
+	mut asked := 0
+	for fd < 8 {
+		# the answer is the host's; that it HAS one is the claim
+		if os.isatty(fd) {
+			asked = asked + 1
+		} else {
+			asked = asked + 1
+		}
+		fd = fd + 1
+	}
+	assert asked == 8
+}
+
+# --- platform and arch ---------------------------------------------------------------------
+
+# THEY RESOLVE AT COMPILE TIME, which the chapter states and nothing asserted. What that means
+# for a test is that they are a fixed non-empty word out of a known set — not a lookup that
+# could answer "" on a host the module has not met.
+#[test]
+fn test_platform_is_one_of_the_names_the_module_knows() {
+	p := os.platform()
+	assert p != ""
+	assert p in ["darwin", "linux", "windows", "freebsd", "unknown"]
+}
+
+#[test]
+fn test_arch_is_a_name() {
+	a := os.arch()
+	assert a != ""
+	assert not strings.contains(a, " ")
+}
+
+# Both are stable within a run — they are the target, not a reading.
+#[test]
+fn test_platform_and_arch_do_not_change() {
+	assert os.platform() == os.platform()
+	assert os.arch() == os.arch()
+}
+
+# --- env ------------------------------------------------------------------------------------
+
+# `env` answers `str?`, and the ABSENCE is the point: a variable that is not set is `nil` and
+# not `""`, which is what lets a caller tell "unset" from "set to empty". A test can create
+# neither, so what it asserts is the one it can be sure of — a name nothing sets.
+#
+# `assert` CANNOT TAKE THE OPTIONAL ITSELF. The keyword renders each operand, and a `str?` has
+# no rendering in this compiler (`E449`), so the claim is asked through a `bool` — which is
+# what `present` is for, and why the two tests below use it rather than `== nil`.
+#[test]
+fn test_env_of_something_nobody_sets_is_absent(ctx: testing.Context) {
+	ctx.log("a name chosen to be absent rather than empty")
+	v := os.env("ZERG_A_NAME_NOTHING_SETS_9f3a")
+	assert not present(v)
+	assert (v ?? "fallback") == "fallback"
+}
+
+# ABSENT is what `present` coalesces to in order to mean "there was nothing here". It is not a
+# value any environment holds — it opens with U+0001, which is the whole requirement — so a
+# variable that is set can never be mistaken for one that is not. (U+0000 is not available:
+# `zerg` refuses a NUL in a string literal.) `src/stdlib/log.zg` spells `NO_COLOR`'s presence
+# the same way, for the same reason.
+const ABSENT := "\u{1}nothing set this"
+
+# present is "this optional holds something", as a bool an assertion can render.
+#
+# THE UNWRAPPING FORM IS NOT AVAILABLE, and neither is the obvious one. `v == nil` is `E341` —
+# an optional is not an operand of `==` — and the unwrap the compiler suggests in its place,
+# `if s := v { ok = true }`, BINDS A NAME NOTHING READS, which is `L103`. That is the whole of
+# what a presence test needs to say, and both spellings of it cost a finding. Coalescing to a
+# sentinel and comparing the plain `str` says it in one line and reads nothing it did not bind.
+fn present(v: str?) -> bool {
+	return (v ?? ABSENT) != ABSENT
+}
+
+# And PATH is the one variable a process on this platform always has, so it is the half of
+# the claim that says `env` can answer at all rather than always answering nothing.
+#[test]
+fn test_env_finds_a_variable_that_is_always_set() {
+	p := os.env("PATH")
+	assert present(p)
+	assert (p ?? "") != ""
+}
+
+# --- set_env --------------------------------------------------------------------------------
+
+# THE ROUND TRIP IS THE WHOLE CLAIM: what `set_env` wrote is what `env` reads back, and a second
+# write REPLACES rather than adding a second entry. Neither half could be asked before, because
+# a suite could only read variables somebody else had set.
+#[test]
+fn test_set_env_is_read_back_by_env(ctx: testing.Context) {
+	k := "ZERG_OS_SUITE_ROUNDTRIP"
+
+	ctx.log("nothing sets it to begin with")
+	assert not present(os.env(k))
+
+	os.set_env(k, "first")
+	assert (os.env(k) ?? "") == "first"
+
+	ctx.log("a second write replaces the value rather than adding one")
+	os.set_env(k, "second")
+	assert (os.env(k) ?? "") == "second"
+
+	assert os.del_env(k)
+}
+
+# A VALUE MAY BE EMPTY, AND EMPTY IS NOT ABSENT. `env` answers `str?` precisely so a caller can
+# tell the two apart, and until the environment could be written no test could construct the
+# case: a variable exported empty had to come from a shell. scripts/log-check.sh asks the
+# `log`-shaped version of this — an exported-empty `NO_COLOR` still turns colour off — and it
+# has to keep asking it, because that claim is about `log`'s module-level consts. The fact
+# UNDERNEATH it is this one, and this is where it belongs.
+#[test]
+fn test_set_env_can_write_an_empty_value_which_is_not_the_same_as_unset(ctx: testing.Context) {
+	k := "ZERG_OS_SUITE_EMPTY"
+
+	os.set_env(k, "")
+	ctx.log("present, and its value is the empty string")
+	assert present(os.env(k))
+	assert (os.env(k) ?? "sentinel") == ""
+
+	ctx.log("and `?? default` does NOT fire for it")
+	assert (os.env(k) ?? "default") != "default"
+
+	assert os.del_env(k)
+	assert not present(os.env(k))
+}
+
+# IT RAISES ON A NAME THE HOST WILL NOT TAKE rather than failing quietly. `setenv(3)` refuses an
+# empty name and one containing `=`, and a caller that was told nothing would go on believing it
+# had written a variable that is not there.
+#[test]
+fn test_set_env_raises_on_a_name_setenv_refuses(ctx: testing.Context) {
+	ctx.log("an empty name")
+	e := testing.assert_raises(guard { os.set_env("", "value") })
+	assert e is ValueError
+
+	ctx.log("and one carrying the separator")
+	e2 := testing.assert_raises(guard { os.set_env("ZERG_OS_SUITE=X", "value") })
+	assert e2 is ValueError
+
+	ctx.log("neither of them left anything behind")
+	assert not present(os.env(""))
+	assert not present(os.env("ZERG_OS_SUITE=X"))
+}
+
+# --- del_env --------------------------------------------------------------------------------
+
+# THE ANSWER IS WHETHER THE KEY WAS THERE, which is the one thing the caller cannot work out
+# for itself: `env` then `del_env` is two queries with a window between them, and `unsetenv(3)`
+# reports success either way. So the first removal is `true` and the second is `false`.
+#[test]
+fn test_del_env_answers_whether_the_key_was_there(ctx: testing.Context) {
+	k := "ZERG_OS_SUITE_ONCE"
+
+	os.set_env(k, "here")
+	ctx.log("the first removal found it")
+	assert os.del_env(k)
+
+	ctx.log("and the second had nothing to remove")
+	assert not os.del_env(k)
+	assert not present(os.env(k))
+}
+
+# A KEY THAT WAS NEVER SET ANSWERS `false`, which is the answer for the absent case stated on
+# its own rather than as the tail of a round trip.
+#[test]
+fn test_del_env_of_a_name_nobody_ever_set_is_false() {
+	assert not os.del_env("ZERG_OS_SUITE_NEVER_SET_4c81")
+}
+
+# IT IS TOTAL, and that is the asymmetry with `set_env`: a name the host would refuse WAS NOT
+# SET, so `false` is a true answer rather than a missing one and there is nothing to raise
+# about. A write to such a name has no answer at all, which is why only that one raises.
+#[test]
+fn test_del_env_is_total_on_the_names_set_env_refuses() {
+	assert not os.del_env("")
+	assert not os.del_env("ZERG_OS_SUITE=X")
+}
+
+# --- run, and the environment a child inherits ----------------------------------------------
+
+# A CHILD INHERITS THE ENVIRONMENT AS IT STANDS AT THE `run`, and the exit status is how a
+# parent with no pipe finds out. `sh -c "exit $K"` ends with whatever the variable held, so the
+# status IS the value the child saw — and `${K:-9}` names a fallback the child can only reach
+# when the variable is gone.
+#
+# THE SHELL IS THE OBSERVER AND NOT THE SUBJECT. `run` is `execvp`, no shell of its own; `sh`
+# is here because expanding a variable is the cheapest thing that can report one.
+#[test]
+fn test_run_hands_the_child_the_environment_as_it_stands(ctx: testing.Context) {
+	k := "ZERG_OS_SUITE_CHILD"
+
+	ctx.log("with nothing set, the child falls back")
+	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
+
+	ctx.log("a write before the run reaches the child")
+	os.set_env(k, "7")
+	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 7
+
+	ctx.log("and so does the LATEST write, not the first")
+	os.set_env(k, "3")
+	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 3
+
+	ctx.log("a removal reaches it too")
+	assert os.del_env(k)
+	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
+}

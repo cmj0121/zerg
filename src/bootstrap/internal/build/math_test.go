@@ -52,8 +52,12 @@ func TestMathConstantsRuns(t *testing.T) {
 }
 
 // TestMathRoundingRuns covers the rounding family trunc/floor/ceil/round over positive
-// and negative inputs, the half-away-from-zero rule, and an already-integral value
-// (which the >= 2^52 guard returns unchanged). Integral floats print without a decimal.
+// and negative inputs, the half-away-from-zero rule, and an already-integral value.
+//
+// The four answer an `int` now, because `int(x)` on a float is refused and a verb that
+// gave back a float would leave the caller holding that refusal. The goldens did not move
+// with the return type: an integral float printed without a decimal, so the digits were
+// always what came out.
 func TestMathRoundingRuns(t *testing.T) {
 	got := runProgramRT(t, "import \"math\"\n"+
 		"fn main() {\n"+
@@ -71,5 +75,22 @@ func TestMathRoundingRuns(t *testing.T) {
 		"}\n")
 	if want := "2\n-2\n2\n-3\n3\n-2\n3\n-3\n2\n-2\n5\n"; got != want {
 		t.Fatalf("math rounding: got %q, want %q", got, want)
+	}
+}
+
+// TestMathRoundingOverflowRaises pins the contract the int return decides: a magnitude no
+// `int` holds raises OverflowError rather than coming back unchanged, which is what the old
+// float return did with anything past 2^52. It is `guard`-demotable like every other
+// conversion that can raise, and the value just below the boundary still converts — so the
+// test says where the line is and not only that there is one.
+func TestMathRoundingOverflowRaises(t *testing.T) {
+	got := runProgramRT(t, "import \"math\"\n"+
+		"fn main() {\n"+
+		"\tprint math.trunc(4503599627370496.0)\n"+ // 2^52, integral and in range
+		"\tprint guard { math.trunc(1e30) } ?? 0\n"+
+		"\tprint guard { math.floor(0.0 - 1e30) } ?? 0\n"+
+		"}\n")
+	if want := "4503599627370496\n0\n0\n"; got != want {
+		t.Fatalf("math rounding overflow: got %q, want %q", got, want)
 	}
 }

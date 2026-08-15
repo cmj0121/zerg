@@ -81,6 +81,13 @@ jobs:
       - name: Every error code is reported once, asserted, and listed
         run: make error-codes-check
 
+      # The seed's gap list is the contract a `seed-gap` case is excused against, so a
+      # reader of either language needs it. The zh-TW page had NO gap section at all while
+      # the English one had 27 entries — nobody decided that, it drifted one entry at a
+      # time, and nothing was watching.
+      - name: The seed's gap list says the same thing in both languages
+        run: make seed-gaps
+
       # And the board itself: a gate the workflow never runs is a gate that finds
       # nothing. This is the check that would have caught the nine that were green
       # only when somebody thought to type them.
@@ -166,6 +173,15 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # --- 7b''. the values that outlive their scope -----------------------------
+      # The leak gate that needs neither LeakSanitizer nor the private corpus, which is
+      # why it is HERE — on both platforms, on every fork — rather than beside
+      # `sanitize-conc` in the Linux-only job that has been this repository's single
+      # source of leak signal. Its programs are written in the script, the way `refuse`
+      # and `reject` above write theirs.
+      - name: No value outlives the scope that made it
+        run: make mem-check
+
       # --- 7b'. the compiler's own sources are canonical -------------------------
       # fmt-corpus and fmt-tokens both need the private corpus, so the formatter's rules
       # were never checked against the largest body of Zerg that exists — the compiler.
@@ -179,13 +195,6 @@ jobs:
       # and that needs a built toolchain.
       - name: No editor file states a language fact the compiler denies
         run: make editor-align
-
-      # The tree-sitter grammar is the one thing here that cannot be held to the compiler by
-      # calling it — it is a second implementation of GRAMMAR — so it is held to a corpus:
-      # every `.zg` file in the tree parses with no ERROR node. It skips where the CLI is
-      # absent, which on this runner it is not.
-      - name: The tree-sitter grammar reads every Zerg file in the tree
-        run: REQUIRE=1 make treesitter
 
       # The linter over the compiler and the stdlib — the only bodies of Zerg large
       # enough for a dead private function to hide in — and the check that every rule
@@ -223,6 +232,19 @@ jobs:
       - name: Unit suites, seed and runtime
         run: make test
 
+      # And the runner those suites will eventually be written in. A test runner that
+      # cannot detect a failing test is the ultimate gate that measures nothing, so this
+      # asks it about the four ways a test fails to hold — a broken assertion, a crash, an
+      # early `os.exit`, and a tree with no tests at all.
+      - name: The test runner can see a test that fails
+        run: make test-runner
+
+      # And the suites written for it. A suite nobody runs is worse than none — it makes a
+      # reader believe there is coverage — so the standard library's own tests are a step of
+      # their own, with a floor under how many of them ran.
+      - name: The standard library's own suites
+        run: make stdlib-test
+
       # The digest that names every cached object, held to FIPS 180-4's vectors and to the
       # system tool. It needs a built compiler, which is why it is here and not in the
       # text-only job.
@@ -247,6 +269,24 @@ jobs:
       # `available`, because the examples half works on a fork with no corpus at all.
       - name: The seed and the shipping compiler agree
         run: make oracle
+
+      # --- 7b'''. and the second implementation of GRAMMAR reads them too ---------
+      # The tree-sitter grammar is the one thing here that cannot be held to the compiler by
+      # calling it — it is a second implementation of GRAMMAR — so it is held to a corpus:
+      # every `.zg` file in the tree parses with no ERROR and no MISSING node.
+      #
+      # AFTER the fetch, and not before it, for the third time on this board and for the
+      # same reason `oracle` and `fmt-corpus` are: the target passes `test-data/codegen`
+      # and `test-data/fmt` as globs, so up beside `editor-align` it read the 57 files that
+      # are IN this repository and silently none of the 189 that are not. That is not a
+      # quieter gate, it is a red one — the floor exists precisely to refuse a run that
+      # measured a fraction of what it names, and it did.
+      #
+      # Deliberately not gated on `available`, like `oracle`: the in-tree half is a real
+      # corpus on a fork with no credentials, and a grammar that cannot read the compiler's
+      # own sources should turn a fork's board red too.
+      - name: The tree-sitter grammar reads every Zerg file in the tree
+        run: REQUIRE=1 make treesitter
 
       # --- 7c. and the ones nobody wrote by hand ---------------------------------
       # The reject list holds the mistakes somebody thought of. This breaks the corpus's
@@ -313,6 +353,16 @@ jobs:
       - name: Formatting does not move a token
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make fmt-tokens
+
+      # --- 7d''. what the formatter writes, the parser reads ---------------------
+      # The three steps above ask whether a source is already canonical and whether spacing
+      # moved a token — and `fmt-tokens` asks its question with the F4xx REWRITES off. So
+      # the rules that change the code's shape were measured by nothing, and F401 spent
+      # months turning `if s := v { return s }` into a file that does not parse while all
+      # three stayed green. This runs every rule and asks whether the output is a program.
+      - name: The formatted result still parses
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make fmt-roundtrip
 
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot

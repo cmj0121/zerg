@@ -43,6 +43,11 @@
 **abort**（`OverflowError`，如 `uint(-1)` 或會失去範圍的縮窄），所以轉換是被檢查的、不會無聲失真。見
 [型別](../core/types.zh-TW.md)。
 
+**`T(x)` 接受哪些配對是一張封閉的表**，而 `int` 是每一組配對都有一側是它的中樞。不在表上的配對就不是一個轉換
+——`byte` 上的 `float(b)` 是 `E395`，改寫成穿過中樞的那兩步（`float(int(b))`）。`float` 作為**來源**是唯一一個
+屬於決定、而非缺了一步的缺席：`float` 上的 `int(x)` 是 `E394`，小數要由一個動詞丟掉——`math.trunc` /
+`floor` / `ceil` / `round`，每一個都回答一個 `int`——或者由 `//` 丟掉。
+
 > **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
 > 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E465 NotImplemented: `i32` is part of the fixed-width
 > ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用，`uint(-1)` 也確實以
@@ -77,11 +82,6 @@
 `Kind(msg: str) -> Err` 呼叫，建出該 kind、帶訊息的 `Err`。搭配 `raise` 觸發 abort，或放進 `Either` 值；以
 `e is IOError` 測試已抹除的 `Err`。這組由編譯器擁有——本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
-
-> **[deviation]** kind 在**型別**裡活著、在**訊息**裡掉了。對建構出來的 `Err`，`e is IOError` 回答正確；但
-> 一個 `raise ValueError("bad input")` 走到頂端時，標準錯誤上只有 _bad input_，而
-> [abort 契約](../conformance.zh-TW.md)所定的是 `Kind: message`——那正是 runtime 自己 raise 時用的形狀
-> （_IndexError: index out of range_）。同一個 kind、兩種輸出形狀，取決於是誰 raise 的。
 
 ## raw pointer（僅限 `unsafe`）
 

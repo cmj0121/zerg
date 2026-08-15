@@ -106,8 +106,22 @@ Measured against `zerg0` on 2026-07-31.
 | `unsafe`, `asm`, `ptr[T]`                                              | the bare-metal door              |
 | command literals `` `git status` ``                                    | the process-substitution literal |
 | `for k in m` over a map                                                | the iteration                    |
+| `e in ValueError` — the error taxonomy's SUBTREE test                  | the `in` of docs/code/errors.md  |
 
-One entry in this tier is a REFUSAL WITH THE WRONG SENTENCE, kept deliberately: the seed
+`e is ValueError` the seed does build; it is `in` it has no reading for. The two are
+different relations (identity and subtree, docs/code/errors.md) and only one of them is
+here, which is worth saying because it decides how a corpus case is written: a case asking
+`is` is one both compilers can be held to, and a case asking `in` is one only `zerg` answers.
+Five oracle skips rest on this single gap (`error_tree`, `err_kind_subtree`, and their
+kin) — see `test-data/oracle-skips.txt`.
+
+It is also a SECOND refusal with the wrong sentence. `e in ValueError` reads to the seed as
+a membership test against a value called `ValueError`, so the name resolves as an ordinary
+expression and the answer is `undefined name "ValueError"` — the message a misspelling gets,
+naming nothing about the operator. Tier 2 says refused BY NAME and this is not; it is
+recorded here rather than fixed because the self-host source never asks the question.
+
+One other entry in this tier is a REFUSAL WITH THE WRONG SENTENCE, kept deliberately: the seed
 rejects a **same-block re-declaration** (`x := 1` then `x := 2`) as `"x" is already declared
 in this scope`. The language permits it — docs/core/memory.md specifies declare-del-declare,
 and `zerg` builds it (the corpus case redeclare_same_block) — so this is the seed being
@@ -115,6 +129,21 @@ narrower, not a rule `zerg` lost. The self-host source never re-declares in one 
 seed could not build it if it did), so the rule costs the chain nothing, and rewriting the
 seed's scope tracking to lift it would move emitted C for no program the seed exists to
 build.
+
+A THIRD is the one a stdlib author meets: **`str(x)` where `x` is a type PARAMETER**. The
+seed turns `fn show[T](x: T) -> str { return str(x) }` away with `cannot build a str from T;
+str(x) takes a scalar or a list[byte]/list[rune]` — a sentence about the conversion's domain,
+said as though the program had handed it a bad argument, when what happened is that the
+question was asked one step too early. `internal/sema/strbridge.go` types `str(x)` by asking
+`ScalarOf` of the argument, and inside a generic body the argument's type is still `T`; the
+seed checks that body ABSTRACTLY, so the refusal lands at the declaration whether or not the
+function is ever called. The SAME rendering spelled `f"{x}"` both compilers build: `inferFStr`
+synthesizes the hole and yields `str`, leaving the rendering to lowering, which runs after
+substitution. `zerg` asks after substitution for both spellings — `show(7)` builds, and
+`show(p)` on a struct is `E449` naming `P`, which is the diagnostic a reader can act on. What
+the gap costs is a rule for every module the seed compiles: `src/stdlib/testing.zg`
+interpolates rather than converts (`raise f"assert_eq failed: {a} != {b}"`), and a generic
+body in the stdlib that reaches for `str(x)` breaks the chain rather than one program.
 
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
@@ -170,7 +199,7 @@ The seed is deliberately the narrower compiler, and it refuses most of what it h
 built. These are the places it does NOT — where it does not turn a program away ITSELF, so
 `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
 
-"Itself" is the whole of it. Two of the two remaining were counted as refusals for a year
+"Itself" is the whole of it. Two of the entries below were counted as refusals for a year
 because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 `-Waddress-of-temporary` are errors there and warnings under gcc, so the same seed and the
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
@@ -186,6 +215,20 @@ the program, which is what the assertion exists to catch.
   it at the callsite.
 - **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is
   emitted as written and cc reports the type. `zerg` judges a default at the declaration.
+- **A default that CALLS anything is refused, in a sentence that claims the language forbids
+  it.** `struct C { c: chan[int] = chan[int]() }` — or any default that is not a literal, a
+  module constant, or arithmetic over those — is turned away with _a default value must be a
+  constant expression that does not reference a parameter/field_. The language says the
+  opposite: a default "is evaluated **per construction** rather than once at the declaration
+  — an expression in it (a call, a sum over module constants) runs again for every
+  construction that omits the field" (`docs/core/types.md`, "Field defaults"), and `zerg`
+  takes it. The seed backfills a default VERBATIM at every call and construct site and never
+  TYPES the expression at all — `checkConstDefault` validates its shape, so a default carries
+  no recorded `ExprType` and a call would reach cc as bad C. The refusal is therefore right
+  about the seed and wrong about Zerg: a `NotImplemented` wearing a language rule's clothes.
+  It is also why `Context.events` in `src/stdlib/testing.zg` is `pub` and carries no default —
+  a module-private field must carry one, and the only default a fresh channel could have is
+  a call.
 - **A TOP-LEVEL binding's annotation is not checked against its value.** `answer: bool =
 42` builds and the global is whatever the seed makes of it; the same mismatch on a LOCAL
   binding the seed does refuse. `zerg` honours a top-level annotation the way it honours a
@@ -211,6 +254,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   type 'void'" against generated C. It is refused by name now — a plain `(A, B)` return
   works, and `zerg` builds both. This is why the STDLIB may not use an optional tuple: it
   is compiled by the seed as well, which is the same reason nothing there uses slicing.
+- **A tuple that OWNS something cannot be COPIED.** `t := (1, s)` where `s` is a `str`, and
+  any tuple holding a `list` or a `map`, is refused by name — "copying a (int, str) is not
+  supported in Phase 1d iteration 2 (only Ref[T] and structs holding Refs)". A tuple of
+  scalars copies fine, and so does a struct holding the same things, so this is the tuple
+  alone. `zerg` copies either: a tuple gets a per-shape `_copy` with a `_drop` beside it,
+  which is what makes `(int, str)` give its `str` back at scope exit.
 - **A TYPE NAME declared twice is accepted.** A `struct`, an `enum` and a `spec` share one
   namespace, and every module of a program flattens into one scope in both compilers — so
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for
@@ -293,11 +342,126 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `file.Items` and neither lowers nor mentions it, so the program builds and prints nothing.
   `zerg` refuses it by name at the line it was written on, `nop` excepted. This is a rule
   `zerg` ADDED rather than one the seed lost, which is the ordinary direction here.
+- **A CONVERSION FOLDS ONLY A WRITTEN LITERAL, so a known value reaching it through a name is
+  left to run.** docs/core/types.md reports `byte(300)` at compile time because "the value is
+  known", and what the language means by known is the const-expr — a literal, a binding whose
+  initializer is one, a `const`, and the operators over any of them. `zerg` asks that question
+  (the same one a fill count `[v; N]` asks), so `big := 300; byte(big)`, `const N := 300;
+byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone: it builds all
+  three and raises `OverflowError` where they run. Three cases in `reject-check.sh` carry the
+  marker. Both compilers stop at the same place on the other side — a CALL and a `mut` binding
+  are not constants for either — so the gap is the middle of the range and not its end.
+- **EVERY CONVERSION BETWEEN TWO SCALARS is accepted, whatever the pair.** docs/core/types.md
+  lists the pairs `T(x)` has "and no others" — `int` is the hub each of them stands on — but
+  the seed lowers a conversion by SHAPE, a class and a width, and a shape has an answer for
+  every pair. So `float(b)` on a `byte`, `rune(b)`, `uint(b)`, `byte(3.5)`, `uint(3.5)`,
+  `rune(65.5)` and `int(1.9)` all build here. `zerg` refuses each: a `float` source is a
+  decision spelled with a verb (`E394`, `math.trunc` and its three siblings), and any other
+  absent pair is the two steps through `int` written as one (`E395`). Seventeen cases in
+  `reject-check.sh` carry the marker, and this is the chapter where `zerg` is the stricter
+  compiler rather than the reverse. (The seed's own sources need no migration: nothing in
+  `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
+  the same standard library.)
+- **TWO MODULES EACH DECLARING ONE `pub` FUNCTION OF THE SAME NAME are accepted, and one of
+  them wins.** A public name has no package to be unique within
+  ([package](../../docs/runtime/package.md)), so `zerg` refuses the pair by name (`E705`) and
+  says what would be needed to keep both — the link-name override
+  [ffi](../../docs/runtime/ffi.md) specifies. The seed flattens every module into one
+  namespace as `zerg` does, but asks the question only of the PRIVATE pair, which it tags by
+  module; a public one reaches C as a single mangled symbol and the second definition simply
+  replaces the first. One case in `reject-check.sh` carries the marker.
+- **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
+  matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
+  one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
+  (`E743`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
+  every value and the `match` falls through to its catch-all with nothing said. One case in
+  `reject-check.sh` carries the marker.
+- **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,
+  not a value's type ([specs](../../docs/core/specs.md)), and `zerg` refuses it at every
+  position a type is written (`E416`). The seed asks the question of a parameter and a result
+  and not of a field, so `pub v: Tag` declares a field whose type nothing gives a
+  representation and the program builds. One case in `reject-check.sh` carries the marker.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The
   seed folds nothing here and emits the division, whose runtime check then raises. Both
   refuse the program in the end; only one of them does it before the program runs.
+- **A `pub` declaration may name a module-private TYPE.** `pub fn make() -> Secret` beside a
+  module-private `struct Secret` is accepted, so a dependent obtains a value of a type it
+  could never have spelled — "a declaration can never be more visible than the types it
+  names" (docs/runtime/package.md) is unenforced. The same goes for a parameter, for a `pub`
+  field whose type is private, and for a `pub` METHOD on a private type — the last is the
+  same sentence read about a receiver, and the specification's "a type's `pub` methods travel
+  with it" is what makes it one rule rather than a separate courtesy. `zerg` refuses each at
+  the declaration, which is the party with a line to change. The seed IS the stricter
+  compiler on the neighbouring rule — it has
+  refused a module-private type named through a namespace (`lib.Secret`) since it was
+  written, and only the qualified spelling, because it never flattens a type into the
+  importer's namespace at all.
+- **A module-private FIELD is readable, and writable, from another module.** The seed
+  requires the default that GRAMMAR#field makes a private field carry — so external code can
+  construct the type without naming a value it may not read — and then lets that value be
+  read. `zerg` refuses the read and the write alike, at the use.
+- **An import is not transitive, and the seed does not enforce it.** Both compilers bind a
+  namespace into one program-wide space, so a module the build reached at all used to be one
+  every module could name: `main` importing only `mid` could still write `lib.make()`.
+  `zerg` now records which module WROTE each binding and refuses a namespace this one did not
+  import — while still telling that apart from an invented prefix, which stays an undefined
+  name in both compilers.
+- **A DECLARED TYPE NAME NEED NOT BEGIN WITH AN UPPER-CASE LETTER.** `struct _Box`,
+  `struct __Box` and `struct lower` all build and run here. `zerg` refuses each at the
+  declaration (`E610`): the case of the first letter is how it tells a construction from a
+  call and a module qualifier from an associated type, and the last two are decided by the
+  PARSER, which has resolved nothing and has no table to consult — so a lower-case type
+  would be legal in one position and misread in three. GRAMMAR#type-ident derives the rule.
+  The seed resolves the name against its symbol table instead, so the letter never matters
+  to it. Three cases in `reject-check.sh` carry the marker.
+- **A COMPILER PRIMITIVE'S OPERAND TYPES are not checked.** The machinery is there —
+  `unaryIntrinsic(n, Float, Int)` in `internal/sema/infer.go` names the argument type — and it
+  does not fire, so `__zrt_trunc(true)` builds and prints `1`, and `__zrt_trunc("hello")` is
+  emitted for cc to reject against a temp C file nobody wrote. `zerg` answers both at the call
+  (`E398`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
+  operand is either a cc diagnostic or an answer that is quietly wrong where C converts it.
+  Two cases in `reject-check.sh` carry the marker.
+- **A `#[test]` FUNCTION IS NOT TYPE-CHECKED.** The seed strips every `#[test]` out of the item
+  list before `sema.Check` runs (`dropTestItems`, `internal/build/build.go`), so `#[test] fn t()
+{ x: int = "no" }` builds and runs, and so does one calling a function that does not exist.
+  `zerg` reads `#[test]` as an ordinary decorator on an ordinary declaration and checks the body
+  like any other: a test that does not compile is a compile error, in a normal build as much as
+  under `zerg test`. The seed's stripping is not wrong for the seed — it keeps a normal build's
+  emitted C byte-identical whether or not a `#[test]` is present — but it means the one
+  compiler that runs tests is the only one that ever looks at them.
+- **`assert` IS NOT A WORD THE SEED KNOWS, and what it says instead names the wrong token.**
+  `assert cond` is a statement of the shipped language (`GRAMMAR#assert-stmt`) and a keyword of
+  `zerg` alone. The seed's lexer reads `assert` as an ordinary identifier, so the statement is
+  two expressions in a row and what comes back is _expected a newline or ';' to separate
+  statements, found an identifier_, pointing at the CONDITION rather than at the word — a
+  sentence that reads as a missing semicolon, which is the one thing it is not. Worth
+  recognising by that shape: the column is off by the width of the word and the space after it.
+  Nothing in
+  `src/stdlib` writes one, deliberately, since the seed compiles that tree; the ERROR KIND it
+  raises (`AssertionError`, 11) is mirrored here all the same, because the kind numbering is an
+  ABI shared with the runtime and a table that stopped at 10 would let a later kind take 11.
+- **A MODULE-LEVEL `unsafe { … }` GROUP IS NOT A FORM THE SEED PARSES, so `import "log"` fails
+  in a seed-built program.** It is the reverse of every other entry here: not the seed
+  accepting what `zerg` refuses, but the seed refusing what `zerg` accepts — and the refusal is
+  a parse error inside the standard library rather than anything about the program that asked.
+  What comes back is _module "log": log.zg failed to parse: expected an expression, found
+  'unsafe'_, at the importer's line and not at the group.
+
+  The group is `log`'s global logger, and it cannot be written any other way: module state is
+  immutable (`E358`) and a system-wide logger is module state by definition. The rule the rest
+  of `src/stdlib` follows — stay inside the subset the seed reads, which is why nothing there
+  writes `assert` — is broken by exactly one module, deliberately, and only that module. Every
+  other stdlib module still builds under both compilers, and nothing the seed itself compiles
+  imports this one.
+
+  A program built with `bin/zerg0` therefore cannot log — and, since `testing` imports `log`
+  so that a `ctx.log` note is the same line as every other, cannot import `testing` either.
+  Neither costs anything: the seed has ONE command, `build`, so it never runs a test, and the
+  `#[test]` items it does see it strips before checking (see the entry above). A program built
+  with `bin/zerg` can do both, and that is every program this toolchain produces for anybody
+  but its own bootstrap.
 
 ## Changing the seed
 

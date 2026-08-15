@@ -385,17 +385,22 @@ var ioIntrinsicNames = map[string]bool{
 }
 
 // sysFloorIntrinsics are the non-io runtime floor leaves other bundled stdlib modules
-// lower onto (the `time` clock leaves; os/fs join later). Like the io floor they live in
-// the always-linked sys.c, so a program that lowers one needs the runtime — but not the
-// io-specific NeedsIO flag.
+// lower onto — `time`'s clock, `os`'s environment and process leaves, `fs`'s directory
+// leaves, and `math`'s truncation. They ride in the always-linked
+// runtime — sys.c for most of them, and the zergrt.h inline over conv.c for `__zrt_trunc`
+// — so a program that lowers one needs the runtime, but not the io-specific NeedsIO flag.
 var sysFloorIntrinsics = map[string]bool{
 	"__zrt_time_unix":  true,
 	"__zrt_time_mono":  true,
+	"__zrt_trunc":      true,
 	"__zrt_platform":   true,
 	"__zrt_arch":       true,
 	"__zrt_exe_path":   true,
 	"__zrt_getenv":     true,
 	"__zrt_has_env":    true,
+	"__zrt_set_env":    true,
+	"__zrt_del_env":    true,
+	"__zrt_isatty":     true,
 	"__zrt_exit":       true,
 	"__zrt_exists":     true,
 	"__zrt_remove":     true,
@@ -627,8 +632,9 @@ func (e *emitter) schedIntrinsicEmit(n *ast.Call) (string, bool) {
 }
 
 // sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`
-// clock leaves and the `os` process/platform leaves — each to its always-linked sys.c
-// primitive. A shadowed name is left to the ordinary call path.
+// clock leaves, the `os` process/platform leaves, and `math`'s truncation — each to its
+// always-linked runtime primitive: sys.c for all of them but `__zrt_trunc`, whose primitive
+// is the zergrt.h inline over conv.c. A shadowed name is left to the ordinary call path.
 func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok {
@@ -659,12 +665,26 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_getenv(%s)", arg), true
 		case "__zrt_has_env":
 			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_del_env":
+			return fmt.Sprintf("zrt_del_env(%s)", arg), true
+		case "__zrt_isatty":
+			return fmt.Sprintf("zrt_isatty(%s)", arg), true
 		case "__zrt_exit":
 			return fmt.Sprintf("zrt_exit(%s)", arg), true
 		case "__zrt_exists":
 			return fmt.Sprintf("zrt_exists(%s)", arg), true
 		case "__zrt_remove":
 			return fmt.Sprintf("zrt_remove(%s)", arg), true
+		case "__zrt_trunc":
+			return fmt.Sprintf("zrt_trunc(%s)", arg), true
+		}
+	}
+	if len(n.Args) == 2 {
+		switch id.Name {
+		case "__zrt_set_env":
+			// void call used as a nil statement; both operands are borrowed str cells the
+			// runtime copies into `environ`, so the caller keeps ownership of each.
+			return fmt.Sprintf("zrt_set_env(%s, %s)", e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)), true
 		}
 	}
 	return "", false
@@ -1248,12 +1268,23 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	}
-	switch t.(type) {
+	switch ct := t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	case *types.List:
 		// a list field / element deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
+	case *types.Chan:
+		// a channel field/element retains the handle, and — like the value copy above — a
+		// SEND-capable one also bumps the sender count, because the sender count is what
+		// closes the channel. Copying a struct that holds one is copying the handle: a
+		// `testing.Context` passed by value shares the one channel it carries, and the copy
+		// has to be a holder in its own right or the original's scope exit closes a channel
+		// the copy is still sending on.
+		if ct.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_copy(%s)", access)
+		}
+		return fmt.Sprintf("zrt_chan_sender_copy(%s)", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	case *types.Enum:
@@ -1311,7 +1342,7 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_release(%s);", access)
 	}
-	switch t.(type) {
+	switch ct := t.(type) {
 	case *types.Fn:
 		// a function-value field/element releases its refcounted environment box (managed).
 		return fmt.Sprintf("zrt_release((%s).env);", access)
@@ -1321,6 +1352,15 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_list_drop(&(%s));", access)
 	case *types.Map:
 		return fmt.Sprintf("zrt_map_drop(&(%s));", access)
+	case *types.Chan:
+		// the mirror of the fieldCopy case: a receive-only handle releases the refcount, a
+		// send-capable one releases the sender count too — and THAT release is what closes
+		// the channel, so a struct holding a send-capable handle ends the stream when its
+		// last copy goes. Dropping the struct is the whole of that event.
+		if ct.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_release(%s);", access)
+		}
+		return fmt.Sprintf("zrt_chan_sender_release(%s);", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
 	case *types.Enum:

@@ -7,18 +7,19 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group       | Is                                                 |
-| ------ | ----------- | -------------------------------------------------- |
-| `F1xx` | layout      | where the line breaks and how far it is indented   |
-| `F2xx` | spacing     | where a space goes between two tokens              |
-| `F3xx` | trivia      | what happens to what a person wrote for a person   |
-| `F4xx` | rewrites    | the rules that MOVE code rather than space it      |
-| `L1xx` | dead code   | things written that nothing reaches                |
-| `L2xx` | null safety | an optional operator that does not do what it says |
-| `L3xx` | capture     | what a coroutine or a deferred call actually took  |
-| `L4xx` | resolution  | a name that answers to more than one thing         |
-| `L5xx` | conversion  | a literal that took a type the page does not show  |
-| `E1xx` | lexical     | text that is not a token                           |
+| Prefix | Group       | Is                                                    |
+| ------ | ----------- | ----------------------------------------------------- |
+| `F1xx` | layout      | where the line breaks and how far it is indented      |
+| `F2xx` | spacing     | where a space goes between two tokens                 |
+| `F3xx` | trivia      | what happens to what a person wrote for a person      |
+| `F4xx` | rewrites    | the rules that MOVE code rather than space it         |
+| `L1xx` | dead code   | things written that nothing reaches                   |
+| `L2xx` | null safety | an optional operator that does not do what it says    |
+| `L3xx` | capture     | what a coroutine or a deferred call actually took     |
+| `L4xx` | resolution  | a name that answers to more than one thing            |
+| `L5xx` | conversion  | a literal that took a type the page does not show     |
+| `E1xx` | lexical     | text that is not a token                              |
+| `E6xx` | parser      | tokens that are not a Zerg form, where `E2xx` ran out |
 
 ## `zerg fmt`
 
@@ -43,9 +44,23 @@ be asked is one every CI reinvents.
 **It will not rewrite a file whose brackets do not close.** Reading tokens means fmt will
 reformat anything that lexes, and a file with a syntax error came back reformatted and
 exit 0 — the tokens intact, but the spacing decided by rules that had nothing true to work
-from. The gate is bracket balance rather than a parse, deliberately: a formatter has to
-work on source the compiler cannot **compile**, which is exactly when a person reaches for
-one. A file that balances and is still ill-formed is formatted as before.
+from. The gate on the INPUT is bracket balance rather than a parse, deliberately: a
+formatter has to work on source the compiler cannot **compile**, which is exactly when a
+person reaches for one. A file that balances and is still ill-formed is formatted as before.
+
+**It will not write output it cannot re-parse.** That gate is on the OUTPUT and it is a
+different question, asked one way round: **if the input parses, the result must**. `F401`
+once rewrote a binding head into source that stops at the `:=`, and `zerg fmt` destroyed
+the file, said nothing and exited 0. A formatter is only safe to run because meaning
+survives it, and a rewrite that does not parse has no meaning at all. So a file that came
+in a program goes out a program, or nothing is written and the run says which file and why.
+What fmt owes is that it never SUBTRACTS — a file that did not parse on the way in is left
+exactly as unreadable as it was found, because fmt is not what broke it.
+
+`--check` asks the same question and answers it the same way, because a safety net that
+asks less than the tool it watches is not one: a file that formatting would break is
+reported as such, and the advice `run zerg fmt` is withheld, since on that file the advice
+is what does the damage. `make fmt-roundtrip` is the gate over both.
 
 ### F1xx — layout
 
@@ -256,6 +271,13 @@ A jump that ALREADY carries its own guard keeps its block. There is no single `i
 what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
 no compiler parses — so the rule declines rather than inventing one.
 
+A **binding head** keeps its block too, for the same reason one step further on. `GRAMMAR`
+derives an if-head as `expr | identifier ':=' expr`, and the second alternative is the only
+condition in the language that DECLARES: `if s := v` unwraps the optional and binds `s` for
+the block. The postfix guard has nowhere to put a declaration, so `if s := v { return s }`
+came back as `return s if s := v` — which stops at the `:=`, and whose `s` names nothing now
+that the binding it came from is gone. The head is what declines it, not the jump.
+
 Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
 `x := if c { 1 } else { 2 }`.
@@ -284,7 +306,8 @@ It rewrites only what it can rewrite **without losing anything**, and declines o
 - exactly one statement in the block, and it is a jump;
 - no `else` — an else has a second branch the guard form cannot carry;
 - no comment anywhere inside, because a comment is something a person put there and this
-  pass has nowhere to put it back.
+  pass has nowhere to put it back;
+- a head that does not bind — the guard form carries a condition, not a declaration.
 
 `F402` is the Go convention, and for the same reason: an import list is read far more
 often than it is edited, and one that is grouped and sorted answers "does this file use X"
@@ -344,7 +367,7 @@ this rule never breaks up a group that was not already broken.
 
 A group its author DID break is joined back onto one line unless one of these vetoes it:
 
-- printed flat, it would end at or past column 80 — a tab counts as 4;
+- printed flat, it would end at or past column 120 — a tab counts as 4;
 - it holds 6 or more top-level elements.
 
 When one does, the group breaks at **every** top-level comma instead. Never half of each:
@@ -376,7 +399,7 @@ arguments read as a list to scan rather than a line to read, however short each 
 > take is worse than one that reformats it, because the certificate is the whole point.
 
 Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
-time rather than the whole line, so the group that crosses column 80 is the last one on
+time rather than the whole line, so the group that crosses column 120 is the last one on
 the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
 `c`, whose two arguments would go on three lines while the condition that actually made
 the line long, and that has no brackets to break at, stayed as it was.
@@ -561,7 +584,7 @@ goes; `F403` is a rewrite for the same reason in reverse — it inserts line bre
 wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
 wrote at all.
 
-## E1xx–E5xx — compile errors
+## E1xx–E7xx — compile errors
 
 These are not advisory. A program that hits one does not build, so each is a **compile
 error** the build stops on. They carry codes because a code is a **stable identity for a
@@ -576,10 +599,40 @@ order a build meets them:
 | `E3xx` | checking | a form whose meaning does not hold together                        |
 | `E4xx` | emitting | a form this compiler will not lower, including a `[not yet]`       |
 | `E5xx` | building | the program as a set of files, which no single file's text answers |
+| `E6xx` | parser   | the parser again: `E2xx` is full, and a range is a hundred numbers |
+| `E7xx` | emitting | the emitter again: `E4xx` is full, for the same reason             |
 
 `E5xx` is the one range that is not a point in that order. A build resolves imports before
 it lexes what they name and looks for `fn main` after everything is emitted, so the driver's
 own findings bracket the other four rather than sitting between two of them.
+
+`E6xx` is not a stage at all — it is **`E2xx` continued**, and `E7xx` is **`E4xx` continued**
+for the same reason twice over. A range is a hundred numbers and the parser used ninety-eight
+of them; the rules that arrived when the parser's refusals were moved onto one reporting
+channel had nowhere in `E2xx` to go. The emitter followed one change later — 50 of its 126
+refusals carried no code at all, and `E4xx` had one number left — so the same move was made
+again. Continuing in a fresh range is what keeps the two properties the scheme is for: a
+number is never reused, and a reader who meets one can tell which stage is speaking.
+
+**When a range fills, open a continuation range for that stage and close the old one.** Two
+open ranges for one stage means two places to allocate from, and that is the exact condition
+the three collisions in one week came out of. Closing is what `E299` is doing in the retired
+table below: it was never issued, and retiring it is how a number is taken out of circulation
+without being spent, so `E2xx` reads as **full** rather than as one slot somebody may still
+take. `E499` is the same move one range over, made the day the emitter's numbers ran past
+`E498`: it was never issued either, and `E4xx` reads as full because of it.
+
+That is why the table above names a **stage** rather than a range, and why `make
+error-codes-check` answers per stage:
+
+```text
+error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
+                                              lexical E112, parser E612
+```
+
+It reads both the ranges and their stages out of the table above rather than carrying its own
+copy, so the answer for a stage is its **highest** range's — which is what a continuation
+means. Adding a continuation range is therefore one row here, and the advice follows it.
 
 A code sits at the **front of the message**, before the sentence: `E109 invalid escape in a
 rune literal`. Where a diagnostic carries a place, the renderer's `error:` opens the line
@@ -601,294 +654,365 @@ throughout: codes are the language's contract, and the seed is the tool that bui
 shipping compiler rather than a part of it (the line
 [Conformance](../conformance.md) draws when it declines to mark the seed's gaps).
 
-| Code   | Rule                                                                                        |
-| ------ | ------------------------------------------------------------------------------------------- |
-| `E101` | a string literal is not closed before the end of the line                                   |
-| `E102` | a rune literal is empty                                                                     |
-| `E103` | a rune literal holds exactly one character, and this holds more                             |
-| `E104` | this character is not part of any Zerg token                                                |
-| `E105` | a triple-quoted string is never closed                                                      |
-| `E106` | a raw string has no closing quote on this line                                              |
-| `E107` | a command literal has no closing backtick                                                   |
-| `E108` | a based number needs a digit immediately after its prefix                                   |
-| `E109` | invalid escape in a … literal                                                               |
-| `E110` | a string literal may not contain a NUL                                                      |
-| `E111` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                 |
-| `E201` | `close` is not a select arm head                                                            |
-| `E202` | a select needs at least one arm                                                             |
-| `E203` | `…` is not a select arm head                                                                |
-| `E204` | expected `…`, found `…`                                                                     |
-| `E205` | expected a newline or `;` to separate statements, found `…`                                 |
-| `E206` | `Either[…, …]` has the same type on both sides                                              |
-| `E207` | a parameterized `…[…]` as … — **[not yet]**                                                 |
-| `E208` | `#[derive(…)]` has no declaration under it                                                  |
-| `E210` | a `spec` member with a BODY — **[not yet]**                                                 |
-| `E211` | an associated value is not a `spec` member                                                  |
-| `E212` | a generic enum `…[…]` — **[not yet]**                                                       |
-| `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given     |
-| `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque        |
-| `E215` | a generic struct `…[…]` — **[not yet]**                                                     |
-| `E217` | the decorator `#[…]` — **[not yet]**                                                        |
-| `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                           |
-| `E219` | `…` as an `impl` item — **[not yet]**                                                       |
-| `E221` | a struct pattern `…{…}` — **[not yet]**                                                     |
-| `E222` | calling … — **[not yet]**                                                                   |
-| `E223` | the named argument `…:` — **[not yet]**                                                     |
-| `E224` | `unsafe { … }` as an EXPRESSION — **[not yet]**                                             |
-| `E225` | an f-string ':spec' format spec — **[not yet]**                                             |
-| `E226` | an f-string '!r' / '!s' / '!a' conversion — **[not yet]**                                   |
-| `E227` | the f-string '{expr=}' self-documenting form — **[not yet]**                                |
-| `E230` | an associated type is not a `spec` member                                                   |
-| `E231` | an associated type binding `type … = …` in an `impl` — **[not yet]**                        |
-| `E232` | a tuple pattern in a `match` arm — **[not yet]**                                            |
-| `E233` | an array type `[T; N]` — **[not yet]**                                                      |
-| `E234` | an `as` binding in a `match` arm — **[not yet]**                                            |
-| `E235` | an interpolating command literal — **[not yet]**                                            |
-| `E236` | a command literal — **[not yet]**                                                           |
-| `E238` | a destructuring binding `(a, b) := …` — **[not yet]**                                       |
-| `E239` | a range with no lower bound — **[not yet]**                                                 |
-| `E240` | a list pattern in a `match` arm — **[not yet]**                                             |
-| `E241` | an or-pattern — **[not yet]**                                                               |
-| `E242` | `for mut v in …` — **[not yet]**                                                            |
-| `E243` | a struct pattern `…{…}` in a `match` arm — **[not yet]**                                    |
-| `E244` | this program nests more than … levels deep                                                  |
-| `E245` | `…` is a reserved word and cannot name …                                                    |
-| `E246` | a tuple type has two elements or more                                                       |
-| `E247` | `pub import` is not a form                                                                  |
-| `E248` | `pub` does not go on `init()`                                                               |
-| `E249` | `pub` does not go on an `impl` block                                                        |
-| `E250` | a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not …    |
-| `E251` | a free function is never `mut fn`                                                           |
-| `E252` | `pub` does not go on an `unsafe { … }` group                                                |
-| `E253` | a module-level `unsafe { … }` group does not nest                                           |
-| `E254` | a module-level `unsafe { … }` group holds declarations                                      |
-| `E255` | `pub` binds to a declaration, and a statement takes none                                    |
-| `E256` | this module-level `unsafe { … }` group is never closed                                      |
-| `E257` | `…` is a reserved word and cannot name a binding                                            |
-| `E258` | `…(…)` converts a VALUE and was given none                                                  |
-| `E259` | `…(…)` converts one value, and this gives …                                                 |
-| `E260` | `list[T](…)` converts a VALUE and was given none                                            |
-| `E261` | `list[T](…)` converts one value, and this gives …                                           |
-| `E262` | a match arm's guard goes before the `=>`                                                    |
-| `E263` | a parameter is `mut &` or nothing                                                           |
-| `E264` | a standalone `unsafe fn` declaration — **[not yet]**                                        |
-| `E265` | an associated type projection `….…` — **[not yet]**                                         |
-| `E266` | a value generic parameter `…: …` — **[not yet]**                                            |
-| `E267` | an import path is a string                                                                  |
-| `E268` | `…[…]` with no call after it — **[not yet]**                                                |
-| `E269` | an `if` EXPRESSION whose branch has more than one statement — **[not yet]**                 |
-| `E270` | a binding head in an `if` EXPRESSION — **[not yet]**                                        |
-| `E271` | `asm(…)` — **[not yet]**                                                                    |
-| `E272` | `…(…)` converts a VALUE and was given none                                                  |
-| `E273` | `…(…)` converts one value, and this gives …                                                 |
-| `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                         |
-| `E276` | a `spec` member that is neither a signature nor a provided method                           |
-| `E277` | an `impl` in neither the spec's module nor the type's                                       |
-| `E278` | `#[derive(S)]` on an enum, and a method takes a `This`                                      |
-| `E279` | `#[derive(S)]` on an enum, and a variant carries no value                                   |
-| `E280` | `#[obj]` on something that is not a `spec`                                                  |
-| `E281` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                         |
-| `E282` | `#[obj]` and a method taking `This` — an object has forgotten its type                      |
-| `E283` | `#[derive(…)]` on something with no structure to read                                       |
-| `E284` | a `??` right-hand diverge with a trailing `if` guard                                        |
-| `E285` | a default on a closure parameter — **[not yet]**                                            |
-| `E286` | a `mut &` parameter in a function type — **[not yet]**                                      |
-| `E287` | an `unsafe` `spec` signature — **[not yet]**                                                |
-| `E291` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                            |
-| `E292` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                         |
-| `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                        |
-| `E289` | a trailing comma before a closing `)`, `]` or `}`                                           |
-| `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                  |
-| `E293` | `…` is a reserved word and cannot name a field                                              |
-| `E294` | expected a field name (or a tuple index) after `.`, found `…`                               |
-| `E295` | `del …` names nothing this program declares                                                 |
-| `E296` | `del …` names a function, struct, enum or variant — not a binding                           |
-| `E297` | `…` is used after del                                                                       |
-| `E298` | `…` is used after del on some paths                                                         |
-| `E301` | `…` is not a public member of module `…`                                                    |
-| `E302` | `…` is not a place, and an assignment needs one                                             |
-| `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written               |
-| `E304` | `type … = …` over a non-scalar — **[not yet]**                                              |
-| `E305` | cannot assign to `…`: it is a module binding, and the top level is immutable                |
-| `E306` | cannot assign to `this`: a method's receiver is a copy, and the form that writes through …  |
-| `E307` | cannot assign to `…`: it is immutable                                                       |
-| `E308` | cannot assign through `…`: it is immutable                                                  |
-| `E309` | parameter `…` of `…` is a `mut &` and cannot have a default                                 |
-| `E310` | the default for `…` of `…` is …, and the parameter is …                                     |
-| `E311` | `…` carries … and this … …                                                                  |
-| `E312` | argument … of `…` is a `mut &` and cannot cross a `…`: a borrow may not be captured, and …  |
-| `E313` | cannot store through …                                                                      |
-| `E314` | no spec named `…`                                                                           |
-| `E315` | `…` is parameterized by …, and this `impl` gives … type argument(s)                         |
-| `E316` | `…` extends `…`, and nothing in this program declares a spec by that name                   |
-| `E317` | `….…` does not match what `…` requires: …                                                   |
-| `E318` | `…` does not implement `…`, which `…` requires                                              |
-| `E319` | the integer literal `…` does not fit an `int`                                               |
-| `E320` | a `str` is not indexable                                                                    |
-| `E321` | an `if` expression answers ONE type, and its branches give … and …                          |
-| `E322` | a `match` answers ONE type, and its arms give … and …                                       |
-| `E323` | … borrows …, which is a value rather than a place                                           |
-| `E324` | … writes back to `this`, and the enclosing method holds its receiver by value               |
-| `E325` | … writes back to `…`, which is not `mut`                                                    |
-| `E326` | `…` is given to two `mut &` parameters of `…` in one call                                   |
-| `E327` | `…` takes … and this gives …                                                                |
-| `E328` | `…` needs … and this gives …                                                                |
-| `E329` | element … of this list literal is …, and this gives …                                       |
-| `E330` | `…` is not a value a … holds                                                                |
-| `E331` | this divides by a constant `0`                                                              |
-| `E332` | this expression's value is past what an `int` holds, so it cannot be measured against …     |
-| `E333` | this function's answer is …, and this gives …                                               |
-| `E334` | the binding `…` is annotated `…`, and no type of that name is declared in this program      |
-| `E335` | cannot bind … to a … binding: `…`                                                           |
-| `E336` | the binding `…` gives …, which has no type of its own                                       |
-| `E337` | `type … = …` names no type                                                                  |
-| `E338` | a struct field or an enum payload is …, and this gives …                                    |
-| `E339` | cannot assign … to …, which holds …                                                         |
-| `E340` | argument … of `…` is …, and this gives …                                                    |
-| `E341` | an optional is not an operand of `…`                                                        |
-| `E342` | operator `…` has no meaning on … and …                                                      |
-| `E343` | operator `…` takes bool operands, and these are … and …                                     |
-| `E344` | operator `…` takes int operands, and these are … and …                                      |
-| `E345` | operator `…` takes numeric operands, and these are … and …                                  |
-| `E346` | operator `…` orders two numbers or two strs, and these are … and …                          |
-| `E347` | cannot compare a variant with a number — a variant is a value of ITS enum                   |
-| `E348` | cannot compare … and … — they are different kinds of value                                  |
-| `E349` | operator `…` has no meaning on …                                                            |
-| `E350` | operator `not` takes a bool operand, and this one is …                                      |
-| `E351` | operator `-` takes a numeric operand, and this one is …                                     |
-| `E352` | operator `~` takes an int operand, and this one is …                                        |
-| `E353` | operator `…` has … on one side and … on the other, and an operator's operands must …        |
-| `E354` | the condition of … is an optional, and a condition is bool — bind it with `if v := x { … }` |
-| `E355` | the condition of … must be bool, and Zerg has no truthiness                                 |
-| `E356` | `…` re-binds a `const`                                                                      |
-| `E357` | `const …` shadows a binding already visible here                                            |
-| `E358` | the top-level binding `…` may not be `mut` outside a module-level                           |
-| `E359` | `….…()` renders the value as text, so it takes no arguments beyond the value                |
-| `E360` | `….…()` renders the value as text, so it is a plain `fn` and not a `mut fn`                 |
-| `E361` | `….…()` answers the `str` the value shows as                                                |
-| `E362` | `…` is declared twice, once as a generic                                                    |
-| `E363` | `…` is declared both as a generic and as a plain function                                   |
-| `E364` | `This` is the self type, and … is outside an `impl`                                         |
-| `E365` | `…` declares a parameter named `…` twice                                                    |
-| `E366` | `…(…)` converts ONE value                                                                   |
-| `E367` | `…(…)` does not parse a `str`                                                               |
-| `E369` | `…` holds an …, and an … is not callable                                                    |
-| `E370` | `…` needs a value for … (…): only a `T?` field has an implicit default, and it is `nil`     |
-| `E371` | `this` is a method's receiver, and this function has none                                   |
-| `E372` | undefined name `…`                                                                          |
-| `E374` | a slice bound is an int, and this is …                                                      |
-| `E375` | a list index is an int, and this is …                                                       |
-| `E376` | no field `…` on …                                                                           |
-| `E377` | `.…` reads a tuple element, and … is not a tuple                                            |
-| `E378` | a tuple of … has no `.…`                                                                    |
-| `E379` | `for … in` walks a list, a map, a str, a range or a channel, and … is not iterable          |
-| `E380` | raise carries an `Err`, or a message to build one from                                      |
-| `E381` | `…` is declared twice, once as one kind of declaration and once as another                  |
-| `E382` | `…` is declared twice as the same kind — every module flattens into one namespace           |
-| `E383` | a variant is named through its enum, and this one is bare                                   |
-| `E384` | a side of an `Either` is named through its type, and this one is bare                       |
-| `E385` | a closure parameter has no type, and its position gives it none                             |
-| `E386` | a call through a function value gives the wrong number of arguments                         |
-| `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code               |
-| `E388` | module `…` has no `…`                                                                       |
-| `E389` | `…` is already … — an import binds a name into the one value namespace                      |
-| `E390` | this position needs a value, and nil is what it was given                                   |
-| `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there           |
-| `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                 |
-| `E402` | a `from` cause is an `Err`, and … is not one                                                |
-| `E403` | `…` leaving a `guard` block — **[not yet]**                                                 |
-| `E404` | a channel of optionals is refused                                                           |
-| `E405` | `…(…)` names one side of an `Either`, which holds exactly one value                         |
-| `E406` | `?.` reads through an optional, and … is not one                                            |
-| `E407` | `int(v)` reads the discriminant, and enum `…` carries a payload, so its tag is opaque       |
-| `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with …    |
-| `E409` | a generic METHOD `….…[…]` — **[not yet]**                                                   |
-| `E410` | `…` has been instantiated … times and is still asking for more                              |
-| `E411` | the type parameter `…` of `…` is not decided by this call                                   |
-| `E412` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                    |
-| `E413` | the raw-pointer built-in `…` — **[not yet]**                                                |
-| `E414` | the compile-time built-in `…[T]` — **[not yet]**                                            |
-| `E415` | an `impl` on the built-in type `…` — **[not yet]**                                          |
-| `E416` | the `spec` `…` used as a TYPE (…) — **[not yet]**                                           |
-| `E417` | `str(…)` over a list bridges bytes or code points, and this is …                            |
-| `E418` | `…(…)` converts a value, and … may not have one                                             |
-| `E419` | an enum converts to `int`                                                                   |
-| `E420` | `….of(n)` reverses the discriminant, and enum `…` carries a payload, so its tag is opaque   |
-| `E421` | `[…]` indexes a value, and … may not have one                                               |
-| `E422` | `…` MUTATES its list, and `…` is a value rather than a place — **[not yet]**                |
-| `E423` | an open-ended range has no upper bound here — **[not yet]**                                 |
-| `E424` | `….…(…)` is an associated function — **[not yet]**                                          |
-| `E425` | undefined function `…`                                                                      |
-| `E426` | `…` has … fields and this gives …                                                           |
-| `E427` | variant pattern `…` cannot match a subject of type …                                        |
-| `E428` | non-exhaustive match: missing variant ….…                                                   |
-| `E430` | `…` on a … needs an `Eq` — there is no structural equality by default                       |
-| `E431` | a map key of type … — **[not yet]**                                                         |
-| `E432` | `…` is declared … and the value is …: unwrap it with `?? …`, `!` or `if … := …`             |
-| `E433` | `print` needs a value, and … may not have one                                               |
-| `E434` | `if … := …` over a … — **[not yet]**                                                        |
-| `E435` | `…` is declared to answer …, and its body falls off the end                                 |
-| `E436` | `#[derive(…)]` — **[not yet]**                                                              |
-| `E437` | cannot derive `…`: the derivable specs are compiler-owned, and a `spec` you write is …      |
-| `E438` | `#[derive(Eq)]` on `…` — **[not yet]**                                                      |
-| `E444` | the list method `…` — **[not yet]**                                                         |
-| `E445` | structural equality over a container — **[not yet]**                                        |
-| `E446` | a refcounted box `Ref(x)` / `deref(r)` — **[not yet]**                                      |
-| `E449` | rendering a … as text — **[not yet]**                                                       |
-| `E451` | `…` declares `…` twice                                                                      |
-| `E452` | `…` is part of a cycle of by-value declarations                                             |
-| `E453` | `…` declares … named `…` twice                                                              |
-| `E454` | this expression chains more than … levels deep                                              |
-| `E455` | `…(…)` converts a scalar, and … is not one                                                  |
-| `E456` | `…` is not a variant of `…`                                                                 |
-| `E457` | `…` is a variant of `…`, not of `…`                                                         |
-| `E458` | this catch-all arm makes the following arms unreachable                                     |
-| `E459` | `…(…)` says which side of an `Either` a value is, so it needs a declared one to be          |
-| `E460` | a … is an identity rather than a value, and the language gives it no equality               |
-| `E461` | a second `impl Into[…] for …` — **[not yet]**                                               |
-| `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                |
-| `E463` | `in` over anything but a list, a map, a range or an error kind — **[not yet]**              |
-| `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                   |
-| `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                       |
-| `E466` | the built-in `set` — **[not yet]**                                                          |
-| `E467` | non-exhaustive match: missing a catch-all `_` arm                                           |
-| `E468` | a `return` with no value, in a function declared to answer …                                |
-| `E469` | … is a `mut &`, and a function VALUE cannot carry one — **[not yet]**                       |
-| `E470` | `del …` on a CHANNEL — **[not yet]**                                                        |
-| `E471` | `…[…](…)` as a constructor — **[not yet]**                                                  |
-| `E472` | `nil` as a `match` pattern — **[not yet]**                                                  |
-| `E473` | a … may hold no value, so `…` has nothing to compare                                        |
-| `E474` | the discriminant of `….…` is not a compile-time constant                                    |
-| `E475` | a fill count is a compile-time constant, and … is not one                                   |
-| `E476` | a fill count is how many copies to make, and `…` is negative                                |
-| `E477` | a range arm's bound is a compile-time constant, and `…` is not one                          |
-| `E478` | `…` needs a channel, and … is not one                                                       |
-| `E479` | a map entry is `key: value`, and this one has no `:`                                        |
-| `E480` | … whose value has no type this compiler can name — **[not yet]**                            |
-| `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                   |
-| `E482` | the field `…` of `…` is module-private, so it must carry a default                          |
-| `E483` | the default on field `…` reads the field `…` — **[not yet]**                                |
-| `E484` | the mutable global `…` may not be `pub`                                                     |
-| `E485` | import cycle: `…` -> `…` -> `…`                                                             |
-| `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                     |
-| `E487` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`      |
-| `E488` | an `unsafe fn(…)` TYPE — **[not yet]**                                                      |
-| `E489` | an `impl` on `….…` — a dotted target — **[not yet]**                                        |
-| `E490` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import     |
-| `E491` | a generic `type …[…] = …` — **[not yet]**                                                   |
-| `E492` | a sub-pattern inside a variant payload — **[not yet]**                                      |
-| `E493` | a range used as a value — **[not yet]**                                                     |
-| `E494` | `is …` names one of the built-in error kinds — **[not yet]**                                |
-| `E495` | a decorator holds at least one item, and `#[]` names nothing to apply                       |
-| `E496` | the decorator `#[sealed]` — reserved — **[not yet]**                                        |
-| `E497` | a `#[derive]` names the specs to generate                                                   |
-| `E498` | a channel is bidirectional, receive-only or send-only                                       |
-| `E501` | this entry file declares no `fn main`                                                       |
-| `E502` | cannot resolve import `…` under any source root                                             |
-| `E503` | cannot receive on a send-only `…`                                                           |
-| `E504` | cannot send on a receive-only `…`                                                           |
-| `E505` | cannot close a receive-only channel `…`                                                     |
-| `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                   |
+| Code   | Rule                                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| `E101` | a string literal is not closed before the end of the line                                               |
+| `E102` | a rune literal is empty                                                                                 |
+| `E103` | a rune literal holds exactly one character, and this holds more                                         |
+| `E104` | this character is not part of any Zerg token                                                            |
+| `E105` | a triple-quoted string is never closed                                                                  |
+| `E106` | a raw string has no closing quote on this line                                                          |
+| `E107` | a command literal has no closing backtick                                                               |
+| `E108` | a based number needs a digit immediately after its prefix                                               |
+| `E109` | invalid escape in a … literal                                                                           |
+| `E110` | a string literal may not contain a NUL                                                                  |
+| `E111` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                             |
+| `E201` | `close` is not a select arm head                                                                        |
+| `E202` | a select needs at least one arm                                                                         |
+| `E203` | `…` is not a select arm head                                                                            |
+| `E204` | expected `…`, found `…`                                                                                 |
+| `E205` | expected a newline or `;` to separate statements, found `…`                                             |
+| `E206` | `Either[…, …]` has the same type on both sides                                                          |
+| `E207` | a parameterized `…[…]` as … — **[not yet]**                                                             |
+| `E208` | `#[derive(…)]` has no declaration under it                                                              |
+| `E210` | a `spec` member with a BODY — **[not yet]**                                                             |
+| `E211` | an associated value is not a `spec` member                                                              |
+| `E212` | a generic enum `…[…]` — **[not yet]**                                                                   |
+| `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given                 |
+| `E214` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque                    |
+| `E215` | a generic struct `…[…]` — **[not yet]**                                                                 |
+| `E217` | the decorator `#[…]` — **[not yet]**                                                                    |
+| `E218` | an associated value binding `… := …` in an `impl` — **[not yet]**                                       |
+| `E219` | `…` as an `impl` item — **[not yet]**                                                                   |
+| `E221` | a struct pattern `…{…}` — **[not yet]**                                                                 |
+| `E222` | calling … — **[not yet]**                                                                               |
+| `E223` | the named argument `…:` — **[not yet]**                                                                 |
+| `E224` | `unsafe { … }` as an EXPRESSION — **[not yet]**                                                         |
+| `E225` | an f-string ':spec' format spec — **[not yet]**                                                         |
+| `E226` | an f-string '!r' / '!s' / '!a' conversion — **[not yet]**                                               |
+| `E227` | the f-string '{expr=}' self-documenting form — **[not yet]**                                            |
+| `E230` | an associated type is not a `spec` member                                                               |
+| `E231` | an associated type binding `type … = …` in an `impl` — **[not yet]**                                    |
+| `E232` | a tuple pattern in a `match` arm — **[not yet]**                                                        |
+| `E233` | an array type `[T; N]` — **[not yet]**                                                                  |
+| `E234` | an `as` binding in a `match` arm — **[not yet]**                                                        |
+| `E235` | an interpolating command literal — **[not yet]**                                                        |
+| `E236` | a command literal — **[not yet]**                                                                       |
+| `E238` | a destructuring binding `(a, b) := …` — **[not yet]**                                                   |
+| `E239` | a range with no lower bound — **[not yet]**                                                             |
+| `E240` | a list pattern in a `match` arm — **[not yet]**                                                         |
+| `E241` | an or-pattern — **[not yet]**                                                                           |
+| `E242` | `for mut v in …` — **[not yet]**                                                                        |
+| `E243` | a struct pattern `…{…}` in a `match` arm — **[not yet]**                                                |
+| `E244` | this program nests more than … levels deep                                                              |
+| `E245` | `…` is a reserved word and cannot name …                                                                |
+| `E246` | a tuple type has two elements or more                                                                   |
+| `E247` | `pub import` is not a form                                                                              |
+| `E248` | `pub` does not go on `init()`                                                                           |
+| `E249` | `pub` does not go on an `impl` block                                                                    |
+| `E250` | a decorator leads its declaration and `pub` sits inside it: write `#[…] pub fn …`, not …                |
+| `E251` | a free function is never `mut fn`                                                                       |
+| `E252` | `pub` does not go on an `unsafe { … }` group                                                            |
+| `E253` | a module-level `unsafe { … }` group does not nest                                                       |
+| `E254` | a module-level `unsafe { … }` group holds declarations                                                  |
+| `E255` | `pub` binds to a declaration, and a statement takes none                                                |
+| `E256` | this module-level `unsafe { … }` group is never closed                                                  |
+| `E257` | `…` is a reserved word and cannot name a binding                                                        |
+| `E258` | `…(…)` converts a VALUE and was given none                                                              |
+| `E259` | `…(…)` converts one value, and this gives …                                                             |
+| `E260` | `list[T](…)` converts a VALUE and was given none                                                        |
+| `E261` | `list[T](…)` converts one value, and this gives …                                                       |
+| `E262` | a match arm's guard goes before the `=>`                                                                |
+| `E263` | a parameter is `mut &` or nothing                                                                       |
+| `E264` | a standalone `unsafe fn` declaration — **[not yet]**                                                    |
+| `E265` | an associated type projection `….…` — **[not yet]**                                                     |
+| `E266` | a value generic parameter `…: …` — **[not yet]**                                                        |
+| `E267` | an import path is a string                                                                              |
+| `E268` | `…[…]` with no call after it — **[not yet]**                                                            |
+| `E269` | an `if` EXPRESSION whose branch has more than one statement — **[not yet]**                             |
+| `E270` | a binding head in an `if` EXPRESSION — **[not yet]**                                                    |
+| `E271` | `asm(…)` — **[not yet]**                                                                                |
+| `E272` | `…(…)` converts a VALUE and was given none                                                              |
+| `E273` | `…(…)` converts one value, and this gives …                                                             |
+| `E275` | a call writes its type arguments, and a postfix `[ … ]` is an index                                     |
+| `E276` | a `spec` member that is neither a signature nor a provided method                                       |
+| `E277` | an `impl` in neither the spec's module nor the type's                                                   |
+| `E278` | `#[derive(S)]` on an enum, and a method takes a `This`                                                  |
+| `E279` | `#[derive(S)]` on an enum, and a variant carries no value                                               |
+| `E280` | `#[obj]` on something that is not a `spec`                                                              |
+| `E281` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                                     |
+| `E282` | `#[obj]` and a method taking `This` — an object has forgotten its type                                  |
+| `E283` | `#[derive(…)]` on something with no structure to read                                                   |
+| `E284` | a `??` right-hand diverge with a trailing `if` guard                                                    |
+| `E285` | a default on a closure parameter — **[not yet]**                                                        |
+| `E286` | a `mut &` parameter in a function type — **[not yet]**                                                  |
+| `E287` | an `unsafe` `spec` signature — **[not yet]**                                                            |
+| `E291` | an `impl` carrying its own type parameters `[…]` — **[not yet]**                                        |
+| `E292` | an `impl` on `…[…]` — a type ARGUMENT on the target — **[not yet]**                                     |
+| `E288` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                                    |
+| `E289` | a trailing comma before a closing `)`, `]` or `}`                                                       |
+| `E290` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                              |
+| `E293` | `…` is a reserved word and cannot name a field                                                          |
+| `E294` | expected a field name (or a tuple index) after `.`, found `…`                                           |
+| `E295` | `del …` names nothing this program declares                                                             |
+| `E296` | `del …` names a function, struct, enum or variant — not a binding                                       |
+| `E297` | `…` is used after del                                                                                   |
+| `E298` | `…` is used after del on some paths                                                                     |
+| `E301` | `…` is not a public member of module `…`                                                                |
+| `E302` | `…` is not a place, and an assignment needs one                                                         |
+| `E303` | cannot assign to `…`: it is a module `const`, and a constant is never written                           |
+| `E304` | `type … = …` over a non-scalar — **[not yet]**                                                          |
+| `E305` | cannot assign to `…`: it is a module binding, and the top level is immutable                            |
+| `E306` | cannot assign to `this`: a method's receiver is a copy, and the form that writes through …              |
+| `E307` | cannot assign to `…`: it is immutable                                                                   |
+| `E308` | cannot assign through `…`: it is immutable                                                              |
+| `E309` | parameter `…` of `…` is a `mut &` and cannot have a default                                             |
+| `E310` | the default for `…` of `…` is …, and the parameter is …                                                 |
+| `E311` | `…` carries … and this … …                                                                              |
+| `E312` | argument … of `…` is a `mut &` and cannot cross a `…`: a borrow may not be captured, and …              |
+| `E313` | cannot store through …                                                                                  |
+| `E314` | no spec named `…`                                                                                       |
+| `E315` | `…` is parameterized by …, and this `impl` gives … type argument(s)                                     |
+| `E316` | `…` extends `…`, and nothing in this program declares a spec by that name                               |
+| `E317` | `….…` does not match what `…` requires: …                                                               |
+| `E318` | `…` does not implement `…`, which `…` requires                                                          |
+| `E319` | the integer literal `…` does not fit an `int`                                                           |
+| `E320` | a `str` is not indexable                                                                                |
+| `E321` | an `if` expression answers ONE type, and its branches give … and …                                      |
+| `E322` | a `match` answers ONE type, and its arms give … and …                                                   |
+| `E323` | … borrows …, which is a value rather than a place                                                       |
+| `E324` | … writes back to `this`, and the enclosing method holds its receiver by value                           |
+| `E325` | … writes back to `…`, which is not `mut`                                                                |
+| `E326` | `…` is given to two `mut &` parameters of `…` in one call                                               |
+| `E327` | `…` takes … and this gives …                                                                            |
+| `E328` | `…` needs … and this gives …                                                                            |
+| `E329` | element … of this list literal is …, and this gives …                                                   |
+| `E330` | `…` is not a value a … holds                                                                            |
+| `E331` | this divides by a constant `0`                                                                          |
+| `E332` | this expression's value is past what an `int` holds, so it cannot be measured against …                 |
+| `E333` | this function's answer is …, and this gives …                                                           |
+| `E335` | cannot bind … to a … binding: `…`                                                                       |
+| `E336` | the binding `…` gives …, which has no type of its own                                                   |
+| `E337` | `type … = …` names no type                                                                              |
+| `E338` | a struct field or an enum payload is …, and this gives …                                                |
+| `E339` | cannot assign … to …, which holds …                                                                     |
+| `E340` | argument … of `…` is …, and this gives …                                                                |
+| `E341` | an optional is not an operand of `…`                                                                    |
+| `E342` | operator `…` has no meaning on … and …                                                                  |
+| `E343` | operator `…` takes bool operands, and these are … and …                                                 |
+| `E344` | operator `…` takes int operands, and these are … and …                                                  |
+| `E345` | operator `…` takes numeric operands, and these are … and …                                              |
+| `E346` | operator `…` orders two numbers or two strs, and these are … and …                                      |
+| `E347` | cannot compare a variant with a number — a variant is a value of ITS enum                               |
+| `E348` | cannot compare … and … — they are different kinds of value                                              |
+| `E349` | operator `…` has no meaning on …                                                                        |
+| `E350` | operator `not` takes a bool operand, and this one is …                                                  |
+| `E351` | operator `-` takes a numeric operand, and this one is …                                                 |
+| `E352` | operator `~` takes an int operand, and this one is …                                                    |
+| `E353` | operator `…` has … on one side and … on the other, and an operator's operands must …                    |
+| `E354` | the condition of … is an optional, and a condition is bool — bind it with `if v := x { … }`             |
+| `E355` | the condition of … must be bool, and Zerg has no truthiness                                             |
+| `E356` | `…` re-binds a `const`                                                                                  |
+| `E357` | `const …` shadows a binding already visible here                                                        |
+| `E358` | the top-level binding `…` may not be `mut` outside a module-level                                       |
+| `E359` | `….…()` renders the value as text, so it takes no arguments beyond the value                            |
+| `E360` | `….…()` renders the value as text, so it is a plain `fn` and not a `mut fn`                             |
+| `E361` | `….…()` answers the `str` the value shows as                                                            |
+| `E362` | `…` is declared twice, once as a generic                                                                |
+| `E363` | `…` is declared both as a generic and as a plain function                                               |
+| `E364` | `This` is the self type, and … is outside an `impl`                                                     |
+| `E365` | `…` declares a parameter named `…` twice                                                                |
+| `E366` | `…(…)` converts ONE value                                                                               |
+| `E367` | `…(…)` does not parse a `str`                                                                           |
+| `E369` | `…` holds an …, and an … is not callable                                                                |
+| `E370` | `…` needs a value for … (…): only a `T?` field has an implicit default, and it is `nil`                 |
+| `E371` | `this` is a method's receiver, and this function has none                                               |
+| `E372` | undefined name `…`                                                                                      |
+| `E374` | a slice bound is an int, and this is …                                                                  |
+| `E375` | a list index is an int, and this is …                                                                   |
+| `E376` | no field `…` on …                                                                                       |
+| `E377` | `.…` reads a tuple element, and … is not a tuple                                                        |
+| `E378` | a tuple of … has no `.…`                                                                                |
+| `E379` | `for … in` walks a list, a map, a str, a range or a channel, and … is not iterable                      |
+| `E380` | raise carries an `Err`, or a message to build one from                                                  |
+| `E381` | `…` is declared twice, once as one kind of declaration and once as another                              |
+| `E382` | `…` is declared twice as the same kind — every module flattens into one namespace                       |
+| `E383` | a variant is named through its enum, and this one is bare                                               |
+| `E384` | a side of an `Either` is named through its type, and this one is bare                                   |
+| `E385` | a closure parameter has no type, and its position gives it none                                         |
+| `E386` | a call through a function value gives the wrong number of arguments                                     |
+| `E387` | `…` is declared in a module-level `unsafe { … }` group, and this is safe code                           |
+| `E388` | module `…` has no `…`                                                                                   |
+| `E389` | `…` is already … — an import binds a name into the one value namespace                                  |
+| `E390` | this position needs a value, and nil is what it was given                                               |
+| `E391` | `…` opens a statement at the top level, and a compiled program runs nothing there                       |
+| `E392` | cannot `…` to `…`: only a `mut` collection can modify its elements                                      |
+| `E393` | cannot `…` `…`: a collection is frozen against structural change inside its own `for` loop              |
+| `E394` | `…(…)` on a `float` — write the verb: `math.trunc` / `floor` / `ceil` / `round`                         |
+| `E395` | a conversion is one step: `…` -> `…` is `…` -> `int` -> `…`, so write the two                           |
+| `E396` | `…` is not a compiler primitive — the `__zrt_…` set is closed                                           |
+| `E397` | the compiler primitive `…` takes … and this gives …                                                     |
+| `E398` | operand … of the compiler primitive `…` is …, and this gives …                                          |
+| `E401` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                             |
+| `E402` | a `from` cause is an `Err`, and … is not one                                                            |
+| `E403` | `…` leaving a `guard` block — **[not yet]**                                                             |
+| `E404` | a channel of optionals is refused                                                                       |
+| `E405` | `…(…)` names one side of an `Either`, which holds exactly one value                                     |
+| `E406` | `?.` reads through an optional, and … is not one                                                        |
+| `E407` | `int(v)` reads the discriminant, and enum `…` carries a payload, so its tag is opaque                   |
+| `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with …                |
+| `E409` | a generic METHOD `….…[…]` — **[not yet]**                                                               |
+| `E410` | `…` has been instantiated … times and is still asking for more                                          |
+| `E411` | the type parameter `…` of `…` is not decided by this call                                               |
+| `E412` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                                |
+| `E413` | the raw-pointer built-in `…` — **[not yet]**                                                            |
+| `E414` | the compile-time built-in `…[T]` — **[not yet]**                                                        |
+| `E415` | an `impl` on the built-in type `…` — **[not yet]**                                                      |
+| `E416` | the `spec` `…` used as a TYPE (…) — **[not yet]**                                                       |
+| `E417` | `str(…)` over a list bridges bytes or code points, and this is …                                        |
+| `E418` | `…(…)` converts a value, and … may not have one                                                         |
+| `E419` | an enum converts to `int`                                                                               |
+| `E420` | `….of(n)` reverses the discriminant, and enum `…` carries a payload, so its tag is opaque               |
+| `E421` | `[…]` indexes a value, and … may not have one                                                           |
+| `E422` | `…` MUTATES its list, and `…` is a value rather than a place — **[not yet]**                            |
+| `E423` | an open-ended range has no upper bound here — **[not yet]**                                             |
+| `E424` | `….…(…)` is an associated function — **[not yet]**                                                      |
+| `E425` | undefined function `…`                                                                                  |
+| `E426` | `…` has … fields and this gives …                                                                       |
+| `E427` | variant pattern `…` cannot match a subject of type …                                                    |
+| `E428` | non-exhaustive match: missing variant ….…                                                               |
+| `E430` | `…` on a … needs an `Eq` — there is no structural equality by default                                   |
+| `E431` | a map key of type … — **[not yet]**                                                                     |
+| `E432` | `…` is declared … and the value is …: unwrap it with `?? …`, `!` or `if … := …`                         |
+| `E433` | `print` needs a value, and … may not have one                                                           |
+| `E434` | `if … := …` over a … — **[not yet]**                                                                    |
+| `E435` | `…` is declared to answer …, and its body falls off the end                                             |
+| `E436` | `#[derive(…)]` — **[not yet]**                                                                          |
+| `E437` | cannot derive `…`: the derivable specs are compiler-owned, and a `spec` you write is …                  |
+| `E438` | `#[derive(Eq)]` on `…` — **[not yet]**                                                                  |
+| `E444` | the list method `…` — **[not yet]**                                                                     |
+| `E445` | structural equality over a container — **[not yet]**                                                    |
+| `E446` | a refcounted box `Ref(x)` / `deref(r)` — **[not yet]**                                                  |
+| `E449` | rendering a … as text — **[not yet]**                                                                   |
+| `E451` | `…` declares `…` twice                                                                                  |
+| `E452` | `…` is part of a cycle of by-value declarations                                                         |
+| `E453` | `…` declares … named `…` twice                                                                          |
+| `E454` | this expression chains more than … levels deep                                                          |
+| `E455` | `…(…)` converts a scalar, and … is not one                                                              |
+| `E456` | `…` is not a variant of `…`                                                                             |
+| `E457` | `…` is a variant of `…`, not of `…`                                                                     |
+| `E458` | this catch-all arm makes the following arms unreachable                                                 |
+| `E459` | `…(…)` says which side of an `Either` a value is, so it needs a declared one to be                      |
+| `E460` | a … is an identity rather than a value, and the language gives it no equality                           |
+| `E461` | a second `impl Into[…] for …` — **[not yet]**                                                           |
+| `E462` | `in` over a list whose elements have no `==` — **[not yet]**                                            |
+| `E463` | `in` over anything but a list, a map, a range or an error kind — **[not yet]**                          |
+| `E464` | `into` is a method of the `Into` spec, and no built-in type implements it                               |
+| `E465` | `…` is part of the fixed-width ladder — **[not yet]**                                                   |
+| `E466` | the built-in `set` — **[not yet]**                                                                      |
+| `E467` | non-exhaustive match: missing a catch-all `_` arm                                                       |
+| `E468` | a `return` with no value, in a function declared to answer …                                            |
+| `E469` | … is a `mut &`, and a function VALUE cannot carry one — **[not yet]**                                   |
+| `E470` | `del …` on a CHANNEL — **[not yet]**                                                                    |
+| `E471` | `…[…](…)` as a constructor — **[not yet]**                                                              |
+| `E472` | `nil` as a `match` pattern — **[not yet]**                                                              |
+| `E473` | a … may hold no value, so `…` has nothing to compare                                                    |
+| `E474` | the discriminant of `….…` is not a compile-time constant                                                |
+| `E475` | a fill count is a compile-time constant, and … is not one                                               |
+| `E476` | a fill count is how many copies to make, and `…` is negative                                            |
+| `E477` | a range arm's bound is a compile-time constant, and `…` is not one                                      |
+| `E478` | `…` needs a channel, and … is not one                                                                   |
+| `E479` | a map entry is `key: value`, and this one has no `:`                                                    |
+| `E480` | … whose value has no type this compiler can name — **[not yet]**                                        |
+| `E481` | `…` re-binds a name a `match` arm's pattern already binds — **[not yet]**                               |
+| `E482` | the field `…` of `…` is module-private, so it must carry a default                                      |
+| `E483` | the default on field `…` reads the field `…` — **[not yet]**                                            |
+| `E484` | the mutable global `…` may not be `pub`                                                                 |
+| `E485` | import cycle: `…` -> `…` -> `…`                                                                         |
+| `E486` | a destructuring assignment `(a, b) = …` — **[not yet]**                                                 |
+| `E487` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`                  |
+| `E488` | an `unsafe fn(…)` TYPE — **[not yet]**                                                                  |
+| `E489` | an `impl` on `….…` — a dotted target — **[not yet]**                                                    |
+| `E490` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import                 |
+| `E491` | a generic `type …[…] = …` — **[not yet]**                                                               |
+| `E492` | a sub-pattern inside a variant payload — **[not yet]**                                                  |
+| `E493` | a range used as a value — **[not yet]**                                                                 |
+| `E494` | `is …` names one of the built-in error kinds — **[not yet]**                                            |
+| `E495` | a decorator holds at least one item, and `#[]` names nothing to apply                                   |
+| `E496` | the decorator `#[sealed]` — reserved — **[not yet]**                                                    |
+| `E497` | a `#[derive]` names the specs to generate                                                               |
+| `E498` | a channel is bidirectional, receive-only or send-only                                                   |
+| `E501` | this entry file declares no `fn main`                                                                   |
+| `E502` | cannot resolve import `…` under any source root                                                         |
+| `E503` | cannot receive on a send-only `…`                                                                       |
+| `E504` | cannot send on a receive-only `…`                                                                       |
+| `E505` | cannot close a receive-only channel `…`                                                                 |
+| `E506` | a channel direction only narrows: a `…` cannot fill a `…`                                               |
+| `E507` | `…` is a module this build compiles and this module did not import                                      |
+| `E508` | `…` is not a public type of module `…`                                                                  |
+| `E509` | `…` is module-private, and … is on a `pub` declaration                                                  |
+| `E510` | `…` is not a public field of `…`, which module `…` declared                                             |
+| `E511` | the module `atomic` ships and cannot be imported — **[not yet]**                                        |
+| `E512` | `…` names a test file, and a normal build compiles none                                                 |
+| `E601` | `…` needs a name, and `…` is not one                                                                    |
+| `E602` | a `<-` prefix is a channel direction: only `<-chan[T]` is a type                                        |
+| `E603` | `mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`                 |
+| `E604` | `is` wants a type name on its right                                                                     |
+| `E605` | `…` is a statement, and an expression is wanted here — **[not yet]**                                    |
+| `E606` | `…` is not an expression this compiler reads — **[not yet]**                                            |
+| `E607` | a match arm's body is an expression, and this one is a statement — **[not yet]**                        |
+| `E608` | an f-string's literal text is malformed                                                                 |
+| `E609` | an f-string hole holds more than one expression                                                         |
+| `E610` | `…` cannot name a struct/enum/spec/type alias — a declared type's name begins with an UPPER-CASE LETTER |
+| `E611` | `…` is a prelude name — … — and cannot name …                                                           |
+| `E612` | `…` applies to the … that follows it, and a statement is not one                                        |
+| `E613` | a second decorator on one item — merge them into its comma list                                         |
+| `E614` | an `#[allow]` names the lint codes it suppresses, and this one names none                               |
+| `E701` | a `…` takes a … or a …, and this bare value is neither side                                             |
+| `E702` | no field `…` on … (optional chain `?.…`)                                                                |
+| `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                                           |
+| `E704` | `?` propagates a right the enclosing function does not answer                                           |
+| `E705` | two modules both define `…` and at least one is `pub` — **[not yet]**                                   |
+| `E706` | `…` and `…` both define `…` — one flat namespace — **[not yet]**                                        |
+| `E707` | no type named `…` (…)                                                                                   |
+| `E708` | `!` on a … — it forces a Result[T] or a T? — **[not yet]**                                              |
+| `E709` | `??` on a … — its left side is a Result[T] or a T? — **[not yet]**                                      |
+| `E710` | `is …` wants an Err on its left, found a …                                                              |
+| `E711` | `in …` wants an Err on its left, found a …                                                              |
+| `E712` | `list[…](…)` converts a `str` to its bytes, and this is …                                               |
+| `E713` | `list[…](…)` — a `str` bridges to its bytes or its code points                                          |
+| `E714` | rendering a … as text — an enum has no name for its variant — **[not yet]**                             |
+| `E715` | `[…]` indexes a list or a map, and this is …                                                            |
+| `E716` | the method `…` on an Err takes no argument — **[not yet]**                                              |
+| `E717` | the method `…` on a Err — the `Error` interface is three names — **[not yet]**                          |
+| `E718` | `ok_or` takes the error to answer an absence with, and none was given — **[not yet]**                   |
+| `E719` | `ok_or` takes ONE error to answer an absence with — **[not yet]**                                       |
+| `E720` | `ok_or` answers an absence with an `Err`, and this is a … — **[not yet]**                               |
+| `E721` | `ok` forgets the Right and takes no argument — **[not yet]**                                            |
+| `E722` | the method `…` on a … — a carrier answers `ok_or` and `ok` — **[not yet]**                              |
+| `E723` | `….…(…)` — an enum type answers `of(n)` and its own variants — **[not yet]**                            |
+| `E724` | `….of(n)` takes one integer — the discriminant to reverse                                               |
+| `E725` | the method `…` on a … — **[not yet]**                                                                   |
+| `E726` | `…` is testable but not constructible                                                                   |
+| `E727` | no type named `…` to construct                                                                          |
+| `E728` | no variant named `…` — a constructor pattern names one of the subject's                                 |
+| `E729` | non-exhaustive match: missing the Left or the Right case                                                |
+| `E730` | non-exhaustive match: missing the `true` or the `false` case                                            |
+| `E731` | the pattern `…` on a Result[T] — it has Left and Right — **[not yet]**                                  |
+| `E732` | these constants depend on each other and none can be given a value first                                |
+| `E733` | `fn main() -> …` — the entry answers nothing, an int or a Result[nil] — **[not yet]**                   |
+| `E734` | main(args) in a program that uses concurrency — **[not yet]**                                           |
+| `E735` | a closure captures `…`, and this compiler cannot work out what it holds                                 |
+| `E736` | … of anything but a function, a method, or a namespaced function — **[not yet]**                        |
+| `E737` | … of `…` — not a function, a method, or a namespaced function — **[not yet]**                           |
+| `E738` | `len` takes no argument, and this gives …                                                               |
+| `E739` | `has` asks about one key, and this gives …                                                              |
+| `E740` | the map method `…` — **[not yet]**                                                                      |
+| `E741` | the field `…` on an Err — it has `msg` and `kind` — **[not yet]**                                       |
+| `E742` | `…` has … type parameters and this gives …                                                              |
+| `E743` | `..=` with no upper bound is not a range — **[not yet]**                                                |
+| `E744` | a `spawn`/`defer` of `…`, a binding that HOLDS a function — **[not yet]**                               |
+| `E745` | `…` is declared twice in this file — one scope declares a name once                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -934,6 +1058,7 @@ holds each range to exactly that: a number that is neither listed above nor list
 | `E229` | stamped twice by the code conversion, and dropped from the site no case reached            |
 | `E237` | a `with` block — built, and an example took the refusal's place                            |
 | `E274` | a bare name in pattern position, decided by its first letter — see above; `E458` covers it |
+| `E334` | a local annotation naming no type — one rule for four sites now, and `E707` is the one     |
 | `E368` | `…` is not generic — the branch that reported it left, and the code left with it           |
 | `E373` | a name declared as both a module constant and a function — the rule is `E381`'s            |
 | `E429` | a closure capturing a name — built                                                         |
@@ -945,6 +1070,8 @@ holds each range to exactly that: a number that is neither listed above nor list
 | `E447` | never issued: the conversion pass that numbered `E4xx` skipped it                          |
 | `E448` | an ordering that comes from `Ord` — the rule it named is the checker's, and always was     |
 | `E450` | no field `…` on a type — the same rule as the row that kept the number below it            |
+| `E299` | never issued: `E2xx` closed at `E298`, and the parser's numbers continue in `E6xx`         |
+| `E499` | never issued: `E4xx` closed at `E498`, and the emitter's numbers continue in `E7xx`        |
 
 ## `zerg lint`
 
@@ -953,8 +1080,48 @@ zerg lint <file.zg>...   # prints findings; exits nonzero when there is one
 ```
 
 Every check is answered from the parsed file alone — no types, no flow analysis — which
-keeps it honest about what it can claim. Findings come back in source order, and a nonzero
-exit makes `zerg lint` usable as a gate rather than as decoration.
+keeps it honest about what it can claim. Findings come back in source order, each with the
+place it is about (`path:line:col`).
+
+### Severity, and the two exit codes
+
+A finding carries a **severity**, and there are three:
+
+| Severity      | Printed as              | `zerg lint` | `zerg lint --strict` |
+| ------------- | ----------------------- | ----------- | -------------------- |
+| **a finding** | `path:line:col: L101 …` | **fails**   | **fails**            |
+| **warning**   | `… warning: L601 …`     | exits 0     | **fails**            |
+| **info**      | `… info: L106 …`        | exits 0     | exits 0              |
+
+A **finding** is a rule firing on the program, which is what the tool is for. A **warning** is
+what a rule says about a program that is not wrong — a `#[test]` that ships is a decision
+somebody is allowed to have made — so it prints and does not fail. An **info** never changes an
+exit status at all.
+
+Only the default prints no adjective: it is what `zerg lint` is for and needs no word in front
+of it, while a line that does **not** change the exit status has to say so or it reads as one
+that did.
+
+`--strict` is what `make lint` runs, over this project's own source, where neither a shipping
+test nor a suppression that will never apply is acceptable. A gate board stricter than the tool
+has precedent here — `refuse-check` asserts more about a refusal than `zerg build` requires.
+
+### Suppressing a finding — `#[allow(…)]`
+
+`#[allow(L103)]` on a statement suppresses that code over the statement it leads, and over its
+block when it has one — the scope is the size of the statement, which is one rule and not a
+choice between a line and a scope. It does not reach the next statement and cannot reach
+another file; there is deliberately **no file-level scope**. It names **`L` codes only**: an `E`
+code is a compiler diagnostic and suppressing one would make bypassing a compiler check an
+official feature. See [Decorators](../core/decorators.md).
+
+Two codes are about a suppression itself. `L106` matters more than it looks: a stale allow
+silences a rule that has stopped firing, and nobody learns when the real problem returns.
+
+| Code   | Severity    | Finding                                                    |
+| ------ | ----------- | ---------------------------------------------------------- |
+| `L106` | **info**    | the allow had nothing to suppress                          |
+| `L107` | **warning** | the allow names a code no rule has, so it will never apply |
 
 ### L1xx — dead code
 
@@ -977,6 +1144,12 @@ L104 `_ :=` in `main` — the expression is already a statement, so the binder s
 read" is the one thing there is no point saying about it. The select-arm spelling of the same
 redundancy is `F407`'s, because `GRAMMAR` makes that binder optional and
 dropping it leaves an arm. A statement's binder has no such spelling.
+
+`L101` and `L102` judge a declaration by its **uses**, and a use counts wherever it is
+written — not only inside a function body. A **type position** is one (`ctx: testing.Context`
+uses the `testing` import and writes no expression at all), and so is a module-level `const`
+initialiser, a struct field's default and a parameter's default. Each of those is code that
+belongs to a declaration rather than to a body.
 
 ### L2xx — null safety
 
@@ -1041,25 +1214,19 @@ than every shape that could.
 
 ### `L4xx` — resolution
 
-| Code   | Rule                                                      |
-| ------ | --------------------------------------------------------- |
-| `L401` | a variant name TWO enums declare (**[deviation]**, below) |
-| `L402` | a `mut fn` that never writes through `this`               |
+| Code   | Rule                                        |
+| ------ | ------------------------------------------- |
+| `L402` | a `mut fn` that never writes through `this` |
 
-`L401` was **retired and is still emitted**. It reported a variant name two enums declare:
-a bare name was a variant when it resolved to one, resolution took the **first**
-declaration, and `c := Red` was a coin toss decided by declaration order. A variant is now
-always named by its enum ([Grammar](../surface/grammar.md)), so `Red` alone names nothing —
-`c := Red` is _E383 `Red` is a variant of `Colour`, and a variant is named through its enum_
-— and the two declarations never compete for a bare name.
-
-> **[deviation]** `zerg lint` still runs the rule, so two enums sharing a variant name draw
-> _L401 `Red` is a variant of both `Colour` and `Signal`, so a bare `Red` resolves to
-> `Colour` by declaration order alone — name it `Signal.Red` where you mean this one_. Both
-> halves of that sentence are now false: a bare `Red` resolves to nothing, and `Signal.Red`
-> is the one spelling the compiler refuses (`E457` — see [Types](../core/types.md), where
-> that refusal is its own deviation). Nothing catches it, because `error-codes-check` holds
-> the `E` codes to the source, the gates and this table, and reads no `L` code at all.
+`L401` stood here and has **retired**. It reported a variant name two enums declare: a bare
+name was a variant when it resolved to one, resolution took the **first** declaration, and
+`c := Red` was a coin toss decided by declaration order. Neither half of that survives. A
+variant is named through its enum ([Grammar](../surface/grammar.md)), so `Red` alone is
+_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_ in either
+enum; and a qualified `Signal.Red` is resolved **inside the enum it names**, so the two
+declarations are two different variants that never compete. The rule is gone from the
+linter rather than left running, which is what its own case in `lint-check` would otherwise
+have gone on asserting.
 
 `mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
 the instance in a `mut` binding. A method that only reads charges its callers that and gives
@@ -1089,6 +1256,35 @@ type is a fact about **types**, so the lowering walk records it and `zerg lint` 
 the C it produces is thrown away. A program that does not compile reports none of them, which
 is right: there is nothing to advise about the types of a program whose types are wrong.
 
+### `L6xx` — what the binary carries
+
+| Code   | Rule                                                                 |
+| ------ | -------------------------------------------------------------------- |
+| `L601` | a `#[test]` or `#[fixture]` outside a `*_test.zg` file — **warning** |
+| `L602` | an `assert` outside a `*_test.zg` file — **warning**                 |
+
+Such a function is **legal** and it **ships**: it is compiled into the binary like any other,
+it appears twice in the emitted C, nothing calls it, and its `import "testing"` travels with
+it — which is how a test-only dependency reaches a shipped program. So the message states that
+**consequence** rather than the preference. A warning that only says "move it" is style advice
+and gets scrolled past; what the reader has to weigh is dead code in the artifact.
+
+`#[allow(L601)]` silences it for a `#[test]` that is meant to ship. One decorator per item, so
+the two are written as one: `#[allow(L601), test]`.
+
+`L602` is the same argument about a **live** claim rather than dead weight. `assert` is always
+compiled in — there is no flag that strips it, deliberately, because a program with its
+assertions and the same program without them are two programs, and nobody writes anything
+load-bearing into a check that may not run. So an `assert` outside a test file is a check that
+ships and can abort a running process, and the message names the **replacement**, which is what
+makes the warning earned: `assert` in production is not _weaker_ than the check somebody meant
+to write, it is _less specific_ — it says the claim was false, and never what it meant.
+`raise ValueError("xs must be non-empty") if xs.len() == 0` says both.
+
+`#[allow(L602)]` silences it, on a `fn` for the whole body or on a single statement for that
+statement. Move the code into a `*_test.zg` file afterwards and `L106` tells you to drop the
+allow, which is what keeps the suppression from outliving its reason.
+
 ## Adding a rule
 
 A new SURFACE FORM needs a case in `test-data/fmt/` in the same change, not only a rule.
@@ -1097,11 +1293,22 @@ on the second pass — so `make fmt-corpus` is green until some case actually co
 shape. Both spacing defects found so far (`chan[T]<-` and friends, then `-1`) hid in forms
 no case had.
 
+A new `F4xx` REWRITE owes `make fmt-roundtrip` as well. It is the only group that can write
+a form the grammar does not have, and it is the group `fmt-tokens` turns off to ask its own
+question — so a rewrite is measured by the round-trip gate or by nothing. State the shapes
+the rule DECLINES as corpus cases too: a decline is a claim, and a case that is already
+canonical is how one is written down.
+
 A new LINT rule needs a program in `scripts/lint-check.sh` that makes it fire, for the reason
-`make lint` cannot supply one: it runs over the compiler and the stdlib, which are clean, so a
-rule that stopped working looks exactly like a rule with nothing to say. That script also fails
-when a code documented in `lint.zg` has no case, so the pairing is checked rather than
-remembered.
+`make lint` cannot supply one: it runs over the compiler, the stdlib and the test suites, which
+are clean, so a rule that stopped working looks exactly like a rule with nothing to say. That
+script also fails when a code documented in `lint.zg` has no case, so the pairing is checked
+rather than remembered.
+
+A rule that judges a declaration by its uses owes a **second** case there: a well formed program
+it must stay **silent** on. `L101` called an import unused when the only thing reaching it was a
+type, and `L102` called a private function dead when the only thing calling it was a
+module-level `const` — and every positive case stayed green through both.
 
 Give it the next number in the group its EFFECT belongs to, add it to the table in
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg) or

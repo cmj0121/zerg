@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens fmt-roundtrip linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -81,6 +81,55 @@ clean: $(SUBDIR)                # clean-up environment
 	@rm -rf .zerg-cache
 
 test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
+
+# `zerg test` is the command the tests of this project will eventually be written for, and
+# this is the gate on IT rather than on them: a runner that cannot detect a failing test
+# reports a green board for a broken program, which is the one failure a test corpus must
+# never have. The fixtures are in the script, chosen by failure mode.
+test-runner:                    # the test runner can see a test that fails
+	$(MAKE) build
+	./scripts/test-runner-check.sh
+
+# And the suites written FOR that runner. `test-runner` asks whether the runner can see a
+# failure; this asks the standard library the questions, and it is a separate target because
+# a red board should say which of the two broke.
+#
+# THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md puts
+# a white-box test. They no longer HAVE to be out here — a test build resolves a test file's
+# package the way an import is resolved, so a `strings_test.zg` beside `strings.zg` is a package
+# of that pair and none of `src/stdlib`'s other seventeen modules is compiled with it — but moving
+# a suite is a change of its own, and this one stays where it was written until somebody makes
+# it. What it costs meanwhile is the white-box position: a suite here reaches its module the way
+# a user does, through `import`, so a module-private name is out of its reach.
+#
+# A FLOOR, of the kind `corpus` and `test-runner` carry, and here it is not a formality: a
+# `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
+# broke, a directory that moved, or a suite somebody deleted all leave this target green for
+# having asked nothing — the one failure a test gate must not have.
+STDLIB_TEST_MIN ?= 159
+
+# The modules whose comments carry runnable examples. An example nobody executes is an
+# unverified claim, which is the shape this repository has spent a span removing, so the
+# ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
+# against what came out. The list is a variable so that adding a module's examples is one
+# name here rather than a second copy of the rule.
+DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/os.zg src/stdlib/strings.zg src/stdlib/time.zg
+
+stdlib-test:                    # the standard library's own suites, and a floor under them
+	$(MAKE) build
+	./scripts/doc-examples-check.sh $(DOC_EXAMPLE_SRCS)
+	@# `log`'s claims a suite inside the process cannot make — `fatal` exits, the default stream
+	@# is stderr, one line is one write, colour follows the terminal, `ZERG_LOG_LEVEL` names a
+	@# level, and the pattern `log` is the tree's reference for is still the shape of its
+	@# source. It rides here rather than on the board of its own because it is the same question
+	@# this target already asks: does the standard library do what it says.
+	./scripts/log-check.sh
+	@out=$$(./bin/zerg test tests/stdlib); status=$$?; \
+	printf '%s\n' "$$out"; \
+	[ $$status -eq 0 ] || exit 1; \
+	n=$$(printf '%s\n' "$$out" | sed -n 's/^\([0-9][0-9]*\) passed,.*/\1/p'); \
+	[ -n "$$n" ] && [ $$n -ge $(STDLIB_TEST_MIN) ] || \
+		{ echo "stdlib-test: $${n:-no} tests passed, and the floor is $(STDLIB_TEST_MIN) — the gate did not run itself"; exit 1; }
 
 run: $(SUBDIR)                  # run in the local environment
 
@@ -276,7 +325,7 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # notice, so a whole directory of the compiler was outside the rule that every other line
 # of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
 # size of whatever was added last.
-SELF_SRCS := src/compiler/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
+SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg tests/stdlib/*/*.zg
 
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
@@ -292,6 +341,28 @@ fmt-tokens:                     # formatting changes spacing, never the token st
 	$(MAKE) build
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./scripts/fmt-tokens.sh
+
+# The third question about the same cases, and the one that was missing. `fmt-corpus` and
+# `fmt-self` ask whether a source is ALREADY canonical, which every rule that does not fire
+# on it passes; `fmt-tokens` asks that spacing does not move a token, and turns the F4xx
+# REWRITES off to ask it. So the rules that change the code's shape — the only ones that can
+# write a form the grammar does not have — were measured by nothing, and F401 turned
+# `if s := v { return s }` into `return s if s := v` for months while all three stayed green.
+#
+# This asks whether the formatter's output is still a PROGRAM. See the script for why the
+# question is one-way — if the input parses, the output must — and for the two halves, since
+# a module's file is not an entry point and cannot be parsed on its own.
+#
+# FMT_ROUNDTRIP_MIN is the floor, and the reason is fmt-corpus's: the directory guard below
+# catches an ABSENT submodule and nothing else, while a partial or wrong-commit checkout
+# leaves test-data/ there with a handful of cases in it and every assertion here satisfied.
+# 180 against the 214 measured today.
+FMT_ROUNDTRIP_MIN ?= 180
+
+fmt-roundtrip:                  # what the formatter writes, the parser reads
+	$(MAKE) build
+	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@MIN_SOURCES=$(FMT_ROUNDTRIP_MIN) ./scripts/fmt-roundtrip.sh
 
 # A case's EXIT STATUS is checked as well as its stdout, against `<name>.rc` where there is
 # one and against 0 where there is not. Only stdout was compared before, so a program that
@@ -345,6 +416,20 @@ fixpoint:                       # prove the compiler still emits the same C for 
 sanitize-conc:                  # run the concurrency corpus under address/UB/leak sanitizers
 	$(MAKE) build
 	./scripts/sanitize-conc.sh
+
+# `sanitize-conc` is the only leak gate this repository had, and it can only run where
+# LeakSanitizer exists — Linux — AND where the private corpus was fetched, which on a fork
+# is nowhere. So the whole memory contract was defended on one platform, behind a secret.
+#
+# This asks a narrower question that needs neither: the same program is run at 5 rounds and
+# at 200 against a counting allocator, and the number of allocations still live at exit must
+# be the SAME. That is exactly the shape a per-round leak has, it is an exact integer rather
+# than an RSS reading, and its programs are written inside the script — so it runs on every
+# platform, on every fork, with nothing fetched. What it cannot see is written at the top of
+# the script: a leak that is bounded per PROGRAM is invisible to a difference.
+mem-check:                      # a value that outlives its scope, counted rather than estimated
+	$(MAKE) build
+	./scripts/mem-check.sh
 
 # Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
 # and the property it pins is not that a bad program fails — it always did — but WHO says
@@ -463,7 +548,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check sha256 gates sanitize-conc
+LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -571,9 +656,54 @@ cache-key-check:                # the build cache names the compiler that filled
 error-codes-check:              # every error code is reported once, asserted, and listed
 	./scripts/error-codes-check.sh
 
-lint:                           # lint the compiler and stdlib with zerg itself
+seed-gaps:                      # the seed's gap list says the same thing in both languages
+	./scripts/seed-gaps-check.sh
+
+# What this gate lints, and it is EVERY ZERG SOURCE THIS PROJECT WRITES — which is what the
+# target has always claimed and what, for a long time, it did not do: the recipe below was one
+# `zerg lint $(ZERG_ENTRY)`, so the compiler was gated and nothing else was. A stdlib module the
+# compiler does not import was unlinted, and so was every test suite. Both shipped findings —
+# `tests/stdlib/os/os_test.zg` carried an `L103` into main, hours after it was written.
+#
+# THE UNIT IS AN ENTRY, NOT A FILE, and that is the one way this list differs from SELF_SRCS
+# next door. `zerg lint` takes a program: it resolves the entry's imports and lints the merged
+# whole, because L101 and L102 are whole-program questions — a private function called from
+# another module of the same program is not dead. So the compiler contributes ONE entry and not
+# its forty files, while a stdlib module and a test suite are each a program of their own.
+#
+# `atomic` is the one exclusion and it is not a judgement about the module: it declares
+# `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
+# name (`E511`, chk_unbuilt_module) and there is no program for the linter to be handed. The
+# entry deletes itself the day a generic struct is built — the same end state CORPUS_SKIP has.
+LINT_SKIP := src/stdlib/atomic.zg
+LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg)) $(wildcard tests/stdlib/*/*_test.zg)
+
+# A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
+# carry. Two of the three globs above reach directories, and a glob that matches nothing leaves
+# a loop with nothing to iterate and a gate that exits 0 for having asked one question.
+#
+# 16 against the 20 there are today: far enough below that adding a module or retiring a suite
+# is not a chore here, far enough above that a pattern which stopped matching cannot pass.
+LINT_MIN ?= 16
+
+# `--strict`, and the tool without it exits 0 on a warning. That is not two answers to one
+# question: `zerg lint` reports on somebody else's program, where a `#[test]` that ships and a
+# suppression that will never apply are decisions they are allowed to have made. This board is
+# over THIS project's own source, where neither is. A gate stricter than the tool has
+# precedent next door — refuse-check asserts more about a refusal than `zerg build` requires.
+#
+# EVERY ENTRY IS LINTED BEFORE THE GATE FAILS, rather than the loop stopping at the first —
+# a board that reports one finding per run makes a reader run it once per finding.
+lint:                           # lint the compiler, the stdlib and the suites with zerg itself
 	$(MAKE) build
-	./bin/zerg lint $(ZERG_ENTRY)
+	@fail=0; n=0; \
+	for f in $(LINT_ENTRIES); do \
+		./bin/zerg lint --strict $$f || fail=1; \
+		n=$$((n+1)); \
+	done; \
+	[ $$fail -eq 0 ] || { echo "lint: a source this project writes has a finding"; exit 1; }; \
+	[ $$n -ge $(LINT_MIN) ] || { echo "lint: only $$n entries were linted, and the floor is $(LINT_MIN)"; exit 1; }; \
+	echo "lint: $$n entries clean"
 
 # `lint` asks whether the compiler is clean, and it is — which is exactly why it cannot tell a
 # rule that finds nothing from a rule that is gone. This one makes every rule fire.

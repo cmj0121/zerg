@@ -497,10 +497,10 @@ impl Logger {
 	# at_level begins a line at any level. It is the general form the five below are written
 	# on, and it is what an instance writes for DEBUG.
 	pub fn at_level(l: Level) -> Entry {
-		# THE ENTRY BORROWS THE LOGGER'S FIELD LIST rather than being handed a fresh one, and
-		# that is what makes the disabled path free: `[]` is an allocation, and a `list` is
-		# copy-on-write, so sharing costs a refcount and the first `.str()` pays for the copy
-		# it actually needs. A dead entry never reads `fs` at all.
+		# THE ENTRY BORROWS THIS LOGGER rather than being handed a fresh field list, and that is
+		# what makes the disabled path free: `[]` is an allocation, and `base` is copy-on-write,
+		# so carrying the logger costs a refcount and the first `.str()` pays for the copy it
+		# actually needs. A dead entry never reads the list at all.
 		return Entry(this.enabled(l), l, this)
 	}
 

@@ -11,8 +11,8 @@ zerg lsp        # speak JSON-RPC 2.0 over stdin/stdout; the editor starts and st
 
 The language server is **not a new program**. It is the compiler that already exists, asked a
 different question: not _"lower this to C"_ but _"what is wrong with this buffer, right now"_. The
-compiler has always answered that one — `emit_files_diag` is what `zerg build` calls — so what ships
-here is the plumbing that carries the answer to where a person is looking.
+compiler has always answered that one — `check_files_diag` is `zerg build --emit c` minus the C — so
+what ships here is the plumbing that carries the answer to where a person is looking.
 
 That is also the invariant, and it is enforced rather than asserted:
 
@@ -51,14 +51,14 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 
 ## What is built
 
-| Request                                                       | Answered by                                        |
-| ------------------------------------------------------------- | -------------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | the session                                        |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `emit_files_diag`, `lint_conversions` |
-| `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
-| `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
-| `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
+| Request                                                       | Answered by                                         |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | the session                                         |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                      |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_files_diag`, `lint_conversions` |
+| `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls  |
+| `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix       |
+| `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations     |
 
 Every other request is answered with a **method-not-found error**, not with silence. A client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
@@ -80,7 +80,7 @@ not redundant with an empty string, since a client clearing a file to nothing se
 another module has to be checked with that module or every name it borrowed reads as undefined —
 a server that underlines correct code is one a person turns off.
 
-**Two severities, from two places.** An **error** is what `emit_files_diag` reports and `zerg build`
+**Two severities, from two places.** An **error** is what `check_files_diag` reports and `zerg build`
 refuses over. The `L5xx` conversion findings are about **legal** programs — a literal that took a type
 the page does not show — so they arrive as **information**. A server that paints a working
 program red teaches its user to ignore red.
@@ -136,12 +136,12 @@ nvim binds them to `gra` by default, and `gO` to the outline.
 it asks a running `zerg` anything. What it does instead is state facts the compiler owns — and
 [`make editor-align`](#keeping-the-editor-honest) holds every one of them to their source.
 
-| Setting                    | Is                                                       | Held to            |
-| -------------------------- | -------------------------------------------------------- | ------------------ |
-| `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                     | `F101`, `F403`     |
-| `colorcolumn=81`           | the first column past the budget `F403` wraps at         | `fmt_wrap_max()`   |
-| `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                | one shared scanner |
-| `makeprg` / `errorformat`  | `:make` runs `--emit c` and reads both diagnostic shapes | the compiler's own |
+| Setting                    | Is                                                           | Held to            |
+| -------------------------- | ------------------------------------------------------------ | ------------------ |
+| `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                         | `F101`, `F403`     |
+| `colorcolumn=81`           | the first column past the budget `F403` wraps at             | `fmt_wrap_max()`   |
+| `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                    | one shared scanner |
+| `makeprg` / `errorformat`  | `:make` runs `--emit check` and reads both diagnostic shapes | the compiler's own |
 
 **Folding and indenting are one rule, asked twice.** A line's level is the lowest delimiter depth it
 reaches, which leaves both lines that bracket a block on screen when it is folded — `fn f() {` above
@@ -342,7 +342,7 @@ further than any string rule and swallowed the closing quote. Neither a token pr
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
-and the server asks `emit_files_diag` rather than checking anything itself, so there is no second copy
+and the server asks `check_files_diag` rather than checking anything itself, so there is no second copy
 to drift. The editor files are the one exception and cannot be anything else: vim highlights from a
 keyword list written in vimscript, and nvim has to know how to indent before any Zerg tool has run.
 

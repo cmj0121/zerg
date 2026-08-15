@@ -45,7 +45,8 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 | `zerg desugar <file>` | rewrite source into the core forms its sugar stands for             |
 | `zerg lsp`            | the language server, over stdio (JSON-RPC)                          |
 
-`--emit` stops at a stage instead: `tokens`, `ast`, `c`, `lib` (an object), `bin` (an executable). A
+`--emit` stops at a stage instead: `tokens`, `ast`, `check` (the diagnostics alone), `c`, `lib` (an
+object), `bin` (an executable). A
 program builds module by module — `-j` compiles several units at once, and results are cached by
 content in `.zerg-cache/`, so a rebuild that changes one module recompiles one module.
 
@@ -56,6 +57,7 @@ no `-o` is given:
 | Stage                | With no `-o`                                                |
 | -------------------- | ----------------------------------------------------------- |
 | `tokens`, `ast`, `c` | stdout, so the stage stays pipeable — `--emit c f.zg > f.c` |
+| `--emit check`       | nothing — it produces diagnostics and no artifact           |
 | `--emit lib`         | the source name with `.o` — `f.zg` gives `f.o`              |
 | `--emit bin`         | the source name — `f.zg` gives `f`                          |
 

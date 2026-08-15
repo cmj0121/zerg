@@ -21,9 +21,9 @@ trim_trailing_whitespace = true
 indent_style = tab
 indent_size = 4
 
-# `indent_size = 4` is not decoration. `F403` decides whether a line has run past column 80
+# `indent_size = 4` is not decoration. `F403` decides whether a line has run past column 120
 # by counting a tab as FOUR — see `fmt_wrap_tab()` — so an editor displaying it as anything
-# else shows a different 80-column rule than the one the formatter applied. The two numbers
+# else shows a different 120-column rule than the one the formatter applied. The two numbers
 # are the same number, and `make editor-align` says so.
 [*.zg]
 indent_style = tab

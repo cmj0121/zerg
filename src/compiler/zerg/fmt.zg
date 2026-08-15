@@ -1322,7 +1322,7 @@ fn fmt_fstr_hole_ok(s: str) -> bool {
 #
 # It fits when both hold:
 #
-#   * printed flat, the group ends before column 80 — a tab counts as 4;
+#   * printed flat, the group ends before column 120 — a tab counts as 4;
 #   * it has fewer than 6 top-level elements.
 #
 # Width is the real judgement here and the count is a backstop for what width cannot see:
@@ -1352,7 +1352,7 @@ fn fmt_fstr_hole_ok(s: str) -> bool {
 # counts as while measuring, and fmt_wrap_elems is the element count that breaks a group
 # however narrow it is.
 fn fmt_wrap_max() -> int {
-	return 80
+	return 120
 }
 
 fn fmt_wrap_tab() -> int {
@@ -1502,7 +1502,7 @@ fn fmt_wrap_group(
 	#
 	# Ordering a split reads well until you see what it does, because this walk sees one
 	# group at a time and not the whole line. When a line runs long the group that crosses
-	# column 80 is the LAST one on it, which is almost never the one worth breaking:
+	# column 120 is the LAST one on it, which is almost never the one worth breaking:
 	# `return 0 if a or b or c(x, y)` would put `c`'s two arguments on three lines while
 	# the condition that actually made the line long — and that has no brackets to break
 	# at — stayed as it was. The count is no better: `scan(l, Rune, false, a, b, c)` fits

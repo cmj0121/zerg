@@ -320,9 +320,16 @@ void zrt_sleep_ns(int64_t ns) {
  * PROT_NONE guard and faults at once (Fork-B). Returns the mapping base; the whole
  * mapped range (guard + usable) is handed to zrt_ctx_init, whose sp starts at the
  * high end. */
+/* the size of every coroutine stack's guard page — one value for all stacks, since
+ * every mapping uses the same page size. It is what sched_run hands
+ * zrt_fault_stack_set so a fault in the guard reads as a StackOverflowError rather
+ * than a bare signal. Written ONCE by sched_init, before any worker exists: filling
+ * it in from stack_alloc instead made it an unsynchronised write every spawn races
+ * with every worker's read. */
+static size_t g_guard_page;
+
 static void *stack_alloc(size_t size, size_t *total_out) {
-	long pg = sysconf(_SC_PAGESIZE);
-	size_t page = (pg > 0) ? (size_t)pg : 4096;
+	size_t page = g_guard_page;
 	size_t total = size + page; /* one guard page below the usable stack */
 	void *base = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (base == MAP_FAILED) {
@@ -487,7 +494,7 @@ void zrt_sched_park(void) {
 }
 
 _Noreturn void zrt_sched_deadlock(void) {
-	zrt_abort_kind(ZRT_ERR_DEADLOCK, "DeadlockError: all coroutines blocked (deadlock)");
+	zrt_abort_kind(ZRT_ERR_DEADLOCK, "all coroutines blocked (deadlock)");
 }
 
 void zrt_sched_wake(zrt_coro *co) {
@@ -533,6 +540,12 @@ void zrt_sched_wake(zrt_coro *co) {
 /* --- the scheduler loop ------------------------------------------------------ */
 
 static void sched_init(void) {
+	/* the concurrent entries come through here rather than entry.c's shims, so this
+	 * is where their stack overflows get their name (and main's native bounds, for
+	 * the little that runs on them before and after the drain). */
+	zrt_fault_init();
+	long pg = sysconf(_SC_PAGESIZE);
+	g_guard_page = (pg > 0) ? (size_t)pg : 4096;
 	zrt_mutex_init(&g_lock);
 	zrt_cond_init(&g_cond);
 	zrt_chan_select_init();
@@ -616,12 +629,18 @@ static void sched_run(void) {
 		/* the two announcements bracketing the switch are what let ThreadSanitizer follow
 		 * a coroutine across stacks and across workers; both vanish in a normal build. */
 		ZRT_TSAN_FIBER_SWITCH(co->tsan_fiber);
+		/* the fault bracket names the stack for the SIGSEGV handler, so a fault in
+		 * this coroutine's guard page reads as its StackOverflowError while the swap
+		 * is out, and stops reading as one the moment this worker is back on its own
+		 * native stack. */
+		zrt_fault_stack_set(co->stack, g_guard_page);
 		/* the ASan bracket names the stack the machine is about to stand on, and parks this
 		 * worker's own fake stack for the duration; without it every instrumented frame the
 		 * coroutine runs is allocated out of THIS thread's arena and dies with it. */
 		ZRT_ASAN_SWITCH_TO(&t_sched_fake, co->stack, co->stack_size);
 		zrt_ctx_swap(&t_sched_ctx, &co->ctx); /* run it until it yields, parks, or finishes */
 		ZRT_ASAN_SWITCH_DONE(t_sched_fake, NULL, NULL);
+		zrt_fault_stack_set(NULL, 0);
 		ZRT_TSAN_FIBER_SWITCH(t_sched_fiber);
 		zrt_tls_save(&co->tls);
 		t_current = NULL;
@@ -685,6 +704,9 @@ static void sched_run(void) {
  * runs, so there is no "main worker" special case beyond who starts the others. */
 static void worker_main(void *arg) {
 	(void)arg;
+	/* the fault handler is process-wide already, but a sigaltstack is per-thread:
+	 * without one of its own this worker's overflow handler has no ground to run on. */
+	zrt_fault_thread_init();
 	sched_run();
 }
 

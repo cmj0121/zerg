@@ -10,7 +10,7 @@ zerg lsp        # 在 stdin/stdout 上講 JSON-RPC 2.0;由編輯器啟動與關�
 ## 主張
 
 language server **不是一個新程式**。它就是已經存在的那個編譯器,被問了另一個問題:不是*「把這個 lower 成 C」*,而是
-_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`check_files_diag` 就是 `zerg build --emit c` 扣掉 C——所以這裡
+_「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答——`check_files_diag` 正是 `zerg build --emit check`——所以這裡
 交付的是把答案送到人正在看的地方的那段管線。
 
 這同時也是不變式,而且它是被**強制**的,不是被宣稱的:
@@ -18,8 +18,8 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 > **如果 server 和 `zerg build` 對一個程式的看法不同,錯的是 server。** 它沒有自己的分析。
 
 `make lsp` 就是這句話變成的 gate。它為每個 example 與 40 個 corpus 程式在 stdio 上跑一次真的 session,把 server 發布
-的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,information 對上會回報
-它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
+的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,lint findings 對上會
+回報它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
 
 除此之外它還帶了**十個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變
 更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位,以及大於
@@ -29,7 +29,7 @@ runtime bounded leaf 一次讀取量的 body。那是另一種、也更安靜的
 ## 它住在哪裡
 
 `src/compiler/lsp/`——自成一個 module,像任何其他消費者一樣跨 `pub` 邊界 import `src/compiler/zerg/`,由 `zergc.zg`
-裡多一行 `.sub(lsp_cmd())` 接上。
+裡多一行 `.sub(cmd.lsp_cmd())` 接上。啟動它的那個命令是 `src/compiler/cmd/lsp_cmd.zg`,跟另外五個放在一起。
 
 **一個 binary,不是兩個。** 子命令讓編譯器與 server 之間的版本歪斜**物理上不可能**——它們是同一個檔案——而且編輯器不
 需要 PATH 上多任何東西。
@@ -43,14 +43,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 ## 已經做好的
 
-| 請求                                                          | 由誰回答                                            |
-| ------------------------------------------------------------- | --------------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | session 本身                                        |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                            |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_files_diag`、`lint_conversions` |
-| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式          |
-| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix        |
-| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告                |
+| 請求                                                          | 由誰回答                                        |
+| ------------------------------------------------------------- | ----------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | session 本身                                    |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                        |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_files_diag`、`lint_program` |
+| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式      |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix    |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告            |
 
 其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
 然後編輯器就靜掉了,什麼也沒說。
@@ -66,9 +66,34 @@ module 擁有協定;driver 擁有檔案系統。
 **診斷是對整個程式檢查的**,不是只對 buffer。一個 import 了別的 module 的檔案必須連同那個 module 一起檢查,否則它借來
 的每個名字都會讀成 undefined——會在正確的程式碼底下畫線的 server,是人會關掉的那種。
 
-**兩種嚴重度,來自兩個地方。** **error** 是 `check_files_diag` 回報、`zerg build` 會為此拒絕的東西。`L5xx` conversion
-findings 是關於**合法**程式的——一個取了紙面上看不出來之型別的字面值——所以它們以 **information** 抵達。把一個能動的
-程式塗成紅色的 server,是在教它的使用者忽略紅色。
+**而那是哪一個程式,是找出來的,不是假設的。** 編輯器只說了哪個檔案被打開,而被打開的檔案通常不是一個 entry:它是某個
+目錄 module 的一個成員,它用到的型別、呼叫它的地方、以及它的第二個 source root,全都在這個檔案之外。把它當成 entry
+讀,它會為隔壁檔案宣告的 struct 報 `E707`、為 sibling 呼叫的 private function 報 `L102`、為一個坐在自己目錄旁邊而不
+是裡面的 module 報 `E502`——三句在說正確程式碼的話。所以 driver 會**去找一個能走到這個 buffer 的 entry**:先看 buffer
+所在目錄的上一層裡直接放著的 `.zg` 檔,再往上一層,在第一個放了任何原始碼的層級停下,取第一個程式裡含有這個 buffer 的
+檔案。「走得到」是由 loader 自己判定的——同一個 `module_files`、同一個 `module_at`——所以 server 從來不會對「什麼是一
+個 module」長出第二個答案。當沒有任何東西走得到這個 buffer 時,這個 buffer **就是**它自己的 entry,而單檔程式、stdlib
+module 與測試檔正好都是這一類。
+
+這也是為什麼規則不是「buffer 所在的目錄就是一個 module」,即使那很誘人。目錄本身沒有任何東西能說明它是不是:
+`src/stdlib/` 是一個目錄,裡面每個 `.zg` 檔各自是一個 module;`examples/` 是一個目錄,裡面是二十個各自獨立的程式。一
+個目錄是在有東西 import 它的時候才成為 module,而只有從 entry 走一遍才知道這件事。
+
+**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是 `check_files_diag` 回報、`zerg build` 會為此拒絕的東西,
+也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
+所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
+——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
+([linter 的嚴重度](fmt.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
+
+| `Finding.sev` | `zerg lint` 印出  | LSP 嚴重度      |
+| ------------- | ----------------- | --------------- |
+| `""`          | `L103 …`          | 2 — warning     |
+| `"warning"`   | `warning: L601 …` | 3 — information |
+| `"info"`      | `info: L106 …`    | 4 — hint        |
+
+這兩欄的字面意思對不上,而且本來就不該對上:左欄決定的是一個**命令的 exit status**,右欄是**編輯器**要畫多大聲。這個
+對映只寫在一個地方,也就是 `ls_severity`,而 `make lsp` held 住它——gate 會把每一則發布出去的診斷重組成 `zerg lint`
+本來會印的那一行,連形容詞一起,所以一個把三個層級壓成同一個嚴重度的 server 會失敗,而不是在每個數字上都同意。
 
 **代碼是以代碼的身分傳遞的。** `Diag` 用一個自己的欄位帶著規則的身分——`E307`、`L502`——所以 server 送出 LSP 的
 `Diagnostic.code`,編輯器可以據此過濾、分組與連結。那正是這一頁講的規則套用在它自己身上:只拼在句子裡的代碼,是每個
@@ -117,7 +142,7 @@ quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己
 | 設定                       | 是什麼                                         | held 到什麼      |
 | -------------------------- | ---------------------------------------------- | ---------------- |
 | `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                          | `F101`、`F403`   |
-| `colorcolumn=81`           | `F403` 換行預算之後的第一欄                    | `fmt_wrap_max()` |
+| `colorcolumn=121`          | `F403` 換行預算之後的第一欄                    | `fmt_wrap_max()` |
 | `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                     | 同一個掃描器     |
 | `makeprg` / `errorformat`  | `:make` 跑 `--emit check`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
 
@@ -286,8 +311,8 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 - `lookup_keyword` 回傳的每個保留字都是 `zerg.vim` 有上色的,而它當作關鍵字上色的每個字也都是 lexer 保留的(內建的
   **型別**名改為 held 到 parser 的清單,因為 `int` 是個普通的 identifier,lexer 從沒聽過它);
 - ftplugin 與 `.editorconfig` 設定的縮排**字元**,就是 `zerg fmt` 實際**寫出**的那個;
-- 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 80 欄,是把 tab
-  算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 80 欄規則。一個數字、三個地方、
+- 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 120 欄,是把 tab
+  算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 120 欄規則。一個數字、三個地方、
   一道 gate;
 - ftplugin 畫的那條**尺**,是 `fmt_wrap_max()` 再往後一欄——也就是一個 flat group 必須在它之前結束的那一欄。一條畫錯
   位置的尺,看起來跟一條尺一模一樣,所以這一條是從 formatter 讀出來的,而不是再寫一次。
@@ -310,9 +335,7 @@ diff 把兩邊綁在一起。**
 | `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                      |
 | `completion`                                  | 同一套 query surface                                |
 | `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| `zerg lint` 發現的 **code** 作為資料          | 那些規則回答 `list[str]`,把代碼渲染進字串裡         |
 | 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
-| `lint_files` 的 findings                      | 它們回答 `list[str]`,沒有位置可以放                 |
 | 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
 
 第一列是真正的缺口,所有互動功能都卡在它後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。需要
@@ -324,3 +347,10 @@ diff 把兩邊綁在一起。**
 
 最後一列是成本,不是缺口。scheduler 是協作式且非搶佔的,所以一次長檢查會佔住它的 worker 直到做完;`emit.zg` 的 9264
 行是這個 repository 裡最壞的情況,也是在這裡設計任何東西之前該拿來量的數字。
+
+在這個編譯器自己的原始碼上量到的數字:以 `src/compiler/zergc.zg` 為根的 24 檔程式檢查一次——現在只要打開
+`src/compiler/` 底下**任何一個**檔案就會要求這件事,因為一個 module 成員是對著它的 module 檢查的——大約 6.5 秒,峰值
+接近 3.7 GB,而一個長時間存活的 session 在三到四次之後會被作業系統殺掉。這個上限是**emitter 的**,不是協定的:編譯器
+的檢查住在 lowering 的走訪裡,所以 `emit_files_diag` 得把整個程式降到 C 才碰得到它們,而沒有一個只做檢查的進入點可以
+改問。`zerg build` 也會碰到同一個上限,只是它活得下來,因為一次 build 是一個做完就結束的行程。debounce 只會把它藏起
+來;一個在產生程式碼之前就停下來的檢查才會終結它。

@@ -46,8 +46,8 @@ the compiler emits.
 
 - **`zergrt.h`** — the **sole** public header; the compiler's emitted C includes only this, and only when the
   program needs the runtime.
-- **`zrt_test.c` / `zrt_test.h`** — the `#[test]` runner harness. Unreferenced: no compiler emits a test
-  binary today, so nothing links these.
+- **`zrt_test.c` / `zrt_test.h`** — the `#[test]` runner harness. Unreferenced: `zerg test` emits a driver
+  that reports for itself, in Zerg, so nothing links these.
 
 ## Conventions
 

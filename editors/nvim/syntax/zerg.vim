@@ -33,6 +33,11 @@ syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
 syntax keyword zergStatement nop return if else break continue match with
 syntax keyword zergStatement spawn select defer del raise guard import impl print
 
+" `assert` states a claim and raises `AssertionError` when it does not hold. It reads as a
+" statement keyword and not as a danger word — unlike `unsafe` and `asm` below — because a
+" claim that does not hold is a diagnostic and not a hole in the language's guarantees.
+syntax keyword zergStatement assert
+
 " `close` was missing from this list entirely — the statement that ends a stream has never
 " been coloured. It is a reserved word, so nothing named `close` can exist to be miscoloured,
 " and one unconditional keyword is the whole rule. (It briefly headed a select's terminal arm

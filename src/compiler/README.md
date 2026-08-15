@@ -25,7 +25,22 @@ in the language itself. The compiler here is the one that ships; the Go seed exi
 
 ```text
 src/compiler/
-  zergc.zg        # the driver: argument parsing, module loading, cc invocation
+  zergc.zg        # the command line, declared: `main`, `root`, the version banner
+  cmd/            # what each sub-command DOES — one directory module
+    cmd.zg        # the module's own header, and no declaration (Go's `doc.go`)
+    build.zg      # `zerg build` — the pipeline, and where its product is written
+    test.zg       # `zerg test` — the run, the process per package, the report
+    test_pkg.zg   #   which directories hold a test, and what each is built from
+    test_fixture.zg #  what one package's run is: fixtures, tests, and the order
+    test_driver.zg  #  the driver source that plan is compiled as
+    fmt.zg        # `zerg fmt`
+    desugar.zg    # `zerg desugar`
+    lint.zg       # `zerg lint`
+    lsp_cmd.zg    # `zerg lsp` (not `lsp.zg`: it would shadow `import "lsp"`)
+    diag.zg       # shared: the lexical gate and the diagnostic renderer
+    source.zg     # shared: reading a source, and resolving what it imports
+    layout.zg     # shared: where things are, and what cc is called with
+    unit.zg       # shared: a unit, its cached object, and the link
   zerg/           # the compiler library — one directory module, shared scope
     token.zg      # Kind enum + Token type
     lexer.zg      # source text -> token stream (comments kept on request)
@@ -35,7 +50,15 @@ src/compiler/
     emit.zg       # AST -> C, with the minimal typecheck emit needs
     fmt.zg        # tokens -> canonical source
     lint.zg       # AST -> findings
+  lsp/            # the language server — a module of its own
 ```
+
+The four `cmd` files marked **shared** are there because more than one sub-command reaches
+them, and which ones was measured over the call graph rather than guessed: `diag`, `layout`
+and `unit` are `build` and `test`'s (and `lint` reads the first two), `source` is those
+three plus `lsp`. They sit beside the commands rather than inside any of them — a directory
+is one module, so nothing had to become `pub` for them to be shared, and nothing became
+`pub` that a second module could then collide with (`E705`).
 
 ## Using it
 
@@ -70,9 +93,9 @@ resolves to a **directory module** whose multiple files flatten into one shared 
 so `token.zg`/`lexer.zg`/`parser.zg` can share the `Kind` and AST enums; but (2)
 **enum variants are not reachable across a module boundary** (`token.Fn` is rejected).
 The library must therefore live in one directory module (`zerg/`) whose files share
-those enums, with `zergc.zg` as a thin driver that only ever calls the module's `pub`
-functions — never constructs a variant. The original `src/compiler/zerg/` instinct was
-right.
+those enums, with the driver — `zergc.zg` and the `cmd` module — only ever calling the
+module's `pub` functions and never constructing a variant. The original `src/compiler/zerg/`
+instinct was right.
 
 ## How a build is put together
 
@@ -204,16 +227,19 @@ reporting nothing at all. The first honest run named it.
 
 What each owner does today, and what is left:
 
-| owner          | today                                           | what is left                  |
-| -------------- | ----------------------------------------------- | ----------------------------- |
-| `chan`         | binding, and a handle nobody binds              | —                             |
-| `list` / `map` | binding, parameter, element vtable, rvalue temp | —                             |
-| `str`          | refcounted cell; binding, parameter, every join | —                             |
-| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields | —                             |
-| carrier        | a drop for the temporary a `!` / `??` reads     | a copy, so a binding can drop |
-| tuple          | copy helper, no drop                            | the drop beside the copy      |
-| ref-box        | `zrt_ref_alloc` per node, never released        | a drop for a recursive type   |
-| all of them    | registered where declared, given back by unwind | —                             |
+| owner          | today                                             | what is left                |
+| -------------- | ------------------------------------------------- | --------------------------- |
+| `chan`         | binding, and a handle nobody binds                | —                           |
+| `list` / `map` | binding, parameter, element vtable, rvalue temp   | —                           |
+| `str`          | refcounted cell; binding, parameter, every join   | —                           |
+| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields   | —                           |
+| carrier        | copy + drop, binding, parameter, element vtable   | the Right of an `Either`    |
+| enum           | `zg_drop_<E>` beside `zg_copy_<E>`, per variant   | —                           |
+| ref-box        | the cell's drop is the enum's own                 | an ITERATIVE chain teardown |
+| fn value       | the environment is a cell; one pair, `zg_*_fnptr` | —                           |
+| tuple          | `_drop` beside `_copy`, per shape, element vtable | —                           |
+| assignment     | the old value is dropped for an enum, a carrier   | every other owning type     |
+| all of them    | registered where declared, given back by unwind   | —                           |
 
 The concurrency corpus is at **0 leak reports**, from 39, and `scripts/sanitize-conc.sh`
 runs with `detect_leaks=1` — a leak there is now a regression rather than a known debt. The
@@ -232,9 +258,16 @@ that registers anything takes its own mark and unwinds at its own end.
 **Where it has not been measured** is the rest of the corpus. `sanitize-conc` runs the
 seventeen concurrency cases; a one-off sweep of the other forty-eight found 47 reports in
 thirteen of them, in classes the concurrency cases do not reach — a chain of rvalue indexes,
-a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types, which are
-the `ref-box` row and were never freed by design. A leak gate over the whole corpus is what
-this needs next, because a class nothing runs is a class nothing measures.
+a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types.
+
+`make mem-check` is the first gate that runs anywhere else. It builds nine programs written
+inside `scripts/mem-check.sh`, runs each at 5 rounds and at 200 against a counting allocator
+linked in place of `alloc.c`, and holds the two live counts equal — so it needs neither
+LeakSanitizer nor the private corpus, and runs on macOS and on a fork. The ref-box, the
+carrier and the closure environment are what it was written for and it was RED on all three
+before they were closed. Its declared limit is that a **bounded** leak — one per program, or
+one per site rather than one per construction — is identical at both round counts and
+invisible to it.
 
 **Increment ladder toward M5** (each end-to-end tested, then committed):
 

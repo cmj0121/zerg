@@ -1,6 +1,7 @@
 package module
 
 import (
+	"path"
 	"sort"
 	"strings"
 
@@ -152,6 +153,13 @@ func (l *Loader) resolveImports(
 ) []string {
 	deps := []string{}
 	for _, spec := range specs {
+		// An import that NAMES a test file reaches the single-file arm, which the
+		// directory arm's filter does not cover. Refusing it here rather than letting
+		// it resolve to nothing keeps the complaint at the import.
+		if IsTestFile(path.Base(spec.Path) + ".zg") {
+			diags.Add(spec.Span(), "%q names a test file, and a normal build compiles none", spec.Path)
+			continue
+		}
 		canonical, files, ok := l.resolve(spec.Path)
 		if !ok {
 			diags.Add(spec.Span(), "cannot resolve import %q under any source root", spec.Path)

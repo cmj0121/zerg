@@ -29,29 +29,34 @@ func findSpecMethod(def *types.SpecDef, name string) *types.SpecMethod {
 
 // TestSpecCollection collects a spec's required and provided methods, associated
 // type and value, and its super-spec chain (DESIGN-1c §1, U1).
+//
+// The collected spec is `Same` and not `Eq` here and in the two tests below, for the reason
+// TestCoherenceConflict states in full: `Eq` is bound before a program is read, so
+// declaring it does not add a spec but replaces the built-in one, and the declaration is
+// refused (parser.preludeRole). These tests only ever needed A spec to collect.
 func TestSpecCollection(t *testing.T) {
-	src := "spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
-		"spec Ord: Eq {\n  fn lt(o: This) -> bool\n  fn le(o: This) -> bool { return true }\n" +
+	src := "spec Same {\n  fn eq(o: This) -> bool\n}\n" +
+		"spec Ord: Same {\n  fn lt(o: This) -> bool\n  fn le(o: This) -> bool { return true }\n" +
 		"  type Item\n  BITS: int\n}"
 	reg := specRegistry(t, src)
 	if reg == nil {
 		t.Fatal("no spec registry")
 	}
 
-	eq := reg.Specs["Eq"]
-	if eq == nil {
-		t.Fatal("spec Eq not collected")
+	same := reg.Specs["Same"]
+	if same == nil {
+		t.Fatal("spec Same not collected")
 	}
-	if m := findSpecMethod(eq, "eq"); m == nil || m.Provided {
-		t.Fatalf("Eq.eq: got %+v, want a required method", m)
+	if m := findSpecMethod(same, "eq"); m == nil || m.Provided {
+		t.Fatalf("Same.eq: got %+v, want a required method", m)
 	}
 
 	ord := reg.Specs["Ord"]
 	if ord == nil {
 		t.Fatal("spec Ord not collected")
 	}
-	if len(ord.Supers) != 1 || ord.Supers[0] != eq {
-		t.Fatalf("Ord.Supers = %v, want [Eq]", ord.Supers)
+	if len(ord.Supers) != 1 || ord.Supers[0] != same {
+		t.Fatalf("Ord.Supers = %v, want [Same]", ord.Supers)
 	}
 	if m := findSpecMethod(ord, "lt"); m == nil || m.Provided {
 		t.Fatalf("Ord.lt: got %+v, want a required method", m)
@@ -71,9 +76,9 @@ func TestSpecCollection(t *testing.T) {
 // the target type's shared method namespace (DESIGN-1c §1.2/§1.3, U1).
 func TestImplCollection(t *testing.T) {
 	src := "struct Point {\n  pub x: int\n}\n" +
-		"spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
+		"spec Same {\n  fn eq(o: This) -> bool\n}\n" +
 		"impl Point {\n  fn get() -> int { return this.x }\n}\n" +
-		"impl Eq for Point {\n  fn eq(o: This) -> bool { return this.x == o.x }\n}"
+		"impl Same for Point {\n  fn eq(o: This) -> bool { return this.x == o.x }\n}"
 	reg := specRegistry(t, src)
 
 	if len(reg.Impls) != 2 {
@@ -90,8 +95,8 @@ func TestImplCollection(t *testing.T) {
 	if inherent == nil || specImpl == nil {
 		t.Fatalf("want one inherent and one spec impl, got %+v", reg.Impls)
 	}
-	if specImpl.Spec.Name != "Eq" {
-		t.Fatalf("spec impl targets spec %q, want Eq", specImpl.Spec.Name)
+	if specImpl.Spec.Name != "Same" {
+		t.Fatalf("spec impl targets spec %q, want Same", specImpl.Spec.Name)
 	}
 
 	// the two impls share Point's one method namespace: get + eq.
@@ -124,9 +129,9 @@ func TestImplDiagnostics(t *testing.T) {
 		{
 			name: "duplicate method across spec and inherent impls",
 			src: "struct Point {\n  pub x: int\n}\n" +
-				"spec Eq {\n  fn eq(o: This) -> bool\n}\n" +
+				"spec Same {\n  fn eq(o: This) -> bool\n}\n" +
 				"impl Point {\n  fn eq() -> bool { return true }\n}\n" +
-				"impl Eq for Point {\n  fn eq(o: This) -> bool { return true }\n}",
+				"impl Same for Point {\n  fn eq(o: This) -> bool { return true }\n}",
 			substr: "already declares method \"eq\"",
 		},
 		{

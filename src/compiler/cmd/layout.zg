@@ -1,0 +1,291 @@
+# Where things are, and what cc is called with: the installation root, the runtime C and
+# the standard library under it, the paths this driver joins and takes apart, and the
+# argument vectors handed to the C compiler.
+#
+# `build`, `test` and `lint` all ask these questions, so they are answered once here.
+
+# --- installation layout -------------------------------------------------------------
+#
+# The compiler has to work from any directory, so nothing below is a relative path the
+# process happens to be standing next to. Each location is answered by an environment
+# variable first, then by a root that is itself answered the same way, and the in-repo
+# layout is only the last resort — which is what makes a checkout work with no setup.
+
+# env_or reads an environment variable, or gives fallback when it is unset.
+fn env_or(key: str, fallback: str) -> str {
+	return __zrt_getenv(key) if __zrt_has_env(key)
+	return fallback
+}
+
+# cc_bin is the C compiler this build invokes: $CC when set, else `cc`, RESOLVED against
+# $PATH so that what comes back names a FILE rather than a word. The resolution is what the
+# cache key needs — `cc` is one name for whatever is first on a path that changes between
+# machines, between shells, and between one toolchain install and the next, and an object
+# built by one of them is not an object built by another.
+#
+# A name that already carries a '/' is a path the caller chose and is returned as it stands.
+# A name that resolves to nothing is returned as it stands too: the spawn then fails and says
+# so, which is a better report than a key that lies about having looked.
+#
+# The scan is written out rather than reaching for `strings.split`, because this compiler
+# flattens every module into one namespace and importing one more would collide.
+fn cc_bin() -> str {
+	name := env_or("CC", "cc")
+	b := bytearray(name)
+	mut i := 0
+	for i < b.len() {
+		return name if b[i] == b'/'
+		i = i + 1
+	}
+
+	path := bytearray(env_or("PATH", ""))
+	mut seg: list[byte] = []
+	mut j := 0
+	for j <= path.len() {
+		if j == path.len() or path[j] == b':' {
+			if seg.len() > 0 {
+				cand := join_path(str(seg), name)
+				return cand if __zrt_exists(cand)
+			}
+			seg = []
+		} else {
+			seg.append(path[j])
+		}
+		j = j + 1
+	}
+	return name
+}
+
+# cc_std is the C dialect the emitted code is compiled with. C17 is the default because
+# that is the dialect the specification names, and the number in a flag nobody reads is
+# exactly the kind of claim that drifts: this said `c11` while the front page said C17,
+# and no gate compared the two.
+#
+# $ZERG_CSTD picks another one. The specification's "C99 as a fallback" means an automatic
+# retreat when a `cc` cannot do C17, and probing for that is not built — so what exists is
+# the ability to ASK for a dialect, which is what lets CI compile the same emitted C under
+# both and find out whether the fallback is real before a user does.
+fn cc_std() -> str {
+	if __zrt_has_env("ZERG_CSTD") {
+		std := __zrt_getenv("ZERG_CSTD")
+		return "-std=" + std
+	}
+	return "-std=c17"
+}
+
+# zerg_root is the installation root: $ZERG_ROOT, else the current directory (the repo
+# checkout, where src/runtime and src/stdlib sit).
+fn zerg_root() -> str {
+	return __zrt_getenv("ZERG_ROOT") if __zrt_has_env("ZERG_ROOT")
+
+	# WHERE THIS BINARY LIVES, not where the user happens to be standing. The root used to
+	# default to `.`, so `zerg build main.zg` outside the source tree failed with
+	# `'zergrt.h' file not found` — cc reporting, about a file the user never wrote, for a
+	# compiler that simply did not know where it was installed.
+	#
+	# Two layouts are recognised, and they are the two that exist: the SOURCE TREE, where
+	# the binary is `<root>/bin/zerg` beside `src/runtime/csrc`, and an INSTALL, where it is
+	# `<prefix>/bin/zerg` beside `<prefix>/lib/zerg/csrc`. Both are "the parent of the
+	# directory holding the binary", which is why one answer serves both — what differs is
+	# where rt_dir and stdlib_dir look under it.
+	# PROBED, not assumed. A binary is not always installed beside its trees: `make fixpoint`
+	# builds a stage into a temp directory and runs it there, and the answer for that one is
+	# the current directory — which is what the default was before this and still is when
+	# the executable's neighbourhood holds nothing.
+	exe := __zrt_exe_path()
+	if exe != "" {
+		up := dir_of(dir_of(exe))
+		return up if up != "" and root_layout(up) != ""
+	}
+	return "."
+}
+
+# root_layout answers which tree `root` is — "src" when the compiler is running from its own
+# source tree, "install" when it was installed, and "" when it is neither. The runtime
+# sources are the tell, because they are what a build needs and they sit in a different
+# place in each; "" is what makes this both the layout question and the "is this a root at
+# all" question, which were two probes of the same directory.
+fn root_layout(root: str) -> str {
+	return "src" if __zrt_exists(join_path(root, "src/runtime/csrc"))
+	return "install" if __zrt_exists(join_path(root, "lib/zerg/csrc"))
+
+	return ""
+}
+
+# rt_dir returns the runtime source tree — $ZERG_RUNTIME, else <root>/src/runtime/csrc.
+# It is probed rather than assumed, so a wrong root fails as a missing-runtime message
+# instead of a wall of cc errors about a header that was never there.
+fn rt_dir() -> str {
+	return __zrt_getenv("ZERG_RUNTIME") if __zrt_has_env("ZERG_RUNTIME")
+
+	root := zerg_root()
+	return join_path(root, "lib/zerg/csrc") if root_layout(root) == "install"
+
+	return join_path(root, "src/runtime/csrc")
+}
+
+# rt_sources are the runtime translation units, as paths.
+fn rt_sources() -> list[str] {
+	rt := rt_dir()
+	mut out: list[str] = []
+	for u in rt_units() {
+		out.append(f"{rt}/{u}")
+	}
+	return out
+}
+
+# stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
+fn stdlib_dir() -> str {
+	return __zrt_getenv("ZERG_STDLIB") if __zrt_has_env("ZERG_STDLIB")
+
+	root := zerg_root()
+	return join_path(root, "lib/zerg/stdlib") if root_layout(root) == "install"
+
+	return join_path(root, "src/stdlib")
+}
+
+# --- paths -----------------------------------------------------------------------------
+
+# join_path joins a directory and a name, treating "" and "." as "here".
+fn join_path(dir: str, name: str) -> str {
+	return name if dir == "" or dir == "."
+	return f"{dir}/{name}"
+}
+
+# dir_of returns the directory part of a path, or "." when it names a bare file.
+fn dir_of(path: str) -> str {
+	b := bytearray(path)
+	mut cut := 0
+	mut seen := false
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i
+			seen = true
+		}
+		i = i + 1
+	}
+	return "." if not seen
+	mut out: list[byte] = []
+	mut j := 0
+	for j < cut {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# has_suffix reports whether s ends with suffix.
+fn has_suffix(s: str, suffix: str) -> bool {
+	b := bytearray(s)
+	x := bytearray(suffix)
+	return false if x.len() > b.len()
+	mut i := 0
+	for i < x.len() {
+		return false if b[b.len() - x.len() + i] != x[i]
+		i = i + 1
+	}
+	return true
+}
+
+# --- the runtime units, and what cc is called with -----------------------------------------
+
+# cc_argv builds the cc command line: compile cpath into output over the always-linked,
+# non-concurrent runtime units, found under rt_dir().
+# rt_units are the runtime translation units every linked program needs.
+fn rt_units() -> list[str] {
+	mut units: list[str] = []
+	units.append("alloc.c")
+	units.append("conv.c")
+	units.append("entry.c")
+	units.append("fmt.c")
+	units.append("list.c")
+	units.append("map.c")
+	units.append("ref.c")
+	units.append("str.c")
+	units.append("sys.c")
+	units.append("unwind.c")
+
+	# The concurrency floor. It is linked unconditionally rather than by inspecting the
+	# program because the driver decides the link line before it knows whether emit
+	# reached a channel — and an unused unit costs a few KB, while a missing one is a
+	# link error a user cannot act on. The context switch and the thread backend are
+	# chosen by target, exactly as the runtime's own selection does.
+	units.append("sched.c")
+	units.append("chan.c")
+	units.append(ctx_unit())
+	units.append(thread_unit())
+	return units
+}
+
+# ctx_unit is the context switch for this target: a hand-written one where there is
+# one, else the portable ucontext floor.
+fn ctx_unit() -> str {
+	a: str = __zrt_arch()
+
+	return "ctx_arm64.S" if a == "arm64"
+	return "ctx_x86_64.S" if a == "x86_64"
+
+	return "ctx_ucontext.c"
+}
+
+# thread_unit is the zrt_thread backend. A platform this does not know gets the
+# no-thread floor, which runs every coroutine on one thread — correct, just not
+# parallel.
+fn thread_unit() -> str {
+	p: str = __zrt_platform()
+
+	return "thread_win32.c" if p == "windows"
+	return "thread_pthread.c" if p == "linux" or p == "darwin" or p == "freebsd" or p == "openbsd" or p == "netbsd"
+
+	return "thread_none.c"
+}
+
+# cc_dialect narrows what the emitted C is allowed to be, and every flag here exists because
+# something got through without it.
+#
+# `-fno-dollars-in-identifiers` is the mangling invariant, made unforgeable. A specialization's
+# key carries `$`, which no Zerg identifier may hold — that is what makes it unforgeable at the
+# Zerg level — and `$` is not a C identifier character either. Both clang and gcc take it as an
+# EXTENSION and say nothing, so a `$` that reached the emitted C compiled on this machine and
+# on Linux CI, and would have failed on the first compiler that did not offer the extension.
+# It reached C once already, and no gate saw it: the flag is what makes the next one a build
+# error here rather than a bug report from somewhere else.
+#
+# It goes on the two invocations that COMPILE. The link-only one reads no source.
+fn cc_dialect(mut &argv: list[str]) {
+	argv.append("-fno-dollars-in-identifiers")
+}
+
+# cc_object_argv compiles the emitted C to an object without linking: a module is not a
+# program, so it has no entry to link against and no runtime to pull in yet.
+fn cc_object_argv(cpath: str, output: str) -> list[str] {
+	mut argv: list[str] = []
+	argv.append(cc_bin())
+	argv.append(cc_std())
+	cc_dialect(argv)
+	argv.append("-I")
+	argv.append(rt_dir())
+	argv.append("-c")
+	argv.append("-o")
+	argv.append(output)
+	argv.append(cpath)
+	return argv
+}
+
+fn cc_argv(cpath: str, output: str) -> list[str] {
+	rt := rt_dir()
+	mut argv: list[str] = []
+	argv.append(cc_bin())
+	argv.append(cc_std())
+	cc_dialect(argv)
+	argv.append("-I")
+	argv.append(rt)
+	argv.append("-o")
+	argv.append(output)
+	argv.append(cpath)
+	for u in rt_units() {
+		argv.append(f"{rt}/{u}")
+	}
+	return argv
+}

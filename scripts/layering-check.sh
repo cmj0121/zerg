@@ -108,6 +108,12 @@ reaches_into() {
 # structs it never read.
 TAB=$(printf '\t')
 
+# a scratch dir for the extractions section 4 compares line by line; `comm`-style work needs
+# files rather than variables, and a `while read` into a variable loses the last line in a
+# pipeline anyway
+TMPD=$(mktemp -d)
+trap 'rm -rf "$TMPD"' EXIT
+
 # A field may be declared `pub`, and every field in this compiler now is: GRAMMAR requires a
 # non-`pub` field to carry a default, and none of these has one. The marker is read past
 # rather than matched on, because what this asks about is the field's NAME — and a pattern
@@ -159,7 +165,31 @@ fi
 # in token.zg now, and this is what would have said so.
 reaches_into "$ZG/parser.zg"
 
-ZPARSER_FIELDS="toks pos impl_ty path depth edepth"
+# WRITE-ONLY, asked of the source. Every mention of `p.ty_quals` in the parser must be the
+# append that records one — a read is the parser consulting what it has seen, which is the
+# symbol table this whole section exists to deny it. The `File` constructor's hand-off is the
+# one exception, and it is a hand-off rather than a consultation.
+quals=$(grep -oE '\bp\.ty_quals\b[^)]*' "$ZG/parser.zg" | grep -vE '^p\.ty_quals\.append\(' | grep -v '^p\.ty_quals$')
+[ -z "$quals" ] || note "zerg's parser READS p.ty_quals ($(printf '%s' "$quals" | tr '\n' ' ')) — an accumulator it consults is a symbol table"
+
+# and the floor under that grep: a rename would empty it and satisfy the claim by matching
+# nothing at all, which is this file's standing failure mode.
+n_quals=$(grep -cE '\bp\.ty_quals\b' "$ZG/parser.zg")
+[ "$n_quals" -ge 2 ] || note "p.ty_quals is mentioned $n_quals time(s) in the parser — the write-only claim above measured nothing"
+
+# `ty_quals` is on this list as an OUTPUT ACCUMULATOR, which is a different kind of field
+# from the rest and the reason the claim below it exists. Everything else the parser
+# produces is a local of parse_file handed to the `File` constructor at the end; this one is
+# collected from parse_base_type, which sits several recursion levels down and returns a
+# `Ty` from a dozen places, so threading a list through would have meant a second out-param
+# on every one of them. It rides on the parser for reach, not for lookup.
+#
+# That distinction is what keeps the claim this section makes true, so it is ASSERTED rather
+# than asserted-in-a-comment: a field the parser only ever APPENDS to cannot inform a parse
+# decision, which is the whole of "the parser builds the AST from tokens alone". A read
+# would be the thing to catch — a parser that consults what it has recorded is a parser with
+# a symbol table, whatever the table happens to hold.
+ZPARSER_FIELDS="toks pos impl_ty path depth edepth ty_quals"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
 if [ -z "$zf" ]; then
 	note "the zerg parser's fields did not extract"
@@ -229,6 +259,78 @@ done
 # where a reader meets it.
 res=$(grep -niE 'scope in hand|name resolution|symbol table' "$GRAMMAR")
 [ -z "$res" ] || note "GRAMMAR defers to name resolution: $res"
+
+# --- 4. the Emitter's constructor is aligned with its fields -------------------------
+#
+# NOT A LAYERING CLAIM, and it is here because this is the one gate that already reads a
+# compiler struct's fields (zg_fields, above) and because the failure it catches is silent.
+#
+# `Emitter` is built by ONE call with a hundred POSITIONAL arguments, matched to the struct
+# by counting. Every argument is that field's zero value — `[]`, `false`, `0`, `""` — so a
+# field inserted anywhere but the end shifts every argument after it, and the compiler can
+# only object where the types happen to differ. Two adjacent fields of the same kind, and a
+# misalignment is accepted silently; a struct this size has many such runs. It is also the
+# single line two branches editing the Emitter in parallel are guaranteed to collide on,
+# each having renumbered it correctly for itself.
+#
+# The fix that would remove the hazard — a default on every field, so the call takes no
+# arguments — is not available: the SEED rejects a list literal as a field default, and the
+# seed has to build this compiler. So the alignment is asserted instead.
+#
+# It compares KINDS, not values, which is exactly as strong as it needs to be: every
+# argument is a zero value, so two fields of the same kind may swap with no effect, and a
+# swap between different kinds is the bug.
+kind_of_field() {
+	case $1 in
+	list\[*) printf 'list\n' ;;
+	*) printf '%s\n' "$1" ;;
+	esac
+}
+
+kind_of_arg() {
+	# TWO ARGUMENTS ARE NOT ZERO VALUES — `want_lints` and `diags`, both handed in by
+	# c_emit_unit — so they are named here rather than pattern-matched. Naming them is the
+	# point: a third one appearing reads as UNKNOWN and fails, which is the prompt to decide
+	# whether the Emitter really wants more constructor state.
+	case $1 in
+	"[]" | diags) printf 'list\n' ;;
+	true | false | want_lints) printf 'bool\n' ;;
+	'""') printf 'str\n' ;;
+	Ty.*) printf 'Ty\n' ;;
+	"c_nosub()") printf 'Subst\n' ;;
+	[0-9]*) printf 'int\n' ;;
+	*) printf 'UNKNOWN(%s)\n' "$1" ;;
+	esac
+}
+
+ctor=$(grep -oE '^	mut em := Emitter\(.*\)$' "$ZG/emit.zg" | sed -E 's/^	mut em := Emitter\(//; s/\)$//')
+if [ -z "$ctor" ]; then
+	note "the Emitter constructor did not extract — the alignment below measured nothing"
+else
+	# the field KINDS, in declaration order
+	awk '/^(pub )?struct Emitter \{/{on=1; next} on && /^}/{exit} on' "$ZG/emit.zg" |
+		grep -oE "^$TAB(pub )?[a-z_][A-Za-z0-9_]*: [A-Za-z0-9_]+(\[[A-Za-z0-9_, ]+\])?$" |
+		sed -E "s/^$TAB(pub )?[a-z_][A-Za-z0-9_]*: //" >"$TMPD/fields"
+	while read -r f; do kind_of_field "$f"; done <"$TMPD/fields" >"$TMPD/fkinds"
+
+	# and the argument KINDS, in call order. `c_nosub()` is the only call among them, and it
+	# holds no comma, so splitting on `,` and trimming each side is safe.
+	printf '%s\n' "$ctor" | tr ',' '\n' | sed 's/^ *//; s/ *$//' >"$TMPD/args"
+	while read -r a; do kind_of_arg "$a"; done <"$TMPD/args" >"$TMPD/akinds"
+
+	nf=$(grep -c . <"$TMPD/fkinds")
+	na=$(grep -c . <"$TMPD/akinds")
+	if [ "$nf" -lt 50 ]; then
+		note "the Emitter's fields did not extract ($nf found) — the alignment measured nothing"
+	elif [ "$nf" -ne "$na" ]; then
+		note "the Emitter has $nf fields and its constructor passes $na arguments"
+	else
+		bad=$(paste -d' ' "$TMPD/fkinds" "$TMPD/akinds" | grep -nvE '^([a-zA-Z]+) \1$' |
+			head -5 | sed 's/^/      slot /')
+		[ -z "$bad" ] || note "the Emitter's constructor does not line up with its fields (field vs argument):
+$bad"
+	fi
+fi
 
 # -----------------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

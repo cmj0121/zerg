@@ -1,10 +1,27 @@
 # Zerg Decorators
 
-A **decorator** is a `#[…]` prefix on a declaration — a directive to the compiler. The set is **fixed and
+A **decorator** is a `#[…]` prefix on a statement — a directive to the compiler. The set is **fixed and
 compiler-owned**: users cannot define new ones (Zerg has **no macros**), so nothing outside this page can
 rewrite your code. Because the set is closed, an **unknown or misspelled decorator is a compile error** — it
-is never silently ignored. Each decorator binds to the declaration that follows it. Part of the
+is never silently ignored. Each decorator binds to the statement that follows it. Part of the
 [Language Reference](../language.md). Also in [繁體中文](decorators.zh-TW.md).
+
+## Shape
+
+Three rules hold for every decorator, whatever it names.
+
+- **It leads a statement**, and a declaration is one — so `#[derive(Eq)]` above a `struct` and
+  `#[allow(L103)]` above a binding are the same form (`statement`, `decorated-decl`,
+  [`GRAMMAR`](../../GRAMMAR) group 1). **Which** decorator is legal where is a **semantic** rule, and a
+  short one: `#[derive]`, `#[obj]` and `#[test]` are about a **declaration**, and above a plain statement
+  each is refused by name — _E612 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows
+  it, and a statement is not one_. `#[allow(…)]` is the one that belongs on a statement.
+- **One decorator per item.** An item that wants several writes the **comma list** — `#[allow(L601), test]`
+  — and stacking one over another is a compile error: _E613 a second decorator on one item — an item takes
+  ONE decorator, so merge them into its comma list_. Two spellings for one thing is what `zerg fmt` exists
+  to remove, and it cannot remove one once both are legal.
+- **It stands on its own line.** A decorator is an item of the statement list like any other, so a
+  separator divides it from what it leads; `#[derive(Eq)] struct P` on one line is not a form.
 
 > **[not yet]** `#[sealed]` is refused with a code of its own — _E496 NotImplemented: the decorator
 > `#[sealed]` — it is a reserved decorator … and this compiler does not build it, so the constructor stays
@@ -13,7 +30,8 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-`#[derive]` and `#[obj]` are the decorators the compiler reads. Every other one — `#[test]`,
+`#[derive]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler reads. Every other
+one —
 `#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
@@ -29,9 +47,39 @@ is never silently ignored. Each decorator binds to the declaration that follows 
   **generic wrap**, which is how a heterogeneous collection is written in a language where a spec is a bound
   and never a type. A `mut fn`, a method taking `This`, and anything that is not a spec are refused by name.
   See **[Specs & Generics](specs.md)**.
-- **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
-  excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
-  fails the test (see [Modules, Packages & Programs](../runtime/package.md) on where tests live).
+- **`#[test]`** — on a `fn`. Marks the function as a test case, run by `zerg test` and by nothing else. It
+  **returns nothing** and takes a **`testing.Context`** (by type), the **fixtures** it needs (by name), or no
+  parameter at all; a failing assertion or an abort inside it fails the test (see
+  [Modules, Packages & Programs](../runtime/package.md) on where tests live). A declared return type is
+  **refused** by `zerg test`, with a place: the driver calls a test as a statement, so the value would be
+  dropped, and a reader who thinks it is the verdict has to be told it is not. It may be written
+  **anywhere**, and `zerg test` **discovers it wherever it is** — a directory whose only `#[test]` sits in an
+  ordinary module file is still a test package. Written outside a `*_test.zg` it is legal and it **ships**:
+  it is compiled into the binary like any other function and nothing in the **program** calls it, so
+  `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)). Both, not one — the linter says
+  where a test ought to live, and the runner runs what is written.
+- **`#[fixture]`** — on a `fn`, and it belongs in a `*_test.zg`. Marks the function as something `zerg test`
+  **builds for the tests that name it**. It takes its tests as a **continuation**: one parameter of type
+  `fn (T)`, identified by type, which is both where those tests run and the declaration of what the fixture
+  **produces**. Every other parameter **names another fixture**. Teardown is `defer`, so the runner supplies
+  nothing for it. It is read **wherever it is written**, exactly as a `#[test]` is — a fixture beside a test in
+  an ordinary module file serves that test rather than being silently absent from it — and the same **L601**
+  applies, since a `#[fixture]` outside a `*_test.zg` ships exactly as a `#[test]` does. See
+  [Modules, Packages & Programs](../runtime/package.md).
+- **`#[allow(Lxxx, …)]`** — on any **statement**, declarations included. Suppresses the named **lint**
+  findings over that statement, and over its block when it has one: the scope is the size of the statement
+  it leads, which is one rule rather than a choice between a line and a scope. It does not reach the next
+  statement and cannot reach another file — there is deliberately **no file-level scope**.
+
+  It names **`L` codes only**. An `E` code is a **compiler diagnostic** and `#[allow]` never suppresses one:
+  a program able to switch a compiler check off would make bypassing one an official feature. A lint finding
+  is advisory, so suppressing one is legitimate.
+
+  It is the one decorator the **compiler reads and never uses**. The parser accepts the name and attributes
+  no meaning to it — the catalogue of codes belongs to the linter, and a copy of it in the compiler would be
+  the second place a language fact is written down. The linter therefore says two things about a suppression
+  itself: **L106** (**info**) when it had nothing to suppress, and **L107** (**warning**) when it names a
+  code no rule has. An `#[allow]` naming no code at all is refused outright — _E614_.
 
 ## Recognized but not yet supported
 
@@ -46,11 +94,17 @@ is a "not yet supported" **compile error**, never a silent no-op:
   controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
 
-> **[not yet]** `#[repr]` and `#[test]` are still reserved names with no rule of their own: they fall into
-> the unknown-decorator arm and get _E217 … this compiler reads `#[derive(…)]` and `#[obj]`, and no other_,
-> the same sentence a misspelled `#[frobnicate]` gets. Both are refused, so nothing is silently dropped;
-> what is lost for those two is the distinction between a name awaiting implementation and a typo —
-> `#[sealed]`, which had the same problem, now has `E496`.
+> **[not yet]** `#[repr]` is still a reserved name with no rule of its own: it falls into the
+> unknown-decorator arm and gets _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`,
+> `#[fixture]` and `#[allow(…)]`, and no other_, the same sentence a misspelled `#[frobnicate]` gets.
+> It is refused, so nothing is silently dropped; what is lost is the distinction between a name
+> awaiting implementation and a typo — `#[sealed]`, which had the same problem, now has `E496`.
+>
+> `#[test]` is **read** now, by both compilers, and `zerg test` runs what it marks (see
+> [Modules, Packages & Programs](../runtime/package.md) for how far that command goes). One
+> **[deviation]** is left in it: the seed strips a `#[test]` function before its checker runs, so the body
+> is never type-checked there, while `zerg` checks it like any other. A test that does not compile is a
+> compile error under `zerg` and silence under `zerg0` — recorded in `src/bootstrap/README.md`.
 
 ## Not a macro
 

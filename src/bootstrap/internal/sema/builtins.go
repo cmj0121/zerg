@@ -49,6 +49,12 @@ type errKind struct {
 // end. Denying the constructor is what keeps that reasoning true; `err is StopIteration`
 // — the reason a consumer can tell the two apart at the surface — costs nothing and stays.
 //
+// `AssertionError` is a kind the seed KNOWS and a form the seed cannot READ, and the split is
+// deliberate. `assert` is a keyword of the shipped compiler only (src/bootstrap/README.md's
+// gap list records it), so nothing here lexes the word — but the kind numbering is an ABI
+// shared with the runtime, and a table that stopped at 10 would let a later kind take 11 and
+// make one number mean two things depending on which compiler built the program.
+//
 //nolint:gochecknoglobals // a fixed, compiler-owned lookup table.
 var errKinds = map[string]errKind{
 	"ValueError":        {1, true},
@@ -61,6 +67,7 @@ var errKinds = map[string]errKind{
 	"SendOnClosedError": {8, true},
 	"StopIteration":     {9, false},
 	"DivideByZeroError": {10, true},
+	"AssertionError":    {11, true},
 }
 
 // ErrKind reports the built-in error kind a name denotes and whether it is one, so the

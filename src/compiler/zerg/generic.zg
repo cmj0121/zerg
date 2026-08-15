@@ -156,7 +156,7 @@ fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list
 # it an ordinary function, and what stops it being instantiated again.
 fn subst_fn(tpl: FnDecl, args: list[Ty]) -> FnDecl {
 	names := tpl.tparams
-	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe)
+	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(names, args, tpl.params), tpl.has_ret, subst_ty(names, args, tpl.ret), subst_block(names, args, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
@@ -233,6 +233,12 @@ fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
 		Stmt.SSelect(arms) => Stmt.SSelect(subst_sel_arms(names, args, arms))
 		Stmt.SClose(ch, tw) => Stmt.SClose(subst_expr(names, args, ch), tw)
 		Stmt.SIfLet(nm, v, tb, he, eb) => Stmt.SIfLet(nm, subst_expr(names, args, v), subst_block(names, args, tb), he, subst_block(names, args, eb))
+
+		# an `assert` holds the author's own condition, desugared, so a `T` written in it — in a
+		# closure's parameter, say — is a `T` this pass owes an argument like any other. The
+		# fallback below left it, quietly: nothing downstream looks at those statements again,
+		# so the specialization carried a `fn(T) -> bool` into a position wanting `fn(int)`.
+		Stmt.SAssert(b) => Stmt.SAssert(subst_block(names, args, b))
 		_ => s
 	}
 }

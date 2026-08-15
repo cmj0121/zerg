@@ -34,16 +34,17 @@ ZG
 `make` 會建出兩個編譯器，你用的是第二個。`zerg0` 是以 Go 實作的種子，已被裁減到只剩一個工作：建出編譯器。
 `zerg` 就是那個編譯器——以 Zerg 寫成、位於 [`src/compiler/`](src/compiler)，並且由它自己編譯。
 
-| 指令                  | 作用                                                  |
-| --------------------- | ----------------------------------------------------- |
-| `zerg build <file>`   | 編譯——entry 宣告 `main` 時產生執行檔，否則產生 object |
-| `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                          |
-| `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                  |
-| `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式           |
-| `zerg lsp`            | language server，走 stdio（JSON-RPC）                 |
+| 指令                  | 作用                                                   |
+| --------------------- | ------------------------------------------------------ |
+| `zerg build <file>`   | 編譯——entry 宣告 `main` 時產生執行檔，否則產生 object  |
+| `zerg test [path]`    | 執行一條路徑、或單一檔案所屬 package 的 `#[test]` 函式 |
+| `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                           |
+| `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                   |
+| `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
+| `zerg lsp`            | language server，走 stdio（JSON-RPC）                  |
 
-`--emit` 則是停在某個階段：`tokens`、`ast`、`check`（只出診斷）、`c`、`lib`（object）、`bin`（執行檔）。程式是逐
-模組建置的——`-j`
+`--emit` 則是停在某個階段：`tokens`、`ast`、`check`（只出診斷）、`c`、`lib`（object）、`bin`（執行檔）。程式是逐模組
+建置的——`-j`
 可同時編譯多個單元，結果以內容為鍵快取在 `.zerg-cache/`，所以只改一個模組的重建就只重編那一個模組。
 
 **`-o` 指定的就是要寫出的檔案**，每個階段都一樣——`--emit c f.zg -o f.c` 寫出 `f.c`，
@@ -85,7 +86,8 @@ struct Point { x: int; y: int }
 Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、別無其他的那一小塊 C 底層——由 spec 與其實作共同
 框定。**標準函式庫**（`src/stdlib/*.zg`）是站在該底層上的**純 Zerg**，只受其 interface 約束：`io.read_file`
 走的是 runtime 的 syscall leaf 迴圈，`math.sqrt` 是純 Zerg 演算法，絕非綁 libm。今天可正常 import 的套件——`io`、
-`fs`、`os`、`strings`、`ascii`、`cli`、`strconv`、`time`、`math`、`rand`、`testing`——以 `import "<name>"` 取得。
+`fs`、`os`、`strings`、`ascii`、`cli`、`strconv`、`json`、`log`、`sha256`、`time`、`math`、`rand`、`testing`——以
+`import "<name>"` 取得。
 
 ## 文件
 

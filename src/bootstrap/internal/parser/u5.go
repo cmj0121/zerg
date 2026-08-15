@@ -51,7 +51,7 @@ func (p *parser) parseBareDecl() ast.Decl {
 	case token.Init:
 		return p.parseInitDecl()
 	case token.Fn:
-		return p.parseFuncDecl()
+		return p.parseFuncDecl(true)
 	default:
 		// declHeadKind peeked past the leading pub/unsafe/mut modifiers to find a
 		// non-declaration keyword; consume those modifiers so the diagnostic and
@@ -107,14 +107,25 @@ func setDecorators(d ast.Decl, decos []*ast.Decorator) {
 
 // --- decorators ---------------------------------------------------------------
 
-// parseDecorators consumes a run of '#[…]' decorators. A newline after a
-// decorator's ']' is not a separator (GRAMMAR group 2), so any inserted ';' is
-// skipped before the next decorator or the target declaration.
+// parseDecorators consumes the ONE '#[…]' decorator an item may carry. A newline
+// after a decorator's ']' is not a separator (GRAMMAR group 2), so any inserted
+// ';' is skipped before the target declaration.
+//
+// ONE PER ITEM (GRAMMAR#decorated-decl). Stacking used to parse here, so `#[a]`
+// on one line and `#[b]` on the next said exactly what `#[a, b]` says — two
+// spellings for one thing, which is what a formatter exists to remove and what it
+// cannot remove once both are legal. The comma list is the spelling, and a stack
+// is turned away rather than quietly folded into one.
 func (p *parser) parseDecorators() []*ast.Decorator {
 	var out []*ast.Decorator
 	for p.at(token.Hash) {
-		out = append(out, p.parseDecorator())
+		h := p.cur()
+		d := p.parseDecorator()
 		p.skipSemis()
+		if len(out) > 0 {
+			p.fail(h.Span, "a second decorator on one item — an item takes one decorator, so merge them into its comma list: #[a(x), b(y)]")
+		}
+		out = append(out, d)
 	}
 	return out
 }
@@ -157,12 +168,87 @@ func (p *parser) parseDecoItem() *ast.DecoItem {
 
 // --- declarations -------------------------------------------------------------
 
+// preludeRole names what a prelude name is for, and returns "" for everything else.
+// The prelude is bound in every module before a program is read
+// (docs/runtime/package.md), so a declaration that takes one of its names leaves the
+// form that desugars to it with no name to reach for.
+//
+// The set is what the toolchain BINDS — the scalars and list aliases a type position
+// maps to a type, the container types whose '[...]' is the type's own, the Either
+// carrier's spellings and constructors, and the two built-in specs. Names the prelude
+// is specified to hold but nothing declares (Ord, Hash, Error, Iterator, Iterable,
+// Ref, and set) are absent on purpose: a program's own 'spec Ord' is the only Ord
+// there is. The shipping compiler states the same list in parser.zg's p_prelude_role.
+func preludeRole(lx string) string {
+	switch lx {
+	case "int", "uint", "float", "bool", "str", "byte", "rune":
+		return "a built-in scalar type"
+	case "bytearray", "runearray":
+		return "a built-in list alias"
+	case "list", "map":
+		return "a built-in container type"
+	case "Either", "Result", "Err":
+		return "an error-carrier type"
+	case "Left", "Right":
+		return "an error-carrier constructor"
+	case "Eq", "Into":
+		return "a built-in spec"
+	}
+	return ""
+}
+
+// preludeCalleeRole is preludeRole at the FUNCTION slot: the prelude names a CALL can
+// spell. 'map' is the whole of the difference, and it is measured rather than argued.
+// Declare 'fn N(zz: int) -> int' and call 'N(1)': for every other name in the set the
+// declaration is unreachable, because the callee is read as the prelude's form before a
+// user symbol is looked for — a conversion for the scalars and the list aliases, a
+// construction for 'Either' / 'Result' / 'Err' / 'Eq' / 'Into', the carrier's own
+// constructor for 'Left' / 'Right'. 'list' is reachable here but costs the seed the
+// 'list[byte](s)' bridge. 'map' alone answers 2 in both compilers: 'map[...](...)' as a
+// constructor is built by neither, so the name has no value form for a declaration to
+// take, and 'fn map(xs, f)' is a function a real program wants.
+//
+// This is a NARROWER set than the type slots take, because a type slot's namespace is
+// where every one of these names is bound. The same split the method rule draws.
+func preludeCalleeRole(lx string) string {
+	if lx == "map" {
+		return ""
+	}
+	return preludeRole(lx)
+}
+
+// declName is expect(Ident) at a slot that DECLARES a top-level name. Only a
+// declaration refuses a prelude name; a local binding that shadows one is a loud type
+// error at its first use, while a top-level declaration removes the name from the
+// whole program in silence.
+// funcName is the 'fn' slot's half of that rule, and `free` is the whole of the
+// question. A METHOD'S NAME IS NOT A TOP-LEVEL NAME: it lives in its type's namespace,
+// where a call has already said which type it is on, so 'impl P { fn set(v: int) }'
+// names nothing the prelude bound.
+func (p *parser) funcName(free bool) token.Token {
+	if !free {
+		return p.expect(token.Ident)
+	}
+	return p.reservedName(preludeCalleeRole(p.cur().Lexeme), "a function")
+}
+
+func (p *parser) declName(what string) token.Token {
+	return p.reservedName(preludeRole(p.cur().Lexeme), what)
+}
+
+func (p *parser) reservedName(role, what string) token.Token {
+	if role != "" && p.at(token.Ident) {
+		p.fail(p.cur().Span, "%q is a prelude name (%s) and cannot name %s", p.cur().Lexeme, role, what)
+	}
+	return p.expect(token.Ident)
+}
+
 // parseStructDecl parses 'pub? struct Name generics? { field-list }'.
 func (p *parser) parseStructDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub)
 	p.expect(token.Struct)
-	name := p.expect(token.Ident)
+	name := p.declName("a struct")
 	generics := p.optGenerics()
 	fields, end, endTrivia := p.parseFieldList()
 	return spanned(&ast.StructDecl{
@@ -175,7 +261,7 @@ func (p *parser) parseEnumDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub)
 	p.expect(token.Enum)
-	name := p.expect(token.Ident)
+	name := p.declName("an enum")
 	generics := p.optGenerics()
 	variants, end, endTrivia := p.parseVariantList()
 	return spanned(&ast.EnumDecl{
@@ -188,7 +274,7 @@ func (p *parser) parseTypeDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub)
 	p.expect(token.Type)
-	name := p.expect(token.Ident)
+	name := p.declName("a type alias")
 	generics := p.optGenerics()
 	p.expect(token.Assign)
 	alias := p.parseType()
@@ -202,7 +288,7 @@ func (p *parser) parseSpecDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub)
 	p.expect(token.Spec)
-	name := p.expect(token.Ident)
+	name := p.declName("a spec")
 	generics := p.optGenerics()
 	var super *ast.Bound
 	if p.accept(token.Colon) {
@@ -468,7 +554,7 @@ func (p *parser) parseImplItem() ast.ImplItem {
 	case token.Ident:
 		return p.parseValBind()
 	default: // pub / unsafe / mut / fn — a method or associated function
-		return p.parseFuncDecl().(*ast.FuncDecl)
+		return p.parseFuncDecl(false).(*ast.FuncDecl)
 	}
 }
 

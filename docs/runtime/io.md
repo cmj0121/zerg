@@ -15,13 +15,15 @@ each reusing an existing model:
   type exists and the whole-file leaves below are what reading and writing go through;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
-> **Status.** The compiler ships a **subset** of this surface. What is built: whole-file read —
-> `io.read_file(path) -> list[byte]` (a missing or unreadable file raises **`IOError`**, which
-> `guard { io.read_file(p) }` demotes to a `Result`; decode with `str(…)` when the bytes are text) — and a
-> minimal set of stdout writers (`io.write` / `io.println` / `io.write_int`) plus the `print` keyword. The
-> **`Reader` / `Writer` spec surface** — `read_bytes` / `read()` / `write` and the `io.stdin` · `io.stdout`
-> · `io.stderr` stream objects described below — is **[not yet]**: the intended semantics stand as
-> specified, but only the whole-file and best-effort-write leaves are wired today.
+> **Status.** The compiler ships a **subset** of this surface, and the subset is the **whole-file and
+> whole-stream leaves**: `io.read_file(path) -> list[byte]` and `io.write_file(path, data)` (a missing or
+> unreadable file raises **`IOError`**, which `guard { io.read_file(p) }` demotes to a `Result`; decode with
+> `str(…)` when the bytes are text), `io.read_stdin() -> list[byte]`, the stdout writers `io.write` /
+> `io.println` / `io.write_int`, the stderr writers `io.ewrite` / `io.eprintln`, and the `print` keyword.
+> The **`Reader` / `Writer` spec surface** — `read_bytes` / `read()` / `write` and the `io.stdin` ·
+> `io.stdout` · `io.stderr` stream objects described below — is **[not yet]**: the intended semantics stand
+> as specified, and reaching one of those names is **`E388`** — _module `io` has no `stdout`_ — in any
+> position, including a method call's receiver.
 
 ## Streams — `Reader` & `Writer`
 
@@ -66,9 +68,11 @@ A missing file is an **expected** value-failure, never an abort. Open modes, see
 `io` methods — stdlib detail, not new concepts. A **socket** is the same shape: a `Ref[handle]` that is a
 `Reader` and `Writer`, its network API left to `io`.
 
-> **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase; the one wired input path is
-> the whole-file `io.read_file(path) -> list[byte]`, which raises **`IOError`** on a missing or unreadable
-> file (demote with `guard`), consistent with "a missing file is an expected value-failure" once `guard`ed.
+> **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase; what is wired is the pair of
+> whole-file leaves `io.read_file(path) -> list[byte]` and `io.write_file(path, data)`, plus
+> `io.read_stdin()`. A missing or unreadable file raises **`IOError`** (demote with `guard`), consistent
+> with "a missing file is an expected value-failure" once `guard`ed. Neither leaf hands back a handle, so
+> nothing has to be closed and `defer f.close()` has nothing to name.
 
 ## Standard streams
 
@@ -83,9 +87,12 @@ import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
 
-> **[not yet]** The `io.stdin` / `io.stdout` / `io.stderr` stream objects are unbuilt; the wired stdout
-> writers this phase are the free functions `io.write(s)` / `io.println(s)` / `io.write_int(n)` (each
-> returns `Result[nil]` but writes best-effort, never yielding an `Err` yet).
+> **[not yet]** The `io.stdin` / `io.stdout` / `io.stderr` stream objects are unbuilt, and writing one is
+> **`E388`** — _module `io` has no `stdout`_ — including as a method call's receiver, the position the
+> example above writes it in. What is wired this phase is free functions: `io.write(s)` / `io.println(s)` /
+> `io.write_int(n)` to stdout, `io.ewrite(s)` / `io.eprintln(s)` to stderr, and `io.read_stdin()` for all of
+> standard input at once (each writer returns `Result[nil]` but writes best-effort, never yielding an `Err`
+> yet).
 >
 > **[deviation] / [implementation-defined] buffering.** `print` writes through **buffered libc stdio**
 > while `io.*` writes go **unbuffered** through `write(2)`. Their output can therefore **interleave out of
@@ -108,8 +115,11 @@ own that frame ([FFI](ffi.md)).
 
 ## Process & command execution
 
-**[not yet]** — a command literal is lexed and then **refused by the parser** (`E236`, with no place) this
-phase; the intended model below stands unchanged for when the runtime lands.
+**[not yet]** — a command literal is lexed and then **refused by the parser**, each form by its own name and
+each with a place: the static `` `git status` `` is `E236`, the interpolating `` f`git checkout {b}` `` is
+`E235`. The intended model below stands unchanged for when the runtime lands. What does ship is
+`os.run(argv: list[str]) -> int` ([Standard Library](stdlib.md)) — argv straight to the OS, no shell and no
+pipes, so it covers running a child and reading its exit status and nothing else about this section.
 
 A child process is spawned with a **backtick command literal** and observed through the same streams — its
 pipes are `Reader`s and a `Writer`, its handle a `Ref[proc]` whose `drop` waits for (or kills) it, reaping

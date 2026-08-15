@@ -90,23 +90,22 @@ KeyError              沒有任何 map 持有這個 key
 `ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
 UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`
 攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
-寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
+寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。前綴屬於那
+**一行**、不屬於訊息:`message()` 只回答文字本身,而錯誤走到頂端時種類會被渲染在它前面——手寫的
+`raise ValueError("bad input")` 與 runtime 自己的 `IndexError` 一視同仁。
 
 > **[not yet]** `code()` 回答 `byte?`，而且**永遠回答 absent**。本編譯器建得出來的 `Err` 沒有一個帶著 code：
 > 存在的錯誤就是那些內建種類，而 code 屬於使用者自訂的錯誤型別——那才是本段尚未建置的部分。`message()` 與
 > `unwrap()` 已經建了。
->
-> **[deviation]** 手寫 `raise` 一個內建種類時，abort 契約所定的 **`Kind:` 前綴**會掉。
-> `raise ValueError("bad input")` 只往 stderr 寫 `bad input`、別的都沒有，而同一個種類由 runtime raise 出來時寫的
-> 是 `IndexError: index out of range`。種類兩邊都在值裡；只有 runtime 自己那條路徑會把它渲染進那一行。於是同一個
-> 種類有兩種輸出形狀、由「誰 raise 的」決定，而編譯這一段沒有任何地方是錯的，所以這個落差只顯示在程式的 stderr
-> ——對一個測試刻意寫下的 `raise` 來說，那是沒有任何 gate 在讀的地方。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天有十個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
-`EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，再加上並行那章指名的三個——`SendOnClosedError`、
-`DeadlockError` 與 `StopIteration`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
-是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十個之
+用到的 fault 名稱裡,今天有十一個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+`EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，加上並行那章指名的三個——`SendOnClosedError`、
+`DeadlockError` 與 `StopIteration`——以及 `AssertionError`:那是失敗的 `assert`（見
+[Grammar](../surface/grammar.zh-TW.md) group 8）raise 出來的東西,而且沒有別的東西會 raise 它。這份獨佔性正是
+給它一個種類、而不是一句訊息的理由:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端的東西報成
+**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
+是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十一個之
 列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
 
 **`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
@@ -130,9 +129,13 @@ coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 st
 unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack
 就夠——因此無界遞迴是一個確定的 `StackOverflowError`、絕不是無聲的卡死。
 
-> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;stack 溢位是一次無法回復的 `SIGSEGV` / stack-smash、會終止
-> 行程而**不跑** `defer`,而非乾淨的 `StackOverflowError` unwind（見 [Conformance](../conformance.zh-TW.md) 的
-> runtime-abort deviation）。意圖中的安全網成立;這個階段尚未建置。
+> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;溢位仍是 guard page 使它成為的那次硬體 fault。但這個
+> fault 如今帶著它的名字：runtime 的 signal handler 在 stderr 回報 `StackOverflowError: stack overflow`、
+> 行程以狀態 **1** 結束,與其他每個 abort 相同——今天程式能溢出的兩條 stack（coroutine 的 guard page 與
+> `main` 的原生 stack）皆然。但出錯的 stack 已耗盡、無法從 signal handler 展開,所以待決的 `defer` 被**跳過**、
+> 沒有 `guard` 能把它降級,`err is StackOverflowError` 也仍不可寫。它也是 coroutine **無法**包住的那一個 abort:
+> 一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程（見 [Conformance](../conformance.zh-TW.md)
+> 的 runtime-abort deviation）。意圖中的深度檢查安全網——一次會跑 `defer` 的乾淨 unwind——成立;這個階段尚未建置。
 
 一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
 pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有

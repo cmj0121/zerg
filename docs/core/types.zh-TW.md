@@ -193,6 +193,13 @@ carve-out**——這四個決定的是運算式**還沒有的**型別,而轉換�
 
 宣告你自己的**積型別**（`struct`）與**和型別**（`enum`），兩者都可對 `[...]` 泛型化。
 
+**宣告出來的型別，名字以大寫字母開頭**（[GRAMMAR#type-ident](../../GRAMMAR)），而且這是規則、不是慣例：第一個
+字母的大小寫，就是這個語言分開它那兩個命名空間的全部依據。`Point(1, 2)` 是建構、`point(1, 2)` 是呼叫；
+`cli.Opt` 是模組限定、`It.Item` 是關聯型別投影。這些都在任何名字被解析之前就要判定，所以 `struct lower`——
+或者 `struct _Box`，因為 `_` 沒有大小寫、也就不屬於任何一個命名空間——會在宣告處被拒絕，回報為 `E610`。
+**使用**的位置不受同一條限制：內建型別名稱（`int`、`str`、`list`、各個定寬成員）都是小寫，而且沒有任何宣告
+會引入它們。
+
 **可見性（`pub`）**——每個宣告（型別、欄位、函式）**預設 private，只在自己的 module 內可見**；在前面加 `pub`
 才會匯出、供他處使用。mutability 是另一條獨立的軸、**不**在這裡宣告：它屬於**實例（instance）**（也就是
 binding；見 Values & Memory），絕不屬於欄位或型別。module 與 package 是什麼，以及可見性、coherence、entry point
@@ -237,11 +244,15 @@ enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 
 ——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
 `E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。
 
-> **[deviation]** 那個命名空間不是 enum 的。一個 **variant 名字屬於全程式第一個宣告它的 enum**:當
-> `enum Colour { Red; Green }` 排在 `enum Signal { Red; Amber }` 之前,帶限定的 `Signal.Red`——正是本段要
-> 讀者採用的那個寫法——會被 _E457 `Red` is a variant of `Colour`, not of `Signal`_ 拒絕,而那句話對它正在報告
-> 的那支程式而言是假的,且沒有位置。於是第二個 enum 的 variant 搆不到,那個 enum 本身也無法使用。與此同時
-> linter 仍會對同一組發出 `L401`,並建議寫 `Signal.Red`——那正是編譯器唯一不收的寫法。
+那個命名空間是 **enum 自己的**,兩個 enum 各自宣告一個 `Red` 是可以的:有 `enum Colour { Red; Green }` 與
+`enum Signal { Amber; Red }` 時,`Colour.Red` 與 `Signal.Red` 是兩個剛好拼法相同的不同 variant,各有自己的
+discriminant。帶限定的名字是**在它指名的那個 enum 裡面**解析的,所以指到該 enum 沒有宣告的名字會是
+_E457 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
+
+> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E383 `Red` is a variant of
+> `Colour`, and a variant is named through its enum_,而 [Grammar](../surface/grammar.zh-TW.md) 說裸名字只要
+> 解析得到一個 variant 就是那個 variant。當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個
+> ——它是兩種可行寫法之一,未必是你要的那一個。
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是
@@ -319,8 +330,9 @@ decorator 的職責——**[not yet]**，所以今天只要型別可及，litera
 > 預設值是在**建構處**才被具體化的，而欄位在那裡不是作用域中的名字，所以 `a` 會解析到別的同名東西。它會報
 > _NotImplemented: the default on field `b` of `P` reads the field `a`_，並附上該欄位的位置。
 
-欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否
-（**[deviation]**——跨 module 邊界的存取尚未被檢查，見 [Module、Package 與程式](../runtime/package.zh-TW.md)）。
+欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否，
+而從另一個 module 指名一個 private 欄位在兩個方向上都是編譯錯誤，並附上位置（見
+[Module、Package 與程式](../runtime/package.zh-TW.md)）。
 **沒有「對外可讀、對外不可寫」的獨立軸**；更細的控制以 method 表達。
 
 copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會動到持有者**自己那份 copy**，永遠影響不到別人的值
@@ -396,24 +408,38 @@ spec 的參數——兩件不同的事,做在不同的地方。
 **`T(x)` 接受的轉換**就是這些,沒有別的。它們不是 `Into` impl,從來也不是:`T(x)` 是一個內建形式,而這是它有答案
 的那些對。
 
-| from   | to      | 會 raise | 說明                              |
-| ------ | ------- | -------- | --------------------------------- |
-| `byte` | `int`   | 否       | 每一個 byte 都是一個 int          |
-| `rune` | `int`   | 否       | 每一個 code point 都是一個 int    |
-| `int`  | `float` | 否       | 不會失敗;超過 2^53 可能失精度     |
-| `int`  | `byte`  | 是       | 超出範圍 → `OverflowError`        |
-| `int`  | `rune`  | 是       | 不是 code point → `OverflowError` |
-| `int`  | `uint`  | 是       | 負數 → `OverflowError`            |
-| `uint` | `int`   | 是       | 超過有號數上限 → `OverflowError`  |
+| from    | to                               | 會 raise   | 說明                                         |
+| ------- | -------------------------------- | ---------- | -------------------------------------------- |
+| `byte`  | `int`                            | 否         | 每一個 byte 都是一個 int                     |
+| `rune`  | `int`                            | 否         | 每一個 code point 都是一個 int               |
+| `int`   | `float`                          | 否         | 不會失敗;超過 2^53 可能失精度                |
+| `int`   | `byte`                           | 是         | 超出範圍 → `OverflowError`                   |
+| `int`   | `rune`                           | 是         | 不是 code point → `OverflowError`            |
+| `int`   | `uint`                           | 是         | 負數 → `OverflowError`                       |
+| `uint`  | `int`                            | 是         | 超過有號數上限 → `OverflowError`             |
+| `str`   | `int` / `uint` / `float`         | 是         | **解析**文字——`ValueError` / `OverflowError` |
+| `float` | `int` / `byte` / `uint` / `rune` | **被拒絕** | `E394`——丟掉小數是一個決定;寫出動詞          |
 
-`float → int` 不在表上:丟掉小數是一個決定,所以它有自己的寫法——`int(x)`,或用 `//` 那個本來就落在整數的除法。
-`byte → float` 也不在:那會是 `byte → int → float`,而一步就是一次轉換的定義——寫成兩步。
+**這張表的形狀是一個中樞,而中樞是 `int`。** 每一組被接受的配對都有一側是 `int`,那正是「一步」規則畫成的圖。所
+以不在表上的配對就不是這個語言擁有的轉換,而不在表上只有兩種方式。
 
-> **[deviation]** 這張表沒有封閉。它宣告不存在的四組配對都被接受、而且靜默降階:`byte` 上的 `float(b)` 得 `65`、
-> `byte(3.5)` 得 `3`、`uint(3.5)` 得 `3`、`rune(65.5)` 得 `65`,而 `int(1.9)` / `int(-1.9)` 朝零截斷、什麼都不說。
-> 所以 `float → int` 不是不存在,而是沒被寫下來:這一段說「必須由某個寫法做出」的那個決定,被替程式做掉了。
-> (`int("42")` 是唯一一組刻意存在的額外配對——它**解析**一個十進位字串、而不是轉換一個數字;見
-> [內建函式](../runtime/builtins.zh-TW.md)——這張表應該把它列進來。)
+**`byte → float` 不在**,因為那會是 `byte → int → float`,而一步就是一次轉換的定義:寫成兩步,`float(int(b))`。
+兩個數字之間每一組缺席的配對都是同一句話換上別的名字——`byte → rune`、`byte → uint`、`rune → uint`——每一組都是
+`E395`,而它會把它要的那兩步印出來。
+
+**`float` 作為來源之所以不在,理由不同**,而且它是這裡唯一的不對稱:丟掉小數不是缺了一步,而是一個**決定**,並且
+有四個都說得通的答案。所以語言拒絕替程式做這個決定,由程式用一個動詞寫出來——`math.trunc`、`math.floor`、
+`math.ceil` 或 `math.round`,每一個都回答一個 `int`,因此它們是整個轉換而不是其中一半——或者用 `//`,那個本來就
+落在 `int` 的除法。`float` 上的 `int(x)` 是 `E394`,而它會指名該寫哪個動詞;目標更窄時就是動詞再加上轉換,
+`byte(math.trunc(x))`。一個 `int` 裝不下的量會 raise `OverflowError`,和其他每一個會失敗的轉換一樣(見
+[標準函式庫](../runtime/stdlib.zh-TW.md))。
+
+**`bool(x)` 和 `str(x)` 不在這張表上**,這也是上面那一列點名四個目標、而不是每一個目標的原因。兩者都不是這個意
+義下的轉換:`bool(3.5)` 是上面說的那個零值測試,答 `true`,而 `str(3.5)` 是一次渲染。兩者都沒有丟掉任何小數,所
+以兩者都沒有決定要做。
+
+`int("42")` 以自己的一列進了表,因為它是穿著同一種寫法的另一種運算:它**解析**數字的文字,而不是重新建構一個值,
+而且只有 `int`、`uint` 和 `float` 這麼做(見[內建函式](../runtime/builtins.zh-TW.md))。
 
 **任何型別轉成文字不在這張表上**,因為那不是這個意義下的型別間轉換:`str(x)` 透過 `display` 渲染一個值,而每個型
 別都有 `display`。
@@ -421,9 +447,22 @@ spec 的參數——兩件不同的事,做在不同的地方。
 **編譯器算得出來的轉換就會被算出來。** `byte(300)` 是良構的 —— 然後它以**常數**的身分失敗:值是已知的,轉換已知
 會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;`if false { b := byte(300) }` 是同一個錯誤。
 
-> **[deviation]** 它**穿不過**泛型呼叫。對 `fn id[T](x: T) -> T` 而言,`byte(id(300))` 在 monomorphize 之後
-> 是同一個已知常數,而它編得過:程式建得起來,執行期才以 _OverflowError: integer conversion out of range_ 死掉。
-> 常數摺疊跑在代換之前,所以那個由特化才變成已知的值,抵達的時間晚於唯一會拒絕它的那一趟。
+**「已知」是一個概念,而它就是 const-expr。** 一個字面量、一個初始值是 const-expr 的繫結、一個 `const`,以及它們
+之上的運算子:`300`、`200 + 100`、對 `big := 300` 而言的 `big`、對 `const N := 100` 而言的 `N` 與 `N * 3`。這和
+填充計數 `[v; N]` 要求的是同一個概念,而且是刻意的——這份文件裡一句話有兩種讀法,正是一個語言對同一個問題長出兩
+個答案的方式。
+
+**它在一次呼叫處停下,在 `mut` 繫結處也停下。** `byte(f(300))` 在它執行的地方 raise,不論 `f` 是普通函式還是泛
+型:一次呼叫不是常數形式,而 enum discriminant 那條規則用的正是同一句話——`A = BASE`、`A = 2 + 3` 和
+`A = BASE * 2 - 1` 都是那個形式,而呼叫不是。`mut` 繫結被排除的理由是它自己的:它在繫結與轉換之間可以被寫入,所
+以它在那裡持有的並不是它在這裡持有的。
+
+**這兩個位置的差別在於拿一個未知的值怎麼辦,而不在於什麼算未知。** 填充計數非要一個數不可,所以它被拒絕
+(`E475`);而轉換一個值本來就是一次普通的轉換,所以它在執行的地方被檢查。
+
+**它穿得過 monomorphization。** 一個泛型的本體是以它的**特化**被檢查的——`fn hold[T](v: T)` 裡的 `y: T = 300`
+以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
+問得出口的東西,而到那時它已經是已知的。
 
 **偏離字面量預設的採用是一個 lint finding**(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議而不是語言
 規則:`1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。

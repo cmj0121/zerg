@@ -13,6 +13,7 @@
 #   D101  a postfix guard becomes the `if` block it is sugar for
 #   D102  a while-`for` becomes the infinite `for` it is sugar for
 #   D103  a range-`for` becomes the infinite `for` it is sugar for
+#   D104  an `assert` becomes the guarded raise it is sugar for
 #
 # The D rules are a SEPARATE COMMAND rather than a mode of `zerg fmt`, and that is the
 # whole reason the codes are their own group: `zerg fmt`'s contract is that its output is
@@ -33,8 +34,20 @@
 # RIGHT about.
 
 # desugar_src_off is the whole pass: the D rules, then fmt's printer.
-pub fn desugar_src_off(src: str, off: list[str]) -> str {
+#
+# `path` is the source's own name, and only D104 reads it: an assert's message says where the
+# claim was written, so a transform that rewrites the claim has to be able to say it too.
+#
+# D104 RUNS FIRST, and the numbering is not the order. What it produces is `raise … if c`,
+# which is itself a sugar — D101's — so running it last would leave this pass with output it
+# rewrites on the next run, and a rule whose answer depends on how many times it was run is
+# exactly what the fixpoint gate exists to catch. Emitting the postfix form and letting D101
+# expand it is also how the core form stays ONE definition rather than two.
+pub fn desugar_src_off(src: str, off: list[str], path: str) -> str {
 	mut toks := tokenize_trivia(src)
+	if not fmt_is_off(off, "D104") {
+		toks = dsg_asserts(toks, last_segment(path))
+	}
 	if not fmt_is_off(off, "D101") {
 		toks = dsg_guards(toks)
 	}
@@ -586,6 +599,131 @@ fn dsg_step_continues(mut &body: list[Token], step: list[Token]) -> list[Token] 
 		i = i + 1
 	}
 	return out
+}
+
+# --- rule D104: an `assert` becomes the guarded raise it is sugar for -----------------------
+#
+# GRAMMAR#assert-stmt defines `assert cond` AS the operand temporaries plus
+# `raise AssertionError(<message>) if not (cond)`, and this writes that definition out. It is
+# the rule with the most to say, because the message is part of the definition: where the
+# claim was written, the claim as it was written, and each operand a comparison came apart
+# into. A rule that rewrote the test and dropped the message would be undoing half a sugar.
+#
+# THE ANALYSIS AND THE MESSAGE ARE THE PARSER'S OWN. Which conjuncts an `and` splits into,
+# where a comparison's operator is, whether an operand is a literal, and every word of the
+# failure message are facts about the LANGUAGE, and spelling them again here is how the two
+# spellings of one form come to disagree — so p_assert_claims, p_assert_is_lit, assert_head,
+# assert_note, assert_tmp and assert_fstr are called. What is written HERE is only the half
+# that cannot be shared: the parser builds a tree and this builds text.
+#
+# NONE OF THEM RESOLVES A NAME, which is what keeps this a token pass. `p_assert_claims` drives
+# the expression ladder over a Parser sitting on this stream and asks it only where things
+# END; the rest are string work. The invariant this file opens with — formatting and
+# desugaring need no name resolution — is untouched, and `make layering` still holds it by
+# measuring what this file reaches in the checker and the emitter, which is nothing.
+#
+# It declines on a comment anywhere in the statement, for D101's reason: the rewrite becomes
+# several statements and a comment runs to the end of whichever line it lands on.
+fn dsg_asserts(mut &toks: list[Token], base: str) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		n := dsg_assert_at(toks, i, base, out)
+		if n > 0 {
+			i = n
+			if i < toks.len() and is_semi(toks[i].kind) {
+				i = i + 1
+			}
+		} else {
+			out.append(toks[i])
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# dsg_assert_at rewrites the assert at `at` onto the end of `out` and answers where the
+# statement ended, or 0 when there is nothing here to rewrite. Nothing is appended unless it
+# answers nonzero.
+fn dsg_assert_at(mut &toks: list[Token], at: int, base: str, mut &out: list[Token]) -> int {
+	return 0 if toks[at].kind != Kind.Assert or not fmt_stmt_start(toks, at)
+	end := dsg_stmt_end(toks, at)
+
+	return 0 if dsg_span_comment(toks, at, end)
+	return 0 if end < toks.len() and is_comment(toks[end].kind)
+
+	# THE CONDITION HAS TO PARSE, and here it may simply not: `zerg desugar` runs over a file
+	# nobody has compiled, and a pass that raised would refuse a source rather than decline a
+	# rule. The compiler is the one that reports a malformed condition.
+	mut p := Parser(toks, 0, "", "", 0, 0, [])
+	mut cls: list[AClaim] = []
+	guard {
+		cls = p_assert_claims(p, at + 1, end)
+	}
+	return 0 if cls.len() == 0
+
+	for c in cls {
+		dsg_emit_assert(toks, at, c, base, out)
+	}
+	return end
+}
+
+# dsg_emit_assert writes the statements one claim IS. Every synthesized token takes the
+# `assert`'s own line, which is what the printer reads to decide that no blank line belongs
+# between them; the `;`s are what break them onto lines of their own.
+#
+# The message is `assert_head` plus one `assert_note` per bound operand, wrapped by
+# `assert_fstr`, over temporaries `assert_tmp` names — the same four functions the parser's own
+# lowering calls, so the two spellings of this form cannot say different things. What is
+# written HERE is only the token shape.
+fn dsg_emit_assert(mut &toks: list[Token], at: int, c: AClaim, base: str, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	h := toks[c.lo]
+	mut cond: list[Token] = []
+	mut msg := assert_head(toks, base, ln, c.lo, c.hi)
+
+	if c.op >= 0 {
+		dsg_assert_side(toks, c.lo, c.op, assert_tmp("l", h), ln, cond, msg, out)
+		cond.append(fmt_on_line(toks[c.op], ln))
+		dsg_assert_side(toks, c.op + 1, c.end, assert_tmp("r", h), ln, cond, msg, out)
+		dsg_copy(toks, c.end, c.hi, ln, cond)
+	} else {
+		dsg_copy(toks, c.lo, c.hi, ln, cond)
+	}
+
+	out.append(Token(Kind.Raise, "raise", "", ln, col))
+	out.append(Token(Kind.Ident, "AssertionError", "", ln, col))
+	out.append(Token(Kind.LParen, "(", "", ln, col))
+	out.append(fmt_on_line(assert_fstr(msg, toks[at]), ln))
+	out.append(Token(Kind.RParen, ")", "", ln, col))
+	out.append(Token(Kind.If, "if", "", ln, col))
+	out.append(Token(Kind.Not, "not", "", ln, col))
+
+	# PARENTHESIZED, for D102's reason: `not a == b` is not `not (a == b)`, and a rule that
+	# has to be right about every condition anyone writes cannot be right by knowing the
+	# precedence table — only by not depending on it.
+	out.append(Token(Kind.LParen, "(", "", ln, col))
+	dsg_append(cond, out)
+	out.append(Token(Kind.RParen, ")", "", ln, col))
+	out.append(Token(Kind.Semi, ";", "", ln, col))
+}
+
+# dsg_assert_side binds one operand of a comparison to a temporary and puts the temporary
+# into the condition — unless it is a literal, which stays where it was written.
+fn dsg_assert_side(mut &toks: list[Token], lo: int, hi: int, name: str, ln: int, mut &cond: list[Token], mut &msg: str, mut &out: list[Token]) {
+	if p_assert_is_lit(toks, lo, hi) {
+		dsg_copy(toks, lo, hi, ln, cond)
+		return
+	}
+	col := toks[lo].col
+	out.append(Token(Kind.Ident, name, "", ln, col))
+	out.append(Token(Kind.Walrus, ":=", "", ln, col))
+	dsg_copy(toks, lo, hi, ln, out)
+	out.append(Token(Kind.Semi, ";", "", ln, col))
+
+	cond.append(Token(Kind.Ident, name, "", ln, col))
+	msg = msg + assert_note(toks, lo, hi, name)
 }
 
 # --- token plumbing ---------------------------------------------------------------------

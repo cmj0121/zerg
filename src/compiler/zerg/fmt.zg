@@ -137,7 +137,8 @@ fn fmt_is_off(off: list[str], code: str) -> bool {
 #   * exactly one statement in the block, and it is a jump;
 #   * no `else` — an else has a second branch that the guard form cannot carry;
 #   * no comment anywhere inside, because a comment is something a person put there and
-#     this pass has nowhere to put it back.
+#     this pass has nowhere to put it back;
+#   * a head that does not BIND — see fmt_head_binds.
 #
 # Anything else is left exactly as written. A formatter that ate a comment is a formatter
 # nobody runs twice.
@@ -163,10 +164,35 @@ fn fmt_guards(mut &toks: list[Token]) -> list[Token] {
 fn fmt_guard_at(mut &toks: list[Token], at: int, mut &out: list[Token]) -> int {
 	return 0 if toks[at].kind != Kind.If or fmt_is_else_if(out)
 	lb := fmt_block_start(toks, at)
-	return 0 if lb == 0
+	return 0 if lb == 0 or fmt_head_binds(toks, at, lb)
 	rb := fmt_block_end(toks, lb)
 	return 0 if rb == 0 or not fmt_is_lone_jump(toks, lb, rb) or fmt_has_else(toks, rb)
 	return lb
+}
+
+# fmt_head_binds reports whether the head between the `if` at `at` and its `{` at `lb`
+# INTRODUCES A NAME, which the postfix guard has nowhere to put.
+#
+# GRAMMAR#if-head is `expr | identifier ':=' expr`, and the second alternative is the whole
+# of it: the optional-unwrap `if s := v` binds `s` for the block, and it is the only form in
+# the language whose CONDITION declares. `for … in` and `with … as` bind too, but neither is
+# an `if` and this rule reaches no other keyword.
+#
+# The test is the `:=` and nothing more structural, because the parser's is the same one:
+# parse_if tells the binding head from an ordinary condition by that token alone, on the
+# ground that no condition may contain one. Reading the head some other way here would be a
+# second answer to a question the parser has already settled, and the two would drift.
+#
+# Rewriting the binding form produced source that is not a program — `if s := v { return s }`
+# came back as `return s if s := v`, which stops at the `:=` with E205, and the `s` being
+# returned names nothing once its binding is gone. The block stays a block.
+fn fmt_head_binds(mut &toks: list[Token], at: int, lb: int) -> bool {
+	mut i := at + 1
+	for i < lb {
+		return true if toks[i].kind == Kind.Walrus
+		i = i + 1
+	}
+	return false
 }
 
 # fmt_emit_guard writes `<jump> <value?> if <cond>` from the pieces of `if <cond> { <jump>
@@ -1296,7 +1322,7 @@ fn fmt_fstr_hole_ok(s: str) -> bool {
 #
 # It fits when both hold:
 #
-#   * printed flat, the group ends before column 80 — a tab counts as 4;
+#   * printed flat, the group ends before column 120 — a tab counts as 4;
 #   * it has fewer than 6 top-level elements.
 #
 # Width is the real judgement here and the count is a backstop for what width cannot see:
@@ -1326,7 +1352,7 @@ fn fmt_fstr_hole_ok(s: str) -> bool {
 # counts as while measuring, and fmt_wrap_elems is the element count that breaks a group
 # however narrow it is.
 fn fmt_wrap_max() -> int {
-	return 80
+	return 120
 }
 
 fn fmt_wrap_tab() -> int {
@@ -1476,7 +1502,7 @@ fn fmt_wrap_group(
 	#
 	# Ordering a split reads well until you see what it does, because this walk sees one
 	# group at a time and not the whole line. When a line runs long the group that crosses
-	# column 80 is the LAST one on it, which is almost never the one worth breaking:
+	# column 120 is the LAST one on it, which is almost never the one worth breaking:
 	# `return 0 if a or b or c(x, y)` would put `c`'s two arguments on three lines while
 	# the condition that actually made the line long — and that has no brackets to break
 	# at — stayed as it was. The count is no better: `scan(l, Rune, false, a, b, c)` fits
@@ -2958,7 +2984,7 @@ fn fmt_sorted(paths: list[str]) -> list[str] {
 # what the driver's resolver does, so the test is on that segment.
 fn fmt_is_stdlib(path: str) -> bool {
 	name := last_segment(path)
-	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "strconv", "strings", "testing", "time"] {
+	for m in ["ascii", "atomic", "cli", "fs", "io", "json", "log", "math", "os", "rand", "sha256", "strconv", "strings", "testing", "time"] {
 		return true if m == name
 	}
 	return false

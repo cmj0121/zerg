@@ -11,8 +11,8 @@ zerg lsp        # speak JSON-RPC 2.0 over stdin/stdout; the editor starts and st
 
 The language server is **not a new program**. It is the compiler that already exists, asked a
 different question: not _"lower this to C"_ but _"what is wrong with this buffer, right now"_. The
-compiler has always answered that one — `check_files_diag` is `zerg build --emit c` minus the C — so
-what ships here is the plumbing that carries the answer to where a person is looking.
+compiler has always answered that one — `check_files_diag` is `zerg build --emit check` — so what ships
+here is the plumbing that carries the answer to where a person is looking.
 
 That is also the invariant, and it is enforced rather than asserted:
 
@@ -21,8 +21,8 @@ That is also the invariant, and it is enforced rather than asserted:
 
 `make lsp` is that sentence as a gate. It drives a real session over stdio for every example and 40
 corpus programs, and holds what the server publishes to what `zerg build` and `zerg lint` say about
-the same file — errors against the command that refuses over one, information findings against the
-command that reports one. It is `make oracle`'s argument applied to the second front end.
+the same file — errors against the command that refuses over one, lint findings against the command
+that reports one. It is `make oracle`'s argument applied to the second front end.
 
 It carries **ten protocol cases** beside that, and every one of them failed once: the exit status, the
 post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification versus
@@ -33,7 +33,8 @@ an editor with a corrupted buffer, or a client left waiting, reports nothing at 
 ## Where it lives
 
 `src/compiler/lsp/` — a module of its own, importing `src/compiler/zerg/` across the `pub` boundary
-like any other consumer, wired in by one more `.sub(lsp_cmd())` in `zergc.zg`.
+like any other consumer, wired in by one more `.sub(cmd.lsp_cmd())` in `zergc.zg`. The command that
+starts it is `src/compiler/cmd/lsp_cmd.zg`, beside the other five.
 
 **One binary, not two.** A sub-command makes version skew between the compiler and the server
 physically impossible — they are the same file — and an editor needs nothing on `PATH` that is not
@@ -51,14 +52,14 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 
 ## What is built
 
-| Request                                                       | Answered by                                         |
-| ------------------------------------------------------------- | --------------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | the session                                         |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                      |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_files_diag`, `lint_conversions` |
-| `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls  |
-| `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix       |
-| `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations     |
+| Request                                                       | Answered by                                        |
+| ------------------------------------------------------------- | -------------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | the session                                        |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_files_diag`, `lint_program`    |
+| `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
+| `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
+| `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
 
 Every other request is answered with a **method-not-found error**, not with silence. A client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
@@ -80,10 +81,42 @@ not redundant with an empty string, since a client clearing a file to nothing se
 another module has to be checked with that module or every name it borrowed reads as undefined —
 a server that underlines correct code is one a person turns off.
 
-**Two severities, from two places.** An **error** is what `check_files_diag` reports and `zerg build`
-refuses over. The `L5xx` conversion findings are about **legal** programs — a literal that took a type
-the page does not show — so they arrive as **information**. A server that paints a working
-program red teaches its user to ignore red.
+**And which program that is, is found rather than assumed.** An editor says only which file is open,
+and an open file is usually not an entry: it is one member of a directory module, whose types, whose
+callers and whose second source root all live outside it. Read as an entry it reports `E707` for a
+struct declared in the file beside it, `L102` for a private function its sibling calls, and `E502`
+for a module that sits beside its own directory rather than inside it — three sentences about correct
+code. So the driver **searches for an entry that reaches the buffer**: the `.zg` files directly in
+the parent of the buffer's directory, then its parent, stopping at the first level that holds any
+source at all, and taking the first one whose program contains the buffer. What counts as reaching it
+is the loader itself — the same `module_files`, the same `module_at` — so the server never grows a
+second answer to what a module is. When nothing reaches the buffer, the buffer **is** its own entry,
+which is what a single-file program, a stdlib module and a test file all are.
+
+That search is why "the buffer's directory is a module" is not the rule, tempting as it is. Nothing
+local to a directory says whether it is one: `src/stdlib/` is a directory of `.zg` files where each
+file is a module of its own, and `examples/` is a directory of twenty separate programs. A directory
+is a module when something imports it, and only a walk from an entry knows that.
+
+**Four severities, from two places.** An **error** — LSP severity 1 — is what `check_files_diag`
+reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
+use. Everything else on the wire came from `lint_program`, and every one of those is a **legal**
+program that builds, so none of them is ever an error: a server that paints a working program red
+teaches its user to ignore red. The linter's own three levels are ordered — a **finding** fails
+`zerg lint`, a **warning** prints and exits 0, an **info** never gates anything
+([the linter's severities](fmt.md)) — so they land on LSP's remaining three in that order:
+
+| `Finding.sev` | `zerg lint` prints | LSP severity    |
+| ------------- | ------------------ | --------------- |
+| `""`          | `L103 …`           | 2 — warning     |
+| `"warning"`   | `warning: L601 …`  | 3 — information |
+| `"info"`      | `info: L106 …`     | 4 — hint        |
+
+The words do not line up, and they are not meant to: the left column is what a **command's exit
+status** turns on and the right is how loudly an **editor** draws. The mapping is written once, in
+`ls_severity`, and `make lsp` holds it — the gate reassembles each published diagnostic as the line
+`zerg lint` would have printed, adjective included, so a server that flattened all three into one
+severity would fail rather than agree about every count.
 
 **A code travels as a code.** `Diag` carries the rule's identity — `E307`, `L502` — in a field of
 its own, so the server sends LSP's `Diagnostic.code` and an editor can filter, group and link by it.
@@ -139,7 +172,7 @@ it asks a running `zerg` anything. What it does instead is state facts the compi
 | Setting                    | Is                                                           | Held to            |
 | -------------------------- | ------------------------------------------------------------ | ------------------ |
 | `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                         | `F101`, `F403`     |
-| `colorcolumn=81`           | the first column past the budget `F403` wraps at             | `fmt_wrap_max()`   |
+| `colorcolumn=121`          | the first column past the budget `F403` wraps at             | `fmt_wrap_max()`   |
 | `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                    | one shared scanner |
 | `makeprg` / `errorformat`  | `:make` runs `--emit check` and reads both diagnostic shapes | the compiler's own |
 
@@ -354,8 +387,8 @@ So those facts get a gate of their own — `make editor-align`:
 - the indent **character** the ftplugin and `.editorconfig` configure is the one `zerg fmt` actually
   **writes**;
 - the indent **width** they configure is the one `F403` measures a tab as. That is not decoration:
-  F403 decides whether a line has run past column 80 by counting a tab as `fmt_wrap_tab()`, so an
-  editor displaying it as anything else is applying a different 80-column rule than the formatter
+  F403 decides whether a line has run past column 120 by counting a tab as `fmt_wrap_tab()`, so an
+  editor displaying it as anything else is applying a different 120-column rule than the formatter
   did. One number, three places, one gate;
 - the **ruler** the ftplugin draws is one past `fmt_wrap_max()` — the column a flat group must end
   before. A ruler in the wrong place looks exactly like a ruler, which is why this one is read out of
@@ -382,9 +415,7 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 | `hover`, `definition`, `references`, `rename` | nothing maps a position to a declaration                         |
 | `completion`                                  | the same query surface                                           |
 | `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
-| a `zerg lint` finding's **code** as data      | those rules answer `list[str]` and render their code into it     |
 | a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
-| the `lint_files` findings                     | they answer `list[str]` and carry no position to place           |
 | incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |
 
 The first row is the real gap and everything interactive is behind it. The information exists —
@@ -400,3 +431,13 @@ gated.
 The last row is a cost, not a gap. The scheduler is cooperative and non-preemptive, so a long check
 occupies its worker until it finishes; `emit.zg` at 9264 lines is the worst case in this repository
 and is the number to measure against before designing anything here.
+
+Measured, on this compiler's own sources: one check of the 24-file program rooted at
+`src/compiler/zergc.zg` — which is what opening **any** file under `src/compiler/` asks for, now that
+a module member is checked against its module — takes about 6.5 s and peaks near 3.7 GB, and a
+long-lived session is killed by the operating system after three or four of them. The ceiling is the
+**emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so
+`emit_files_diag` lowers the whole program to C to reach them and there is no check-only entry point
+to ask instead. It is reached by `zerg build` too and simply survives there, because a build is a
+process that then exits. A debounce would hide it; a check that stops before code generation would
+end it.

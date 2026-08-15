@@ -330,6 +330,7 @@ enum {
 	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
+	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
 typedef struct zrt_err {
@@ -465,14 +466,14 @@ zrt_err zrt_taken_err(void);
 
 /* One message per fault, named once: each helper below is `static inline` in a header, so
  * a repeated literal is re-emitted per translation unit as well as re-typed per edit. */
-#define ZRT_MSG_ADD_OVERFLOW "OverflowError: integer addition overflowed"
-#define ZRT_MSG_SUB_OVERFLOW "OverflowError: integer subtraction overflowed"
-#define ZRT_MSG_MUL_OVERFLOW "OverflowError: integer multiplication overflowed"
-#define ZRT_MSG_NEG_OVERFLOW "OverflowError: integer negation overflowed"
-#define ZRT_MSG_DIV_OVERFLOW "OverflowError: integer division overflowed"
-#define ZRT_MSG_SHIFT_WIDTH  "OverflowError: shift distance outside the type width"
-#define ZRT_MSG_DIV_ZERO     "DivideByZeroError: division by zero"
-#define ZRT_MSG_MOD_ZERO     "DivideByZeroError: remainder by zero"
+#define ZRT_MSG_ADD_OVERFLOW "integer addition overflowed"
+#define ZRT_MSG_SUB_OVERFLOW "integer subtraction overflowed"
+#define ZRT_MSG_MUL_OVERFLOW "integer multiplication overflowed"
+#define ZRT_MSG_NEG_OVERFLOW "integer negation overflowed"
+#define ZRT_MSG_DIV_OVERFLOW "integer division overflowed"
+#define ZRT_MSG_SHIFT_WIDTH  "shift distance outside the type width"
+#define ZRT_MSG_DIV_ZERO     "division by zero"
+#define ZRT_MSG_MOD_ZERO     "remainder by zero"
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
 	int64_t r;
@@ -723,6 +724,18 @@ static inline int64_t zrt_floordiv_f(double a, double b) {
 	return t;
 }
 
+/* `math.trunc(x)` drops x's fractional part and answers an `int`. It is a leaf because
+ * `int(x)` on a float is REFUSED by the language (docs/core/types.md): dropping a fraction
+ * is a decision, so it is spelled with a verb, and the standard library needs a way down to
+ * the machine that the verb it defines cannot itself be written with.
+ *
+ * The range check is the one every float -> int goes through, so a magnitude no `int` holds
+ * raises OverflowError rather than being undefined — and that, not a value returned
+ * unchanged, is what the rounding family now answers for such an input. */
+static inline int64_t zrt_trunc(double v) {
+	return zrt_conv_i_from_f(v, -9223372036854775808.0, 9223372036854775807.0);
+}
+
 /* --- str <-> list bridge (str.c, docs/code/collections.md) ----------------------
  *
  * A str bridges to a list[byte] (raw octets) or list[rune] (code points) for scanning
@@ -770,6 +783,16 @@ const char *zrt_arch(void);
 const char *zrt_exe_path(void);
 const char *zrt_getenv(const char *key);
 bool        zrt_has_env(const char *key);
+/* The two WRITES, which `os.set_env` / `os.del_env` lower onto. zrt_set_env replaces any
+ * current value and RAISES ValueError when setenv(3) refuses the name; zrt_del_env removes
+ * the variable and answers whether it WAS there, which unsetenv(3) will not say. Both are
+ * only safe BEFORE any coroutine is spawned: `environ` belongs to libc and libc does not lock
+ * it, so a write racing a read is a use-after-free this runtime cannot fix. See sys.c. */
+void zrt_set_env(const char *key, const char *value);
+bool zrt_del_env(const char *key);
+/* zrt_isatty is whether fd is a terminal — what `os.isatty` lowers onto, and what lets a
+ * program colour its output at a terminal and not into a pipe. */
+bool zrt_isatty(int64_t fd);
 void        zrt_exit(int64_t code);
 
 /* Filesystem-write leaves (sys.c): the stdlib `io.write_file` drives zrt_open_write (an
@@ -799,9 +822,40 @@ zrt_list zrt_listdir(const char *path);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
-/* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just
- * abort-message output; the stream primitives below are the io module's leaves. */
-void zrt_report(const char *msg);
+/* zrt_report writes one diagnostic line to stderr: `kind: msg`, or `msg` alone when kind
+ * is NULL. The MVP sys surface is just abort-message output; the stream primitives below
+ * are the io module's leaves.
+ *
+ * The kind arrives as a separate argument, and is not folded into the message by the
+ * caller, because this is the abort path: joining them costs an allocation that can fail
+ * and that nobody is left to free. */
+void zrt_report(const char *kind, const char *msg);
+
+/* --- stack-overflow naming (sys.c) -----------------------------------------------
+ *
+ * A stack overflow is the one abort that cannot go through zrt_abort: by the time it
+ * is observable the faulting stack is exhausted, so nothing on it can run — no unwind,
+ * no `defer`s (docs/conformance.md keeps that half of the deviation). What these give
+ * the fault is its NAME and its STATUS: a SIGSEGV/SIGBUS handler on a sigaltstack
+ * decides overflow-or-not from the fault address, writes
+ * `StackOverflowError: stack overflow` to stderr with write(2) only, and _exit(1)s —
+ * the same message-then-status-1 shape every other abort has. A fault that is NOT a
+ * stack overflow is re-raised undisguised. */
+
+/* zrt_fault_init installs the fault handler (process-wide), gives the calling thread
+ * its sigaltstack, and records the calling thread's native stack bounds as main's.
+ * Every program-entry shim calls it, on the real main thread, before user code. */
+void zrt_fault_init(void);
+
+/* zrt_fault_thread_init gives one more OS thread its sigaltstack (the handler itself
+ * is already process-wide). Each scheduler worker calls it as it starts. */
+void zrt_fault_thread_init(void);
+
+/* zrt_fault_stack_set names the stack the calling thread is about to run user code
+ * on: base is a coroutine stack mapping whose first guard_len bytes are its PROT_NONE
+ * guard page, or NULL when the thread is back on its own native stack. The scheduler
+ * brackets every switch into a coroutine with the pair. */
+void zrt_fault_stack_set(void *base, size_t guard_len);
 
 /* --- io streams (sys.c, Phase 1f) ---------------------------------------------
  *

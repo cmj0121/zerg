@@ -1,10 +1,11 @@
-# `zerg build` — the only command that compiles, and how far it goes is `--emit` rather
-# than a command of its own.
+# `zerg build`. What is here is what only a build does: reading `-j` and `--emit`, deciding
+# what the entry file IS when `--emit` is unset, running the pipeline as far as it was asked
+# to, and writing the result where `-o` says.
 #
-# What is here is what only a build does: reading `-j` and `--emit`, deciding what the
-# entry file IS when `--emit` is unset, running the pipeline as far as it was asked to, and
-# writing the result where `-o` says. Loading the program, keying its objects, calling cc
-# and linking are `unit.zg`'s, because `zerg test` is a build too.
+# Loading the program, keying a unit's cached object, and the batched compile-and-link are
+# `unit.zg`'s, because `zerg test` is a build too; the argument vectors cc is handed are
+# `layout.zg`'s. What is left here is the one-shot `compile_to`, which `--emit lib` and
+# `--emit bin` reach and nothing else does.
 
 import (
 	"cli"
@@ -28,13 +29,6 @@ pub fn build_cmd() -> cli.Command {
 		.run(do_build)
 	)
 }
-
-# --- what each sub-command does -------------------------------------------------------------
-#
-# Each is handed the parsed command line and returns the process's exit status. There is no
-# argument checking here: a missing file or an unreadable flag was refused before the
-# function was ever called, which is the point of declaring the command line rather than
-# unpicking it.
 
 fn do_build(c: cli.Ctx) -> int {
 	build_stage(c.args(), default_stage(c.get("emit"), c.args()), c.get("output"), job_count(c.get("jobs")))

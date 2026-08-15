@@ -1,9 +1,6 @@
-# `zerg lsp` — the same compiler answering an editor rather than a shell.
-#
-# The protocol is the interface, so there is nothing to declare: an editor starts the
-# process, speaks JSON-RPC over its standard input and output, and stops it by closing
-# them. What the server cannot do for itself is turn a path and an unsaved buffer into the
-# whole program that buffer belongs to, and that is the one thing handed to it here.
+# `zerg lsp` — the same compiler answering an editor rather than a shell. The server itself
+# is `src/compiler/lsp`; what is here is the command that starts it, and the one thing it
+# cannot do for itself.
 #
 # THE FILE IS NOT CALLED `lsp.zg`, and it is the only one here that is not named after its
 # command. A module is resolved BESIDE THE IMPORTER first, so `cmd/lsp.zg` would be what
@@ -27,8 +24,8 @@ pub fn lsp_cmd() -> cli.Command {
 
 # do_lsp hands the server the one thing it cannot do for itself: turn a path and an unsaved
 # buffer into the whole program that buffer belongs to. Resolving an import is 60 lines of
-# environment variables, an installation root and a checkout layout, all of it here already,
-# and none of it the protocol's business.
+# environment variables, an installation root and a checkout layout — `source.zg` and
+# `layout.zg` beside this file — and none of it the protocol's business.
 fn do_lsp(c: cli.Ctx) -> int {
 	return lsp.serve(lsp_program)
 }

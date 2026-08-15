@@ -1,5 +1,5 @@
-# `zerg fmt` — rewrite sources in the canonical style, or report what is not canonical and
-# change nothing.
+# `zerg fmt`. The rules and the rewrite are `zerg/fmt.zg`'s; what is here is the command,
+# the bracket gate a source has to pass before it is rewritten, and the `--check` answer.
 
 import (
 	"cli"
@@ -23,8 +23,6 @@ fn do_fmt(c: cli.Ctx) -> int {
 	run_fmt(c.args(), c.all("off"))
 	return 0
 }
-
-# --- fmt / lint ------------------------------------------------------------------------
 
 # run_fmt rewrites each named file in place. Reading and writing the same path means a
 # formatted file is byte-identical to what it was, so running fmt twice is a no-op.

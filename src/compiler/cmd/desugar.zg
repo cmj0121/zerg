@@ -1,9 +1,6 @@
-# `zerg desugar` — rewrite sources into the core forms their sugar is defined as.
-#
-# It takes `fmt`'s two flags because it answers the other half of `fmt`'s question: `zerg
-# fmt` writes the canonical form, which is the SUGARED one, and this writes the core form
-# that sugar is defined as — a source nobody commits, which exists so the two spellings can
-# be built and compared.
+# `zerg desugar`. The rewrite is `zerg/desugar.zg`'s; what is here is the command and the
+# same bracket gate `fmt.zg` applies — a file of its own beside it, for the reason `zergc.zg`
+# gives for the command being beside `fmt`.
 
 import (
 	"cli"

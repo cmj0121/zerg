@@ -130,6 +130,21 @@ seed could not build it if it did), so the rule costs the chain nothing, and rew
 seed's scope tracking to lift it would move emitted C for no program the seed exists to
 build.
 
+A THIRD is the one a stdlib author meets: **`str(x)` where `x` is a type PARAMETER**. The
+seed turns `fn show[T](x: T) -> str { return str(x) }` away with `cannot build a str from T;
+str(x) takes a scalar or a list[byte]/list[rune]` — a sentence about the conversion's domain,
+said as though the program had handed it a bad argument, when what happened is that the
+question was asked one step too early. `internal/sema/strbridge.go` types `str(x)` by asking
+`ScalarOf` of the argument, and inside a generic body the argument's type is still `T`; the
+seed checks that body ABSTRACTLY, so the refusal lands at the declaration whether or not the
+function is ever called. The SAME rendering spelled `f"{x}"` both compilers build: `inferFStr`
+synthesizes the hole and yields `str`, leaving the rendering to lowering, which runs after
+substitution. `zerg` asks after substitution for both spellings — `show(7)` builds, and
+`show(p)` on a struct is `E449` naming `P`, which is the diagnostic a reader can act on. What
+the gap costs is a rule for every module the seed compiles: `src/stdlib/testing.zg`
+interpolates rather than converts (`raise f"assert_eq failed: {a} != {b}"`), and a generic
+body in the stdlib that reaches for `str(x)` breaks the chain rather than one program.
+
 Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
 ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
 `spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,
@@ -200,6 +215,20 @@ the program, which is what the assertion exists to catch.
   it at the callsite.
 - **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is
   emitted as written and cc reports the type. `zerg` judges a default at the declaration.
+- **A default that CALLS anything is refused, in a sentence that claims the language forbids
+  it.** `struct C { c: chan[int] = chan[int]() }` — or any default that is not a literal, a
+  module constant, or arithmetic over those — is turned away with _a default value must be a
+  constant expression that does not reference a parameter/field_. The language says the
+  opposite: a default "is evaluated **per construction** rather than once at the declaration
+  — an expression in it (a call, a sum over module constants) runs again for every
+  construction that omits the field" (`docs/core/types.md`, "Field defaults"), and `zerg`
+  takes it. The seed backfills a default VERBATIM at every call and construct site and never
+  TYPES the expression at all — `checkConstDefault` validates its shape, so a default carries
+  no recorded `ExprType` and a call would reach cc as bad C. The refusal is therefore right
+  about the seed and wrong about Zerg: a `NotImplemented` wearing a language rule's clothes.
+  It is also why `Context.events` in `src/stdlib/testing.zg` is `pub` and carries no default —
+  a module-private field must carry one, and the only default a fresh channel could have is
+  a call.
 - **A TOP-LEVEL binding's annotation is not checked against its value.** `answer: bool =
 42` builds and the global is whatever the seed makes of it; the same mismatch on a LOCAL
   binding the seed does refuse. `zerg` honours a top-level annotation the way it honours a
@@ -394,6 +423,45 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   (`E398`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
   operand is either a cc diagnostic or an answer that is quietly wrong where C converts it.
   Two cases in `reject-check.sh` carry the marker.
+- **A `#[test]` FUNCTION IS NOT TYPE-CHECKED.** The seed strips every `#[test]` out of the item
+  list before `sema.Check` runs (`dropTestItems`, `internal/build/build.go`), so `#[test] fn t()
+{ x: int = "no" }` builds and runs, and so does one calling a function that does not exist.
+  `zerg` reads `#[test]` as an ordinary decorator on an ordinary declaration and checks the body
+  like any other: a test that does not compile is a compile error, in a normal build as much as
+  under `zerg test`. The seed's stripping is not wrong for the seed — it keeps a normal build's
+  emitted C byte-identical whether or not a `#[test]` is present — but it means the one
+  compiler that runs tests is the only one that ever looks at them.
+- **`assert` IS NOT A WORD THE SEED KNOWS, and what it says instead names the wrong token.**
+  `assert cond` is a statement of the shipped language (`GRAMMAR#assert-stmt`) and a keyword of
+  `zerg` alone. The seed's lexer reads `assert` as an ordinary identifier, so the statement is
+  two expressions in a row and what comes back is _expected a newline or ';' to separate
+  statements, found an identifier_, pointing at the CONDITION rather than at the word — a
+  sentence that reads as a missing semicolon, which is the one thing it is not. Worth
+  recognising by that shape: the column is off by the width of the word and the space after it.
+  Nothing in
+  `src/stdlib` writes one, deliberately, since the seed compiles that tree; the ERROR KIND it
+  raises (`AssertionError`, 11) is mirrored here all the same, because the kind numbering is an
+  ABI shared with the runtime and a table that stopped at 10 would let a later kind take 11.
+- **A MODULE-LEVEL `unsafe { … }` GROUP IS NOT A FORM THE SEED PARSES, so `import "log"` fails
+  in a seed-built program.** It is the reverse of every other entry here: not the seed
+  accepting what `zerg` refuses, but the seed refusing what `zerg` accepts — and the refusal is
+  a parse error inside the standard library rather than anything about the program that asked.
+  What comes back is _module "log": log.zg failed to parse: expected an expression, found
+  'unsafe'_, at the importer's line and not at the group.
+
+  The group is `log`'s global logger, and it cannot be written any other way: module state is
+  immutable (`E358`) and a system-wide logger is module state by definition. The rule the rest
+  of `src/stdlib` follows — stay inside the subset the seed reads, which is why nothing there
+  writes `assert` — is broken by exactly one module, deliberately, and only that module. Every
+  other stdlib module still builds under both compilers, and nothing the seed itself compiles
+  imports this one.
+
+  A program built with `bin/zerg0` therefore cannot log — and, since `testing` imports `log`
+  so that a `ctx.log` note is the same line as every other, cannot import `testing` either.
+  Neither costs anything: the seed has ONE command, `build`, so it never runs a test, and the
+  `#[test]` items it does see it strips before checking (see the entry above). A program built
+  with `bin/zerg` can do both, and that is every program this toolchain produces for anybody
+  but its own bootstrap.
 
 ## Changing the seed
 

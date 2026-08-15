@@ -232,6 +232,19 @@ jobs:
       - name: Unit suites, seed and runtime
         run: make test
 
+      # And the runner those suites will eventually be written in. A test runner that
+      # cannot detect a failing test is the ultimate gate that measures nothing, so this
+      # asks it about the four ways a test fails to hold — a broken assertion, a crash, an
+      # early `os.exit`, and a tree with no tests at all.
+      - name: The test runner can see a test that fails
+        run: make test-runner
+
+      # And the suites written for it. A suite nobody runs is worse than none — it makes a
+      # reader believe there is coverage — so the standard library's own tests are a step of
+      # their own, with a floor under how many of them ran.
+      - name: The standard library's own suites
+        run: make stdlib-test
+
       # The digest that names every cached object, held to FIPS 180-4's vectors and to the
       # system tool. It needs a built compiler, which is why it is here and not in the
       # text-only job.
@@ -330,6 +343,16 @@ jobs:
       - name: Formatting does not move a token
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make fmt-tokens
+
+      # --- 7d''. what the formatter writes, the parser reads ---------------------
+      # The three steps above ask whether a source is already canonical and whether spacing
+      # moved a token — and `fmt-tokens` asks its question with the F4xx REWRITES off. So
+      # the rules that change the code's shape were measured by nothing, and F401 spent
+      # months turning `if s := v { return s }` into a file that does not parse while all
+      # three stayed green. This runs every rule and asks whether the output is a program.
+      - name: The formatted result still parses
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make fmt-roundtrip
 
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot

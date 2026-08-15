@@ -48,16 +48,22 @@ this is a command of its own rather than a `--desugar` mode on `fmt`.
 | `D101` | a postfix guard becomes the `if` block it is sugar for   | yes    |
 | `D102` | a while-`for` becomes the infinite `for` it is sugar for | no     |
 | `D103` | a range-`for` becomes the infinite `for` it is sugar for | no     |
+| `D104` | an `assert` becomes the guarded raise it is sugar for    | yes    |
 
 **Same C** is a real distinction and the gate measures it. `D101` produces a program whose emitted C
 is **byte-identical** to the sugar's, because four of the five postfix guards are desugared in the
-**parser** and the fifth (`c_return_if`) emits the same `if` block. `D102` and `D103` produce a
-`for (;;)` where the sugar produced a `while` or a counted `for` — the same program, not the same
-text. So the equivalence this tool asserts is **behavioural**, and the stronger claim is asserted
-only for the files it holds for: `make desugar` asks whether `D101` was the only rule that fired,
-and compares the C when it was.
+**parser** and the fifth (`c_return_if`) emits the same `if` block. `D104` is byte-identical for the
+same reason one step further on: `assert` is desugared in the parser too, and this rule writes out
+exactly the statements it builds. `D102` and `D103` produce a `for (;;)` where the sugar produced a
+`while` or a counted `for` — the same program, not the same text. So the equivalence this tool
+asserts is **behavioural**, and the stronger claim is asserted only for the files it holds for:
+`make desugar` asks whether `D101` was the only rule that fired, and compares the C when it was.
 
-The rules run in the order they are numbered, and `D101` running first is load-bearing — see `D103`.
+**The numbering is not the order.** `D104` runs FIRST, because what it emits is `raise … if c` —
+`D101`'s own sugar. Emitted last it would leave this pass with output it rewrites on the next run,
+and a rule whose answer depends on how many times it was run is exactly what the fixpoint half of
+the gate exists to catch. After that the rules run in numbered order, and `D101` running before
+`D103` is load-bearing — see `D103`.
 
 ### `D101` — a postfix guard becomes its block
 
@@ -169,6 +175,37 @@ That is why `D101` runs first: `continue if c` has to have become `if c { contin
 rule can put two statements where the `continue` was. Where it cannot — a `continue` still carrying
 its own guard because `D101` was switched off, or one written as a match arm's body, where two
 statements do not fit — the whole loop declines rather than the rule inventing somewhere to put it.
+
+### `D104` — an `assert` becomes its guarded raise
+
+```zerg
+assert count(xs) == 3    →    zga_l7c9 := count(xs)
+                              if not (zga_l7c9 == 3) {
+                                  raise AssertionError(f"a.zg:7  assert count(xs) == 3\n  count(xs) = {zga_l7c9}")
+                              }
+```
+
+**The message is part of the definition.** A rule that rewrote the test and dropped the message
+would be undoing half a sugar — and it is the half the behavioural gate cannot see, because a claim
+that holds never renders one. `test-data/desugar/assert_claim.zg` is the case that pins it as text.
+
+The operands are **bound first**, which is the rule the whole form rests on: the message names them,
+so rendering them out of the condition a second time would make `assert next(it) == 3` advance the
+iterator twice. A literal operand is left where it is (`3 = 3` carries nothing), an `and` becomes
+one claim per conjunct, and under `or` / `??` only the first conjunct is bound — no operand is ever
+lifted across a short-circuiting operator.
+
+The position it bakes in is the file's **basename**, which is the most a source-to-source transform
+can honestly say: the text has to keep meaning the same thing after the file has been copied
+somewhere else to be built, and a basename survives that where a path does not.
+
+**Which conjuncts, which operator, which operands** are not decided here. This rule calls the
+parser's own analysis over the token stream, because those are facts about the language and a second
+scanner is how two spellings of one form come to disagree. What is written here is the other half:
+the parser builds a tree, and this builds text.
+
+Like `D101` it declines on a comment anywhere in the statement — the rewrite becomes several
+statements, and a comment runs to the end of whichever line it lands on.
 
 ## What it declines, and why
 

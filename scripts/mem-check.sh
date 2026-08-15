@@ -61,7 +61,7 @@ MANY="${MANY:-200}"
 # How many cases must actually be measured. Every assertion here is of the form "these two
 # numbers agree", which an empty list satisfies — so a typo in the case list would leave a
 # green gate that built nothing.
-MIN_CASES="${MIN_CASES:-10}"
+MIN_CASES="${MIN_CASES:-11}"
 
 [ -x "$ZERG" ] || {
 	printf 'mem-check: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -187,6 +187,90 @@ measure() {
 	fi
 	printf 'ok     %-14s (%-5s) live %s = %s, total +%s over %s rounds\n' \
 		"$name" "$label" "$lf" "$lm" "$dtotal" "$((MANY - FEW))"
+}
+
+# measure_free <label> <compiler> <name> — the OPPOSITE claim to `measure`'s, for the one
+# property in this repository that is about an allocation NOT happening: a disabled log entry.
+#
+# `lg.at_level(log.DEBUG)` at a level that is off answers a dead builder, and `log`'s whole
+# design rests on that costing NOTHING — no field formatted, no list grown, no `[]` made.
+# "Costs nothing" is not something a test can assert and not something a benchmark can prove;
+# it is a COUNT, and this file already counts. So the two runs are made and the totals must be
+# EQUAL: whatever a round did, it did not allocate.
+#
+# ITS FLOOR IS THE SAME PROGRAM WITH THE LEVEL ON. `measure` floors itself on `dtotal > 0`,
+# because a case that allocates nothing is a case that measured nothing; this one cannot,
+# since zero is the answer it wants. So the binary is run a second pair of times with
+# ZLOG_ON=1, which turns the level up and nothing else, and THAT pair must allocate. A loop
+# that stopped running, a counter that stopped counting, or a builder the compiler folded away
+# entirely all fail there rather than passing quietly here.
+#
+# THE ON PAIR IS NOT HELD TO `live`. It allocates and it does not free everything: a `str`
+# built and returned by a call leaks in this compiler, which `strings.join` does too and which
+# is not this module's to fix. The claim here is exactly the one that is about `log`.
+measure_free() {
+	local label=$1 zc=$2 name=$3
+	local c="$WORK/$name.$label.c" bin="$WORK/$name.$label.bin"
+
+	if ! "$zc" build --emit c "$WORK/$name.zg" >"$c" 2>"$WORK/$name.$label.emit.log"; then
+		printf 'EMIT   %-14s (%s)\n' "$name" "$label"
+		head -5 "$WORK/$name.$label.emit.log"
+		fail=1
+		return
+	fi
+	# shellcheck disable=SC2046  # one path per line, no spaces
+	if ! $CC -std=c11 -g -I "$RT" -o "$bin" "$c" $(rt_sources) 2>"$WORK/$name.$label.cc.log"; then
+		printf 'CC     %-14s (%s)\n' "$name" "$label"
+		head -10 "$WORK/$name.$label.cc.log"
+		fail=1
+		return
+	fi
+
+	local off_few off_many on_few on_many
+	off_few="$(run_at "$bin" "$FEW" no)" || {
+		fail=1
+		return
+	}
+	off_many="$(run_at "$bin" "$MANY" no)" || {
+		fail=1
+		return
+	}
+	on_few="$(ZLOG_ON=1 run_at "$bin" "$FEW" no)" || {
+		fail=1
+		return
+	}
+	on_many="$(ZLOG_ON=1 run_at "$bin" "$MANY" no)" || {
+		fail=1
+		return
+	}
+
+	local d_off=$(( ${off_many% *} - ${off_few% *} ))
+	local d_on=$(( ${on_many% *} - ${on_few% *} ))
+
+	if [ "$d_on" -le 0 ]; then
+		printf 'FLOOR  %-14s (%s) allocated nothing with the level ON — the case measured nothing\n' \
+			"$name" "$label"
+		fail=1
+		return
+	fi
+	if [ "$d_off" -ne 0 ]; then
+		printf 'ALLOC  %-14s (%s) allocated %s more over %s extra rounds with the level OFF — a disabled line must allocate NOTHING\n' \
+			"$name" "$label" "$d_off" "$((MANY - FEW))"
+		fail=1
+		return
+	fi
+	printf 'ok     %-14s (%-5s) off +0, on +%s over %s rounds — a disabled line allocates nothing\n' \
+		"$name" "$label" "$d_on" "$((MANY - FEW))"
+}
+
+# case_free <name> — the body arrives on stdin. `zerg` only: the seed cannot parse the
+# module-level `unsafe { }` group `log` holds its global logger in.
+case_free() {
+	local name=$1
+	emit_case "$name"
+	cases=$((cases + 1))
+	measure_free zerg "$ZERG" "$name"
+	return 0
 }
 
 # case_run <name> <seed?> <conc?> — the body arrives on stdin.
@@ -552,6 +636,40 @@ fn main() {
 		b := str(i) + "!"
 		f := make_adder(b)
 		n = n + f(1)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# --- a disabled log entry allocates nothing --------------------------------------------
+#
+# The claim `log`'s whole design rests on. The builder is chained through four field methods
+# and a terminal, so every one of them takes the dead path, and the two totals must be equal.
+#
+# THE LITERALS ARE IN THE LOOP ON PURPOSE. Hoisting them would measure a shape nobody writes;
+# a call site is arguments spelled at the call, and the module documents that evaluating those
+# is the one cost a disabled line still pays. This asserts that the cost is ONLY that.
+#
+# ZLOG_ON=1 turns the level up and changes nothing else, which is what makes the same binary
+# its own floor — see `measure_free`.
+case_free log_dead <<'ZG'
+import "log"
+
+fn level() -> int {
+	v := os.env("ZLOG_ON")
+	if s := v {
+		return log.TRACE if s == "1"
+	}
+	return log.OFF
+}
+
+fn main() {
+	lg := log.new().level(level())
+	mut i := 0
+	n := rounds()
+	for i < n {
+		lg.at_level(log.DEBUG).str("k", "v").int("n", i).bool("b", true).dur("t", 5).msg("never")
 		i = i + 1
 	}
 	print n

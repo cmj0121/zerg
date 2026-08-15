@@ -1,0 +1,587 @@
+# `zerg test` — the run itself: the walk over packages, the process per package, and what
+# the terminal is told.
+#
+# The other three quarters of the runner are beside it, one per question: which directories
+# hold a test (`test_pkg.zg`), the plan one package's run is (`test_fixture.zg`), and the
+# driver source that plan is compiled as (`test_driver.zg`).
+
+import (
+	"cli"
+	"io"
+)
+
+# test is `build` pointed at the files a build leaves out. A `*_test.zg` is compiled by no
+# normal build (docs/runtime/package.md) — the exclusion is what keeps a test out of the
+# shipped artifact — so the INCLUSION has to live somewhere, and it lives here rather than as
+# a `--test` flag on `build`. `zerg build` keeps one meaning: it compiles what ships, and what
+# ships never contains a test. A flag would have made the same command mean both, and the day
+# somebody scripts `zerg build --test` into a release step there is nothing left to say no.
+pub fn test_cmd() -> cli.Command {
+	return (
+		cli.command("test", "build and run the `#[test]` functions under a path, wherever they are written")
+		.opt("k", "only", "run only the tests whose name begins with this", "")
+		.opt("t", "timeout", "seconds one test may take before it is reported STUCK", "60")
+		.add(cli.positional("path", "the directory to search, or one `.zg` file — its package runs (default: the current directory)"))
+		.run(do_test)
+	)
+}
+
+fn do_test(c: cli.Ctx) -> int {
+	args := c.args()
+	only := c.get("only")
+	secs := c.int_of("timeout", TEST_TIMEOUT)
+	return run_tests(args[0], only, secs) if args.len() > 0
+
+	return run_tests(".", only, secs)
+}
+
+# --- the test runner ------------------------------------------------------------------------
+#
+# A TEST BUILD IS A BUILD OF MORE FILES, not of a relaxed language. A `*_test.zg` sits in the
+# module it tests and shares its namespace, so compiling it beside that module's other sources
+# is the whole of what the white-box position means (docs/runtime/package.md): nothing about
+# visibility moves, and there is no test-only way into a private name.
+#
+# So the unit of work is a DIRECTORY. A module is a directory whose files share a scope, and a
+# directory holding a `*_test.zg` becomes one test binary — its own sources, its test files,
+# and one generated driver that calls the `#[test]` functions by name.
+#
+# ONE COROUTINE PER TEST, and one PROCESS per test when that is not enough. A test runs in a
+# `spawn`ed coroutine, inside a `guard`, and the two together contain everything a test can do
+# to itself that is containable — measured on this branch:
+#
+#   an assertion that does not hold    the `guard` catches it; it is a value the runner reads
+#   an uncaught abort (`IndexError`)   the `guard` catches that too; and with no guard at all
+#                                      the coroutine dies alone and the process runs on
+#   a stack overflow                   THE PROCESS DIES — exit 1, and nothing after it runs
+#   `os.exit(0)`                       THE PROCESS DIES — with the status a passing run has
+#
+# The last two are the un-catchable class, and they are why the one-process-per-test
+# arrangement is still here as the FALLBACK rather than deleted. The driver re-runs one named
+# test when it is asked to, in a process of its own, which is how a run that died gets each
+# survivor attributed to the test that caused it.
+#
+# A TEST ANSWERS IN A FILE, not in an exit status. A status is one small integer: it cannot
+# carry which assertion failed or what the values were, and — the part that decides the shape —
+# `os.exit(0)` inside a test produces exactly the status a passing test does. So a record is
+# written AFTER the body is out of the driver's hands, and a MISSING record is the fact that it
+# never came back. Finishing is observed, never inferred from a number that cannot tell the two
+# apart, and THAT is what makes the fallback exact: the records present after a run that died
+# are a prefix, so the tests with no record are precisely the ones left to run.
+#
+# THE RECORD FILE is line-oriented, one record per test, written by the driver (`zt_append`,
+# in test_driver.zg) and read by `take_records` below — the only two readers there are:
+#
+#   T <name>        this record is about test <name>
+#   V <verdict>     `ok`, `fail`, `skip` or `crash`
+#   M <line>        one line of what goes under it — a skip's reason, a failure's notes
+#
+# A message is many `M` lines rather than one escaped field, so nothing has to encode a
+# newline: a test's notes are lines already.
+
+# run_tests is the whole command: find the packages, run each one's tests, and say what
+# happened. It answers 0 only when nothing failed.
+#
+# A RUN THAT FOUND NOTHING SAYS SO, on stderr and in the STATUS. Discovering no test and
+# printing nothing is indistinguishable from a run where everything passed, which is the one
+# failure a test runner must not have — every gate in this repository is written against it —
+# and a sentence alone is not enough, because the reader of a CI line is a shell.
+
+# NOTHING_FOUND is what `zerg test` answers when the search succeeded and turned up no test,
+# and it is a status of its own because that is a DIFFERENT ANSWER from the three already
+# spoken here. Rename a directory, move a suite, edit a glob or mistype a path into a CI line,
+# and a runner that answers 0 leaves the board green forever while running nothing — the shape
+# this repository has already been bitten by and written down: a gate measuring nothing looks
+# like a gate finding nothing. pytest reserves a status for exactly this.
+#
+# The ladder `zerg test` now answers on, and why this is 3 rather than 2:
+#
+#   0  every test that ran passed, or skipped
+#   1  a test failed, or timed out — the tests said no
+#   2  the COMMAND was wrong: no such path, a `--only` that matched nothing, a fixture
+#      parameter that resolves to nothing. Nothing ran, and nothing was going to
+#   3  the command was right, the search ran, and there was no test in what it searched
+#
+# 2 was already taken and taking it again would be the same erasure one level up: the reader's
+# next move differs, and that is the whole test of whether two answers are one. A 2 is fixed by
+# editing the command line; a 3 is fixed by looking at the tree. pytest's own number for this
+# is 5, which is an artifact of its history (2 interrupted, 3 internal error, 4 usage) and not
+# a thing to copy — this ladder is dense, and 3 is the next rung.
+const NOTHING_FOUND := 3
+
+fn run_tests(root: str, only: str, secs: int) -> int {
+	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk (test_pkg.zg) reads a missing directory as
+	# a directory with nothing in it — that is what the runtime's listing answers, deliberately,
+	# because its other caller is probing a search path — so `zerg test tset/` would report "no
+	# tests", exit 0, and leave a typo looking exactly like a package nobody has written tests
+	# for. The two are told apart HERE, where the path is the one the user typed.
+	if not __zrt_exists(root) {
+		io.ewrite(f"zerg: no such path `{root}`\n")
+		return 2
+	}
+
+	# A FILE PATH NAMES THE PACKAGE IT IS IN. Iterating on one file is the commonest thing
+	# anybody does with a test runner, and a walk that only knows directories answered it with
+	# "no tests" — a wrong answer delivered calmly, which is the one thing this project's
+	# standing rule forbids of any form. There is nothing to invent for it: the package model
+	# already answers "which build is this file compiled in" (docs/runtime/package.md), so a
+	# file is resolved to its package and that package is what runs.
+	#
+	# THE PACKAGE, NOT THE FILE'S TESTS. `strings_test.zg` names the package `strings.zg` +
+	# `strings_test.zg`, and running that pair is what a white-box test of `strings` IS — a run
+	# of the test file alone is not a build of anything. `--only` is the tool for one test.
+	#
+	# A `.zg` NAME IS WHAT MARKS A FILE, which is the convention the walk itself already uses:
+	# `test_pkgs` (test_pkg.zg) does not descend into a `.zg` name either. There is no `isdir`
+	# under this runtime, and inventing one for this would put a second answer to "is this a
+	# source file" in the tree.
+	base := search_root(root)
+	mut pkgs: list[Pkg] = []
+	if base == root {
+		test_pkgs(root, pkgs)
+	} else {
+		file_pkgs(root, pkgs)
+	}
+
+	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
+	# parameter whose type is not what the fixture produces, and a circle among fixtures are
+	# all facts about the SOURCE, and a runner that discovered one of them halfway through a
+	# run would have already reported verdicts for tests whose neighbours never got to run —
+	# a report whose green half means nothing. So they are asked for the whole tree first,
+	# reported together the way a compiler reports diagnostics, and nothing is executed.
+	mut errs: list[str] = []
+	mut chosen := 0
+	for p in pkgs {
+		mut fixts: list[Fixt] = []
+		mut tests: list[Tst] = []
+		plan_pkg(base, p, only, fixts, tests, errs)
+		chosen = chosen + tests.len()
+	}
+	if errs.len() > 0 {
+		for e in errs {
+			io.ewrite(e + "\n")
+		}
+		return 2
+	}
+
+	# A FILTER THAT SELECTED NOTHING IS A TYPO, not a green run. `--only` is asked for while
+	# somebody is iterating on one test, which is exactly when a misspelling would be read as
+	# "it passes now" — so it is refused with the same status an unresolvable parameter gets,
+	# and the tree it looked in is named because the walk may simply not have reached it.
+	if only != "" and chosen == 0 {
+		io.ewrite(f"zerg: no `#[test]` under `{root}` has a name beginning with `{only}`\n")
+		return 2
+	}
+
+	mut passed := 0
+	mut failed := 0
+	mut skipped := 0
+	mut stuck := 0
+	for p in pkgs {
+		run_pkg(base, p, only, secs, passed, failed, skipped, stuck)
+	}
+
+	if passed + failed + skipped + stuck == 0 {
+		io.ewrite(f"zerg: no tests: nothing under `{root}` declares a `#[test]`\n")
+		return NOTHING_FOUND
+	}
+	io.println("")
+
+	# A SKIP IS COUNTED APART FROM BOTH. It is not a pass — nothing was checked — and it is
+	# not a failure — nothing was claimed. Folding it into either makes the number that
+	# matters the one nobody can read: a suite whose skips are counted as passes goes green
+	# on a platform where none of it ran.
+	# A TIMEOUT IS COUNTED APART TOO, for the same reason a skip is: it is not a failed
+	# assertion — nothing was decided — and folding it into the failures would make a hung test
+	# and a broken one the same number.
+	io.println(f"{passed} passed, {failed} failed, {skipped} skipped, {stuck} timed out")
+	return 1 if failed > 0 or stuck > 0
+
+	return 0
+}
+
+# run_pkg builds one package's test binary and runs it, adding its counts to the run's.
+#
+# The driver is the LAST file of the entry unit, so the whole package is one scope and a test
+# function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
+# already has with the module it tests, applied one file further.
+fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
+	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
+	# findings somewhere: run_tests planned every package before it ran any of them, and a run
+	# holding one unresolved parameter never reaches here at all.
+	mut fixts: list[Fixt] = []
+	mut tests: list[Tst] = []
+	mut errs: list[str] = []
+	plan_pkg(root, p, only, fixts, tests, errs)
+	return if tests.len() == 0
+
+	mut names: list[str] = []
+	mut at: list[str] = []
+	for t in tests {
+		names.append(t.name)
+		at.append(t.path)
+	}
+
+	mut own: list[bool] = []
+	srcs := pkg_files(root, p, own)
+
+	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
+	# module is a directory and that is the only thing that puts its declarations in the same
+	# scope. A driver in a temp directory is a module of its own, and every test function it
+	# calls is then `E301 … is not a public member of module lib` — which would make a `pub` on
+	# each test the price of running it, i.e. exactly the test-only backdoor into visibility
+	# that docs/runtime/package.md says there is not.
+	#
+	# Only the BINARY and the report go under the build cache, which is where a build already
+	# puts what it made.
+	key := pkg_key(p)
+	drv := join_path(p.dir, driver_name(p))
+	bin := join_path(test_dir(), key + ".bin")
+	rep := join_path(test_dir(), key + ".rep")
+	sel := join_path(test_dir(), key + ".sel")
+
+	# THE TWO PATHS ARE BAKED INTO THE DRIVER rather than handed to it on the command line,
+	# and that is not a preference: `E734 NotImplemented: main(args) in a program that uses
+	# concurrency` — a `fn main(args)` and a `spawn` cannot be in one program in this
+	# compiler, and the driver now has both. A generated file has no need of an argument
+	# anyway: whatever a run would have passed, the run also wrote the file.
+	guard {
+		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel, secs)))
+	}
+
+	mut files: list[str] = []
+	mut copies: list[str] = []
+	mut k := 0
+	for k < srcs.len() {
+		if own[k] {
+			files.append(srcs[k])
+		} else {
+			c := join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			guard {
+				io.write_file(c, bytearray(read_source(srcs[k])))
+			}
+			copies.append(c)
+			files.append(c)
+		}
+		k = k + 1
+	}
+	files.append(drv)
+
+	# THE FILES THIS COMMAND WROTE COME OFF DISK THE MOMENT THEY HAVE BEEN READ, and that one
+	# line is what makes the cleanup total rather than best-effort. `load_units_of` reads every
+	# source into a `Unit`; everything after it — emit, cc, link, and every diagnostic any of
+	# them reports — works from those values and never opens a source again. So the window in
+	# which a driver exists on disk is exactly this call, and the only way out of it that is
+	# not a return is a raise, which the guard has.
+	#
+	# It used to be the last thing run_pkg did, which meant every path that did NOT reach the
+	# end left the driver behind: `zerg test src/stdlib` stopped at an `E215` inside
+	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
+	# standard library — a directory the compiler resolves imports by LISTING.
+	res := guard {
+		load_units_of(files, p.dir, p.dir)
+	}
+	rm_file(drv)
+	for c in copies {
+		rm_file(c)
+	}
+
+	lerr := match res {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	if lerr != "" {
+		io.ewrite(lerr + "\n")
+		__zrt_exit(1)
+	}
+	units := match res {
+		Either.Left(u)  => u
+		Either.Right(_) => []
+	}
+	link_units(units, drv, bin, TEST_JOBS)
+
+	mut verdict: list[str] = []
+	mut text: list[str] = []
+	for n in names {
+		verdict.append("")
+		text.append("")
+	}
+
+	# `broke` is what the driver said about a FIXTURE rather than about a test — the one thing
+	# in a run no test's slot can hold. A fixture whose tests all answered for themselves and
+	# which then raised on its way out has failed, and it is attributable to nothing else.
+	mut broke: list[str] = []
+
+	rm_file(rep)
+	rm_file(sel)
+	mut argv: list[str] = []
+	argv.append(bin)
+	__zrt_exec(argv)
+	take_records(rep, names, verdict, text, broke)
+
+	# THE FALLBACK. Every test with no record is one the in-process run never got back from,
+	# and each is re-run in a process of its own — which is what turns "the run died" into
+	# "this test died". `fell` is the first of them, and it is what the report says the
+	# strategy changed at: a run that quietly ran half of itself another way is a run whose
+	# result nobody can interpret.
+	mut fell := -1
+	mut i := 0
+	for i < names.len() {
+		if verdict[i] == "" {
+			if fell < 0 {
+				fell = i
+			}
+			run_one(bin, sel, rep, names, i, verdict, text, broke)
+		}
+		i = i + 1
+	}
+
+	report_pkg(names, at, verdict, text, broke, fell, passed, failed, skipped, stuck)
+
+	# the binary and the report belong to THIS run: the next one writes them again from whatever
+	# the test files then declare, and a stale one left behind is a test binary that answers for
+	# a program nobody has any more. The driver and the inherited copies went above, as soon as
+	# they had been read.
+	rm_file(rep)
+	rm_file(sel)
+	rm_file(bin)
+}
+
+# run_one runs a single named test in a process of its own — the isolated path, which is the
+# only thing that survives a test taking the process with it.
+#
+# THE NAME TRAVELS IN A FILE for the reason the driver's paths do: the driver cannot read a
+# command line (E734), so the one thing that varies between these runs is written where the
+# driver looks for it.
+fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
+	rm_file(rep)
+	guard {
+		io.write_file(sel, bytearray(names[i]))
+	}
+	mut argv: list[str] = []
+	argv.append(bin)
+	code := __zrt_exec(argv)
+	take_records(rep, names, verdict, text, broke)
+	return if verdict[i] != ""
+
+	# STILL NO RECORD, so this test is the one that ends processes. The status tells the two
+	# un-catchable ways apart, and `os.exit(0)` is the one that needs saying out loud: it
+	# leaves exactly the status a passing test does, and only the missing record says it
+	# never finished.
+	if code == 0 {
+		verdict[i] = "fail"
+		text[i] = "the test exited before it finished — `os.exit` ends the process, and a test that did not return did not pass\n"
+	} else {
+		verdict[i] = "crash"
+		text[i] = f"the test process died with status {code}\n"
+	}
+}
+
+# TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather
+# than a flag: `zerg test --jobs` is a knob for the part of the command nobody is waiting on.
+const TEST_JOBS := 4
+
+# TEST_TIMEOUT is how many seconds one test may take before the run stops waiting on it, and
+# it is a DEFAULT rather than a constant: `--timeout` moves it, and a suite whose slowest test
+# is genuinely slower than this says so on its own command line.
+#
+# A HUNG TEST AND A SLOW TEST LOOK IDENTICAL until something decides which is which, and with
+# nothing deciding, the one that hangs takes the whole run with it — until CI's own timeout
+# kills the job, at which point the log says the job was killed and nothing says which test
+# did it. Sixty seconds is far above anything a unit test should take and far below any CI
+# job limit, which is the whole of what a default here has to be.
+const TEST_TIMEOUT := 60
+
+# test_dir is where a test binary and its report are written: a `test` directory under the build
+# cache, which is already the place a build puts what it made and which `make clean` already
+# takes away. The driver source is the one thing that cannot live here — see run_pkg.
+fn test_dir() -> str {
+	dir := join_path(cache_dir(), "test")
+	__zrt_mkdir(dir)
+	return dir
+}
+
+# take_records reads whatever the driver managed to write and fills in the tests it named. It
+# is called after the in-process run and again after every fallback process, and it only ever
+# WRITES a slot it found a record for — so a partial file adds what it has and leaves the rest
+# empty, which is the whole signal the fallback runs on.
+#
+# A NAME IT DOES NOT KNOW IS IGNORED rather than reported, which costs nothing: the driver is
+# generated from this same list, so the only way to reach that is a stale file, and a stale
+# file is exactly what `rm_file` before each run is for.
+fn take_records(path: str, names: list[str], mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
+	mut at := -1
+	for ln in lines_of(read_or_empty(path)) {
+		if has_prefix(ln, "T ") {
+			at = name_index(names, drop_tag(ln))
+		} else if has_prefix(ln, "F ") {
+			# an `F` is about a fixture, so it ends whatever test the lines above were about:
+			# nothing that follows belongs to one
+			at = -1
+			f := drop_tag(ln)
+			if not has_str(broke, f) {
+				broke.append(f)
+			}
+		} else if at >= 0 and has_prefix(ln, "V ") {
+			verdict[at] = drop_tag(ln)
+		} else if at >= 0 and has_prefix(ln, "M ") {
+			text[at] = f"{text[at]}{drop_tag(ln)}\n"
+		}
+	}
+}
+
+fn name_index(names: list[str], name: str) -> int {
+	mut i := 0
+	for i < names.len() {
+		return i if names[i] == name
+		i = i + 1
+	}
+	return -1
+}
+
+# drop_tag takes the two-character tag off a record line. Everything after it is the payload
+# verbatim, spaces and all — a test's message is prose and nothing may trim it.
+fn drop_tag(ln: str) -> str {
+	b := bytearray(ln)
+	mut out: list[byte] = []
+	mut i := 2
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+fn has_prefix(s: str, prefix: str) -> bool {
+	b := bytearray(s)
+	x := bytearray(prefix)
+	return false if x.len() > b.len()
+
+	mut i := 0
+	for i < x.len() {
+		return false if b[i] != x[i]
+		i = i + 1
+	}
+	return true
+}
+
+# lines_of splits text on newlines and drops the empty tail a trailing newline leaves. A
+# record file always ends in one, and an empty file is no lines rather than one empty one.
+fn lines_of(text: str) -> list[str] {
+	b := bytearray(text)
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'\n' {
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(b[i])
+		}
+		i = i + 1
+	}
+	if cur.len() > 0 {
+		out.append(str(cur))
+	}
+	return out
+}
+
+# report_pkg prints one package's results and adds them to the run's counts.
+#
+# THE REPORT IS PRINTED HERE AND NOT BY THE DRIVER, which is what lets one format serve both
+# paths: the in-process run and the fallback processes write the same records, and a reader
+# cannot tell from a line which way it was produced — except where it is told, which is the
+# one line that says the strategy changed.
+fn report_pkg(names: list[str], at: list[str], verdict: list[str], text: list[str], broke: list[str], fell: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
+	mut seen := ""
+	mut i := 0
+	for i < names.len() {
+		if at[i] != seen {
+			seen = at[i]
+			io.println(seen)
+		}
+		if i == fell {
+			io.println("  NOTE  the in-process run ended here — the tests below ran one process each")
+		}
+		v := verdict[i]
+		if v == "ok" {
+			io.println("  ok    " + names[i])
+			passed = passed + 1
+		} else if v == "skip" {
+			# a skip's reason goes ON the line: it is one short phrase, and a reader
+			# scanning for what did not run wants it beside the name rather than under it
+			io.println(f"  SKIP  {pad_name(names[i])}{first_line(text[i])}")
+			skipped = skipped + 1
+		} else {
+			io.println(f"  {verdict_word(v)} {names[i]}")
+			for ln in lines_of(text[i]) {
+				io.println("        " + ln)
+			}
+
+			# A TIMEOUT IS ITS OWN VERDICT and is counted apart, because it is not a failed
+			# assertion: nothing was checked and nothing was claimed, the test simply never
+			# came back. A runner that reported it FAIL would send the reader looking for an
+			# assertion that does not exist.
+			if v == "timeout" {
+				stuck = stuck + 1
+			} else {
+				failed = failed + 1
+			}
+		}
+		i = i + 1
+	}
+
+	# A FIXTURE THAT FAILED WITH NOTHING LEFT TO BLAME IT ON is still a failure, and it is
+	# printed last because that is when it happened: the tests under it had each already
+	# answered for themselves, and what broke was the teardown on the way out.
+	for b in broke {
+		io.println(f"  FAIL  {b}")
+		failed = failed + 1
+	}
+}
+
+# verdict_word is the six-character column every verdict is printed in, so the names line up
+# whatever happened to the test above.
+fn verdict_word(v: str) -> str {
+	return "CRASH" if v == "crash"
+	return "STUCK" if v == "timeout"
+
+	return "FAIL "
+}
+
+# pad_name puts a skip's reason in a column, and keeps two spaces between the two whatever the
+# name's length — a name longer than the column would otherwise run straight into its reason
+# and make one word out of two.
+fn pad_name(name: str) -> str {
+	mut out := name + "  "
+	for bytearray(out).len() < NAME_COLUMN {
+		out = out + " "
+	}
+	return out
+}
+
+const NAME_COLUMN := 23
+
+fn first_line(text: str) -> str {
+	for ln in lines_of(text) {
+		return ln
+	}
+	return ""
+}
+
+fn read_or_empty(path: str) -> str {
+	mut out := ""
+	guard {
+		out = str(io.read_file(path))
+	}
+	return out
+}
+
+# rm_file removes a path this command made, and says nothing when it was not there — every
+# caller wants "make sure this is gone" rather than "delete exactly this".
+fn rm_file(path: str) {
+	guard {
+		__zrt_remove(path)
+	}
+}

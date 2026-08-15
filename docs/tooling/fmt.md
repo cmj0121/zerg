@@ -44,9 +44,23 @@ be asked is one every CI reinvents.
 **It will not rewrite a file whose brackets do not close.** Reading tokens means fmt will
 reformat anything that lexes, and a file with a syntax error came back reformatted and
 exit 0 — the tokens intact, but the spacing decided by rules that had nothing true to work
-from. The gate is bracket balance rather than a parse, deliberately: a formatter has to
-work on source the compiler cannot **compile**, which is exactly when a person reaches for
-one. A file that balances and is still ill-formed is formatted as before.
+from. The gate on the INPUT is bracket balance rather than a parse, deliberately: a
+formatter has to work on source the compiler cannot **compile**, which is exactly when a
+person reaches for one. A file that balances and is still ill-formed is formatted as before.
+
+**It will not write output it cannot re-parse.** That gate is on the OUTPUT and it is a
+different question, asked one way round: **if the input parses, the result must**. `F401`
+once rewrote a binding head into source that stops at the `:=`, and `zerg fmt` destroyed
+the file, said nothing and exited 0. A formatter is only safe to run because meaning
+survives it, and a rewrite that does not parse has no meaning at all. So a file that came
+in a program goes out a program, or nothing is written and the run says which file and why.
+What fmt owes is that it never SUBTRACTS — a file that did not parse on the way in is left
+exactly as unreadable as it was found, because fmt is not what broke it.
+
+`--check` asks the same question and answers it the same way, because a safety net that
+asks less than the tool it watches is not one: a file that formatting would break is
+reported as such, and the advice `run zerg fmt` is withheld, since on that file the advice
+is what does the damage. `make fmt-roundtrip` is the gate over both.
 
 ### F1xx — layout
 
@@ -257,6 +271,13 @@ A jump that ALREADY carries its own guard keeps its block. There is no single `i
 what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
 no compiler parses — so the rule declines rather than inventing one.
 
+A **binding head** keeps its block too, for the same reason one step further on. `GRAMMAR`
+derives an if-head as `expr | identifier ':=' expr`, and the second alternative is the only
+condition in the language that DECLARES: `if s := v` unwraps the optional and binds `s` for
+the block. The postfix guard has nowhere to put a declaration, so `if s := v { return s }`
+came back as `return s if s := v` — which stops at the `:=`, and whose `s` names nothing now
+that the binding it came from is gone. The head is what declines it, not the jump.
+
 Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
 `x := if c { 1 } else { 2 }`.
@@ -285,7 +306,8 @@ It rewrites only what it can rewrite **without losing anything**, and declines o
 - exactly one statement in the block, and it is a jump;
 - no `else` — an else has a second branch the guard form cannot carry;
 - no comment anywhere inside, because a comment is something a person put there and this
-  pass has nowhere to put it back.
+  pass has nowhere to put it back;
+- a head that does not bind — the guard form carries a condition, not a declaration.
 
 `F402` is the Go convention, and for the same reason: an import list is read far more
 often than it is edited, and one that is grouped and sorted answers "does this file use X"
@@ -604,7 +626,7 @@ That is why the table above names a **stage** rather than a range, and why `make
 error-codes-check` answers per stage:
 
 ```text
-error-codes-check: next free code per stage — building E513, checking E399, emitting E745,
+error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
                                               lexical E112, parser E612
 ```
 
@@ -943,12 +965,15 @@ shipping compiler rather than a part of it (the line
 | `E609` | an f-string hole holds more than one expression                                                         |
 | `E610` | `…` cannot name a struct/enum/spec/type alias — a declared type's name begins with an UPPER-CASE LETTER |
 | `E611` | `…` is a prelude name — … — and cannot name …                                                           |
+| `E612` | `…` applies to the … that follows it, and a statement is not one                                        |
+| `E613` | a second decorator on one item — merge them into its comma list                                         |
+| `E614` | an `#[allow]` names the lint codes it suppresses, and this one names none                               |
 | `E701` | a `…` takes a … or a …, and this bare value is neither side                                             |
 | `E702` | no field `…` on … (optional chain `?.…`)                                                                |
 | `E703` | `?` on a … — it unwraps the Left of a carrier — **[not yet]**                                           |
 | `E704` | `?` propagates a right the enclosing function does not answer                                           |
 | `E705` | two modules both define `…` and at least one is `pub` — **[not yet]**                                   |
-| `E706` | two modules both define `…` — one flat namespace — **[not yet]**                                        |
+| `E706` | `…` and `…` both define `…` — one flat namespace — **[not yet]**                                        |
 | `E707` | no type named `…` (…)                                                                                   |
 | `E708` | `!` on a … — it forces a Result[T] or a T? — **[not yet]**                                              |
 | `E709` | `??` on a … — its left side is a Result[T] or a T? — **[not yet]**                                      |
@@ -987,6 +1012,7 @@ shipping compiler rather than a part of it (the line
 | `E742` | `…` has … type parameters and this gives …                                                              |
 | `E743` | `..=` with no upper bound is not a range — **[not yet]**                                                |
 | `E744` | a `spawn`/`defer` of `…`, a binding that HOLDS a function — **[not yet]**                               |
+| `E745` | `…` is declared twice in this file — one scope declares a name once                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -1054,8 +1080,48 @@ zerg lint <file.zg>...   # prints findings; exits nonzero when there is one
 ```
 
 Every check is answered from the parsed file alone — no types, no flow analysis — which
-keeps it honest about what it can claim. Findings come back in source order, and a nonzero
-exit makes `zerg lint` usable as a gate rather than as decoration.
+keeps it honest about what it can claim. Findings come back in source order, each with the
+place it is about (`path:line:col`).
+
+### Severity, and the two exit codes
+
+A finding carries a **severity**, and there are three:
+
+| Severity      | Printed as              | `zerg lint` | `zerg lint --strict` |
+| ------------- | ----------------------- | ----------- | -------------------- |
+| **a finding** | `path:line:col: L101 …` | **fails**   | **fails**            |
+| **warning**   | `… warning: L601 …`     | exits 0     | **fails**            |
+| **info**      | `… info: L106 …`        | exits 0     | exits 0              |
+
+A **finding** is a rule firing on the program, which is what the tool is for. A **warning** is
+what a rule says about a program that is not wrong — a `#[test]` that ships is a decision
+somebody is allowed to have made — so it prints and does not fail. An **info** never changes an
+exit status at all.
+
+Only the default prints no adjective: it is what `zerg lint` is for and needs no word in front
+of it, while a line that does **not** change the exit status has to say so or it reads as one
+that did.
+
+`--strict` is what `make lint` runs, over this project's own source, where neither a shipping
+test nor a suppression that will never apply is acceptable. A gate board stricter than the tool
+has precedent here — `refuse-check` asserts more about a refusal than `zerg build` requires.
+
+### Suppressing a finding — `#[allow(…)]`
+
+`#[allow(L103)]` on a statement suppresses that code over the statement it leads, and over its
+block when it has one — the scope is the size of the statement, which is one rule and not a
+choice between a line and a scope. It does not reach the next statement and cannot reach
+another file; there is deliberately **no file-level scope**. It names **`L` codes only**: an `E`
+code is a compiler diagnostic and suppressing one would make bypassing a compiler check an
+official feature. See [Decorators](../core/decorators.md).
+
+Two codes are about a suppression itself. `L106` matters more than it looks: a stale allow
+silences a rule that has stopped firing, and nobody learns when the real problem returns.
+
+| Code   | Severity    | Finding                                                    |
+| ------ | ----------- | ---------------------------------------------------------- |
+| `L106` | **info**    | the allow had nothing to suppress                          |
+| `L107` | **warning** | the allow names a code no rule has, so it will never apply |
 
 ### L1xx — dead code
 
@@ -1184,6 +1250,35 @@ type is a fact about **types**, so the lowering walk records it and `zerg lint` 
 the C it produces is thrown away. A program that does not compile reports none of them, which
 is right: there is nothing to advise about the types of a program whose types are wrong.
 
+### `L6xx` — what the binary carries
+
+| Code   | Rule                                                                 |
+| ------ | -------------------------------------------------------------------- |
+| `L601` | a `#[test]` or `#[fixture]` outside a `*_test.zg` file — **warning** |
+| `L602` | an `assert` outside a `*_test.zg` file — **warning**                 |
+
+Such a function is **legal** and it **ships**: it is compiled into the binary like any other,
+it appears twice in the emitted C, nothing calls it, and its `import "testing"` travels with
+it — which is how a test-only dependency reaches a shipped program. So the message states that
+**consequence** rather than the preference. A warning that only says "move it" is style advice
+and gets scrolled past; what the reader has to weigh is dead code in the artifact.
+
+`#[allow(L601)]` silences it for a `#[test]` that is meant to ship. One decorator per item, so
+the two are written as one: `#[allow(L601), test]`.
+
+`L602` is the same argument about a **live** claim rather than dead weight. `assert` is always
+compiled in — there is no flag that strips it, deliberately, because a program with its
+assertions and the same program without them are two programs, and nobody writes anything
+load-bearing into a check that may not run. So an `assert` outside a test file is a check that
+ships and can abort a running process, and the message names the **replacement**, which is what
+makes the warning earned: `assert` in production is not _weaker_ than the check somebody meant
+to write, it is _less specific_ — it says the claim was false, and never what it meant.
+`raise ValueError("xs must be non-empty") if xs.len() == 0` says both.
+
+`#[allow(L602)]` silences it, on a `fn` for the whole body or on a single statement for that
+statement. Move the code into a `*_test.zg` file afterwards and `L106` tells you to drop the
+allow, which is what keeps the suppression from outliving its reason.
+
 ## Adding a rule
 
 A new SURFACE FORM needs a case in `test-data/fmt/` in the same change, not only a rule.
@@ -1191,6 +1286,12 @@ The formatter's failures are stable — a form printed wrongly is printed the sa
 on the second pass — so `make fmt-corpus` is green until some case actually contains the
 shape. Both spacing defects found so far (`chan[T]<-` and friends, then `-1`) hid in forms
 no case had.
+
+A new `F4xx` REWRITE owes `make fmt-roundtrip` as well. It is the only group that can write
+a form the grammar does not have, and it is the group `fmt-tokens` turns off to ask its own
+question — so a rewrite is measured by the round-trip gate or by nothing. State the shapes
+the rule DECLINES as corpus cases too: a decline is a claim, and a case that is already
+canonical is how one is written down.
 
 A new LINT rule needs a program in `scripts/lint-check.sh` that makes it fire, for the reason
 `make lint` cannot supply one: it runs over the compiler and the stdlib, which are clean, so a

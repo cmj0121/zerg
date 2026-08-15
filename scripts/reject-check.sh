@@ -16,7 +16,7 @@
 # The gate is not that these fail. Every one of them failed before this script existed —
 # what differed is WHO said so. A program the compiler emits anyway reaches cc, which
 # rejects generated C at a line in a file nobody wrote, and before and after a fix the
-# case still "fails", so no build gate can tell them apart. Hence six assertions per
+# case still "fails", so no build gate can tell them apart. Hence seven assertions per
 # case:
 #
 #   1. a non-zero exit
@@ -24,20 +24,26 @@
 #      has to be told from another
 #   3. no mention of .zerg-cache
 #   4. nothing shaped like a cc diagnostic (`<file>:LINE:COL: error:` opening a line)
-#   5. a `--> file:line:col` line, so the reader is told WHERE
-#   6. the SEED refuses it too — unless the case says `seed-gap`, naming a rule the seed
+#   5. no name the COMPILER minted — a message may quote what is in the file and nothing else
+#   6. a `--> file:line:col` line, so the reader is told WHERE
+#   7. the SEED refuses it too — unless the case says `seed-gap`, naming a rule the seed
 #      does not enforce (its gaps are its own contract, in src/bootstrap/README.md)
 #
 # The fourth is not redundant with the third. A build given `-o` puts its intermediate C
 # beside the output rather than in the cache, so a cc error can carry no cache path at all
 # and still be a cc error — which is exactly the failure this gate exists to catch.
 #
-# The fifth is what this branch's diagnostics work bought: every rule in check.zg reports
+# The fifth is the one a reader can act on, and it is the one no other gate can see: a
+# message that names a compiler temporary is still a refusal, still carries its code and
+# still says where, so every other assertion here goes green while the reader is told about
+# a binding that is in no file they can open.
+#
+# The sixth is what this branch's diagnostics work bought: every rule in check.zg reports
 # through one place that knows the statement's file, line and column, so a rule that loses
 # its position is caught here rather than noticed by a user. Nothing else would see it —
 # the sentence still matches.
 #
-# The sixth makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
+# The seventh makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
 # and diagnoses every rule here; a rule it enforces and `zerg` does not is a rule `zerg`
 # LOST on the way to self-hosting, which is how this whole class went unnoticed. Only what
 # `zerg` prints is normative — the seed merely has to say no — because the two word their
@@ -220,6 +226,15 @@ reject() {
 	# is exactly how one of them came to be asked in two places and not in the third.
 	if cc_answered "$out"; then
 		echo "VIA CC    $name — cc answered this, not the compiler against the source"
+		fail=$((fail + 1))
+		return
+	fi
+
+	# AND IT MUST SPEAK THE READER'S VOCABULARY. A rule may quote any name in the file and no
+	# name that is not — see `names_a_temp` in diag.sh for what the compiler mints and why
+	# `assert` is the form that made this reachable from rules with nothing to do with it.
+	if names_a_temp "$out"; then
+		echo "NAMES TEMP  $name — the message quotes \`$(temp_named "$out")\`, which is in no file the reader can open"
 		fail=$((fail + 1))
 		return
 	fi
@@ -808,6 +823,70 @@ struct A {
 
 fn main() {
 	print "ok"
+}
+EOF
+
+# --- one decorator per item, and which decorators lead a statement -------------------
+#
+# A decorator may lead a STATEMENT now (GRAMMAR#statement), which is what `#[allow(…)]` is
+# for. That makes `#[derive(Eq)]` above a statement SYNTACTICALLY legal and semantically
+# nothing, so it owes its own refusal — a decorator changes what a declaration means, and
+# there is no declaration in a body for one to change.
+#
+# It is a rejection rather than a refusal: no future feature makes `#[derive]` on a binding
+# mean something. The seed refuses it too, by not reading a decorator inside a body at all.
+reject derive-leading-a-statement E612 '`#[derive(Eq)]`' at=2:2 <<'EOF'
+fn main() {
+	#[derive(Eq)]
+	n := 1
+	print n
+}
+EOF
+
+# `#[test]` gets the sentence about a `fn`, not the derive's about a type — the same split
+# E487 makes one position up, and the reason is the same: advice for the other decorator is
+# advice the reader cannot act on.
+reject test-leading-a-statement E612 '`#[test]`' at=2:2 <<'EOF'
+fn main() {
+	#[test]
+	n := 1
+	print n
+}
+EOF
+
+# ONE DECORATOR PER ITEM. Stacking parsed in both compilers and said exactly what the comma
+# list says — two spellings for one thing, which is what `zerg fmt` exists to remove and what
+# it cannot remove once both are legal.
+reject stacked-decorators-on-a-declaration E613 at=2:1 <<'EOF'
+#[derive(Eq)]
+#[obj]
+spec Draw {
+	fn draw() -> str
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# and in the position that opened this: `#[allow]` puts nothing on the pending list, so a
+# stack that began with one would have read as no decorator at all without a flag of its own
+reject stacked-decorators-on-a-statement E613 at=3:2 <<'EOF'
+fn main() {
+	#[allow(L103)]
+	#[allow(L104)]
+	n := 1
+	print n
+}
+EOF
+
+# `#[allow]` NAMES THE CODES IT SUPPRESSES. With none it suppresses nothing while reading as
+# though it did — E497's argument for `#[derive]`, one decorator over.
+reject an-allow-with-no-codes E614 at=2:4 <<'EOF'
+fn main() {
+	#[allow]
+	n := 1
+	print n
 }
 EOF
 
@@ -1912,6 +1991,23 @@ fn main() {
 }
 EOF
 
+# The set is CLOSED and it also GROWS, and both halves need a case. `__zrt_isatty` is the
+# newest leaf — the one `os.isatty` lowers onto — and the row that gives it an operand type is
+# a different line from the row that gives it a result type. A leaf added to one and not the
+# other is accepted with the wrong arity or handed the wrong operand, which reaches cc as a
+# diagnostic against a file nobody wrote.
+reject the-newest-primitive-given-a-str E398 'is int, and this gives str' seed-gap <<'EOF'
+fn main() {
+	print __zrt_isatty("2")
+}
+EOF
+
+reject the-newest-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
+fn main() {
+	print __zrt_isatty()
+}
+EOF
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise. The conditional `return` is here on its own because it takes a
@@ -3009,6 +3105,36 @@ reject slice-a-str E320 <<'EOF'
 fn main() {
 	s := "hello"
 	print(s[1..3])
+}
+EOF
+
+# THE SAME RULE, SEEN THROUGH `assert` — and the reason the two below are here is not E320
+# at all. `assert` hoists each operand of its condition into a temporary of its own so that
+# the failure message can report the value without running the condition twice, and a
+# temporary is a binding in the ordinary environment: a rejected operand left it there with
+# no type, every read of it came back _E372 undefined name `zga_l3c9`_, and the reader was
+# told about a name that appears nowhere in their file. One per conjunct, so an `and` with
+# two bad operands answered with three messages for two mistakes.
+#
+# `one-finding` is the whole claim, and the assertion above about minted names is the other
+# half of it: the count catches the cascade and the vocabulary catches what it said.
+#
+# The SEED refuses both for a reason of its own — `assert` is not a word it knows
+# (src/bootstrap/README.md) — so its half of this gate is honest about the program and says
+# nothing about the rule. Only `zerg`'s answer is normative here, which is what that split
+# is for.
+reject assert-on-a-str-index E320 one-finding <<'EOF'
+fn main() {
+	s := "hello"
+	assert s[0] == 104
+}
+EOF
+
+reject assert-and-on-two-str-indexes E320 one-finding <<'EOF'
+fn main() {
+	s := "hello"
+	t := "world"
+	assert s[0] == 104 and t[1] == 111
 }
 EOF
 
@@ -6578,10 +6704,12 @@ pub fn work() -> int {
 }
 EOF
 
-# ONE module declaring a name twice, in two files. Two DIFFERENT modules each declaring a
-# private one is legal — they take a module tag in C — so what this pins is the collision
-# no tag can separate.
-reject one-module-declaring-a-function-twice E706 <<'EOF'
+# TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
+# is legal — they take a module tag in C — so what this pins is the collision no tag can
+# separate. The sentence is pinned because the case below it shares the shape and not the rule:
+# what E706 has to say here is that there are two FILES, which is the thing this compiler
+# cannot tell from two modules and used to assert it could.
+reject two-files-of-one-module-declaring-a-function E706 'both define `work`' <<'EOF'
 import "one"
 
 fn main() {
@@ -6598,6 +6726,40 @@ pub fn first() -> int {
 --- one/b.zg
 fn work() -> int {
 	return 2
+}
+EOF
+
+# ONE FILE declaring a name twice, which is the other half of the same collision and is a
+# different RULE: E706 is a `NotImplemented` the package layer retires, and this is refused by
+# every compiler there will ever be. It was reported as E706 — "two modules both define
+# `test_same`" about two `#[test]` functions in one file — and a reader following that sentence
+# goes looking for a second module.
+#
+# The sentence is pinned on the half no place carries: the marker points at the SECOND
+# declaration, so the first one's line is the thing the reader cannot see from the caret.
+reject one-file-declaring-a-function-twice E745 'the first is at line 1' <<'EOF'
+fn work() -> int {
+	return 1
+}
+
+fn work() -> int {
+	return 2
+}
+
+fn main() {
+	print work()
+}
+EOF
+
+# AND THE CONSTANT, which is the rule's other walk over its other table. The two are one rule
+# and two tables (emit.zg says so where the wording lives), so a case on the function alone
+# pins half of it — and the constant half was the half that used to LINK rather than refuse.
+reject one-file-declaring-a-constant-twice E745 'the first is at line 1' seed-gap <<'EOF'
+const N := 1
+const N := 2
+
+fn main() {
+	print N
 }
 EOF
 

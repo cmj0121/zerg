@@ -93,3 +93,40 @@ func TestNoConcurrencyStaysClean(t *testing.T) {
 		}
 	}
 }
+
+// TestChanInAStructFieldIsCopied is the line between the seed's two answers about a channel,
+// and it is not the same line as the refusals above. LOWERING one — a send, a receive, a
+// construction — is Tier 2 and refused by name. HOLDING one is not: a struct with a channel
+// field is a value like any other, and the seed has to copy and drop it whether or not the
+// program it is in ever operates the channel. `src/stdlib/testing.zg` is exactly that
+// program — `Context`'s only field is the channel a test speaks over, and the module's
+// assertions, which touch no channel at all, are what a `zerg0`-built program imports.
+//
+// It used to fall through to "copying a chan[T] is not supported": copyValue had the case
+// and the two FIELD slots did not, so a rule the seed knew was missing from two of the three
+// places that render it. The direction is the reason both are checked — a send-capable
+// handle bumps the sender count and a receive-only one does not, and the sender count is
+// what closes the channel, so a helper that copied both the same way would leave a stream
+// nobody can end.
+func TestChanInAStructFieldIsCopied(t *testing.T) {
+	cases := []struct{ name, field, copyFn, dropFn string }{
+		{"send-capable", "chan[int]", "zrt_chan_sender_copy", "zrt_chan_sender_release"},
+		{"receive-only", "<-chan[int]", "zrt_chan_copy", "zrt_chan_release"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "struct C {\n  pub ch: " + tc.field + "\n}\n\n" +
+				"fn take(c: C) -> int {\n  d := c\n  return 1\n}\n\n" +
+				"fn main() {\n  print 1\n}"
+			code, msgs := emitDiags(t, src)
+			if len(msgs) != 0 {
+				t.Fatalf("a struct holding a channel must emit, got %v\n%s", msgs, code)
+			}
+			for _, want := range []string{tc.copyFn, tc.dropFn} {
+				if !strings.Contains(code, want) {
+					t.Fatalf("the generated helpers must call %s\n%s", want, code)
+				}
+			}
+		})
+	}
+}

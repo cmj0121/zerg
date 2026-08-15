@@ -23,6 +23,7 @@
 # formatting. What is missing and why is in docs/tooling/lsp.md.
 import (
 	"io"
+	"json"
 	"strconv"
 
 	"zerg"
@@ -167,8 +168,8 @@ fn ls_content_length(buf: list[byte], hdr: int) -> int {
 # ls_send writes one frame. The length is in BYTES, which is what `list[byte]` counts and what
 # a `str`'s length would not: a message carrying a diagnostic with an em-dash in it is
 # longer on the wire than it is on the page.
-fn ls_send(v: JVal) {
-	body := json_write(v)
+fn ls_send(v: json.Val) {
+	body := json.encode(v)
 	n := bytearray(body).len()
 	io.write(f"Content-Length: {n}\r\n\r\n{body}")
 }
@@ -183,19 +184,19 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 	# A frame that is not JSON has no id to answer with, so there is nobody to tell. It is
 	# logged and the session goes on, which is the only thing that leaves the editor usable.
 	msg := match guard {
-		json_parse(body)
+		json.decode(body)
 	} {
 		Either.Left(v)  => v
-		Either.Right(e) => jnull()
+		Either.Right(e) => json.null()
 	}
-	if jis_null(msg) {
+	if json.is_null(msg) {
 		ls_log("lsp: a frame that is not JSON was dropped")
 		return
 	}
 
-	method := jstr(jget(msg, "method"))
-	id := jget(msg, "id")
-	has_id := not jis_null(id)
+	method := json.as_str(json.get(msg, "method"))
+	id := json.get(msg, "id")
+	has_id := not json.is_null(id)
 
 	# After `shutdown` the session accepts nothing but `exit`. A request that arrives anyway
 	# is answered — with InvalidRequest, which is what the protocol says and, more to the
@@ -213,38 +214,38 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		ls_reply(id, ls_initialize_result())
 	} else if method == "shutdown" {
 		s.down = true
-		ls_reply(id, jnull())
+		ls_reply(id, json.null())
 	} else if method == "exit" {
 		s.stop = true
 	} else if method == "textDocument/didOpen" {
-		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
-		ls_put_doc(s, uri, jstr(jat3(msg, "params", "textDocument", "text")))
+		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
+		ls_put_doc(s, uri, json.as_str(json.walk3(msg, "params", "textDocument", "text")))
 		ls_publish(s, uri, load)
 	} else if method == "textDocument/didChange" {
-		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
-		ch := ls_full_text(jget(jget(msg, "params"), "contentChanges"))
+		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
+		ch := ls_full_text(json.get(json.get(msg, "params"), "contentChanges"))
 		if ch.ok {
 			ls_put_doc(s, uri, ch.text)
 			ls_publish(s, uri, load)
 		}
 	} else if method == "textDocument/didSave" {
-		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
+		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
 
 		# `text` rides along only when the client was asked for it, and this server does not
 		# ask: the buffer it already holds is the one the editor just wrote.
 		ls_publish(s, uri, load)
 	} else if method == "textDocument/didClose" {
-		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
+		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
 		ls_drop_doc(s, uri)
 		ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, [])))
 	} else if method == "textDocument/formatting" {
-		ls_reply(id, ls_formatting_result(s, jstr(jat3(msg, "params", "textDocument", "uri"))))
+		ls_reply(id, ls_formatting_result(s, json.as_str(json.walk3(msg, "params", "textDocument", "uri"))))
 	} else if method == "textDocument/codeAction" {
-		params := jget(msg, "params")
-		uri := jstr(jat3(msg, "params", "textDocument", "uri"))
+		params := json.get(msg, "params")
+		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
 		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
 	} else if method == "textDocument/documentSymbol" {
-		ls_reply(id, ls_document_symbol_result(s, jstr(jat3(msg, "params", "textDocument", "uri"))))
+		ls_reply(id, ls_document_symbol_result(s, json.as_str(json.walk3(msg, "params", "textDocument", "uri"))))
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -253,32 +254,32 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 	}
 }
 
-fn ls_reply(id: JVal, result: JVal) {
-	mut fs := jfields()
-	jput_str(fs, "jsonrpc", "2.0")
-	jput(fs, "id", id)
-	jput(fs, "result", result)
-	ls_send(jobj_of(fs))
+fn ls_reply(id: json.Val, result: json.Val) {
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "jsonrpc", "2.0")
+	json.put(fs, "id", id)
+	json.put(fs, "result", result)
+	ls_send(json.of_obj(fs))
 }
 
-fn ls_error_reply(id: JVal, code: int, msg: str) {
-	mut ef := jfields()
-	jput_int(ef, "code", code)
-	jput_str(ef, "message", msg)
+fn ls_error_reply(id: json.Val, code: int, msg: str) {
+	mut ef: list[json.Field] = []
+	json.put_int(ef, "code", code)
+	json.put_str(ef, "message", msg)
 
-	mut fs := jfields()
-	jput_str(fs, "jsonrpc", "2.0")
-	jput(fs, "id", id)
-	jput(fs, "error", jobj_of(ef))
-	ls_send(jobj_of(fs))
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "jsonrpc", "2.0")
+	json.put(fs, "id", id)
+	json.put(fs, "error", json.of_obj(ef))
+	ls_send(json.of_obj(fs))
 }
 
-fn ls_notification(method: str, params: JVal) -> JVal {
-	mut fs := jfields()
-	jput_str(fs, "jsonrpc", "2.0")
-	jput_str(fs, "method", method)
-	jput(fs, "params", params)
-	return jobj_of(fs)
+fn ls_notification(method: str, params: json.Val) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "jsonrpc", "2.0")
+	json.put_str(fs, "method", method)
+	json.put(fs, "params", params)
+	return json.of_obj(fs)
 }
 
 # ls_initialize_result declares exactly what is built and nothing that is not. A capability
@@ -287,31 +288,31 @@ fn ls_notification(method: str, params: JVal) -> JVal {
 #
 # `textDocumentSync: 1` is FULL — the whole buffer arrives on every change. Phase 1 re-checks
 # it from scratch anyway, so incremental sync would be bookkeeping in service of nothing.
-fn ls_initialize_result() -> JVal {
-	mut caps := jfields()
-	jput_int(caps, "textDocumentSync", 1)
-	jput_bool(caps, "documentFormattingProvider", true)
+fn ls_initialize_result() -> json.Val {
+	mut caps: list[json.Field] = []
+	json.put_int(caps, "textDocumentSync", 1)
+	json.put_bool(caps, "documentFormattingProvider", true)
 
 	# The code actions this server offers are all QUICK FIXES, and saying so is not decoration:
 	# an editor uses the kind to decide what a keystroke reaches and what only a menu does, and
 	# a client that asks `only: ["quickfix"]` gets nothing from a server that declares no kinds.
-	mut ca := jfields()
-	jput(ca, "codeActionKinds", jarr_of([jstr_of("quickfix")]))
-	jput(caps, "codeActionProvider", jobj_of(ca))
+	mut ca: list[json.Field] = []
+	json.put(ca, "codeActionKinds", json.of_list([json.of_str("quickfix")]))
+	json.put(caps, "codeActionProvider", json.of_obj(ca))
 
 	# The outline. It is the one answer that needs NO name resolution — a declaration knows
 	# what it is called and where it was written — which is why it is here while `hover`,
 	# `definition` and `references` are not.
-	jput_bool(caps, "documentSymbolProvider", true)
+	json.put_bool(caps, "documentSymbolProvider", true)
 
-	mut info := jfields()
-	jput_str(info, "name", "zerg")
-	jput_str(info, "version", zerg.zerg_version())
+	mut info: list[json.Field] = []
+	json.put_str(info, "name", "zerg")
+	json.put_str(info, "version", zerg.zerg_version())
 
-	mut fs := jfields()
-	jput(fs, "capabilities", jobj_of(caps))
-	jput(fs, "serverInfo", jobj_of(info))
-	return jobj_of(fs)
+	mut fs: list[json.Field] = []
+	json.put(fs, "capabilities", json.of_obj(caps))
+	json.put(fs, "serverInfo", json.of_obj(info))
+	return json.of_obj(fs)
 }
 
 # ls_full_text takes the text of the final content change. Under full sync there is exactly
@@ -324,14 +325,14 @@ fn ls_initialize_result() -> JVal {
 # showing and every diagnostic with it. And a change carrying a `range` is an INCREMENTAL
 # edit — which this server never asked for, having declared full sync — so applying its
 # `text` would replace the whole document with a fragment of itself.
-fn ls_full_text(changes: JVal) -> Change {
+fn ls_full_text(changes: json.Val) -> Change {
 	mut out := Change(false, "")
-	for c in jarr(changes) {
-		if jhas(c, "range") {
+	for c in json.as_list(changes) {
+		if json.has(c, "range") {
 			ls_log("lsp: an incremental change arrived for a server that declared full sync; the buffer is left as it was")
 			return Change(false, "")
 		}
-		out = Change(true, jstr(jget(c, "text")))
+		out = Change(true, json.as_str(json.get(c, "text")))
 	}
 	return out
 }
@@ -382,11 +383,11 @@ fn ls_publish(mut &s: Server, uri: str, load: fn (str, str) -> Program) {
 	ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, ls_check(path, text, load))))
 }
 
-fn ls_diagnostics_params(uri: str, ds: list[JVal]) -> JVal {
-	mut fs := jfields()
-	jput_str(fs, "uri", uri)
-	jput(fs, "diagnostics", jarr_of(ds))
-	return jobj_of(fs)
+fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "uri", uri)
+	json.put(fs, "diagnostics", json.of_list(ds))
+	return json.of_obj(fs)
 }
 
 # ls_check asks the compiler the three questions it can already answer about a buffer, in the
@@ -396,8 +397,8 @@ fn ls_diagnostics_params(uri: str, ds: list[JVal]) -> JVal {
 # stops there for the same reason: a parser handed unreadable text can only say something
 # untrue about it. Reporting a parse error beside `E101 a string literal is not closed`
 # would be exactly that untrue thing.
-fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] {
-	mut out: list[JVal] = []
+fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.Val] {
+	mut out: list[json.Val] = []
 	lex := zerg.lex_diags(text, path)
 	if lex.len() > 0 {
 		for d in lex {
@@ -453,52 +454,72 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[JVal] 
 		}
 	}
 
-	# The L5xx conversion findings are about LEGAL programs — a value that changed type
-	# where the source does not say so — so they are INFORMATION and must not draw as
-	# errors. A server that paints a working program red teaches its user to ignore red.
+	# EVERY LINT FINDING, THROUGH THE FUNCTION `zerg lint` CALLS. It used to be
+	# `lint_conversions` — the L5xx family alone — which meant the server had a private
+	# answer to "what does the linter say about this file": the eight tree rules were
+	# missing, and so was `#[allow(…)]`, which lives inside `lint_program` and would
+	# otherwise have had to be applied a second time here. `lint_program` also asks
+	# `lint_conversions` itself, so this is one call where there were nearly two.
+	#
+	# GUARDED, because loading a program is the one thing here that can refuse, and a
+	# server that dies on a half-typed file is a server the editor stops talking to.
 	lints := match guard {
-		zerg.lint_conversions(prog.srcs, prog.paths)
+		zerg.lint_program(prog.srcs, prog.paths)
 	} {
 		Either.Left(ls) => ls
 		Either.Right(_) => []
 	}
-	for d in lints {
-		if d.path == path {
-			out.append(ls_diagnostic(text, d, 3))
+	for f in lints {
+		if f.path == path {
+			out.append(ls_diagnostic_at(text, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))
 		}
 	}
 	return out
 }
 
+# ls_severity maps the linter's severity onto LSP's. A lint finding is never an ERROR:
+# severity 1 is what `zerg build` refuses over, and every one of these is a legal program
+# that builds — a server that paints a working program red teaches its user to ignore red.
+# So the linter's three levels land on the three that remain, IN ORDER, because they are
+# ordered: a finding fails `zerg lint`, a warning is printed and exits 0, an info never
+# gates anything (docs/tooling/fmt.md, "A finding carries a severity").
+fn ls_severity(sev: str) -> int {
+	return 3 if sev == "warning"
+
+	return 4 if sev == "info"
+
+	return 2
+}
+
 # ls_whole_file_diag is the abort's sentence, with a range of NOTHING at the top of the
 # file. A zero-width range and not the word there: an underline drawn under `fn` says the
 # `fn` is wrong, and the one thing known about this finding is that nobody knows where it is.
-fn ls_whole_file_diag(msg: str) -> JVal {
-	mut fs := jfields()
-	jput(fs, "range", ls_range_of(0, 0, 0, 0))
-	jput_int(fs, "severity", 1)
-	jput_str(fs, "source", "zerg")
-	jput_str(fs, "message", msg)
-	return jobj_of(fs)
+fn ls_whole_file_diag(msg: str) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put(fs, "range", ls_range_of(0, 0, 0, 0))
+	json.put_int(fs, "severity", 1)
+	json.put_str(fs, "source", "zerg")
+	json.put_str(fs, "message", msg)
+	return json.of_obj(fs)
 }
 
-fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> JVal {
+fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> json.Val {
 	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
 }
 
 # `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data
 # (`Diag.code`). A finding without one omits the field rather than sending an empty string,
 # which an editor would show as a rule named "".
-fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> JVal {
-	mut fs := jfields()
-	jput(fs, "range", ls_word_range(text, line, col))
-	jput_int(fs, "severity", severity)
-	jput_str(fs, "source", "zerg")
+fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put(fs, "range", ls_word_range(text, line, col))
+	json.put_int(fs, "severity", severity)
+	json.put_str(fs, "source", "zerg")
 	if code != "" {
-		jput_str(fs, "code", code)
+		json.put_str(fs, "code", code)
 	}
-	jput_str(fs, "message", msg)
-	return jobj_of(fs)
+	json.put_str(fs, "message", msg)
+	return json.of_obj(fs)
 }
 
 # --- positions -------------------------------------------------------------------------
@@ -516,13 +537,13 @@ fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severit
 # name; deriving the end from the SOURCE is honest about which one knows. So the range is
 # the word at the position — an identifier if there is one there, one character otherwise.
 
-fn ls_word_range(text: str, line: int, col: int) -> JVal {
+fn ls_word_range(text: str, line: int, col: int) -> json.Val {
 	sp := ls_word_span(text, line, col)
 	return ls_range_of(sp.sl, sp.sc, sp.el, sp.ec)
 }
 
 # Span is a range as four numbers rather than as JSON. A code action needs to COMPARE one
-# against the range the client asked about, and comparing two JVals means reading back out of
+# against the range the client asked about, and comparing two `json.Val`s means reading back out of
 # the thing just built — so the numbers exist before the object does, and both the diagnostic
 # and the action are rendered from them.
 struct Span {
@@ -569,18 +590,18 @@ fn ls_pos_lt(al: int, ac: int, bl: int, bc: int) -> bool {
 	return ac < bc
 }
 
-fn ls_range_of(sl: int, sc: int, el: int, ec: int) -> JVal {
-	mut fs := jfields()
-	jput(fs, "start", ls_position(sl, sc))
-	jput(fs, "end", ls_position(el, ec))
-	return jobj_of(fs)
+fn ls_range_of(sl: int, sc: int, el: int, ec: int) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put(fs, "start", ls_position(sl, sc))
+	json.put(fs, "end", ls_position(el, ec))
+	return json.of_obj(fs)
 }
 
-fn ls_position(line: int, ch: int) -> JVal {
-	mut fs := jfields()
-	jput_int(fs, "line", line)
-	jput_int(fs, "character", ch)
-	return jobj_of(fs)
+fn ls_position(line: int, ch: int) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put_int(fs, "line", line)
+	json.put_int(fs, "character", ch)
+	return json.of_obj(fs)
 }
 
 # ls_utf16_col is how many UTF-16 code units the first `upto` BYTES of a line come to. A
@@ -630,9 +651,9 @@ fn ls_line_at(text: str, idx: int) -> str {
 # It re-lints rather than remembering what was published. Phase 1 re-checks the whole program per
 # keystroke anyway, so a cache would be a second answer to a question already being asked — and
 # a stale one exactly when the buffer has just changed, which is when a fix is asked for.
-fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> Program) -> JVal {
-	mut out: list[JVal] = []
-	return jarr_of(out) if not ls_has_doc(s, uri)
+fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> Program) -> json.Val {
+	mut out: list[json.Val] = []
+	return json.of_list(out) if not ls_has_doc(s, uri)
 
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
@@ -642,7 +663,7 @@ fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> 
 			out.append(ls_quick_fix(uri, sp, d))
 		}
 	}
-	return jarr_of(out)
+	return json.of_list(out)
 }
 
 # ls_fixable is every finding on THIS file that carries a fix. A finding without one is not an
@@ -675,32 +696,32 @@ fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg
 
 # ls_quick_fix is one action. The DIAGNOSTIC rides along so the editor can attach the action to
 # the underline the user is looking at rather than to the line in general.
-fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
-	mut ed := jfields()
-	jput(ed, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
-	jput_str(ed, "newText", d.fix)
+fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> json.Val {
+	mut ed: list[json.Field] = []
+	json.put(ed, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
+	json.put_str(ed, "newText", d.fix)
 
-	mut changes := jfields()
-	jput(changes, uri, jarr_of([jobj_of(ed)]))
+	mut changes: list[json.Field] = []
+	json.put(changes, uri, json.of_list([json.of_obj(ed)]))
 
-	mut wsp := jfields()
-	jput(wsp, "changes", jobj_of(changes))
+	mut wsp: list[json.Field] = []
+	json.put(wsp, "changes", json.of_obj(changes))
 
-	mut diag := jfields()
-	jput(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
-	jput_int(diag, "severity", 3)
-	jput_str(diag, "source", "zerg")
+	mut diag: list[json.Field] = []
+	json.put(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
+	json.put_int(diag, "severity", 3)
+	json.put_str(diag, "source", "zerg")
 	if d.code != "" {
-		jput_str(diag, "code", d.code)
+		json.put_str(diag, "code", d.code)
 	}
-	jput_str(diag, "message", d.msg)
+	json.put_str(diag, "message", d.msg)
 
-	mut fs := jfields()
-	jput_str(fs, "title", f"Write `{d.fix}`")
-	jput_str(fs, "kind", "quickfix")
-	jput(fs, "diagnostics", jarr_of([jobj_of(diag)]))
-	jput(fs, "edit", jobj_of(wsp))
-	return jobj_of(fs)
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "title", f"Write `{d.fix}`")
+	json.put_str(fs, "kind", "quickfix")
+	json.put(fs, "diagnostics", json.of_list([json.of_obj(diag)]))
+	json.put(fs, "edit", json.of_obj(wsp))
+	return json.of_obj(fs)
 }
 
 # ls_document_symbol_result answers `textDocument/documentSymbol`: the outline of one buffer.
@@ -718,9 +739,9 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> JVal {
 # A parse that ABORTS answers with nothing rather than with an error. A buffer mid-edit does not
 # parse, an outline is a view and not a verdict, and the diagnostic that says the buffer is
 # broken has already been published by the check that runs on every keystroke.
-fn ls_document_symbol_result(s: Server, uri: str) -> JVal {
-	mut out: list[JVal] = []
-	return jarr_of(out) if not ls_has_doc(s, uri)
+fn ls_document_symbol_result(s: Server, uri: str) -> json.Val {
+	mut out: list[json.Val] = []
+	return json.of_list(out) if not ls_has_doc(s, uri)
 
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
@@ -733,7 +754,7 @@ fn ls_document_symbol_result(s: Server, uri: str) -> JVal {
 	for sym in syms {
 		out.append(ls_document_symbol(text, sym))
 	}
-	return jarr_of(out)
+	return json.of_list(out)
 }
 
 # ls_document_symbol is one entry, as LSP's `DocumentSymbol`.
@@ -748,7 +769,7 @@ fn ls_document_symbol_result(s: Server, uri: str) -> JVal {
 # `detail` is what the outline shows beside the name: the receiver of a method, the underlying
 # type of a `type`, the module path of an import. `pub` rides in front of it, because the one
 # thing a reader scanning a module's outline is looking for is what other modules can reach.
-fn ls_document_symbol(text: str, sym: zerg.Symbol) -> JVal {
+fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
 	mut detail := sym.detail
 	if sym.is_pub {
 		if detail == "" {
@@ -759,15 +780,15 @@ fn ls_document_symbol(text: str, sym: zerg.Symbol) -> JVal {
 	}
 
 	r := ls_word_range(text, sym.line, sym.col)
-	mut fs := jfields()
-	jput_str(fs, "name", sym.name)
-	jput_int(fs, "kind", ls_symbol_kind(sym.kind))
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "name", sym.name)
+	json.put_int(fs, "kind", ls_symbol_kind(sym.kind))
 	if detail != "" {
-		jput_str(fs, "detail", detail)
+		json.put_str(fs, "detail", detail)
 	}
-	jput(fs, "range", r)
-	jput(fs, "selectionRange", r)
-	return jobj_of(fs)
+	json.put(fs, "range", r)
+	json.put(fs, "selectionRange", r)
+	return json.of_obj(fs)
 }
 
 # ls_symbol_kind maps the compiler's WORD onto LSP's number (SymbolKind, §Document Symbols).
@@ -792,23 +813,23 @@ fn ls_symbol_kind(kind: str) -> int {
 }
 
 # ls_req_span reads the range a codeAction request asks about.
-fn ls_req_span(params: JVal) -> Span {
-	r := jget(params, "range")
-	st := jget(r, "start")
-	en := jget(r, "end")
-	return Span(jint(jget(st, "line")), jint(jget(st, "character")), jint(jget(en, "line")), jint(jget(en, "character")))
+fn ls_req_span(params: json.Val) -> Span {
+	r := json.get(params, "range")
+	st := json.get(r, "start")
+	en := json.get(r, "end")
+	return Span(json.as_int(json.get(st, "line")), json.as_int(json.get(st, "character")), json.as_int(json.get(en, "line")), json.as_int(json.get(en, "character")))
 }
 
-fn ls_formatting_result(s: Server, uri: str) -> JVal {
-	mut edits: list[JVal] = []
-	return jarr_of(edits) if not ls_has_doc(s, uri)
+fn ls_formatting_result(s: Server, uri: str) -> json.Val {
+	mut edits: list[json.Val] = []
+	return json.of_list(edits) if not ls_has_doc(s, uri)
 	text := ls_doc_text(s, uri)
 
 	# The SAME gate the command line applies, and for the same reason: fmt reads tokens, so
 	# it will reformat anything that lexes — including a half-typed buffer, whose spacing it
 	# would decide from a shape that means nothing. An editor formats on save, which is
 	# exactly when a buffer is most likely to be mid-edit.
-	return jarr_of(edits) if not zerg.fmt_balanced(text)
+	return json.of_list(edits) if not zerg.fmt_balanced(text)
 
 	out := match guard {
 		zerg.fmt_src_off(text, [])
@@ -816,19 +837,19 @@ fn ls_formatting_result(s: Server, uri: str) -> JVal {
 		Either.Left(t)  => t
 		Either.Right(_) => text
 	}
-	return jarr_of(edits) if out == text
+	return json.of_list(edits) if out == text
 
-	mut fs := jfields()
-	jput(fs, "range", ls_whole_range(text))
-	jput_str(fs, "newText", out)
-	edits.append(jobj_of(fs))
-	return jarr_of(edits)
+	mut fs: list[json.Field] = []
+	json.put(fs, "range", ls_whole_range(text))
+	json.put_str(fs, "newText", out)
+	edits.append(json.of_obj(fs))
+	return json.of_list(edits)
 }
 
 # ls_whole_range covers the document. The end is the real last position rather than a large
 # number a client is expected to clamp: a client that does not clamp appends instead of
 # replacing, and the file doubles.
-fn ls_whole_range(text: str) -> JVal {
+fn ls_whole_range(text: str) -> json.Val {
 	lines := ls_split_lines(text)
 	n := lines.len()
 	return ls_range_of(0, 0, 0, 0) if n == 0

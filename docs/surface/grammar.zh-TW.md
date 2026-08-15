@@ -60,7 +60,7 @@ import**（呼叫 C library 的符號如 `malloc`）是 **stdlib 機制**——�
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt | decorated-decl
+statement     ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt   ::= nop | …          # 無區塊；一行即可
 compound-stmt ::= …                # 擁有一個 '{ … }' 區塊（if / for / …）
 decorated-decl ::= …               # 引入名字的宣告，可選 #[…] 前綴（fn / struct / …，group 7）
@@ -126,7 +126,7 @@ chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
-unsafe ptr   asm
+unsafe ptr   asm     assert
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
@@ -439,7 +439,7 @@ spec-member ::= fn-sig | fn-decl              # 必要方法，或已提供實�
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # bound 是 spec → 型別參數；具體型別 → 值參數
 bound         ::= type-name ( '+' type-name )*  # spec 的合取
-decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
+decorated-decl ::= decorator? declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(16)、align(SIZE*2)
@@ -505,20 +505,23 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
   一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
   另一件事。
-- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
-  （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
-  `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
-  [Derive & Default Behavior](../core/derive.zh-TW.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
-  擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator 是編譯錯誤**,絕不被默默丟棄。今日已實作:
-  `#[derive]`;`#[test]`、`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
-  在實作前會被識別並拒絕。`#[` 是唯一不算註解的
+- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator?` 前綴可領**任何
+  statement**,宣告也在內（`statement` 與 `decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪個位置是**語意**
+  規則——`struct`/`enum` 上的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的
+  canonical impl（見 [Derive & Default Behavior](../core/derive.zh-TW.md)）；一般 statement 上的 `#[allow(L103)]`
+  壓下它涵蓋範圍內的 lint finding,而 `#[derive]` 放在那裡是編譯錯誤。**一個項目一個 decorator**:要掛好幾個就寫
+  逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
+  而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
+  項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
+  是編譯錯誤**,絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]` 與 layout
+  指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕。`#[` 是唯一不算註解的
   `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors
 
 失敗分**兩層**。**可回復**失敗是 sum type 的普通值——`Either[X, Y]`、`Result[T]` = `Either[T, Err]`、以及
 `T?` = `Either[T, nil]`（placeholder 為 `nil`）。**bug** 是**abort**,會 unwind stack（跑 `defer`）。六個運算子在兩層
-間搭橋:
+間搭橋,另有一個敘述跨層陳述一項主張:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
@@ -526,6 +529,7 @@ coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
 raise         ::= 'raise' expr ( 'from' expr )?
 guard-expr    ::= 'guard' block
+assert-stmt   ::= 'assert' expr
 postfix       += '?' | '!' | '?.' identifier
 ```
 
@@ -538,6 +542,11 @@ postfix       += '?' | '!' | '?.' identifier
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
 - **`guard { … }`**——把區塊內任何 abort **降級**回值,產出 `Result[T]`(abort→value)。它是從 abort 層回來的唯一途徑,
   guard 過的 abort 就是普通 `Result`,用同一套 `?` / `??` / `match` 處理。
+- **`assert cond`**——陳述一項主張,不成立時 **raise `AssertionError`**。它只收一個條件、**再無其他**:訊息由編譯器
+  寫——主張寫在哪個檔案哪一行、主張本身的原始文字、以及比較拆開後每個運算元當時的值。需要「解釋」而非「展示」的
+  主張請寫 `raise ValueError("why") if not cond`,那才是產品程式碼的形式。它就是那個 raise 的語法糖,只是運算元會
+  **先**綁進暫時變數,訊息才不會把它們再求值一次;`assert a and b` 是兩條 assert,而且運算元絕不跨過短路運算子被
+  提出來。它**永遠會被編譯進去**——沒有任何旗標能拿掉它——`*_test.zg` 之外寫一條的代價由 linter 的 `L602` 說明。
 
 ## Group 9 — Concurrency
 

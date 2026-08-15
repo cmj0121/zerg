@@ -4,6 +4,10 @@
 # namespace, as `time.now()`. Zerg is zero-external-dependency: the two irreducible
 # clock reads are thin runtime leaves (`__zrt_time_unix` / `__zrt_time_mono`, over
 # clock_gettime); any higher-level logic (durations, formatting) is pure Zerg above them.
+import (
+	"strconv"
+	"strings"
+)
 
 # now returns the wall-clock time in whole seconds since the Unix epoch (1970-01-01 UTC).
 # It can jump backwards when the system clock is adjusted — for measuring elapsed time use
@@ -18,6 +22,178 @@ pub fn now() -> int {
 # `elapsed := time.monotonic() - start`.
 pub fn monotonic() -> int {
 	return __zrt_time_mono()
+}
+
+# --- the calendar ---------------------------------------------------------------------
+#
+# A CLOCK READING IS NOT A DATE, and until now this module answered only the first. `now()`
+# hands back a count of seconds, which is the right thing to store and to subtract and the
+# wrong thing to show anybody: a log line, a report, a filename stamp all want the calendar,
+# and every caller that wanted one had to write this conversion itself.
+#
+# EVERYTHING HERE IS UTC. There is no local time in this module and that is a decision, not
+# a gap: a local time needs the zone database, which is a file on the host that the language
+# cannot promise is there — and a zero-external-dependency stdlib will not read one. UTC is
+# the offset every machine agrees on, it is what a log line should carry anyway (two machines
+# in two zones write comparable lines), and a caller who genuinely wants local time knows
+# their own offset and can add it to the seconds before asking.
+#
+# THE CONVERSION IS EXACT AND HAS NO TABLE. `utc` is the civil-from-days algorithm over the
+# proleptic Gregorian calendar: it shifts the epoch to March of year 0 so that the leap day
+# lands at the END of the year, which makes the month lengths a linear function and the whole
+# thing five divisions with no month-length array and no leap-year branch. It is correct for
+# every `int` a clock can produce, before 1970 included — `zerg` divides toward NEGATIVE
+# INFINITY (`-7 / 3` is `-3`) and takes the modulo's sign from the divisor, so a negative
+# second count needs no special case anywhere below. That is the one property this code
+# rests on and the suite asserts it directly.
+#
+# LEAP SECONDS DO NOT EXIST HERE, because they do not exist in the input: `__zrt_time_unix`
+# is Unix time, which is defined to have exactly 86400 seconds in every day.
+
+# Date is one instant broken into the fields a calendar has, in UTC. `month` is 1..12 and
+# `day` is 1..31 — the numbers a human writes, not the zero-based ones the arithmetic uses.
+pub struct Date {
+	pub year: int = 1970
+	pub month: int = 1
+	pub day: int = 1
+	pub hour: int = 0
+	pub minute: int = 0
+	pub second: int = 0
+}
+
+# utc breaks a Unix second count into its UTC calendar fields.
+#
+# ```zerg
+# time.utc(0).year
+# time.utc(1755253351).month
+# time.utc(-1).year
+# ```
+# ```output
+# 1970
+# 8
+# 1969
+# ```
+pub fn utc(t: int) -> Date {
+	days := t / 86400
+	rem := t % 86400
+
+	# Shift to an era of 400 years beginning 0000-03-01: 719468 is the number of days from
+	# that day to 1970-01-01. `era` is which 400-year cycle, `doe` the day within it.
+	z := days + 719468
+	era := z / 146097
+	doe := z - era * 146097
+
+	# The year within the era, by removing the leap days the cycle has inserted so far.
+	yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+	doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+
+	# March-based month index 0..11, from the exact linear fit of the month lengths.
+	mp := (5 * doy + 2) / 153
+	day := doy - (153 * mp + 2) / 5 + 1
+
+	# March is index 0, so January and February belong to the NEXT calendar year.
+	month := if mp >= 10 {
+		mp - 9
+	} else {
+		mp + 3
+	}
+	march_year := yoe + era * 400
+	year := if month <= 2 {
+		march_year + 1
+	} else {
+		march_year
+	}
+
+	return Date(year, month, day, rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+# rfc3339 renders a Unix second count as `YYYY-MM-DDThh:mm:ssZ` — RFC 3339 with the `Z`
+# offset, which is the timestamp format a log line, a report header and a machine reader all
+# already agree on. Seconds are the whole of the precision because seconds are the whole of
+# what `now()` has.
+#
+# A YEAR OUTSIDE 0000-9999 IS NOT RFC 3339 and this does not pretend otherwise: the digits it
+# has are printed, with a leading `-` if the year is negative. The format has no such year, so
+# there is no right answer — but a clock reading 30000 years out is a clock that is wrong
+# rather than a date somebody meant, and truncating it to four digits would hide that.
+#
+# ```zerg
+# time.rfc3339(0)
+# time.rfc3339(1755253351)
+# ```
+# ```output
+# 1970-01-01T00:00:00Z
+# 2025-08-15T10:22:31Z
+# ```
+pub fn rfc3339(t: int) -> str {
+	d := utc(t)
+	date := f"{pad(d.year, 4)}-{pad(d.month, 2)}-{pad(d.day, 2)}"
+	return f"{date}T{pad(d.hour, 2)}:{pad(d.minute, 2)}:{pad(d.second, 2)}Z"
+}
+
+# pad is `n` in decimal, zero-filled to `width`. A negative number keeps its sign in FRONT of
+# the filling — `pad(-5, 4)` is `-005` and not `00-5`, which is what padding the rendered
+# string would give and is not a number at all. Module-private.
+fn pad(n: int, width: int) -> str {
+	return "-" + strings.pad_start(strconv.to_string(0 - n, 10), width - 1, "0") if n < 0
+	return strings.pad_start(strconv.to_string(n, 10), width, "0")
+}
+
+# --- durations -------------------------------------------------------------------------
+
+# duration renders a nanosecond count the way a person reads one: the largest unit that
+# leaves a whole part, and up to three digits of fraction with the trailing zeros dropped.
+#
+# THE UNIT IS CHOSEN, NOT FIXED, because the range this has to cover is nine orders of
+# magnitude. `time.monotonic()` differences are what a caller has, and those run from a
+# handful of nanoseconds for one call to minutes for a test suite; printing either end in the
+# other's unit is unreadable. Three digits of fraction is where the precision stops being
+# something a reader uses.
+#
+# SECONDS ARE THE LARGEST UNIT. There are no minutes and no hours, because a duration that
+# long is not what this is for and `1.5m` invites being read as milli-anything.
+#
+# ```zerg
+# time.duration(1500000000)
+# time.duration(250000000)
+# time.duration(1234)
+# time.duration(999)
+# time.duration(0)
+# ```
+# ```output
+# 1.5s
+# 250ms
+# 1.234µs
+# 999ns
+# 0ns
+# ```
+pub fn duration(ns: int) -> str {
+	return "-" + duration(0 - ns) if ns < 0
+	return scaled(ns, 1000000000, "s") if ns >= 1000000000
+	return scaled(ns, 1000000, "ms") if ns >= 1000000
+	return scaled(ns, 1000, "µs") if ns >= 1000
+
+	return f"{ns}ns"
+}
+
+# scaled is `ns` in units of `unit`, with the remainder as up to three fraction digits.
+# Module-private.
+fn scaled(ns: int, unit: int, name: str) -> str {
+	whole := ns / unit
+	milli := ns % unit * 1000 / unit
+	return f"{whole}{name}" if milli == 0
+	return f"{whole}.{fraction(milli)}{name}"
+}
+
+# fraction is a thousandth count 1..999 as its digits with the trailing zeros dropped — 500
+# is `5`, 50 is `05`, 456 is `456`. Module-private.
+fn fraction(v: int) -> str {
+	s := strings.pad_start(strconv.to_string(v, 10), 3, "0")
+
+	return strings.trim_suffix(s, "00") if v % 100 == 0
+	return strings.trim_suffix(s, "0") if v % 10 == 0
+
+	return s
 }
 
 # --- timers -------------------------------------------------------------------------

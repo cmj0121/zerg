@@ -398,6 +398,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_exe_path":   true,
 	"__zrt_getenv":     true,
 	"__zrt_has_env":    true,
+	"__zrt_isatty":     true,
 	"__zrt_exit":       true,
 	"__zrt_exists":     true,
 	"__zrt_remove":     true,
@@ -662,6 +663,8 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_getenv(%s)", arg), true
 		case "__zrt_has_env":
 			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_isatty":
+			return fmt.Sprintf("zrt_isatty(%s)", arg), true
 		case "__zrt_exit":
 			return fmt.Sprintf("zrt_exit(%s)", arg), true
 		case "__zrt_exists":
@@ -1253,12 +1256,23 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	}
-	switch t.(type) {
+	switch ct := t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	case *types.List:
 		// a list field / element deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
+	case *types.Chan:
+		// a channel field/element retains the handle, and — like the value copy above — a
+		// SEND-capable one also bumps the sender count, because the sender count is what
+		// closes the channel. Copying a struct that holds one is copying the handle: a
+		// `testing.Context` passed by value shares the one channel it carries, and the copy
+		// has to be a holder in its own right or the original's scope exit closes a channel
+		// the copy is still sending on.
+		if ct.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_copy(%s)", access)
+		}
+		return fmt.Sprintf("zrt_chan_sender_copy(%s)", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	case *types.Enum:
@@ -1316,7 +1330,7 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_release(%s);", access)
 	}
-	switch t.(type) {
+	switch ct := t.(type) {
 	case *types.Fn:
 		// a function-value field/element releases its refcounted environment box (managed).
 		return fmt.Sprintf("zrt_release((%s).env);", access)
@@ -1326,6 +1340,15 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_list_drop(&(%s));", access)
 	case *types.Map:
 		return fmt.Sprintf("zrt_map_drop(&(%s));", access)
+	case *types.Chan:
+		// the mirror of the fieldCopy case: a receive-only handle releases the refcount, a
+		// send-capable one releases the sender count too — and THAT release is what closes
+		// the channel, so a struct holding a send-capable handle ends the stream when its
+		// last copy goes. Dropping the struct is the whole of that event.
+		if ct.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_release(%s);", access)
+		}
+		return fmt.Sprintf("zrt_chan_sender_release(%s);", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
 	case *types.Enum:

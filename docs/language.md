@@ -144,7 +144,7 @@ the language itself provides. A user cannot add to the set.
   methods `.load` / `.store` / `.offset` ([Values & Memory](core/memory.md)).
 
 Everything else that looks callable is **not** a built-in function: `print` / `raise` / `guard` / `spawn`
-/ `defer` / `del` are **keywords**; `list.len()` / `map.get()` are **methods** on a built-in type; and
+/ `defer` / `del` / `assert` are **keywords**; `list.len()` / `map.get()` are **methods** on a built-in type; and
 `math.sqrt` / `io.read_file` are **stdlib** functions reached with `import`. The per-function detail is in
 **[Built-in Functions](runtime/builtins.md)**; the importable packages are in
 **[Standard Library](runtime/stdlib.md)**.

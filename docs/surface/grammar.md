@@ -63,7 +63,7 @@ A Zerg program is a sequence of statements:
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt | decorated-decl
+statement     ::= decorator? ( simple-stmt | compound-stmt ) | decorated-decl
 simple-stmt   ::= nop | …          # no block; fits on one line
 compound-stmt ::= …                # owns a '{ … }' block (if / for / …)
 decorated-decl ::= …               # a name-introducing declaration, optional #[…] prefix (fn / struct / …, group 7)
@@ -130,7 +130,7 @@ chan  type   impl    init
 defer del    close   raise    guard    is
 not   and    or      print    this     with
 as    from   true    false    nil      const
-unsafe ptr   asm
+unsafe ptr   asm     assert
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -490,7 +490,7 @@ spec-member ::= fn-sig | fn-decl              # a required method, or a provided
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # bound: a spec → type param; a concrete type → value param
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
-decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
+decorated-decl ::= decorator? declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2)
@@ -580,14 +580,19 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
   associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
   which is the other thing it was carrying.
-- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
-  leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
-  declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to
-  **generate** the canonical impls of the named specs by reading the type's structure (see
-  [Derive & Default Behavior](../core/derive.md)); a logging decorator would sit on a `fn`. Decorators are a
-  **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
-  misspelled decorator is a compile error**, never silently dropped. `#[derive]` is the one the compiler
-  reads; `#[test]`, `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
+- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator?` prefix
+  leads **any statement**, declarations included (`statement` and `decorated-decl`, group 1), and binds to
+  it. Which decorators are valid in which position is a **semantic** rule — `#[derive(Encode, Decode)]` on a
+  `struct`/`enum` asks the compiler to **generate** the canonical impls of the named specs by reading the
+  type's structure (see [Derive & Default Behavior](../core/derive.md)); `#[allow(L103)]` on a plain
+  statement suppresses a lint finding over it, and a `#[derive]` there is a compile error. **One decorator
+  per item**: an item that wants several writes the comma list, `#[a(x), b(y)]`, and a stacked `#[a(x)]`
+  over `#[b(y)]` is a compile error — two spellings for one thing is what `zerg fmt` exists to remove, and
+  it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
+  the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
+  compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
+  decorator is a compile error**, never silently dropped. `#[derive]`, `#[obj]`, `#[test]` and `#[allow]`
+  are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
   `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a
   comment — the lexer
   peeks one
@@ -597,7 +602,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
 
 Failure comes in **two tiers**. A **recoverable** failure is an ordinary value of a sum type —
 `Either[X, Y]`, `Result[T]` = `Either[T, Err]`, and `T?` = `Either[T, nil]` with the placeholder `nil`. A
-**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers:
+**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers,
+and one statement states a claim across them:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
@@ -605,6 +611,7 @@ coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
 raise         ::= 'raise' expr ( 'from' expr )?
 guard-expr    ::= 'guard' block
+assert-stmt   ::= 'assert' expr
 postfix       += '?' | '!' | '?.' identifier
 ```
 
@@ -620,6 +627,14 @@ postfix       += '?' | '!' | '?.' identifier
 - **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
   (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
   handled by the same `?` / `??` / `match`.
+- **`assert cond`** — state a claim and **raise `AssertionError`** when it does not hold. It takes a
+  condition and **nothing else**: the compiler writes the message, from the position the claim was written
+  at, the claim's own source text, and the value of each operand a comparison came apart into. A claim that
+  needs explaining rather than showing is `raise ValueError("why") if not cond`, which is the production
+  form. It is sugar for exactly that raise, with the operands bound to temporaries FIRST so the message
+  cannot evaluate them a second time; `assert a and b` is two asserts, and no operand is ever lifted across
+  a short-circuiting operator. It is **always compiled in** — there is no flag that strips it — and the
+  linter's `L602` says what one costs outside a `*_test.zg` file.
 
 ## Group 9 — Concurrency
 

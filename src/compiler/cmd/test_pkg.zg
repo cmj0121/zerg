@@ -1,0 +1,304 @@
+# WHAT A PACKAGE IS, for `zerg test`: one directory, one driver, one process. This is the
+# discovery half — which directories hold a test, which sources each package compiles, and
+# the names the generated files wear so a run can take them away again.
+
+import (
+	"sha256"
+
+	"zerg"
+)
+
+# Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE
+# module rather than the directory itself — the name of that module. `mod` is `""` for the
+# directory.
+#
+# THERE ARE TWO SHAPES BECAUSE THE LANGUAGE HAS TWO. `module_at` resolves an import to a
+# single `<name>.zg` file BEFORE it resolves one to a directory, so a `.zg` file beside its
+# neighbours is a module in its own right — which is what `src/stdlib` is: eighteen
+# independent one-file modules in one flat directory, not one module of eighteen files.
+#
+# A test build used to know only the second shape, and that made a white-box test of a
+# stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other
+# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E215`, a
+# generic struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii`
+# and `strconv`) — pointing at files the author did not write, before one test had run.
+#
+# So a test file is now resolved the way an import is, MOST SPECIFIC FIRST: `strings_test.zg`
+# belongs to `strings.zg` if that file is beside it, and to the directory otherwise.
+#
+# WHAT IT COSTS: in a directory that IS one module, a `*_test.zg` whose name matches one of
+# the module's files takes that file alone — so `a_test.zg` in a directory of `a.zg` and
+# `b.zg` no longer sees `b.zg`. That is a loud failure (an undeclared name at the line that
+# used it) and never a silent one, and the way out is to name the file for the module rather
+# than for one of its parts. In exchange the rule is MONOTONE: adding a test file never
+# changes what another package is built from.
+struct Pkg {
+	pub dir: str
+	pub mod: str
+}
+
+# test_pkgs collects the packages under `root`, outermost first, in the sorted order the
+# runtime's directory read guarantees — so two runs of the same tree report in the same order.
+# One directory may hold several: one per one-file module that has a test file, and one for
+# the directory itself when a test file names no module.
+#
+# A DOT-NAME IS NOT DESCENDED INTO. `.git` alone is more files than the tree it sits in, and
+# `.zerg-cache` is where this command writes; a walk that read either would spend the run
+# looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
+# `opendir` per source file otherwise.
+fn test_pkgs(root: str, mut &out: list[Pkg]) {
+	dir_pkgs(root, out)
+	for name in __zrt_listdir(root) {
+		if not is_hidden(name) and not has_suffix(name, ".zg") {
+			test_pkgs(join_path(root, name), out)
+		}
+	}
+}
+
+# dir_pkgs is the packages of ONE directory, and it is separate from the walk above because
+# the walk is not the only caller: a run pointed at a file asks the same question of that
+# file's directory alone.
+#
+# A `#[test]` OUTSIDE A `*_test.zg` STILL FORMS A PACKAGE. The decorator may be written
+# anywhere — that is the language's answer and both compilers read it there — so discovery
+# finds one wherever it is, and L601 goes on warning that a `#[test]` in an ordinary file
+# SHIPS. Both, not one: the linter's job is to say where a test ought to live and the runner's
+# is to run what is written, and a runner that quietly skipped a `#[test]` because of its
+# file's NAME was reporting a green run of a suite it had not run.
+#
+# IT INTRODUCES NO PACKAGE SHAPE. The package a stray `#[test]` belongs to is the one that
+# ALREADY compiles the file it is written in: a file claimed by a one-file module is in that
+# module's package, which the test file above already made, and an unclaimed file is among the
+# directory package's sources. So all this adds is the directory package APPEARING where no
+# `*_test.zg` would have made one — `pkg_sources` is untouched, and the monotone property
+# docs/runtime/package.md states holds for the same reason it did before: which files a
+# package is built from is decided by the `*_test.zg` names alone.
+fn dir_pkgs(dir: str, mut &out: list[Pkg]) {
+	names := __zrt_listdir(dir)
+	mut whole := false
+	for name in names {
+		if zerg.is_test_file(name) and not is_own_file(name) {
+			m := test_module(dir, name)
+			if m == "" {
+				whole = true
+			} else {
+				out.append(Pkg(dir, m))
+			}
+		}
+	}
+
+	# ASKED ONLY WHILE THE ANSWER IS STILL OPEN. A directory a test file already made a package
+	# of needs no second reason to be one, and this is the expensive question of the two — so
+	# the cost stays off every directory that has a test file at all.
+	if not whole {
+		whole = a_source_declares_a_test(dir)
+	}
+	if whole {
+		out.append(Pkg(dir, ""))
+	}
+}
+
+# a_source_declares_a_test is whether any file the DIRECTORY's own package would be compiled
+# from holds a `#[test]`.
+#
+# IT ASKS pkg_sources, which is the list that package is built from, rather than re-deriving
+# which of a directory's names belong to it. The two questions are one — "is this file in the
+# directory package" — and the paragraph above claims this adds no package SHAPE, which is a
+# claim about those two agreeing; written out twice, nothing would hold them to it.
+#
+# It stops at the first, because one is the whole answer and each of these is a parse.
+fn a_source_declares_a_test(dir: str) -> bool {
+	for f in pkg_sources(Pkg(dir, "")) {
+		return true if file_declares_a_test(f)
+	}
+	return false
+}
+
+# file_declares_a_test parses one source and answers whether it declares a `#[test]`.
+#
+# IT PARSES, because the decorator is a declaration's and a grep for the text would be a
+# second answer to what a `#[test]` is — one that a comment or a string literal satisfies. The
+# parse is one this run was going to do anyway for a directory that turns out to be a package.
+#
+# A FILE THAT DOES NOT PARSE IS NOT A TEST PACKAGE, and the guard is what says so rather than
+# ending the run: discovery walks files nobody named, and a broken source somewhere under the
+# path is the BUILD's finding, reported with a place by whichever package compiles it.
+fn file_declares_a_test(path: str) -> bool {
+	mut found := false
+	guard {
+		found = has_a_test(zerg.parse_at(read_source(path), path))
+	}
+	return found
+}
+
+# has_a_test is whether a parsed file declares a `#[test]` at all. It is its own function
+# because the walk above runs inside a `guard`, and a `guard` block cannot carry the early
+# return that stops this one at the first hit.
+fn has_a_test(tree: zerg.File) -> bool {
+	for fd in tree.fns {
+		return true if fd.is_test
+	}
+	return false
+}
+
+# search_root is the directory a run searches from: the path itself, or its directory when the
+# path names a `.zg` file. Ancestors — the `fixtures_test.zg` of each level — are counted from
+# it, which keeps the rule the one docs/runtime/package.md already states: they are counted
+# from the path `zerg test` was GIVEN, and the directory a named file sits in is that path.
+fn search_root(path: str) -> str {
+	return dir_of(path) if has_suffix(path, ".zg")
+
+	return path
+}
+
+# file_pkgs is the packages that COMPILE `path`. It is the package model's own answer read
+# backwards — `pkg_sources` says which files a package is built from, and this asks which
+# package a file is in — so the two can never disagree about a file.
+#
+# The directory is `search_root`'s answer and is derived here rather than passed: two arguments
+# that have to agree are one argument, and the caller had nothing else to give.
+#
+# There may be no package, which is a run that found nothing and is reported as one: a `.zg`
+# file with no `#[test]` in it and no test file naming it is in none.
+fn file_pkgs(path: str, mut &out: list[Pkg]) {
+	mut all: list[Pkg] = []
+	dir_pkgs(search_root(path), all)
+	for p in all {
+		if has_str(pkg_sources(p), path) {
+			out.append(p)
+		}
+	}
+}
+
+# test_module is the one-file module a test file names, or `""` when it names none.
+#
+# `fixtures_test.zg` names none WHATEVER is beside it: it is the file a directory contributes
+# to the directories below (FIXTURES_NAME), so it belongs to the directory and to every
+# package in it, and a `fixtures.zg` that happened to sit there would otherwise carry it off
+# into a package of its own.
+fn test_module(dir: str, name: str) -> str {
+	return "" if name == FIXTURES_NAME
+
+	base := drop_suffix(name, "_test.zg")
+
+	return "" if base == ""
+
+	return base if __zrt_exists(join_path(dir, base + ".zg"))
+
+	return ""
+}
+
+# claimed says whether a file belongs to a one-file module of this directory rather than to
+# the directory itself — `strings.zg` and `strings_test.zg` both do, once `strings_test.zg`
+# is there to claim them, and neither is then compiled into the directory's own package.
+fn claimed(dir: str, name: str) -> bool {
+	return true if test_module(dir, name) != ""
+
+	base := drop_suffix(name, ".zg")
+	return false if base == ""
+
+	t := base + "_test.zg"
+	return false if not __zrt_exists(join_path(dir, t))
+
+	return test_module(dir, t) != ""
+}
+
+# drop_suffix is `s` without `suffix`, or `""` when `s` does not end in one — and `""` also
+# when the two are equal, since a file named `_test.zg` names no module either.
+fn drop_suffix(s: str, suffix: str) -> str {
+	return "" if not has_suffix(s, suffix)
+
+	b := bytearray(s)
+	n := b.len() - bytearray(suffix).len()
+	mut out: list[byte] = []
+	mut i := 0
+	for i < n {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# is_own_file says whether a name is one THIS COMMAND writes — a generated driver or the copy
+# of an inherited fixture file. Neither is a source, and neither makes a directory a package:
+# a leftover from an interrupted run would otherwise be discovered as a test file of its own.
+fn is_own_file(name: str) -> bool {
+	return has_prefix(name, DRIVER_PREFIX) or has_prefix(name, INHERITED_PREFIX)
+}
+
+fn is_hidden(name: str) -> bool {
+	b := bytearray(name)
+	return false if b.len() == 0
+
+	return b[0] == b'.'
+}
+
+# pkg_sources is every file one package is compiled from, the `*_test.zg` files INCLUDED — and
+# that inclusion is the one line where a test build differs from every other one. `module_at`
+# filters them out where a module's directory is read; this is the reading that does not.
+#
+# A ONE-FILE MODULE takes three names and no listing: the file, the directory's own
+# `fixtures_test.zg` if there is one — a fixture serves every package of its directory, not
+# only the directory's own — and the test file that named it.
+#
+# A LEFTOVER DRIVER IS NOT A SOURCE. The name is this command's own, and one is there only when
+# a previous run was interrupted between writing it and taking it away; reading it back would
+# compile the last run's driver beside this one's — two `fn main`, and a list of tests from
+# whatever the file declared then.
+fn pkg_sources(p: Pkg) -> list[str] {
+	mut out: list[str] = []
+	if p.mod == "" {
+		for name in __zrt_listdir(p.dir) {
+			if has_suffix(name, ".zg") and not is_own_file(name) and not claimed(p.dir, name) {
+				out.append(join_path(p.dir, name))
+			}
+		}
+		return out
+	}
+	out.append(join_path(p.dir, p.mod + ".zg"))
+	fx := join_path(p.dir, FIXTURES_NAME)
+	if __zrt_exists(fx) {
+		out.append(fx)
+	}
+	out.append(join_path(p.dir, p.mod + "_test.zg"))
+	return out
+}
+
+# DRIVER_PREFIX opens what a generated driver is called, and the name ends in `_test.zg` for
+# the reason that is the whole of why it may sit in a source directory at all: a `*_test.zg` is
+# compiled by no normal build, in either compiler, so a driver left behind by an interrupted
+# run is a file `zerg build` does not read. The next `zerg test` on that package overwrites it
+# before it is used and removes it after, so a leftover heals itself rather than accumulating.
+#
+# It is one name per PACKAGE rather than one per run, and a fixed name is what makes that
+# healing possible: a run interrupted twice leaves one file, not two. The module's name is in
+# it because one directory may hold several packages, and two drivers of one name in one
+# directory would be one driver.
+const DRIVER_PREFIX := "zerg_test_driver_"
+
+fn driver_name(p: Pkg) -> str {
+	return DRIVER_PREFIX + "test.zg" if p.mod == ""
+
+	return f"{DRIVER_PREFIX}{p.mod}_test.zg"
+}
+
+# pkg_key is what a package's binary and report are filed under, and it names BOTH halves of
+# the package: two packages of one directory would otherwise share a binary.
+fn pkg_key(p: Pkg) -> str {
+	return sha256.hex(bytearray(f"{p.dir}|{p.mod}"))
+}
+
+# INHERITED_PREFIX names the copy of an ancestor's fixture file that a package's driver is
+# built with.
+#
+# A COPY, BECAUSE A MODULE IS A DIRECTORY. The file is read from an ancestor, and a
+# declaration read from another directory belongs to another module however the build was
+# told to compile it — so every type and function an inherited fixture file declares would be
+# `E508` / `E301` to the tests that asked for it. Writing it into the package is what the
+# driver already does for exactly this reason, and it is the only thing that puts the two in
+# one scope.
+#
+# The copy is byte for byte, so a diagnostic inside one points at the right LINE of the file
+# the author wrote; only the name in front of it is this run's. It ends in `_test.zg` like
+# everything else here, so no shipping build reads one, and it is taken away with the driver.
+const INHERITED_PREFIX := "zerg_test_inherited_"

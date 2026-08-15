@@ -155,7 +155,7 @@ it asks a running `zerg` anything. What it does instead is state facts the compi
 | Setting                    | Is                                                       | Held to            |
 | -------------------------- | -------------------------------------------------------- | ------------------ |
 | `noexpandtab`, `tabstop=4` | one tab per level, four columns wide                     | `F101`, `F403`     |
-| `colorcolumn=81`           | the first column past the budget `F403` wraps at         | `fmt_wrap_max()`   |
+| `colorcolumn=121`          | the first column past the budget `F403` wraps at         | `fmt_wrap_max()`   |
 | `foldexpr` / `indentexpr`  | the lowest delimiter depth a line reaches                | one shared scanner |
 | `makeprg` / `errorformat`  | `:make` runs `--emit c` and reads both diagnostic shapes | the compiler's own |
 
@@ -370,8 +370,8 @@ So those facts get a gate of their own — `make editor-align`:
 - the indent **character** the ftplugin and `.editorconfig` configure is the one `zerg fmt` actually
   **writes**;
 - the indent **width** they configure is the one `F403` measures a tab as. That is not decoration:
-  F403 decides whether a line has run past column 80 by counting a tab as `fmt_wrap_tab()`, so an
-  editor displaying it as anything else is applying a different 80-column rule than the formatter
+  F403 decides whether a line has run past column 120 by counting a tab as `fmt_wrap_tab()`, so an
+  editor displaying it as anything else is applying a different 120-column rule than the formatter
   did. One number, three places, one gate;
 - the **ruler** the ftplugin draws is one past `fmt_wrap_max()` — the column a flat group must end
   before. A ruler in the wrong place looks exactly like a ruler, which is why this one is read out of

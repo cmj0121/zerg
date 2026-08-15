@@ -367,7 +367,7 @@ this rule never breaks up a group that was not already broken.
 
 A group its author DID break is joined back onto one line unless one of these vetoes it:
 
-- printed flat, it would end at or past column 80 — a tab counts as 4;
+- printed flat, it would end at or past column 120 — a tab counts as 4;
 - it holds 6 or more top-level elements.
 
 When one does, the group breaks at **every** top-level comma instead. Never half of each:
@@ -399,7 +399,7 @@ arguments read as a list to scan rather than a line to read, however short each 
 > take is worse than one that reformats it, because the certificate is the whole point.
 
 Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
-time rather than the whole line, so the group that crosses column 80 is the last one on
+time rather than the whole line, so the group that crosses column 120 is the last one on
 the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
 `c`, whose two arguments would go on three lines while the condition that actually made
 the line long, and that has no brackets to break at, stayed as it was.

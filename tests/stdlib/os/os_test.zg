@@ -1,0 +1,119 @@
+# The `os` suite — the questions about the host that have an answer a test can know.
+#
+# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out.
+#
+# MOST OF THIS MODULE CANNOT BE TESTED HERE AND SHOULD NOT PRETEND TO BE. `exit` ends the
+# process, `run` starts another one, and `env` answers whatever the host was started with —
+# a suite that asserted a value for `HOME` would be asserting the machine. What IS testable
+# is the part that is a function of its argument, and the part where the module makes a
+# CLAIM: `platform` and `arch` resolve at compile time, so they name the target rather than
+# the host, and `isatty` answers about a descriptor.
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+# --- isatty ------------------------------------------------------------------------------
+
+# A DESCRIPTOR THAT IS NOT OPEN IS NOT A TERMINAL, and it answers false rather than raising.
+# That is the whole of what a suite can say about `isatty` without asserting how the suite
+# itself was started: whether fd 2 is a terminal depends on the shell, the CI runner and
+# whether somebody redirected it, and a test that asserted either way would fail for a reason
+# that is not about the code. The environment-dependent half is held by scripts/log-check.sh,
+# which runs whole programs and controls their streams.
+#[test]
+fn test_isatty_says_no_to_a_descriptor_that_is_not_one(ctx: testing.Context) {
+	ctx.log("a negative fd cannot be open at all")
+	assert not os.isatty(-1)
+	assert not os.isatty(-99)
+
+	ctx.log("and one far above what this process opened")
+	assert not os.isatty(4096)
+}
+
+# IT IS TOTAL: every fd is a question with an answer, and none of them raises. A logger asks
+# this before it decides to colour, on a path where an abort would be absurd — the program
+# would die because it could not work out whether to use escape codes.
+#[test]
+fn test_isatty_never_raises() {
+	mut fd := 0
+	mut asked := 0
+	for fd < 8 {
+		# the answer is the host's; that it HAS one is the claim
+		if os.isatty(fd) {
+			asked = asked + 1
+		} else {
+			asked = asked + 1
+		}
+		fd = fd + 1
+	}
+	assert asked == 8
+}
+
+# --- platform and arch ---------------------------------------------------------------------
+
+# THEY RESOLVE AT COMPILE TIME, which the chapter states and nothing asserted. What that means
+# for a test is that they are a fixed non-empty word out of a known set — not a lookup that
+# could answer "" on a host the module has not met.
+#[test]
+fn test_platform_is_one_of_the_names_the_module_knows() {
+	p := os.platform()
+	assert p != ""
+	assert p in ["darwin", "linux", "windows", "freebsd", "unknown"]
+}
+
+#[test]
+fn test_arch_is_a_name() {
+	a := os.arch()
+	assert a != ""
+	assert not strings.contains(a, " ")
+}
+
+# Both are stable within a run — they are the target, not a reading.
+#[test]
+fn test_platform_and_arch_do_not_change() {
+	assert os.platform() == os.platform()
+	assert os.arch() == os.arch()
+}
+
+# --- env ------------------------------------------------------------------------------------
+
+# `env` answers `str?`, and the ABSENCE is the point: a variable that is not set is `nil` and
+# not `""`, which is what lets a caller tell "unset" from "set to empty". A test can create
+# neither, so what it asserts is the one it can be sure of — a name nothing sets.
+#
+# `assert` CANNOT TAKE THE OPTIONAL ITSELF. The keyword renders each operand, and a `str?` has
+# no rendering in this compiler (`E449`), so the claim is asked through a `bool` — which is
+# what `present` is for, and why the two tests below use it rather than `== nil`.
+#[test]
+fn test_env_of_something_nobody_sets_is_absent(ctx: testing.Context) {
+	ctx.log("a name chosen to be absent rather than empty")
+	v := os.env("ZERG_A_NAME_NOTHING_SETS_9f3a")
+	assert not present(v)
+	assert (v ?? "fallback") == "fallback"
+}
+
+# present is "this optional holds something", as a bool an assertion can render.
+#
+# IT IS WRITTEN WITH AN ASSIGNMENT RATHER THAN A `return` INSIDE THE `if`, and that is not a
+# style choice either: `zerg fmt` collapses `if s := v { return true }` into
+# `return true if s := v`, which does not parse (`E205`) — the trailing `if` on a diverge takes
+# a bare CONDITION and a binding head is not one. An assignment is not a diverge, so the
+# formatter leaves this shape alone. Reported; four lines reproduce it.
+fn present(v: str?) -> bool {
+	mut ok := false
+	if s := v {
+		ok = true
+	}
+	return ok
+}
+
+# And PATH is the one variable a process on this platform always has, so it is the half of
+# the claim that says `env` can answer at all rather than always answering nothing.
+#[test]
+fn test_env_finds_a_variable_that_is_always_set() {
+	p := os.env("PATH")
+	assert present(p)
+	assert (p ?? "") != ""
+}

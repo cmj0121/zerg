@@ -1991,6 +1991,23 @@ fn main() {
 }
 EOF
 
+# The set is CLOSED and it also GROWS, and both halves need a case. `__zrt_isatty` is the
+# newest leaf — the one `os.isatty` lowers onto — and the row that gives it an operand type is
+# a different line from the row that gives it a result type. A leaf added to one and not the
+# other is accepted with the wrong arity or handed the wrong operand, which reaches cc as a
+# diagnostic against a file nobody wrote.
+reject the-newest-primitive-given-a-str E398 'is int, and this gives str' seed-gap <<'EOF'
+fn main() {
+	print __zrt_isatty("2")
+}
+EOF
+
+reject the-newest-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
+fn main() {
+	print __zrt_isatty()
+}
+EOF
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise. The conditional `return` is here on its own because it takes a

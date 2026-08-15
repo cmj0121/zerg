@@ -58,6 +58,34 @@ untracked **by design** — Zerg is procedural-first here — not by omission.
 The mutability of the binding that _holds_ a function is the ordinary per-instance axis — `mut f := …`
 is rebindable, `f := …` is not — and is orthogonal to everything above.
 
+## Naming: a property, and its two writes
+
+A **convention**, not a rule the compiler enforces — the language has no opinion about identifiers beyond
+`GRAMMAR`. It is written down because it had become a coincidence that held everywhere in this tree and
+was stated nowhere, and a convention nobody can look up is one the next contributor breaks by accident.
+
+> **`xxx` reads, `set_xxx` writes, `del_xxx` removes.**
+
+The test that makes it decidable, and the reason it is a short rule rather than a taste:
+
+> **The trio applies to a PROPERTY — something with a getter, named for the thing rather than for the act.**
+
+Both halves of that sentence do work.
+
+- **`os.env` has a getter**, and it is a noun: `env(key)` names what it answers. So the environment is a
+  property, and its writes are `set_env` and `del_env` — not `put_env`, not `unset_env`, not `env_set`.
+- **`log` deliberately has no getter** for its installed logger. `current()` was proposed and refused: it
+  would read as mid-flight reconfiguration of a cell that is not safe for it. With no getter there is no
+  property, so `install` is the name of an **act** and does not become `set_logger`.
+- **`atomic.load` / `atomic.store` name the act, not the thing.** A cell's contents have no name here —
+  there is no `atomic.value` — so there is no `xxx` for `set_` to prefix, and the pair keeps the vocabulary
+  every atomic in every language uses. A getter whose name is a verb is not a property accessor.
+
+What is **not** covered, and deliberately: a **builder** method that returns a modified copy rather than
+writing to its receiver (`log.Logger.level(l)`, `cli.Command.version(v)`) is named for the field it fills
+and takes no prefix. It is not a setter — the receiver is unchanged — so calling it `set_level` would claim
+a mutation that does not happen.
+
 ## Default parameters & named arguments
 
 Zerg has **no overloading** — one name is one function — so the flexibility overloading usually buys comes

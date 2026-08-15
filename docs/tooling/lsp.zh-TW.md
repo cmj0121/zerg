@@ -129,7 +129,7 @@ quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己
 | 設定                       | 是什麼                                     | held 到什麼      |
 | -------------------------- | ------------------------------------------ | ---------------- |
 | `noexpandtab`、`tabstop=4` | 一層一個 tab,顯示四欄                      | `F101`、`F403`   |
-| `colorcolumn=81`           | `F403` 換行預算之後的第一欄                | `fmt_wrap_max()` |
+| `colorcolumn=121`          | `F403` 換行預算之後的第一欄                | `fmt_wrap_max()` |
 | `foldexpr` / `indentexpr`  | 一行所觸及的最低分隔符深度                 | 同一個掃描器     |
 | `makeprg` / `errorformat`  | `:make` 跑 `--emit c`,並讀得懂兩種診斷形狀 | 編譯器自己的輸出 |
 
@@ -298,8 +298,8 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 - `lookup_keyword` 回傳的每個保留字都是 `zerg.vim` 有上色的,而它當作關鍵字上色的每個字也都是 lexer 保留的(內建的
   **型別**名改為 held 到 parser 的清單,因為 `int` 是個普通的 identifier,lexer 從沒聽過它);
 - ftplugin 與 `.editorconfig` 設定的縮排**字元**,就是 `zerg fmt` 實際**寫出**的那個;
-- 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 80 欄,是把 tab
-  算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 80 欄規則。一個數字、三個地方、
+- 它們設定的縮排**寬度**,就是 `F403` 把一個 tab 算成的那個數。這不是裝飾:F403 判斷一行有沒有超過第 120 欄,是把 tab
+  算成 `fmt_wrap_tab()`,所以把它顯示成別的寬度的編輯器,套用的是與 formatter 不同的 120 欄規則。一個數字、三個地方、
   一道 gate;
 - ftplugin 畫的那條**尺**,是 `fmt_wrap_max()` 再往後一欄——也就是一個 flat group 必須在它之前結束的那一欄。一條畫錯
   位置的尺,看起來跟一條尺一模一樣,所以這一條是從 formatter 讀出來的,而不是再寫一次。

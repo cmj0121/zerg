@@ -8,7 +8,7 @@
 #
 #   the SOURCE   — the code a diagnostic actually opens with
 #   the GATES    — a case that asserts it, which is what makes the code mean anything
-#   the CATALOGUE — the row a reader looks up, in docs/tooling/fmt.md
+#   the CATALOGUE — the row a reader looks up, in docs/tooling/diagnostics.md
 #
 # So this asserts the three are the same set. The failure it exists for is the quiet one: a
 # code added to the compiler with no case is an identity nobody checks, and a code in the
@@ -28,9 +28,12 @@
 # check that is doing its job. Unreachable-but-about-a-program is the separate finding above;
 # unreachable-because-the-compiler-is-broken is not a diagnostic at all.
 #
-# The catalogue lives in fmt.md beside the formatter's F and the linter's L codes: three
-# schemes, one table per scheme, one page. That is deliberate — a reader who meets `E204`
-# and a reader who meets `L105` are asking the same question.
+# The catalogue has a page of its own, and the F and L schemes have theirs. It sat with them
+# for as long as there were three tables on one page, which was fine while the question was
+# "what does this code mean" and stopped being fine when the page grew to half again the size
+# of any other chapter: a reader who meets `E204` in a terminal has no reason to look under
+# `zerg fmt`. The three are still one discipline — a code is an identity, and this script
+# holds all of them to that — but a reader arrives at each of them by a different road.
 #
 # AND IT ANSWERS ONE MORE QUESTION, which is the reason for the second half of this script:
 # what is the NEXT FREE CODE. Three collisions happened in one week — `E387`, `E477` and
@@ -48,7 +51,7 @@
 set -uo pipefail
 
 SRC=${SRC:-src/compiler}
-DOC=${DOC:-docs/tooling/fmt.md}
+DOC=${DOC:-docs/tooling/diagnostics.md}
 
 # The TRANSLATED catalogue, held to the same code set. It is asked separately from the three
 # lists above because it answers a different question: those ask whether a code is real, and
@@ -56,7 +59,7 @@ DOC=${DOC:-docs/tooling/fmt.md}
 # two drifted the first time somebody added a code — four rows landed in the English table and
 # none in this one, inside a commit that updated two other zh-TW pages, which means the
 # omission was not a decision anybody made.
-DOC_ZH=${DOC_ZH:-docs/tooling/fmt.zh-TW.md}
+DOC_ZH=${DOC_ZH:-docs/tooling/diagnostics.zh-TW.md}
 GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
 fail=0

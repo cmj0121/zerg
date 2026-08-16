@@ -332,4 +332,6 @@ Deferred for a later design pass — none blocks the model above:
 - Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
 - A compile-time **`sizeof` / `alignof`** — a type's size and alignment as a constant, now that the layout is
   fixed (see [Values & Memory](../core/memory.md)) — is a **stdlib** facility, deferred until a
-  concrete need; it is not a core-language construct.
+  concrete need; it is not a core-language construct. **[Built-ins](builtins.md) calls the same pair a
+  built-in**, and the two chapters have not been reconciled; it exists in neither place, so the
+  disagreement has cost nothing yet and is recorded rather than resolved here.

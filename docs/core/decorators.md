@@ -48,7 +48,7 @@ other one — `#[sealed]`, the layout directives — is **[not yet]** and refuse
   **refused** by `zerg test`, with a place: the driver calls a test as a statement, so the value would be
   dropped, and a reader who thinks it is the verdict has to be told it is not. It may be written
   **anywhere** and `zerg test` discovers it wherever it is; written outside a `*_test.zg` it is legal and it
-  **ships**, so `zerg lint` warns about it (**L601**, see [fmt & lint](../tooling/fmt.md)) — the linter says
+  **ships**, so `zerg lint` warns about it (**L601**, see [the linter](../tooling/lint.md)) — the linter says
   where a test ought to live and the runner runs what is written. Where tests live is
   [Modules, Packages & Programs](../runtime/package.md).
 - **`#[fixture]`** — on a `fn`, and it belongs in a `*_test.zg`. Marks the function as something `zerg test`

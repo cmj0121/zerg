@@ -251,9 +251,9 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and
-> the **generic `enum`** is `E212 NotImplemented: a generic enum`Either[…]`— this compiler erases type
-parameters, and a variant's payload names one`. A generic `struct` is `E215` for the same reason. The
+> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and the
+> **generic `enum`** is _E212 NotImplemented: a generic enum `Either[…]` — this compiler erases type
+> parameters, and a variant's payload names one_. A generic `struct` is `E215` for the same reason. The
 > block shows the specified shapes; both of them wait on generic types.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
@@ -477,10 +477,11 @@ spec Into[T] {
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
 
-A **super-spec** carries its arguments too: `spec Ord: Eq[int]` says Ord extends `Eq` **at** `int`, so
-what an `impl Ord` owes is `Eq`'s signatures with `int` where `Eq`'s own parameter stands. A bound's
-arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
-parameters, which is a different thing done in a different place.
+A **super-spec** carries its arguments too: `spec Keyed: Into[str]` says `Keyed` extends `Into` **at**
+`str`, so what an `impl Keyed` owes is `Into`'s signatures with `str` where `Into`'s own parameter stands.
+A bound's arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
+parameters, which is a different thing done in a different place. (`Eq` takes no parameter, so the
+super-spec [Specs & Generics](specs.md) writes for `Ord` is the bare `spec Ord: Eq`.)
 
 **An operator's operands must already be one type.** An untyped literal adopts the other operand — the
 _other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different

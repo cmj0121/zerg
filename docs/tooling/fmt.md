@@ -1143,6 +1143,8 @@ L103 binding `unused` in `main` is never read
 L104 `_ :=` in `main` — the expression is already a statement, so the binder says nothing
 ```
 
+`main` is never reported by `L102`: the runtime calls it, whatever the source says.
+
 `L104` is why `L103` says nothing about `_`: an unread `_` is what `_` **means**, so "never
 read" is the one thing there is no point saying about it. The select-arm spelling of the same
 redundancy is `F407`'s, because `GRAMMAR` makes that binder optional and
@@ -1173,8 +1175,6 @@ L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instea
 Both are answered from the parsed file alone, like every other rule here — `?? nil` is a
 shape, and so is a `!` inside a function whose declared result carries an absence. Neither
 needs a type nobody wrote down.
-
-`main` is never reported by `L102`: the runtime calls it, whatever the source says.
 
 ### L3xx — capture
 

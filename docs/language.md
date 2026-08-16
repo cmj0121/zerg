@@ -71,11 +71,12 @@ other chapter relies on. Read it first.
 
 ### Tooling
 
-| Chapter                                    | Covers                                                    |
-| ------------------------------------------ | --------------------------------------------------------- |
-| [Formatter & Linter Rules](tooling/fmt.md) | every rule `zerg fmt` and `zerg lint` apply, and its code |
-| [Desugar Rules](tooling/desugar.md)        | every rule `zerg desugar` applies, and its code           |
-| [Language Server](tooling/lsp.md)          | `zerg lsp` — what it answers, and what holds it honest    |
+| Chapter                                       | Covers                                                    |
+| --------------------------------------------- | --------------------------------------------------------- |
+| [Formatter & Linter Rules](tooling/fmt.md)    | every rule `zerg fmt` and `zerg lint` apply, and its code |
+| [Compile Diagnostics](tooling/diagnostics.md) | every `E` code the compiler reports, and its rule         |
+| [Desugar Rules](tooling/desugar.md)           | every rule `zerg desugar` applies, and its code           |
+| [Language Server](tooling/lsp.md)             | `zerg lsp` — what it answers, and what holds it honest    |
 
 ## Types
 

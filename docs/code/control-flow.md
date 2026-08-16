@@ -114,11 +114,10 @@ Every arm yields the **same type** (_E322 a `match` answers ONE type, and its ar
 `match` is a value usable at a `:=`, a `return`, or an argument — arms that yield `nil` read as a plain
 statement. Coverage is **required** — a `match` that misses a case is _E428 non-exhaustive match: missing
 variant …_ (so **adding an `enum` variant a dependent's `match` doesn't handle breaks the build**, caught at
-compile time rather than silently). A
-guarded or range arm (below) does **not** count toward coverage — the compiler can't prove a guard holds —
-so a case still needs an **unguarded** arm or a trailing **`_`**. Because every value is thus statically
-covered, `MatchError` is only the runtime backstop for that residual guard-gap; a **redundant** arm (one an
-earlier arm already covers) is a warning.
+compile time rather than silently). A guarded or range arm (below) does **not** count toward coverage — the
+compiler can't prove a guard holds — so a case still needs an **unguarded** arm or a trailing **`_`**.
+Because every value is thus statically covered, `MatchError` is only the runtime backstop for that residual
+guard-gap; a **redundant** arm (one an earlier arm already covers) is a warning.
 
 > **[not yet]** The **redundant-arm warning** is not built: an arm an earlier arm already covers produces
 > nothing at all — no warning, no note — and stays in the emitted code as an arm no value can reach.
@@ -136,8 +135,8 @@ A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
-> **[not yet]** Three of the pattern kinds above are refused **in the parser**, which is why none of them
-> reaches the checker or the emitter and why each names itself:
+> **[not yet]** Three of the pattern kinds above are refused **in the parser**, so none of them reaches the
+> checker or the emitter, and each names itself:
 >
 > - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E492 NotImplemented: a sub-pattern inside a
 >   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
@@ -148,9 +147,9 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 > - a **list pattern** is _E240 NotImplemented: a list pattern in a `match` arm_ — destructure a list with
 >   indexing and a slice instead.
 >
-> Refusing at the parse is also what empties the intended checker's one soft spot: exhaustiveness over
-> **nested** payloads was to be weaker than full coverage, proving the top-level variants without proving
-> every nested combination. There is no nested case left for it to be weak about.
+> Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
+> payloads was to prove the top-level variants without proving every nested combination — since no nested
+> case reaches it.
 
 ```text
 msg := match ev {

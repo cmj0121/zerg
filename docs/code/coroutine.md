@@ -34,7 +34,7 @@ NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. 
   > beside any `spawn` is _E734 NotImplemented: main(args) in a program that uses concurrency_. `main` runs
   > as **coroutine 0**, and every scheduler entry shim takes a nullary function pointer, so there is nowhere
   > to thread `args` through; a concurrent program reads its configuration from the environment or a file
-  > until one exists. The non-concurrent entry already passes them, so the shape is not the problem.
+  > until one exists.
 
 - **Captures are restricted** to **immutable values and `Ref` values** (channels, `Ref[T]`) — a `mut`
   reference cannot cross `spawn`, so coroutines never share mutable Zerg state (no data races). What
@@ -495,10 +495,10 @@ For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`**
 provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
 > **[not yet]** And not because of anything about atomics: an `Atomic[int]` IS a `Ref[int]`, and there
-> is no `Ref[T]` yet (`E446`). The module ships and the **import** is what is refused, rather than a type
-> nothing declares reaching the emitter — _E511 the module `atomic` ships and cannot be imported — it
-> declares `Atomic[T]`, and a generic struct is a form this compiler has not built. Share state across
-> coroutines with a channel until it has_ — so the actor above is the pattern that works today. The explicit
+> is no `Ref[T]` yet (`E446`). The **import** is what is refused, rather than a type nothing declares
+> reaching the emitter — _E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`,
+> and a generic struct is a form this compiler has not built. Share state across coroutines with a channel
+> until it has_ — so the actor above is the pattern that works today. The explicit
 > **memory-ordering argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.
 
 ## A producer — the generator pattern
@@ -575,8 +575,7 @@ FIFO run queue, and a coroutine migrates freely between workers, so it may resum
 started on. **`main` is coroutine 0**: it is queued on that run queue before any worker exists, and the
 thread that called it becomes a worker rather than a supervisor. So the pool is up around `main`'s first
 statement, not started in reaction to the first `spawn`, and `M` is the whole budget — no thread is held
-back for the program's own coroutine, which is why the deviation below is a **count**. What the scheduler
-is **not** is preemptive.
+back for the program's own coroutine. What the scheduler is **not** is preemptive.
 
 > **[deviation]** The spec requires that no coroutine can indefinitely starve others; the scheduler is
 > **cooperative**, so a coroutine yields **only** at a channel operation, a `select`, or a sleep, and

@@ -66,8 +66,8 @@ AssertionError: parse.zg:41  assert lo == hi
   hi = 2
 ```
 
-這就是為什麼這則訊息沒有參數可傳,而 `assert` 是給那種「自己的文字就是解釋」的主張用的。需要解釋而不是展示的
-主張,寫成 `raise ValueError("why") if not cond`,那才是 production 形式——也是唯一帶條件的形式,因為 `assert` 是
+所以 `assert` 是給那種「自己的文字就是解釋」的主張用的。需要解釋而不是展示的主張,寫成
+`raise ValueError("why") if not cond`,那才是 production 形式——也是唯一帶條件的形式,因為 `assert` 是
 唯一**不收後綴 `if`** 的 diverge:`assert c if d` 根本不成立（`E205`）。`assert` **一律被編譯進去**、沒有任何旗標
 拿得掉,因為有 assertion 與沒有 assertion 的程式會是兩支程式;所以 `zerg lint` 會把 `*_test.zg` 以外的 `assert`
 報成 `L602`——它不是比你要的更弱的檢查,而是更**不精確**的那一個。

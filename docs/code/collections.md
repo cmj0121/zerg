@@ -66,7 +66,7 @@ frozen snapshot, even a `mut` collection is usable as one.
 > **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
 > key is restricted to **`int`** or **`str`**: anything else is _E431 NotImplemented: a map key of type … —
 > a key needs `Hash`, and this compiler has one for `int` and for `str`_. `derive(Hash)` and general keyed
-> types are not built, and `set[T]` is **[not yet]** entirely.
+> types are not built.
 
 ## Access — `[]` asserts, `.get` checks
 
@@ -117,8 +117,8 @@ equality).
 
 > **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is
 > _E445 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a
-> container has no declaration to derive it on_, and `set[T]` does not exist yet. Only **`str ==`**
-> compares. `for mut x` over a collection is **[not yet]** for **every** element type, POD included:
+> container has no declaration to derive it on_. Only **`str ==`** compares. `for mut x` over a collection
+> is **[not yet]** for **every** element type, POD included:
 > `for mut x in ys` is `E242` whatever `ys` holds, so the second line of the example below is not a program.
 
 ```text

@@ -515,8 +515,7 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   是編譯錯誤**(`E217`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]`
   與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E496 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than being
-  sealed in silence_,而那正是每一個保留 decorator 的形狀:名字認得、效果不套用,而且兩件事都不安靜發生。
-  `#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
+  sealed in silence_。`#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors
 
@@ -685,10 +684,9 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## 已規範但未實作
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
-別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例，以該拒絕的 `E###` 釘住，
-所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。曾經沒有碼、因而釘不住任何東西的那三列，現在
-都有了：把 range 當值是 `E493`、泛型別名 `type X[T] = …` 是 `E491`，而 body 是 reassignment 或 send 的 `match`
-arm 是 `E607`，訊息會指名它遇到的是哪一種。
+別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例，以該拒絕的 `E###` 釘住——把 range
+當值是 `E493`、泛型別名 `type X[T] = …` 是 `E491`、body 是 reassignment 或 send 的 `match` arm 是 `E607`——
+所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
 

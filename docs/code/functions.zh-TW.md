@@ -105,9 +105,8 @@ greet("Sam", "Hi", true)     # 全 positional
   不能再回到 positional）。
 
   > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _E223 NotImplemented: the named argument
-  > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒有辦法跳過中間那個
-  > 有預設的參數，「一旦具名，其後全部都要具名」這條規則也沒有東西可管。一次呼叫由左往右填它的參數，有預設的
-  > 參數只能從引數列的**尾端**省略。
+  > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒辦法跳過中間那個有
+  > 預設的參數，也沒有具名順序的規則要遵守。一次呼叫由左往右填它的參數，有預設的參數只能從引數列的**尾端**省略。
 
 因為參數可以用名字挑選，**名字就成了函式契約的一部分**——改名會弄壞呼叫者，就跟改型別一樣。但預設與名字都不進
 _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名字住在參數列——與「型別就是輸入／輸出契約、僅此

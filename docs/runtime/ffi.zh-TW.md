@@ -16,10 +16,7 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 >
 > 本章已經沒有任何東西會漏到 `cc`。`handle` 是 `zerg` 程式裡沒有任何宣告帶有的名字，所以標註它的 binding
 > ——`mut h: handle = 0` 或 `mut h: handle? = nil`——會在寫下它的地方被拒絕，回報為
-> _E707 no type named `handle` (the binding `h`)_。（本來有兩條規則會漏出去：optional 的那種拼法會對著產生的
-> C 冒出 `error: unknown type name 'zg_handle'`，因為那個檢查讀的是標註的裸名字，而 `?` 不是裸名字；另一件是
-> 宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 可以從安全程式碼呼叫且沒有任何診斷。兩者現在都由 `zerg`
-> 回報，後者回報為 `E387`。）
+> _E707 no type named `handle` (the binding `h`)_。
 
 ## 兩條邊、一份契約
 
@@ -172,6 +169,10 @@ struct by value、`mut &this` 變成指向它的指標（就地）——所以�
 扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。（確切方案，以及是否提供逐宣告的 link-name 覆寫，是待決問題
 ——見下。）
 
+> **[deviation]** 前綴是 `zg_`，而且**沒有 package 那一段**，因為沒有 package 層可以命名（見
+> [package.md](package.zh-TW.md) 的〈四層〉）：一次 `--emit lib` 建置裡的 `pub fn add` 匯出的是 `zg_add`，以 `nm`
+> 實測。所以名稱如規範所述地穩定且不 mangle，而讓它們跨 package 不衝突的那一部分，正是還不存在的那一部分。
+
 ## 匯入 C——一個 stdlib 設施
 
 grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sqlite3_open` 命名出來讓 Zerg
@@ -198,9 +199,7 @@ module 層級的分組是**一個有開頭也有結尾的情境**，兩端都會
 global 的。
 
 > **[not yet]** 一個獨立的 `unsafe fn` 宣告會被**指名拒絕、帶位置**。把它蓋起來就等於把 `fn` 當安全的讀——
-> 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。（它以前
-> 正是那樣編過的：`unsafe fn g() -> int { return 2 }` 之後 `print g()` 編得過，`g` 從普通安全程式碼可呼叫、
-> 完全沒有診斷。）
+> 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。
 
 分組自己的規則**有**被強制：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是一個 unsafe fn，從安全程式碼指名
 它——呼叫它，或把裸名字綁成 function value——會以 `E387` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
@@ -288,3 +287,5 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 - 匯入設施未來是否會綁定 **`"C"` 以外的 ABI**；目前只定義 `"C"`。
 - 一個編譯期 **`sizeof` / `alignof`**——把型別的大小與對齊當成常數,既然佈局已固定(見
   [值與記憶體](../core/memory.zh-TW.md))——是一個 **stdlib** 設施、延後到有具體需求;它不是核心語言構造。
+  **[內建函式](builtins.zh-TW.md) 把同一組稱為 built-in**,兩章尚未彌合;它在兩處都不存在,所以這個分歧到目前
+  為止沒有代價,在此記錄而不裁決。

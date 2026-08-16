@@ -148,9 +148,7 @@ carrier 的情形也在內(`x: float? = i` 印出 `5`;`Left(300)` 放進 `Result
 期望型別推進去的節點種類就是這些、沒有別的——並要求 `zerg` 的推導家族完全不接受期望型別。要多一個
 carve-out,gate 一定會把它指名出來。
 
-上面那條規則在每一個位置都成立:**一個位置會 wrap 一個值,永不 convert 它。** 所以轉換**不是第五個
-carve-out**——這四個決定的是運算式**還沒有的**型別,而轉換改的是它已經有的型別;不合的值仍然被拒絕,
-修法仍然是寫出來的 `T(x)`(見下方「型別轉換」)。
+轉換**不是第五個 carve-out**:這四個決定的是運算式**還沒有的**型別,而轉換改的是它已經有的型別。
 
 ### 數值字面量（Numeric literals）
 
@@ -167,13 +165,13 @@ carve-out**——這四個決定的是運算式**還沒有的**型別,而轉換�
   量(`1.0`、`1e3`)從一開始就是 `float`、絕不是 `int`。
 
 - **字面量是採用,值是轉換,而這兩者值得分清楚。** `b: byte = 5` 寫下一個 byte,完全沒有轉換;而
-  `b: byte = 300` 是 **compile error**——已知這個常數放不進去。`b: byte = n`(`n` 是 `int` 值)是一次**轉換**,
-  而轉換要寫出來:`b: byte = byte(n)`,它在執行期可能 raise `OverflowError`。採用在編譯期定案;寫出來的轉換才會
-  執行。
+  `b: byte = n`(`n` 是 `int` 值)是一次**轉換**,而轉換要寫出來:`b: byte = byte(n)`,它在執行期可能 raise
+  `OverflowError`。採用在編譯期定案;寫出來的轉換才會執行。
 
-  偏離字面量預設的採用是一個 **lint** 發現(`L502`),因為讀 `xs: list[byte] = [1, 2]` 的人應該在頁面上看見
-  byte,而不是從宣告去推斷它。這個 finding 會指名每一個字面量,並給出讓型別現形的寫法——`float` 用 `1.0`,而
-  型別本身沒有字面量形式時則用 `byte(1)`。
+  偏離字面量預設的採用是一個 **lint** 發現(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會——因為讀
+  `xs: list[byte] = [1, 2]` 的人應該在頁面上看見 byte,而不是從宣告去推斷它。它是建議而不是語言規則。這個
+  finding 會指名每一個字面量,並給出讓型別現形的寫法——`float` 用 `1.0`,而型別本身沒有字面量形式時則用
+  `byte(1)`。
 
 - **一個由字面量組成的運算式,本身就是一個字面量。** `100 + 100` 裡沒有任何東西自帶型別,所以整個運算式一起採
   用:`x: byte = 100 + 100` 是 byte 算術,答案 `200`。每個組成都在運算子執行**之前**先對著目標型別量——
@@ -273,8 +271,9 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制
 （見 [模式比對](../code/control-flow.zh-TW.md)）。
 
-> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 會被指名拒絕——上面的
-> 組成繼承規則已是規格,而無名形式上的衍生尚未建置(出貨的訊息仍把原因怪在沒有宣告可掛上)。
+> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
+> _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
 > **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E205 expected a newline or `;` to separate
 > statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E238`)。
 > 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。
@@ -290,9 +289,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
-> **[deviation]** bootstrap 只對**純量**底型 `Y` 實作 `type X = Y`,而新型別**不**繼承 `Y` 的算術或 `spec` impl——
-> 一個 `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反——且 `type Name = str` 目前被**拒絕**。意圖
-> 中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;bootstrap 這個階段只涵蓋純量、無 impl 的情形。
+> **[deviation]** `type X = Y` 只對**純量**底型 `Y` 實作,而新型別**不**繼承 `Y` 的算術或 `spec` impl——一個
+> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E304 NotImplemented:
+> `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
+> name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
+> to follow the name_。意圖中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;建出來的只有純量、無 impl
+> 的情形。
 
 ## 建構與封裝（Construction & encapsulation）
 
@@ -396,9 +398,10 @@ spec Into[T] {
   是 bound 的一部分**:一個實作了 `Into[Feet]` 的型別並不滿足 `Into[Meters]`。
 - **一步,絕不串接**——`X → Y` 和 `Y → Z` 不會給你 `X → Z`。寫兩步,或自己宣告 `X → Z`。
 
-**super-spec** 也帶著它的引數:`spec Ord: Eq[int]` 說的是 Ord 在 `int` 上擴充 `Eq`,所以一個 `impl Ord` 欠的
-是把 `Eq` 自己的參數換成 `int` 之後的那些簽章。bound 的引數是拿去跟 impl **比對**;super 的引數則是**代入**被指名
-spec 的參數——兩件不同的事,做在不同的地方。
+**super-spec** 也帶著它的引數:`spec Keyed: Into[str]` 說的是 `Keyed` 在 `str` 上擴充 `Into`,所以一個
+`impl Keyed` 欠的是把 `Into` 自己的參數換成 `str` 之後的那些簽章。bound 的引數是拿去跟 impl **比對**;super 的引數
+則是**代入**被指名 spec 的參數——兩件不同的事,做在不同的地方。(`Eq` 不帶參數,所以
+[Spec 與泛型](specs.zh-TW.md) 為 `Ord` 寫的 super-spec 就是裸的 `spec Ord: Eq`。)
 
 **運算子的兩個運算元必須已經是同一個型別。** untyped literal 會採用另一個運算元——上方的「另一個運算元」位置——
 所以 `1.5 + 1` 是兩個 `float`。兩個**已定型**、型別不同的運算元是編譯錯誤,不論哪一對:`i + f` 和 `i + u` 是同一
@@ -435,14 +438,11 @@ spec 的參數——兩件不同的事,做在不同的地方。
 [標準函式庫](../runtime/stdlib.zh-TW.md))。
 
 **`bool(x)` 和 `str(x)` 不在這張表上**,這也是上面那一列點名四個目標、而不是每一個目標的原因。兩者都不是這個意
-義下的轉換:`bool(3.5)` 是上面說的那個零值測試,答 `true`,而 `str(3.5)` 是一次渲染。兩者都沒有丟掉任何小數,所
-以兩者都沒有決定要做。
+義下的轉換:`bool(3.5)` 是上面說的那個零值測試,答 `true`,而 `str(x)` 是透過 `display` 渲染一個值,每個型別都有
+`display`。兩者都沒有丟掉任何小數,所以兩者都沒有決定要做。
 
 `int("42")` 以自己的一列進了表,因為它是穿著同一種寫法的另一種運算:它**解析**數字的文字,而不是重新建構一個值,
 而且只有 `int`、`uint` 和 `float` 這麼做(見[內建函式](../runtime/builtins.zh-TW.md))。
-
-**任何型別轉成文字不在這張表上**,因為那不是這個意義下的型別間轉換:`str(x)` 透過 `display` 渲染一個值,而每個型
-別都有 `display`。
 
 **編譯器算得出來的轉換就會被算出來。** `byte(300)` 是良構的 —— 然後它以**常數**的身分失敗:值是已知的,轉換已知
 會 raise,於是在編譯期報出來而不是留到執行期。可達性不參與其中;`if false { b := byte(300) }` 是同一個錯誤。
@@ -453,8 +453,7 @@ spec 的參數——兩件不同的事,做在不同的地方。
 個答案的方式。
 
 **它在一次呼叫處停下,在 `mut` 繫結處也停下。** `byte(f(300))` 在它執行的地方 raise,不論 `f` 是普通函式還是泛
-型:一次呼叫不是常數形式,而 enum discriminant 那條規則用的正是同一句話——`A = BASE`、`A = 2 + 3` 和
-`A = BASE * 2 - 1` 都是那個形式,而呼叫不是。`mut` 繫結被排除的理由是它自己的:它在繫結與轉換之間可以被寫入,所
+型:一次呼叫不是常數形式,而上面 enum discriminant 那條規則用的正是同一句話。`mut` 繫結被排除的理由是它自己的:它在繫結與轉換之間可以被寫入,所
 以它在那裡持有的並不是它在這裡持有的。
 
 **這兩個位置的差別在於拿一個未知的值怎麼辦,而不在於什麼算未知。** 填充計數非要一個數不可,所以它被拒絕
@@ -464,12 +463,10 @@ spec 的參數——兩件不同的事,做在不同的地方。
 以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
 問得出口的東西,而到那時它已經是已知的。
 
-**偏離字面量預設的採用是一個 lint finding**(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議而不是語言
-規則:`1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。
-
-> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個。方法是用**名字**當 key 的,所以第二個
-> `impl Into[…] for X` 會跟第一個相撞、並被具名拒絕。要做到好幾個,需要把 spec 方法改成用 (spec, **型別引數**) 當
-> key——那正是上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
+> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E461 NotImplemented: a second
+> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_。那正是
+> 上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
 
 一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是

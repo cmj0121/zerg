@@ -28,7 +28,7 @@
 [值與記憶體](../core/memory.zh-TW.md)。
 
 > **[not yet]** 本編譯器沒有 `Ref[T]` 型別，所以這兩個內建都不存在，兩者都被具名拒絕——
-> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
+> _E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
 > reference count 的是 `chan`、`str` 與遞迴型別，各由編譯器自行管理、而非透過這個 box；`atomic` 模組與
 > `Reader` 表面都在等這一項。
 
@@ -44,14 +44,14 @@
 [型別](../core/types.zh-TW.md)。
 
 **`T(x)` 接受哪些配對是一張封閉的表**，而 `int` 是每一組配對都有一側是它的中樞。不在表上的配對就不是一個轉換
-——`byte` 上的 `float(b)` 是 `E395`，改寫成穿過中樞的那兩步（`float(int(b))`）。`float` 作為**來源**是唯一一個
-屬於決定、而非缺了一步的缺席：`float` 上的 `int(x)` 是 `E394`，小數要由一個動詞丟掉——`math.trunc` /
-`floor` / `ceil` / `round`，每一個都回答一個 `int`——或者由 `//` 丟掉。
+——`byte` 上的 `float(b)` 是 `E395`，改寫成穿過中樞的那兩步。`float` 作為**來源**的缺席屬於決定、而非缺了一步：
+`float` 上的 `int(x)` 是 `E394`，小數要由一個動詞丟掉。表與這兩個理由都在[型別](../core/types.zh-TW.md)。
 
 > **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
 > 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E465 NotImplemented: `i32` is part of the fixed-width
-> ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用，`uint(-1)` 也確實以
-> _OverflowError: integer conversion out of range_ abort，與規格一致。
+> ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用；編譯器看不見
+> 的負值確實以 _OverflowError: integer conversion out of range_ abort，與規格一致——它**看得見**的那種則改在編譯期
+> 被拒（`E330`），依 [型別](../core/types.zh-TW.md) 的常數規則。
 
 ## 解析字串（Parsing a string）
 
@@ -78,10 +78,22 @@
 
 ## error 建構子（Error constructors）
 
-**固定**集合 `ValueError` / `OverflowError` / `IOError` / `EncodingError` / `IndexError` / `KeyError`，各以
-`Kind(msg: str) -> Err` 呼叫，建出該 kind、帶訊息的 `Err`。搭配 `raise` 觸發 abort，或放進 `Either` 值；以
-`e is IOError` 測試已抹除的 `Err`。這組由編譯器擁有——本階段程式無法自訂新 kind。見
+這套分類是**十一個由編譯器擁有的 kind**，每一個都是 `Kind(msg: str) -> Err`——該 kind、帶訊息的 `Err`。搭配
+`raise` 觸發 abort，或放進 `Either` 值；以 `e is IOError` 測試已抹除的 `Err`。本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
+
+`ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
+`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError`
+
+它們的**編號是一份 ABI**，由 runtime（`ZRT_ERR_*`）與兩個編譯器共用，這也是這張表不會半途停下的原因：只加進其中
+一邊的 kind，會讓同一個數字依「是哪個編譯器建的」而有兩種意思。
+
+**`StopIteration` 可被測試、但不可被建構**，這是這組唯一不對稱之處。它是 channel 乾淨關閉所攜帶的 sentinel，
+所以一個能建出它的 sender 會讓自己的 channel 戴著「正常結束」的記號關閉，而消費端會把當掉讀成善終。寫出它是
+_E726 `StopIteration` is testable but not constructible_；`e is StopIteration` 不花任何代價，予以保留。
+
+**`AssertionError` 由 `assert` raise，而且只有它會**，這正是 `zerg test` 能在不把訊息當協定讀的情況下，分辨
+「一個不成立的主張」與「一支垮掉的程式」的原因。
 
 ## raw pointer（僅限 `unsafe`）
 
@@ -89,10 +101,10 @@
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 全部都沒有建，而拒絕訊息對此是誠實的——_E413 NotImplemented: the raw-pointer built-in `addr` —
-> bare-metal memory access, which is `unsafe`-only and not built here_，以及 _NotImplemented: `ptr` is not an
-> expression this compiler reads_。**型別**位置如今答的是同一個 `E413`:`fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個
-> raw-pointer 內建,而不再讀起來像是 `ptr` 是個既有型別、只是值不合。它們所需的 `unsafe` 情境本身也還沒建。
+> **[not yet]** 全部都沒有建，而每一個位置都以同一個代碼說明——_E413 NotImplemented: the raw-pointer built-in
+> `addr` — bare-metal memory access, which is `unsafe`-only and not built here_，`ptr` 相同，**型別**位置也相同：
+> `fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個 raw-pointer 內建，而不再讀起來像是 `ptr` 是個既有型別、只是值不合。
+> 它們所需的 `unsafe` 情境本身也還沒建。
 
 ## `sizeof` / `alignof`
 
@@ -100,6 +112,6 @@
 編譯器 layout 知識、純 Zerg 表達不出來的 built-in。引數是**型別**，寫法與 `list[T]` 的型別引數一致：`sizeof[int]`
 （8）、`sizeof[Point]`、`sizeof[list[byte]]`。主要用於 FFI 與低階 layout。見 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 具名拒絕——_NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does not
+> **[not yet]** 具名拒絕——_E414 NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does not
 > compute a type's layout_，`alignof[T]` 相同。另請注意 [FFI](ffi.zh-TW.md) 把同一組描述成 **stdlib** 設施而非
 > built-in；兩章對它將來住在哪裡說法不一，而且兩邊都還沒有它。

@@ -23,10 +23,17 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > or an f-string — works, and an **override is consulted** on any named type (`type X = Y`, a `struct`, an
 > `enum`) that declares one. An `Err` renders as its **message**; its kind is there to be compared
 > (`e is IOError`), not read out. The **structural default rendering of a composite** (a `struct`, `list`,
-> or `map` with no override) is **[not yet]**: such a composite in a format hole is **rejected at compile
-> time** today, so the intended "every value renders" holds for scalars, strings, errors and overridden
-> types now, and for the rest once structural `debug` lands. The exact spelling of a structural `debug`
-> string is therefore **not pinned** ([not yet]).
+> or `map` with no override) is **[not yet]**: such a composite is **rejected at compile time** today, and
+> by two codes at the two doors — _E449 NotImplemented: rendering a `P` as text — a composite needs the
+> structural `Display` this compiler does not generate; render its fields_ from `print`, a hole and
+> `str(x)` alike, and _E417 `str(…)` over a list bridges bytes or code points_ where the argument is a
+> `list` of something else. So the intended "every value renders" holds for scalars, strings, errors and
+> overridden types now, and for the rest once structural `debug` lands. The exact spelling of a structural
+> `debug` string is therefore **not pinned** ([not yet]).
+>
+> It is one gap with a third face: a composite has no structural **equality** either, so `xs == ys` over
+> two lists is `E445` ([Specs & Generics](../core/specs.md)). Rendering and comparing are the two things a
+> reader most expects a container to do for free, and neither is derived.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile
@@ -35,7 +42,7 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
 
 - **`{x}`** uses `display`; a **conversion** picks another view first — **`!r`** the developer `debug`,
   **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
-  are **[not yet]** — a conversion in a hole is refused by name.
+  are **[not yet]** — _E226 NotImplemented: an f-string '!r' / '!s' / '!a' conversion_.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
   `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
   the parser** (`E227`) this phase.
@@ -43,7 +50,7 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
   and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A format
-  spec is **[not yet]** — one in a hole is refused by name.
+  spec is **[not yet]** — _E225 NotImplemented: an f-string ':spec' format spec_.
 
   > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
   > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and

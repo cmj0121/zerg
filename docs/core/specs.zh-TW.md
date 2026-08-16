@@ -20,17 +20,17 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **相等、排序與雜湊都是 opt-in、絕非自動。** 沒有**自動實作的 `Object` spec**、也沒有隱式的 `==`。一個型別只有透過
   **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
-  `derive(Hash)` 取得雜湊（兩者皆 **[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何
-  spec bound 就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是
-  表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（`Eq` 在一個 `struct` 與一個
-  無欄位 `enum` 上已建置;`Ord`、`Hash`、`Encode`、`Decode`,以及帶 payload 的 `enum` 上的 `Eq`,皆為 **[not yet]**）
+  `derive(Hash)` 取得雜湊（兩者皆 **[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。上面那些結構性
+  記憶體操作是例外,因為那些是表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的
+  **結構化衍生**（`Eq` 在一個 `struct` 與一個無欄位 `enum` 上已建置;
+  `Ord`、`Hash`、`Encode`、`Decode`,以及帶 payload 的 `enum` 上的 `Eq`,皆為 **[not yet]**）
   見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
 boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不能 reinterpret；要拿到具體型別只能「一開始就留著」、無從
-反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**——這個
-測試讀的是 box 本就帶著的 dispatch 身分，**既不還原值、也不讀結構**（見下方「型別測試」）。
+反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**，
+答案是從 box 本就帶著的 dispatch 身分讀出來的（見下方「型別測試」）。
 
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
@@ -46,7 +46,7 @@ op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可�
 
 > **[not yet]** `spec` 根本不能**當型別用**,所以上面那三段——heap-boxed 的 existential、它的動態 dispatch、以及逐個
 > 成員交代 box 提供什麼、不提供什麼——講的是一套沒有程式到得了的機制。`fn go(g: Greet)` 會被拒絕、報
-> _NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
+> _E416 NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
 > here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
 > 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
 > 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
@@ -70,14 +70,16 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 ——`list[T]` 可以實作 `Iterator`。
 
-> **[not yet]** 目標**帶著型別引數**的 `impl` 會被指名拒絕,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
-> `impl[T] Spec for list[T]`——參數就坐在 `impl` 上,正是為了讓目標能拼出它們——以及完全具體的
+> **[not yet]** 目標**帶著型別引數**的 `impl` 是 _E292 NotImplemented: an `impl` on `list[int]` — a type
+> ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every
+> instantiation of `list` would share one_,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
+> `impl[T] Spec for list[T]` 以及完全具體的
 > `impl Spec for list[int]`。所以沒有任何實作能掛到容器型別上,上一行說的「`list[T]` 可以實作 `Iterator`」是規範,
 > 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
 > monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
 
-以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定。**沒有「所有型別都有」
-的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式的 blanket impl。
+以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定;也**沒有「所有型別都
+有」的實作**,包含上面那個 per-type opt-in 的 `Eq`。
 
 > **[deviation]** 意圖中的 coherence 規則是**全程式每組 `(spec, 型別)` 唯一一個 impl**、以每個具體實例化為鍵——所以
 > `impl X for list[int]` 與 `impl X for list[str]` 會是**不同**、各自可解析——並跨 package 強制 orphan rule。其中兩半
@@ -87,8 +89,8 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > package 層可供這條規則伸到。**唯一性**根本沒有以 `(spec, 型別)` 這組鍵來判:讓第二個 `impl X for A` 成為錯誤的,
 > 是它的方法在「一個型別的方法共用的那一個命名空間」裡相撞,而那是比規則所問更窄的問題。至於鍵的**實例化**那一半,
 > 是 **[not yet]** 而非 deviation:帶型別引數的目標在上面就被拒絕了,所以從來沒有任何實例化會走到鍵那裡,鍵也就無從
-> 不精確。這一段從前宣稱鍵**過度近似**——說 `list[int]` 與 `list[str]` 會相撞、第二個被誤判為重複 impl。實測下來那是
-> 假的:兩者中的**第一個**就已被拒絕,而兩者都不曾被當成鍵。
+> 不精確。實測下來,`impl X for list[int]` / `impl X for list[str]` 兩者中的**第一個**就已被拒絕,而兩者都不曾被
+> 當成鍵——所以鍵不是過度近似,而是從來沒被查閱過。
 
 ## `#[obj]`——把一個 spec 的方法當成值持有
 
@@ -173,7 +175,7 @@ impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { 
 ——只有「對一個有多個實作的值做裸使用」才會。要在**執行期**、而非依引數型別做選擇，就改用 `enum`。
 
 > **[not yet]** 一個帶參數的 spec 只能在**一個**引數上被實作,不能同時在好幾個上——而那正是本節存在的全部意義。
-> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _`C` declares `ix` twice — every method on a type
+> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _E451 `C` declares `ix` twice — every method on a type
 > shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
 > **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
 > `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
@@ -190,7 +192,9 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
 (見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
 ——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
-存在性測試 `x is T` 是 **[not yet]**。
+存在性測試 `x is T` 是 **[not yet]**:_E494 NotImplemented: `is P` — an `is` test names one of the built-in
+error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
+than the grammar writes_。
 
 ## Method、`this` / `This` 與 default body
 
@@ -209,7 +213,7 @@ spec 的 method 分兩種：
   實作無論如何都保持 canonical。
 
 > **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
-> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
+> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
 > it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
 > 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
 > method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
@@ -233,10 +237,9 @@ spec 的 method 分兩種：
 
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
-`count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
-**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
-（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑
-spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
+`count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**，而機制就是上面已經定義過的那一套。這對**直接在
+具體值上呼叫**也成立（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別
+的**覆寫**、否則跑 spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 
@@ -264,7 +267,7 @@ shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型�
 spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
 impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** `impl` 內的 `NAME := 32` 會報 _NotImplemented: an associated value binding `BITS := …` in
+> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E218 NotImplemented: an associated value binding `BITS := …` in
 > an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
 > 改寫成 module 層的常數。
 
@@ -277,7 +280,16 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
 **[not yet]**。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
 
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
-  比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
+  比較。它**同時要求** `eq` 與 `ne`——只給其中一個的 impl 會得到
+  _E318 `P` does not implement `ne`, which `Eq` requires_——因為 `!=` 是被分派的,不是靠對 `==` 取反導出的。
+  一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
+
+  > **[not yet]** 一個**容器**根本取得不到它,而這正是那條規則從一個它答不上來的方向被碰到:兩個 `list`、兩個
+  > `map` 或兩個 tuple 的 `xs == ys` 是 _E445 NotImplemented: `==` on a `list[int]` — structural equality over
+  > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
+  > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
+  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E449` 的是
+  > 同一個洞,只差一個運算子。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
@@ -320,7 +332,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 一般程式碼**使用 `Ref[T]`、
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
-**運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
+**運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `!=` 已經走 `Eq` 的 `eq` /
+`ne`，`<` 走 `Ord`。
 多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。**邏輯運算子都是關鍵字**——`not`
 （一元），以及**會短路的** `and` / `or`——只作用於 `bool`、回傳 `bool`（不吃 truthiness；要判斷就 `bool(x)`）：`and`
 在左側為 `false` 時跳過右側、`or` 在左側為 `true` 時跳過右側；logical xor 就是 `a != b`（**沒有** `xor` 關鍵字——它
@@ -330,7 +343,7 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 `float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——所以 `float` 永遠不是排序集合的元素、也不是 key，
 而一個**含** `float` 的複合型別會透明地繼承這點：一個 **derive 出的 `Eq`** 用 `==` 比那個欄位，所以對 `NaN`
 **非自反**，該型別也**得不到** `Ord`/`Hash`。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
-陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
+陷阱：`Hash` 需要一個**自反**的 `eq` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
 **total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)` 表示

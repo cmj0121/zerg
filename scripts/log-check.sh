@@ -2,7 +2,7 @@
 #
 # log-check — the claims about `log` that a test running INSIDE the process cannot make.
 #
-# tests/stdlib/log/log_test.zg asks everything that can be asked from inside: the level gate,
+# src/stdlib/log_test.zg asks everything that can be asked from inside: the level gate,
 # the builder, the bytes of a rendered line, the global. It reaches them through a `chan[str]`
 # sink, which is what makes a logger testable at all — there is no reading a `write(2)` back.
 #
@@ -49,8 +49,8 @@
 # runs, so a write afterwards changes nothing and only a fresh process can vary them.
 #
 # THAT FREEZE IS WHAT EVERY CASE HERE RESTS ON, and it is now asserted from inside rather than
-# assumed: tests/stdlib/log/log_test.zg writes the variables itself and holds the answers
-# still. The day `log` reads one lazily, this file starts measuring its own shell rather than
+# assumed: src/stdlib/log_test.zg writes the variables itself and holds the answers still.
+# The day `log` reads one lazily, this file starts measuring its own shell rather than
 # the module — while still passing — and that test is what says so.
 #
 # WHY THE ONE-WRITE CLAIM IS STRUCTURAL AND NOT A STRESS TEST.

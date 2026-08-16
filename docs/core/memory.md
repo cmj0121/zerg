@@ -54,7 +54,7 @@ holder's scope exit.
 ---
 
 > **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
-> through one. `struct Node { value: int; next: Node? }` is rejected with _`Node` is part of a cycle of
+> through one. `struct Node { value: int; next: Node? }` is rejected with _E452 `Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
 > that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
@@ -90,8 +90,8 @@ through:
 > **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
 > aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
 > rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
-> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps
-> it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
+> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
+> keeps it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
 > legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a

@@ -63,9 +63,10 @@ offers precisely what dispatches through `this` alone — re-boxing a `This`-ret
 
 > **[not yet]** A `spec` cannot be used **as a type** at all, so the three paragraphs above — the heap-boxed
 > existential, its dynamic dispatch, and the member-by-member account of what a box does and does not offer —
-> describe a facility no program can reach. `fn go(g: Greet)` is refused by name: the `spec` is a bound and an
-> interface here, not yet a value's type, and the refusal says to take the concrete type or a generic
-> parameter bounded by it instead. A `spec` fills two of its three roles here and not the third; the same
+> describe a facility no program can reach. `fn go(g: Greet)` is _E416 NotImplemented: the `spec` `Greet`
+> used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface here, not yet a value's type;
+> take the concrete type, or a generic parameter bounded by it_. A `spec` fills two of its three roles here
+> and not the third; the same
 > claim in the [Language Reference](../language.md) overview is unbuilt for the same reason, and the
 > dynamic-dispatch half of the codegen paragraph below has nothing to dispatch on.
 >
@@ -93,9 +94,10 @@ so an implementation can be neither hidden nor duplicated — it is in effect ex
 and its spec are visible. Implementations are written for a **concrete or generic type** — `list[T]` may
 implement `Iterator`.
 
-> **[not yet]** An `impl` whose **target carries type arguments** is refused by name, in both of the
-> shapes `GRAMMAR#impl-decl` derives for it: the parameterized `impl[T] Spec for list[T]` — the parameters
-> sit on the `impl` precisely so the target may spell them — and the fully concrete
+> **[not yet]** An `impl` whose **target carries type arguments** is _E292 NotImplemented: an `impl` on
+> `list[int]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare
+> name, so every instantiation of `list` would share one_ — and it is both of the shapes
+> `GRAMMAR#impl-decl` derives, the parameterized `impl[T] Spec for list[T]` and the fully concrete
 > `impl Spec for list[int]`. So no implementation can be attached to a container type at all, and
 > `list[T]` implementing `Iterator`, the line above, is specification rather than something `zerg`
 > builds. What it needs is one implementation monomorphized per instantiation of its target, and a
@@ -221,8 +223,8 @@ ambiguous** — only a bare use on a value with several impls is. For a choice m
 than by the argument's type, use an `enum` instead.
 
 > **[not yet]** A parameterized spec may be implemented at **one** argument, not several, which is the whole
-> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _`C` declares
-> `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
+> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _E451 `C`
+> declares `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
 > canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
 > with the first instead of being told apart by the very argument that is supposed to distinguish them. The
 > `Indexable[int, T]` / `Indexable[Range, list[T]]` pair above therefore cannot be declared, and the
@@ -242,7 +244,9 @@ never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `an
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
 [Null-safety & Errors](../code/errors.md)). This phase, **that is the only implemented use** — `is` works on the
 built-in error taxonomy, while the general existential test `x is T` for a
-**non-error** type is **[not yet]**.
+**non-error** type is **[not yet]**: _E494 NotImplemented: `is P` — an `is` test names one of the built-in
+error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
+than the grammar writes_.
 
 ## Methods, `this` / `This`, and default bodies
 
@@ -264,7 +268,7 @@ A spec's methods come in two kinds:
   `(type, spec)` implementation stays canonical either way.
 
 > **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
-> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
+> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
 > nothing in it is checked and it is not the method that runs; declare the signature and write the body in
 > each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
 > the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
@@ -336,7 +340,7 @@ which no spec demanded and **none can require** — a spec that wanted one would
 the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
 (`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** `NAME := 32` inside an `impl` reports _NotImplemented: an associated value binding
+> **[not yet]** `NAME := 32` inside an `impl` reports _E218 NotImplemented: an associated value binding
 > `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
 > fixed-array size that a type constant was to supply is written as a module-level constant instead.
 

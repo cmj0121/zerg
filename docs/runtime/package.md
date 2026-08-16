@@ -209,7 +209,7 @@ its own value.
 
 > **[deviation]** The **entry file's own directory** is not a module. A file beside the entry file is not
 > in its namespace and is not compiled into the build: naming a function declared there reports
-> `undefined function`. Files share one namespace in every module that is reached by an `import`; the
+> _E425 undefined function `beside`_. Files share one namespace in every module that is reached by an `import`; the
 > module rooted at the entry file is the exception.
 >
 > ---
@@ -443,6 +443,11 @@ only `#[test]` sits in an ordinary module file is a test package too, and `zerg 
 (**L601**) that such a test **ships**. Both, not one: the linter says where a test ought to live and the
 runner runs what is written. It adds no package **shape** — the package a stray `#[test]` belongs to is
 the one that already compiles the file it is in — so the monotone rule above is untouched.
+
+The claim inside it ships as well, and gets a second finding: **L602** on an `assert` outside a
+`*_test.zg`. There is no flag that strips one, so a claim written in shipping code can abort a running
+program — and it is not a weaker check than the one the author meant but a **less specific** one, saying
+only that the claim was false. `raise ValueError("xs must be non-empty") if xs.len() == 0` says both.
 
 **A `#[test]` returns nothing, and a declared return type is refused** with a place, before anything is
 compiled: the driver calls a test as a **statement**, so the value would be dropped — and

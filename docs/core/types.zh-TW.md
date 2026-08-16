@@ -466,9 +466,10 @@ spec Into[T] {
 **偏離字面量預設的採用是一個 lint finding**(`L502`)——`1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議而不是語言
 規則:`1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。
 
-> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個。方法是用**名字**當 key 的,所以第二個
-> `impl Into[…] for X` 會跟第一個相撞、並被具名拒絕。要做到好幾個,需要把 spec 方法改成用 (spec, **型別引數**) 當
-> key——那正是上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
+> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E461 NotImplemented: a second
+> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_。那正是
+> 上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
 
 一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是

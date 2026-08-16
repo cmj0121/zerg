@@ -162,7 +162,7 @@ module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** �
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
 
 > **[deviation]** **entry 檔自己的目錄不是一個 module**。與 entry 檔並列的檔案不在它的命名空間裡，也不會被編進這次
-> 建置：指名該檔宣告的函式會得到 `undefined function`。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
+> 建置：指名該檔宣告的函式會得到 _E425 undefined function `beside`_。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
 > 都成立；以 entry 檔為根的那個 module 是例外。
 >
 > **[deviation]** **單一檔案** import 得起來。`import "sib"` 在旁邊有一個 `sib.zg` 時,會解析到那一個檔案與它的
@@ -344,6 +344,11 @@ package 是用哪些檔案建起來的。
 裡，它也是一個測試 package，而 `zerg lint` 仍然會警告（**L601**）這樣的測試會**跟著出貨**。兩者並存而非二選一：
 linter 說測試該住哪，runner 跑的是實際寫下的東西。它不新增任何 package **形狀**——一個落單的 `#[test]` 所屬的
 package，就是原本就會編到它所在檔案的那一個——所以上面那條單調規則不受影響。
+
+裡面的那個主張也一樣會出貨，並得到第二個 finding：`*_test.zg` 之外的 `assert` 會拿到 **L602**。沒有任何旗標能把
+它剝掉，所以寫在出貨程式碼裡的一個主張，可以讓一支正在執行的程式 abort——而它不是作者本來想要的那個檢查的較弱版本，
+是**較不具體**的版本：它只說得出「這個主張是假的」。`raise ValueError("xs must be non-empty") if xs.len() == 0`
+兩件事都說得出來。
 
 **`#[test]` 不回傳任何東西，宣告了回傳型別會被拒絕**，帶位置，而且在編譯任何東西之前：driver 是把測試當作一個
 **述句**呼叫的，所以那個值會被丟掉——而 `#[test] fn t() -> bool { return false }` 曾經被回報成 `ok`。它是被拒絕而

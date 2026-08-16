@@ -559,10 +559,11 @@ is known by then.
 `1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different
 types on the page, so a reader never has to infer a literal's type from its surroundings.
 
-> **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
-> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name. Reaching
-> several needs a spec method keyed by the spec **and its arguments**, which is the same thing the
-> bound above needs — and what would let a written `x.into()` say which one it means.
+> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E461 NotImplemented: a
+> second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;
+> the language allows several, and reaching that needs the method keyed by the spec and its arguments_.
+> That is the same thing the bound above needs, and what would let a written `x.into()` say which one it
+> means.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

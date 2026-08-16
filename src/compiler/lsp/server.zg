@@ -493,7 +493,7 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 # that builds — a server that paints a working program red teaches its user to ignore red.
 # So the linter's three levels land on the three that remain, IN ORDER, because they are
 # ordered: a finding fails `zerg lint`, a warning is printed and exits 0, an info never
-# gates anything (docs/tooling/fmt.md, "A finding carries a severity").
+# gates anything (docs/tooling/lint.md, "A finding carries a severity").
 fn ls_severity(sev: str) -> int {
 	return 3 if sev == "warning"
 

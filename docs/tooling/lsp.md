@@ -107,7 +107,7 @@ use. Everything else on the wire came from `lint_program`, and every one of thos
 program that builds, so none of them is ever an error: a server that paints a working program red
 teaches its user to ignore red. The linter's own three levels are ordered — a **finding** fails
 `zerg lint`, a **warning** prints and exits 0, an **info** never gates anything
-([the linter's severities](fmt.md)) — so they land on LSP's remaining three in that order:
+([the linter's severities](lint.md)) — so they land on LSP's remaining three in that order:
 
 | `Finding.sev` | `zerg lint` prints | LSP severity    |
 | ------------- | ------------------ | --------------- |
@@ -285,7 +285,7 @@ quick fix and then does nothing is worse than one that offers none, because the 
 lies.
 
 The rewrite is **not** `zerg fmt`'s. The formatter reads tokens and must work on source the compiler
-cannot compile ([Formatter & Linter](fmt.md)); knowing that `1` became a `float` needs types, so a
+cannot compile ([Formatter Rules](fmt.md)); knowing that `1` became a `float` needs types, so a
 formatter that did this would fail in exactly the buffer a person reaches for it in. It is also an
 opinion — `1.5 + 1` is a legal program — and the formatter has none.
 

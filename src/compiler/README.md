@@ -316,7 +316,7 @@ field and a named error for anything else.
 
 `f"…"` takes the plain hole only, and the `:spec`, `!r`/`!s`/`!a`, `{x=}` and
 interpolating-command forms are each refused by name rather than by silence
-([Formatter & Linter](../../docs/tooling/fmt.md)). It desugars **in the parser** to the `+`
+([Compile Diagnostics](../../docs/tooling/diagnostics.md)). It desugars **in the parser** to the `+`
 chain the form is defined to be, which is why the AST and the emitter know nothing about
 f-strings at all — and why the seed only has to lex and parse one to build stage 1.
 

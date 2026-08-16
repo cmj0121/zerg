@@ -626,7 +626,7 @@ error-codes-check` answers per stage:
 
 ```text
 error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
-                                              lexical E112, parser E612
+                                              lexical E112, parser E615
 ```
 
 It reads both the ranges and their stages out of the table above rather than carrying its own

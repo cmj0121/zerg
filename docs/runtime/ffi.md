@@ -13,9 +13,7 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > root_ — rather than later, at the `unsafe` the binding would have needed. The module-level **group** is the shape
 > that IS built, for its `mut` bindings; what its `fn` may do inside is still refused, one operation at a time. On the
 > export edge a `--emit lib` build writes an object and **no header**, and nothing reports which `pub` declarations
-> would have been left out of one. `sizeof` / `alignof`, which this chapter calls a stdlib facility and
-> [Built-ins](builtins.md) calls a built-in, exist in neither place.
->
+> would have been left out of one. >
 > Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
 > carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
 > where it is written, as _E707 no type named `handle` (the binding `h`)_.
@@ -330,8 +328,5 @@ Deferred for a later design pass — none blocks the model above:
   error.
 - The scheduler's policy for **blocking foreign calls** (thread-pool growth) — a runtime detail.
 - Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
-- A compile-time **`sizeof` / `alignof`** — a type's size and alignment as a constant, now that the layout is
-  fixed (see [Values & Memory](../core/memory.md)) — is a **stdlib** facility, deferred until a
-  concrete need; it is not a core-language construct. **[Built-ins](builtins.md) calls the same pair a
-  built-in**, and the two chapters have not been reconciled; it exists in neither place, so the
-  disagreement has cost nothing yet and is recorded rather than resolved here.
+- A compile-time **`sizeof` / `alignof`** — whether a type's layout is a **built-in** or a **stdlib** facility
+  is undecided, and it exists as neither. Refused by name (`E414`).

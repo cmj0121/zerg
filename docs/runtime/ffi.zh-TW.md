@@ -11,8 +11,7 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 > ——_E502 cannot resolve import `ffi` under any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
 > **分組**是有建的那一種形式，為的是它的 `mut` binding；它的 `fn` 在裡面能做什麼，仍是一項一項被拒絕。export
 > 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header
-> 之外。`sizeof` / `alignof`——本章稱之為 stdlib 設施、[內建函式](builtins.zh-TW.md) 稱之為 built-in——兩處
-> 都沒有。
+> 之外。
 >
 > 本章已經沒有任何東西會漏到 `cc`。`handle` 是 `zerg` 程式裡沒有任何宣告帶有的名字，所以標註它的 binding
 > ——`mut h: handle = 0` 或 `mut h: handle? = nil`——會在寫下它的地方被拒絕，回報為
@@ -285,7 +284,5 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 - library 模式遇到非 FFI-safe 的 public 宣告：**skip-with-diagnostic**（目前傾向）對上硬性錯誤。
 - scheduler 對**阻塞外部呼叫**的策略（thread pool 擴張）——一個 runtime 細節。
 - 匯入設施未來是否會綁定 **`"C"` 以外的 ABI**；目前只定義 `"C"`。
-- 一個編譯期 **`sizeof` / `alignof`**——把型別的大小與對齊當成常數,既然佈局已固定(見
-  [值與記憶體](../core/memory.zh-TW.md))——是一個 **stdlib** 設施、延後到有具體需求;它不是核心語言構造。
-  **[內建函式](builtins.zh-TW.md) 把同一組稱為 built-in**,兩章尚未彌合;它在兩處都不存在,所以這個分歧到目前
-  為止沒有代價,在此記錄而不裁決。
+- 一個編譯期 **`sizeof` / `alignof`**——型別的佈局屬於 **built-in** 還是 **stdlib** 設施尚未決定,
+  而它兩邊都不存在。具名拒絕(`E414`)。

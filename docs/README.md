@@ -22,7 +22,7 @@ is [below](#how-the-toolchain-is-built).
 | `code/`    | writing code — control flow, functions, errors, collections, coroutines, idioms       |
 | `surface/` | the surface itself — the sugar table, and the formal grammar                          |
 | `runtime/` | a program and the world outside it — modules, I/O, formatting, built-ins, stdlib, FFI |
-| `tooling/` | what the toolchain does to your source — the formatter and linter rules               |
+| `tooling/` | what the toolchain does with your source — fmt/lint, desugar, and what an editor asks |
 
 The authoritative grammar is not here: it is [`GRAMMAR`](../GRAMMAR) at the repo root.
 [`surface/grammar.md`](surface/grammar.md) is its prose companion.

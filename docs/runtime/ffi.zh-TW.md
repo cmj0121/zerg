@@ -169,6 +169,10 @@ struct by value、`mut &this` 變成指向它的指標（就地）——所以�
 扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。（確切方案，以及是否提供逐宣告的 link-name 覆寫，是待決問題
 ——見下。）
 
+> **[deviation]** 前綴是 `zg_`，而且**沒有 package 那一段**，因為沒有 package 層可以命名（見
+> [package.md](package.zh-TW.md) 的〈四層〉）：一次 `--emit lib` 建置裡的 `pub fn add` 匯出的是 `zg_add`，以 `nm`
+> 實測。所以名稱如規範所述地穩定且不 mangle，而讓它們跨 package 不衝突的那一部分，正是還不存在的那一部分。
+
 ## 匯入 C——一個 stdlib 設施
 
 grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sqlite3_open` 命名出來讓 Zerg

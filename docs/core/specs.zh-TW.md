@@ -277,7 +277,9 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
 **[not yet]**。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
 
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
-  比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
+  比較。它**同時要求** `eq` 與 `ne`——只給其中一個的 impl 會得到
+  _E318 `P` does not implement `ne`, which `Eq` requires_——因為 `!=` 是被分派的,不是靠對 `==` 取反導出的。
+  一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
 
   > **[not yet]** 一個**容器**根本取得不到它,而這正是那條規則從一個它答不上來的方向被碰到:兩個 `list`、兩個
   > `map` 或兩個 tuple 的 `xs == ys` 是 _E445 NotImplemented: `==` on a `list[int]` — structural equality over
@@ -327,7 +329,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 一般程式碼**使用 `Ref[T]`、
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
-**運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
+**運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `!=` 已經走 `Eq` 的 `eq` /
+`ne`，`<` 走 `Ord`。
 多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。**邏輯運算子都是關鍵字**——`not`
 （一元），以及**會短路的** `and` / `or`——只作用於 `bool`、回傳 `bool`（不吃 truthiness；要判斷就 `bool(x)`）：`and`
 在左側為 `false` 時跳過右側、`or` 在左側為 `true` 時跳過右側；logical xor 就是 `a != b`（**沒有** `xor` 關鍵字——它
@@ -337,7 +340,7 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 `float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——所以 `float` 永遠不是排序集合的元素、也不是 key，
 而一個**含** `float` 的複合型別會透明地繼承這點：一個 **derive 出的 `Eq`** 用 `==` 比那個欄位，所以對 `NaN`
 **非自反**，該型別也**得不到** `Ord`/`Hash`。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
-陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
+陷阱：`Hash` 需要一個**自反**的 `eq` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
 **total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)` 表示

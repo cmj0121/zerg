@@ -196,11 +196,13 @@ commit.
 
 ## Group 4 — Bindings & Expressions
 
-A **binding** introduces a name; a reassignment updates one:
+A **binding** introduces a name; a reassignment updates one. `pub` on a **module-level**
+binding exposes it to the rest of the package, the way it does on any other declaration;
+inside a block there is nothing to expose and it is an error:
 
 ```text
-binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # inferred; 'const' = shadow-proof
-              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # type-annotated; the ':' picks this over reassign
+binding       ::= 'pub'? ( 'mut' | 'const' )? bind-target ':=' expr  # inferred; 'const' = shadow-proof
+              | 'pub'? ( 'mut' | 'const' )? identifier ':' type '=' expr  # type-annotated; ':' picks this over reassign
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element

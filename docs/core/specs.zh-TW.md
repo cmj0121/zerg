@@ -46,7 +46,7 @@ op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可�
 
 > **[not yet]** `spec` 根本不能**當型別用**,所以上面那三段——heap-boxed 的 existential、它的動態 dispatch、以及逐個
 > 成員交代 box 提供什麼、不提供什麼——講的是一套沒有程式到得了的機制。`fn go(g: Greet)` 會被拒絕、報
-> _NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
+> _E416 NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
 > here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
 > 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
 > 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
@@ -70,8 +70,10 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 ——`list[T]` 可以實作 `Iterator`。
 
-> **[not yet]** 目標**帶著型別引數**的 `impl` 會被指名拒絕,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
-> `impl[T] Spec for list[T]`——參數就坐在 `impl` 上,正是為了讓目標能拼出它們——以及完全具體的
+> **[not yet]** 目標**帶著型別引數**的 `impl` 是 _E292 NotImplemented: an `impl` on `list[int]` — a type
+> ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every
+> instantiation of `list` would share one_,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
+> `impl[T] Spec for list[T]` 以及完全具體的
 > `impl Spec for list[int]`。所以沒有任何實作能掛到容器型別上,上一行說的「`list[T]` 可以實作 `Iterator`」是規範,
 > 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
 > monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
@@ -173,7 +175,7 @@ impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { 
 ——只有「對一個有多個實作的值做裸使用」才會。要在**執行期**、而非依引數型別做選擇，就改用 `enum`。
 
 > **[not yet]** 一個帶參數的 spec 只能在**一個**引數上被實作,不能同時在好幾個上——而那正是本節存在的全部意義。
-> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _`C` declares `ix` twice — every method on a type
+> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _E451 `C` declares `ix` twice — every method on a type
 > shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
 > **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
 > `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
@@ -190,7 +192,9 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
 (見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
 ——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
-存在性測試 `x is T` 是 **[not yet]**。
+存在性測試 `x is T` 是 **[not yet]**:_E494 NotImplemented: `is P` — an `is` test names one of the built-in
+error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
+than the grammar writes_。
 
 ## Method、`this` / `This` 與 default body
 
@@ -209,7 +213,7 @@ spec 的 method 分兩種：
   實作無論如何都保持 canonical。
 
 > **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
-> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
+> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
 > it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
 > 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
 > method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
@@ -264,7 +268,7 @@ shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型�
 spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
 impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** `impl` 內的 `NAME := 32` 會報 _NotImplemented: an associated value binding `BITS := …` in
+> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E218 NotImplemented: an associated value binding `BITS := …` in
 > an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
 > 改寫成 module 層的常數。
 

@@ -43,7 +43,7 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 ---
 
 > **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
-> `struct Node { value: int; next: Node? }` 會被拒絕、報 _`Node` is part of a cycle of by-value declarations —
+> `struct Node { value: int; next: Node? }` 會被拒絕、報 _E452 `Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
 > 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
 > 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
@@ -70,7 +70,7 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 
 > **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
 > 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
-> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
+> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
 > safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
 > 接受這次呼叫,只有在索引真的相遇時才 abort。
 

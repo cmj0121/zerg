@@ -188,8 +188,8 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — r
   shell), its argv split on whitespace (quotes respected), so no interpolation and no injection/glob/pipe. The
   interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
   (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
-  ([Process & I/O](../runtime/io.md)), not grammar. Both command-literal forms are **[not yet]**: recognized by the
-  grammar but **rejected at code generation** this phase.
+  ([Process & I/O](../runtime/io.md)), not grammar. Both forms are **[not yet]**, and the parser tells them
+  apart rather than passing either on: `E236` for the plain literal, `E235` for the interpolating one.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
@@ -311,9 +311,9 @@ literal** `` f`…` `` (the group-3 command literal, **[not yet]**): it runs thr
 **shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
 
 - **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
-  `display` / ascii. All three are **[not yet]** — a conversion in a hole is refused by name
+  `display` / ascii. All three are **[not yet]** — a conversion in a hole is `E226`
   ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the expression's source text
-  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well.
+  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well (`E227`).
 - **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
   fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.
@@ -564,9 +564,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   `impl Indexable[int, T]` (element) and `impl Indexable[Range, list[T]]` (slice) is how `xs[k]` dispatches
   statically on `k`'s type — or use an `enum` for a runtime choice.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
-  full method). That is the whole of it — a spec carries **behaviour and nothing else**. An **associated
-  type** and an **associated value** are not members here; both are refused by name. A single-output protocol
-  is written by parameterizing the spec (`spec Iterable[T]`), and a per-impl constant is an associated fn. A
+  full method). That is the whole of it — a spec carries **behaviour and nothing else**, which is the next
+  bullet's subject. A
   method takes **no explicit receiver** — `this` is implicit inside a method, reached through the instance it
   is called on; a `fn` that uses `this` with no instance bound is a compile error. The self type is
   **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
@@ -576,7 +575,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   namespace, inherent or from a spec alike; a duplicate is an error.
 - **No associated types or values.** A spec declares neither a type the `impl` fills in (`type Item`,
   projected `I.Item`) nor a compile-time value it supplies (`BITS: int`, bound as `BITS := 32`); both are
-  refused by name. A single-output protocol is written by parameterizing the spec — `Iterable[T]` with at
+  refused by name — _E230 an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing
+  else_. A single-output protocol is written by parameterizing the spec — `Iterable[T]` with at
   most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
   associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
   which is the other thing it was carrying.
@@ -591,11 +591,12 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
   the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
   compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
-  decorator is a compile error**, never silently dropped. `#[derive]`, `#[obj]`, `#[test]` and `#[allow]`
-  are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
-  `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a
-  comment — the lexer
-  peeks one
+  decorator is a compile error** (`E217`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]` and
+  `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` /
+  `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E496 … it is a
+  reserved decorator … and this compiler does not build it, so the constructor stays public rather than
+  being sealed in silence_, which is the shape every one of them takes: the name is known, the effect is
+  not applied, and neither happens quietly. `#[` is the one `#` that is not a comment — the lexer peeks one
   character.
 
 ## Group 8 — Null-safety & Errors
@@ -627,14 +628,12 @@ postfix       += '?' | '!' | '?.' identifier
 - **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
   (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
   handled by the same `?` / `??` / `match`.
-- **`assert cond`** — state a claim and **raise `AssertionError`** when it does not hold. It takes a
-  condition and **nothing else**: the compiler writes the message, from the position the claim was written
-  at, the claim's own source text, and the value of each operand a comparison came apart into. A claim that
-  needs explaining rather than showing is `raise ValueError("why") if not cond`, which is the production
-  form. It is sugar for exactly that raise, with the operands bound to temporaries FIRST so the message
-  cannot evaluate them a second time; `assert a and b` is two asserts, and no operand is ever lifted across
-  a short-circuiting operator. It is **always compiled in** — there is no flag that strips it — and the
-  linter's `L602` says what one costs outside a `*_test.zg` file.
+- **`assert cond`** — state a claim and **raise `AssertionError`** when it does not hold. The production
+  takes a condition and **nothing else**, so there is no message operand and no trailing `if`; what the
+  compiler writes into the message instead, and when to reach for a `raise` rather than a claim, is
+  [Errors](../code/errors.md). It is sugar for that raise with the operands bound to temporaries **first**,
+  so the message cannot evaluate them a second time; `assert a and b` is two asserts, and no operand is ever
+  lifted across a short-circuiting operator.
 
 ## Group 9 — Concurrency
 
@@ -773,8 +772,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
   `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** in full: the
-  bundled `atomic` module declares `pub struct Atomic[T]`, a generic struct is unbuilt, and so `import
-"atomic"` on its own reports _E215 NotImplemented: a generic struct `Atomic[…]`_. Neither `Atomic[int]`,
+  bundled `atomic` module declares `pub struct Atomic[T]`, a generic struct is unbuilt, and the **import**
+  is what is refused — `import "atomic"` on its own reports _E511 the module `atomic` ships and cannot be
+  imported_, rather than letting a type nothing declares reach the emitter (a generic `struct` written in
+  a program is the general `E215`). Neither `Atomic[int]`,
   the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
   intended `Atomic[int]` with sequential consistency rests on — is `E446`.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
@@ -794,16 +795,13 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## What is specified and not built
 
 Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
-name**, and no program that uses one compiles into something else. This list is mostly not
-prose — `scripts/refuse-check.sh` holds a case for nearly every row, pinned by the refusal's
-`E###`, so a form that quietly starts working, or quietly starts failing differently, fails
-the gate.
-
-**Nearly**, because three of the refusals below carry no code, and a case can pin nothing
-without one: a range used as a value, a `match` arm whose body is a reassignment or a send,
-and a generic `type X[T] = …` alias. Those three are held by this table and by nothing else —
-see the diagnostics deviation in [Conformance](../conformance.md), which is where that gap
-belongs.
+name**, and no program that uses one compiles into something else. This list is not prose —
+`scripts/refuse-check.sh` holds a case for each row, pinned by the refusal's `E###`, so a
+form that quietly starts working, or quietly starts failing differently, fails the gate.
+The three rows that once carried no code, and so could be pinned by nothing, all carry one
+now: a range used as a value is `E493`, a generic `type X[T] = …` alias is `E491`, and a
+`match` arm whose body is a reassignment or a send is `E607`, which names which of the two
+it found.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
 production, not the one that first mentions it.
@@ -832,7 +830,7 @@ production, not the one that first mentions it.
 | 7     | an `impl` on a built-in type, on a target with type arguments, or carrying its own `[T]`                  |
 | 7     | an `impl` item that is not a method — an associated value or type binding, or anything else               |
 | 7     | an associated type projection `It.Item`; a value generic `f[N: int]`; a parameterized bound `Eq[int]`     |
-| 7     | every decorator but `#[derive(…)]` and `#[obj]`                                                           |
+| 7     | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`                                 |
 | 7     | a map key that is not an `int` or a `str` — a key needs `Hash`                                            |
 | 7     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`, and the fixed-width ladder `i8`…`f64` |
 | 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`, a standalone `unsafe fn`, an `unsafe` `spec` signature           |

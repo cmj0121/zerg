@@ -13,10 +13,9 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
   整檔 leaf；
 - **失敗是值**——會失敗的呼叫回 `Result[T]`、以 `?` 傳播；EOF 不算。
 
-> **狀態。** 編譯器只出貨這個面的**子集**，而這個子集就是**整檔與整串流的葉子**：`io.read_file(path) -> list[byte]`
-> 與 `io.write_file(path, data)`（檔案不存在或不可讀會 raise **`IOError`**，可用 `guard { io.read_file(p) }` 降級為
-> `Result`；內容為文字時以 `str(…)` 解碼）、`io.read_stdin() -> list[byte]`、stdout 寫出器 `io.write` /
-> `io.println` / `io.write_int`、stderr 寫出器 `io.ewrite` / `io.eprintln`，以及 `print` 關鍵字。
+> **狀態。** 編譯器只出貨這個面的**子集**，而這個子集就是**整檔與整串流的葉子**——列表見
+> [標準函式庫](stdlib.zh-TW.md#io)——外加 `print` 關鍵字。檔案不存在或不可讀會 raise **`IOError`**，可用
+> `guard { io.read_file(p) }` 降級為 `Result`；內容為文字時以 `str(…)` 解碼。
 > **`Reader` / `Writer` spec 面**——下文的 `read_bytes` / `read()` / `write` 與 `io.stdin` · `io.stdout` ·
 > `io.stderr` 串流物件——為 **[not yet]**：預期語意一如規格所述，而寫出其中任一個名字得到的是 **`E388`**——
 > _module `io` has no `stdout`_——任何位置皆然，包含作為方法呼叫的 receiver。
@@ -59,8 +58,7 @@ create(path: str) -> Result[File]      # 寫/truncate；File 實作 Writer
 檔案不存在是**預期**的 value 失敗、絕非 abort。開檔模式、seek、metadata 都是 `io` method——stdlib 細節、不是新
 概念。**socket** 是同一形狀：一個既是 `Reader` 又是 `Writer` 的 `Ref[handle]`，網路 API 留給 `io`。
 
-> **[not yet]** `File` handle 與 `open` / `create` 此階段尚未建置；接好的是一對整檔葉子
-> `io.read_file(path) -> list[byte]` 與 `io.write_file(path, data)`，外加 `io.read_stdin()`。檔案不存在或不可讀時
+> **[not yet]** `File` handle 與 `open` / `create` 此階段尚未建置；接好的是那一對整檔葉子，檔案不存在或不可讀時
 > raise **`IOError`**（用 `guard` 降級）——一經 `guard` 便與「檔案不存在是預期的 value 失敗」一致。兩個葉子都不交還
 > handle，所以沒有東西需要關閉，`defer f.close()` 也沒有可指名的對象。
 
@@ -78,9 +76,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 
 > **[not yet]** `io.stdin` / `io.stdout` / `io.stderr` 串流物件尚未建置，寫出其中一個得到的是 **`E388`**——
 > _module `io` has no `stdout`_——包含作為方法呼叫的 receiver，也就是上方範例寫它的位置。此階段接好的是自由
-> 函式：寫 stdout 的 `io.write(s)` / `io.println(s)` / `io.write_int(n)`、寫 stderr 的 `io.ewrite(s)` /
-> `io.eprintln(s)`，以及一次讀完標準輸入的 `io.read_stdin()`（各寫出器回 `Result[nil]`，但為 best-effort 寫出，
-> 尚不會產出 `Err`）。
+> 函式（見[標準函式庫](stdlib.zh-TW.md#io)）；各寫出器回 `Result[nil]`，但為 best-effort 寫出，尚不會產出 `Err`。
 >
 > **[deviation] / [implementation-defined] 緩衝。** `print` 走**有緩衝的 libc stdio**，而 `io.*` 寫出走
 > **無緩衝**的 `write(2)`，所以兩者的輸出**不依原始碼順序交錯**。實測：一支交替呼叫 `print` 與 `io.println` 各

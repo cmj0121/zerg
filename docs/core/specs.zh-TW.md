@@ -20,10 +20,10 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **相等、排序與雜湊都是 opt-in、絕非自動。** 沒有**自動實作的 `Object` spec**、也沒有隱式的 `==`。一個型別只有透過
   **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
-  `derive(Hash)` 取得雜湊（兩者皆 **[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何
-  spec bound 就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是
-  表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（`Eq` 在一個 `struct` 與一個
-  無欄位 `enum` 上已建置;`Ord`、`Hash`、`Encode`、`Decode`,以及帶 payload 的 `enum` 上的 `Eq`,皆為 **[not yet]**）
+  `derive(Hash)` 取得雜湊（兩者皆 **[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。上面那些結構性
+  記憶體操作是例外,因為那些是表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的
+  **結構化衍生**（`Eq` 在一個 `struct` 與一個無欄位 `enum` 上已建置;
+  `Ord`、`Hash`、`Encode`、`Decode`,以及帶 payload 的 `enum` 上的 `Eq`,皆為 **[not yet]**）
   見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
@@ -87,8 +87,8 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > package 層可供這條規則伸到。**唯一性**根本沒有以 `(spec, 型別)` 這組鍵來判:讓第二個 `impl X for A` 成為錯誤的,
 > 是它的方法在「一個型別的方法共用的那一個命名空間」裡相撞,而那是比規則所問更窄的問題。至於鍵的**實例化**那一半,
 > 是 **[not yet]** 而非 deviation:帶型別引數的目標在上面就被拒絕了,所以從來沒有任何實例化會走到鍵那裡,鍵也就無從
-> 不精確。這一段從前宣稱鍵**過度近似**——說 `list[int]` 與 `list[str]` 會相撞、第二個被誤判為重複 impl。實測下來那是
-> 假的:兩者中的**第一個**就已被拒絕,而兩者都不曾被當成鍵。
+> 不精確。實測下來,`impl X for list[int]` / `impl X for list[str]` 兩者中的**第一個**就已被拒絕,而兩者都不曾被
+> 當成鍵——所以鍵不是過度近似,而是從來沒被查閱過。
 
 ## `#[obj]`——把一個 spec 的方法當成值持有
 

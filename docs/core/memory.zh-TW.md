@@ -32,9 +32,8 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 > SIGSEGV;但那是一份診斷,不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,在那裡 raise 並不安全,
 > 所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。這裡欠的是**迭代式**的鏈拆解,而它還沒有被建出來。
 >
-> 本段原本說的——那條鏈根本不會被釋放、cell 帶著一個 no-op drop、持有它的 binding 沒有登記任何 release——已經
-> 關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在**具現化新值之後**才把舊值
-> 還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
+> **釋放**這一半已經關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在
+> **具現化新值之後**才把舊值還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
 > 配置數與 5 輪完全相同(`make mem-check`)。上面那句 stack 溢位就是這個修正的代價:在沒有東西被釋放的時候,
 > 它根本到不了。
 
@@ -277,10 +276,9 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 }
 ```
 
-一個 block 內多個 `defer` 以**後登記先跑**執行，與 scope-owned 的釋放及 `Ref` 的 drop 交錯、依建構的逆序進行，於是
-拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
-觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
-`defer`；會 → `Ref[T]`。**
+三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時觸發（順序見「釋放
+順序」）；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？
+**不會 → `defer`；會 → `Ref[T]`。**
 
 一個 **`with` block** 把這種資源綁進一段語彙區間——而它是那個本來就會這麼做的裸 block 的**純語法** sugar:
 `with acquire() as y { … }` 就是 `{ y := acquire(); … }`,而無名的 `with e { … }` 仍然會綁定,綁到一個只有編譯器
@@ -290,6 +288,5 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 一個資源如果它的釋放是**某人必須記得呼叫的方法**,那它根本不是 `with` 的案例——它是一個 `defer`,寫出來,
 寫在 `with` 剛剛打開的那個 block 裡。
 
-`with` **已經實作**,而且就是上面那條展開式、沒有別的:一個 block、一個 binding,以及 body 自己寫的那個
-`defer`。它本身不帶任何 teardown——一個 `with` 之所以會釋放東西,是因為 body 裡有 `defer` 這麼說,或因為那個值
-本來就像其他值一樣是 scope-owned 的。`examples/18_scoped.zg` 就是隨貨附上的示範。
+`with` **已經實作**,而且就是上面那條展開式、沒有別的——它本身不帶任何 teardown。`examples/18_scoped.zg`
+就是隨貨附上的示範。

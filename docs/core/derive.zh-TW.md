@@ -166,29 +166,8 @@ impl Encode for User {                            # 生成，非手寫
 }
 ```
 
-sum 型別依 variant derive——**先 tag、再 payload**：
-
-```text
-#[derive(Encode)]                     # 生成：寫出 variant tag，再逐個 payload 欄位
-enum Shape {
-    Circle(float)
-    Rect(float, float)
-}
-```
-
-當線上格式必須不同，就**手寫 impl 而非 derive**——仍是唯一 canonical 實作，仍然沒有 macro：
-
-```text
-impl Encode for User {                            # 取代 derive 出的那份
-    fn encode(mut &out: Sink) {
-        out.field("uid")
-        this.id.encode(out)       # 自訂 key
-        out.field("name")
-        this.name.encode(out)
-        # tags 與 email 刻意不放進線上格式
-    }
-}
-```
+sum 型別依 variant derive 也是同一套——**先 tag、再 payload**。當線上格式必須不同——換一個 key、或刻意不把
+某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，所以仍是唯一 canonical 實作，仍然沒有 macro。
 
 `Decode` 回傳 `Result[This]`，所以格式錯誤只是一般的 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
 傳播——絕非 abort。（`Result[T]` 非 FFI-safe，但這裡無妨：`Encode`/`Decode` 是純 Zerg spec，永遠不跨

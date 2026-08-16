@@ -32,20 +32,10 @@ the form they will take.)
 > character is legitimately a space is silently rewritten into one the example does not produce, and the
 > example goes from true to false with nothing to show for it. `trim_left` is the case that found this.
 >
-> The workaround is to end the **expression** with a terminator the eye can see, and to assert the same
-> form in the suite so the two agree:
->
-> ````text
-> # ```zerg
-> # strings.trim_left("  hi  ") + "|"
-> # ```
-> # ```output
-> # hi  |
-> # ```
-> ````
->
-> Do not try to exempt the file from the hook: every other line in it should be trimmed, and an example
-> that needs a trailing space is an example whose reader cannot see it either.
+> The workaround is to end the **expression** with a terminator the eye can see —
+> `strings.trim_left("  hi  ") + "|"`, whose output is then `hi  |` — and to assert the same form in the
+> suite so the two agree. Do not try to exempt the file from the hook: every other line in it should be
+> trimmed, and an example that needs a trailing space is an example whose reader cannot see it either.
 
 ## Packages
 
@@ -127,18 +117,16 @@ exist was not set and `false` is a true answer rather than a missing one.
 > libc. Zerg runs real OS worker threads ([Coroutines](../code/coroutine.md)), so two coroutines are two
 > threads often enough that a program which happens to work proves nothing.
 >
-> That makes it **categorically unlike** the shared-state hazard [`log`](#log) documents. The logger's cell
-> is state this project owns, and one day an atomic could close that race. `environ` is not ours, and
-> nothing done here can make it safe — there is no fix to wait for, only a time to call it.
+> That makes it **categorically unlike** the shared-state hazard [`log`](#log) documents: the logger's cell
+> is state this project owns and an atomic could one day close that race, while `environ` is not ours and
+> nothing done here can make it safe. There is no fix to wait for, only a time to call it.
 >
 > The compiler does **not** enforce it, and could not do so honestly: the workers exist before `main`'s
 > first statement, so a rule keyed on "has anything been spawned yet" would report safety in a process that
 > already has sixteen threads, and would refuse the write inside every `#[test]` (a test is a coroutine).
 
 **`isatty` is about the DEVICE and nothing else.** Use it to choose a **rendering** — colour at a terminal,
-plain into a pipe — and never a **format**: output that changes shape when it is redirected cannot be read
-the same way twice, and a log file that is JSON on one machine and columns on another is worse than either.
-[`log`](#log) follows exactly that line — colour asks this, and only `ZERG_LOG` picks the format. A
+plain into a pipe — and never a **format**; [`log`](#log) draws exactly that line, and says why. A
 descriptor that is not open is not a terminal, so it answers `false` rather than raising; it is total, which
 matters on a path where an abort would mean dying over escape codes.
 
@@ -287,9 +275,9 @@ one call; there is no `any`, so `str` takes a `str` and `int` takes an `int`; th
 the builder is one concrete type. Any other shape waits on at least two of the three.
 
 It is also the answer to **lazy evaluation**. `log.debug()` at a level that is off answers a **dead** entry:
-every field method returns at once, nothing is formatted, nothing is allocated, and `msg` writes nothing. The
-caller hands over typed values instead of a string it built first, so the work a disabled line would have done
-never happens rather than being thrown away.
+nothing is formatted, nothing is allocated, and `msg` writes nothing. The caller hands over typed values
+instead of a string it built first, so the work a disabled line would have done never happens rather than
+being thrown away.
 
 What is still paid is evaluating the **arguments** — `expensive()` in `.str("dump", expensive())` runs either
 way, because Zerg evaluates arguments before the call. That is why `enabled` is public:
@@ -325,10 +313,10 @@ own cell, so every field method, every level check and every writer exists once.
 renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
 value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
 `log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
-`lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at` because a free `pub at` is
-`E705` against the compiler's own lexer, which has a module-private `at` — a `pub` name has no package to be
-unique within. `parse_level` is not `parse` for the same reason, reached from the other side: a `pub parse`
-here would collide with a module-private `parse` in any program that imports `log`.
+`lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at`, and `parse_level` rather
+than `parse`, because a `pub` name has no package to be unique within: a free `pub at` is `E705` against the
+compiler's own lexer, which has a module-private `at`, and a `pub parse` here would collide with a
+module-private `parse` in any program that imports `log`.
 
 **There is one mutating function and it takes a whole logger.** The `set_level` / `set_format` / `set_colour`
 / `set_sink` family was **deleted**, not renamed: the module already had four pure builders, so the setters
@@ -430,9 +418,8 @@ Only the **level** is coloured. It is what a reader scans for, and colouring the
 fight with whatever they contain. A JSON line is never coloured at all — escape codes in a field a machine
 parses are corruption, not decoration.
 
-The JSON line is built through [`json`](#json), not by hand, which is why that module was promoted out of
-the language server: one escaper in the tree is one place for a quote, a newline or a tab to be right. Its
-three fixed keys — `t`, `l`, `msg` — come first, in that order.
+The JSON line is built through [`json`](#json), not by hand — that module was promoted out of the language
+server for exactly this. Its three fixed keys — `t`, `l`, `msg` — come first, in that order.
 
 ### The destination
 
@@ -591,8 +578,8 @@ runs — see [Modules, Packages & Programs](package.md) for how far that command
 the compiler writes the failure message, and it says three things a function never could — the file and
 line the claim was written at, the claim's own source text, and the value of each operand a comparison
 came apart into. Zerg has no `__FILE__` and no caller attribution, and a condition reaches a helper as a
-`bool` with its shape already compiled away, so `assert_eq` bought back two of those values by taking the
-operands apart at the call. That is why it existed and why it no longer has to.
+`bool` with its shape already compiled away; `assert_eq` existed to buy back two of those values, and no
+longer has to.
 
 A failed claim raises `AssertionError`, and nothing else does — which is how `zerg test` reports it as a
 **failure** while anything else that reaches the top of a test body is a **crash**.

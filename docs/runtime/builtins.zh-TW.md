@@ -19,7 +19,6 @@
 | [str 橋接](#str--list-橋接)                   | `str(42)`, `str(bytes)`       | scalar display 或 str ⇄ list  |
 | [error kind](#error-建構子error-constructors) | `ValueError(msg)` …           | 建出固定 kind 的 `Err`        |
 | [raw pointer](#raw-pointer僅限-unsafe)        | `addr` `ptr` `.load` …        | bare-metal——**僅限 `unsafe`** |
-| [`sizeof` / `alignof`](#sizeof--alignof)      | `sizeof[T]`, `alignof[T]`     | 型別的大小 / 對齊             |
 
 ## `Ref`
 
@@ -106,12 +105,9 @@ _E726 `StopIteration` is testable but not constructible_；`e is StopIteration` 
 > `fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個 raw-pointer 內建，而不再讀起來像是 `ptr` 是個既有型別、只是值不合。
 > 它們所需的 `unsafe` 情境本身也還沒建。
 
-## `sizeof` / `alignof`
+## `sizeof` / `alignof` —— 已延後
 
-`sizeof[T] -> uint` 與 `alignof[T] -> uint` 是型別的**位元組大小**與**對齊**，在**編譯期**決定——這是唯一需要
-編譯器 layout 知識、純 Zerg 表達不出來的 built-in。引數是**型別**，寫法與 `list[T]` 的型別引數一致：`sizeof[int]`
-（8）、`sizeof[Point]`、`sizeof[list[byte]]`。主要用於 FFI 與低階 layout。見 [值與記憶體](../core/memory.zh-TW.md)。
-
-> **[not yet]** 具名拒絕——_E414 NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does not
-> compute a type's layout_，`alignof[T]` 相同。另請注意 [FFI](ffi.zh-TW.md) 把同一組描述成 **stdlib** 設施而非
-> built-in；兩章對它將來住在哪裡說法不一，而且兩邊都還沒有它。
+**不屬於本規格。** `sizeof[T]` 與 `alignof[T]` 具名拒絕 —— _E414 NotImplemented: the compile-time built-in
+`sizeof[T]` — this compiler does not compute a type's layout_ —— 而「型別的佈局屬於 **built-in** 還是
+**標準函式庫**設施」這個問題尚未決定。原本一章說是前者、[FFI](ffi.zh-TW.md) 說是後者,兩處一併移除而不是留著
+互相矛盾;**決定先於功能**。

@@ -12,15 +12,14 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 
 ## Summary
 
-| Built-in                                 | Signature                     | Summary                        |
-| ---------------------------------------- | ----------------------------- | ------------------------------ |
-| [`Ref`](#ref) / [`deref`](#deref)        | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
-| [conversions](#primitive-conversions)    | `int(x)` … `T(x)`             | primitive re-construction      |
-| [number parse](#parsing-a-string)        | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
-| [str bridges](#str--list-bridges)        | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
-| [error kinds](#error-constructors)       | `ValueError(msg)` …           | build an `Err` of a kind       |
-| [raw pointers](#raw-pointers-unsafe)     | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
-| [`sizeof` / `alignof`](#sizeof--alignof) | `sizeof[T]`, `alignof[T]`     | a type's size / alignment      |
+| Built-in                              | Signature                     | Summary                        |
+| ------------------------------------- | ----------------------------- | ------------------------------ |
+| [`Ref`](#ref) / [`deref`](#deref)     | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
+| [conversions](#primitive-conversions) | `int(x)` … `T(x)`             | primitive re-construction      |
+| [number parse](#parsing-a-string)     | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
+| [str bridges](#str--list-bridges)     | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
+| [error kinds](#error-constructors)    | `ValueError(msg)` …           | build an `Err` of a kind       |
+| [raw pointers](#raw-pointers-unsafe)  | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
 
 ## `Ref`
 
@@ -118,14 +117,10 @@ These are the one door to bare-metal work. See [Values & Memory](../core/memory.
 > raw-pointer built-in rather than reading as though `ptr` were an existing type the value did not suit.
 > The `unsafe` context they need is itself unbuilt.
 
-## `sizeof` / `alignof`
+## `sizeof` / `alignof` — deferred
 
-`sizeof[T] -> uint` and `alignof[T] -> uint` are a type's **byte size** and **alignment**, resolved at
-**compile time** — the one built-in that needs compiler layout knowledge, unexpressible in pure Zerg. The
-argument is a **type**, written like a type argument on `list[T]`: `sizeof[int]` (8), `sizeof[Point]`,
-`sizeof[list[byte]]`. Mainly for FFI and low-level layout. See [Values & Memory](../core/memory.md).
-
-> **[not yet]** Refused by name — _E414 NotImplemented: the compile-time built-in `sizeof[T]` — this compiler
-> does not compute a type's layout_, and the same for `alignof[T]`. Note that [FFI](ffi.md) describes the same
-> pair as a **standard-library** facility rather than a built-in; the two chapters disagree about where it
-> will live, and neither has it.
+**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E414 NotImplemented:
+the compile-time built-in `sizeof[T]` — this compiler does not compute a type's layout_ — and the question of
+whether a type's layout is a **built-in** or a **standard-library** facility is open. The chapter that described
+them as one and the [FFI](ffi.md) chapter that described them as the other are both removed rather than left
+disagreeing; the decision comes before the feature.

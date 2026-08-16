@@ -134,12 +134,16 @@ else ends it, and the edges are most of the rule:
   paragraph brings its own column;
 - a **guarded** arm — `n if n > 99 =>` is a sentence rather than a row, so it lines up with
   nothing and ends the run it meets;
-- an arm whose body is a **block**, or that puts its body on the next line;
-- a head more than **12 columns** wider than the run's narrowest.
+- an arm whose body is a **block**, or that puts its body on the next line.
 
-That last one is the budget, and it bounds the padding any one line takes: without it a run
-creeps wider one arm at a time and a three-character pattern ends up half a line from its
-answer. 12 is measured off a `select`, whose arm heads are four different shapes —
+A **budget** then decides whether the run it found is a table at all: if its widest head is
+more than **12 columns** past its narrowest, nothing in it is padded and every line keeps its
+single space. That bounds the padding any one line takes — without it a run creeps wider one
+arm at a time and a three-character pattern ends up half a line from its answer — and it is
+**all or nothing** rather than a fourth edge. Cutting the run at the first head that overruns
+is what this did first, and it turns one `match` into three or four tables in three or four
+columns, which reads worse than the ragged edge it replaced. A table is one thing or it is
+not a table. 12 is measured off a `select`, whose arm heads are four different shapes —
 `v := <-work`, `<-quit`, `out <- total`, `_` — and 8 cut the `_` arm out of its own table.
 
 The padding is **spaces** while the indent stays **tabs**, so the column holds at any tab

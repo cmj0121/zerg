@@ -110,7 +110,10 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 > **[deviation]** 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒
 > 絕。三個回答**程式**問題的階段如今都有通道了——check.zg 的 `chk_at`、parser.zg 的 `p_diag`、emit.zg 的
 > `c_diag`——每一條都把碼當成引數收下、位置自己讀，所以一處不可能帶了其中一個卻忘掉另一個。本 deviation 剩下的
-> 是 **lexer**，它的兩處拒絕兩者皆無。
+> 是 **f-string 掃描器**,它的兩處 raise 兩者皆無 —— 而這比原本窄:lexer 自己的拒絕走 channel,
+> 帶碼也帶位置(`E101 a string literal is not closed before the end of the line`、
+> `E104 this character is not part of any Zerg token`,皆附 `--> file:line:col`)。剩下的是未封閉的
+> `f"abc` 與 f-string 內的裸 `}`,它們回一句白話,連 `error:` 前綴都沒有。
 >
 > ---
 >

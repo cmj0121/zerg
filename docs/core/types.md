@@ -194,16 +194,16 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
   written — `x: float = float(i)`. A fractional or exponent literal (`1.0`, `1e3`) is a `float` from
   the start and never an `int`.
 
-- **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes
-  a byte with no conversion at all, and `b: byte = 300` is a **compile error** — the constant is known
-  not to fit. `b: byte = n` for an `int` value is a **conversion**, and a conversion is
-  written: `b: byte = byte(n)`, which may raise `OverflowError` at run time. Adoption settles at
-  compile time; a written conversion runs.
+- **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes a
+  byte with no conversion at all; `b: byte = n` for an `int` value is a **conversion**, and a conversion is
+  written: `b: byte = byte(n)`, which may raise `OverflowError` at run time. Adoption settles at compile
+  time; a written conversion runs.
 
-  An adoption away from the literal's default is a **lint** finding (`L502`), because the reader of
-  `xs: list[byte] = [1, 2]` should be able to see bytes on the page rather than infer them from the
-  declaration. The finding names each literal and hands over the spelling that shows it — `1.0` for a
-  `float`, `byte(1)` where the type has no literal form of its own.
+  An adoption away from the literal's default is a **lint** finding (`L502`) — `1.5 + 1` is reported and
+  `1.5 + 1.0` is not — because the reader of `xs: list[byte] = [1, 2]` should be able to see bytes on the
+  page rather than infer them from the declaration. It is advisory, not a rule of the language. The finding
+  names each literal and hands over the spelling that shows it — `1.0` for a `float`, `byte(1)` where the
+  type has no literal form of its own.
 
 - **An expression of literals is a literal.** Nothing in `100 + 100` has a type of its own, so the whole
   of it adopts: `x: byte = 100 + 100` is byte arithmetic answering `200`. Each part is measured against
@@ -554,10 +554,6 @@ it is checked where it runs.
 `fn hold[T](v: T)` called with a `byte` is refused, naming the byte — because substitution happens before
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
-
-**An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
-`1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different
-types on the page, so a reader never has to infer a literal's type from its surroundings.
 
 > **[deviation]** A type may have **one** `Into` in this compiler, not several — _E461 NotImplemented: a
 > second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;

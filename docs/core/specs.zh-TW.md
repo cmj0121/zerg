@@ -29,8 +29,8 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
 boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不能 reinterpret；要拿到具體型別只能「一開始就留著」、無從
-反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**——這個
-測試讀的是 box 本就帶著的 dispatch 身分，**既不還原值、也不讀結構**（見下方「型別測試」）。
+反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**，
+答案是從 box 本就帶著的 dispatch 身分讀出來的（見下方「型別測試」）。
 
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
@@ -78,8 +78,8 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
 > monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
 
-以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定。**沒有「所有型別都有」
-的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式的 blanket impl。
+以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定;也**沒有「所有型別都
+有」的實作**,包含上面那個 per-type opt-in 的 `Eq`。
 
 > **[deviation]** 意圖中的 coherence 規則是**全程式每組 `(spec, 型別)` 唯一一個 impl**、以每個具體實例化為鍵——所以
 > `impl X for list[int]` 與 `impl X for list[str]` 會是**不同**、各自可解析——並跨 package 強制 orphan rule。其中兩半
@@ -237,10 +237,9 @@ spec 的 method 分兩種：
 
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
-`count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
-**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
-（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑
-spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
+`count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**，而機制就是上面已經定義過的那一套。這對**直接在
+具體值上呼叫**也成立（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別
+的**覆寫**、否則跑 spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 

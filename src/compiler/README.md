@@ -85,6 +85,7 @@ setup and an install needs no checkout:
 | `ZERG_RUNTIME` | the runtime C sources | `$ZERG_ROOT/src/runtime/csrc` |
 | `ZERG_STDLIB`  | the standard library  | `$ZERG_ROOT/src/stdlib`       |
 | `ZERG_CACHE`   | the build cache       | `$ZERG_ROOT/.zerg-cache`      |
+| `ZERG_CSTD`    | the C dialect for cc  | `c17`                         |
 
 An import resolves against the entry file's own directory first, then the standard
 library, and a module is either `<name>.zg` or a DIRECTORY of sources read in sorted

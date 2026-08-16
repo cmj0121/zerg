@@ -231,10 +231,16 @@ through the runtime — and a token pass has nothing to tell it which. Rewriting
 right for a list and wrong for a map, so it declines.
 
 The **range arm** is a different kind of decline. `GRAMMAR` says `200..300 =>` is sugar for the guard
-`_ if _ in 200..300`, and that guard used to be the reason: `in` over a range was unbuilt, so the sugar
-was the only working spelling and a desugaring can only be checked where its core form exists. **The
-core form now builds** — `_ if _ in 200..300 => …` compiles and matches — so what is left is a rule
-nobody has written rather than a rule nothing could check. The arm is passed through unchanged.
+it writes `_ if _ in 200..300`, and that guard used to be the reason: `in` over a range was unbuilt, so
+the sugar was the only working spelling and a desugaring can only be checked where its core form
+exists. **The core form now builds** — `v if v in 200..300 => …` compiles and matches — so what is
+left is a rule nobody has written rather than a rule nothing could check. The arm is passed through
+unchanged.
+
+`v` and not `_`, which is the part a rule would have to get right: `GRAMMAR`'s `_ if _ in …` is
+notation for an arm that does not BIND, and the second `_` is not a name a guard can read
+(_E372 undefined name `_`\_). Writing the core form means inventing a binder the source never had,
+and one that must not collide with anything the arm's body already names.
 
 ## The gates
 

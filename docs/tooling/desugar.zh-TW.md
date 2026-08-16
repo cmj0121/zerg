@@ -197,10 +197,14 @@ parser 建的是樹,而這裡建的是文字。
 數迴圈、channel 是 receive、map 依插入順序走 key、str 變成它的 code point、list 走 runtime 的索引——而 token pass
 沒有任何東西能告訴它是哪一種。改寫成索引迴圈對 list 是對的、對 map 是錯的,所以它 decline。
 
-**range arm** 是另一種 decline。`GRAMMAR` 說 `200..300 =>` 是 guard `_ if _ in 200..300` 的 sugar,而那個 guard
-曾經就是理由:`in` 用在 range 上尚未實作,於是 sugar 是唯一能動的寫法,而一道 desugar 只能在它的 core 形式存在時被
-檢查。**那個 core 形式現在建得起來**——`_ if _ in 200..300 => …` 編得過也比對得到——所以剩下的是「還沒有人寫這條
-規則」,而不是「沒有東西檢查得了」。這個 arm 會原樣通過。
+**range arm** 是另一種 decline。`GRAMMAR` 說 `200..300 =>` 是它寫成 `_ if _ in 200..300` 的那個 guard 的 sugar,
+而那個 guard 曾經就是理由:`in` 用在 range 上尚未實作,於是 sugar 是唯一能動的寫法,而一道 desugar 只能在它的 core
+形式存在時被檢查。**那個 core 形式現在建得起來**——`v if v in 200..300 => …` 編得過也比對得到——所以剩下的是
+「還沒有人寫這條規則」,而不是「沒有東西檢查得了」。這個 arm 會原樣通過。
+
+是 `v` 而不是 `_`,而這正是一條規則得處理對的地方:`GRAMMAR` 的 `_ if _ in …` 是「這個 arm 不做繫結」的記法,
+第二個 `_` 並不是 guard 讀得到的名字(_E372 undefined name `_`\_)。要寫出 core 形式，就得發明一個原始碼裡從來
+沒有的 binder，而且它不能跟 arm body 已經用到的任何名字相撞。
 
 ## Gate
 

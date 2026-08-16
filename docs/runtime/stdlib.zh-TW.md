@@ -9,6 +9,10 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 
 編譯器直接提供、**免** import 的函式，見 [內建函式（Built-in Functions）](builtins.zh-TW.md)。
 
+**一個 module 的 suite 就放在它旁邊**——`src/stdlib/strings_test.zg` 緊鄰 `strings.zg`——那正是
+[模組、套件與程式](package.zh-TW.md) 所描述的白箱擺法，也讓每一對自成一個 package。`zerg test src/stdlib` 會跑
+全部，`zerg test src/stdlib/strings.zg` 跑其中一個。
+
 ## 模組註解裡可執行的範例
 
 `pub` 函式的註解可以帶範例：在普通的 `#` 註解裡寫成一組 fenced block——運算式放 ` ```zerg `，它印出什麼放

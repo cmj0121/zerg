@@ -10,6 +10,10 @@ Nothing here binds a third-party library.
 
 For the compiler-provided functions that need **no** import, see [Built-in Functions](builtins.md).
 
+**A module's suite sits beside it** — `src/stdlib/strings_test.zg` next to `strings.zg` — which is the
+white-box placement [Modules, Packages & Programs](package.md) describes, and makes each pair a package of
+its own. `zerg test src/stdlib` runs all of them; `zerg test src/stdlib/strings.zg` runs one.
+
 ## Runnable examples in a module's comments
 
 A `pub` function's comment may carry an example, as a pair of fenced blocks in a plain `#` comment — the

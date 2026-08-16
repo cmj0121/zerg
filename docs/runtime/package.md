@@ -423,6 +423,15 @@ counting skips and timeouts apart from passes and failures, and exiting non-zero
 own `fixtures_test.zg` if there is one, and the driver. One directory may therefore hold several packages,
 each with its own driver and its own process.
 
+**And a test package that IS a module is that module.** `src/stdlib/strings_test.zg` forms a package built
+from `strings.zg`, so an `import "strings"` reached from anywhere else in that same program resolves to
+**this package's sources** rather than loading the module's file a second time. Without that rule the
+module arrives in the program twice and the build stops at _E745 `get` is declared twice in this file_,
+pointing into a source nobody touched. Nothing contrived reaches it: a suite imports `testing`, `testing`
+renders a note through `log`, and `log` encodes with `json` — so the stdlib modules in `testing`'s closure
+are exactly the ones whose suites sit beside them. It is the same mechanism that loads a module once
+however many importers it has, not a rule about test files bolted onto the loader.
+
 **The path may be one `.zg` file**, and then it is the **package that file is in** that runs — ancestors
 counted from the file's directory, exactly as for the directory itself. A build of the test file **alone**
 is a build of nothing, so the file selects a package rather than a file list; `--only` is the tool for one

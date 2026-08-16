@@ -398,9 +398,10 @@ spec Into[T] {
   是 bound 的一部分**:一個實作了 `Into[Feet]` 的型別並不滿足 `Into[Meters]`。
 - **一步,絕不串接**——`X → Y` 和 `Y → Z` 不會給你 `X → Z`。寫兩步,或自己宣告 `X → Z`。
 
-**super-spec** 也帶著它的引數:`spec Ord: Eq[int]` 說的是 Ord 在 `int` 上擴充 `Eq`,所以一個 `impl Ord` 欠的
-是把 `Eq` 自己的參數換成 `int` 之後的那些簽章。bound 的引數是拿去跟 impl **比對**;super 的引數則是**代入**被指名
-spec 的參數——兩件不同的事,做在不同的地方。
+**super-spec** 也帶著它的引數:`spec Keyed: Into[str]` 說的是 `Keyed` 在 `str` 上擴充 `Into`,所以一個
+`impl Keyed` 欠的是把 `Into` 自己的參數換成 `str` 之後的那些簽章。bound 的引數是拿去跟 impl **比對**;super 的引數
+則是**代入**被指名 spec 的參數——兩件不同的事,做在不同的地方。(`Eq` 不帶參數,所以
+[Spec 與泛型](specs.zh-TW.md) 為 `Ord` 寫的 super-spec 就是裸的 `spec Ord: Eq`。)
 
 **運算子的兩個運算元必須已經是同一個型別。** untyped literal 會採用另一個運算元——上方的「另一個運算元」位置——
 所以 `1.5 + 1` 是兩個 `float`。兩個**已定型**、型別不同的運算元是編譯錯誤,不論哪一對:`i + f` 和 `i + u` 是同一

@@ -52,8 +52,10 @@ once, and results are cached by content in `.zerg-cache/`, so a rebuild that cha
 recompiles one module.
 
 **`-o` names the file written**, at every stage — `--emit c f.zg -o f.c` writes `f.c`, and
-`--emit lib f.zg -o out.o` writes exactly `out.o`. What differs per stage is only the DEFAULT, when
-no `-o` is given:
+`--emit lib f.zg -o out.o` writes exactly `out.o`. It is worth stating because it used to mean
+something different at each: `--emit c` discarded the flag and wrote stdout regardless, so a build
+that asked for a file got none and exited 0. What differs per stage is only the DEFAULT, when no
+`-o` is given:
 
 | Stage                | With no `-o`                                                |
 | -------------------- | ----------------------------------------------------------- |
@@ -61,10 +63,6 @@ no `-o` is given:
 | `--emit check`       | nothing — it produces diagnostics and no artifact           |
 | `--emit lib`         | the source name with `.o` — `f.zg` gives `f.o`              |
 | `--emit bin`         | the source name — `f.zg` gives `f`                          |
-
-It used to mean a different thing at each: `--emit lib` appended `.o` to whatever it was given, so
-`-o out.o` wrote `out.o.o`, and `--emit c`, `--emit tokens` and `--emit ast` discarded the flag and
-wrote stdout regardless — a build that asked for a file got none and exited 0.
 
 ## The language
 
@@ -121,11 +119,11 @@ linker against generated code nobody wrote. A feature the specification marks **
 chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
 ones, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                                       | Chapter                                 |
-| ---------------------------------------------------------------------- | --------------------------------------- |
-| a `list` is not frozen while iterated — appending during a `for` works | [collections](docs/code/collections.md) |
-| a refcounted value entering a carrier is never released — it leaks     | [values & memory](docs/core/memory.md)  |
-| a `list` fill form `[v; N]` re-evaluates `v` once per element          | [collections](docs/code/collections.md) |
+| Silent deviation                                                     | Chapter                                 |
+| -------------------------------------------------------------------- | --------------------------------------- |
+| `for x in p.xs { p.xs.append(v) }` compiles, and grows what it walks | [collections](docs/code/collections.md) |
+| a value assigned over is abandoned rather than freed — it leaks      | [values & memory](docs/core/memory.md)  |
+| an `init()` in a module the run never touches still runs             | [modules](docs/runtime/package.md)      |
 
 Two more are structural, and a running program feels them: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks

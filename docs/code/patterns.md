@@ -7,9 +7,7 @@ small core it already gives you. Part of the [Language Reference](../language.md
 ## Closures & higher-order functions
 
 Zerg's anonymous function `fn(…) -> R { … }` **is** the closure — first-class, capturing by copy (see
-[Functions & Closures](functions.md)). Capturing is built: an **immutable** value — a scalar, or a non-POD
-`str` / `list` / `map` — and a **`mut`** binding alike, the latter taking the value it held at the point the
-closure was written. There is deliberately **no terser
+[Functions & Closures](functions.md)). There is deliberately **no terser
 `|x|` lambda**: a little verbosity nudges you toward Zerg's procedural-first style rather than deep
 functional chains. Three ways to keep closures readable, in order of preference:
 
@@ -34,7 +32,7 @@ fn positive(x: int) -> bool { return x > 0 }
 result := xs.map(double).filter(positive).fold(0, add)
 ```
 
-> **[not yet]** The adapters themselves do not exist. `xs.map(double)` reports _NotImplemented: the list
+> **[not yet]** The adapters themselves do not exist. `xs.map(double)` reports _E444 NotImplemented: the list
 > method `map` — this compiler has `len` and `append`_, and `filter` and `fold` answer the same way, so the
 > chain above has nothing to chain. Method calls do chain, and the ones a `list` has are the two named in
 > that message; until the adapters land, the loop below is not merely the procedural-first alternative but
@@ -87,8 +85,8 @@ cfg := Config(host: "example.com", port: 8080)
 
 > **[not yet]** Both calls above are the named-argument form, and named arguments are not built (see
 > [Functions & Closures](functions.md)): `connect("example.com", port: 8080, tls: false)` and
-> `Config(host: "example.com", port: 8080)` alike report _NotImplemented: the named argument `port:` — this
-> compiler binds arguments by position only_. A struct is built positionally today —
+> `Config(host: "example.com", port: 8080)` alike report _E223 NotImplemented: the named argument `port:` —
+> this compiler binds arguments by position only_. A struct is built positionally today —
 > `Config("example.com", 8080)` — and a defaulted parameter can only be dropped off the end of a call, so the
 > one-call builder this section recommends over the fluent ceremony is the part of it with nothing to run on.
 
@@ -111,23 +109,20 @@ To mutate the builder in place instead, use a `mut fn` method on a `mut` binding
 ## Destructuring & pattern support
 
 Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x, y} := e` both unpack in one
-step — the everyday way a multiple return or a small record is consumed; both are **[not yet]**, as are the
-**struct**, **tuple** and **`as`** patterns in a `match`. Read a tuple back by static index (`.0` / `.1`)
-and a struct by field. What a `match` does destructure is the **variant**, **wildcard `_`**, **range**, and
-**negative-literal** patterns, together with their **nesting**. Two more
-forms `GRAMMAR` allows are **[not yet]**: an **or-pattern** (`A | B =>`, binding or not) and a **list
-pattern** (`[h, ..t]`). Both are rejected at code generation: the list pattern after type-checking, the
-or-pattern because `|` there is read as the bitwise operator and an arm that matched the wrong value in
-silence is worse than one that does not build. See [Control Flow](control-flow.md) for what `zerg fmt` can
-do about the contiguous-integer case.
+step — the everyday way a multiple return or a small record is consumed, and both **[not yet]**, as are the
+struct, tuple and `as` patterns in a `match`. The catalogue of what a pattern may be, and the code each
+unbuilt shape is refused by, is [Control Flow](control-flow.md); what matters here is the idiom left
+standing while they wait.
 
-> **[not yet]** Of that list it is the **nesting** that does not exist; the four kinds each work on their
-> own. A variant pattern's payload position accepts a binding name or `_` and nothing else — a
-> sub-pattern there is never read — so `L(Yes(v))` and `L(0)` are both refused, by name and with a place:
-> _E492 NotImplemented: a sub-pattern inside a variant payload, beginning at `…`_. (It used to be a bare
-> parser message with no error code and no place, naming whichever token stood there.) A RESERVED WORD in
-> that position is a different rule and keeps its own: `L(this)` is `E245`. Match one level, bind the
-> payload, and `match` the binding in turn.
+The kinds that fire — **variant**, **literal** (a negative one included), **wildcard `_`**, and **range** —
+each work on their own, and each works **one level deep**. So the everyday shapes are: read a tuple back by
+static index (`.0` / `.1`) and a struct by field rather than destructuring either; and where a language with
+nested patterns would write `L(Yes(v))`, match one level, bind the payload, and `match` the binding in turn.
+
+> **[not yet]** A variant pattern's payload position accepts a binding name or `_` and nothing else, so
+> `L(Yes(v))` and `L(0)` are both _E492 NotImplemented: a sub-pattern inside a variant payload, beginning at
+> `…`_. A RESERVED WORD there is a different rule and keeps its own: `L(this)` is _E245 `this` is a reserved
+> word and cannot name a pattern binding_.
 
 ## Deliberately not added
 

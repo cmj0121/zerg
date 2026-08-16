@@ -76,7 +76,7 @@ opens a statement at the top level, and a compiled program has nowhere to run it
 頂層常數以**依賴序**
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
-**原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
+**原始碼順序**。這整套排序成立。
 
 對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
@@ -89,8 +89,8 @@ _E732 these constants depend on each other and none can be given a value first_�
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依
-序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。每個 `init()` **恰好一次、依 FIFO
-順序、在 `main` 之前**執行。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
+序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。
+`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
 藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
 channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
 **裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
@@ -262,14 +262,12 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 
 **prelude 不是被 import 的**——它的名字是 **built into the toolchain**，從一開始就綁在每個 module 裡，正如 primitive
 關鍵字。它裝的是語言本身倚賴的東西：運算子 desugar 的目標型別（`Either`、`Result`、`T?`、`nil`）、built-in spec
-（`Eq`、`Ord`、`Hash`、`Error`、`Iterator`／`Iterable`、`Ref`，以及運算子 spec——見 [Spec 與 Generics](../core/specs.zh-TW.md)；
-**沒有 `Object` spec**——相等與排序是經 `derive(Eq)` / `derive(Ord)` opt-in，而 `display` / `debug` 是內建的值渲染、
-非 spec method，見 [格式化](format.zh-TW.md)），
-外加少數泛用型別——`list`、`map`、`set` 容器（見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。
-（primitives——`bool`、`int`、`str`……——與 `chan`、以及 `defer`／`print` 構造同樣是 grammar 與 runtime，不是被
-import 的名字。）這些名字是
-**保留字**：宣告不得 shadow 或重宣告它們，所以那些 desugar 到它們的
-運算子永遠不會被從語言底下抽走。
+（`Eq`、`Ord`、`Hash`、`Error`、`Iterator`／`Iterable`、`Ref`，以及運算子 spec——見
+[Spec 與 Generics](../core/specs.zh-TW.md)），外加少數泛用型別——`list`、`map`、`set` 容器
+（見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。`display` / `debug` 根本不在裡面：它們是內建的
+值渲染、不是 spec method（見 [格式化](format.zh-TW.md)）。primitives——`bool`、`int`、`str`……——與 `chan`、以及
+`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。這些名字是**保留字**：宣告不得 shadow 或
+重宣告它們，所以那些 desugar 到它們的運算子永遠不會被從語言底下抽走。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的

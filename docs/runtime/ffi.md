@@ -18,11 +18,7 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 >
 > Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
 > carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
-> where it is written, as _E707 no type named `handle` (the binding `h`)_. (Two rules used to escape
-> instead: the optional spelling produced `error: unknown type name 'zg_handle'` against generated C,
-> because the check read the annotation's bare name and a `?` is not one; and a `fn` declared inside a
-> module-level `unsafe { … }` group was callable from safe code with no diagnostic. Both are reported by
-> `zerg` now, the second as `E387`.)
+> where it is written, as _E707 no type named `handle` (the binding `h`)_.
 
 ## Two edges, one contract
 
@@ -231,9 +227,7 @@ mutable global with nothing said.
 
 > **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place**. Building it would
 > read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
-> form is turned away rather than silently disarmed. (It used to compile exactly that way:
-> `unsafe fn g() -> int { return 2 }` then `print g()` compiled, and `g` was callable from ordinary safe
-> code with no diagnostic at all.)
+> form is turned away rather than silently disarmed.
 
 The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
 unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is

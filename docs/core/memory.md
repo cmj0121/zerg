@@ -40,8 +40,7 @@ holder's scope exit.
 > paths, where raising is not safe, so no `guard` can catch it and no `defer` after it runs. An
 > **iterative** chain teardown is what this owes, and it is not built.
 >
-> What this paragraph used to say — that the chain is never freed at all, that the cell carries a no-op
-> drop, and that a binding holding one registers no release — is closed. The cell's drop is the enum's own,
+> The **freeing** half of this is closed. The cell's drop is the enum's own,
 > a binding registers it where it is declared, and an assignment gives the old value back after
 > materialising the new one. Measured over a counting allocator: 200 rounds that each build and drop a
 > 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many live allocations as five rounds do
@@ -340,11 +339,10 @@ flush a buffer, close a scope-local resource — needing no type at all:
 }
 ```
 
-Several `defer`s in a block run **last-scheduled-first**, interleaved with scope-owned frees and `Ref`
-drops in reverse construction order, so teardown mirrors setup. Three constructs share one axis — _when_
-cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires
-at the **last holder's** exit. The dividing line is a single question — does the resource escape its
-scope? **No → `defer`; yes → `Ref[T]`.**
+Three constructs share one axis — _when_ cleanup fires: `del` revokes a name **now**; `defer` fires at
+**this block's** exit (in the order Drop order gives it); a `Ref[T]` drop fires at the **last holder's**
+exit. The dividing line is a single question — does the resource escape its scope?
+**No → `defer`; yes → `Ref[T]`.**
 
 A **`with` block** scopes such a resource to a lexical region — and it is **purely syntactic** sugar over
 the bare block that already does so: `with acquire() as y { … }` is `{ y := acquire(); … }`, and the
@@ -355,7 +353,5 @@ release is the axis above, unchanged, and that axis already covers every exit in
 A resource whose release is a **method someone must remember to call** is not a `with` case at all — it is
 a `defer`, written out, in the block `with` just opened.
 
-`with` is **built**, and it is exactly the expansion above and nothing else: the block, the binding, and
-whatever `defer` the body writes for itself. It carries no teardown of its own — a `with` that frees
-something frees it because a `defer` in the body says so, or because the value is scope-owned like any
-other. `examples/18_scoped.zg` is the shipped demonstration.
+`with` is **built**, and it is exactly the expansion above and nothing else — it carries no teardown of
+its own. `examples/18_scoped.zg` is the shipped demonstration.

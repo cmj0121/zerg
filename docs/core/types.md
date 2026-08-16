@@ -174,10 +174,8 @@ checker to exactly this list — every node kind it pushes a wanted type into, a
 `zerg`'s inference family to taking no wanted type at all. A fifth carve-out cannot be added without the
 gate naming it.
 
-The rule above holds at every position: **a position wraps a value, it never converts one.** So
-conversion is **not a fifth carve-out** — each of these decides a type the expression **does not have
-yet**, where a conversion would change one it already has, and the fix for a value that does not fit
-stays the written `T(x)` (Type Conversion, below).
+Conversion is **not a fifth carve-out**: each of these decides a type the expression **does not have
+yet**, where a conversion changes one it already has.
 
 ### Numeric literals
 
@@ -525,14 +523,12 @@ that can fail (see [Standard Library](../runtime/stdlib.md)).
 
 **`bool(x)` and `str(x)` are not on this table**, which is why the row above names four targets and not
 every one. Neither is a conversion in this sense: `bool(3.5)` is the zero test above, answering `true`,
-and `str(3.5)` is a rendering. A fraction is not dropped by either, so neither has a decision to make.
+and `str(x)` renders a value through `display`, which every type has. A fraction is not dropped by
+either, so neither has a decision to make.
 
 `int("42")` is on the table as its own row because it is a different operation wearing the same
 spelling: it **parses** the number's text rather than re-constructing a value, and only `int`, `uint`
 and `float` do it (see [Built-in Functions](../runtime/builtins.md)).
-
-**Any type to text is not in the table**, because it is not a conversion between types in this sense:
-`str(x)` renders a value through `display`, which every type has.
 
 **A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
 as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
@@ -545,10 +541,9 @@ for `const N := 100`. It is the same notion a fill count `[v; N]` requires, and 
 sentence in this document with two readings is how a language grows two answers to one question.
 
 **It stops at a call, and at a `mut` binding.** `byte(f(300))` raises where it runs, for an ordinary `f`
-and a generic one alike: a call is not a constant form, which the enum-discriminant rule says in the same
-words — `A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1` are the form, and a call is not. A `mut` binding is
-excluded for a reason of its own: it can be written between the binding and the conversion, so what it
-holds there is not what it holds here.
+and a generic one alike: a call is not a constant form, which the enum-discriminant rule above says in
+the same words. A `mut` binding is excluded for a reason of its own: it can be written between the binding
+and the conversion, so what it holds there is not what it holds here.
 
 **The two positions differ in what they DO with an unknown value, not in what counts as one.** A fill
 count must have a number, so it is refused (`E475`); a conversion of a value is an ordinary conversion, so

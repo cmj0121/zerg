@@ -16,14 +16,12 @@ each reusing an existing model:
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
 > **Status.** The compiler ships a **subset** of this surface, and the subset is the **whole-file and
-> whole-stream leaves**: `io.read_file(path) -> list[byte]` and `io.write_file(path, data)` (a missing or
-> unreadable file raises **`IOError`**, which `guard { io.read_file(p) }` demotes to a `Result`; decode with
-> `str(…)` when the bytes are text), `io.read_stdin() -> list[byte]`, the stdout writers `io.write` /
-> `io.println` / `io.write_int`, the stderr writers `io.ewrite` / `io.eprintln`, and the `print` keyword.
-> The **`Reader` / `Writer` spec surface** — `read_bytes` / `read()` / `write` and the `io.stdin` ·
-> `io.stdout` · `io.stderr` stream objects described below — is **[not yet]**: the intended semantics stand
-> as specified, and reaching one of those names is **`E388`** — _module `io` has no `stdout`_ — in any
-> position, including a method call's receiver.
+> whole-stream leaves** — tabled in [Standard Library](stdlib.md#io) — plus the `print` keyword. A missing
+> or unreadable file raises **`IOError`**, which `guard { io.read_file(p) }` demotes to a `Result`; decode
+> with `str(…)` when the bytes are text. The **`Reader` / `Writer` spec surface** — `read_bytes` / `read()`
+> / `write` and the `io.stdin` · `io.stdout` · `io.stderr` stream objects described below — is
+> **[not yet]**: the intended semantics stand as specified, and reaching one of those names is **`E388`** —
+> _module `io` has no `stdout`_ — in any position, including a method call's receiver.
 
 ## Streams — `Reader` & `Writer`
 
@@ -69,10 +67,9 @@ A missing file is an **expected** value-failure, never an abort. Open modes, see
 `Reader` and `Writer`, its network API left to `io`.
 
 > **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase; what is wired is the pair of
-> whole-file leaves `io.read_file(path) -> list[byte]` and `io.write_file(path, data)`, plus
-> `io.read_stdin()`. A missing or unreadable file raises **`IOError`** (demote with `guard`), consistent
-> with "a missing file is an expected value-failure" once `guard`ed. Neither leaf hands back a handle, so
-> nothing has to be closed and `defer f.close()` has nothing to name.
+> whole-file leaves, which raise **`IOError`** (demote with `guard`) — consistent with "a missing file is an
+> expected value-failure" once `guard`ed. Neither leaf hands back a handle, so nothing has to be closed and
+> `defer f.close()` has nothing to name.
 
 ## Standard streams
 
@@ -89,10 +86,9 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 
 > **[not yet]** The `io.stdin` / `io.stdout` / `io.stderr` stream objects are unbuilt, and writing one is
 > **`E388`** — _module `io` has no `stdout`_ — including as a method call's receiver, the position the
-> example above writes it in. What is wired this phase is free functions: `io.write(s)` / `io.println(s)` /
-> `io.write_int(n)` to stdout, `io.ewrite(s)` / `io.eprintln(s)` to stderr, and `io.read_stdin()` for all of
-> standard input at once (each writer returns `Result[nil]` but writes best-effort, never yielding an `Err`
-> yet).
+> example above writes it in. What is wired this phase is free functions
+> ([Standard Library](stdlib.md#io)); each writer returns `Result[nil]` but writes best-effort, never
+> yielding an `Err` yet.
 >
 > **[deviation] / [implementation-defined] buffering.** `print` writes through **buffered libc stdio**
 > while `io.*` writes go **unbuffered** through `write(2)`, so their output **interleaves out of source

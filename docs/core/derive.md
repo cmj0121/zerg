@@ -213,30 +213,10 @@ impl Encode for User {                            # generated, not written
 }
 ```
 
-A sum type derives over its variants — **tag, then payload**:
-
-```text
-#[derive(Encode)]                     # generated: write the variant tag, then each payload field
-enum Shape {
-    Circle(float)
-    Rect(float, float)
-}
-```
-
-When the wire format must differ, **hand-write the impl instead of deriving** — still one canonical
-implementation, still no macro:
-
-```text
-impl Encode for User {                            # replaces the derived one
-    fn encode(mut &out: Sink) {
-        out.field("uid")
-        this.id.encode(out)       # custom key
-        out.field("name")
-        this.name.encode(out)
-        # tags and email deliberately omitted from the wire form
-    }
-}
-```
+A sum type derives over its variants the same way — **tag, then payload**. When the wire format must
+differ — a different key, a field deliberately left off the wire — **hand-write the impl instead of
+deriving**; it replaces the generated one, so there is still one canonical implementation and still no
+macro.
 
 `Decode` returns `Result[This]`, so a malformed input is an ordinary value-tier failure — `guard`-free
 on the happy path, `?`-propagated on error — never an abort. (`Result[T]` is not FFI-safe, but that's

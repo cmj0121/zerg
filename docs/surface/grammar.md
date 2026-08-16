@@ -591,8 +591,9 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
   the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
   compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
-  decorator is a compile error** (`E217`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]` and
-  `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` /
+  decorator is a compile error** (`E217`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]`,
+  `#[fixture]` and `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives
+  (`#[repr]` /
   `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E496 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than
   being sealed in silence_. `#[` is the one `#` that is not a comment — the lexer peeks one character.
@@ -826,7 +827,7 @@ production, not the one that first mentions it.
 | 7     | an `impl` on a built-in type, on a target with type arguments, or carrying its own `[T]`                  |
 | 7     | an `impl` item that is not a method — an associated value or type binding, or anything else               |
 | 7     | an associated type projection `It.Item`; a value generic `f[N: int]`; a parameterized bound `Eq[int]`     |
-| 7     | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]` and `#[allow(…)]`                                 |
+| 7     | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`                   |
 | 7     | a map key that is not an `int` or a `str` — a key needs `Hash`                                            |
 | 7     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`, and the fixed-width ladder `i8`…`f64` |
 | 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`, a standalone `unsafe fn`, an `unsafe` `spec` signature           |

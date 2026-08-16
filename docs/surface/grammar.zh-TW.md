@@ -512,7 +512,8 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
   而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
   項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
-  是編譯錯誤**(`E217`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]`
+  是編譯錯誤**(`E217`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與
+  `#[allow]`;`#[sealed]`
   與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E496 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than being
   sealed in silence_。`#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
@@ -714,7 +715,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 7     | 對內建型別的 `impl`（`impl Tag for int`）、對帶型別引數的目標的 `impl`、或自己帶 `[T]` 的 `impl` |
 | 7     | 不是 method 的 `impl` item —— associated value 或 type 繫結，以及其餘任何東西                    |
 | 7     | associated type projection `It.Item`；value 泛型參數 `f[N: int]`；帶參數的 bound `Eq[int]`       |
-| 7     | 除 `#[derive(…)]`、`#[obj]`、`#[test]` 與 `#[allow(…)]` 以外的所有 decorator                     |
+| 7     | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]` 與 `#[allow(…)]` 以外的所有 decorator       |
 | 7     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                                                |
 | 7     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`，以及定寬階梯 `i8`…`f64`               |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`、獨立的 `unsafe fn`、`unsafe` 的 `spec` 簽章              |

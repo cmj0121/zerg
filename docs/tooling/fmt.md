@@ -220,8 +220,8 @@ header a pasted help screen would light up `Options:` as a field name, `--output
 operators and `VALUE` as a type. Wrong highlighting is worse than none, so the author says
 which is which.
 
-It is a prompt rather than a `fence because comments are to become documentation,
-and that generator emits markdown — so` is the **output** syntax. Spelling the input
+It is a prompt rather than a ` ``` ` fence because comments are to become documentation,
+and that generator emits markdown — so ` ``` ` is the **output** syntax. Spelling the input
 the same way would leave a generator that must pass one through while producing the other
 with no way to tell them apart by looking.
 

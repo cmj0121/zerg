@@ -23,6 +23,12 @@ fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的
   也是重點**：它是一個 **handle**，coroutine 拿到的是同一條 channel 的另一個 handle，之後送出的東西**看得到**。
   `defer` 以同樣方式捕獲，在 `defer` 那一行。**值被快照，handle 被共享** —— `zerg lint` 以 `L301` 說出這件事。
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
+
+  > **[not yet]** 會 `spawn` 的程式不能同時收命令列引數：`fn main(args: list[str])` 與任何 `spawn` 並存都是
+  > _E734 NotImplemented: main(args) in a program that uses concurrency_。`main` 是以 **coroutine 0** 執行的，
+  > 而每一個 scheduler entry shim 都收一個無參數的函式指標，`args` 無處可穿過去;在這樣的 shim 出現之前,並行程式
+  > 從環境變數或檔案讀取設定。非並行的 entry 早就把引數傳進去了,所以問題不在形狀。
+
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
   共享可變的 Zerg 狀態（不會有 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
 
@@ -93,11 +99,11 @@ abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**
 的 send 以 `SendOnClosedError` raise，`DeadlockError` 則是「收尾與 deadlock」所述的乾淨、可攔截 abort，兩者都能用
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 
-**`StopIteration` 叫得出名字，卻刻意無法建構。** `err is StopIteration` 是合法的測試——它是內建種類之一——但
-**沒有**任何程式能 `raise StopIteration(…)`：這個名字不是建構子，在**兩個編譯器**裡寫了都是編譯錯誤。今天接收端
-看得到的東西沒有一個會讓那個測試成立，因為下面的 receive 已經以「從哪一條路抵達」分辨了乾淨結束與崩潰；這個哨兵
-是 runtime 自己的 end-of-stream 標記，正是為此而搆不到。一個能 raise 它的 sender，會讓自己的 channel 戴著
-end-of-stream 標記關閉，而它的 consumer 會把崩潰讀成乾淨結束。
+**`StopIteration` 叫得出名字，卻刻意無法建構。** `err is StopIteration` 是合法的測試，但**沒有**任何程式能
+`raise StopIteration(…)`——在**兩個編譯器**裡都是 _E726_（見 [錯誤處理](errors.zh-TW.md)）。這個哨兵是 runtime
+自己的 end-of-stream 標記：一個能 raise 它的 sender，會讓自己的 channel 戴著那個標記關閉，而它的 consumer 會把
+崩潰讀成乾淨結束。今天接收端看得到的東西也沒有一個會讓那個測試成立，因為下面的 receive 已經以**從哪一條路抵達**
+分辨了乾淨結束與崩潰。
 
 ### 送出——`ch <- v`
 
@@ -126,8 +132,8 @@ receive 回傳 **`T?`**。一條串流會結束的兩種方式，在這個語言
 這個分家正是「原因不會遺失」的全部理由。`Result` 逼收方先問「我拿到的 `Right` 是哪一種」才分得出結束與死亡；
 忘了問的人就把死亡弄丟了。現在沒有人忘得掉。
 
-`chan[T?]` 因此被**拒絕**，理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束了」，
-沒有任何運算子分得開。包進一個 struct，或約定一個哨兵值。
+`chan[T?]` 因此被**拒絕**（`E404`），理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束
+了」，沒有任何運算子分得開。包進一個 struct，或約定一個哨兵值。
 
 被拒絕的是**型別**，不是某一種寫法：參數、回傳型別、struct 欄位、帶標註的繫結、`type` 宣告、
 巢在另一個型別裡的 `chan`，以及建構式 `chan[T?](…)`，都是同一個型別寫在不同位置，每一個都會被擋下來。
@@ -144,8 +150,8 @@ x := <-(<-cc)         # 被拒絕——`<-ch` 需要一個 channel，而 chan[in
 ```
 
 這不是一條關於巢狀的規則。**每一個** channel 運算都對拿到的東西問同一個問題——`<-x`、`x <- v`、
-`close(x)`，以及兩種 `select` arm——而只要它不是一個 channel 端點，答案就是同一句具名的拒絕，
-而且帶著位置。
+`close(x)`，以及兩種 `select` arm——而只要它不是一個 channel 端點，答案就是同一句具名、帶位置的拒絕：
+_E478 `<-ch` needs a channel, and chan[int]? is not one_。
 
 每種需求都由 `T?` 本來就有的四個運算子掉出來——由 **receiver** 決定：
 
@@ -166,16 +172,9 @@ for v in ch { use(v) }                   # 同一種 drain，串流結束處就�
 至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以原本記在這裡的
 「`Result[T]` 活不進簽章」問題，已經不在 channel 這條路上了。
 
-上面那行 `match` 還值得再記一筆，關於 arm 裡可以放什麼。`match` arm 的 body 是一個**運算式**，而區塊**就是**
-一個運算式——所以 `Left(v) => { … }` 可以裝好幾個敘述、並且交出最後一個敘述的值，像 `print` 這種敘述站在那個
-**區塊裡面**非常穩。`c_match` 降階成三元運算鏈，而區塊降階成一個 statement expression，那就是三元運算鏈的一個
-運算元，和其他運算元沒有兩樣。敘述不能當的是 arm 的**整個 body**:`1 => print "one"` 會被
-_NotImplemented: `print` is a statement, and an expression is wanted here_ 擋下,因為在那裡 arm 沒有別的東西
-可以交出。加上大括號,arm 就有了一個區塊,而區塊交得出來。
-
-`select` 的 arm 不同，理由值得記清楚：`match` 的 arm 必須**產出**該次 match 的值，而 `select` 不產出值、它的
-arm 是**執行**。所以 select arm 的 body 是一個**敘述**（GRAMMAR group 9）——`break` 在那裡很平常，區塊只是眾多
-敘述中的一種。
+**`select` 的 arm body 是一個敘述**，而它與 `match` arm 的差別值得記清楚：`match` 的 arm 必須**產出**該次 match
+的值，所以敘述不能當它的整個 body（見 [控制流](control-flow.zh-TW.md)）；而 `select` 不產出值、它的 arm 只是
+**執行**（`GRAMMAR#select-arm`）。所以 `break` 在 select arm 裡很平常，區塊也只是那裡允許的眾多敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 
@@ -430,10 +429,11 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
 `fetch_add` / `compare_swap`。
 
-> **[not yet]** 在**出貨的 `zerg`** 上，而且原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而
-> `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_NotImplemented: a generic struct `Atomic[…]` — this compiler
-> erases type parameters, and a field names one_——而不是吐出一個沒人宣告的型別，所以 `import "std/atomic"` 在
-> 那裡是一則乾淨的診斷；上面的 actor 才是**兩個編譯器**都成立的做法。
+> **[not yet]** 原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而還沒有 `Ref[T]`（`E446`）。
+> 模組本身有出貨，被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E511 the module `atomic`
+> ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has
+> not built. Share state across coroutines with a channel until it has_——所以上面的 actor 才是今天成立的做法。
+> 顯式的**記憶體順序引數**與 generic 的 **`Atomic[T]`** 在語言層面同樣是 **[not yet]**。
 
 ## producer——generator pattern
 
@@ -474,6 +474,8 @@ for v in range(0, 10) { use(v) }   # drain 到 producer 的 channel 關閉
 refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**不會遺失**：以最後 sender 身分關閉 channel 時會帶著
 崩潰的 `Err`，並在 **consumer 下一次 receive 時 raise 出來**（乾淨結束則給 `nil`——見上面的「接收」）。實測:
 producer 送出一個值後 abort，consumer 第二次 `<-ch` 會 re-raise `IOError: disk went away`，而不是回答一次缺席。
+coroutine 邊界包不住的**唯一**一種 abort 是 `StackOverflowError`,它從任何一條 stack 都會結束整個行程——見
+[錯誤處理](errors.zh-TW.md) 的 deviation。
 
 runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
 消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
@@ -494,8 +496,11 @@ scheduler 是**公平的**：每個 **ready** 的 coroutine 終究會被排到�
 coroutine。這是對**可觀察性質、而非機制**的保證：公平**如何**達成——搶佔、compiler 插入的 safepoint、reduction
 計數——是語言不固定的實作細節；只承諾那個性質。
 
-**今日。** scheduler **確實是 M:N**——`M` 條 worker OS thread（預設每顆 CPU 一條）抽同一條共享的 FIFO run
-queue，coroutine 在 worker 之間自由遷移，因此可能在一條它從未啟動於其上的 thread 恢復。它**不是**的，是搶佔式。
+**今日。** scheduler **確實是 M:N**——`M` 條 worker OS thread（每顆 CPU 一條，上限 16）抽同一條共享的 FIFO run
+queue，coroutine 在 worker 之間自由遷移，因此可能在一條它從未啟動於其上的 thread 恢復。**`main` 是 coroutine 0**:
+它在任何 worker 存在之前就已經排進那條 run queue,而呼叫它的那條 thread 自己也成為一個 worker、不是 supervisor。
+所以 pool 是在 `main` 的第一個敘述前後就已經起來,而不是等第一次 `spawn` 才啟動;`M` 就是全部的預算——沒有一條
+thread 是替程式自己的 coroutine 留著的,這也正是下面那條 deviation 是一個**數字**的原因。它**不是**的，是搶佔式。
 
 > **[deviation]** 規格要求沒有任何 coroutine 能無限期餓死其他人；而 scheduler 是**合作式**的：coroutine **只在**
 > channel 操作、`select` 或 sleep 讓出，在它自己讓出之前沒有東西能把它從 worker 上拿下來。因此一個**從不 park

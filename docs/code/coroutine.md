@@ -29,6 +29,13 @@ NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. 
   shared** — `zerg lint` says so as `L301`.
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.
+
+  > **[not yet]** A program that `spawn`s cannot also take command-line arguments: `fn main(args: list[str])`
+  > beside any `spawn` is _E734 NotImplemented: main(args) in a program that uses concurrency_. `main` runs
+  > as **coroutine 0**, and every scheduler entry shim takes a nullary function pointer, so there is nowhere
+  > to thread `args` through; a concurrent program reads its configuration from the environment or a file
+  > until one exists. The non-concurrent entry already passes them, so the shape is not the problem.
+
 - **Captures are restricted** to **immutable values and `Ref` values** (channels, `Ref[T]`) — a `mut`
   reference cannot cross `spawn`, so coroutines never share mutable Zerg state (no data races). What
   crosses a boundary, and how, is **Sharing & the memory model**, next.
@@ -111,12 +118,11 @@ Both channel error kinds are **reified and nameable**: a send on a closed channe
 deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).
 
 **`StopIteration` is nameable but deliberately not constructible.** `err is StopIteration` is a legal
-test — it is one of the built-in kinds — but **no** program can `raise StopIteration(…)`: the name is not
-a constructor, and writing one is a compile error in **both** compilers. Nothing a receiver sees answers
-that test today, because the receive below already tells a clean end from a crash by which of the two
-routes it arrives on; the sentinel is the runtime's own end-of-stream marker and stays out of reach for
-exactly that reason. A sender able to raise it would close its channel wearing the marker, and its
-consumer would read a crash as a clean finish.
+test, but **no** program can `raise StopIteration(…)` — _E726_ in **both** compilers ([Errors](errors.md)).
+The sentinel is the runtime's own end-of-stream marker: a sender able to raise it would close its channel
+wearing that marker, and its consumer would read a crash as a clean finish. Nothing a receiver sees answers
+the test today either, because the receive below already tells a clean end from a crash by **which of the
+two routes** it arrives on.
 
 ### Send — `ch <- v`
 
@@ -148,8 +154,8 @@ That split is the whole reason the reason cannot be lost. A `Result` made the re
 kind of `Right` it was holding before it could tell an ending from a death; anyone who forgot lost
 the death. Nobody can forget now.
 
-`chan[T?]` is **refused** for the same reason it is now unnecessary: `nil` would mean both the value
-that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
+`chan[T?]` is **refused** (`E404`) for the same reason it is now unnecessary: `nil` would mean both the
+value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
 or agree on a sentinel.
 
 It is the **type** that is refused, not one way of writing it: a parameter, a result, a struct field,
@@ -171,7 +177,8 @@ x := <-(<-cc)         # refused — `<-ch` needs a channel, and chan[int]? is no
 
 That is not a rule about nesting. **Every** channel operation asks the same question of what it is
 handed — `<-x`, `x <- v`, `close(x)`, and both kinds of `select` arm — and for anything that is not a
-channel end the answer is one refusal, by name and with a place.
+channel end the answer is one refusal, by name and with a place: _E478 `<-ch` needs a channel, and
+chan[int]? is not one_.
 
 Every need falls out of the four operators `T?` already had — the **receiver** chooses:
 
@@ -194,18 +201,11 @@ whether this stream ending badly is your business — and `guard` is where that 
 `?` on a receive, meanwhile, now needs only what any `T?` needs: the absence is an ordinary optional,
 so the `Result[T]`-in-a-signature problem that used to be noted here is off the channel path.
 
-The `match` line above is worth one more note, about what may stand in an arm. A `match` arm's body is
-an **expression**, and a block **is** one — so `Left(v) => { … }` holds several statements and yields
-its last one's value, and a statement such as `print` stands **inside** that block perfectly well.
-`c_match` lowers to a ternary chain, and a block lowers to a statement expression, which is an operand
-of one like any other. What a statement may not be is the arm's **whole body**: `1 => print "one"` is
-turned away with _NotImplemented: `print` is a statement, and an expression is wanted here_, because
-there the arm has nothing else to yield. Wrap it in braces and the arm has a block, which does.
-
-`select` arms differ, and the reason is worth keeping straight: a `match` arm must **yield** the
-match's value, while a `select` yields nothing and its arm **runs**. So a select arm's body is a
-**statement** (GRAMMAR group 9) — `break` is ordinary there, and a block is just one statement among
-them.
+A **`select` arm's body is a statement**, and the difference from a `match` arm is worth keeping
+straight: a `match` arm must **yield** the match's value, so a statement cannot be its whole body
+([Control Flow](control-flow.md)), while a `select` yields nothing and its arm simply **runs**
+(`GRAMMAR#select-arm`). So `break` is ordinary in a select arm, and a block is just one statement
+among the ones allowed there.
 
 ## Closing — automatic on the last sender, `close(ch)` when it must be early
 
@@ -495,10 +495,11 @@ For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`**
 provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
 > **[not yet]** And not because of anything about atomics: an `Atomic[int]` IS a `Ref[int]`, and there
-> is no `Ref[T]` yet. `import "std/atomic"` is refused by name rather than emitting a type nothing
-> declares — _NotImplemented: a generic struct `Atomic[…]` — this compiler erases type parameters, and a
-> field names one_ — so the actor above is the pattern that works today. The explicit **memory-ordering
-> argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.
+> is no `Ref[T]` yet (`E446`). The module ships and the **import** is what is refused, rather than a type
+> nothing declares reaching the emitter — _E511 the module `atomic` ships and cannot be imported — it
+> declares `Atomic[T]`, and a generic struct is a form this compiler has not built. Share state across
+> coroutines with a channel until it has_ — so the actor above is the pattern that works today. The explicit
+> **memory-ordering argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.
 
 ## A producer — the generator pattern
 
@@ -542,7 +543,9 @@ unwinds (freeing scopes, decrementing channel refcounts) while everything else r
 fire-and-forget, but the failure is **not lost**: closing a channel as the last sender carries the
 crash `Err`, which is **raised at the consumer's next receive** (a clean finish gives `nil` instead —
 Receive, above). Measured: a producer that aborts after one send makes the consumer's second `<-ch`
-re-raise `IOError: disk went away` rather than answer an absence.
+re-raise `IOError: disk went away` rather than answer an absence. The **one** abort a coroutine boundary
+does not contain is a `StackOverflowError`, which ends the process from any stack — see the deviation in
+[Errors](errors.md).
 
 The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at the top level prints one
 — and then that coroutine is gone and the program runs on. The report is **purely observational**:
@@ -567,9 +570,13 @@ coroutine can indefinitely starve others** — not even a CPU-bound one that nev
 safepoints, reduction counting — is an implementation detail the language does not fix; only the property
 is promised.
 
-**Today.** The scheduler **is M:N** — `M` worker OS threads (one per CPU by default) drain one shared FIFO
-run queue, and a coroutine migrates freely between workers, so it may resume on a thread it never started
-on. What it is **not** is preemptive.
+**Today.** The scheduler **is M:N** — `M` worker OS threads (one per CPU, capped at 16) drain one shared
+FIFO run queue, and a coroutine migrates freely between workers, so it may resume on a thread it never
+started on. **`main` is coroutine 0**: it is queued on that run queue before any worker exists, and the
+thread that called it becomes a worker rather than a supervisor. So the pool is up around `main`'s first
+statement, not started in reaction to the first `spawn`, and `M` is the whole budget — no thread is held
+back for the program's own coroutine, which is why the deviation below is a **count**. What the scheduler
+is **not** is preemptive.
 
 > **[deviation]** The spec requires that no coroutine can indefinitely starve others; the scheduler is
 > **cooperative**, so a coroutine yields **only** at a channel operation, a `select`, or a sleep, and

@@ -4,7 +4,7 @@ Every code the compiler reports, and the rule each one names. Part of the
 [Language Reference](../language.md). Also in [繁體中文](diagnostics.zh-TW.md).
 
 An `F` or an `L` code is what a **tool** says about a program that already builds, and the
-[formatter and the linter](fmt.md) carry their own. An `E` code is not advice.
+[formatter](fmt.md) and the [linter](lint.md) carry their own.
 
 These are not advisory. A program that hits one does not build, so each is a **compile
 error** the build stops on. They carry codes because a code is a **stable identity for a

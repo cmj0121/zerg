@@ -469,10 +469,14 @@ a literal carrying a brace, which is correct doubled and reads worse than what i
 and the accumulation `out = out + …`, where a hole would make the accumulator
 indistinguishable from the values being interpolated.
 
-`F406` writes a blank line, and the bar for doing that is deliberately high: this whole
-tree has **ten** blank lines inside function bodies, and `fmt.zg` — 1300 lines of it — has
-none. So the rule puts one in exactly two places, both of them places the authors here
-already put one.
+`F406` writes a blank line, and the bar for doing that is deliberately high: when the rule
+was written this whole tree had **ten** blank lines inside function bodies, and `fmt.zg` —
+1300 lines of it then — had none. So the rule puts one in exactly two places, both of them
+places the authors here already put one.
+
+It is the rule's own output that makes that number unmeasurable now: `src/compiler/` carries
+roughly 1,700 such blanks today, and `fmt.zg` — 3,057 lines — has 81. The bar is what the
+rule DECLINES, below, and not a count anybody can take again.
 
 A run of **more than one** guard is followed by a blank:
 

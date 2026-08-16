@@ -1,12 +1,13 @@
 # Zerg Null-safety 與錯誤處理（Null-safety & Errors）
 
-兩層失敗——可回復的值與 abort——橋接它們的運算子（`?` `??` `?.` `!` `raise` `guard`）,以及如何依型別處理錯誤。
-屬於 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](errors.md) 版本。
+兩層失敗——可回復的值與 abort——橋接它們的運算子（`?` `??` `?.` `!` `raise` `assert` `guard`）,以及如何依型別處理
+錯誤。屬於 [語言參考](../language.zh-TW.md) 的一部分。亦有 [English](errors.md) 版本。
 
 失敗分成**兩層**，兩層之間各只有一座橋。**可回復的失敗是值**——「不存在」與預期內的錯誤都是 sum type 的一般值，
-而非魔法般的 null；這是你日常工作的那一層。**bug 則是一次 abort**——溢位、除以零、賭錯的 `!`、或一個明確的
-`raise` 會 _raise_ 並 unwind stack（見下方 _Aborts_）；它們不出現在任何簽章裡，無法被檢視、也無法續算。兩層攜帶的是
-**同一個 `Err`**（`Error` spec），因此在橋上乾淨地交會：**`raise`（與 `!`）把值升級成 abort，`guard` 把 abort 降級回值。**
+而非魔法般的 null；這是你日常工作的那一層。**bug 則是一次 abort**——溢位、除以零、賭錯的 `!`、不成立的 `assert`、
+或一個明確的 `raise` 會 _raise_ 並 unwind stack（見下方 _Aborts_）；它們不出現在任何簽章裡，無法被檢視、也無法續
+算。兩層攜帶的是**同一個 `Err`**（`Error` spec），因此在橋上乾淨地交會：**`raise`（與 `!`、與 `assert`）把值升級成
+abort，`guard` 把 abort 降級回值。**
 
 值那一層是同一個 sum type；依慣例**左邊是值、右邊是要被傳遞的東西**：
 
@@ -55,6 +56,22 @@ addr := config?.server?.host ?? "localhost"
 ——它是 `if c { raise e }` 的糖,也正是格式化器的 `F401` 會把 block 形式改寫成的樣子。它只屬於語句形式:
 `??` 右側的 `raise` 不接尾隨 `if`,否則那個 guard 會讀成 coalesce 的。
 
+**`assert cond`——陳述一項主張(值 → abort)。** 主張不成立時 raise `AssertionError`,而它只收一個條件、
+**別的都不收**([`GRAMMAR#assert-stmt`](../../GRAMMAR)):訊息才是函式永遠湊不出來的那樣東西,所以由 compiler
+從主張所在的位置、主張本身的原始碼文字、以及比較拆開後每個運算元的值寫出來。
+
+```text
+AssertionError: parse.zg:41  assert lo == hi
+  lo = 1
+  hi = 2
+```
+
+所以 `assert` 是給那種「自己的文字就是解釋」的主張用的。需要解釋而不是展示的主張,寫成
+`raise ValueError("why") if not cond`,那才是 production 形式——也是唯一帶條件的形式,因為 `assert` 是
+唯一**不收後綴 `if`** 的 diverge:`assert c if d` 根本不成立（`E205`）。`assert` **一律被編譯進去**、沒有任何旗標
+拿得掉,因為有 assertion 與沒有 assertion 的程式會是兩支程式;所以 `zerg lint` 會把 `*_test.zg` 以外的 `assert`
+報成 `L602`——它不是比你要的更弱的檢查,而是更**不精確**的那一個。
+
 **內建的錯誤分類是一棵樹。** 這個階段提供**固定的六種**錯誤,而其中有些**是另一些的一種**:
 
 ```text
@@ -85,8 +102,9 @@ KeyError              沒有任何 map 持有這個 key
 你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](../core/specs.zh-TW.md)——的 `struct` / `enum`)
 **尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
-`raise`、讀 `err.message()`、用 `err is ValueError` 與 `err in ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code
-完整。runtime **自身的內建失敗也 raise 對應的種類**,使 library 與 runtime 的錯誤共用一套詞彙:整數解析失敗是
+`raise`、讀 `err.message()`、用 `err is ValueError` 與 `err in ValueError` 測試,而 `guard` 會把它還原成
+`Right(err)`、message／cause／code 完整。
+runtime **自身的內建失敗也 raise 對應的種類**,使 library 與 runtime 的錯誤共用一套詞彙:整數解析失敗是
 `ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
 UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`
 攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
@@ -101,17 +119,18 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
 用到的 fault 名稱裡,今天有十一個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
 `EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，加上並行那章指名的三個——`SendOnClosedError`、
-`DeadlockError` 與 `StopIteration`——以及 `AssertionError`:那是失敗的 `assert`（見
-[Grammar](../surface/grammar.zh-TW.md) group 8）raise 出來的東西,而且沒有別的東西會 raise 它。這份獨佔性正是
-給它一個種類、而不是一句訊息的理由:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端的東西報成
-**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
-是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十一個之
-列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
+`DeadlockError` 與 `StopIteration`——以及 `AssertionError`:那是失敗的 `assert` raise 出來的東西,而且**沒有別的
+東西**會 raise 它。這份獨佔性正是種類勝過訊息之處:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端
+的東西報成**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、
+`MatchError` 與 `AliasError` 是 **[not yet]**——`err is AliasError` 在**兩個編譯器**裡都是
+_E494 NotImplemented: `is AliasError` — an `is` test names one of the built-in error kinds here, and
+`AliasError` is not one_——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
 
 **`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
-`raise StopIteration("…")` 在**兩個編譯器**裡都是編譯錯誤。channel 的乾淨關閉以它作為**種類**、而非訊息字串
-攜帶——這正是 consumer 不必比對字串就能分辨乾淨結束與崩潰的原因;一個能 raise 這個哨兵的 sender 恰恰會破壞這件事
-（見 [Concurrency](coroutine.zh-TW.md)）。`StackOverflowError` 則是 **[deviation]**（見下）。
+`raise StopIteration("…")` 在**兩個編譯器**裡都是
+_E726 `StopIteration` is testable but not constructible_,因為它正是 channel 乾淨關閉早已戴上的那個標記——一個能
+raise 它的 sender 會讓 consumer 付出什麼代價,見 [Concurrency](coroutine.zh-TW.md)。
+`StackOverflowError` 則是 **[deviation]**（見下）。
 abort **不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到出錯處續算。語意上它是一次
 **會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
@@ -154,10 +173,15 @@ fn read_config(s: str) -> Result[Config] {
 }
 ```
 
-> **被 guard 的區塊有兩條限制，而且都是大聲的。** 從區塊裡 `return`、`break` 或 `continue` > **離開**會被拒絕：handler 在區塊前推入、區塊後彈出，中途跳走會把 frame 帶走、
-> 把 handler 留在上面。區塊的值若是**在區塊內綁定的名字**也被拒絕，因為 C 規定在 `setjmp`
-> 與落點之間被修改的自動變數，除非是 `volatile` 否則其值不確定（C99 7.13.2.1）——把區塊的
-> 值寫成一次呼叫或一個常值，那本來也是日常寫法。
+> **被 guard 的區塊只有一條限制，而且是大聲的。** 用 `return`、`break` 或 `continue` **離開**區塊，
+> 在兩個編譯器裡都會被拒絕——_E403 NotImplemented: `return` leaving a `guard` block — the guard's
+> handler would stay installed on a frame that has returned_。handler 在區塊前推入、區塊後彈出，
+> 中途跳走會把 frame 帶走、把 handler 留在上面。寫在 guard **裡面**的迴圈不受影響:它的 `break`
+> 從不跨過那個 frame。
+
+區塊的值是**在區塊內綁定的名字**是很平常的事,那也正是一個 guard 要裝好幾個 statement 的主要理由——
+`guard { x := parse(s)  check(x) }`。那個值是被**複製**出來、而不是被別名,所以那些 binding 在離開時照樣釋放,
+而答案活得比區塊久。
 
 `Result[T]` **能在簽章裡存活**，所以上面的 `read_config` 就是一個普通函式，而它回傳的東西在呼叫端就是一個普通的
 值：交給 `??` 取預設、交給 `match` 讀兩側（`Right(e)` 那個 arm 的 `e is ValueError` 回答種類），或交給 `?` 把同一
@@ -187,8 +211,9 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被
-`guard` 具現化的內建 abort;對**非錯誤**型別的一般存在性測試 `x is T` 是 **[not yet]**。這裡可達的錯誤集合在覆蓋上被
+——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——上面那十一個具現化種類、別無其他,這也是為什麼
+範圍外的名字得到的是 `E494`、而不是一個回答 `false` 的測試;對**非錯誤**型別的一般存在性測試 `x is T` 是
+**[not yet]**。這裡可達的錯誤集合在覆蓋上被
 視為**開放**,所以 `is` 串永遠無法窮盡:**catch-all 必備**。未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort——但
 `MatchError` 是 **[not yet]** 的具現化種類,且因為最後一個 `match` arm 一律無條件,compiler 今天永不 emit 一個(catch-all
 的要求是靜態規則、不是 runtime `MatchError`)。
@@ -199,6 +224,6 @@ match guard { work() } {
 「這是我確切的錯誤種類」。(把多種錯誤聚成一個封閉 sum 的自訂 error `enum`,與上面的自訂 error 型別一同延後。)
 
 > **[not yet]** 內建錯誤種類不能出現在**型別**位置：`fn f() -> Either[int, ValueError]` 會回報
-> ``no type named `ValueError` ``。那六個種類是 runtime 認得的 constructor，不是型別檢查器解析得到的名字，所以剛
-> 才描述的那一分為二裡封閉集合的那一半——由 `match` 以值讀出右側的具體 `Either[T, Kind]`，本節與分類那一節都點名
-> 過——今天沒有任何程式寫得出來。兩條路裡存在的是被抹除的 `Result[T]` 加上一串 `is`。
+> _E707 no type named `ValueError`_。那些種類是 runtime 認得的 constructor，不是型別檢查器解析得到的名字，所以剛
+> 才描述的那一分為二裡封閉集合的那一半，今天沒有任何程式寫得出來;兩條路裡存在的是被抹除的 `Result[T]` 加上一串
+> `is`。

@@ -22,16 +22,17 @@
 
 寫出來的型別**贏**——`fn (x: str)` 放在 `fn (int) -> …` 的位置是一個指名兩個型別的型別錯誤,而不是被悄悄
 覆蓋掉的註記。而一個**遇不到**這種位置的 closure 無處可取,那是錯誤、不是猜測:`f := fn (x) { … }` 會報
-_the closure parameter `x` has no type, and this position gives it none_。
+_E385 the closure parameter `x` has no type, and this position gives it none_。
 
 > **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
-> 寫在它上一行的 `f := text.make` 會報 _module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條路
-> 上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
+> 寫在它上一行的 `f := text.make` 會報 _E388 module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條
+> 路上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
 >
 > **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
 > method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
-> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕。型別引數從引數型別
-> 推論,是今天實例化一個 generic 的唯一途徑。
+> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕——_E275 `id[int](…)`
+> writes a call's type arguments, and a postfix `[ … ]` is an index_。型別引數從引數型別推論,是今天實例化一個
+> generic 的唯一途徑。
 >
 > **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被讀完、然後被指名拒絕：
 > `f: fn(mut &int) = bump` 報 _E286 NotImplemented: a `mut &` parameter in a function type_，並帶上那個前綴
@@ -89,7 +90,7 @@ greet("Sam", "Hi", true)     # 全 positional
   的參數仍是**必填**。
 
   > **[not yet]** **讀取前面參數**的預設值——`fn g(a: int, b: int = a * 2)`——是唯一沒做出來的形狀。預設值在
-  > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _error: undefined name `a`_，
+  > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _E372 undefined name `a`_，
   > 而不是求值 `a * 2`。其餘每種預設值都如規格 lower，純常數與計算出來的運算式一樣：`b: int = 1 + 2`、
   > `b: int = side()` 與 `greeting: str = "a" + "b"` 都在呼叫處、每次求值。
   >
@@ -103,10 +104,9 @@ greet("Sam", "Hi", true)     # 全 positional
   positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
   不能再回到 positional）。
 
-  > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _NotImplemented: the named argument
-  > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒有辦法跳過中間那個
-  > 有預設的參數，「一旦具名，其後全部都要具名」這條規則也沒有東西可管。一次呼叫由左往右填它的參數，有預設的
-  > 參數只能從引數列的**尾端**省略。
+  > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _E223 NotImplemented: the named argument
+  > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒辦法跳過中間那個有
+  > 預設的參數，也沒有具名順序的規則要遵守。一次呼叫由左往右填它的參數，有預設的參數只能從引數列的**尾端**省略。
 
 因為參數可以用名字挑選，**名字就成了函式契約的一部分**——改名會弄壞呼叫者，就跟改型別一樣。但預設與名字都不進
 _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名字住在參數列——與「型別就是輸入／輸出契約、僅此
@@ -116,13 +116,12 @@ _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名�
 模型與 C ABI 都保持扁平，也符合 formatting 已採的 no-variadics 立場；`print` 保持是內建構造、不是使用者可定義的
 variadic。
 
-**閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
-單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——**已經實作**:
-捕獲的名字會變成閉包隨身帶著的一個 per-site 環境,而值在**寫下閉包的地方**被複製進去。
-捕獲一個 **`mut`** binding 也已經實作,而且拿到的是**寫下閉包那一刻**該 binding 持有的值——之後對那個 binding 的
-寫入,透過閉包看不到。那正是「複製帶入」的意思,也正是這兩種情況不需要兩條規則的原因。捕獲在語意上是
-**複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
-而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。
+**閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲的名字會變成閉包隨身帶著的一
+個 per-site 環境。捕獲一個 **`mut`** binding 與其他捕獲一樣,拿到的是**寫下閉包那一刻**該 binding 持有的值——之後
+對那個 binding 的寫入,透過閉包看不到;那正是「複製帶入」的意思,也正是這兩種情況不需要兩條規則的原因。複製是
+**語意**、不總是機制:單純的 scalar 確實被複製,而 channel 做 refcount++、non-POD 值(`list` / `map` / `str`、
+`Ref`、裝箱值)則是**被 retain** 進那個環境、而非急切深拷貝。無論走哪一條,逃出定義 scope 的閉包都帶著自己的捕獲、
+永不懸空。
 
 那個環境是 **refcounted** 的,不是 scope-owned——這是上面那條複製規則唯一由實作、而非由 scope 來實現的地方。閉包
 可能活得比造出它的 scope 久,所以 fn value 算它環境的一個 holder,最後一個 holder 釋放它,並依宣告的逆序拆解捕獲,
@@ -164,6 +163,3 @@ for x in xs {
 > 函式值沒有符號。(它以前會把 `zg_work()` 寫進那個 thunk 裡,建置死在 `cc`——那正是總則明文禁止的結局。)
 > 行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
 > [Coroutines 與 Channels](coroutine.zh-TW.md)。
-
-而且因為捕獲永遠是 immutable copy，「捕獲的是變數還是值？」根本沒有可觀察的答案——被捕獲的值永不改變，這個
-問題自然消失。

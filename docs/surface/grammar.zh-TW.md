@@ -177,8 +177,8 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
 - **command literal。** 反引號 `` `git status` `` 是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
   空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）改為經過 **shell** 並
   對每個 hole **shell-quote**（`{x:raw}` 可退出）。執行面——pipe 作為 `Reader`／`Writer`、行程 `Ref[proc]`——屬
-  **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法。兩種命令字面量形式皆為 **[not yet]**：被文法辨識，但此階段
-  在**程式碼生成時被拒絕**。
+  **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法。兩種形式皆為 **[not yet]**，而 parser 會把它們分開、
+  也不會把任何一種往下傳：純字面量是 `E236`，內插的那個是 `E235`。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
@@ -286,9 +286,8 @@ literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經
 （`{x:raw}` 可退出），使值以單一安全引數插入。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
-  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
-  **[not yet]**，已被解析但在程式碼生成時被拒絕。
+  三者皆為 **[not yet]**——洞裡的轉換是 `E226`（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
+  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——同樣是 **[not yet]**（`E227`）。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
   只當它是到 `}` 為止的不透明字串。
@@ -493,15 +492,15 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   搭配 `impl Indexable[int, T]`（元素）與 `impl Indexable[Range, list[T]]`（slice）——`xs[k]` 便依 `k` 的型別靜態
   分派——或用 `enum` 做 runtime 選擇。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。就這樣而已——spec 承載
-  **行為,別的都不承載**。**associated type** 與 **associated value** 不是這裡的成員,兩者皆被具名拒絕;單一輸出
-  的協定改以參數化 spec 表達（`spec Iterable[T]`）,而每個 impl 一份的常數是 associated fn。方法**不宣告
+  **行為,別的都不承載**,而那正是下一條的主題。方法**不宣告
   receiver**——`this` 在方法內為隱式,透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯
   錯誤。self 型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
 - **Inherent `impl`。** 無 `for` 的 `impl User { … }` 加入**不綁任何 spec** 的方法——named constructor
   `User.from_json(…)`（關聯函式,不用 `this`,以 `Type.f(…)` 呼叫）或私有方法 `u.recompute()`（用 `this`,以
   `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
 - **沒有 associated type,也沒有 associated value。** spec 既不宣告由 `impl` 填入的型別（`type Item`,投影成
-  `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕。單一輸出的協定改以
+  `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕——_E230 an
+  associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else_。單一輸出的協定改以
   參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
   一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
   另一件事。
@@ -513,9 +512,11 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
   而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
   項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
-  是編譯錯誤**,絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]` 與 layout
-  指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕。`#[` 是唯一不算註解的
-  `#`——lexer peek 一字元即分辨。
+  是編譯錯誤**(`E217`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]` 與 `#[allow]`;`#[sealed]`
+  與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E496 … it is a
+  reserved decorator … and this compiler does not build it, so the constructor stays public rather than being
+  sealed in silence_,而那正是每一個保留 decorator 的形狀:名字認得、效果不套用,而且兩件事都不安靜發生。
+  `#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors
 
@@ -542,11 +543,10 @@ postfix       += '?' | '!' | '?.' identifier
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
 - **`guard { … }`**——把區塊內任何 abort **降級**回值,產出 `Result[T]`(abort→value)。它是從 abort 層回來的唯一途徑,
   guard 過的 abort 就是普通 `Result`,用同一套 `?` / `??` / `match` 處理。
-- **`assert cond`**——陳述一項主張,不成立時 **raise `AssertionError`**。它只收一個條件、**再無其他**:訊息由編譯器
-  寫——主張寫在哪個檔案哪一行、主張本身的原始文字、以及比較拆開後每個運算元當時的值。需要「解釋」而非「展示」的
-  主張請寫 `raise ValueError("why") if not cond`,那才是產品程式碼的形式。它就是那個 raise 的語法糖,只是運算元會
-  **先**綁進暫時變數,訊息才不會把它們再求值一次;`assert a and b` 是兩條 assert,而且運算元絕不跨過短路運算子被
-  提出來。它**永遠會被編譯進去**——沒有任何旗標能拿掉它——`*_test.zg` 之外寫一條的代價由 linter 的 `L602` 說明。
+- **`assert cond`**——陳述一項主張,不成立時 **raise `AssertionError`**。這個 production 只收一個條件、**再無其他**,
+  所以沒有訊息運算元、也沒有尾隨的 `if`;編譯器改寫進訊息裡的是什麼、以及什麼時候該用 `raise` 而不是一項主張,見
+  [錯誤處理](../code/errors.zh-TW.md)。它就是那個 raise 的語法糖,只是運算元會**先**綁進暫時變數,訊息才不會把它們
+  再求值一次;`assert a and b` 是兩條 assert,而且運算元絕不跨過短路運算子被提出來。
 
 ## Group 9 — Concurrency
 
@@ -668,7 +668,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
   memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組宣告 `pub struct Atomic[T]`,而泛型 struct
-  尚未建置,所以光是 `import "atomic"` 就會回報 _E215 NotImplemented: a generic struct `Atomic[…]`_。
+  尚未建置,被拒絕的是那次 **import**——光是 `import "atomic"` 就會回報 _E511 the module `atomic` ships and cannot
+  be imported_,而不是讓一個沒人宣告的型別走到 emitter（程式裡自己寫的泛型 `struct` 才是通用的 `E215`）。
   `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
   所倚賴的 `Ref[T]` 是 `E446`。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
@@ -684,12 +685,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## 已規範但未實作
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
-別的東西。這份清單大致上不是散文 —— `scripts/refuse-check.sh` 幾乎每一列都有對應案例，以該拒絕的 `E###` 釘住，
-所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
-
-之所以說**幾乎**，是因為下表有三個拒絕沒有碼，而沒有碼，案例就釘不住任何東西：把 range 當值、body 是
-reassignment 或 send 的 `match` arm、以及泛型別名 `type X[T] = …`。那三者只由這張表撐著、沒有別的東西撐——見
-[Conformance](../conformance.zh-TW.md) 的診斷 deviation，那個缺口屬於那裡。
+別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例，以該拒絕的 `E###` 釘住，
+所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。曾經沒有碼、因而釘不住任何東西的那三列，現在
+都有了：把 range 當值是 `E493`、泛型別名 `type X[T] = …` 是 `E491`，而 body 是 reassignment 或 send 的 `match`
+arm 是 `E607`，訊息會指名它遇到的是哪一種。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
 
@@ -717,7 +716,7 @@ reassignment 或 send 的 `match` arm、以及泛型別名 `type X[T] = …`。�
 | 7     | 對內建型別的 `impl`（`impl Tag for int`）、對帶型別引數的目標的 `impl`、或自己帶 `[T]` 的 `impl` |
 | 7     | 不是 method 的 `impl` item —— associated value 或 type 繫結，以及其餘任何東西                    |
 | 7     | associated type projection `It.Item`；value 泛型參數 `f[N: int]`；帶參數的 bound `Eq[int]`       |
-| 7     | 除 `#[derive(…)]` 與 `#[obj]` 以外的所有 decorator                                               |
+| 7     | 除 `#[derive(…)]`、`#[obj]`、`#[test]` 與 `#[allow(…)]` 以外的所有 decorator                     |
 | 7     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                                                |
 | 7     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`，以及定寬階梯 `i8`…`f64`               |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`、獨立的 `unsafe fn`、`unsafe` 的 `spec` 簽章              |

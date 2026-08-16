@@ -7,6 +7,23 @@ and the `Ref[T]` escape hatch. Part of the [Language Reference](../language.md).
 No garbage collector, no pointer syntax. Every value is **scope-owned** (freed at scope exit) and
 passed **by value**. Copy-by-value is the semantics; the compiler elides copies when safe:
 
+> **[deviation]** **What the release logic tracks is a BINDING**, so a heap value that is nobody's binding
+> is nobody's to end. Two shapes leak without bound in an ordinary loop, and they are one defect
+> ([issue #11](https://github.com/cmj0121/zerg/issues/11)):
+>
+> - **a temporary handed straight from one call into another.** `strings.count(strings.join(…), "a")` in a
+>   500 000-round loop peaks at **25.7 MB**; binding the middle result to a name first peaks at **1.7 MB**.
+> - **the old buffer of a field written over.** `b.xs = […]` in a loop peaks at **25.7 MB** over 300 000
+>   rounds and **49.9 MB** over 600 000 — it doubles with the loop, so it is unbounded, not a fixed cost.
+>
+> The two peaks agreeing at 25.7 MB is a coincidence of the round counts each repro chose, not one figure
+> written twice; they were measured separately and the 600 000-round doubling is what shows the second is
+> a rate rather than a ceiling.
+>
+> Both are legal programs that run correctly and consume memory forever, which the standing contract —
+> _implemented, or refused by name_ — has no third state for. Neither has a case in `make mem-check`, and
+> the section on assignment below carries the same defect from the binding side.
+
 - **Single flow** — an immutable value may pass by-ref invisibly; a mutable one falls back to a copy.
 - **Across coroutines** — always copied: no shared mutable state, no data races; propagating a change
   back is the caller's job (e.g. via a channel).
@@ -27,8 +44,7 @@ holder's scope exit.
 > paths, where raising is not safe, so no `guard` can catch it and no `defer` after it runs. An
 > **iterative** chain teardown is what this owes, and it is not built.
 >
-> What this paragraph used to say — that the chain is never freed at all, that the cell carries a no-op
-> drop, and that a binding holding one registers no release — is closed. The cell's drop is the enum's own,
+> The **freeing** half of this is closed. The cell's drop is the enum's own,
 > a binding registers it where it is declared, and an assignment gives the old value back after
 > materialising the new one. Measured over a counting allocator: 200 rounds that each build and drop a
 > 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many live allocations as five rounds do
@@ -38,7 +54,7 @@ holder's scope exit.
 ---
 
 > **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
-> through one. `struct Node { value: int; next: Node? }` is rejected with _`Node` is part of a cycle of
+> through one. `struct Node { value: int; next: Node? }` is rejected with _E452 `Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
 > that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
@@ -74,8 +90,8 @@ through:
 > **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
 > aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
 > rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
-> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps
-> it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
+> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
+> keeps it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
 > legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
@@ -182,7 +198,8 @@ order.
 value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
 
 > **[deviation]** Only a recursive `enum` and a carrier do that. Assigning over a `str`, a `list`, a `map`,
-> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does the
+> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does
+> writing over a **field** (the unbounded shape measured at the head of this chapter), the
 > collection a `for … in` over a **map** copies to walk, and the payload a **force-unwrap** copies out:
 > `q!` hands back a copy of what the carrier holds, and an expression that reads one field of it discards
 > the rest. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two allocations a
@@ -326,11 +343,10 @@ flush a buffer, close a scope-local resource — needing no type at all:
 }
 ```
 
-Several `defer`s in a block run **last-scheduled-first**, interleaved with scope-owned frees and `Ref`
-drops in reverse construction order, so teardown mirrors setup. Three constructs share one axis — _when_
-cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires
-at the **last holder's** exit. The dividing line is a single question — does the resource escape its
-scope? **No → `defer`; yes → `Ref[T]`.**
+Three constructs share one axis — _when_ cleanup fires: `del` revokes a name **now**; `defer` fires at
+**this block's** exit (in the order Drop order gives it); a `Ref[T]` drop fires at the **last holder's**
+exit. The dividing line is a single question — does the resource escape its scope?
+**No → `defer`; yes → `Ref[T]`.**
 
 A **`with` block** scopes such a resource to a lexical region — and it is **purely syntactic** sugar over
 the bare block that already does so: `with acquire() as y { … }` is `{ y := acquire(); … }`, and the
@@ -341,7 +357,5 @@ release is the axis above, unchanged, and that axis already covers every exit in
 A resource whose release is a **method someone must remember to call** is not a `with` case at all — it is
 a `defer`, written out, in the block `with` just opened.
 
-`with` is **built**, and it is exactly the expansion above and nothing else: the block, the binding, and
-whatever `defer` the body writes for itself. It carries no teardown of its own — a `with` that frees
-something frees it because a `defer` in the body says so, or because the value is scope-owned like any
-other. `examples/18_scoped.zg` is the shipped demonstration.
+`with` is **built**, and it is exactly the expansion above and nothing else — it carries no teardown of
+its own. `examples/18_scoped.zg` is the shipped demonstration.

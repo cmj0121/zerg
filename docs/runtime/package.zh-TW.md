@@ -30,8 +30,9 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module
 > tag,也就是它在「程式的 module 名字排序後」的位置。用排序而不是首見順序,是因為那個名字每次跑都必須一樣。
 >
-> 公開的那種沒有地方可以唯一。這一頁刻意拒絕全域註冊表(見下),所以公開撞名是**編譯錯誤加上 link-name
-> 覆寫**——那正是 [FFI](ffi.zh-TW.md) 已經寫下的做法,而它要等 package 層存在。
+> 公開的那種沒有地方可以唯一。這一頁刻意拒絕全域註冊表(見下),所以公開撞名需要的是**編譯錯誤加上 link-name
+> 覆寫**——而那個覆寫在 [FFI](ffi.zh-TW.md) 裡是一個**待決問題**,不是任一章已經寫下的做法。無論如何它都要等
+> package 層:在那之前,根本沒有一個「讓名字唯一」的單位存在。
 
 ### Program 與 entry point
 
@@ -69,22 +70,28 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 statement**。`GRAMMAR#program` 推導得出它——`program ::= stmt-list` 就是 Zerg 的 **script mode**，而 grammar 正是
 用 `nop` 程式為這個語言開場——所以它是合法語法，編譯器會把它整句讀完。但**編譯出來**的程式沒有任何一刻可以跑它：
 執行從 `main` 開始，上面的一切都是在那之前備妥的狀態。因此它會被**具名拒絕、並帶位置**，而且是由 build 而不是由
-parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）。`nop` 是唯一的例
-外，而且其實不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
+parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）——即 _E391 `print`
+opens a statement at the top level, and a compiled program has nowhere to run it_。`nop` 是唯一的例外，而且其實
+不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
 
 頂層常數以**依賴序**
 初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
-**原始碼順序**。這整套排序——拓撲序加上「module 名稱再原始碼順序」的 tie-break——成立。
+**原始碼順序**。這整套排序成立。
 
-這兩件事都已經實作。初始化式讀到一個宣告在它**後面**的常數時,拿到的是那個值、不是零——`const A: int = B + 1`
-寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
-_these constants depend on each other and none can be given a value first_。
+對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
+——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
+_E732 these constants depend on each other and none can be given a value first_。
+
+> **[deviation]** reads-from 圖是由初始化式**寫出來**的名字建的,所以一個**穿過呼叫**的讀取不是一條邊。
+> `const A: str = mk()` 寫在 `const B: str = "x"` 上面、而 `mk()` 讀 `B`,會讓 `A` 持有**零值**,而且完全沒有
+> 任何診斷——實測,`A` 印出來是空的。這是這條排序規則唯一的 silent-wrong,也是 `src/stdlib/log.zg` 把自己
+> 初始化式會碰到的常數宣告在**它們上面**、並由 `scripts/log-check.sh` 守住那個順序的原因:語言本身不守。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依
-序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。每個 `init()` **恰好一次、依 FIFO
-順序、在 `main` 之前**執行。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
+序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。
+`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
 藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
 channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
 **裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
@@ -155,7 +162,7 @@ module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** �
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
 
 > **[deviation]** **entry 檔自己的目錄不是一個 module**。與 entry 檔並列的檔案不在它的命名空間裡，也不會被編進這次
-> 建置：指名該檔宣告的函式會得到 `undefined function`。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
+> 建置：指名該檔宣告的函式會得到 _E425 undefined function `beside`_。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
 > 都成立；以 entry 檔為根的那個 module 是例外。
 >
 > **[deviation]** **單一檔案** import 得起來。`import "sib"` 在旁邊有一個 `sib.zg` 時,會解析到那一個檔案與它的
@@ -202,7 +209,9 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
-import 它的人；它在宣告處就被拒絕，並帶位置。要對外開放，就寫一個讀它的 `pub fn`。
+import 它的人。兩個代碼從兩側守住同一條規則：_E358 the top-level binding `x` may not be `mut` outside a
+module-level `unsafe { … }` group_，以及 _E484 the mutable global `x` may not be `pub`_。要對外開放，就寫一個讀它
+的 `pub fn`——`src/stdlib/log.zg` 是這棵樹的示範，也是出貨 stdlib 裡唯一這樣的分組。
 
 ### 匯入與引用
 
@@ -254,14 +263,12 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 
 **prelude 不是被 import 的**——它的名字是 **built into the toolchain**，從一開始就綁在每個 module 裡，正如 primitive
 關鍵字。它裝的是語言本身倚賴的東西：運算子 desugar 的目標型別（`Either`、`Result`、`T?`、`nil`）、built-in spec
-（`Eq`、`Ord`、`Hash`、`Error`、`Iterator`／`Iterable`、`Ref`，以及運算子 spec——見 [Spec 與 Generics](../core/specs.zh-TW.md)；
-**沒有 `Object` spec**——相等與排序是經 `derive(Eq)` / `derive(Ord)` opt-in，而 `display` / `debug` 是內建的值渲染、
-非 spec method，見 [格式化](format.zh-TW.md)），
-外加少數泛用型別——`list`、`map`、`set` 容器（見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。
-（primitives——`bool`、`int`、`str`……——與 `chan`、以及 `defer`／`print` 構造同樣是 grammar 與 runtime，不是被
-import 的名字。）這些名字是
-**保留字**：宣告不得 shadow 或重宣告它們，所以那些 desugar 到它們的
-運算子永遠不會被從語言底下抽走。
+（`Eq`、`Ord`、`Hash`、`Error`、`Iterator`／`Iterable`、`Ref`，以及運算子 spec——見
+[Spec 與 Generics](../core/specs.zh-TW.md)），外加少數泛用型別——`list`、`map`、`set` 容器
+（見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。`display` / `debug` 根本不在裡面：它們是內建的
+值渲染、不是 spec method（見 [格式化](format.zh-TW.md)）。primitives——`bool`、`int`、`str`……——與 `chan`、以及
+`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。這些名字是**保留字**：宣告不得 shadow 或
+重宣告它們，所以那些 desugar 到它們的運算子永遠不會被從語言底下抽走。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的
@@ -301,7 +308,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 白箱擺法在目錄的**兩種形狀**下都成立，因為 test build 解析一個測試檔屬於哪個 package，用的就是解析 import 的規則：
 **先具體、後一般**。`module_at` 先回答單一的 `<name>.zg` 檔、再回答目錄，所以一個 `.zg` 檔放在鄰居旁邊，它本身就是
-一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十八個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
+一個 module——`src/stdlib` 正是這樣，一個扁平目錄裡十五個彼此獨立的 module。因此放在那裡的 `strings_test.zg` 就是
 `strings.zg` 一個檔案的測試，package 就是這一對；而一個沒有同名鄰居可指的測試檔，仍然屬於**目錄**，一如既往。
 
 代價是：在一個**本身就是單一 module** 的目錄裡，名字對上該 module 某個檔案的 `*_test.zg` 只會拿到那個檔案——`a.zg`
@@ -309,158 +316,134 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 是把測試檔以 module 為名，而不是以它其中一個檔案為名。換來的是這條規則**單調**：新增一個測試檔，永遠不會改變另一個
 package 是用哪些檔案建起來的。
 
-測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除。因此測試的
-宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
-之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
+測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除——所以即使
+測試檔放在 root module、即使標了 `pub`，也留在對外 API 之外（見下方「排除」）。一如 entry 檔，語言本身不賦予檔名
+任何意義，是工具賦予的。
 
-> **[not yet]** `zerg test` 目前是一個**骨架**。它會走訪一條路徑找出底下的 package,把每個都編譯
-> ——它自己的原始碼、它的測試檔,加上一個產生出來的 driver,所以白箱測試不需要 import 也不需要 `pub`
-> 就摸得到 module 的內部——然後把找到的每個 `#[test]` 跑起來,以檔案分組回報
-> `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH`,skip 與 timeout 都跟 pass、fail 分開計數,只要有一個
-> 沒過就以非零狀態結束。
+### `zerg test`
+
+`zerg test <path>` 會走訪一條路徑找出底下的 package，把每個都編譯——它自己的原始碼、它的測試檔，加上一個產生出來
+的 driver，所以白箱測試不需要 import 也不需要 `pub` 就摸得到 module 的內部——然後跑它找到的每一個 `#[test]`，以
+`ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` 依檔案分組回報，skip 與 timeout 與 pass、fail 分開計數；只要有任何一項
+不成立就以非零結束。
+
+**package 就是測試檔所指名的那個 module**，依上面「先具體、後一般」那條規則，再加上該目錄自己的
+`fixtures_test.zg`（若有）與 driver。因此同一個目錄可以放好幾個 package，各有自己的 driver、自己的行程。
+
+**而一個「本身就是某個 module」的測試 package，就是那個 module。** `src/stdlib/strings_test.zg` 形成的 package
+是用 `strings.zg` 建的，所以同一支程式裡任何其他地方的 `import "strings"`，解析到的是**這個 package 的原始碼**，
+而不是把該 module 的檔案再載入一次。沒有這條規則，那個 module 會在程式裡出現兩次，建置會停在
+_E745 `get` is declared twice in this file_，指著一份沒有人動過的原始碼。沒有任何刻意的安排才到得了它：一份 suite
+會 import `testing`，`testing` 透過 `log` 輸出一則 note，而 `log` 用 `json` 編碼——所以 `testing` 依賴閉包裡的那些
+stdlib module，恰好就是有 suite 的那幾個。這與「一個 module 無論被幾個人 import 都只載入一次」是同一套機制，不是
+額外栓在 loader 上的一條測試檔專屬規則。
+
+**路徑可以是單一 `.zg` 檔**，此時跑的是**那個檔案所在的 package**——祖先從該檔案的目錄算起，與直接給目錄時一致。
+單獨建置那個測試檔等於什麼都沒建，所以檔案是用來**選一個 package**，而不是給一份檔案清單；要挑單一測試，工具是
+`--only`。
+
+**結束碼分得出「搜了但什麼都沒找到」。** `0` 跑到的測試全部通過或跳過、`1` 有測試失敗或逾時、`2` 這個命令執行不了
+（路徑不存在、`--only` 什麼都沒對到、fixture 參數解析不到東西）、`3` 搜尋跑完了而搜到的範圍裡沒有測試。`3` 沒有併進
+`2`，因為讀者下一步不同：`2` 是改命令列、`3` 是去看那棵樹。搜不到東西時 stderr 也會說，但光一句話會讓 CI 那一行
+永遠是綠的，而讀 CI 那一行的是一支 shell。
+
+**`#[test]` 寫在哪裡就在哪裡被找到**，不限於 `*_test.zg`——所以一個目錄裡唯一的 `#[test]` 就算寫在普通 module 檔
+裡，它也是一個測試 package，而 `zerg lint` 仍然會警告（**L601**）這樣的測試會**跟著出貨**
+（見 [Decorator](../core/decorators.zh-TW.md)）。它不新增任何 package **形狀**——一個落單的 `#[test]` 所屬的
+package，就是原本就會編到它所在檔案的那一個——所以上面那條單調規則不受影響。
+
+裡面的那個主張也一樣會出貨，並得到第二個 finding：`*_test.zg` 之外的 `assert` 會拿到 **L602**。沒有任何旗標能把
+它剝掉，所以寫在出貨程式碼裡的一個主張，可以讓一支正在執行的程式 abort——而它不是作者本來想要的那個檢查的較弱版本，
+是**較不具體**的版本：它只說得出「這個主張是假的」。`raise ValueError("xs must be non-empty") if xs.len() == 0`
+兩件事都說得出來。
+
+**`#[test]` 不回傳任何東西**（見 [Decorator](../core/decorators.zh-TW.md)），而拒絕一個宣告出來的回傳型別發生在
+編譯任何東西之前：`#[test] fn t() -> bool { return false }` 曾經被回報成 `ok`。它是被拒絕而不是被 lint，因為 lint
+以 0 結束，而那一輪會繼續說 `ok`。
+
+**`--only <name>`** 只跑名字**開頭是** `<name>` 的測試——完整名字選一個測試，字首選一整族。它在產生任何東西之前就
+套用，所以沒被選到的測試不會被編、它的 fixture 也不會被建。一個什麼都沒選到的過濾器以 `2` 結束，而不是回報一輪
+綠色的「什麼都沒有」。
+
+**`--timeout <seconds>`** 是一個測試在被放棄等待前可以跑多久，預設 `60`。超過的測試回報 `STUCK` 並單獨計數，而這
+一輪會繼續往下跑：逾時不是一個沒通過的斷言，因為什麼都還沒被決定。沒有它，卡住的測試與慢的測試無從分辨，而卡住的
+那個會把整輪拖著走，直到 CI 自己的 timeout 砍掉這份工作、且沒有任何東西說得出是哪個測試幹的。
+
+**兩條路徑，而報告會說是哪一條。** 一個測試在一個行程裡、以 **coroutine** 的身分、包在 `guard` 內執行——這能接住
+一個不成立的斷言，也能接住一次沒被接住的 abort。coroutine 接不住的，是一個把**行程**結束掉的測試：stack overflow，
+或 `os.exit`。所以在這一輪結束時仍然沒有結果的測試，會**各自用一個行程**重跑——剛好就是剩下的那些，因為結果只在函式
+體回傳之後才寫下——這才把那次死亡歸給造成它的測試。發生時報告會在一行 `NOTE` 上說明；一輪安靜換了策略的執行，是
+一輪沒有人能解讀其結果的執行。
+
+#### 一個測試宣告它需要什麼
+
+`#[test]` 的參數、以及 `#[fixture]` 的參數，都依 [Decorator](../core/decorators.zh-TW.md) 所述的規則解析——
+`testing.Context` 依型別、fixture 依名字、`fn (T)` 這個 continuation 宣告 fixture 產出什麼。留給本章的是 runner
+拿它們做了什麼。context 以**值**傳入，而真正重要的東西本來就共享：它唯一的欄位是一個 channel，而 channel 是 `Ref`
+值，所以複本共享它；它帶了什麼在 [標準函式庫](stdlib.zh-TW.md)。一個主張是 `assert cond` 這個關鍵字
+（[Grammar](../surface/grammar.zh-TW.md)，group 8），它自己寫出訊息，不需要 context 給它任何東西。teardown 是
+`defer`，語言自己的慣用法，所以 runner 不必為它準備任何東西。
+
+```zerg
+#[fixture]
+fn db(use: fn (Conn)) {
+    c := connect("postgres://tmp/test")
+    defer c.close()
+    use(c)
+}
+
+#[test]
+fn test_query(db: Conn, ctx: testing.Context) { … }
+```
+
+框架**以巢狀組合**——`db(fn (c) { … schema(c, fn (s) { … }) })`——所以相依順序、teardown 順序（內層的 `defer` 先
+觸發）與「只在需要時才建」全都是「呼叫寫在哪裡」的結果。執行期沒有拓撲排序、沒有 teardown 登記簿，而沒有任何測試
+會經過的那一層根本不會被產生出來。
+
+**所有東西都在任何東西執行之前解析完。** 指不到任何 fixture 的參數、型別不是該 fixture 產出物的參數，以及 fixture
+之間的**環**，都會帶**位置**回報，而且是整棵樹一次報完，然後這一輪以 `2` 結束、什麼都沒執行。
+
+**一個建不起來的 fixture 會讓每一個需要它的測試失敗**——`FAIL test_query`，底下附 _fixture `db` could not be
+built: …_，而這一輪以非零結束：一個根本沒能跑的測試，絕不可以看起來像通過了。如果那次 raise 是在它底下每個測試都
+已經各自有了答案之後才到的，壞掉的就是 **teardown**，於是失敗記在那個 fixture 上，而不是記在任何人的測試上。
+
+#### fixture 住在哪裡，以及誰繼承得到
+
+一個 fixture 服務**它自己那個目錄**的測試。要一併服務**底下**目錄的，放進 **`fixtures_test.zg`**——祖先唯一能往下
+貢獻的那個檔案，而且是往下貢獻給**每一層**、不只下一層。這就是 pytest 的 `conftest.py` 模型，而這個固定檔名有兩層
+承重：一個普通的 `*_test.zg` 是它所屬 module 的檔案、會讀那個 module 的私有名字，把它帶進下面的目錄就是把它放進
+那些名字不存在的 scope；另外，祖先自己的測試否則會在每個後代目錄各跑一次。祖先是從 `zerg test` **被給定的**那個
+路徑算起。
+
+被繼承的檔案在這一輪期間會被**複製進該 package**，因為 module 就是一個**目錄**——與那個產生出來的 driver 寫在那裡
+是同一個理由。複製是逐位元組的，所以裡面的診斷會指到正確的行。因此一個 package 無法**遮蔽**一個繼承來的 fixture：
+同一個 scope 裡一個名字兩份宣告，會被當作它本來就是的那種碰撞而拒絕。
+
+**scope 是 package，不是 session。** `pkg/sub` 與 `pkg/sub2` 各自建一份繼承來的 fixture 的**自己的**實例，因為各是
+一個 driver、一個行程——就是 pytest 的 `scope="package"`。session scope 是刻意不要的，而且本來也到不了：`E705` 拒絕
+兩個 module 都定義同一個 `pub` 名字，所以一個橫跨整棵樹的 driver 根本建不起來，而一個活的值也不會跨過行程邊界。
+同理，當某個測試把行程結束掉、剩下的以一個行程一個測試重跑時，那些行程各自只進入它被指派的那個測試所在的那些層。
+
+那個產生出來的 driver、以及繼承 fixture 檔案的複本，在**被讀取之後立刻**從磁碟上移除，早於建置能 emit、編譯、連結
+或回報任何東西——所以一輪失敗的執行，留下的原始碼目錄與它來的時候一模一樣。這在最看不見的地方最重要：編譯器是靠
+**列出** `src/stdlib` 來解析標準函式庫的，而留在那裡的一個 driver 就是之後每一次建置都會讀到的檔案。
+
+#### 排除
+
+一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對，兩個編譯器都是——所以測試宣告的任何東西都到不了
+出貨產物、也不會加入 module 的表面，而它重複的名字或一個根本不能 parse 的檔案，對一般建置毫無代價。指名它的某個宣告
+會得到 _E388 module `lib` has no `only_in_test`_，指名那個檔案則是 _E512 `lib/lib_test` names a test file, and a
+normal build compiles none_，兩者都帶位置。E388 不會進一步說「有個測試檔宣告了它」：那個事實屬於 loader，而回報的
+規則在 checker 裡。
+
+測試檔從任何地方都 import 不得，包含另一個測試檔——白箱測試共享它所屬 module 的命名空間、完全不需要 import 就摸得到
+內部，這正是為什麼 `zerg test` 是「多編幾個檔案」的問題，而不是「放寬某條可見性規則」的問題。
+
+> **[not yet]** 上述之外還有四件事：doc comment（`##`）、把 doc 範例當測試跑、benchmark，以及**同時跑兩個測試**
+> ——測試是循序的，`ctx.parallel()` 還沒建，等它落地時，共用同一個 fixture 的測試將共用同一份實例。
 >
-> **一個 package 就是測試檔所指名的那個 module**,以先具體後一般解析:`strings_test.zg` 旁邊有
-> `strings.zg`,package 就是這一對(再加上該目錄自己的 `fixtures_test.zg`,如果有的話,以及 driver);
-> 指不到這種鄰居的測試檔,則以目錄為 package。因此一個目錄可能同時有好幾個 package,各有自己的 driver
-> 與自己的 process。
->
-> **路徑可以是單一個 `.zg` 檔**,這時跑起來的是**那個檔所屬的 package**。指著
-> `src/stdlib/strings_test.zg` 跑的是 `strings.zg` + `strings_test.zg`,而不是那個目錄的其他 package;
-> 祖先是從該檔案的目錄算起,和直接指那個目錄時完全一樣。只用測試檔**自己**做一次 build 是在 build 空氣,
-> 所以一個檔案選的是一個 package 而不是一份檔案清單;要指定單一測試請用 `--only`。
->
-> **exit status 分得出「找過了、什麼都沒有」。** `0` 跑起來的測試全部通過或跳過,`1` 有測試失敗或逾時,
-> `2` 這個命令沒辦法執行(路徑不存在、`--only` 沒選到東西、fixture 參數指不到東西),`3` 搜尋跑完了,而
-> 被搜尋的範圍裡沒有測試。`3` 沒有併進 `2`,因為讀者的下一步不同:`2` 靠改命令列修好,`3` 靠去看那棵樹。
-> 什麼都沒找到的一次執行也會在 stderr 說出來,但光有一句話會讓一條 CI 綠到天荒地老,而讀 CI 那一行的是
-> shell。
->
-> **一個 `#[test]` 寫在哪裡就會在哪裡被找到**,不限於 `*_test.zg`。這個 decorator 可以寫在任何地方,所以
-> 一個目錄裡唯一的 `#[test]` 就算寫在普通的模組檔裡,那個目錄仍然是一個 test package,而 `zerg lint` 照樣
-> 會警告(**L601**)這樣的測試會**被打包出去**。兩者都要,不是二選一:linter 說測試該住在哪裡,runner 執行
-> 寫下來的東西。它不會多出任何 package **形狀**——一個落單的 `#[test]` 所屬的 package,就是原本就會編譯它
-> 所在那個檔案的那一個——所以上面那條**單調**規則沒有被動到:一個 package 用哪些檔案建起來,仍然只由
-> `*_test.zg` 的檔名決定。
->
-> **一個 `#[test]` 不回傳東西,宣告了回傳型別會被拒絕**,指出位置,而且在任何東西被編譯之前:driver 是把
-> 測試當成一個 **statement** 呼叫的,那個值會被丟掉——而 `#[test] fn t() -> bool { return false }` 曾經被
-> 回報成 `ok`。之所以是拒絕而不是 lint,是因為 lint 以 0 結束,那次執行還是會繼續說 `ok`。
->
-> **`--only <name>`** 只跑名字**以 `<name>` 開頭**的測試——寫完整名字就選一個,寫字首就選一整族。它在
-> 任何東西被產生之前就先套用,所以沒被選上的測試不會被編譯,它的 fixture 也不會被建起來。一個什麼都沒
-> 選到的 filter 以 `2` 結束,而不是回報一次「什麼都沒有」的綠燈:命令指名了一個不存在的測試。
->
-> **`--timeout <seconds>`** 是單一測試在執行被放棄之前可以花的時間,預設 `60`。超過的測試回報 `STUCK`
-> 並單獨計數,而且執行會繼續往後面的測試走:timeout 不是斷言失敗,因為根本沒有任何事情被判定。少了它,
-> 卡住的測試和單純很慢的測試分不出來,而卡住那個會把整次執行一起帶走——直到 CI 自己的 timeout 砍掉這個
-> job,而 log 裡沒有任何一行說得出是哪個測試幹的。
->
-> **兩條路徑,而報告會說走的是哪一條。** 一個測試以 **coroutine** 的形式、包在 `guard` 裡、在同一個 process
-> 中執行——這同時接住了「斷言不成立」與「未捕捉的 abort」,因為 `guard` 兩者都接得住,而沒有 `guard` 的
-> coroutine 死掉時也只死自己。coroutine 接不住的是把 **process** 本身結束掉的測試:stack overflow,或
-> `os.exit`。所以一次執行結束時仍然沒有結果的測試,會各自在**自己的 process** 裡重跑一次——正好是剩下那些,
-> 因為結果只在本體返回之後才寫下——這才把「死掉」歸到造成它的那個測試身上。這件事發生時,報告會用一行
-> `NOTE` 說出來;一次悄悄換了策略的執行,是一次沒有人能解讀結果的執行。
->
-> 一個 `#[test]` 的參數是**沒有**、**一個 `testing.Context`**(以型別辨識而非以參數名字辨識),或是它
-> 需要的 **fixture**(以名字比對);driver 依簽章寫出對應的呼叫。Context **傳值**,而該共享的東西照樣共享——它唯一的欄位是一個 channel,而 channel 是
-> `Ref` 值,複製即共享——上頭有 `ctx.name()`、`ctx.log(msg)`(只在測試失敗時顯示)、`ctx.skip(reason)` 與
-> `ctx.fatal(msg)`。後兩者以 `raise` 解開、把理由留在 context 上,所以沒有任何一方需要比對訊息字串才能分辨
-> skip 與 fail。一項主張是 `assert cond`,那個關鍵字(見 [Grammar](../surface/grammar.zh-TW.md) group 8),
-> 它自己寫訊息、不需要 context 給任何東西;留給 `ctx.log` 的是一則**領域註記**——關於 fixture、而不是關於運算式
-> 的事。`testing.assert_raises` 維持自由函式,因為它不是斷言:它問的是一個**已經結束**的呼叫 raise 了什麼。
->
-> **Fixture。** 一個測試**宣告它需要什麼**,框架建置一次、交給它,再拆掉。`#[fixture]` 是一個把自己的測試當作
-> **continuation** 收下的函式:
->
-> ```zerg
-> #[fixture]
-> fn db(use: fn (Conn)) {
->     c := connect("postgres://tmp/test")
->     defer c.close()
->     use(c)
-> }
->
-> #[fixture]
-> fn schema(db: Conn, use: fn (Schema)) {
->     s := make_schema(db)
->     defer drop_schema(s)
->     use(s)
-> }
-> ```
->
-> `use: fn (T)` **以型別辨識**,而且一次是兩件事:測試執行所在的 continuation,以及這個 fixture **產出什麼**的宣告。
-> 其餘每個參數都是**以名字比對**到另一個 fixture 的相依——測試對 fixture、fixture 對 fixture,都是同一條規則。
-> teardown 就是 `defer`,語言自己的慣用法,不需要 runner 提供任何東西。
->
-> 測試用同樣的方式解析自己的參數:`testing.Context` **以型別**,fixture **以名字**,沒有參數則直接呼叫。
->
-> ```zerg
-> #[test]
-> fn test_insert(schema: Schema) { … }
->
-> #[test]
-> fn test_query(db: Conn, ctx: testing.Context) { … }
->
-> #[test]
-> fn test_pure() { … }
-> ```
->
-> 框架**以巢狀組合**——`db(fn (c) { … schema(c, fn (s) { … }) })`——所以相依順序、teardown 順序（內層的 `defer`
-> 先觸發）與「只在需要時才建」,全都是「呼叫寫在哪裡」的結果。執行期沒有拓撲排序,也沒有 teardown 登記表;沒有任何
-> 測試經過的那一層,根本不會被生成。
->
-> **一切都在任何東西執行之前先解析完。** 指名不到 fixture 的參數、型別不是該 fixture 產出物的參數,以及 fixture
-> 之間的**環**,都會**帶位置**、對整棵樹一次報完,然後這次執行以 `2` 結束,什麼都沒跑。
->
-> **建不起來的 fixture 會讓每個需要它的測試 FAIL**——`FAIL test_query`,底下寫著
-> _fixture `db` could not be built: …_,而整次執行以非零結束:跑不成的測試絕不可以看起來像通過的測試。若 raise
-> 是在它底下每個測試都已經各自有交代之後才到,壞掉的是 **teardown**,這個失敗就記在 fixture 身上,而不是記在誰的
-> 測試上。
->
-> **fixture 住在哪裡,以及誰繼承它。** fixture 宣告在 `*_test.zg` 裡,所以到不了任何出貨建置,而它服務**自己這個
-> 目錄**的測試。要連**底下**的目錄一起服務的,就寫進 **`fixtures_test.zg`**——祖先目錄唯一會往下傳的檔案,傳給它
-> 底下的**每一層**,而不只是下一層。這是 pytest 的 `conftest.py` 模型,而固定的檔名承擔了兩件事:一般的
-> `*_test.zg` 是它所屬模組的**一個檔案**,會讀該模組的私有名字,把它帶進底下的目錄等於放進一個那些名字不存在的
-> scope;而祖先自己的測試否則會在每個後代目錄各跑一次。寫在 `fixtures_test.zg` 裡的 `#[test]` 只在它自己的目錄
-> 跑一次,和其他測試一樣。祖先是從 `zerg test` **被給定的**那個路徑算起。
->
-> 被繼承的檔案在這次執行期間會被**複製進該套件**,因為模組就是**目錄**——生成的 driver 寫在那裡也是同一個理由。
-> 複製是逐位元組的,所以裡面的診斷仍指向正確的**行**,而它會隨執行結束一起被移除。因此套件無法**遮蔽**一個被繼承
-> 的 fixture:同一個 scope 裡兩個同名宣告,就以它本來的樣子——衝突——被拒絕。
->
-> **範圍是套件,不是 session。** `pkg/sub` 與 `pkg/sub2` 各自建置一份被繼承 fixture 的**自己的**實例,因為各自是
-> 一個 driver、一個行程。這是 pytest 的 `scope="package"`。session 範圍是刻意不要的,而且本來也到不了:`E705`
-> 會拒絕兩個模組同時定義一個 `pub` 名字,所以整棵樹一個 driver 蓋不出來,而活著的值也跨不過行程邊界。
->
-> fixture 的值抵達測試的方式,和任何值抵達一次呼叫的方式一樣——**傳值**——而測試主體跑在 `spawn` 的另一側,所以
-> 裡面的 `Ref`（channel、盒裝 handle）是共享的,其餘是複製的。測試是**序列**執行的;`ctx.parallel()` 是
-> **[not yet]**,等它落地之後,共用同一個 fixture 的測試會共用它的同一個實例。
->
-> **fallback 會重建它需要的東西。** 當一個測試把行程結束掉、剩下的以一個行程一個測試重跑時,那些行程只會進入
-> 「它被要求的那個測試所在」的層——所以它會把那個測試的 fixture 重新立起來,而且不會多立別的。
->
-> **產生出來的 driver、以及被繼承的 fixture 檔的副本,在被讀完之後就立刻從磁碟上消失**,早於這個建置能夠
-> emit、編譯、連結或回報任何東西——所以一次失敗的執行,留下的原始碼目錄跟它進來時一模一樣。這件事最要緊的
-> 地方也正是最看不見的地方:編譯器是用**列目錄**的方式解析標準函式庫的,一個被留在 `src/stdlib` 的 driver,
-> 之後每一次建置都會讀到它。
->
-> **還沒建**的是這之後的每一件事:doc comment(`##`)、把 doc example 當測試跑、benchmark,以及
-> 同時跑兩個測試。失敗的斷言會 `raise`,而 raise 是控制流,所以它自己就會從測試本體解開出去。
->
-> **斷言**那一側已經補上,而且它是一個**關鍵字**、不是函式庫:`assert cond` raise 出 `AssertionError`,帶著
-> 檔案、行號、主張本身的原始文字,以及比較拆開後每個運算元當時的值。`testing.assert_raises` 交回一次 `guard`
-> 包住的呼叫所 raise 的 `Err`,是唯一留下的輔助函式。仍然沒有的是**複合值**的渲染,所以兩個 list 的
-> `assert xs == ys` 是 `E445`,關於 list 的主張只能透過某個把它縮成純量的東西去做。
->
-> **排除**已經建好。一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對,兩個編譯器都是——
-> 所以測試宣告的任何東西都到不了出貨產物、也不會加入 module 的表面,而它重複的名字或一個根本不能 parse 的
-> 檔案,對一般建置毫無代價。指名它的某個宣告會得到 _E388 module `lib` has no `only_in_test`_,指名那個檔案
-> 則是 _E512 `lib/lib_test` names a test file, and a normal build compiles none_,兩者都帶位置。E388 不會
-> 進一步說「有個測試檔宣告了它」:那個事實屬於 loader,而回報的規則在 checker 裡。
->
-> 測試檔從任何地方都 import 不得,包含另一個測試檔——白箱測試共享它所屬 module 的命名空間、完全不需要 import
-> 就摸得到內部,這正是為什麼 `zerg test` 是「多編幾個檔案」的問題,而不是「放寬某條可見性規則」的問題。
+> 已經建好的部分裡唯一的缺口是對**複合型別**的主張：`assert xs == ys` 比較兩個 list 是 `E445`，所以這類主張要透過
+> 某個能把它化約成 scalar 的東西來寫（[Spec 與泛型](../core/specs.zh-TW.md)）。
 
 ### Target 條件式檔案
 

@@ -174,10 +174,8 @@ checker to exactly this list — every node kind it pushes a wanted type into, a
 `zerg`'s inference family to taking no wanted type at all. A fifth carve-out cannot be added without the
 gate naming it.
 
-The rule above holds at every position: **a position wraps a value, it never converts one.** So
-conversion is **not a fifth carve-out** — each of these decides a type the expression **does not have
-yet**, where a conversion would change one it already has, and the fix for a value that does not fit
-stays the written `T(x)` (Type Conversion, below).
+Conversion is **not a fifth carve-out**: each of these decides a type the expression **does not have
+yet**, where a conversion changes one it already has.
 
 ### Numeric literals
 
@@ -196,16 +194,16 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
   written — `x: float = float(i)`. A fractional or exponent literal (`1.0`, `1e3`) is a `float` from
   the start and never an `int`.
 
-- **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes
-  a byte with no conversion at all, and `b: byte = 300` is a **compile error** — the constant is known
-  not to fit. `b: byte = n` for an `int` value is a **conversion**, and a conversion is
-  written: `b: byte = byte(n)`, which may raise `OverflowError` at run time. Adoption settles at
-  compile time; a written conversion runs.
+- **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes a
+  byte with no conversion at all; `b: byte = n` for an `int` value is a **conversion**, and a conversion is
+  written: `b: byte = byte(n)`, which may raise `OverflowError` at run time. Adoption settles at compile
+  time; a written conversion runs.
 
-  An adoption away from the literal's default is a **lint** finding (`L502`), because the reader of
-  `xs: list[byte] = [1, 2]` should be able to see bytes on the page rather than infer them from the
-  declaration. The finding names each literal and hands over the spelling that shows it — `1.0` for a
-  `float`, `byte(1)` where the type has no literal form of its own.
+  An adoption away from the literal's default is a **lint** finding (`L502`) — `1.5 + 1` is reported and
+  `1.5 + 1.0` is not — because the reader of `xs: list[byte] = [1, 2]` should be able to see bytes on the
+  page rather than infer them from the declaration. It is advisory, not a rule of the language. The finding
+  names each literal and hands over the spelling that shows it — `1.0` for a `float`, `byte(1)` where the
+  type has no literal form of its own.
 
 - **An expression of literals is a literal.** Nothing in `100 + 100` has a type of its own, so the whole
   of it adopts: `x: byte = 100 + 100` is byte arithmetic answering `200`. Each part is measured against
@@ -253,9 +251,9 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and
-> the **generic `enum`** is `E212 NotImplemented: a generic enum`Either[…]`— this compiler erases type
-parameters, and a variant's payload names one`. A generic `struct` is `E215` for the same reason. The
+> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and the
+> **generic `enum`** is _E212 NotImplemented: a generic enum `Either[…]` — this compiler erases type
+> parameters, and a variant's payload names one_. A generic `struct` is `E215` for the same reason. The
 > block shows the specified shapes; both of them wait on generic types.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
@@ -322,8 +320,9 @@ result is **first-class** — stored, passed, or destructured — so multiple re
 mechanism ([Pattern matching](../code/control-flow.md)).
 
 > **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
-> is refused by name — the parts-inheritance rule above is specified and the derivation over an unnamed
-> form is unbuilt (the shipped message still blames the missing declaration).
+> is _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
+> derivation over an unnamed form is what is missing.
 > **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E205 expected
 > a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
 > name (the parenthesized `(a, b) := two()` does say it, as `E238`). Either way a tuple result is stored
@@ -345,11 +344,13 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
 
-> **[deviation]** The bootstrap implements `type X = Y` only for a **scalar** underlying `Y`, and the new
-> type does **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+`
-> without an explicit `int(c)`, contrary to the inheritance rule above — while `type Name = str` is
-> currently **rejected**. The intended semantics (a fresh identity reusing `Y`'s whole representation and
-> impls) stand; the bootstrap covers only the scalar, impl-less case this phase.
+> **[deviation]** `type X = Y` is implemented only for a **scalar** underlying `Y`, and the new type does
+> **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+` without an
+> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E304
+> NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
+> scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
+> the copy and drop rules to follow the name_. The intended semantics (a fresh identity reusing `Y`'s whole
+> representation and impls) stand; only the scalar, impl-less case is built.
 
 ## Construction & encapsulation
 
@@ -476,10 +477,11 @@ spec Into[T] {
 - **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
   declare `X → Z` yourself.
 
-A **super-spec** carries its arguments too: `spec Ord: Eq[int]` says Ord extends `Eq` **at** `int`, so
-what an `impl Ord` owes is `Eq`'s signatures with `int` where `Eq`'s own parameter stands. A bound's
-arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
-parameters, which is a different thing done in a different place.
+A **super-spec** carries its arguments too: `spec Keyed: Into[str]` says `Keyed` extends `Into` **at**
+`str`, so what an `impl Keyed` owes is `Into`'s signatures with `str` where `Into`'s own parameter stands.
+A bound's arguments are MATCHED against an impl's; a super's are **substituted** into the named spec's
+parameters, which is a different thing done in a different place. (`Eq` takes no parameter, so the
+super-spec [Specs & Generics](specs.md) writes for `Ord` is the bare `spec Ord: Eq`.)
 
 **An operator's operands must already be one type.** An untyped literal adopts the other operand — the
 _other operand_ position, above — so `1.5 + 1` is two `float`s. Two **typed** operands of different
@@ -522,14 +524,12 @@ that can fail (see [Standard Library](../runtime/stdlib.md)).
 
 **`bool(x)` and `str(x)` are not on this table**, which is why the row above names four targets and not
 every one. Neither is a conversion in this sense: `bool(3.5)` is the zero test above, answering `true`,
-and `str(3.5)` is a rendering. A fraction is not dropped by either, so neither has a decision to make.
+and `str(x)` renders a value through `display`, which every type has. A fraction is not dropped by
+either, so neither has a decision to make.
 
 `int("42")` is on the table as its own row because it is a different operation wearing the same
 spelling: it **parses** the number's text rather than re-constructing a value, and only `int`, `uint`
 and `float` do it (see [Built-in Functions](../runtime/builtins.md)).
-
-**Any type to text is not in the table**, because it is not a conversion between types in this sense:
-`str(x)` renders a value through `display`, which every type has.
 
 **A conversion the compiler can carry out is carried out.** `byte(300)` is well-formed — and then fails
 as a **constant**: the value is known, the conversion is known to raise, and it is reported at compile
@@ -542,10 +542,9 @@ for `const N := 100`. It is the same notion a fill count `[v; N]` requires, and 
 sentence in this document with two readings is how a language grows two answers to one question.
 
 **It stops at a call, and at a `mut` binding.** `byte(f(300))` raises where it runs, for an ordinary `f`
-and a generic one alike: a call is not a constant form, which the enum-discriminant rule says in the same
-words — `A = BASE`, `A = 2 + 3` and `A = BASE * 2 - 1` are the form, and a call is not. A `mut` binding is
-excluded for a reason of its own: it can be written between the binding and the conversion, so what it
-holds there is not what it holds here.
+and a generic one alike: a call is not a constant form, which the enum-discriminant rule above says in
+the same words. A `mut` binding is excluded for a reason of its own: it can be written between the binding
+and the conversion, so what it holds there is not what it holds here.
 
 **The two positions differ in what they DO with an unknown value, not in what counts as one.** A fill
 count must have a number, so it is refused (`E475`); a conversion of a value is an ordinary conversion, so
@@ -556,14 +555,11 @@ it is checked where it runs.
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
 
-**An adoption away from the literal's default is a lint finding** (`L502`) — `1.5 + 1` is reported and
-`1.5 + 1.0` is not. It is advisory, not a rule of the language: `1` and `1.0` should mean different
-types on the page, so a reader never has to infer a literal's type from its surroundings.
-
-> **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
-> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name. Reaching
-> several needs a spec method keyed by the spec **and its arguments**, which is the same thing the
-> bound above needs — and what would let a written `x.into()` say which one it means.
+> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E461 NotImplemented: a
+> second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;
+> the language allows several, and reaching that needs the method keyed by the spec and its arguments_.
+> That is the same thing the bound above needs, and what would let a written `x.into()` say which one it
+> means.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

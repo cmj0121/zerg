@@ -18,11 +18,7 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 >
 > Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
 > carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
-> where it is written, as _E707 no type named `handle` (the binding `h`)_. (Two rules used to escape
-> instead: the optional spelling produced `error: unknown type name 'zg_handle'` against generated C,
-> because the check read the annotation's bare name and a `?` is not one; and a `fn` declared inside a
-> module-level `unsafe { … }` group was callable from safe code with no diagnostic. Both are reported by
-> `zerg` now, the second as `E387`.)
+> where it is written, as _E707 no type named `handle` (the binding `h`)_.
 
 ## Two edges, one contract
 
@@ -200,6 +196,11 @@ declaration name (a method also carrying its type, e.g. `zg_<pkg>_<name>` / `zg_
 A clash on the flat exported surface is a compile error in library mode. (The exact scheme, and any
 per-declaration link-name override, are open questions — see below.)
 
+> **[deviation]** The prefix is `zg_` and there is **no package segment**, because there is no package
+> layer to name (Four layers, [package.md](package.md)): `pub fn add` in a `--emit lib` build exports
+> `zg_add`, measured with `nm`. So the names are stable and unmangled as specified, and the part that
+> makes them collision-free across packages is the part that does not exist yet.
+
 ## Importing C — a stdlib facility
 
 There is **no import block** in the grammar either. Binding a foreign C symbol — naming
@@ -231,9 +232,7 @@ mutable global with nothing said.
 
 > **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place**. Building it would
 > read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
-> form is turned away rather than silently disarmed. (It used to compile exactly that way:
-> `unsafe fn g() -> int { return 2 }` then `print g()` compiled, and `g` was callable from ordinary safe
-> code with no diagnostic at all.)
+> form is turned away rather than silently disarmed.
 
 The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
 unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is
@@ -333,4 +332,6 @@ Deferred for a later design pass — none blocks the model above:
 - Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
 - A compile-time **`sizeof` / `alignof`** — a type's size and alignment as a constant, now that the layout is
   fixed (see [Values & Memory](../core/memory.md)) — is a **stdlib** facility, deferred until a
-  concrete need; it is not a core-language construct.
+  concrete need; it is not a core-language construct. **[Built-ins](builtins.md) calls the same pair a
+  built-in**, and the two chapters have not been reconciled; it exists in neither place, so the
+  disagreement has cost nothing yet and is recorded rather than resolved here.

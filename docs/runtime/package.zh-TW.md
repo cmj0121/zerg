@@ -330,6 +330,14 @@ package 是用哪些檔案建起來的。
 **package 就是測試檔所指名的那個 module**，依上面「先具體、後一般」那條規則，再加上該目錄自己的
 `fixtures_test.zg`（若有）與 driver。因此同一個目錄可以放好幾個 package，各有自己的 driver、自己的行程。
 
+**而一個「本身就是某個 module」的測試 package，就是那個 module。** `src/stdlib/strings_test.zg` 形成的 package
+是用 `strings.zg` 建的，所以同一支程式裡任何其他地方的 `import "strings"`，解析到的是**這個 package 的原始碼**，
+而不是把該 module 的檔案再載入一次。沒有這條規則，那個 module 會在程式裡出現兩次，建置會停在
+_E745 `get` is declared twice in this file_，指著一份沒有人動過的原始碼。沒有任何刻意的安排才到得了它：一份 suite
+會 import `testing`，`testing` 透過 `log` 輸出一則 note，而 `log` 用 `json` 編碼——所以 `testing` 依賴閉包裡的那些
+stdlib module，恰好就是有 suite 的那幾個。這與「一個 module 無論被幾個人 import 都只載入一次」是同一套機制，不是
+額外栓在 loader 上的一條測試檔專屬規則。
+
 **路徑可以是單一 `.zg` 檔**，此時跑的是**那個檔案所在的 package**——祖先從該檔案的目錄算起，與直接給目錄時一致。
 單獨建置那個測試檔等於什麼都沒建，所以檔案是用來**選一個 package**，而不是給一份檔案清單；要挑單一測試，工具是
 `--only`。

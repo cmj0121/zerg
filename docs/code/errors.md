@@ -1,15 +1,16 @@
 # Zerg Null-safety & Errors
 
 The two failure tiers — recoverable values and aborts — the operators that bridge them
-(`?` `??` `?.` `!` `raise` `guard`), and how errors are handled by type. Part of the
+(`?` `??` `?.` `!` `raise` `assert` `guard`), and how errors are handled by type. Part of the
 [Language Reference](../language.md). Also in [繁體中文](errors.zh-TW.md).
 
 Failure comes in **two tiers**, with exactly one bridge each way. **Recoverable failure is a value** —
 absence and expected errors are ordinary values of a sum type, never a magic null; this is the tier
-you work in day to day. **A bug is an abort** — overflow, division by zero, a wrong `!`, or an explicit
-`raise` _raise_ and unwind the stack (see _Aborts_ below); they appear in no signature and can't be
-inspected or resumed. Both tiers carry the same `Err` (the `Error` spec), so they meet cleanly at the
-bridges: **`raise` (and `!`) lift a value into an abort, `guard` demotes an abort back into a value.**
+you work in day to day. **A bug is an abort** — overflow, division by zero, a wrong `!`, a failed
+`assert`, or an explicit `raise` _raise_ and unwind the stack (see _Aborts_ below); they appear in no
+signature and can't be inspected or resumed. Both tiers carry the same `Err` (the `Error` spec), so they
+meet cleanly at the bridges: **`raise` (and `!`, and `assert`) lift a value into an abort, `guard`
+demotes an abort back into a value.**
 
 The value tier is one sum type; by convention the **left** is the value, the **right** is what gets
 propagated:
@@ -66,6 +67,24 @@ other diverge takes — `raise e if c`, and `raise e from cause if c` — which 
 and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
 on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
+**`assert cond` — state a claim (value → abort).** It raises `AssertionError` when the claim does not
+hold, and it takes a condition and **nothing else** ([`GRAMMAR#assert-stmt`](../../GRAMMAR)): the message
+is the one thing a function could never assemble, so the compiler writes it from the position, the claim's
+own source text, and the value of each operand the comparison came apart into.
+
+```text
+AssertionError: parse.zg:41  assert lo == hi
+  lo = 1
+  hi = 2
+```
+
+So `assert` is for the claim whose own text is the explanation. A claim needing an explanation rather than a
+display is `raise ValueError("why") if not cond`, which is the production form — and the only conditional
+one, since `assert` is the one diverge that takes **no postfix `if`**: `assert c if d` does not parse
+(`E205`). `assert` is **always compiled in** and there is no flag that strips it, because a program with and
+without its assertions would be two programs; so `zerg lint` reports one outside a `*_test.zg` file as
+`L602` — not a weaker check than you meant, a **less specific** one.
+
 **The built-in error taxonomy is a TREE.** This phase ships a **fixed set of six** error kinds, and some
 of them are **kinds of** others:
 
@@ -121,20 +140,19 @@ answers the text alone, and the kind is rendered in front of it when the error r
 expected failure. Of the fault names this chapter uses, eleven reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
 the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` — and
-`AssertionError`, which is what a failed `assert` (see [Grammar](../surface/grammar.md), group 8) raises
-and which nothing else raises. That exclusivity is the point of giving it a kind rather than a message:
-`zerg test` reports a claim that did not hold as a **failure** and anything else that reached the top of
-a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
+`AssertionError`, which a failed `assert` raises and **nothing else** does. That exclusivity is what the
+kind buys over a message: `zerg test` reports a claim that did not hold as a **failure** and anything else
+that reached the top of a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
-**[not yet]** — writing `err is AliasError` is a clean, named compile error in **both** compilers, the
-name not being one of the eleven — and the abort carries no distinct reified kind for them, only a generic
-message.
+**[not yet]** — `err is AliasError` is _E494 NotImplemented: `is AliasError` — an `is` test names one of
+the built-in error kinds here, and `AliasError` is not one_, in **both** compilers — and the abort carries
+no distinct reified kind for them, only a generic message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
-of `is` and may **not** call: `raise StopIteration("…")` is a compile error in **both** compilers. A
-channel's clean close carries it as a **kind** rather than a message, which is what lets a consumer tell a
-clean end from a crash without comparing strings; a sender able to raise the sentinel would defeat exactly
-that (see [Concurrency](coroutine.md)). `StackOverflowError` is a **[deviation]** (see below). An abort is **not
+of `is` and may **not** call: `raise StopIteration("…")` is _E726 `StopIteration` is testable but not
+constructible_ in **both** compilers, because it is the marker a channel's clean close already wears —
+see [Concurrency](coroutine.md) for what a sender able to raise it would cost its consumer.
+`StackOverflowError` is a **[deviation]** (see below). An abort is **not
 catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
@@ -183,13 +201,16 @@ fn read_config(s: str) -> Result[Config] {
 }
 ```
 
-> **Two limits on what a guarded block may be, both loud.** A `return`, `break` or `continue`
-> that LEAVES the block is refused in both compilers: the handler is pushed before the block and
-> popped after it, so a jump in between takes the frame away and leaves the handler installed on
-> it. And a block whose value is a name BOUND INSIDE it is refused, because C makes an automatic
-> variable modified between `setjmp` and the landing pad indeterminate unless it is `volatile`
-> (C99 7.13.2.1) — give the block a call or a literal as its value, which is the everyday shape
-> anyway.
+> **One limit on what a guarded block may be, and it is loud.** A `return`, `break` or `continue`
+> that LEAVES the block is refused in both compilers — _E403 NotImplemented: `return` leaving a
+> `guard` block — the guard's handler would stay installed on a frame that has returned_. The
+> handler is pushed before the block and popped after it, so a jump in between takes the frame
+> away and leaves the handler on it. A loop written **inside** the guard is unaffected: its
+> `break` never crosses the frame.
+
+A block whose value is a name **bound inside it** is ordinary, which is most of what a guard holds
+several statements for — `guard { x := parse(s)  check(x) }`. The value is **copied** out rather
+than aliased, so the bindings are still released on the way past and the answer outlives the block.
 
 `Result[T]` **survives in a signature**, so `read_config` above is an ordinary function and what it returns
 is an ordinary value at the call site: hand it to `??` for a default, to a `match` for the two sides (the
@@ -225,8 +246,9 @@ match guard { work() } {
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
-is built **for the error taxonomy** — the six built-in kinds and any built-in
-abort a `guard` reifies; the general existential test `x is T` for a **non-error** type is **[not yet]**.
+is built **for the error taxonomy** — the eleven reified kinds above and nothing else, which is why a name
+outside them is `E494` rather than a test that answers `false`; the general existential test `x is T` for a
+**non-error** type is **[not yet]**.
 The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
 exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but
 `MatchError` is **[not yet]** a reified kind, and because the final `match` arm is always unconditional the
@@ -240,8 +262,6 @@ says "here is my exact error kind". (A user-defined error `enum` gathering sever
 is deferred with user error types above.)
 
 > **[not yet]** A built-in error kind cannot appear in a **type** position: `fn f() -> Either[int, ValueError]`
-> reports ``no type named `ValueError` ``. The six kinds are constructors the runtime knows, not names the
-> type checker resolves, so the closed-set half of the split just described — the concrete
-> `Either[T, Kind]` whose right a `match` reads by value, named here and again where the taxonomy is
-> introduced — has no program that can be written today. The erased `Result[T]` with an `is`-chain is the
-> one of the two routes that exists.
+> reports _E707 no type named `ValueError`_. The kinds are constructors the runtime knows, not names the type
+> checker resolves, so the closed-set half of the split just described has no program that can be written
+> today; the erased `Result[T]` with an `is`-chain is the one of the two routes that exists.

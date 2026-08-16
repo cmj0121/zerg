@@ -20,22 +20,29 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > **狀態。** 渲染一個**純量**、一個 **`str`**，或一個 **`Err`**——透過純 `{x}` 洞、`print`，或 f-string——可
 > 用，而且任何宣告了 override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。一個 `Err`
 > 渲染為它的**訊息**；它的 kind 是拿來比較的（`e is IOError`），不是拿來讀出的。**沒有 override 的複合值**
-> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日格式洞裡這樣的複合值會在**編譯期被拒
-> 絕**，所以「每個值都能渲染」對純量、字串與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構
-> 化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
+> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日這樣的複合值會在**編譯期被拒絕**，而且
+> 是兩個門口兩個代碼——_E449 NotImplemented: rendering a `P` as text — a composite needs the structural
+> `Display` this compiler does not generate; render its fields_ 用於 `print`、格式洞與 `str(x)`，而
+> _E417 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。所以「每個值都能渲染」
+> 對純量、字串、錯誤與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切
+> 拼法**尚未被釘定**（[not yet]）。
+>
+> 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E445`
+> （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式
 引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：
 
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
-  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕。
+  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——_E226 NotImplemented: an
+  f-string '!r' / '!s' / '!a' conversion_。
 - **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04d}"`）。**[not yet]**
   ——被辨識之後由 **parser 拒絕**（`E227`）。
 - **`{x:spec}`** 把 spec 字串交給型別的 **`Format`** 協定——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。這是
   **per-type 協定**、非 `display` 參數：語言只固定 `:spec` 的**語法**（到 `}` 為止的不透明文字）；一個 spec 的**意義**
   由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。對
-  format spec 為 **[not yet]**——洞裡的 spec 會被指名拒絕。
+  format spec 為 **[not yet]**——_E225 NotImplemented: an f-string ':spec' format spec_。
 
   > **spec 是程式自己寫的文字,而它的每一個欄位都有界。** `type` 字母對每一種渲染都是**封閉集合**——float 取
   > `e E f F g G`，int 取 `b o x X c d`——其中 `c` 把 int 當作它指名的**碼位**渲染,並拒絕任何 `str` 裝不下的

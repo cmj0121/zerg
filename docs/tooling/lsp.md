@@ -24,11 +24,12 @@ corpus programs, and holds what the server publishes to what `zerg build` and `z
 the same file — errors against the command that refuses over one, lint findings against the command
 that reports one. It is `make oracle`'s argument applied to the second front end.
 
-It carries **ten protocol cases** beside that, and every one of them failed once: the exit status, the
-post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification versus
-a `$/` request, a malformed frame, a string id, a UTF-16 column after a line of CJK, and a body larger
-than one read of the runtime's bounded leaf. Those are a different kind of failure and a quieter one —
-an editor with a corrupted buffer, or a client left waiting, reports nothing at all.
+It carries **fifteen protocol cases** beside that, and every one of them failed once: the exit status,
+the post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification
+versus a `$/` request, a malformed frame, a string id, a UTF-16 column after a line of CJK, a body
+larger than one read of the runtime's bounded leaf, and five over the [quick fix](#a-quick-fix-is-the-compilers-answer-not-the-servers).
+Those are a different kind of failure and a quieter one — an editor with a corrupted buffer, or a
+client left waiting, reports nothing at all.
 
 ## Where it lives
 
@@ -61,9 +62,11 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
 
-Every other request is answered with a **method-not-found error**, not with silence. A client left
-waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
-nothing said.
+Those last three are the whole of what `initialize` **declares** — `documentFormattingProvider`,
+`codeActionProvider`, `documentSymbolProvider` — which is the part a client reads before it sends
+anything. Every other request is answered with a **method-not-found error**, not with silence: a
+client left waiting for a reply it will never get stops sending the next one, and the editor goes
+quiet with nothing said.
 
 **The session is a state machine, and the exit status is part of it.** `shutdown` closes the server
 to everything but `exit`; a request that arrives after it is answered with `InvalidRequest`, because a
@@ -104,7 +107,7 @@ use. Everything else on the wire came from `lint_program`, and every one of thos
 program that builds, so none of them is ever an error: a server that paints a working program red
 teaches its user to ignore red. The linter's own three levels are ordered — a **finding** fails
 `zerg lint`, a **warning** prints and exits 0, an **info** never gates anything
-([the linter's severities](fmt.md)) — so they land on LSP's remaining three in that order:
+([the linter's severities](lint.md)) — so they land on LSP's remaining three in that order:
 
 | `Finding.sev` | `zerg lint` prints | LSP severity    |
 | ------------- | ------------------ | --------------- |
@@ -282,7 +285,7 @@ quick fix and then does nothing is worse than one that offers none, because the 
 lies.
 
 The rewrite is **not** `zerg fmt`'s. The formatter reads tokens and must work on source the compiler
-cannot compile ([Formatter & Linter](fmt.md)); knowing that `1` became a `float` needs types, so a
+cannot compile ([Formatter Rules](fmt.md)); knowing that `1` became a `float` needs types, so a
 formatter that did this would fail in exactly the buffer a person reaches for it in. It is also an
 opinion — `1.5 + 1` is a legal program — and the formatter has none.
 
@@ -410,18 +413,21 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 
 ## What is not built, and what each one is waiting on
 
-| Missing                                       | Waiting on                                                       |
-| --------------------------------------------- | ---------------------------------------------------------------- |
-| `hover`, `definition`, `references`, `rename` | nothing maps a position to a declaration                         |
-| `completion`                                  | the same query surface                                           |
-| `semanticTokens`                              | `Kind`'s variants cannot be matched outside the `zerg` module    |
-| a diagnostic **end** position                 | the compiler tracks where a thing starts and not where it ends   |
-| incremental sync, debounce, cancellation      | a measurement; Phase 1 re-checks the whole program per keystroke |
+Tracked as issue [#15](https://github.com/cmj0121/zerg/issues/15).
 
-The first row is the real gap and everything interactive is behind it. The information exists —
-`check.zg` computes all of it — and is discarded after the build. What is needed is not those types
-made public one by one but a **query surface**: given a path and a position, what is declared there,
-where was it declared, and what is its type.
+| Missing                                           | Waiting on                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------- |
+| `hover`, `definition`, `references`, `rename`     | nothing maps a position to a declaration                      |
+| `completion`, `signatureHelp`, `workspace/symbol` | the same query surface                                        |
+| `semanticTokens`                                  | `Kind`'s variants cannot be matched outside the `zerg` module |
+| a diagnostic **end** position                     | the compiler tracks where a thing starts, not where it ends   |
+| incremental sync, debounce, cancellation          | a measurement; Phase 1 re-checks the program per keystroke    |
+
+The first two rows are the real gap and everything interactive is behind them. The information
+exists — `check.zg` computes all of it — and is discarded after the build. What is needed is not
+those types made public one by one but a **query surface**: given a path and a position, what is
+declared there, where was it declared, and what is its type. That is one index, not seven features —
+eight with `declaration`, which is `definition` asked of a different node.
 
 `semanticTokens` is a different kind of missing and worth naming as such: it would need a table
 mapping token kinds to LSP token types, which is exactly the sort of **repeated list of language
@@ -432,9 +438,10 @@ The last row is a cost, not a gap. The scheduler is cooperative and non-preempti
 occupies its worker until it finishes; `emit.zg` is the worst case in this repository and is the
 number to measure against before designing anything here.
 
-**The memory half of that cost is closed.** One check of the 24-file program rooted at
+**The memory half of that cost is closed.** One check of the program rooted at
 `src/compiler/zergc.zg` — which is what opening **any** file under `src/compiler/` asks for, now that
-a module member is checked against its module — used to take 6.7 s and peak at **6.7 GB**, and a
+a module member is checked against its module, and which was 24 files when this was measured and is
+27 today — used to take 6.7 s and peak at **6.7 GB**, and a
 long-lived session was killed by the operating system after three or four of them. The ceiling was
 the **emitter's**, not the protocol's: the compiler's checks live inside the lowering walk, so the
 only way to reach them was `emit_files_diag`, which lowers the whole program to C first.

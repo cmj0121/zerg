@@ -10,13 +10,14 @@
 
 1. **Emit 目標——轉譯成 C，重用 runtime。** emitter 降到 C（與 Go bootstrap 產生的同一種 C）
    然後交給 `cc`，整份重用 `src/runtime/csrc`。這個階段不做原生／組語 codegen。
-2. **driver 透過一個新的 runtime `exec` leaf 呼叫 `cc`。** 今天的 runtime 沒有子行程原語。我們
-   加入 `zrt_exec`（一層 OS syscall 地基：`posix_spawn`/`execvp` 之後 `waitpid`，零第三方依賴），
-   以 `__zrt_exec` intrinsic 曝露出來，再包成 `os.run` / process 這個 stdlib 模組。這同時補上了
-   規格裡「command literal — not yet」的缺口。
-3. **涵蓋範圍——先做 `Zerg-boot` 子集，再逐步長大。** Milestone 1 只需要支援「編譯器自己的原始碼
-   所使用的那個語言子集」。每一個 pass 都以「與 Go bootstrap 的 `--emit` 輸出做 diff」來驗證。
-   等 fixpoint 成立之後，涵蓋範圍才往完整語言成長。
+2. **driver 透過一個 runtime `exec` leaf 呼叫 `cc`。** `zrt_exec` 是一層 OS syscall 地基——
+   `posix_spawn`/`execvp` 之後 `waitpid`，零第三方依賴——以 `__zrt_exec` intrinsic 曝露出來，
+   再包進 `os`。它**沒有**補上規格裡 command literal 的缺口：`` `…` `` 至今仍是指名拒絕
+   （`E236`）。
+3. **涵蓋範圍——先做 `Zerg-boot` 子集，再往外長。** 編譯器得先編得動自己的原始碼，才談得上編別
+   的；而那個子集就是今天種子的契約
+   （[`src/bootstrap/README.zh-TW.md`](../bootstrap/README.zh-TW.md)）。`zerg` 在那之**外**還
+   接受什麼，見[下文](#出貨的編譯器接受什麼)。
 
 ## 目錄結構
 
@@ -43,10 +44,15 @@ src/compiler/
     lexer.zg      # 原始碼文字 -> token 串（可要求保留註解）
     ast.zg        # 遞迴的 AST 節點型別（enum payload）
     parser.zg     # token -> AST
+    check.zg      # 一支「程式」必須滿足的規則，與產生它的那段程式碼分開
+    generic.zg    # 單型化——每一個實例化各產生一份，做法是代換
     emit.zg       # AST -> C，含 emit 所需的最小型別檢查
     fmt.zg        # token -> 標準形式的原始碼
+    desugar.zg    # token -> 那些 sugar 被定義成的 core 形式
     lint.zg       # AST -> 發現
-  lsp/            # language server——自成一個模組
+    version.zg    # 由 ./scripts/gen-version.sh 從 VERSION 產生
+  lsp/
+    server.zg     # language server——自成一個模組
 ```
 
 `cmd` 裡標成**共用**的那四個檔案之所以在那裡，是因為不只一個子命令會用到它們，而且「是哪些」是在 call graph 上量出來的，
@@ -95,14 +101,20 @@ scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的
 
 - **分離編譯。** 一個單元宣告整個程式，但只定義它自己的模組，所以兩個共用同一個 import 的模組
   可以並排連結。整程式一次 emit 做不到這件事：每個 object 都會帶一份共用模組的副本。
-- **快取。** 一個單元的 key 是「它產生的那份 C」的 hash——那已經把它自己的原始碼、它看得到的
-  一切、以及產生它的那個編譯器全都摺進去了，因為上述任何一項改變都會改變那份 C。用內容而不是
-  時間戳，而這之所以安全，正是因為 fixpoint 證明了 emit 是決定性的。改一個註解不會重編任何
-  東西：註解到不了產生出來的 C。runtime 的 translation unit 也以同樣方式快取。
+- **快取。** 一個單元的 key 是對「它產生的那份 C，**加上會拿去餵的那個 `cc` 與 C 方言**」取
+  `sha256`——那份 C 已經把它自己的原始碼、它看得到的一切、以及產生它的那個編譯器摺進去了，但摺
+  不進那兩個位在它下游的輸入。用內容而不是時間戳，而這之所以安全，正是因為 fixpoint 證明了 emit
+  是決定性的。改一個註解不會重編任何東西：註解到不了產生出來的 C。`make cache-key-check` 是那道
+  閘門，而它之所以存在，是因為 `cc` 那一半從快取寫出來的那天起就一直缺著——換一個編譯器，讀回來
+  的是前一個編譯器建的 object，而且回報成功。
 - **平行。** 單元一旦 emit 完就彼此不相依，所以 `-j` 可以同時編好幾個。平行來自 OS 行程而不是
-  coroutine：runtime 的排程器是協作式 N:1，所以 coroutine 給的是並行，不是 CPU 平行。
+  coroutine：排程器是 M:N 但**協作式**的，一條 CPU-bound 的 coroutine 會一直佔住它的 worker，
+  所以它買到的是並行，不是更短的編譯時間。
 
-用它自己建自己，六個單元：`-j1` 是 1.28 秒，`-j4` 是 0.56 秒，什麼都沒改時是 0.33 秒。
+用它自己建自己是**十個單元**——進入點、`cmd/`、`zerg/`、`lsp/`，加上它們用到的六個 stdlib 模組。
+量三次的結果是：冷建 `-j1` 約 7 秒、`-j4` 約 6 秒，而 `-j8` 落在 `-j4` 的執行間浮動範圍內，什麼
+都沒改時約 5 秒。這些數字之所以這麼接近，正是重點：`zerg/` 是一個目錄模組、因此是一個單元，而它
+就是編譯器的大部分，所以 `-j` 不可能低過它。在這裡買到時間的是快取，不是平行。
 
 ## 語料庫（corpus）
 
@@ -112,14 +124,48 @@ scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的
 
 ```sh
 make corpus     # 先建 zerg，然後拿它跑過 test-data/codegen/
-make refuse     # 每一支必須被拒絕的程式，都要由編譯器指名拒絕
+make refuse     # 每一個這個編譯器還沒建出來的形式，都是指名拒絕、不是 emit 出去
+make reject     # 每一支不是 Zerg 的程式都被拒絕——由編譯器拒絕，不是由 cc
 ```
 
 每個案例是一支 `.zg` 程式，旁邊放著它必須印出的 stdout。Makefile 的 `CORPUS_PASS` 是 `zerg`
-今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘案例
-只回報、不強制——剩下的八個需要泛型**函式**定義、把泛型型別參數當成欄位型別、`derive`、spec
-bound 或 `#[dyn]`，而自舉編譯器目前一個都沒有。每一個都是**指名**拒絕——`gen_struct` 回答的是
-_no type named `T` (field `Box.val`)_——而不是誤譯。
+今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘的由
+`CORPUS_SKIP` 擋著，而把一個名字從裡面刪掉，**就是**那個名字所等的功能的閘門。
+
+還在等的有六個，每一個都是**指名**拒絕、不是誤譯——`gen_struct` 回答的是
+_E215 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and a
+field names one_——它們等的是泛型的 `struct` 或 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」以外
+的 `derive`。另外兩個，`spec_bound` 與 `gen_identity`，今天建得起來、也印得出該印的東西：是這份
+清單還沒跟上。
+
+## 一支程式必須是什麼，以及誰說了算
+
+種子有一個語意分析 pass；這個編譯器當初是在沒有那個 pass 的情況下寫成的，而它生命中的大部分時間，
+沒有任何東西問過一支程式是否合式。`x := 1` 後面接 `x = 2` 編得過也跑得動。`1 + "s"` 變成 C 的指標
+運算，印出一個位址。`b: bool = 1` 印出 `true`，因為降階之後兩者都是 `int64_t`。一個連 C 都看得出
+來的型別錯誤會走到 **cc**，由它對著 `.zerg-cache` 底下的產生碼報出來。
+
+`check.zg` 收著那些規則——可變性、一個區塊裡一個綁定、bool 條件（每一種在問問題的形式，包括
+match arm 的 guard）、運算元型別，以及一個值會進入的四個槽：宣告、賦值、對照簽章的 `return`、
+對照參數的引數，再加上一次呼叫的引數個數。它們是一個**檔案**而不是一個 pass，因為它們需要的知識
+在 emitter 裡已經有了：`c_infer` 會把每個運算式定型，環境會追蹤每個綁定。今天另立一個 pass 等於
+第二次走訪與第二份推論，而會漂走的正是第二份。把它們從呼叫它們的 emit 裡集中出來，是為了讓這組
+規則可以被當成一組讀，也是為了讓日後把它們抬升成一個真正的 pass 是搬移而不是重寫——那件事在 AST
+學會攜帶原始碼位置時就得發生。
+
+型別以 `ty_eq`（在 `ast.zg`）比較，它是在 `Ty` enum 上做結構性比較——不是用 `ty_name`，後者是診斷
+用的**拼法**，會把 `TUnknown`、`TTuple` 與 `TMap` collapse 成同一個名字。「合得進去」不等於相等，
+所以 `chk_fits` 在上面另有自己的結構：一個會把拿到的東西重新塑形的槽從來不算不匹配，而一個 list
+在它的元素合得進去時就合得進另一個 list。
+
+兩種訊息，差別在於壽命：
+
+| 訊息              | 意思                               | 住在       |
+| ----------------- | ---------------------------------- | ---------- |
+| `NotImplemented:` | 這個編譯器還沒建出來的形式         | `emit.zg`  |
+| 一個普通的句子    | 一支不是 Zerg 的程式——語言給的答案 | `check.zg` |
+
+`make refuse` 與 `make reject` 是兩道閘門，一欄一道。
 
 `make refuse` 是同一件事的另一面。這裡每一道閘門問的都是工具鏈**建得出什麼**，而一則拒絕真正
 需要被釘住的性質，不是「壞程式會失敗」——它一直都會——而是**誰**說的。編譯器照樣 emit 出去的
@@ -127,18 +173,16 @@ _no type named `T` (field `Box.val`)_——而不是誤譯。
 的錯。所以 `scripts/refuse-check.sh` 的每個案例都斷言三件事：非零 exit、預期的句子，以及輸出裡
 **沒有**那個 cache。
 
-每個開始通過的案例，就是一次修正或一個功能落地，然後它會被搬進那份清單。
+**emit 是端到端驗證的，不是逐位元相同。** 要在 18k 行 Zerg 程式碼（連註解算 35k 行）的規模上
+重現 Go 種子確切的 C 排版與命名，代價遠高於它的價值，所以標準是**功能等價**：產生的 C 必須編
+得過，而程式必須印出語料庫所說的東西。決定性（反正 fixpoint 本來就要求）是讓這件事穩定的原因；
+逐位元相同的 C 明確不是目標。
 
-**emit 是端到端驗證的，不是逐位元相同。** 要在約 9.5k 行的規模上重現 Go 種子確切的 C 排版與
-命名，代價遠高於它的價值，所以標準是**功能等價**：產生的 C 必須編得過，而程式必須印出語料庫
-所說的東西。決定性（反正 fixpoint 本來就要求）是讓這件事穩定的原因；逐位元相同的 C 明確不是
-目標。
+## 哪些構造需要 runtime
 
-## 把 emit 長到自我編譯的子集（M3 → M5）
-
-examples 的子集（純量、函式、if / for、對 int 的 match）已經端到端完成。編譯器自己的原始碼需要
-的遠不止這些，所以 emit 一個功能一個功能地長，每一個都先用一支端到端的測試程式驗證過，才做下
-一個。Go bootstrap 產生的那些 C 形狀（也就是目標）是：
+`需要 runtime？` 那一欄就是軸線，而它決定了 `src/runtime/csrc` 得裝多少 C：一個構造的 C 只是一個
+**形狀**時就不需要 runtime，而當它的 C 需要一段**生命週期**——一個堆積上的盒子、一段可成長的緩衝
+區、一個 refcount——它就得伸手去拿 `zrt_*`，也就不可能只是一個形狀。
 
 | 功能               | C 形狀                                                            | 需要 runtime？ |
 | ------------------ | ----------------------------------------------------------------- | -------------- |
@@ -148,23 +192,20 @@ examples 的子集（純量、函式、if / for、對 int 的 match）已經端�
 | list[T]            | `zrt_list` + `zrt_list_init/push/len/at`；for-in 是索引迴圈       | 是             |
 | str 建構／運算     | `list[byte](s)` / `str(bs)` / `+` / `==`                          | 是             |
 
-**leak-style 的 emit 是那個簡化。** 一個自舉編譯器是批次工具：它編一次然後結束，所以它從來不需要
-free。因此 emit **重用 runtime 的資料結構原語**（`zrt_list_*`、用 `zrt_ref_alloc` /
-`zrt_ref_payload` 做裝箱），但**跳過整套記憶體管理紀律**——那套紀律 Go 的 emit 是穿過每一個函式
-去織的——沒有 `zrt_scope_mark` / `zrt_defer` / `zrt_unwind_to`，沒有 per-type 的 copy / drop /
-release，ref-box 配置了就不釋放，list 帶一個 `{NULL,NULL}` 的元素 vtable。作業系統會在結束時
-回收。這仍然遵守「emit C、重用 runtime」這個決定——runtime 的資料結構確實被重用了——同時砍掉了
-Go emit 大部分的複雜度。決定性（M5 唯一需要的性質）不受洩漏影響。
+## 拆解，以及那個必須收回的論證
 
-**而那個理由已經超出它自己的範圍了。** 它推論的是**一個**程式：這個編譯器，編譯它自己，然後結束。
-但這是**出貨用的後端**：同一份 emit 編譯的是每一個有人用 Zerg 寫出來的程式，而那些程式沒有一個
-答應過自己是批次工具。一個用 `zerg build` 建出來的 Zerg 服務，會漏掉它格式化過的每個字串、建過的
-每個 list，只要它還在跑就一直漏。語言裡沒有任何一句話這樣說，工具鏈也不會警告。
+emit **重用 runtime 的資料結構原語**（`zrt_list_*`、用 `zrt_ref_alloc` / `zrt_ref_payload` 做
+裝箱）。它原本跳過的是圍繞著這些原語的整套記憶體管理紀律——沒有 `zrt_scope_mark` / `zrt_defer` /
+`zrt_unwind_to`，沒有 per-type 的 copy / drop / release——理由是：一個自舉編譯器是批次工具，它編
+一次然後結束，所以它從來不需要 free。
 
-它之所以一直沒被量到，是因為唯一的 sanitizer gate 是 `make sanitize-conc`，而在 ASan 的 fiber
-標註落地之前，LeakSanitizer 掃的是錯的範圍找 root，於是什麼都不報。第一次誠實的執行才把它叫出來。
+**而那個論證推論的是一個程式。** 這是**出貨用的後端**，同一份 emit 編譯的是每一個有人用 Zerg 寫
+出來的程式，而那些程式沒有一個答應過自己是批次工具。一個 Zerg 服務會漏掉它格式化過的每個字串、
+建過的每個 list，只要它還在跑就一直漏；語言裡沒有任何一句話這樣說，工具鏈也不會警告。它之所以
+一直沒被量到，是因為當時唯一的 sanitizer gate 是 `make sanitize-conc`，而在 ASan 的 fiber 標註
+落地之前，LeakSanitizer 掃的是錯的範圍找 root，於是什麼都不報。第一次誠實的執行才把它叫出來。
 
-每個擁有者今天做到哪裡，還剩下什麼：
+所以那套紀律現在是會被 emit 出來的。每個擁有者今天做到哪裡，還剩下什麼：
 
 | 擁有者         | 今天                                                   | 還剩下什麼         |
 | -------------- | ------------------------------------------------------ | ------------------ |
@@ -203,75 +244,28 @@ rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box �
 **有界**的洩漏——每支程式一筆，或每個位置一筆而不是每次建構一筆——在兩個輪數下是同一個數字，它看
 不見。
 
-**通往 M5 的增量階梯**（每一階都端到端測過，然後才 commit）：
-
-1. struct——宣告、建構、欄位存取、`mut &` 參數、欄位變更 _（不需 runtime）_
-2. 帶 payload 的 enum——tagged union、建構、match 解構 _（不需 runtime）_
-3. 遞迴的 enum——`void*` ref-box，leak-style _（需 runtime）_
-4. list[T] + for-in——`zrt_list`、索引迴圈、依元素型別單型化 _（需 runtime）_
-5. str 建構／運算——`list[byte]` ↔ `str`、`+`、`==` _（需 runtime）_
-6. 泛型／單型化——每一個在原始碼中用到的實例化各產生一份具體的 emit
-7. import——把攤平後的多檔模組 emit 成一個 translation unit
-
-當七項全部到位、而且功能程式的語料庫加上 stdlib 都能編譯並跑出一致結果時，編譯器就可以試著編譯
-它自己的原始碼，M5 於是開始。
-
 ## 自舉的證明
 
 編譯器能重現它自己，才讓「自舉」是一個主張而不只是一句描述，而 `make build` 就是檢查它的地方：
 種子建出一個中間產物，中間產物建出最終出貨的編譯器，而一個無法重現自己的編譯器過不了這一關。
 `make corpus` 與 `make lint` 是疊在上面的檢查。
 
-## 把 bootstrap 縮到最小（M6）
-
-一旦 fixpoint 成立，Go bootstrap 就只需要編譯 `src/compiler/*.zg` 這些原始碼（以及它們 import
-的 `io` / `ascii` / `strconv` / `cli`）**實際用到**的那個 `Zerg-boot` 子集。每一次移除都由
-`make build` 自己把關：種子建出中間產物，中間產物建出出貨的編譯器，而一個弄丟了編譯器所需東西的
-種子過不了這一關。`make corpus` 與 `make lint` 是疊在上面的檢查。
-
-**Zerg-boot 子集**（最小的 bootstrap **必須**保留的東西）：
-
-- 宣告：`fn`（含 `mut &` 參考參數）、`struct`、`enum`（含自我遞迴）、`#[derive(Eq)]`、
-  `import`、`pub`
-- 敘述：`x := e` / `x: T = e` / `mut` / `const` 綁定，對名稱／欄位／索引 lvalue 的賦值、
-  `print`、`return`（含 `return e if c`）、`if` / `else if` / `else`、`for cond` / `for` /
-  `for x in xs`、`break`、`continue`、`nop`、`guard`、`raise`
-- 運算式：int / float / str / bool / byte 字面值、`nil`、識別字、一元／二元運算子、呼叫、
-  欄位存取、索引、方法呼叫、list 字面值 `[]`、轉換（`int`/`byte`/`str`/`list[T]`(x)）、
-  `match`（字面值／綁定／萬用／建構子 pattern，可選的 guard）、if 運算式
-- 型別：`int`、`float`、`str`、`bool`、`byte`、`nil`、`list[T]`、具名的 struct/enum、
-  `Result[T]`、`impl` 內的 `This`
-- 帶**值接收器**的固有 `impl T { … }` 方法：parser 會把整個區塊攤平成帶有 `this: T` 第一參數的
-  普通函式，而 C 名稱是 `zg_<T>_<name>`，不是自由函式拿到的那種扁平 `zg_<name>`。`mut fn`
-  （可變接收器）**不在**子集內——改用 `mut &` 參數，或回傳一個新值，而後者本來就是可串接的
-  builder 在做的事。
-- 隨附 stdlib 所降到的那些 `__zrt_*` runtime intrinsic
-
-**可剝除的**（不在子集內——自舉的原始碼從不使用）：closure／第一級函式；coroutine
-（`spawn` / `chan` / `select`）；`map[K,V]`；`spec`（因而 `impl Spec for T`）與泛型**函式**
-定義；`unsafe` / `asm` / `ptr`；command literal；`with` / `defer` / `del`；`Result` 以外的
-optional（`T?` / `??` / `!`）。非 build 的子命令（`fmt` / `lint` / `test`）同樣被丟掉——最小的
-種子只有 `zerg build`；自舉的編譯器之後可以用 Zerg 把那些工具重新實作一次。
-
-**f-string 在 `F405` 落地時離開了那份清單。** 自舉的原始碼現在會用到它們——`zerg fmt` 會寫出
-它們——所以種子必須能 lex 與 parse `f"…"` 才建得出 stage 1。它本來就做得到；改變的是這件事現在
-變成承重的，而不再只是順帶。出貨的編譯器只接受單純的 hole：沒有 `:spec`、沒有 `!r`/`!s`/`!a`、
-沒有 `{x=}`，也沒有會內插的命令形式，每一種都是**指名**拒絕，而不是沉默略過。它在 parser 裡就
-desugar 成這個形式本來被定義成的那條 `+` 鏈，所以 AST 與 emitter 對 f-string 一無所知。
-
 ## 出貨的編譯器接受什麼
 
-上面那份 Zerg-boot 清單回答的是另一個問題。它說的是**種子**為了建出 stage 1 必須保留什麼；
-它沒有說 `zerg` 自己理解什麼，而這兩者一直在拉開。出貨的編譯器在那個子集之外還接受：
+`Zerg-boot`——**種子**為了建出 stage 1 必須保留的那個子集——只寫在一個地方：
+[`src/bootstrap/README.zh-TW.md`](../bootstrap/README.zh-TW.md)，第一層是它支援什麼，第二層是它
+指名拒絕什麼。`zerg` 在那個子集之**外**還接受什麼：
 
 | 形式                              | 註                                      |
 | --------------------------------- | --------------------------------------- |
 | `a..b` / `a..=b`、`for i in a..b` | 作為 `for` 的可迭代對象；當成值會被拒絕 |
 | `init()`                          | 可以多個，各跑一次，依宣告順序          |
 | 模組層級的 `const`                | 一個 C global，在任何 `init()` 之前賦值 |
+| `spec S { … }`                    | 整塊吃下；`impl S for T` 本來就能動     |
 | `(a, b)` 與 `t.0`                 | 每一種相異的 shape 一個 carrier struct  |
 | `map[K,V]`、`{k: v}`、`{:}`       | POD 的 key 與 value                     |
 | `defer f(args)`                   | 在所在區塊的出口，引數以值捕獲          |
+| `fn f[T](…)`                      | 單型化——每一個實例化各產生一份 emit     |
 
 並行在這裡是完整的，而且這是這個編譯器目前**比較寬**的地方：`chan[T](cap)`、`ch <- v`、真正
 回傳 `Result[T]` 的 `<-ch`、`close(ch)` 與 `defer close(ch)`、四種 arm 形狀俱全且 arm body 可以
@@ -285,52 +279,24 @@ group 8 的四個運算子都讀得懂它——`??`（右結合、短路、右�
 optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住它的函式提早 return 出去）。宣告會補上
 建構時省略的部分：`T?` 欄位補 `nil`，其餘則指名報錯。
 
-仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（它會一併帶走 `std/atomic`）、對
-**`Result[T]`** 的 `?`（它需要 `Result[T]` 能存活於簽章，與上面 `T?` 那一半不同）、`match` arm
-body 用區塊、泛型**函式**定義、把泛型型別參數當成欄位型別、具名引數的 struct 建構 `T(a: 1)`，以及
-command literal。
+`f"…"` 只接受單純的 hole，而 `:spec`、`!r`/`!s`/`!a`、`{x=}` 與會內插的命令形式，每一種都是**指名**
+拒絕，不是沉默略過（[編譯診斷](../../docs/tooling/diagnostics.zh-TW.md)）。它**在 parser 裡**就
+desugar 成這個形式本來被定義成的那條 `+` 鏈——這既是 AST 與 emitter 對 f-string 一無所知的原因，
+也是種子只要能 lex 與 parse 它就建得出 stage 1 的原因。
 
-## 效能：平行與快取（M7）
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E446`）、泛型的 `struct` 或
+`enum`——也就是被欄位或 payload 指名的型別參數（`E215` / `E212`；而讓 `import "atomic"` 變成
+`E511` 的正是 `Atomic[T]`）、具名引數的建構 `T(a: 1)`（`E223`），以及 command literal
+（`E236`）。
 
-一層 fixpoint 之後才做的效能層。正確性與決定性的 fixpoint 優先（M1–M5）；M7 只在上面加速度，
-所以下面那些使能條件會提早設計進去，而排程器／快取本身最後才落地。
+## 效能還剩下什麼
 
-### 平行來自 OS 行程，不是 coroutine
+平行與快取都[已經建好了](#一次-build-是怎麼組起來的)。還開著的只有兩件事，寫下來是為了不讓它們
+被當成新點子重新發明一次：
 
-runtime 是一個協作式的 **N:1** 排程器：`spawn`／channel 在單一 OS thread 上給的是並行，不是
-CPU 平行（先佔式的 **M:N** 是「not yet」）。所以行程內的 coroutine 沒辦法加速 CPU-bound 的編譯
-工作。真正的平行是散到多個行程上的，而 driver 就是那個編排者：
-
-- **`cc` 的呼叫**——同時跑多個 `cc` 行程。牆鐘時間的大宗落在 C 後端，所以 driver 生出一個有上限
-  的 pool 並回收它們。最大、最便宜的一筆收益。
-- **前端／每單元**——每個模組一個 worker 編譯器行程。`lex`/`parse`/`emit` 每個模組都是純的、
-  獨立的，所以它以 `make -j` 的方式散到多個行程上。
-
-coroutine／channel 仍然作為**編排**層有用——一個餵給有上限行程池的工作佇列——而不是作為計算的
-平行。排程走的是模組載入器早就算好的**模組相依 DAG**（import 邊 + init 計畫）：拓撲地抽乾
-ready-set，葉子優先。等 M:N 排程器落地之後，前端也可以在單一行程內平行化。
-
-### 以內容定址的快取，每模組一份
-
-- **單元**——模組（本來就是編譯／相依的單位）。
-- **Key**——一份 `sha256`，涵蓋：模組原始碼、它所 import 的那些模組的公開介面 hash、目標旗標，
-  以及編譯器自身的版本。少了任何一項都有拿到過期結果的風險。
-- **兩層產物**——`.zg → .c`（這個編譯器）與 `.c → .o`（透過 `cc`）。因為 emit 是決定性的，
-  相同的 `.c` 會產生相同的 `.o`，所以「快取 `.c` 加上一個內容定址的 `.o` 儲存」就涵蓋了整條管線。
-- **介面 vs 實作**——把模組導出的表面分開 hash，可以讓私有內文的改動不必重編它的相依者
-  （Go export-data 的做法）。MVP 可以先 hash 整份原始碼，之後再細化。
-
-### 共用的前置條件
-
-- **決定性的 emit**——穩定的順序，沒有 map 迭代的隨機性，輸出裡沒有時間戳。這是 M5 fixpoint
-  **與**一份可靠快取共同要求的——同一個性質同時服務兩者，所以它不是額外的工作。
-- **`zrt_mkdir` runtime leaf**——今天的 runtime 沒有 `mkdir`（只有
-  open/read/close/open_write/write_bytes/exists/remove）。快取目錄
-  （`$XDG_CACHE_HOME/zerg/` 或 `.zerg-cache/`）需要它；在 M0 與 `zrt_exec` 一起加。
-
-### 設計時就放進去的使能條件（在 M1–M4 期間落地，不是延後）
-
-- 前端的 pass 保持純粹且以模組隔離（M2/M3）
-- emit 是決定性的（M3——本來就是 fixpoint 的前置條件）
-- driver 從一開始就是一個「每單元 shell-out」的編排者（M4）
-- `zrt_exec` 支援並行的子行程與多路 `waitpid`（M0）
+- **私有的改動仍然會重編一個模組的相依者。** key 是整份產生出來的 C，所以任何碰得到它的編輯都會
+  讓下游全部失效。把模組**導出的表面**分開 hash，才能讓只改內文的改動停在真正被改動的那一個單元
+  （Go export-data 的交換條件）。它不會讓 `-j` 變快——沒有東西能把 `zerg/` 拆開——但它會讓快取在
+  「一個人真的會做的那種編輯」上命中。
+- **前端無法在單一行程內平行化**，理由與 `-j` 要散到多個行程上[相同](#一次-build-是怎麼組起來的)。
+  coroutine 在這裡只有作為編排層才有用——一個餵給有上限行程池的工作佇列。

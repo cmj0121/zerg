@@ -11,15 +11,14 @@ in the language itself. The compiler here is the one that ships; the Go seed exi
 1. **Emit target — transpile to C, reuse the runtime.** The emitter lowers to C (the same
    C the Go bootstrap emits) and hands off to `cc`, reusing `src/runtime/csrc` wholesale.
    No native/asm codegen at this stage.
-2. **Driver invokes `cc` through a new runtime `exec` leaf.** The runtime today has no
-   subprocess primitive. We add `zrt_exec` (an OS-syscall floor: `posix_spawn`/`execvp`
-   then `waitpid`, zero third-party dependency), surface it as the `__zrt_exec`
-   intrinsic, and wrap it in an `os.run` / process stdlib module. This also fills the
-   spec's "command literal — not yet" gap.
-3. **Coverage — a `Zerg-boot` subset first, grown incrementally.** Milestone 1 only needs
-   to support the language subset the compiler's own source is written in. Every pass is
-   validated by diffing against the Go bootstrap's `--emit` output. Coverage grows toward
-   the full language after the fixpoint holds.
+2. **The driver invokes `cc` through a runtime `exec` leaf.** `zrt_exec` is an OS-syscall
+   floor — `posix_spawn`/`execvp` then `waitpid`, zero third-party dependency — surfaced
+   as the `__zrt_exec` intrinsic and wrapped in `os`. It does **not** fill the spec's
+   command-literal gap: `` `…` `` is still refused by name (`E236`).
+3. **Coverage — the `Zerg-boot` subset first, grown outward.** The compiler had only to
+   compile its own source before it could compile anything else, and that subset is the
+   seed's contract today ([`src/bootstrap/README.md`](../bootstrap/README.md)). What `zerg`
+   accepts **beyond** it is [below](#what-the-shipped-compiler-accepts).
 
 ## Layout
 
@@ -47,10 +46,14 @@ src/compiler/
     ast.zg        # recursive AST node types (enum payloads)
     parser.zg     # tokens -> AST
     check.zg      # the rules a PROGRAM must satisfy, apart from the code that emits it
+    generic.zg    # monomorphization — one emission per instantiation, by substitution
     emit.zg       # AST -> C, with the minimal typecheck emit needs
     fmt.zg        # tokens -> canonical source
+    desugar.zg    # tokens -> the core forms the sugar is defined as
     lint.zg       # AST -> findings
-  lsp/            # the language server — a module of its own
+    version.zg    # generated from VERSION by ./scripts/gen-version.sh
+  lsp/
+    server.zg     # the language server — a module of its own
 ```
 
 The four `cmd` files marked **shared** are there because more than one sub-command reaches
@@ -106,18 +109,25 @@ object, which one link puts together. That split is what everything else rests o
 - **Separate compilation.** A unit declares the whole program but defines only its own
   module, so two modules that share an import can be linked side by side. Whole-program
   emission cannot: each object would carry its own copy of the shared module.
-- **Caching.** A unit's key is a hash of the C it emitted — which already folds in its own
-  source, everything it can see, and the compiler that produced it, since a change to any
-  of those changes the C. Content, not timestamps, which is safe precisely because the
-  fixpoint proves emission is deterministic. Change a comment and nothing recompiles: a
-  comment does not reach the emitted C. The runtime's translation units are cached the
-  same way.
+- **Caching.** A unit's key is `sha256` over the C it emitted **plus the `cc` it will be
+  handed to and the dialect** — the C folds in the source, everything it can see and the
+  compiler that produced it, but not the two inputs downstream of it. Content, not
+  timestamps, which is safe precisely because the fixpoint proves emission is
+  deterministic. Change a comment and nothing recompiles: a comment does not reach the
+  emitted C. `make cache-key-check` is the gate, and it exists because the `cc` half was
+  missing for as long as the cache had existed — switching compilers read back the objects
+  the first one built, and reported success.
 - **Parallelism.** Units do not depend on each other once emitted, so `-j` compiles
-  several at once. It comes from OS processes, not coroutines: the runtime's scheduler is
-  cooperative N:1, so coroutines give concurrency, not CPU parallelism.
+  several at once. It comes from OS processes, not coroutines: the scheduler is M:N but
+  **cooperative**, so a CPU-bound coroutine holds its worker and buys concurrency rather
+  than a shorter compile.
 
-Building the compiler with itself, six units: 1.28s at `-j1`, 0.56s at `-j4`, 0.33s when
-nothing changed.
+Building the compiler with itself is **ten units** — the entry, `cmd/`, `zerg/`, `lsp/` and
+the six stdlib modules they reach. Over three runs it takes roughly 7 s cold at `-j1` and 6 s
+at `-j4`, with `-j8` inside the run-to-run spread of `-j4`, and about 5 s when nothing
+changed. That the numbers are so close is the point: `zerg/` is one directory module and so
+one unit, and it is most of the compiler, so `-j` cannot go below it. The cache is what buys
+time here, not the parallelism.
 
 ## The corpus
 
@@ -133,12 +143,15 @@ make reject     # every program that is not Zerg is rejected — by the compiler
 ```
 
 Each case is a `.zg` program beside the stdout it must produce. The Makefile's
-`CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves
-it is a regression and fails the target. The remaining eight are reported, not enforced:
-they need generic **function** definitions, a generic type parameter as a field's type,
-`derive`, spec bounds, or `#[dyn]`, none of which the self-hosting compiler has yet. Each
-is refused by name — `gen_struct` answers _no type named `T` (field `Box.val`)_ — rather
-than mis-emitted.
+`CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves it
+is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and deleting a name
+from it **is** the gate for the feature that name waits on.
+
+Six are waiting, each refused **by name** rather than mis-emitted — `gen_struct` answers
+_E215 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and
+a field names one_ — on a generic `struct` or `enum`, `#[dyn]`, or `derive` beyond `Eq` on a
+fieldless enum. Two more, `spec_bound` and `gen_identity`, build and print what they must
+today: the list has not caught up with them.
 
 ## What a program has to be, and who says so
 
@@ -152,8 +165,9 @@ reached **cc**, which reported it against generated C under `.zerg-cache`.
 form that asks a question, including a match arm's guard), operand types, and the four
 slots a value enters: a declaration, an assignment, a `return` against its signature, and
 an argument against its parameter, plus a call's argument count. They are a file rather
-than a pass because the knowledge they need already exists in the emitter: `c_infer` types every expression and the environment
-tracks every binding. A separate pass today would mean a second walk and a second copy of
+than a pass because the knowledge they need already exists in the emitter: `c_infer` types
+every expression and the environment tracks every binding. A separate pass today would mean
+a second walk and a second copy of
 inference, and the second copy is the one that drifts. Collecting them apart from the
 emission that calls them is what keeps the rules readable as a set, and what makes lifting
 them into a real pass later a move rather than a rewrite — which is what has to happen when
@@ -181,20 +195,17 @@ generated C under `.zerg-cache`, at a line the programmer cannot open. So each c
 `scripts/refuse-check.sh` asserts three things: a non-zero exit, the expected sentence, and
 no mention of the cache.
 
-Each case that starts passing is a fix or a feature landing, and moves into the list.
-
 **Emit is validated end-to-end, not byte-exact.** Reproducing the Go seed's exact C
-formatting and naming across ~9.5k LOC would cost far more than it is worth, so the bar
-is **functional equivalence**: the emitted C must compile and the program must print what
-the corpus says. Determinism (required anyway by the fixpoint) is what makes that stable;
-byte-identical C is explicitly a non-goal.
+formatting and naming across 18k lines of Zerg code — 35k with its comments — would cost
+far more than it is worth, so the bar is **functional equivalence**: the emitted C must
+compile and the program must print what the corpus says. Determinism (required anyway by
+the fixpoint) is what makes that stable; byte-identical C is explicitly a non-goal.
 
-## Growing emit to the self-compile subset (M3 → M5)
+## Which constructs need the runtime
 
-The examples subset (scalars, functions, if / for, match on int) is done end-to-end. The
-compiler's own source needs far more, so emit grows feature by feature, each validated by
-an end-to-end test program before the next. The C shapes the Go bootstrap emits (the
-target) are:
+The `runtime?` column is the axis, and it is what decides how much C `src/runtime/csrc` has
+to contain: a construct whose C is a shape needs none, and one whose C needs a **lifetime**
+— a heap box, a growable buffer, a refcount — reaches for `zrt_*` and cannot be a shape.
 
 | feature           | C shape                                                           | runtime? |
 | ----------------- | ----------------------------------------------------------------- | -------- |
@@ -204,28 +215,23 @@ target) are:
 | list[T]           | `zrt_list` + `zrt_list_init/push/len/at`; for-in is an index loop | yes      |
 | str build / ops   | `list[byte](s)` / `str(bs)` / `+` / `==`                          | yes      |
 
-**Leak-style emit is the simplification.** A self-hosting compiler is a batch tool: it
-compiles once and exits, so it never needs to free. Emit therefore **reuses the runtime's
-data-structure primitives** (`zrt_list_*`, `zrt_ref_alloc` / `zrt_ref_payload` for boxing)
-but **skips the whole memory-management discipline** the Go emit threads through every
-function — no `zrt_scope_mark` / `zrt_defer` / `zrt_unwind_to`, no per-type
-copy / drop / release, ref-boxes allocated and never released, lists with a `{NULL,NULL}`
-element vtable. The OS reclaims on exit. This still honours the "emit C, reuse the runtime"
-decision — the runtime data structures are reused — while cutting the bulk of the Go
-emit's complexity. Determinism (the only property M5 needs) is unaffected by leaking.
+## Teardown, and the argument that had to be withdrawn
 
-**And that justification has outgrown itself.** It reasons about ONE program — this
-compiler, compiling itself, exiting. But this is the shipping backend: the same emit
-compiles every program anybody writes in Zerg, and none of them promised to be a batch
-tool. A Zerg service built with `zerg build` leaks every string it formats and every list
-it builds, for as long as it runs. Nothing in the language says so, and nothing in the
-toolchain warns.
+Emit **reuses the runtime's data-structure primitives** (`zrt_list_*`, `zrt_ref_alloc` /
+`zrt_ref_payload` for boxing). What it originally skipped was the whole memory-management
+discipline around them — no `zrt_scope_mark` / `zrt_defer` / `zrt_unwind_to`, no per-type
+copy / drop / release — on the argument that a self-hosting compiler is a batch tool: it
+compiles once and exits, so it never needs to free.
 
-It went unmeasured because the only sanitizer gate is `make sanitize-conc`, and until the
+**That argument reasoned about one program.** This is the shipping backend, and the same
+emit compiles everything anybody writes in Zerg — none of which promised to be a batch
+tool. A Zerg service leaked every string it formatted and every list it built, for as long
+as it ran, with nothing in the language saying so and nothing in the toolchain warning. It
+went unmeasured because the only sanitizer gate was `make sanitize-conc`, and until the
 ASan fiber annotations landed LeakSanitizer was scanning the wrong range for roots and
 reporting nothing at all. The first honest run named it.
 
-What each owner does today, and what is left:
+So the discipline is emitted now. What each owner does today, and what is left:
 
 | owner          | today                                             | what is left                |
 | -------------- | ------------------------------------------------- | --------------------------- |
@@ -269,19 +275,6 @@ before they were closed. Its declared limit is that a **bounded** leak — one p
 one per site rather than one per construction — is identical at both round counts and
 invisible to it.
 
-**Increment ladder toward M5** (each end-to-end tested, then committed):
-
-1. structs — decl, construction, field access, `mut &` params, field mutation _(no runtime)_
-2. enums with payload — tagged union, construction, match destructuring _(no runtime)_
-3. recursive enums — `void*` ref-boxing, leak-style _(runtime)_
-4. list[T] + for-in — `zrt_list`, index-loop, monomorphized per element type _(runtime)_
-5. str building / ops — `list[byte]` ↔ `str`, `+`, `==` _(runtime)_
-6. generics / monomorphization — one concrete emission per instantiation used in source
-7. imports — emit the flattened multi-file module as one translation unit
-
-When all seven are in and the corpus of feature programs plus the stdlib compile and run
-identically, the compiler can attempt its own source, and M5 begins.
-
 ## Self-host proof
 
 The compiler reproducing itself is what makes "self-hosting" a claim rather than a
@@ -289,55 +282,11 @@ description, and `make build` is where it is checked: the seed builds an interme
 intermediate builds the compiler that ships, and a compiler that cannot reproduce itself
 cannot get through that. `make corpus` and `make lint` are the checks layered on top.
 
-## Bootstrap minimization (M6)
-
-Once the fixpoint holds, the Go bootstrap only needs to compile the `Zerg-boot` subset the
-`src/compiler/*.zg` sources (and their imports `io` / `ascii` / `strconv` / `cli`) actually use.
-Every removal is guarded by `make build` itself: the seed builds an intermediate, the
-intermediate builds the shipped compiler, and a seed that lost something the compiler
-needs cannot get through that. `make corpus` and `make lint` are the checks on top.
-
-**The Zerg-boot subset** (what the minimal bootstrap MUST keep):
-
-- declarations: `fn` (incl. `mut &` reference params), `struct`, `enum` (incl.
-  self-recursive), `#[derive(Eq)]`, `import`, `pub`
-- statements: `x := e` / `x: T = e` / `mut` / `const` bindings, assignment to a name /
-  field / index lvalue, `print`, `return` (incl. `return e if c`), `if` / `else if` /
-  `else`, `for cond` / `for` / `for x in xs`, `break`, `continue`, `nop`, `guard`, `raise`
-- expressions: int / float / str / bool / byte literals, `nil`, identifiers, unary /
-  binary operators, calls, field access, indexing, method calls, list literals `[]`,
-  conversions (`int`/`byte`/`str`/`list[T]`(x)), `match` (literal / bind / wildcard /
-  constructor patterns, optional guard), if-expressions
-- types: `int`, `float`, `str`, `bool`, `byte`, `nil`, `list[T]`, named struct/enum,
-  `Result[T]`, `This` inside an `impl`
-- inherent `impl T { … }` methods with a **value receiver**: the parser flattens the block
-  into ordinary functions carrying a `this: T` first parameter, and the C name is
-  `zg_<T>_<name>` rather than the flat `zg_<name>` a free function gets. A `mut fn`
-  (mutable receiver) is _not_ in the subset — take a `mut &` parameter, or return a new
-  value, which is what a chainable builder does anyway.
-- the `__zrt_*` runtime intrinsics the bundled stdlib lowers onto
-
-**Strippable** (NOT in the subset — the self-host source never uses them): closures /
-first-class functions; coroutines (`spawn` / `chan` / `select`); `map[K,V]`; `spec`
-(and so `impl Spec for T`) and generic _function_ definitions; `unsafe` / `asm` / `ptr`;
-command literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`)
-beyond `Result`. The
-non-build subcommands (`fmt` / `lint` / `test`) are also dropped — the minimal seed is
-`zerg build` only; the self-host compiler can reimplement the tools in Zerg later.
-
-**F-strings left that list** when `F405` landed. The self-host source now uses them —
-`zerg fmt` writes them — so the seed must lex and parse `f"…"` to build stage 1. It already
-did; what changed is that it is now load-bearing rather than incidental. The shipped
-compiler accepts the plain hole only: no `:spec`, no `!r`/`!s`/`!a`, no `{x=}`, and no
-interpolating command form, each refused by name rather than by silence. It desugars in
-the parser to the `+` chain the form is defined to be, so the AST and the emitter know
-nothing about f-strings at all.
-
 ## What the shipped compiler accepts
 
-The Zerg-boot list above answers a different question from this one. It says what the
-**seed** must keep to build stage 1; it does not say what `zerg` itself understands, and
-the two have been drifting apart. What the shipped compiler accepts beyond that subset:
+`Zerg-boot` — the subset the **seed** must keep to build stage 1 — is listed once, in
+[`src/bootstrap/README.md`](../bootstrap/README.md): Tier 1 is what it supports, Tier 2 what
+it refuses by name. What `zerg` accepts **beyond** that subset:
 
 | form                              | note                                              |
 | --------------------------------- | ------------------------------------------------- |
@@ -348,6 +297,7 @@ the two have been drifting apart. What the shipped compiler accepts beyond that 
 | `(a, b)` and `t.0`                | one carrier struct per distinct shape             |
 | `map[K,V]`, `{k: v}`, `{:}`       | POD keys and values                               |
 | `defer f(args)`                   | at the enclosing block's exit, arguments by value |
+| `fn f[T](…)`                      | monomorphized — one emission per instantiation    |
 
 Concurrency is here in full and is where this compiler is now the WIDER of the two:
 `chan[T](cap)`, `ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)` and `defer close(ch)`,
@@ -364,61 +314,27 @@ is itself optional), `!`, and `?`, which early-returns the absence from a functi
 result can carry it. A declaration fills what a construction leaves off, `nil` for a `T?`
 field and a named error for anything else.
 
-Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (which takes
-`std/atomic` with it), `?` over a **`Result[T]`** (which needs `Result[T]` to survive in a
-signature, unlike the `T?` half above), a block as a `match` arm body, generic **function**
-definitions, a generic type parameter used as a field's type, named-argument struct
-construction `T(a: 1)`, and the command literal.
+`f"…"` takes the plain hole only, and the `:spec`, `!r`/`!s`/`!a`, `{x=}` and
+interpolating-command forms are each refused by name rather than by silence
+([Compile Diagnostics](../../docs/tooling/diagnostics.md)). It desugars **in the parser** to the `+`
+chain the form is defined to be, which is why the AST and the emitter know nothing about
+f-strings at all — and why the seed only has to lex and parse one to build stage 1.
 
-## Performance: parallelism & caching (M7)
+Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (`E446`), a
+generic `struct` or `enum` — a type parameter that a field or a payload names (`E215` /
+`E212`, and it is `Atomic[T]` that makes `import "atomic"` an `E511`), named-argument
+construction `T(a: 1)` (`E223`), and the command literal (`E236`).
 
-A post-fixpoint performance layer. Correctness and a deterministic fixpoint come first
-(M1–M5); M7 only adds speed on top, so the enablers below are designed in early and the
-scheduler/cache themselves land last.
+## What performance work is left
 
-### Parallelism comes from OS processes, not coroutines
+Parallelism and the cache are [built](#how-a-build-is-put-together). The two things still
+open are worth naming so neither is rediscovered as an idea:
 
-The runtime is a cooperative **N:1** scheduler: `spawn`/channels give concurrency on one
-OS thread, not CPU parallelism (preemptive **M:N** is "not yet"). So in-process coroutines
-cannot speed up CPU-bound compile work. Real parallelism is fanned out across processes,
-and the driver is the orchestrator:
-
-- **`cc` invocations** — many `cc` processes at once. The wall-clock bulk lives in the C
-  backend, so the driver spawns a bounded pool and reaps them. Biggest, cheapest win.
-- **front-end / unit** — one worker compiler process per module. `lex`/`parse`/`emit` is
-  pure and independent per module, so it fans out `make -j`-style across processes.
-
-Coroutines/channels stay useful as the **orchestration** layer — a work queue feeding a
-bounded process pool — not as the compute parallelism. Scheduling walks the **module
-dependency DAG** the module loader already computes (import edges + init plan): topologically
-drain the ready-set, leaves first. When an M:N scheduler lands, the front-end can also go
-parallel inside one process.
-
-### Content-addressed cache, per module
-
-- **Unit** — the module (already the compilation/dependency unit).
-- **Key** — a `sha256` over: the module source, its imported modules' public-interface
-  hashes, the target flags, and the compiler self-version. Missing any component risks a
-  stale hit.
-- **Two product layers** — `.zg → .c` (this compiler) and `.c → .o` (via `cc`). Because emit
-  is deterministic, identical `.c` yields identical `.o`, so caching the `.c` plus a
-  content-addressed `.o` store covers the whole pipeline.
-- **Interface vs implementation** — hashing a module's exported surface separately lets a
-  private-body change skip recompiling its dependents (Go export-data style). The MVP may
-  start by hashing whole source and refine later.
-
-### Shared prerequisites
-
-- **Deterministic emit** — stable ordering, no map-iteration randomness, no timestamps in
-  output. Required by the M5 fixpoint _and_ by a reliable cache — the same property serves
-  both, so it is not extra work.
-- **`zrt_mkdir` runtime leaf** — the runtime has no `mkdir` today (only
-  open/read/close/open_write/write_bytes/exists/remove). The cache directory
-  (`$XDG_CACHE_HOME/zerg/` or `.zerg-cache/`) needs one; add it alongside `zrt_exec` in M0.
-
-### Designed-in enablers (land during M1–M4, not deferred)
-
-- front-end passes stay pure and module-isolated (M2/M3)
-- emit is deterministic (M3 — already a fixpoint prerequisite)
-- the driver is a per-unit shell-out orchestrator from the start (M4)
-- `zrt_exec` supports concurrent children + multi-way `waitpid` (M0)
+- **A private change still recompiles a module's dependents.** The key is the whole emitted
+  C, so any edit that reaches it invalidates everything downstream. Hashing a module's
+  **exported surface** separately is what lets a body-only change stop at the one unit that
+  changed (Go's export-data trade). It cannot make `-j` faster — nothing splits `zerg/` —
+  but it is what makes the cache hit on the edit a person actually makes.
+- **The front end cannot go parallel inside one process**, for the reason `-j` fans out
+  across processes [above](#how-a-build-is-put-together). Coroutines are useful here only as
+  the orchestration layer — a work queue feeding a bounded process pool.

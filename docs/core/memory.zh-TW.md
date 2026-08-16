@@ -6,6 +6,20 @@
 無 garbage collector、無 pointer 語法。每個值都是 **scope-owned**（離開 scope 即釋放），且預設以**值傳遞**。
 copy-by-value 是語意；編譯器會在安全時省略複製：
 
+> **[deviation]** **釋放邏輯追蹤的是 BINDING**，所以一個不屬於任何 binding 的 heap 值，也就不屬於任何人去終結。
+> 有兩種形狀會在一個普通迴圈裡無上限地漏，而它們是同一個缺陷（[issue #11](https://github.com/cmj0121/zerg/issues/11)）：
+>
+> - **一個從某次呼叫直接交給另一次呼叫的暫存值。** `strings.count(strings.join(…), "a")` 在 50 萬輪的迴圈裡
+>   峰值 **25.7 MB**；先把中間結果綁到一個名字上，峰值 **1.7 MB**。
+> - **被寫過去的欄位所持有的舊 buffer。** `b.xs = […]` 在迴圈裡 30 萬輪峰值 **25.7 MB**、60 萬輪 **49.9 MB**
+>   ——它隨迴圈加倍，所以是無上限，而不是一筆固定成本。
+>
+> 兩個峰值都落在 25.7 MB，是各自重現程式所選輪數的巧合，不是同一個數字被寫了兩次；它們是分開量的，而 60 萬輪那次
+> 的加倍，正是第二種形狀屬於「速率」而非「天花板」的證據。
+>
+> 兩者都是會正確執行、卻永遠吃記憶體的合法程式，而既有的約定——_做出來，或者具名拒絕_——沒有第三種狀態容納它。
+> 兩者在 `make mem-check` 裡都還沒有案例，而下面關於指派的段落是同一個缺陷從 binding 那一側看的樣子。
+
 - **單一執行流程**——immutable 的值可隱形地改以 by-ref 傳遞；mutable 的則 fallback 為複製。
 - **跨 coroutine**——一律複製：無共享可變狀態、無 data race；要把修改反映回去是呼叫端的責任（例如透過 channel）。
 - **取值 / 回傳**——unwrap（`?`、`!`）、`match`、`return` 都是複製出來；來源永不失效。move 只是來源之後死掉時的
@@ -21,16 +35,15 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 > SIGSEGV;但那是一份診斷,不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,在那裡 raise 並不安全,
 > 所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。這裡欠的是**迭代式**的鏈拆解,而它還沒有被建出來。
 >
-> 本段原本說的——那條鏈根本不會被釋放、cell 帶著一個 no-op drop、持有它的 binding 沒有登記任何 release——已經
-> 關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在**具現化新值之後**才把舊值
-> 還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
+> **釋放**這一半已經關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在
+> **具現化新值之後**才把舊值還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
 > 配置數與 5 輪完全相同(`make mem-check`)。上面那句 stack 溢位就是這個修正的代價:在沒有東西被釋放的時候,
 > 它根本到不了。
 
 ---
 
 > **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
-> `struct Node { value: int; next: Node? }` 會被拒絕、報 _`Node` is part of a cycle of by-value declarations —
+> `struct Node { value: int; next: Node? }` 會被拒絕、報 _E452 `Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
 > 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
 > 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
@@ -57,7 +70,7 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 
 > **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
 > 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
-> _`xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
+> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
 > safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
 > 接受這次呼叫,只有在索引真的相遇時才 abort。
 
@@ -144,7 +157,8 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 ——`s = s + x` 要讀 `s` 才做得出自己的右手邊。
 
 > **[deviation]** 只有遞迴 `enum` 與 carrier 這麼做。指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或
-> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;`for … in` 走訪一個 **map** 時複製出來的那份集合也是,
+> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;寫過去一個**欄位**也是(本章開頭實測的那個無上限形狀),
+> `for … in` 走訪一個 **map** 時複製出來的那份集合也是,
 > **force-unwrap** 抄出來的那份 payload 也是——`q!` 交回的是 carrier 所持有之物的一份複本,而只讀其中一個欄位
 > 的運算式會把其餘的丟掉。fn value 的部分實測過:迴圈裡 `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包
 > 的環境,以及它捕獲的那個值。force-unwrap 也實測過:迴圈裡 `p: str? = s` 之後 `q!`,每輪漏一個。每一個都是
@@ -265,10 +279,9 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 }
 ```
 
-一個 block 內多個 `defer` 以**後登記先跑**執行，與 scope-owned 的釋放及 `Ref` 的 drop 交錯、依建構的逆序進行，於是
-拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
-觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
-`defer`；會 → `Ref[T]`。**
+三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時觸發（順序見「釋放
+順序」）；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？
+**不會 → `defer`；會 → `Ref[T]`。**
 
 一個 **`with` block** 把這種資源綁進一段語彙區間——而它是那個本來就會這麼做的裸 block 的**純語法** sugar:
 `with acquire() as y { … }` 就是 `{ y := acquire(); … }`,而無名的 `with e { … }` 仍然會綁定,綁到一個只有編譯器
@@ -278,6 +291,5 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 一個資源如果它的釋放是**某人必須記得呼叫的方法**,那它根本不是 `with` 的案例——它是一個 `defer`,寫出來,
 寫在 `with` 剛剛打開的那個 block 裡。
 
-`with` **已經實作**,而且就是上面那條展開式、沒有別的:一個 block、一個 binding,以及 body 自己寫的那個
-`defer`。它本身不帶任何 teardown——一個 `with` 之所以會釋放東西,是因為 body 裡有 `defer` 這麼說,或因為那個值
-本來就像其他值一樣是 scope-owned 的。`examples/18_scoped.zg` 就是隨貨附上的示範。
+`with` **已經實作**,而且就是上面那條展開式、沒有別的——它本身不帶任何 teardown。`examples/18_scoped.zg`
+就是隨貨附上的示範。

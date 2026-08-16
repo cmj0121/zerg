@@ -70,18 +70,52 @@ compiler code generator**，與上面兩層都不同。
 - **compiler**——那就不是使用者撰寫的。
 
 所以使用者自定 structural derive 是**結構上不可能**，不是漏做。可 derive 的集合是**固定且 compiler
-擁有**的；使用者 spec 永遠不在其中（`#[derive(UserSpec)]` 是編譯錯誤）。可擴充的一層是上面的
-behavioral default；結構這一層是封閉的。
+擁有**的；使用者 spec 永遠不在其中——_E437 cannot derive `Show`: on a struct the derivable specs are
+compiler-owned, and a `spec` you write is never one of them … write `impl Show for P` instead_。可擴充的
+一層是上面的 behavioral default；結構這一層是封閉的。
+
+## 委派式 derive——在 `enum` 上,對任何 spec
+
+`#[derive(S)]` 在 **enum** 上是另一條規則,而差別在於**生成的程式碼從哪裡來**。在 struct 上它讀的是型別的
+**結構**,所以那一半是編譯器擁有的封閉集合;在 enum 上它是**委派**——每個 arm 把呼叫交給 payload,而 payload
+已經實作了 `S`——而那個改寫對**任何** spec 都是機械可得的,包括你自己寫的。
+
+```zerg
+#[derive(Show)]
+enum Shape {
+    Circle(C)
+    Square(S)
+}
+
+# 就是你原本要自己寫、而且每加一個 variant 就要自己補的那個 impl:
+impl Show for Shape {
+    fn show() -> str {
+        return match this {
+            Shape.Circle(v) => v.show()
+            Shape.Square(v) => v.show()
+        }
+    }
+}
+```
+
+加一個 variant,委派自動重生——這正是把它 derive 出來的理由。
+
+有兩種形狀會被**拒絕**,而且理由是同一個:**那個改寫不存在**。
+
+- 收 **`This`** 的方法(`fn same(o: This) -> bool`)必須連**另一個**引數也一起 match,而沒有任何東西保證
+  兩個 arm 是同一個 variant;
+- **不帶值**的 variant 沒有東西可以委派。
 
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
 **沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的編譯錯誤。
+**`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E436`。
 
-> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並會被指名拒絕。它的規則需要同時比對
-> 兩側的 tag **與** payload;無欄位的 `enum` 可以 derive,因為它的 variant 差異恰好就是 discriminant 的差異。
-> 在那之前,請手寫帶 `match` 的 `impl Eq`。
+> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E438 … it
+> carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants differ
+> exactly as their discriminants do; write `impl Eq for E` with a `match`_。它的規則需要同時比對兩側的 tag
+> **與** payload。
 
 | Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
 | -------- | --------------------------------------------- | -------------- | ------------------------------ |
@@ -164,62 +198,9 @@ impl Encode for User {                            # 生成，非手寫
 }
 ```
 
-sum 型別依 variant derive——**先 tag、再 payload**：
-
-```text
-#[derive(Encode)]                     # 生成：寫出 variant tag，再逐個 payload 欄位
-enum Shape {
-    Circle(float)
-    Rect(float, float)
-}
-```
-
-當線上格式必須不同，就**手寫 impl 而非 derive**——仍是唯一 canonical 實作，仍然沒有 macro：
-
-```text
-impl Encode for User {                            # 取代 derive 出的那份
-    fn encode(mut &out: Sink) {
-        out.field("uid")
-        this.id.encode(out)       # 自訂 key
-        out.field("name")
-        this.name.encode(out)
-        # tags 與 email 刻意不放進線上格式
-    }
-}
-```
+sum 型別依 variant derive 也是同一套——**先 tag、再 payload**。當線上格式必須不同——換一個 key、或刻意不把
+某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，所以仍是唯一 canonical 實作，仍然沒有 macro。
 
 `Decode` 回傳 `Result[This]`，所以格式錯誤只是一般的 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
 傳播——絕非 abort。（`Result[T]` 非 FFI-safe，但這裡無妨：`Encode`/`Decode` 是純 Zerg spec，永遠不跨
 C 邊界——見 [FFI](../runtime/ffi.zh-TW.md) 參考。）
-
-## 委派式 derive——在 `enum` 上,對任何 spec
-
-`#[derive(S)]` 在 **enum** 上是另一條規則,而差別在於**生成的程式碼從哪裡來**。在 struct 上它讀的是型別的
-**結構**,所以那一半是編譯器擁有的封閉集合;在 enum 上它是**委派**——每個 arm 把呼叫交給 payload,而 payload
-已經實作了 `S`——而那個改寫對**任何** spec 都是機械可得的,包括你自己寫的。
-
-```zerg
-#[derive(Show)]
-enum Shape {
-    Circle(C)
-    Square(S)
-}
-
-# 就是你原本要自己寫、而且每加一個 variant 就要自己補的那個 impl:
-impl Show for Shape {
-    fn show() -> str {
-        return match this {
-            Shape.Circle(v) => v.show()
-            Shape.Square(v) => v.show()
-        }
-    }
-}
-```
-
-加一個 variant,委派自動重生——這正是把它 derive 出來的理由。
-
-有兩種形狀會被**拒絕**,而且理由是同一個:**那個改寫不存在**。
-
-- 收 **`This`** 的方法(`fn same(o: This) -> bool`)必須連**另一個**引數也一起 match,而沒有任何東西保證
-  兩個 arm 是同一個 variant;
-- **不帶值**的 variant 沒有東西可以委派。

@@ -67,11 +67,13 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 
 ### 工具
 
-| 章節                                         | 涵蓋                                           |
-| -------------------------------------------- | ---------------------------------------------- |
-| [格式化器與檢查器規則](tooling/fmt.zh-TW.md) | `zerg fmt` 與 `zerg lint` 的每一條規則及其代碼 |
-| [Desugar 規則](tooling/desugar.zh-TW.md)     | `zerg desugar` 的每一條規則及其代碼            |
-| [Language Server](tooling/lsp.zh-TW.md)      | `zerg lsp`——它回答什麼,以及什麼讓它保持誠實    |
+| 章節                                     | 涵蓋                                        |
+| ---------------------------------------- | ------------------------------------------- |
+| [格式化器規則](tooling/fmt.zh-TW.md)     | `zerg fmt` 的每一條規則及其代碼             |
+| [檢查器規則](tooling/lint.zh-TW.md)      | `zerg lint` 的每一條規則及其代碼            |
+| [編譯診斷](tooling/diagnostics.zh-TW.md) | 編譯器回報的每一個 `E` 代碼及其規則         |
+| [Desugar 規則](tooling/desugar.zh-TW.md) | `zerg desugar` 的每一條規則及其代碼         |
+| [Language Server](tooling/lsp.zh-TW.md)  | `zerg lsp`——它回答什麼,以及什麼讓它保持誠實 |
 
 ## 型別（Types）
 
@@ -123,8 +125,8 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
   **解析**十進位字串（[型別](core/types.zh-TW.md)）。
 - **`str(bytes)` / `str(runes)`** 與 **`bytearray(s)` / `runearray(s)`**——str ⇄ list 的橋接，驗證
   `str` 不變式（[Collection](code/collections.zh-TW.md)）。
-- **Error 建構子**——固定的 `ValueError` / `OverflowError` / `IOError` / `EncodingError` / `IndexError` /
-  `KeyError`，各自建出該 kind 的 `Err`（[Null-safety 與錯誤處理](code/errors.zh-TW.md)）。
+- **Error 建構子**——每個內建 kind 各一個，各自建出該 kind 的 `Err`。kind 有**十一**個、建構子有**十**個：
+  `StopIteration` 可以被測試，但不能被建構（[Null-safety 與錯誤處理](code/errors.zh-TW.md)）。
 - **Raw pointer 內建（僅限 `unsafe`）**——`addr` / `ptr` / `ptr[T]` / `uint(p)`，以及指標方法
   `.load` / `.store` / `.offset`（[值與記憶體](core/memory.zh-TW.md)）。
 

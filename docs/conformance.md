@@ -136,7 +136,11 @@ level in — a place nobody can open, and a name nobody can find. `scripts/rejec
 > them is the **channel**, not whether the rule checks or refuses. All three stages that answer about a
 > PROGRAM now have one — `chk_at` in check.zg, `p_diag` in parser.zg, `c_diag` in emit.zg — and each takes
 > the code as an argument and reads the place itself, so a site cannot carry one and forget the other. What
-> is left of this deviation is the **lexer**, whose two refusals carry neither.
+> is left of this deviation is the **f-string scanner**, whose two raises carry neither — and that is
+> narrower than it was: the lexer's own refusals go through the channel and answer with a code and a
+> place (`E101 a string literal is not closed before the end of the line`, `E104 this character is not
+part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc` unterminated and a
+> bare `}` inside an f-string, which answer with a bare sentence and no `error:` prefix at all.
 >
 > ---
 >

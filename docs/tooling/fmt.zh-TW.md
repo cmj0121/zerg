@@ -17,8 +17,7 @@
 | `L3xx` | 捕獲        | coroutine 與延後呼叫實際拿到了什麼           |
 | `L4xx` | 解析        | 一個名字對應到不只一個東西                   |
 | `L5xx` | 轉換        | 字面值取了紙面上看不出來的型別               |
-| `E1xx` | 詞法        | 不構成 token 的文字                          |
-| `E6xx` | 剖析        | `E2xx` 用完之後,不構成 Zerg 形式的 token     |
+| `L6xx` | 執行檔      | 合法、但不該被帶進執行檔的東西               |
 
 ## `zerg fmt`
 
@@ -120,12 +119,15 @@ line: int   # 1-based, for a diagnostic
 - 空行，或自成一行的註解——後面接的是新的一段，而一段會帶自己的欄位；
 - 帶 **guard** 的 arm——`n if n > 99 =>` 是一個句子而不是一列，所以它不跟任何東西對齊，並終止它遇到
   的那個 run；
-- body 是 **block** 的 arm，或把 body 放到下一行的 arm；
-- head 比該 run 最窄的那個寬超過 **12 欄**。
+- body 是 **block** 的 arm，或把 body 放到下一行的 arm。
 
-最後一條是預算，它限制了任何單一行會吃到的 padding：沒有它，一個 run 會一個 arm 一個 arm 地愈長愈
-寬，最後一個三個字元的 pattern 離它的答案有半行遠。12 是以 `select` 量出來的——它的 arm head 有四
-種不同形狀：`v := <-work`、`<-quit`、`out <- total`、`_`，而 8 會把 `_` 那一行切出自己的表。
+接著由一個**預算**決定「找出來的這個 run 到底算不算一張表」：如果它最寬的 head 比最窄的多出超過
+**12 欄**，那麼裡面沒有任何一行會被 padding，每一行都保留它原本的單一空白。它限制了任何單一行會
+吃到的 padding——沒有它，一個 run 會一個 arm 一個 arm 地愈長愈寬，最後一個三個字元的 pattern 離它
+的答案有半行遠——而且它是**全有或全無**，不是第四種邊界。在第一個超出的 head 處把 run 切開，正是
+這裡最早的做法，而它會把一個 `match` 變成三、四張各自對齊的表，讀起來比它取代掉的那個參差邊緣更
+糟。一張表要嘛是一張表，要嘛不是。12 是以 `select` 量出來的——它的 arm head 有四種不同形狀：
+`v := <-work`、`<-quit`、`out <- total`、`_`，而 8 會把 `_` 那一行切出自己的表。
 
 padding 用**空白**、縮排仍然是 **tab**，所以這一欄在任何 tab width 下都成立：run 內的 tab 完全相同，
 會互相抵消。一行可能因此超出 `F403` 換行的欄位，最多超出一個預算的量——這是換來一張表的代價。
@@ -387,9 +389,13 @@ n := (
 `\u{…}` 的字面值；hole 裡帶著 `"`、`\`、`{`、`}`；字面值裡帶大括號——雙寫是正確的但比原本更難讀；
 以及 `out = out + …` 這種累積，那裡的 hole 會讓累積器和被內插的值長得一模一樣。
 
-`F406` 會**寫入**一個空行，而做這件事的門檻是刻意訂高的：整棵樹的函式 body 內總共只有**十個**
-空行，而 `fmt.zg` 自己 1300 行一個也沒有。所以這條規則只在兩個地方放，而且兩個都是這裡的作者
-本來就會放的地方。
+`F406` 會**寫入**一個空行，而做這件事的門檻是刻意訂高的：這條規則被寫下來時，整棵樹的函式
+body 內總共只有**十個**空行，而 `fmt.zg` 當時 1300 行一個也沒有。所以這條規則只在兩個地方放，
+而且兩個都是這裡的作者本來就會放的地方。
+
+而讓那個數字今天量不出來的，正是這條規則自己的產出：`src/compiler/` 現在大約有 1,700 個這樣的
+空行，而 `fmt.zg`——3,057 行——有 81 個。門檻在於這條規則**不做**什麼（見下），而不是一個誰都
+能重新量一次的數字。
 
 **超過一個** guard 組成的一段，後面接一個空行：
 
@@ -536,7 +542,7 @@ or-pattern 都等語言層面的工作。
 
 ```text
 error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
-                                              lexical E112, parser E612
+                                              lexical E112, parser E615
 ```
 
 號碼段和它們的階段都是從上面那張表讀出來的,而不是在腳本裡另存一份,所以一個階段的答案取自它**最高**
@@ -575,37 +581,37 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E204` | expected `…`, found `…`                                                                               |
 | `E205` | expected a newline or `;` to separate statements, found `…`                                           |
 | `E206` | `Either[…, …]` has the same type on both sides                                                        |
-| `E207` | NotImplemented                                                                                        |
+| `E207` | 參數化的 `…[…]` 作為 …——**[not yet]**                                                                 |
 | `E208` | `#[derive(…)]` has no declaration under it                                                            |
-| `E210` | NotImplemented                                                                                        |
+| `E210` | 帶 BODY 的 `spec` 成員——**[not yet]**                                                                 |
 | `E211` | associated value 不是 `spec` 的成員                                                                   |
-| `E212` | NotImplemented                                                                                        |
+| `E212` | 泛型 enum `…[…]`——**[not yet]**                                                                       |
 | `E213` | an enum discriminant is distinct across variants, and `… = …` repeats one already given               |
 | `E214` | 在 variant 帶 payload 的 enum 上寫判別值 `… = …`——它的 tag 是不透明的                                 |
-| `E215` | NotImplemented                                                                                        |
-| `E217` | NotImplemented                                                                                        |
-| `E218` | NotImplemented                                                                                        |
-| `E219` | NotImplemented                                                                                        |
-| `E221` | NotImplemented                                                                                        |
-| `E222` | NotImplemented                                                                                        |
-| `E223` | NotImplemented                                                                                        |
-| `E224` | NotImplemented                                                                                        |
-| `E225` | NotImplemented                                                                                        |
-| `E226` | NotImplemented                                                                                        |
-| `E227` | NotImplemented                                                                                        |
+| `E215` | 泛型 struct `…[…]`——**[not yet]**                                                                     |
+| `E217` | decorator `#[…]`——**[not yet]**                                                                       |
+| `E218` | `impl` 裡的 associated value 綁定 `… := …`——**[not yet]**                                             |
+| `E219` | `…` 作為 `impl` 的項目——**[not yet]**                                                                 |
+| `E221` | struct pattern `…{…}`——**[not yet]**                                                                  |
+| `E222` | 呼叫 …——**[not yet]**                                                                                 |
+| `E223` | 具名引數 `…:`——**[not yet]**                                                                          |
+| `E224` | `unsafe { … }` 作為運算式——**[not yet]**                                                              |
+| `E225` | f-string 的 ':spec' 格式規格——**[not yet]**                                                           |
+| `E226` | f-string 的 '!r' / '!s' / '!a' 轉換——**[not yet]**                                                    |
+| `E227` | f-string 的 '{expr=}' 自述形式——**[not yet]**                                                         |
 | `E230` | associated type 不是 `spec` 的成員                                                                    |
-| `E231` | NotImplemented                                                                                        |
-| `E232` | NotImplemented                                                                                        |
-| `E233` | NotImplemented                                                                                        |
-| `E234` | NotImplemented                                                                                        |
-| `E235` | NotImplemented                                                                                        |
-| `E236` | NotImplemented                                                                                        |
-| `E238` | NotImplemented                                                                                        |
-| `E239` | NotImplemented                                                                                        |
-| `E240` | NotImplemented                                                                                        |
-| `E241` |                                                                                                       |
-| `E242` |                                                                                                       |
-| `E243` |                                                                                                       |
+| `E231` | `impl` 裡的 associated type 綁定 `type … = …`——**[not yet]**                                          |
+| `E232` | `match` arm 裡的 tuple pattern——**[not yet]**                                                         |
+| `E233` | 陣列型別 `[T; N]`——**[not yet]**                                                                      |
+| `E234` | `match` arm 裡的 `as` 綁定——**[not yet]**                                                             |
+| `E235` | 會內插的 command literal——**[not yet]**                                                               |
+| `E236` | command literal——**[not yet]**                                                                        |
+| `E238` | 解構綁定 `(a, b) := …`——**[not yet]**                                                                 |
+| `E239` | 沒有下界的 range——**[not yet]**                                                                       |
+| `E240` | `match` arm 裡的 list pattern——**[not yet]**                                                          |
+| `E241` | or-pattern——**[not yet]**                                                                             |
+| `E242` | `for mut v in …`——**[not yet]**                                                                       |
+| `E243` | `match` arm 裡的 struct pattern `…{…}`——**[not yet]**                                                 |
 | `E244` | 這個程式的巢狀超過 … 層                                                                               |
 | `E245` | `…` 是保留字,不能用來命名…                                                                            |
 | `E246` | tuple 型別要有兩個以上的元素                                                                          |
@@ -663,7 +669,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E301` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E302` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E303` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |
-| `E304` | NotImplemented                                                                                        |
+| `E304` | 對非純量做 `type … = …`——**[not yet]**                                                                |
 | `E305` | 不能對 `…` 賦值:它是 module 繫結,而最上層是不可變的                                                   |
 | `E306` | 不能對 `this` 賦值:方法的接收者是一份複本,寫穿它的形式是 `mut fn`                                     |
 | `E307` | 不能對 `…` 賦值:它是不可變的                                                                          |
@@ -763,39 +769,39 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E406` | `?.` reads through an optional, and … is not one                                                      |
 | `E407` | `int(v)` 讀判別值,而 enum `…` 帶 payload,所以它的 tag 是不透明的                                      |
 | `E408` | `?` early-returns the RIGHT of …, so the enclosing function must answer a carrier with the same right |
-| `E409` | NotImplemented                                                                                        |
+| `E409` | 泛型 METHOD `….…[…]`——**[not yet]**                                                                   |
 | `E410` | `…` has been instantiated … times and is still asking for more                                        |
 | `E411` | the type parameter `…` of `…` is not decided by this call                                             |
 | `E412` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                              |
-| `E413` | NotImplemented                                                                                        |
-| `E414` | NotImplemented                                                                                        |
-| `E415` | NotImplemented                                                                                        |
-| `E416` | NotImplemented                                                                                        |
+| `E413` | raw pointer 內建 `…`——**[not yet]**                                                                   |
+| `E414` | 編譯期內建 `…[T]`——**[not yet]**                                                                      |
+| `E415` | 對內建型別 `…` 做 `impl`——**[not yet]**                                                               |
+| `E416` | 把 `spec` `…` 當成型別使用（…）——**[not yet]**                                                        |
 | `E417` | `str(…)` over a list bridges bytes or code points, and this is …                                      |
 | `E418` | `…(…)` converts a value, and … may not have one                                                       |
 | `E419` | an enum converts to `int`                                                                             |
 | `E420` | `….of(n)` 反推判別值,而 enum `…` 帶 payload,所以它的 tag 是不透明的                                   |
 | `E421` | `[…]` indexes a value, and … may not have one                                                         |
-| `E422` | NotImplemented                                                                                        |
-| `E423` |                                                                                                       |
-| `E424` | NotImplemented                                                                                        |
+| `E422` | `…` 會 MUTATE 它的 list，而 `…` 是一個值、不是一個位置——**[not yet]**                                 |
+| `E423` | 開放式 range 在這裡沒有上界——**[not yet]**                                                            |
+| `E424` | `….…(…)` 是 associated function——**[not yet]**                                                        |
 | `E425` | undefined function `…`                                                                                |
 | `E426` | `…` has … fields and this gives …                                                                     |
 | `E427` | variant pattern `…` cannot match a subject of type …                                                  |
 | `E428` | non-exhaustive match                                                                                  |
 | `E430` | `…` 在 … 上需要一個 `Eq`——預設沒有結構相等                                                            |
-| `E431` | NotImplemented                                                                                        |
+| `E431` | 型別為 … 的 map key——**[not yet]**                                                                    |
 | `E432` | `…` is declared … and the value is …                                                                  |
 | `E433` | `print` needs a value, and … may not have one                                                         |
-| `E434` | NotImplemented                                                                                        |
+| `E434` | 對 … 做 `if … := …`——**[not yet]**                                                                    |
 | `E435` | `…` is declared to answer …, and its body falls off the end                                           |
-| `E436` | NotImplemented                                                                                        |
+| `E436` | `#[derive(…)]`——**[not yet]**                                                                         |
 | `E437` | cannot derive `…`                                                                                     |
-| `E438` | NotImplemented                                                                                        |
-| `E444` | NotImplemented                                                                                        |
+| `E438` | 對 `…` 做 `#[derive(Eq)]`——**[not yet]**                                                              |
+| `E444` | list 方法 `…`——**[not yet]**                                                                          |
 | `E445` | 容器上的結構相等 —— **[not yet]**                                                                     |
-| `E446` |                                                                                                       |
-| `E449` |                                                                                                       |
+| `E446` | refcount 盒子 `Ref(x)` / `deref(r)`——**[not yet]**                                                    |
+| `E449` | 把 … 算繪成文字——**[not yet]**                                                                        |
 | `E451` | `…` 宣告了兩次 `…`                                                                                    |
 | `E452` | `…` 落在一組以值宣告的循環裡                                                                          |
 | `E453` | `…` 宣告了兩個名為 `…` 的 …                                                                           |
@@ -828,7 +834,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E480` | …的值沒有這個編譯器能命名的型別 — **[not yet]**                                                       |
 | `E481` | `…` 重新綁定 `match` arm 的 pattern 已經綁住的名字 — **[not yet]**                                    |
 | `E482` | `…` 的欄位 `…` 是 module-private,所以必須帶預設值                                                     |
-| `E483` | NotImplemented                                                                                        |
+| `E483` | 欄位 `…` 的預設值讀了欄位 `…`——**[not yet]**                                                          |
 | `E484` | 可變全域 `…` 不可以是 `pub`                                                                           |
 | `E485` | import 循環：`…` -> `…` -> `…`                                                                        |
 | `E486` | 解構賦值 `(a, b) = …` — **[not yet]**                                                                 |
@@ -927,7 +933,7 @@ expression this compiler reads ``，指錯層級、指錯問題，而且印出�
 `E274` 也曾在其中，現已**退場**。它報告的是 pattern 位置上的裸名字——「`Zzz` 是某個 enum 的
 variant，而 pattern 要透過 enum 指名」——判準卻是名字的第一個字母，而那個 parser 什麼都還沒
 解析、也不知道有哪些 enum。於是它會對一個根本沒宣告 enum 的程式開火，句子裡指名的那個 enum
-並不存在。pattern 位置上的裸名字**永遠**是一個新的 binding（[Grammar](../surface/grammar.md)），
+並不存在。pattern 位置上的裸名字**永遠**是一個新的 binding（[Grammar](../surface/grammar.zh-TW.md)），
 不看大小寫；而這條規則原本想擋的錯——兩個 variant 沒帶 enum 寫出來——改由 `E458` 回答：第一個
 arm 綁住了全部，它下面的 arm 都到不了。這個號碼不再重用。
 
@@ -1159,6 +1165,15 @@ method 讓呼叫端付這個代價卻什麼也沒回報 —— 而他們看不�
 `fmt-tokens` 為了問自己那個問題而關掉的分組——所以一條改寫規則不是被 round-trip gate 量到，就是沒有任何
 東西量它。規則**放手**的那些形狀也要寫成語料案例：放手是一種主張，而一個本來就是標準形的案例，就是
 把這種主張寫下來的方式。
+
+一條新的 **lint** 規則需要在 `scripts/lint-check.sh` 裡有一支會讓它觸發的程式，理由是 `make lint`
+供不出這種程式：它跑的是編譯器、標準函式庫與那些測試套件，而它們都是乾淨的——所以一條停止運作的
+規則，看起來跟一條無話可說的規則一模一樣。那支腳本同時也會在「`lint.zg` 裡有文件記載的代碼卻沒有
+案例」時失敗，所以這組配對是被檢查的，不是被記住的。
+
+一條「依使用情形判斷宣告」的規則還欠**第二個**案例：一支它必須保持**沉默**的良構程式。`L101` 曾把
+只被型別用到的 import 說成沒被用到，`L102` 曾把只被模組層級 `const` 呼叫的私有函式說成死掉的——而
+每一個正面案例在這兩次都是綠的。
 
 依它的**效果**所屬的分組取下一個號碼，加進
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg) 或

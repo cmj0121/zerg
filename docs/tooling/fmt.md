@@ -7,19 +7,18 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group       | Is                                                    |
-| ------ | ----------- | ----------------------------------------------------- |
-| `F1xx` | layout      | where the line breaks and how far it is indented      |
-| `F2xx` | spacing     | where a space goes between two tokens                 |
-| `F3xx` | trivia      | what happens to what a person wrote for a person      |
-| `F4xx` | rewrites    | the rules that MOVE code rather than space it         |
-| `L1xx` | dead code   | things written that nothing reaches                   |
-| `L2xx` | null safety | an optional operator that does not do what it says    |
-| `L3xx` | capture     | what a coroutine or a deferred call actually took     |
-| `L4xx` | resolution  | a name that answers to more than one thing            |
-| `L5xx` | conversion  | a literal that took a type the page does not show     |
-| `E1xx` | lexical     | text that is not a token                              |
-| `E6xx` | parser      | tokens that are not a Zerg form, where `E2xx` ran out |
+| Prefix | Group       | Is                                                 |
+| ------ | ----------- | -------------------------------------------------- |
+| `F1xx` | layout      | where the line breaks and how far it is indented   |
+| `F2xx` | spacing     | where a space goes between two tokens              |
+| `F3xx` | trivia      | what happens to what a person wrote for a person   |
+| `F4xx` | rewrites    | the rules that MOVE code rather than space it      |
+| `L1xx` | dead code   | things written that nothing reaches                |
+| `L2xx` | null safety | an optional operator that does not do what it says |
+| `L3xx` | capture     | what a coroutine or a deferred call actually took  |
+| `L4xx` | resolution  | a name that answers to more than one thing         |
+| `L5xx` | conversion  | a literal that took a type the page does not show  |
+| `L6xx` | the binary  | something legal that ships and should not have     |
 
 ## `zerg fmt`
 
@@ -135,12 +134,16 @@ else ends it, and the edges are most of the rule:
   paragraph brings its own column;
 - a **guarded** arm — `n if n > 99 =>` is a sentence rather than a row, so it lines up with
   nothing and ends the run it meets;
-- an arm whose body is a **block**, or that puts its body on the next line;
-- a head more than **12 columns** wider than the run's narrowest.
+- an arm whose body is a **block**, or that puts its body on the next line.
 
-That last one is the budget, and it bounds the padding any one line takes: without it a run
-creeps wider one arm at a time and a three-character pattern ends up half a line from its
-answer. 12 is measured off a `select`, whose arm heads are four different shapes —
+A **budget** then decides whether the run it found is a table at all: if its widest head is
+more than **12 columns** past its narrowest, nothing in it is padded and every line keeps its
+single space. That bounds the padding any one line takes — without it a run creeps wider one
+arm at a time and a three-character pattern ends up half a line from its answer — and it is
+**all or nothing** rather than a fourth edge. Cutting the run at the first head that overruns
+is what this did first, and it turns one `match` into three or four tables in three or four
+columns, which reads worse than the ragged edge it replaced. A table is one thing or it is
+not a table. 12 is measured off a `select`, whose arm heads are four different shapes —
 `v := <-work`, `<-quit`, `out <- total`, `_` — and 8 cut the `_` arm out of its own table.
 
 The padding is **spaces** while the indent stays **tabs**, so the column holds at any tab
@@ -470,10 +473,14 @@ a literal carrying a brace, which is correct doubled and reads worse than what i
 and the accumulation `out = out + …`, where a hole would make the accumulator
 indistinguishable from the values being interpolated.
 
-`F406` writes a blank line, and the bar for doing that is deliberately high: this whole
-tree has **ten** blank lines inside function bodies, and `fmt.zg` — 1300 lines of it — has
-none. So the rule puts one in exactly two places, both of them places the authors here
-already put one.
+`F406` writes a blank line, and the bar for doing that is deliberately high: when the rule
+was written this whole tree had **ten** blank lines inside function bodies, and `fmt.zg` —
+1300 lines of it then — had none. So the rule puts one in exactly two places, both of them
+places the authors here already put one.
+
+It is the rule's own output that makes that number unmeasurable now: `src/compiler/` carries
+roughly 1,700 such blanks today, and `fmt.zg` — 3,057 lines — has 81. The bar is what the
+rule DECLINES, below, and not a count anybody can take again.
 
 A run of **more than one** guard is followed by a blank:
 
@@ -627,7 +634,7 @@ error-codes-check` answers per stage:
 
 ```text
 error-codes-check: next free code per stage — building E513, checking E399, emitting E746,
-                                              lexical E112, parser E612
+                                              lexical E112, parser E615
 ```
 
 It reads both the ranges and their stages out of the table above rather than carrying its own
@@ -1140,6 +1147,8 @@ L103 binding `unused` in `main` is never read
 L104 `_ :=` in `main` — the expression is already a statement, so the binder says nothing
 ```
 
+`main` is never reported by `L102`: the runtime calls it, whatever the source says.
+
 `L104` is why `L103` says nothing about `_`: an unread `_` is what `_` **means**, so "never
 read" is the one thing there is no point saying about it. The select-arm spelling of the same
 redundancy is `F407`'s, because `GRAMMAR` makes that binder optional and
@@ -1170,8 +1179,6 @@ L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instea
 Both are answered from the parsed file alone, like every other rule here — `?? nil` is a
 shape, and so is a `!` inside a function whose declared result carries an absence. Neither
 needs a type nobody wrote down.
-
-`main` is never reported by `L102`: the runtime calls it, whatever the source says.
 
 ### L3xx — capture
 

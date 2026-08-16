@@ -2195,8 +2195,11 @@ fn fmt_mark_at(mut &marks: list[int], i: int) -> int {
 }
 
 # fmt_align_run measures the run starting at `at`, lines it up, and answers with the line after
-# it. A run is consecutive rows at one indent. A comment on its own line is TRANSPARENT — it
-# does not end the table it sits inside — and anything else ends the run.
+# it. A run is consecutive rows at one indent, and ANYTHING ELSE ends it — a blank line, a
+# guarded arm, an arm whose body is a block, and a comment on its own line among them. A
+# comment is not transparent: `fmt_align_row` reads its mark, a comment carries none, and the
+# loop below stops there. That is the rule `docs/tooling/fmt.md` states for `F106`/`F107` — a
+# comment on its own line starts a new paragraph, and a paragraph brings its own column.
 #
 # The budget is ALL OR NOTHING: if the run's widest and narrowest heads are more than the gap
 # apart, nothing in it is padded and every line keeps its single space. Cutting the run at the

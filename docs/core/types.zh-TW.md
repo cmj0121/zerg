@@ -291,9 +291,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
-> **[deviation]** bootstrap 只對**純量**底型 `Y` 實作 `type X = Y`,而新型別**不**繼承 `Y` 的算術或 `spec` impl——
-> 一個 `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反——且 `type Name = str` 目前被**拒絕**。意圖
-> 中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;bootstrap 這個階段只涵蓋純量、無 impl 的情形。
+> **[deviation]** `type X = Y` 只對**純量**底型 `Y` 實作,而新型別**不**繼承 `Y` 的算術或 `spec` impl——一個
+> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E304 NotImplemented:
+> `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
+> name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
+> to follow the name_。意圖中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;建出來的只有純量、無 impl
+> 的情形。
 
 ## 建構與封裝（Construction & encapsulation）
 

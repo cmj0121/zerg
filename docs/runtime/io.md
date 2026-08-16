@@ -95,10 +95,12 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 > yet).
 >
 > **[deviation] / [implementation-defined] buffering.** `print` writes through **buffered libc stdio**
-> while `io.*` writes go **unbuffered** through `write(2)`. Their output can therefore **interleave out of
-> source order** — an `io.*` write may appear before an earlier `print` still sitting in the libc buffer.
-> The spec does not fix a buffering discipline across the two; to force ordering, keep a run of output on
-> one path, or flush. (See [Conformance](../conformance.md) on implementation-defined behavior.)
+> while `io.*` writes go **unbuffered** through `write(2)`, so their output **interleaves out of source
+> order**. Measured: a program alternating `print` and `io.println` four times emits both `io` lines first
+> and both `print` lines after, at a terminal and through a pipe alike — so this is not a rare race but
+> what the two paths do. The spec does not fix a buffering discipline across them; to get source order,
+> keep a run of output on one path. (See [Conformance](../conformance.md) on implementation-defined
+> behavior.)
 
 ## Blocking — at the coroutine, not the thread
 

@@ -346,11 +346,13 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
 
-> **[deviation]** The bootstrap implements `type X = Y` only for a **scalar** underlying `Y`, and the new
-> type does **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+`
-> without an explicit `int(c)`, contrary to the inheritance rule above — while `type Name = str` is
-> currently **rejected**. The intended semantics (a fresh identity reusing `Y`'s whole representation and
-> impls) stand; the bootstrap covers only the scalar, impl-less case this phase.
+> **[deviation]** `type X = Y` is implemented only for a **scalar** underlying `Y`, and the new type does
+> **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+` without an
+> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E304
+> NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
+> scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
+> the copy and drop rules to follow the name_. The intended semantics (a fresh identity reusing `Y`'s whole
+> representation and impls) stand; only the scalar, impl-less case is built.
 
 ## Construction & encapsulation
 

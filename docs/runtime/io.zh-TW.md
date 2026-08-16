@@ -83,9 +83,10 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 > 尚不會產出 `Err`）。
 >
 > **[deviation] / [implementation-defined] 緩衝。** `print` 走**有緩衝的 libc stdio**，而 `io.*` 寫出走
-> **無緩衝**的 `write(2)`。兩者的輸出因此可能**不依原始碼順序交錯**——一次 `io.*` 寫出可能出現在仍留在 libc
-> 緩衝裡的較早 `print` 之前。規格不固定兩者之間的緩衝規範；要強制順序，就把一段輸出集中在同一條路徑上，或手動
-> flush。（見 [Conformance](../conformance.zh-TW.md) 論 implementation-defined 行為。）
+> **無緩衝**的 `write(2)`，所以兩者的輸出**不依原始碼順序交錯**。實測：一支交替呼叫 `print` 與 `io.println` 各
+> 四次的程式，兩行 `io` 全部先出、兩行 `print` 全部後出，在終端機與經由管線都一樣——所以這不是罕見的競態，而是
+> 這兩條路徑本來的樣子。規格不固定兩者之間的緩衝規範；要拿到原始碼順序，就把一段輸出集中在同一條路徑上。
+> （見 [Conformance](../conformance.zh-TW.md) 論 implementation-defined 行為。）
 
 ## 阻塞——在 coroutine、不在 thread
 

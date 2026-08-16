@@ -35,13 +35,14 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：
 
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
-  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕。
+  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——_E226 NotImplemented: an
+  f-string '!r' / '!s' / '!a' conversion_。
 - **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04d}"`）。**[not yet]**
   ——被辨識之後由 **parser 拒絕**（`E227`）。
 - **`{x:spec}`** 把 spec 字串交給型別的 **`Format`** 協定——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。這是
   **per-type 協定**、非 `display` 參數：語言只固定 `:spec` 的**語法**（到 `}` 為止的不透明文字）；一個 spec 的**意義**
   由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。對
-  format spec 為 **[not yet]**——洞裡的 spec 會被指名拒絕。
+  format spec 為 **[not yet]**——_E225 NotImplemented: an f-string ':spec' format spec_。
 
   > **spec 是程式自己寫的文字,而它的每一個欄位都有界。** `type` 字母對每一種渲染都是**封閉集合**——float 取
   > `e E f F g G`，int 取 `b o x X c d`——其中 `c` 把 int 當作它指名的**碼位**渲染,並拒絕任何 `str` 裝不下的

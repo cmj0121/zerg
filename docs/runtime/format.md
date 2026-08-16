@@ -42,7 +42,7 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
 
 - **`{x}`** uses `display`; a **conversion** picks another view first — **`!r`** the developer `debug`,
   **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
-  are **[not yet]** — a conversion in a hole is refused by name.
+  are **[not yet]** — _E226 NotImplemented: an f-string '!r' / '!s' / '!a' conversion_.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
   `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
   the parser** (`E227`) this phase.
@@ -50,7 +50,7 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
   and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A format
-  spec is **[not yet]** — one in a hole is refused by name.
+  spec is **[not yet]** — _E225 NotImplemented: an f-string ':spec' format spec_.
 
   > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
   > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and

@@ -351,8 +351,10 @@ store, send over a channel) belong to the **memory model**, not to any spec boun
 else is a spec a type **opts into**, a generic bound gating on it:
 
 - **`Eq`** — structural equality, driving `==` / `!=`, gained by `#[derive(Eq)]` or a hand-written
-  `impl Eq`; a channel or `fn` field compares by identity. A type with **no `Eq` impl cannot be
-  compared** — `==` on it is a compile error, never a silent structural default.
+  `impl Eq`; a channel or `fn` field compares by identity. It requires **both** `eq` and `ne` — an impl
+  supplying only one is _E318 `P` does not implement `ne`, which `Eq` requires_ — because `!=` is
+  dispatched, not derived by negating `==`. A type with **no `Eq` impl cannot be compared** — `==` on it
+  is a compile error, never a silent structural default.
 
   > **[not yet]** A **container** cannot gain one at all, which is the rule met from a direction it has no
   > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E445 NotImplemented: `==` on a
@@ -412,7 +414,7 @@ box (see [Values & Memory](memory.md)). Ordinary code **uses `Ref[T]`; it never 
 shared by reference?" always has a definite answer: only `chan` and `Ref[T]` are.
 
 **Operators desugar to specs**, so a user type may overload the value operators by implementing the
-matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
+matching one — `==` / `!=` already route through `Eq`'s `eq` / `ne`, and `<` through `Ord`. An overload must mean the
 **conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The **logical
 operators are keywords** — `not` (unary), and the **short-circuiting** `and` / `or` — over `bool` only,
 yielding `bool` (no truthiness; cast with `bool(x)`): `and` skips its right operand when the left is
@@ -425,7 +427,7 @@ operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable*
 `float` is never a sorted-collection element or a key, and a composite **containing** one inherits this
 transparently: a **derived `Eq`** compares the field with `==`, so it is **non-reflexive** for a
 `NaN`, and the type gets no `Ord`/`Hash` either. To key or sort such a type the author **implements them
-explicitly**, handling `float`'s two traps: a **reflexive** `equal` with **canonical `±0.0`** (equal, so
+explicitly**, handling `float`'s two traps: a **reflexive** `eq` with **canonical `±0.0`** (equal, so
 must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
 stdlib total-order/hashable `float` wrapper is deferred.
 

@@ -27,18 +27,19 @@ supplies one: a declared binding, an argument, a `return`, a struct field, a par
 
 A written type **wins** — `fn (x: str)` at a `fn (int) -> …` position is a type error naming both, not an
 annotation quietly overruled. And a closure that meets **no** such position has nowhere to take them from,
-which is an error rather than a guess: `f := fn (x) { … }` reports _the closure parameter `x` has no type,
-and this position gives it none_.
+which is an error rather than a guess: `f := fn (x) { … }` reports _E385 the closure parameter `x` has no
+type, and this position gives it none_.
 
 > **[not yet]** The value stops at the module boundary. A function named through another module is a **call
-> target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _module `text` has no
-> `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name path
-> never learned it. So a cross-module function can be called, but not bound, passed, or stored.
+> target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _E388 module `text`
+> has no `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name
+> path never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
 > **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
 > VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
 > language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
-> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name.
+> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E275
+> `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is an index_.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
 > **type** carrying it is read and then refused by name: `f: fn(mut &int) = bump` reports _E286
@@ -107,7 +108,7 @@ greet("Sam", "Hi", true)     # all positional
 
   > **[not yet]** A default that **reads an earlier parameter** — `fn g(a: int, b: int = a * 2)` — is the one
   > shape that is not built. The default is materialised at the **call site**, where the callee's parameter
-  > names are not in scope, so the call reports _error: undefined name `a`_ instead of evaluating `a * 2`.
+  > names are not in scope, so the call reports _E372 undefined name `a`_ instead of evaluating `a * 2`.
   > Every other default is lowered as specified, a bare constant and a computed expression alike:
   > `b: int = 1 + 2`, `b: int = side()` and `greeting: str = "a" + "b"` all evaluate at the call, each time.
   >
@@ -123,8 +124,8 @@ greet("Sam", "Hi", true)     # all positional
   any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
   the rest must be named too** (no positional after a name).
 
-  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _NotImplemented:
-  > the named argument `loud:` — this compiler binds arguments by position only_, and the rest of the
+  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _E223
+  > NotImplemented: the named argument `loud:` — this compiler binds arguments by position only_, and the rest of the
   > mechanism goes with it: there is no way to skip a defaulted parameter in the middle, and the "once you
   > name an argument the rest must be named too" rule has nothing left to govern. A call fills its parameters
   > left to right, and a defaulted one can only be dropped off the **end** of the argument list.
@@ -139,16 +140,14 @@ A **variadic** parameter is deliberately **not** offered — pass a `list[T]` ex
 called `sum([1, 2, 3])`). This keeps the call model and the C ABI flat, and matches the no-variadics stance
 already taken for formatting; `print` stays a built-in construct, not a user-definable variadic.
 
-**Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
-an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
-boxed value) — is built: the captures become a per-site environment the closure carries, and the values are
-copied in where they are written. Capturing a **`mut`** binding is built too, and it takes the value the
-binding held **at the point the closure was written** — a later write to that binding is not visible through
-the closure, which is what "copied in" means and why the two cases need no different rule. Capture is **by
-copy** in meaning — a captured channel is
-refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
-rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
-carries its own captures and can never dangle.
+**Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** The captures
+become a per-site environment the closure carries. A **`mut`** binding captures like any other, taking the
+value it held **at the point the closure was written** — a later write to it is not visible through the
+closure, which is what "copied in" means and why the two cases need no different rule. Copy is the
+**meaning**, not always the mechanism: a plain scalar really is copied, while a channel is refcount-bumped
+and a non-POD value (a `list` / `map` / `str`, a `Ref`, a boxed value) is **retained** into the environment
+rather than eagerly deep-cloned. Either way a closure that escapes its defining scope carries its own
+captures and can never dangle.
 
 The environment is **refcounted**, not scope-owned — that is the one place the copy rule above is realised by
 the implementation rather than by the scope. A closure may outlive the scope that made it, so the fn value
@@ -196,6 +195,3 @@ for x in xs {
 > and die inside `cc`, which is the one outcome the standing rule forbids.) `spawn handle(x)` is the form
 > that works, and it snapshots its argument at the `spawn`, which gets the same per-iteration value by the
 > other route. See [Coroutines & Channels](coroutine.md).
-
-And because captures are always immutable copies, "captured the variable or the value?" has no
-observable answer — the captured value can never change, so the question disappears.

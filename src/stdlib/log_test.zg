@@ -1,8 +1,10 @@
 # The `log` suite — the level gate, the builder, and the bytes of a finished line.
 #
-# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out. `render`, `tag`,
-# `shown` and `needs_quotes` are module-private and are asked through a line that was
-# actually written.
+# WHITE-BOX, for the reason src/stdlib/strings_test.zg sets out: this file is a file of the
+# `log` module, so `render`, `tag`, `shown` and `needs_quotes` are in scope. Most of what is
+# below still goes through a line that was ACTUALLY WRITTEN, because a renderer is only
+# right if the builder reaches it — but `needs_quotes` is a predicate on a string and
+# `shown` is a value renderer, and each answers a question a whole line can only sample.
 #
 # THE CHANNEL SINK IS WHAT MAKES THIS A SUITE AT ALL. A logger whose only destination is a
 # file descriptor can be asked nothing from inside the same process — there is no reading a
@@ -32,7 +34,6 @@
 # an inherited default would be a test that fails for the developer who was already debugging
 # something.
 import (
-	"log"
 	"os"
 	"strings"
 	"testing"
@@ -42,8 +43,8 @@ import (
 # pinned is a logger this suite can assert against: `lvl` explicitly, pretty, uncoloured, to
 # standard error until a test redirects it. It is the ONE place the environment is shut out,
 # so a new test inherits that property by using it rather than by remembering it.
-fn pinned(lvl: log.Level) -> log.Logger {
-	return log.new().level(lvl).format(log.Format.PRETTY).colour(false)
+fn pinned(lvl: Level) -> Logger {
+	return new().level(lvl).format(Format.PRETTY).colour(false)
 }
 
 # --- the level gate ------------------------------------------------------------------------
@@ -53,27 +54,27 @@ fn pinned(lvl: log.Level) -> log.Logger {
 # at exactly one threshold, and a suite that tests INFO against DEBUG never meets it.
 #[test]
 fn test_enabled_is_at_or_above() {
-	lg := pinned(log.Level.WARN)
-	assert not lg.enabled(log.Level.TRACE)
-	assert not lg.enabled(log.Level.DEBUG)
-	assert not lg.enabled(log.Level.INFO)
-	assert lg.enabled(log.Level.WARN)
-	assert lg.enabled(log.Level.ERROR)
-	assert lg.enabled(log.Level.FATAL)
+	lg := pinned(Level.WARN)
+	assert not lg.enabled(Level.TRACE)
+	assert not lg.enabled(Level.DEBUG)
+	assert not lg.enabled(Level.INFO)
+	assert lg.enabled(Level.WARN)
+	assert lg.enabled(Level.ERROR)
+	assert lg.enabled(Level.FATAL)
 }
 
 #[test]
 fn test_enabled_at_the_two_ends() {
-	all := pinned(log.Level.TRACE)
-	assert all.enabled(log.Level.TRACE)
-	assert all.enabled(log.Level.FATAL)
+	all := pinned(Level.TRACE)
+	assert all.enabled(Level.TRACE)
+	assert all.enabled(Level.FATAL)
 
 	# OFF is not in the ordering at all — it is the threshold that accepts nothing, so nothing
 	# is on, `fatal`'s line included.
-	none := pinned(log.Level.OFF)
-	assert not none.enabled(log.Level.TRACE)
-	assert not none.enabled(log.Level.INFO)
-	assert not none.enabled(log.Level.FATAL)
+	none := pinned(Level.OFF)
+	assert not none.enabled(Level.TRACE)
+	assert not none.enabled(Level.INFO)
+	assert not none.enabled(Level.FATAL)
 }
 
 # `parse_level` IS THE INVERSE OF THE NAME A JSON LINE CARRIES, and this is the only thing
@@ -84,13 +85,13 @@ fn test_enabled_at_the_two_ends() {
 #[test]
 fn test_parse_level_is_the_inverse_of_the_name(ctx: testing.Context) {
 	ctx.log("each name parses back to a threshold that behaves like the level it names")
-	assert round_trips("trace", log.Level.TRACE)
-	assert round_trips("debug", log.Level.DEBUG)
-	assert round_trips("info", log.Level.INFO)
-	assert round_trips("warn", log.Level.WARN)
-	assert round_trips("error", log.Level.ERROR)
-	assert round_trips("fatal", log.Level.FATAL)
-	assert round_trips("off", log.Level.OFF)
+	assert round_trips("trace", Level.TRACE)
+	assert round_trips("debug", Level.DEBUG)
+	assert round_trips("info", Level.INFO)
+	assert round_trips("warn", Level.WARN)
+	assert round_trips("error", Level.ERROR)
+	assert round_trips("fatal", Level.FATAL)
+	assert round_trips("off", Level.OFF)
 
 	ctx.log("anything else is nil, so the caller decides — this module does not guess")
 	assert unknown("")
@@ -106,18 +107,18 @@ fn test_parse_level_is_the_inverse_of_the_name(ctx: testing.Context) {
 # the way the language does offer — coalesce twice with DIFFERENT levels. Only `nil` takes the
 # fallback, so only `nil` gives two different answers.
 fn unknown(s: str) -> bool {
-	a := log.parse_level(s) ?? log.Level.TRACE
-	b := log.parse_level(s) ?? log.Level.OFF
+	a := parse_level(s) ?? Level.TRACE
+	b := parse_level(s) ?? Level.OFF
 	return a != b
 }
 
 # round_trips reports whether `name` parses to a level that gates identically to `want`, over
 # every level there is. Comparing the two `Level` values directly would say less: this asks
 # the question `enabled` asks, which is the only one a caller has.
-fn round_trips(name: str, want: log.Level) -> bool {
-	got := pinned(log.parse_level(name) ?? log.Level.OFF)
+fn round_trips(name: str, want: Level) -> bool {
+	got := pinned(parse_level(name) ?? Level.OFF)
 	ref := pinned(want)
-	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR, log.Level.FATAL] {
+	for l in [Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR, Level.FATAL] {
 		return false if got.enabled(l) != ref.enabled(l)
 	}
 	return true
@@ -128,16 +129,16 @@ fn round_trips(name: str, want: log.Level) -> bool {
 # the property a struct with methods loses the moment one of them mutates `this`.
 #[test]
 fn test_configuration_does_not_mutate_the_original(ctx: testing.Context) {
-	base := pinned(log.Level.INFO)
-	quiet := base.level(log.Level.ERROR)
+	base := pinned(Level.INFO)
+	quiet := base.level(Level.ERROR)
 	named := base.with_str("component", "lexer")
 
 	ctx.log("the copies took the change")
-	assert not quiet.enabled(log.Level.INFO)
+	assert not quiet.enabled(Level.INFO)
 
 	ctx.log("and the original did not")
-	assert base.enabled(log.Level.INFO)
-	assert named.enabled(log.Level.INFO)
+	assert base.enabled(Level.INFO)
+	assert named.enabled(Level.INFO)
 }
 
 # a_failure is an `Err` this suite can hand to `Entry.err`. There is no way to mint one
@@ -151,9 +152,9 @@ fn a_failure() -> Err {
 
 # one writes a single line through a channel sink and answers it. Every rendering test below
 # is written on this, so the plumbing appears once.
-fn one(lg: log.Logger) -> str {
+fn one(lg: Logger) -> str {
 	ch := chan[str](32)
-	lg.to(log.to_chan(ch)).info().msg("hello")
+	lg.to(to_chan(ch)).info().msg("hello")
 	return taken(ch)
 }
 
@@ -186,7 +187,7 @@ fn unwrapped(v: str?) -> str {
 
 #[test]
 fn test_a_line_is_timestamp_level_message(ctx: testing.Context) {
-	line := one(pinned(log.Level.INFO))
+	line := one(pinned(Level.INFO))
 
 	ctx.log("the timestamp is RFC 3339, which `time` renders and this only places")
 	assert strings.index_of(line, "T") == 10
@@ -202,7 +203,7 @@ fn test_a_line_is_timestamp_level_message(ctx: testing.Context) {
 # message under 830 lines in 24000.
 #[test]
 fn test_a_line_is_one_line() {
-	line := one(pinned(log.Level.INFO))
+	line := one(pinned(Level.INFO))
 	assert strings.has_suffix(line, "\n")
 	assert strings.count(line, "\n") == 1
 }
@@ -210,10 +211,10 @@ fn test_a_line_is_one_line() {
 #[test]
 fn test_every_level_has_its_own_tag() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.TRACE).to(log.to_chan(ch))
+	lg := pinned(Level.TRACE).to(to_chan(ch))
 
 	lg.trace().msg("m")
-	lg.at_level(log.Level.DEBUG).msg("m")
+	lg.at_level(Level.DEBUG).msg("m")
 	lg.info().msg("m")
 	lg.warn().msg("m")
 	lg.error().msg("m")
@@ -235,7 +236,7 @@ fn test_every_level_has_its_own_tag() {
 #[test]
 fn test_fields_are_key_equals_value_in_order() {
 	ch := chan[str](32)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).info().str("file", "a.zg").int("line", 12).bool("ok", true).msg("compiling")
+	pinned(Level.INFO).to(to_chan(ch)).info().str("file", "a.zg").int("line", 12).bool("ok", true).msg("compiling")
 	line := taken(ch)
 	tail := " INF compiling  file=a.zg line=12 ok=true\n"
 	assert strings.has_suffix(line, tail)
@@ -247,7 +248,7 @@ fn test_fields_are_key_equals_value_in_order() {
 #[test]
 fn test_field_order_is_call_order() {
 	ch := chan[str](32)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).info().int("b", 2).int("a", 1).msg("m")
+	pinned(Level.INFO).to(to_chan(ch)).info().int("b", 2).int("a", 1).msg("m")
 	line := taken(ch)
 	assert strings.index_of(line, "b=2") < strings.index_of(line, "a=1")
 }
@@ -282,7 +283,7 @@ fn test_a_newline_in_a_value_does_not_split_the_line() {
 
 fn field(k: str, v: str) -> str {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).info().str(k, v).msg("m")
+	pinned(Level.INFO).to(to_chan(ch)).info().str(k, v).msg("m")
 	return taken(ch)
 }
 
@@ -292,7 +293,7 @@ fn field(k: str, v: str) -> str {
 #[test]
 fn test_err_writes_the_failure_under_the_key_error() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).error().err(a_failure()).msg("failed")
+	pinned(Level.INFO).to(to_chan(ch)).error().err(a_failure()).msg("failed")
 	line := taken(ch)
 	assert strings.contains(line, " ERR failed  error=")
 	assert strings.count(line, "\n") == 1
@@ -301,7 +302,7 @@ fn test_err_writes_the_failure_under_the_key_error() {
 #[test]
 fn test_dur_renders_as_a_duration_not_a_nanosecond_count() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).info().dur("took", 1500000000).msg("done")
+	pinned(Level.INFO).to(to_chan(ch)).info().dur("took", 1500000000).msg("done")
 	assert strings.contains(taken(ch), "took=1.5s")
 
 	# And it is the same renderer `time` exports, not a second one.
@@ -316,9 +317,9 @@ fn test_dur_renders_as_a_duration_not_a_nanosecond_count() {
 # being SHARED as about the shape of the line.
 
 # jline writes one line at `lvl` in JSON and answers it.
-fn jline(lvl: log.Level, text: str) -> str {
+fn jline(lvl: Level, text: str) -> str {
 	ch := chan[str](4)
-	pinned(log.Level.TRACE).format(log.Format.JSON).to(log.to_chan(ch)).at_level(lvl).str("k", "v").msg(text)
+	pinned(Level.TRACE).format(Format.JSON).to(to_chan(ch)).at_level(lvl).str("k", "v").msg(text)
 	return taken(ch)
 }
 
@@ -327,7 +328,7 @@ fn jline(lvl: log.Level, text: str) -> str {
 # every line.
 #[test]
 fn test_json_puts_time_level_and_message_first() {
-	line := jline(log.Level.INFO, "compiling")
+	line := jline(Level.INFO, "compiling")
 	assert strings.has_prefix(line, "{\"t\":\"")
 	assert strings.contains(line, "\",\"l\":\"info\",\"msg\":\"compiling\",\"k\":\"v\"}")
 	assert strings.has_suffix(line, "}\n")
@@ -343,11 +344,11 @@ fn test_json_puts_time_level_and_message_first() {
 # asked in scripts/log-check.sh, which runs a whole program and expects it to end.
 #[test]
 fn test_json_spells_the_level_out() {
-	assert strings.contains(jline(log.Level.TRACE, "m"), "\"l\":\"trace\"")
-	assert strings.contains(jline(log.Level.DEBUG, "m"), "\"l\":\"debug\"")
-	assert strings.contains(jline(log.Level.INFO, "m"), "\"l\":\"info\"")
-	assert strings.contains(jline(log.Level.WARN, "m"), "\"l\":\"warn\"")
-	assert strings.contains(jline(log.Level.ERROR, "m"), "\"l\":\"error\"")
+	assert strings.contains(jline(Level.TRACE, "m"), "\"l\":\"trace\"")
+	assert strings.contains(jline(Level.DEBUG, "m"), "\"l\":\"debug\"")
+	assert strings.contains(jline(Level.INFO, "m"), "\"l\":\"info\"")
+	assert strings.contains(jline(Level.WARN, "m"), "\"l\":\"warn\"")
+	assert strings.contains(jline(Level.ERROR, "m"), "\"l\":\"error\"")
 }
 
 # A JSON LINE IS STILL ONE LINE. A message carrying a newline is the ordinary case for a
@@ -356,7 +357,7 @@ fn test_json_spells_the_level_out() {
 #[test]
 fn test_json_escapes_rather_than_breaking_the_line(ctx: testing.Context) {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).format(log.Format.JSON).to(log.to_chan(ch)).warn().str("m", "a \"quoted\"\nline\twith tabs").msg("escaping")
+	pinned(Level.INFO).format(Format.JSON).to(to_chan(ch)).warn().str("m", "a \"quoted\"\nline\twith tabs").msg("escaping")
 	line := taken(ch)
 
 	ctx.log("one newline, and it is the terminator")
@@ -372,7 +373,7 @@ fn test_json_escapes_rather_than_breaking_the_line(ctx: testing.Context) {
 #[test]
 fn test_json_keeps_the_field_types() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).format(log.Format.JSON).to(log.to_chan(ch)).info().int("line", 12).bool("ok", false).str("s", "12").msg("m")
+	pinned(Level.INFO).format(Format.JSON).to(to_chan(ch)).info().int("line", 12).bool("ok", false).str("s", "12").msg("m")
 	line := taken(ch)
 	assert strings.contains(line, "\"line\":12")
 	assert strings.contains(line, "\"ok\":false")
@@ -384,16 +385,16 @@ fn test_json_keeps_the_field_types() {
 #[test]
 fn test_format_is_carried_by_the_copy() {
 	ch := chan[str](8)
-	base := pinned(log.Level.INFO).format(log.Format.JSON).to(log.to_chan(ch))
+	base := pinned(Level.INFO).format(Format.JSON).to(to_chan(ch))
 
 	base.with_str("c", "lex").info().msg("one")
 	assert strings.contains(taken(ch), "\"c\":\"lex\"")
 
-	base.level(log.Level.WARN).warn().msg("two")
+	base.level(Level.WARN).warn().msg("two")
 	assert strings.contains(taken(ch), "\"l\":\"warn\"")
 
 	# and back to pretty, on a copy, without touching the original
-	base.format(log.Format.PRETTY).info().msg("three")
+	base.format(Format.PRETTY).info().msg("three")
 	assert strings.contains(taken(ch), " INF three")
 
 	base.info().msg("four")
@@ -409,7 +410,7 @@ fn test_format_is_carried_by_the_copy() {
 #[test]
 fn test_colour_wraps_the_level_and_nothing_else(ctx: testing.Context) {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).colour(true).to(log.to_chan(ch)).info().str("k", "v").msg("hello")
+	pinned(Level.INFO).colour(true).to(to_chan(ch)).info().str("k", "v").msg("hello")
 	line := taken(ch)
 
 	ctx.log("green, then a reset, around the three letters")
@@ -428,26 +429,26 @@ fn esc() -> str {
 
 #[test]
 fn test_each_level_has_its_own_colour() {
-	assert strings.contains(coloured(log.Level.TRACE), esc() + "[90m")
-	assert strings.contains(coloured(log.Level.DEBUG), esc() + "[36m")
-	assert strings.contains(coloured(log.Level.INFO), esc() + "[32m")
-	assert strings.contains(coloured(log.Level.WARN), esc() + "[33m")
-	assert strings.contains(coloured(log.Level.ERROR), esc() + "[31m")
+	assert strings.contains(coloured(Level.TRACE), esc() + "[90m")
+	assert strings.contains(coloured(Level.DEBUG), esc() + "[36m")
+	assert strings.contains(coloured(Level.INFO), esc() + "[32m")
+	assert strings.contains(coloured(Level.WARN), esc() + "[33m")
+	assert strings.contains(coloured(Level.ERROR), esc() + "[31m")
 
 	# FATAL is absent for the reason `test_json_spells_the_level_out` gives: rendering one
 	# ends the process. Its colour is the one row of this table log-check.sh has to hold.
 }
 
-fn coloured(lvl: log.Level) -> str {
+fn coloured(lvl: Level) -> str {
 	ch := chan[str](4)
-	pinned(log.Level.TRACE).colour(true).to(log.to_chan(ch)).at_level(lvl).msg("m")
+	pinned(Level.TRACE).colour(true).to(to_chan(ch)).at_level(lvl).msg("m")
 	return taken(ch)
 }
 
 #[test]
 fn test_colour_off_writes_no_escape_at_all() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).to(log.to_chan(ch)).error().msg("plain")
+	pinned(Level.INFO).to(to_chan(ch)).error().msg("plain")
 	assert strings.count(taken(ch), esc()) == 0
 }
 
@@ -457,7 +458,7 @@ fn test_colour_off_writes_no_escape_at_all() {
 #[test]
 fn test_json_is_never_coloured() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).colour(true).format(log.Format.JSON).to(log.to_chan(ch)).error().msg("machine")
+	pinned(Level.INFO).colour(true).format(Format.JSON).to(to_chan(ch)).error().msg("machine")
 	line := taken(ch)
 	assert strings.count(line, esc()) == 0
 	assert strings.contains(line, "\"l\":\"error\"")
@@ -468,7 +469,7 @@ fn test_json_is_never_coloured() {
 #[test]
 fn test_with_str_appears_on_every_line() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.INFO).with_str("component", "lexer").with_int("worker", 3).to(log.to_chan(ch))
+	lg := pinned(Level.INFO).with_str("component", "lexer").with_int("worker", 3).to(to_chan(ch))
 
 	lg.info().msg("one")
 	lg.warn().msg("two")
@@ -484,7 +485,7 @@ fn test_with_str_appears_on_every_line() {
 #[test]
 fn test_base_fields_come_before_the_entry_fields() {
 	ch := chan[str](4)
-	pinned(log.Level.INFO).with_str("component", "lexer").to(log.to_chan(ch)).info().str("file", "a.zg").msg("m")
+	pinned(Level.INFO).with_str("component", "lexer").to(to_chan(ch)).info().str("file", "a.zg").msg("m")
 	line := taken(ch)
 	assert strings.index_of(line, "component=lexer") < strings.index_of(line, "file=a.zg")
 }
@@ -495,7 +496,7 @@ fn test_base_fields_come_before_the_entry_fields() {
 #[test]
 fn test_an_entrys_fields_do_not_reach_the_next_entry() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.INFO).to(log.to_chan(ch))
+	lg := pinned(Level.INFO).to(to_chan(ch))
 
 	lg.info().str("only", "first").msg("one")
 	lg.info().msg("two")
@@ -511,7 +512,7 @@ fn test_an_entrys_fields_do_not_reach_the_next_entry() {
 #[test]
 fn test_an_entry_does_not_write_back_into_its_logger() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.INFO).to(log.to_chan(ch))
+	lg := pinned(Level.INFO).to(to_chan(ch))
 
 	lg.info().str("scratch", "x").msg("one")
 	lg.info().str("other", "y").msg("two")
@@ -529,9 +530,9 @@ fn test_an_entry_does_not_write_back_into_its_logger() {
 #[test]
 fn test_a_disabled_entry_writes_nothing() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.INFO).to(log.to_chan(ch))
+	lg := pinned(Level.INFO).to(to_chan(ch))
 
-	lg.at_level(log.Level.DEBUG).str("k", "v").int("n", 1).msg("nope")
+	lg.at_level(Level.DEBUG).str("k", "v").int("n", 1).msg("nope")
 	lg.trace().msg("nope")
 
 	assert taken(ch) == ""
@@ -543,10 +544,10 @@ fn test_a_disabled_entry_writes_nothing() {
 #[test]
 fn test_a_disabled_entry_chains_without_effect(ctx: testing.Context) {
 	ch := chan[str](32)
-	lg := pinned(log.Level.ERROR).to(log.to_chan(ch))
+	lg := pinned(Level.ERROR).to(to_chan(ch))
 
 	ctx.log("all five kinds of field on a dead entry, then the terminal")
-	lg.at_level(log.Level.DEBUG).str("a", "1").int("b", 2).bool("c", true).dur("d", 5).err(a_failure()).msg("nope")
+	lg.at_level(Level.DEBUG).str("a", "1").int("b", 2).bool("c", true).dur("d", 5).err(a_failure()).msg("nope")
 
 	assert taken(ch) == ""
 
@@ -560,7 +561,7 @@ fn test_a_disabled_entry_chains_without_effect(ctx: testing.Context) {
 #[test]
 fn test_an_entry_without_msg_writes_nothing() {
 	ch := chan[str](32)
-	lg := pinned(log.Level.INFO).to(log.to_chan(ch))
+	lg := pinned(Level.INFO).to(to_chan(ch))
 
 	lg.info()
 	lg.info().str("k", "v")
@@ -602,16 +603,16 @@ fn test_an_entry_without_msg_writes_nothing() {
 # installed puts a logger at `lvl` writing into a fresh channel in the cell, and answers the
 # channel. It builds on `pinned`, so the global under test is shut off from the environment
 # exactly as an instance under test is.
-fn installed(lvl: log.Level) -> chan[str] {
+fn installed(lvl: Level) -> chan[str] {
 	ch := chan[str](32)
-	log.install(pinned(lvl).to(log.to_chan(ch)))
+	install(pinned(lvl).to(to_chan(ch)))
 	return ch
 }
 
 # restored puts the global back to what a program that never called `install` has: a logger
 # built by the same constructor the cell was initialised with.
 fn restored() {
-	log.install(log.new())
+	install(new())
 }
 
 # THE GLOBAL IS AN INSTANCE, and this is the test that says so: every free function writes the
@@ -620,12 +621,12 @@ fn restored() {
 #[test]
 fn test_the_global_writes_the_same_line_as_an_instance() {
 	defer restored()
-	ch := installed(log.Level.INFO)
-	log.info().str("k", "v").msg("m")
+	ch := installed(Level.INFO)
+	info().str("k", "v").msg("m")
 	from_global := taken(ch)
 
 	other := chan[str](4)
-	pinned(log.Level.INFO).to(log.to_chan(other)).info().str("k", "v").msg("m")
+	pinned(Level.INFO).to(to_chan(other)).info().str("k", "v").msg("m")
 	from_instance := taken(other)
 
 	# The timestamps may differ by a second, so what is compared is everything after them —
@@ -642,13 +643,13 @@ fn test_the_global_writes_the_same_line_as_an_instance() {
 #[test]
 fn test_the_global_has_the_five_levels_a_test_can_write() {
 	defer restored()
-	ch := installed(log.Level.TRACE)
+	ch := installed(Level.TRACE)
 
-	log.trace().msg("m")
-	log.debug().msg("m")
-	log.info().msg("m")
-	log.warn().msg("m")
-	log.error().msg("m")
+	trace().msg("m")
+	debug().msg("m")
+	info().msg("m")
+	warn().msg("m")
+	error().msg("m")
 
 	assert strings.contains(taken(ch), " TRC m")
 	assert strings.contains(taken(ch), " DBG m")
@@ -661,14 +662,14 @@ fn test_the_global_has_the_five_levels_a_test_can_write() {
 fn test_install_reaches_a_line_written_elsewhere(ctx: testing.Context) {
 	defer restored()
 	ctx.log("the line is written by another function, which was handed nothing")
-	ch := installed(log.Level.WARN)
+	ch := installed(Level.WARN)
 
 	writes_a_debug_and_an_error()
 	assert strings.contains(taken(ch), " ERR from elsewhere")
 	assert taken(ch) == ""
 
 	ctx.log("and installing again reaches the same function, with no plumbing between")
-	other := installed(log.Level.DEBUG)
+	other := installed(Level.DEBUG)
 	writes_a_debug_and_an_error()
 	assert strings.contains(taken(other), " DBG from elsewhere")
 	assert strings.contains(taken(other), " ERR from elsewhere")
@@ -677,8 +678,8 @@ fn test_install_reaches_a_line_written_elsewhere(ctx: testing.Context) {
 # The function the test above configures from a distance. It imports `log` and nothing else,
 # takes no logger, and is the shape every ordinary function in a program has.
 fn writes_a_debug_and_an_error() {
-	log.debug().msg("from elsewhere")
-	log.error().msg("from elsewhere")
+	debug().msg("from elsewhere")
+	error().msg("from elsewhere")
 }
 
 # `install` REPLACES THE WHOLE LOGGER, which is the property that makes it one mutation
@@ -689,8 +690,8 @@ fn writes_a_debug_and_an_error() {
 fn test_install_replaces_every_setting_at_once(ctx: testing.Context) {
 	defer restored()
 	ch := chan[str](32)
-	log.install(pinned(log.Level.TRACE).format(log.Format.JSON).to(log.to_chan(ch)))
-	log.debug().str("k", "v").msg("one")
+	install(pinned(Level.TRACE).format(Format.JSON).to(to_chan(ch)))
+	debug().str("k", "v").msg("one")
 
 	ctx.log("level, format and sink all came from the value that was installed")
 	line := taken(ch)
@@ -698,9 +699,9 @@ fn test_install_replaces_every_setting_at_once(ctx: testing.Context) {
 	assert strings.contains(line, "\"msg\":\"one\"")
 
 	ctx.log("and installing again keeps nothing from the logger before it")
-	other := installed(log.Level.ERROR)
-	log.debug().msg("dropped")
-	log.error().msg("two")
+	other := installed(Level.ERROR)
+	debug().msg("dropped")
+	error().msg("two")
 
 	assert taken(ch) == ""
 	assert strings.contains(taken(other), " ERR two")
@@ -713,14 +714,14 @@ fn test_install_replaces_every_setting_at_once(ctx: testing.Context) {
 #[test]
 fn test_installing_twice_keeps_the_last() {
 	defer restored()
-	first := installed(log.Level.TRACE)
-	second := installed(log.Level.ERROR)
+	first := installed(Level.TRACE)
+	second := installed(Level.ERROR)
 
-	log.info().msg("m")
+	info().msg("m")
 	assert taken(first) == ""
 	assert taken(second) == ""
 
-	log.error().msg("m")
+	error().msg("m")
 	assert taken(first) == ""
 	assert strings.contains(taken(second), " ERR m")
 }
@@ -728,13 +729,13 @@ fn test_installing_twice_keeps_the_last() {
 #[test]
 fn test_the_global_enabled_follows_the_installed_logger() {
 	defer restored()
-	log.install(pinned(log.Level.ERROR))
-	assert not log.enabled(log.Level.WARN)
-	assert log.enabled(log.Level.ERROR)
+	install(pinned(Level.ERROR))
+	assert not enabled(Level.WARN)
+	assert enabled(Level.ERROR)
 
-	log.install(pinned(log.Level.OFF))
-	assert not log.enabled(log.Level.ERROR)
-	assert not log.enabled(log.Level.FATAL)
+	install(pinned(Level.OFF))
+	assert not enabled(Level.ERROR)
+	assert not enabled(Level.FATAL)
 }
 
 # THE DEFAULT IS WHAT `new()` BUILDS, and restoring is rebuilding it rather than remembering
@@ -744,17 +745,17 @@ fn test_the_global_enabled_follows_the_installed_logger() {
 #[test]
 fn test_restoring_the_default_needs_no_current() {
 	defer restored()
-	log.install(pinned(log.Level.OFF))
-	assert not log.enabled(log.Level.FATAL)
+	install(pinned(Level.OFF))
+	assert not enabled(Level.FATAL)
 
 	# WHAT the default is is not asked here and cannot be — it comes from `ZERG_LOG_LEVEL`,
 	# which is frozen before `main`. What IS asked is the claim the pattern makes: rebuilding
 	# with the public constructor puts back exactly what a program that never called `install`
 	# would have had, at every level, without anything ever reading the cell.
-	log.install(log.new())
-	fresh := log.new()
-	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR, log.Level.FATAL] {
-		assert log.enabled(l) == fresh.enabled(l)
+	install(new())
+	fresh := new()
+	for l in [Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR, Level.FATAL] {
+		assert enabled(l) == fresh.enabled(l)
 	}
 }
 
@@ -764,14 +765,14 @@ fn test_restoring_the_default_needs_no_current() {
 #[test]
 fn test_at_level_on_both_surfaces() {
 	defer restored()
-	ch := installed(log.Level.TRACE)
+	ch := installed(Level.TRACE)
 
-	log.at_level(log.Level.DEBUG).msg("global")
+	at_level(Level.DEBUG).msg("global")
 	assert strings.contains(taken(ch), " DBG global")
 
 	other := chan[str](4)
-	lg := pinned(log.Level.TRACE).to(log.to_chan(other))
-	lg.at_level(log.Level.DEBUG).msg("instance")
+	lg := pinned(Level.TRACE).to(to_chan(other))
+	lg.at_level(Level.DEBUG).msg("instance")
 	assert strings.contains(taken(other), " DBG instance")
 }
 
@@ -833,9 +834,9 @@ fn test_the_environment_is_read_once_and_a_later_write_moves_nothing(ctx: testin
 # gates is `log.new()`'s threshold read as one on/off answer per level. It is a value that can
 # be compared, which is what makes "it did not move" a single assertion rather than six.
 fn gates() -> str {
-	lg := log.new()
+	lg := new()
 	mut out := ""
-	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR, log.Level.FATAL] {
+	for l in [Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR, Level.FATAL] {
 		if lg.enabled(l) {
 			out = out + "1"
 		} else {
@@ -851,7 +852,7 @@ fn gates() -> str {
 # threshold is — comparing two empty strings is not the claim this is making.
 fn unpinned_line() -> str {
 	ch := chan[str](4)
-	log.new().level(log.Level.TRACE).to(log.to_chan(ch)).info().msg("shape")
+	new().level(Level.TRACE).to(to_chan(ch)).info().msg("shape")
 	line := taken(ch)
 	mut out := "pretty"
 	if strings.has_prefix(line, "{") {
@@ -872,4 +873,37 @@ fn restore(key: str, was: str?) {
 	} else {
 		os.del_env(key)
 	}
+}
+
+# --- the module's own helpers ---------------------------------------------------------
+
+# THE FOUR BYTES THAT FORCE A QUOTE, asked one at a time. `needs_quotes` is what decides
+# whether a pretty line reads `k=v` or `k="v"`, and it is a predicate over EVERY byte of the
+# value — so a wrong bound produces a line that parses as two fields, or one that quotes
+# everything and reads like JSON that lost its braces. A rendered line can only show the
+# verdict for whatever value a test happened to pick.
+#
+# THE BOUND IS `<= 32` AND SO INCLUDES THE SPACE, which is the byte the rule exists for; 33
+# is `!` and is ordinary. Both sides of that comparison are asked, because an off-by-one
+# there is the difference between quoting a space and not.
+#[test]
+fn test_needs_quotes_names_every_byte_that_forces_one() {
+	assert needs_quotes("a b")
+	assert needs_quotes("a=b")
+	assert needs_quotes("a\"b")
+	assert needs_quotes("a\\b")
+	assert needs_quotes("a\nb")
+	assert not needs_quotes("plain")
+	assert not needs_quotes("!~")
+}
+
+# COLOUR IS THE LEVEL AND NOTHING ELSE, and `tag` is where that is decided: uncoloured it is
+# the three-letter name unchanged, and coloured it is the name WRAPPED — a prefix and a
+# reset, with nothing of the message inside. A line can show that the reset is present; only
+# the function can show that the uncoloured form is the same string the coloured one wraps.
+#[test]
+fn test_tag_wraps_the_name_and_leaves_it_alone_uncoloured() {
+	assert tag(Level.INFO, false) == "INF"
+	assert tag(Level.ERROR, false) == "ERR"
+	assert tag(Level.INFO, true) == f"{colour_of(Level.INFO)}INF{esc()}[0m"
 }

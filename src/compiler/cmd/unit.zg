@@ -264,15 +264,30 @@ struct Unit {
 fn load_units(entry: str) -> list[Unit] {
 	mut one: list[str] = []
 	one.append(entry)
-	return load_units_of(one, entry, dir_of(entry))
+	mut none: list[str] = []
+	return load_units_of(one, entry, dir_of(entry), none)
 }
 
 # load_units_of is load_units for an entry unit whose FILES are named directly rather than
 # resolved from one path. A test build is the only caller: its entry unit is a directory's
 # sources — the `*_test.zg` included, which is the whole of what a test build is — plus the
 # driver `zerg test` generated, and no import path names that set.
-fn load_units_of(files: list[str], name: str, from_dir: str) -> list[Unit] {
-	mut seen: list[str] = []
+#
+# `provides` is the import paths this entry unit ALREADY IS, and it exists because a white-box
+# suite is a file OF its module: the package `src/stdlib/json_test.zg` forms is built from
+# `json.zg`, so an `import "json"` reached from anywhere in that program names files this unit
+# already holds. Loading them again put `json.zg` into the program twice and the build stopped
+# at `E745 get is declared twice in this file` — pointing at a module source nobody had
+# touched. Seeding `seen` is what says "that module is here already", and it is the same
+# mechanism that loads a module once however many importers it has.
+#
+# IT IS NOT A CYCLE THE CHECK IS BEING TALKED OUT OF. `chk_import_cycle` is never reached for
+# these, because the recursion stops before it — and the loop it would name is one a white-box
+# suite CREATES by existing: `json_test.zg` imports `testing`, `testing` renders a note through
+# `log`, and `log` encodes with `json`. Refusing that is refusing the arrangement
+# docs/runtime/package.md asks for, for a module the program compiles exactly once.
+fn load_units_of(files: list[str], name: str, from_dir: str, provides: list[str]) -> list[Unit] {
+	mut seen: list[str] = provides
 	mut units: list[Unit] = []
 	mut root: list[str] = []
 	load_unit(files, name, from_dir, seen, root, units)

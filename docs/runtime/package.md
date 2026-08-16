@@ -407,11 +407,10 @@ a loud failure (an undeclared name, at the line that used it) and never a silent
 name the test file for the module rather than for one of its parts. In exchange the rule is **monotone**:
 adding a test file never changes what another package is built from.
 
-Test files are recognized **by the build tool's convention** (e.g. a `*_test.zg` name) and included
-only in a test build, never in a normal one. So a test's declarations never reach the shipped artifact
-or a package's public surface — even a `pub` declaration in a test file in the root module stays out of
-the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
-does.
+Test files are recognized **by the build tool's convention** (e.g. a `*_test.zg` name) and included only in
+a test build, never in a normal one — so even a `pub` declaration in a test file in the root module stays
+out of the external API (The exclusion, below). As with the entry file, the language itself ascribes no
+meaning to the name; the tool does.
 
 ### `zerg test`
 
@@ -420,10 +419,9 @@ a generated driver, so a white-box test reaches the module's internals with no i
 runs every `#[test]` it finds, reporting `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` grouped by file,
 counting skips and timeouts apart from passes and failures, and exiting non-zero if any did not hold.
 
-**A package is the module the test file names**, by the most-specific-first rule above: `strings_test.zg`
-beside `strings.zg` is a package of that pair (plus the directory's own `fixtures_test.zg`, if there is
-one, and the driver), and a test file naming no such sibling makes the directory the package. One
-directory may therefore hold several packages, each with its own driver and its own process.
+**A package is the module the test file names**, by the most-specific-first rule above, plus the directory's
+own `fixtures_test.zg` if there is one, and the driver. One directory may therefore hold several packages,
+each with its own driver and its own process.
 
 **The path may be one `.zg` file**, and then it is the **package that file is in** that runs — ancestors
 counted from the file's directory, exactly as for the directory itself. A build of the test file **alone**
@@ -439,20 +437,19 @@ stderr as well, but a sentence alone leaves a CI line green forever, and the rea
 shell.
 
 **A `#[test]` is discovered wherever it is written**, and not only in a `*_test.zg` — so a directory whose
-only `#[test]` sits in an ordinary module file is a test package too, and `zerg lint` goes on warning
-(**L601**) that such a test **ships**. Both, not one: the linter says where a test ought to live and the
-runner runs what is written. It adds no package **shape** — the package a stray `#[test]` belongs to is
-the one that already compiles the file it is in — so the monotone rule above is untouched.
+only `#[test]` sits in an ordinary module file is a test package too, while `zerg lint` goes on warning
+(**L601**) that such a test **ships** ([Decorators](../core/decorators.md)). It adds no package **shape** —
+the package a stray `#[test]` belongs to is the one that already compiles the file it is in — so the
+monotone rule above is untouched.
 
 The claim inside it ships as well, and gets a second finding: **L602** on an `assert` outside a
 `*_test.zg`. There is no flag that strips one, so a claim written in shipping code can abort a running
 program — and it is not a weaker check than the one the author meant but a **less specific** one, saying
 only that the claim was false. `raise ValueError("xs must be non-empty") if xs.len() == 0` says both.
 
-**A `#[test]` returns nothing, and a declared return type is refused** with a place, before anything is
-compiled: the driver calls a test as a **statement**, so the value would be dropped — and
-`#[test] fn t() -> bool { return false }` was reported `ok`. It is refused rather than linted because a
-lint exits 0 and the run would go on saying `ok`.
+**A `#[test]` returns nothing** ([Decorators](../core/decorators.md)), and the refusal of a declared return
+type comes before anything is compiled: `#[test] fn t() -> bool { return false }` was reported `ok`. It is
+refused rather than linted because a lint exits 0 and the run would go on saying `ok`.
 
 **`--only <name>`** runs the tests whose name **begins with** `<name>` — a whole name selects one test, a
 stem selects the family. It is applied before anything is generated, so a test it did not select is not
@@ -475,17 +472,14 @@ interpret.
 
 #### What a test declares it needs
 
-A `#[test]`'s parameters are resolved by two rules: a **`testing.Context` by type**, and every other
-parameter **by name** against a fixture. No parameter means a direct call. A context is passed **by value**
-and shares what matters anyway — its one field is a channel, and a channel is a `Ref` value, so a copy
-shares it; what it carries is in [Standard Library](stdlib.md). A claim is `assert cond`, the keyword
-([Grammar](../surface/grammar.md), group 8), which writes its own message and needs nothing from the
-context.
-
-A **`#[fixture]`** takes its tests as a **continuation** — one parameter of type `fn (T)`, identified by
-type, which is both where those tests run and the declaration of what the fixture **produces**. Every
-other parameter names another fixture, by the same rule a test's does. Teardown is `defer`, the language's
-own idiom, so the runner supplies nothing for it.
+A `#[test]`'s parameters, and a `#[fixture]`'s, are resolved by the rules
+[Decorators](../core/decorators.md) states — a `testing.Context` by type, a fixture by name, a continuation
+`fn (T)` for what a fixture produces. What is left to this chapter is what the runner does with them. A
+context is passed **by value** and shares what matters anyway: its one field is a channel, and a channel is
+a `Ref` value, so a copy shares it; what it carries is in [Standard Library](stdlib.md). A claim is
+`assert cond`, the keyword ([Grammar](../surface/grammar.md), group 8), which writes its own message and
+needs nothing from the context. Teardown is `defer`, the language's own idiom, so the runner supplies
+nothing for it.
 
 ```zerg
 #[fixture]

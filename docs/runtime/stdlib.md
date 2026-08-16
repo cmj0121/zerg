@@ -270,17 +270,11 @@ Structured logging, as a **chained builder**:
 log.info().str("file", path).int("line", n).msg("compiling")
 ```
 
-The shape is not fashion — it is the one that works in **this** language. There are no varargs, so a field is
-one call; there is no `any`, so `str` takes a `str` and `int` takes an `int`; there is no generic struct, so
-the builder is one concrete type. Any other shape waits on at least two of the three.
-
-It is also the answer to **lazy evaluation**. `log.debug()` at a level that is off answers a **dead** entry:
-nothing is formatted, nothing is allocated, and `msg` writes nothing. The caller hands over typed values
-instead of a string it built first, so the work a disabled line would have done never happens rather than
-being thrown away.
-
-What is still paid is evaluating the **arguments** — `expensive()` in `.str("dump", expensive())` runs either
-way, because Zerg evaluates arguments before the call. That is why `enabled` is public:
+The builder is the shape **this** language leaves — no varargs, no `any`, no generic struct, each argued in
+`src/stdlib/log.zg` — and it is also the answer to **lazy evaluation**: `log.debug()` at a level that is off
+answers a **dead** entry, formatting and allocating nothing, because the caller hands over typed values
+rather than a string it built first. What is still paid is evaluating the **arguments**, which Zerg does
+before the call. That is why `enabled` is public:
 
 ```zerg
 if log.enabled(log.Level.DEBUG) {
@@ -356,14 +350,11 @@ races with nobody. Installing twice is legal and the last one wins, silently.
 
 ### Levels
 
-`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF`, as the variants of an **enum**. They were `int`
-constants, and the type is what an `int` cannot be: `log.new().level(2)` and `log.new().level(99)` were both
-legal and neither said anything, where `E340` now refuses an `int` where a `Level` belongs and a `Level` where
-an `int` does, and `E347` refuses comparing a variant with a number.
-
-The deeper win is that every renderer is an **exhaustive `match`**, so a level cannot be added without ranking
-it, naming it and colouring it — `E428` names the arm that was forgotten. The `int` version printed a blank
-and said nothing.
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF`, as the variants of an **enum** rather than the `int`
+constants they were: `E340` refuses an `int` where a `Level` belongs and a `Level` where an `int` does, `E347`
+refuses comparing a variant with a number, and every renderer being an **exhaustive `match`** means a level
+cannot be added without ranking it, naming it and colouring it — `E428` names the arm that was forgotten. The
+`int` version accepted `log.new().level(99)`, printed a blank, and said nothing either time.
 
 **`OFF` is not in the ordering at all.** It is the threshold that accepts nothing: a logger set to it writes
 nothing, including a line written _at_ `OFF`. The ordering itself is one private function, and the enum's
@@ -418,8 +409,8 @@ Only the **level** is coloured. It is what a reader scans for, and colouring the
 fight with whatever they contain. A JSON line is never coloured at all — escape codes in a field a machine
 parses are corruption, not decoration.
 
-The JSON line is built through [`json`](#json), not by hand — that module was promoted out of the language
-server for exactly this. Its three fixed keys — `t`, `l`, `msg` — come first, in that order.
+The JSON line is built through [`json`](#json), not by hand. Its three fixed keys — `t`, `l`, `msg` — come
+first, in that order.
 
 ### The destination
 
@@ -495,8 +486,7 @@ libm binding). A domain error (e.g. `sqrt` of a negative) raises `ValueError`, d
 dropping a fraction is a decision, and four answers are defensible ([Types](../core/types.md)) — so these
 are the verbs that make it. A verb that gave back a `float` would leave the caller holding the very
 conversion it called a verb to perform. A magnitude no `int` holds raises `OverflowError`, demotable with
-`guard` like any other conversion that can fail; a narrower target is the verb and then the conversion,
-`byte(math.trunc(x))`.
+`guard` like any other conversion that can fail.
 
 ## `rand`
 

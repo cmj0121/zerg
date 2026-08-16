@@ -250,15 +250,10 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 log.info().str("file", path).int("line", n).msg("compiling")
 ```
 
-這個形狀不是流行，而是**在這個語言裡**唯一行得通的那一個。沒有 varargs，所以一個欄位就是一次呼叫；沒有 `any`，
-所以 `str` 收 `str`、`int` 收 `int`；沒有 generic struct，所以 builder 是一個具體型別。任何其他形狀都至少要等其中兩件。
-
-它同時也是**延遲求值**的答案。等級關掉時 `log.debug()` 回傳一個**死的** entry：什麼都不格式化、什麼都不配置，
-`msg` 也不寫。呼叫端交出的是有型別的值，而不是自己先組好的字串——所以被關掉的那一行本來要做的工，是「從未發生」
-而不是「做完丟掉」。
-
-還是要付的是**引數的求值**：`.str("dump", expensive())` 裡的 `expensive()` 兩種情況都會跑，因為 Zerg 在呼叫前先求值。
-這正是 `enabled` 必須公開的原因：
+builder 是**這個語言**留下來的形狀——沒有 varargs、沒有 `any`、沒有 generic struct，每一件都在 `src/stdlib/log.zg`
+裡交代過——它同時也是**延遲求值**的答案：等級關掉時 `log.debug()` 回傳一個**死的** entry，什麼都不格式化、什麼都不
+配置，因為呼叫端交出的是有型別的值，而不是自己先組好的字串。還是要付的是**引數的求值**，那是 Zerg 在呼叫之前就會
+做的事。這正是 `enabled` 必須公開的原因：
 
 ```zerg
 if log.enabled(log.Level.DEBUG) {
@@ -325,12 +320,10 @@ group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所
 
 ### 等級
 
-`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant。它們原本是 `int` 常數，而型別
-能做到的正是 `int` 做不到的：`log.new().level(2)` 與 `log.new().level(99)` 兩者都合法而且什麼都不會說；現在 `E340`
-會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 則擋下拿 variant 跟數字比較。
-
-更深的收穫是每個算繪函式都是**窮盡的 `match`**：新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的
-那一條 arm。`int` 版本只會印出空白，然後什麼都不說。
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant，而不是它們原本的 `int` 常數：
+`E340` 會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 擋下拿 variant 跟數字比較，
+而每個算繪函式都是**窮盡的 `match`**，所以新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的那一條
+arm。`int` 版本連 `log.new().level(99)` 都收，只印出空白，兩次都什麼也不說。
 
 **`OFF` 根本不在那個順序裡。** 它是「什麼都不收」的門檻：設到它的 logger 什麼都不寫，包括寫*在* `OFF` 上的那一行。
 順序本身是一個私有函式，而 enum 的宣告順序刻意**不是**契約——模組裡沒有任何地方讀 discriminant，所以把 variant
@@ -377,8 +370,7 @@ $ ZERG_LOG=json ./myprog
 只有**等級**會上色。那是讀的人在掃視的欄位，而替訊息或值上色會跟它們本身的內容打架。JSON 行則完全不上色——
 在一個給機器 parse 的欄位裡放跳脫碼是損毀，不是裝飾。
 
-JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的——那個模組正是為了這件事才從 language server 裡拉出來。
-它固定的三個 key——`t`、`l`、`msg`——依這個順序排在最前面。
+JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的。它固定的三個 key——`t`、`l`、`msg`——依這個順序排在最前面。
 
 ### 目的地
 
@@ -447,8 +439,7 @@ primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算
 **取整的那四個回答一個 `int`，而那正是它們存在的理由。** `float` 上的 `int(x)` 被拒絕——丟掉小數是一個決定，而
 且有四個都說得通的答案（見[型別](../core/types.zh-TW.md)）——所以這四個就是做出那個決定的動詞。一個回傳
 `float` 的動詞，會讓呼叫端手上仍握著那個它本來就是為了完成而呼叫動詞的轉換。一個 `int` 裝不下的量會 raise
-`OverflowError`，和其他每一個會失敗的轉換一樣可以用 `guard` 降級；目標更窄時就是動詞再加上轉換，
-`byte(math.trunc(x))`。
+`OverflowError`，和其他每一個會失敗的轉換一樣可以用 `guard` 降級。
 
 ## `rand`
 

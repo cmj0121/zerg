@@ -316,9 +316,9 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 是把測試檔以 module 為名，而不是以它其中一個檔案為名。換來的是這條規則**單調**：新增一個測試檔，永遠不會改變另一個
 package 是用哪些檔案建起來的。
 
-測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除。因此測試的
-宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
-之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
+測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除——所以即使
+測試檔放在 root module、即使標了 `pub`，也留在對外 API 之外（見下方「排除」）。一如 entry 檔，語言本身不賦予檔名
+任何意義，是工具賦予的。
 
 ### `zerg test`
 
@@ -327,9 +327,8 @@ package 是用哪些檔案建起來的。
 `ok` / `FAIL` / `SKIP` / `STUCK` / `CRASH` 依檔案分組回報，skip 與 timeout 與 pass、fail 分開計數；只要有任何一項
 不成立就以非零結束。
 
-**package 就是測試檔所指名的那個 module**，依上面「先具體、後一般」那條規則：`strings.zg` 旁邊的
-`strings_test.zg` 是這一對的 package（加上該目錄自己的 `fixtures_test.zg`（若有）與 driver），而一個指不到同名鄰居
-的測試檔，就讓目錄成為 package。因此同一個目錄可以放好幾個 package，各有自己的 driver、自己的行程。
+**package 就是測試檔所指名的那個 module**，依上面「先具體、後一般」那條規則，再加上該目錄自己的
+`fixtures_test.zg`（若有）與 driver。因此同一個目錄可以放好幾個 package，各有自己的 driver、自己的行程。
 
 **路徑可以是單一 `.zg` 檔**，此時跑的是**那個檔案所在的 package**——祖先從該檔案的目錄算起，與直接給目錄時一致。
 單獨建置那個測試檔等於什麼都沒建，所以檔案是用來**選一個 package**，而不是給一份檔案清單；要挑單一測試，工具是
@@ -341,8 +340,8 @@ package 是用哪些檔案建起來的。
 永遠是綠的，而讀 CI 那一行的是一支 shell。
 
 **`#[test]` 寫在哪裡就在哪裡被找到**，不限於 `*_test.zg`——所以一個目錄裡唯一的 `#[test]` 就算寫在普通 module 檔
-裡，它也是一個測試 package，而 `zerg lint` 仍然會警告（**L601**）這樣的測試會**跟著出貨**。兩者並存而非二選一：
-linter 說測試該住哪，runner 跑的是實際寫下的東西。它不新增任何 package **形狀**——一個落單的 `#[test]` 所屬的
+裡，它也是一個測試 package，而 `zerg lint` 仍然會警告（**L601**）這樣的測試會**跟著出貨**
+（見 [Decorator](../core/decorators.zh-TW.md)）。它不新增任何 package **形狀**——一個落單的 `#[test]` 所屬的
 package，就是原本就會編到它所在檔案的那一個——所以上面那條單調規則不受影響。
 
 裡面的那個主張也一樣會出貨，並得到第二個 finding：`*_test.zg` 之外的 `assert` 會拿到 **L602**。沒有任何旗標能把
@@ -350,9 +349,9 @@ package，就是原本就會編到它所在檔案的那一個——所以上面�
 是**較不具體**的版本：它只說得出「這個主張是假的」。`raise ValueError("xs must be non-empty") if xs.len() == 0`
 兩件事都說得出來。
 
-**`#[test]` 不回傳任何東西，宣告了回傳型別會被拒絕**，帶位置，而且在編譯任何東西之前：driver 是把測試當作一個
-**述句**呼叫的，所以那個值會被丟掉——而 `#[test] fn t() -> bool { return false }` 曾經被回報成 `ok`。它是被拒絕而
-不是被 lint，因為 lint 以 0 結束，而那一輪會繼續說 `ok`。
+**`#[test]` 不回傳任何東西**（見 [Decorator](../core/decorators.zh-TW.md)），而拒絕一個宣告出來的回傳型別發生在
+編譯任何東西之前：`#[test] fn t() -> bool { return false }` 曾經被回報成 `ok`。它是被拒絕而不是被 lint，因為 lint
+以 0 結束，而那一輪會繼續說 `ok`。
 
 **`--only <name>`** 只跑名字**開頭是** `<name>` 的測試——完整名字選一個測試，字首選一整族。它在產生任何東西之前就
 套用，所以沒被選到的測試不會被編、它的 fixture 也不會被建。一個什麼都沒選到的過濾器以 `2` 結束，而不是回報一輪
@@ -370,13 +369,11 @@ package，就是原本就會編到它所在檔案的那一個——所以上面�
 
 #### 一個測試宣告它需要什麼
 
-`#[test]` 的參數由兩條規則解析：**`testing.Context` 依型別**，其餘每個參數**依名字**去對一個 fixture。沒有參數就是
-直接呼叫。context 以**值**傳入，而真正重要的東西本來就共享——它唯一的欄位是一個 channel，而 channel 是 `Ref` 值，
-所以複本共享它；它帶了什麼在 [標準函式庫](stdlib.zh-TW.md)。一個主張是 `assert cond` 這個關鍵字
-（[Grammar](../surface/grammar.zh-TW.md)，group 8），它自己寫出訊息，不需要 context 給它任何東西。
-
-一個 **`#[fixture]`** 以 **continuation** 收下它的測試——一個型別為 `fn (T)` 的參數，以型別辨識，它同時是那些測試
-執行的所在，以及這個 fixture **產出什麼**的宣告。其餘每個參數指名另一個 fixture，規則和測試的那條相同。teardown 是
+`#[test]` 的參數、以及 `#[fixture]` 的參數，都依 [Decorator](../core/decorators.zh-TW.md) 所述的規則解析——
+`testing.Context` 依型別、fixture 依名字、`fn (T)` 這個 continuation 宣告 fixture 產出什麼。留給本章的是 runner
+拿它們做了什麼。context 以**值**傳入，而真正重要的東西本來就共享：它唯一的欄位是一個 channel，而 channel 是 `Ref`
+值，所以複本共享它；它帶了什麼在 [標準函式庫](stdlib.zh-TW.md)。一個主張是 `assert cond` 這個關鍵字
+（[Grammar](../surface/grammar.zh-TW.md)，group 8），它自己寫出訊息，不需要 context 給它任何東西。teardown 是
 `defer`，語言自己的慣用法，所以 runner 不必為它準備任何東西。
 
 ```zerg

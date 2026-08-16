@@ -9,6 +9,10 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 
 編譯器直接提供、**免** import 的函式，見 [內建函式（Built-in Functions）](builtins.zh-TW.md)。
 
+**一個 module 的 suite 就放在它旁邊**——`src/stdlib/strings_test.zg` 緊鄰 `strings.zg`——那正是
+[模組、套件與程式](package.zh-TW.md) 所描述的白箱擺法，也讓每一對自成一個 package。`zerg test src/stdlib` 會跑
+全部，`zerg test src/stdlib/strings.zg` 跑其中一個。
+
 ## 模組註解裡可執行的範例
 
 `pub` 函式的註解可以帶範例：在普通的 `#` 註解裡寫成一組 fenced block——運算式放 ` ```zerg `，它印出什麼放
@@ -28,18 +32,9 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 > commit** 裡裁掉——所以一個最後一個字元本來就該是空白的 output block，會被無聲改寫成範例根本不會產生的樣子，
 > 範例從真變成假，且沒有留下任何痕跡。`trim_left` 就是發現這件事的案例。
 >
-> 解法是讓**運算式**本身以一個看得見的終止符收尾，並在測試套件裡用同樣的形式斷言，讓兩邊一致：
->
-> ````text
-> # ```zerg
-> # strings.trim_left("  hi  ") + "|"
-> # ```
-> # ```output
-> # hi  |
-> # ```
-> ````
->
-> 不要試著把該檔案排除在 hook 之外：檔案裡其他每一行都應該被裁，而一個需要行尾空白的範例，讀者的眼睛同樣看不見它。
+> 解法是讓**運算式**本身以一個看得見的終止符收尾——`strings.trim_left("  hi  ") + "|"`，輸出就是 `hi  |`——
+> 並在測試套件裡用同樣的形式斷言，讓兩邊一致。不要試著把該檔案排除在 hook 之外：檔案裡其他每一行都應該被裁，
+> 而一個需要行尾空白的範例，讀者的眼睛同樣看不見它。
 
 ## 套件
 
@@ -118,8 +113,8 @@ leaf。
 > use-after-free。Zerg 會跑真正的 OS worker 執行緒（[Coroutine](../code/coroutine.zh-TW.md)），兩個 coroutine
 > 常常就是兩條執行緒，因此「在我機器上會動」什麼也證明不了。
 >
-> 這讓它與 [`log`](#log) 記載的共享狀態危害**在類別上就不同**。logger 的那個 cell 是本專案自己的狀態，總有一天
-> 一個 atomic 可以關掉那個競爭；`environ` 不是我們的，這裡做再多也無法讓它安全——沒有什麼修正可以等，只有一個
+> 這讓它與 [`log`](#log) 記載的共享狀態危害**在類別上就不同**：logger 的那個 cell 是本專案自己的狀態，總有一天
+> 一個 atomic 可以關掉那個競爭；而 `environ` 不是我們的，這裡做再多也無法讓它安全。沒有什麼修正可以等，只有一個
 > 該呼叫它的時機。
 >
 > 編譯器**不會**強制它，而且也無法誠實地強制：workers 在 `main` 的第一行之前就存在了，所以一條以「到目前為止有沒有
@@ -127,9 +122,8 @@ leaf。
 > test 就是一個 coroutine）。
 
 **`isatty` 只關於裝置，別無其他。** 用它來挑**算繪方式**——在終端機上加色、進 pipe 就不加——而永遠不要用它挑
-**格式**：輸出的形狀會因為被重導而改變，就沒辦法用同一種方式讀第二次，而一台機器上是 JSON、另一台是欄位的
-log 檔比兩者都糟。[`log`](#log) 走的正是這條線——顏色問它，而只有 `ZERG_LOG` 決定格式。沒有開啟的描述子不是
-終端機，所以它回 `false` 而不是 raise；它是 total 的,這在「abort 等於為了跳脫碼而死」的路徑上很重要。
+**格式**；[`log`](#log) 走的正是這條線，也說明了為什麼。沒有開啟的描述子不是終端機，所以它回 `false` 而不是
+raise；它是 total 的,這在「abort 等於為了跳脫碼而死」的路徑上很重要。
 
 ## `strings`
 
@@ -260,15 +254,10 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 log.info().str("file", path).int("line", n).msg("compiling")
 ```
 
-這個形狀不是流行，而是**在這個語言裡**唯一行得通的那一個。沒有 varargs，所以一個欄位就是一次呼叫；沒有 `any`，
-所以 `str` 收 `str`、`int` 收 `int`；沒有 generic struct，所以 builder 是一個具體型別。任何其他形狀都至少要等其中兩件。
-
-它同時也是**延遲求值**的答案。等級關掉時 `log.debug()` 回傳一個**死的** entry：每個欄位方法立刻返回、什麼都不格式化、
-什麼都不配置，`msg` 也不寫。呼叫端交出的是有型別的值，而不是自己先組好的字串——所以被關掉的那一行本來要做的工，
-是「從未發生」而不是「做完丟掉」。
-
-還是要付的是**引數的求值**：`.str("dump", expensive())` 裡的 `expensive()` 兩種情況都會跑，因為 Zerg 在呼叫前先求值。
-這正是 `enabled` 必須公開的原因：
+builder 是**這個語言**留下來的形狀——沒有 varargs、沒有 `any`、沒有 generic struct，每一件都在 `src/stdlib/log.zg`
+裡交代過——它同時也是**延遲求值**的答案：等級關掉時 `log.debug()` 回傳一個**死的** entry，什麼都不格式化、什麼都不
+配置，因為呼叫端交出的是有型別的值，而不是自己先組好的字串。還是要付的是**引數的求值**，那是 Zerg 在呼叫之前就會
+做的事。這正是 `enabled` 必須公開的原因：
 
 ```zerg
 if log.enabled(log.Level.DEBUG) {
@@ -298,10 +287,9 @@ if log.enabled(log.Level.DEBUG) {
 **沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
 （見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕一個叫
 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、而且被接受；
-在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`，是因為自由的 `pub at`
-會與編譯器自己的 lexer 撞上 `E705`——那裡有一個 module 私有的 `at`，而 `pub` 名字沒有 package 可以讓它唯一。
-`parse_level` 不叫 `parse` 是同一條規則的另一面：這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module
-私有的 `parse` 相撞。
+在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`、`parse_level` 而不是
+`parse`，都是因為 `pub` 名字沒有 package 可以讓它唯一：自由的 `pub at` 會與編譯器自己那個有 module 私有 `at` 的
+lexer 撞上 `E705`，而這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module 私有的 `parse` 相撞。
 
 **只有一個會改狀態的函式，而且它收下一整個 logger。** `set_level` / `set_format` / `set_colour` / `set_sink`
 這一家是被**刪掉**而不是改名的：模組本來就有四個純 builder，所以那些 setter 只是把同一件事再說一次，順便把共享狀態
@@ -336,12 +324,10 @@ group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所
 
 ### 等級
 
-`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant。它們原本是 `int` 常數，而型別
-能做到的正是 `int` 做不到的：`log.new().level(2)` 與 `log.new().level(99)` 兩者都合法而且什麼都不會說；現在 `E340`
-會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 則擋下拿 variant 跟數字比較。
-
-更深的收穫是每個算繪函式都是**窮盡的 `match`**：新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的
-那一條 arm。`int` 版本只會印出空白，然後什麼都不說。
+`TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant，而不是它們原本的 `int` 常數：
+`E340` 會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 擋下拿 variant 跟數字比較，
+而每個算繪函式都是**窮盡的 `match`**，所以新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的那一條
+arm。`int` 版本連 `log.new().level(99)` 都收，只印出空白，兩次都什麼也不說。
 
 **`OFF` 根本不在那個順序裡。** 它是「什麼都不收」的門檻：設到它的 logger 什麼都不寫，包括寫*在* `OFF` 上的那一行。
 順序本身是一個私有函式，而 enum 的宣告順序刻意**不是**契約——模組裡沒有任何地方讀 discriminant，所以把 variant
@@ -388,9 +374,7 @@ $ ZERG_LOG=json ./myprog
 只有**等級**會上色。那是讀的人在掃視的欄位，而替訊息或值上色會跟它們本身的內容打架。JSON 行則完全不上色——
 在一個給機器 parse 的欄位裡放跳脫碼是損毀，不是裝飾。
 
-JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的,這正是那個模組要從 language server 裡拉出來的原因:
-整棵樹只有一份跳脫實作,引號、換行與 tab 就只有一個地方要弄對。它固定的三個 key——`t`、`l`、`msg`——依這個
-順序排在最前面。
+JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的。它固定的三個 key——`t`、`l`、`msg`——依這個順序排在最前面。
 
 ### 目的地
 
@@ -459,8 +443,7 @@ primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算
 **取整的那四個回答一個 `int`，而那正是它們存在的理由。** `float` 上的 `int(x)` 被拒絕——丟掉小數是一個決定，而
 且有四個都說得通的答案（見[型別](../core/types.zh-TW.md)）——所以這四個就是做出那個決定的動詞。一個回傳
 `float` 的動詞，會讓呼叫端手上仍握著那個它本來就是為了完成而呼叫動詞的轉換。一個 `int` 裝不下的量會 raise
-`OverflowError`，和其他每一個會失敗的轉換一樣可以用 `guard` 降級；目標更窄時就是動詞再加上轉換，
-`byte(math.trunc(x))`。
+`OverflowError`，和其他每一個會失敗的轉換一樣可以用 `guard` 降級。
 
 ## `rand`
 
@@ -493,10 +476,16 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 | `positional(name, help) -> Argument`                    | 位置引數                            |
 | `Command.opt` / `.required` / `.flag` / `.pos`          | 就地宣告引數，不必先建一個          |
 | `Command.add(a)` / `.sub(c)` / `.run(f)`                | 掛上引數、子命令、它的函式          |
+| `Command.exclusive(xs)` / `.one_of(xs)`                 | 一組之中至多一個 / 恰好一個         |
 | `Command.version` / `.usage` / `.epilog` / `.no_help`   | `--help` 與 `--version` 說什麼      |
-| `Command.exec(args: list[str]) -> int`                  | parse、dispatch，並回答程序的狀態碼 |
+| `Command.render() -> str`                               | help 文字，給想自己安排位置的程式   |
+| `Command.exec(argv: list[str]) -> int`                  | parse、dispatch，並回答程序的狀態碼 |
 | `Ctx.has` / `.get` / `.all` / `.int_of` / `.args`       | 讀出這次 parse 的結果               |
+| `Ctx.path() -> str`                                     | 一路走到這裡的命令名，串起來        |
 | `Argument.required` / `.repeated` / `.env` / `.section` | 收窄一個已宣告的引數                |
+
+`one_of` 是一個名字、而不是 `exclusive` 上的一個旗標，因為「至多一個」與「恰好一個」是兩個約束，而
+`.exclusive(xs, true)` 在呼叫處哪一個都沒說出來。
 
 ## `atomic`
 
@@ -506,7 +495,8 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 > **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十五個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
 > ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
-> 也不存在。在這件事落地之前，跨 coroutine 的共享狀態請走 channel。
+> 也不存在；模組裡另有一組 `Atomic[T]` 形狀的表面（`new_atomic`），等的是同一件事。在這件事落地之前，跨 coroutine
+> 的共享狀態請走 channel。
 >
 > 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
 > `src/stdlib/` 的模組同時也離開了 `zerg fmt --check` 與其餘的 self-source 集合，會在 generics 到來之前無人閱讀
@@ -529,7 +519,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 **斷言不在這裡。** `assert cond` 是關鍵字（見 [Grammar](../surface/grammar.zh-TW.md) group 8）:訊息由編譯器寫,
 而它說得出三件函式永遠說不出的事——主張寫在哪個檔案哪一行、主張本身的原始文字、以及比較拆開後每個運算元當時的
 值。Zerg 沒有 `__FILE__`、也沒有呼叫端歸屬,而條件抵達輔助函式時已經是一個形狀被編譯掉的 `bool`;`assert_eq`
-是靠在呼叫端把運算元拆開才買回其中兩個值的。那就是它存在過的理由,也是它不必再存在的理由。
+存在過就是為了買回其中兩個值,而現在它不必再存在。
 
 失敗的主張 raise 的是 `AssertionError`,而且沒有別的東西會 raise 它——這正是 `zerg test` 能把它報成**失敗**、
 而把其他抵達測試本體頂端的東西報成**崩潰**的原因。
@@ -537,6 +527,11 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 | 函式                                    | 摘要                                         |
 | --------------------------------------- | -------------------------------------------- |
 | `assert_raises[T](r: Result[T]) -> Err` | 交回一次 `guard` 包住的呼叫所 raise 的 `Err` |
+
+**模組其餘的部分屬於 runner，不屬於一個測試。** `Event`、`Outcome`、`context`、`finished` 與 `collect` 之所以是
+`pub`，是因為 `zerg test` 產生的那個 driver 是一個**位於受測 package 內**的檔案，所以它像任何 importer 一樣構得到
+它們。測試本體不會呼叫其中任何一個；它們列在這裡，是為了讓在模組裡遇上它們的讀者，不會誤以為那是給自己用的輔助
+函式。
 
 `assert_raises` 不是斷言,所以它仍是函式:它問的是一個**已經結束**的呼叫 raise 了什麼。它拿的是**呼叫當下寫的那個
 `guard`**,並把錯誤交回來,所以種類是用語言自己的 `is` 去問,而不是傳進去——在 Zerg 裡型別不是值,

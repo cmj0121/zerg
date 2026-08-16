@@ -71,11 +71,13 @@ other chapter relies on. Read it first.
 
 ### Tooling
 
-| Chapter                                    | Covers                                                    |
-| ------------------------------------------ | --------------------------------------------------------- |
-| [Formatter & Linter Rules](tooling/fmt.md) | every rule `zerg fmt` and `zerg lint` apply, and its code |
-| [Desugar Rules](tooling/desugar.md)        | every rule `zerg desugar` applies, and its code           |
-| [Language Server](tooling/lsp.md)          | `zerg lsp` — what it answers, and what holds it honest    |
+| Chapter                                       | Covers                                                 |
+| --------------------------------------------- | ------------------------------------------------------ |
+| [Formatter Rules](tooling/fmt.md)             | every rule `zerg fmt` applies, and its code            |
+| [Linter Rules](tooling/lint.md)               | every rule `zerg lint` applies, and its code           |
+| [Compile Diagnostics](tooling/diagnostics.md) | every `E` code the compiler reports, and its rule      |
+| [Desugar Rules](tooling/desugar.md)           | every rule `zerg desugar` applies, and its code        |
+| [Language Server](tooling/lsp.md)             | `zerg lsp` — what it answers, and what holds it honest |
 
 ## Types
 
@@ -138,8 +140,9 @@ the language itself provides. A user cannot add to the set.
   reinterpretation; `int("…")` additionally **parses** a decimal string ([Types](core/types.md)).
 - **`str(bytes)` / `str(runes)`** and **`bytearray(s)` / `runearray(s)`** — the str ⇄ list bridges,
   validating the `str` invariant ([Collections](code/collections.md)).
-- **Error constructors** — the fixed `ValueError` / `OverflowError` / `IOError` / `EncodingError` /
-  `IndexError` / `KeyError`, each building an `Err` of that kind ([Null-safety & Errors](code/errors.md)).
+- **Error constructors** — one per built-in kind, each building an `Err` of that kind. There are
+  **eleven** kinds and **ten** constructors: `StopIteration` is testable and not constructible
+  ([Null-safety & Errors](code/errors.md)).
 - **Raw-pointer builtins (`unsafe` only)** — `addr` / `ptr` / `ptr[T]` / `uint(p)`, and the pointer
   methods `.load` / `.store` / `.offset` ([Values & Memory](core/memory.md)).
 

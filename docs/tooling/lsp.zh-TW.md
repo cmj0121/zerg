@@ -21,10 +21,11 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,lint findings 對上會
 回報它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
 
-除此之外它還帶了**十個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變
-更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位,以及大於
-runtime bounded leaf 一次讀取量的 body。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,或一個在乾等的 client,
-什麼都不會說。
+除此之外它還帶了**十五個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量
+變更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位、大於
+runtime bounded leaf 一次讀取量的 body,以及五個關於
+[quick fix](#quick-fix-是編譯器的答案不是-server-的) 的。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,
+或一個在乾等的 client,什麼都不會說。
 
 ## 它住在哪裡
 
@@ -52,8 +53,9 @@ module 擁有協定;driver 擁有檔案系統。
 | `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix    |
 | `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告            |
 
-其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,
-然後編輯器就靜掉了,什麼也沒說。
+`initialize` 宣告**三項 capability**——`documentFormattingProvider`、`codeActionProvider`、
+`documentSymbolProvider`——外加 `textDocumentSync: 1`。其他每一個請求都會收到 **method-not-found
+錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,然後編輯器就靜掉了,什麼也沒說。
 
 **session 是一台狀態機,而 exit status 是它的一部分。** `shutdown` 之後 server 只接受 `exit`;之後才到的 request 會收
 到 `InvalidRequest`,因為在等回覆的 client 會停止送下一個。`shutdown` 後的 `exit` 以 **0** 結束,沒有 `shutdown` 的
@@ -83,7 +85,7 @@ module 與測試檔正好都是這一類。
 也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
 所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
 ——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
-([linter 的嚴重度](fmt.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
+([linter 的嚴重度](lint.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
 
 | `Finding.sev` | `zerg lint` 印出  | LSP 嚴重度      |
 | ------------- | ----------------- | --------------- |
@@ -235,7 +237,7 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 的更糟,因為使用者學到的是「這個選單會騙人」。
 
 這個改寫**不是** `zerg fmt` 的工作。formatter 讀的是 token,而且必須能在編譯器編不過的原始碼上運作(見
-[Formatter 與 Linter](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
+[格式化器規則](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
 最需要它的那種 buffer 裡失效。它同時也是一個意見——`1.5 + 1` 是合法程式——而 formatter 沒有意見。
 
 ## 大綱是 parser 的清單,不是 server 的
@@ -330,17 +332,21 @@ diff 把兩邊綁在一起。**
 
 ## 還沒做的,以及各自在等什麼
 
-| 缺的                                          | 在等                                                |
-| --------------------------------------------- | --------------------------------------------------- |
-| `hover`、`definition`、`references`、`rename` | 沒有任何東西能把位置對映到宣告                      |
-| `completion`                                  | 同一套 query surface                                |
-| `semanticTokens`                              | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| 診斷的**結束**位置                            | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
-| 增量同步、debounce、取消                      | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
+追蹤在 issue [#15](https://github.com/cmj0121/zerg/issues/15),它是兩半共同掛靠的傘:每次檢查的成本,以及一個能回答
+「一個名字在哪裡被宣告」的索引。
 
-第一列是真正的缺口,所有互動功能都卡在它後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。需要
-的不是把那些型別一個一個公開,而是一個 **query surface**:給一個 path 與一個位置,那裡宣告了什麼、它在哪裡被宣告、它
-的型別是什麼。
+| 缺的                                              | 在等                                                |
+| ------------------------------------------------- | --------------------------------------------------- |
+| `hover`、`definition`、`references`、`rename`     | 沒有任何東西能把位置對映到宣告                      |
+| `completion`、`signatureHelp`、`workspace/symbol` | 同一套 query surface                                |
+| `semanticTokens`                                  | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
+| 診斷的**結束**位置                                | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
+| 增量同步、debounce、取消                          | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
+
+前兩列是真正的缺口,所有互動功能都卡在它們後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。
+需要的不是把那些型別一個一個公開,而是一個 **query surface**:給一個 path 與一個位置,那裡宣告了什麼、它在哪裡被
+宣告、它的型別是什麼。它們不是七個功能(算上 `declaration` 是八個——它就是對另一種節點問的 `definition`),而是一個
+索引;反過來做,只會得到每個方法各一份、對同一個問題的私有答案。
 
 `semanticTokens` 是另一種缺,值得這樣點名:它會需要一張把 token kind 對映到 LSP token type 的表,而那正是上一節存在
 就是為了防止的那種**重複的語言事實清單**。vim 語法檔已經在為 Zerg 上色,而且它有 gate。
@@ -348,8 +354,9 @@ diff 把兩邊綁在一起。**
 最後一列是成本,不是缺口。scheduler 是協作式且非搶佔的,所以一次長檢查會佔住它的 worker 直到做完;`emit.zg` 是這個
 repository 裡最壞的情況,也是在這裡設計任何東西之前該拿來量的數字。
 
-**這個成本的記憶體那一半已經關掉了。** 以 `src/compiler/zergc.zg` 為根的 24 檔程式檢查一次——現在只要打開
-`src/compiler/` 底下**任何一個**檔案就會要求這件事,因為一個 module 成員是對著它的 module 檢查的——以前要 6.7 秒,峰
+**這個成本的記憶體那一半已經關掉了。** 以 `src/compiler/zergc.zg` 為根的那個程式檢查一次——現在只要打開
+`src/compiler/` 底下**任何一個**檔案就會要求這件事,因為一個 module 成員是對著它的 module 檢查的;量測當時它是 24
+個檔案,今天是 27 個——以前要 6.7 秒,峰
 值 **6.7 GB**,而一個長時間存活的 session 在三到四次之後會被作業系統殺掉。這個上限是 **emitter 的**,不是協定的:編
 譯器的檢查住在 lowering 的走訪裡,所以唯一碰得到它們的路是 `emit_files_diag`,而它會先把整個程式降到 C。
 

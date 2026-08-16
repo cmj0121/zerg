@@ -11,8 +11,10 @@ Zerg 的內建容器——**`list`**、**`map`**、**`set`**，外加定長的 *
 | `set[T]`    | 一個**唯一成員**集合 | `T: Eq + Hash`       | **插入**序     | **[not yet]** |
 | `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         | **[not yet]** |
 
-上表的 `map` key 需求是預期的那一種；這個階段 key 僅限 **`int`** 或 **`str`**（見下方 [key](#keyeq-免費hash-顯式)），
-而 `set[T]` 在型別與值兩種位置都是 **[not yet]**。
+上表的 `map` key 需求是預期的那一種；這個階段 key 僅限 **`int`** 或 **`str`**（見下方 [key](#keyeq-免費hash-顯式)）。
+兩個 **[not yet]** 的列各自指名自己:`set[T]` 在型別或值任一位置都是 _E466 NotImplemented: the built-in `set`_,
+而 `[T; N]` 是 _E233 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not
+part of its type_。
 
 更豐富的形狀都是組合出來的，不是新的內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 還是獨立的
 immutable primitive（見下）。
@@ -41,7 +43,8 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 所以同一種 `list` 型別，既是凍結序列（plain）也是可增長 vector（`mut`）；**只有 `mut` collection 能改它的元素**。
 
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
-> 指名拒絕（``NotImplemented: the list method `insert` ``），所以一個 collection 只能從尾端增長、完全不能縮短。
+> 指名拒絕（_E444 NotImplemented: the list method `insert` — this compiler has `len` and `append`_），所以一個
+> collection 只能從尾端增長、完全不能縮短。
 
 ```text
 xs := [1, 2, 3]            # 凍結：xs.append(4) 與 xs[0] = 9 都是錯誤
@@ -58,7 +61,8 @@ compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key 是用凍�
 collection 也能拿來當 key。
 
 > **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
-> **`int`** 或 **`str`**；`derive(Hash)` 與一般的 keyed 型別尚未建置，而 `set[T]` 整體是 **[not yet]**。
+> **`int`** 或 **`str`**:其他一律是 _E431 NotImplemented: a map key of type … — a key needs `Hash`, and this
+> compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別尚未建置。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 
@@ -69,14 +73,14 @@ collection 也能拿來當 key。
 - **`xs.get(i)` / `m.get(k)`**——檢查路徑 → **`T?`** / **`V?`**，給那種你本來就預期可能不存在的情況用。
 - **`x in xs` / `x in s` / `k in m`** → `bool`；在 `mut` collection 上 **`xs[i] = v`** 就地設定。list 是**掃描**、
   map 是**雜湊**——同一個問題、不同的代價——而被找的那個值會像進入任何其他
-  [有型別的位置](../core/types.zh-TW.md#typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
+  [有型別的位置](../core/types.zh-TW.md#有型別的位置typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
 
 ```text
 first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
-> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 與 `m.get(k)` 都會被指名拒絕，所以上面那行 `m.get(id) ?? "anon"`
+> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 與 `m.get(k)` 都是 `E444`，所以上面那行 `m.get(id) ?? "anon"`
 > 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內的不存在」不是程式問得出口的問題，而是它必須在索引
 > 之前先用 `k in m` 迴避掉的事。
 
@@ -90,7 +94,7 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 
 於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
 
-> **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 會被指名拒絕。**`x[a..b]`** slice-index 語法糖
+> **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 是 `E444`。**`x[a..b]`** slice-index 語法糖
 > 已建置且正確——`xs[1..3]` 產出一個全新的兩元素 `list`、`xs[0..=2]` 產出三元素的，各自都是獨立的值——所以在
 > method 落地前，子區間就用中括號那個形式寫。上面那個唯讀、copy-on-write 的設計是兩者共同的預期語意。
 
@@ -100,10 +104,11 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。預期的結構相等性是：`list`
 **依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
 
-> **[not yet]** 容器相等性尚未建置：今天用 `==` / `!=` 比較兩個 `list` 或兩個 `map` 是一個**大聲的 compile
-> error**，而 `set[T]` 還不存在。只有 **`str ==`** 能比。`for mut x` 走訪一個 collection 對**每一種**元素型別都是
-> **[not yet]**、包含 POD：不論 `ys` 裝什麼，`for mut x in ys` 都會被指名拒絕，所以下面範例的第二行不是一個程式，
-> 而 [控制流](control-flow.zh-TW.md) 對這個形式的無條件標記才是準確的那個。
+> **[not yet]** 容器相等性尚未建置：今天用 `==` / `!=` 比較兩個 `list` 或兩個 `map` 是
+> _E445 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a container
+> has no declaration to derive it on_。只有 **`str ==`** 能比。`for mut x` 走訪一個
+> collection 對**每一種**元素型別都是 **[not yet]**、包含 POD：不論 `ys` 裝什麼，`for mut x in ys` 都是 `E242`，
+> 所以下面範例的第二行不是一個程式。
 
 ```text
 for x in xs { total = total + x }         # 讀取
@@ -128,7 +133,7 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 
-> **[not yet]** 這兩個替代方案都不存在：`xs.retain(pred)` 與 `xs.filter(pred)` 都會被指名拒絕，所以一次轉換今天
+> **[not yet]** 這兩個替代方案都不存在：`xs.retain(pred)` 與 `xs.filter(pred)` 都是 `E444`，所以一次轉換今天
 > 得寫成一個 append 進第二個 `list` 的 `for`，再在迴圈之後 rebind。
 
 ## 定長陣列——`[T; N]`
@@ -173,7 +178,7 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
 - **寫進簽章**——函式透過**值泛型**對長度泛化,`fn sum[N: int](xs: [int; N])`,`N` 由引數推出、呼叫端從不寫它。
 
-  > **[not yet]** 值參數會被拒絕——_NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
+  > **[not yet]** 值參數會被拒絕——_E266 NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
   > 一個具體長度（`[int; 4]`）,要處理任意長度就改收 `list[T]`。
 
 - **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 是 [not yet]**，對每一
@@ -202,8 +207,5 @@ list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字�
 
 ## 待決
 
-- **`set[T]`**——唯一成員集合已在上文載明，但 **[not yet]** 尚未建置，型別與值兩種位置皆然。
-- **容器相等性**——`list` 與 `map` 上的結構性 `==` / `!=` 是 **[not yet]**；今天只有 `str ==` 能比。
-- **切片**——`slice(a, b)` 這個 **method** 是 **[not yet]**；**`x[a..b]` slice-index 語法糖**已建置且正確，也是今天
-  取子區間的方式。
-- **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`，如果有需要的話。
+上文每一個標了 **[not yet]** 的東西，都與它指名的那個特性一起待決。只有一種形狀是別處都沒有載明的:一個**有序
+變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`——如果需求確實成立的話。

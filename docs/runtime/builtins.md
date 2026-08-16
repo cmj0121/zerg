@@ -12,15 +12,14 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 
 ## Summary
 
-| Built-in                                 | Signature                     | Summary                        |
-| ---------------------------------------- | ----------------------------- | ------------------------------ |
-| [`Ref`](#ref) / [`deref`](#deref)        | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
-| [conversions](#primitive-conversions)    | `int(x)` … `T(x)`             | primitive re-construction      |
-| [number parse](#parsing-a-string)        | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
-| [str bridges](#str--list-bridges)        | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
-| [error kinds](#error-constructors)       | `ValueError(msg)` …           | build an `Err` of a kind       |
-| [raw pointers](#raw-pointers-unsafe)     | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
-| [`sizeof` / `alignof`](#sizeof--alignof) | `sizeof[T]`, `alignof[T]`     | a type's size / alignment      |
+| Built-in                              | Signature                     | Summary                        |
+| ------------------------------------- | ----------------------------- | ------------------------------ |
+| [`Ref`](#ref) / [`deref`](#deref)     | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
+| [conversions](#primitive-conversions) | `int(x)` … `T(x)`             | primitive re-construction      |
+| [number parse](#parsing-a-string)     | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
+| [str bridges](#str--list-bridges)     | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
+| [error kinds](#error-constructors)    | `ValueError(msg)` …           | build an `Err` of a kind       |
+| [raw pointers](#raw-pointers-unsafe)  | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
 
 ## `Ref`
 
@@ -29,7 +28,7 @@ is the one value shared **by reference** (copies retain, the last holder frees i
 outlives its defining scope or is shared across a `spawn`. See [Values & Memory](../core/memory.md).
 
 > **[not yet]** There is no `Ref[T]` type in this compiler, so neither built-in exists. Both are refused by
-> name — _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
+> name — _E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
 > IS reference-counted is `chan`, a `str` and a recursive type, each managed by the compiler rather than
 > through this box; the `atomic` module and the `Reader` surface both wait on this one.
 
@@ -45,17 +44,18 @@ the box itself is unaffected.
 value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-1)`, or a narrowing that
 loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
 
-**Which pairs `T(x)` accepts is a closed table**, and `int` is the hub every one of them has on a side.
-A pair that is not on it is not a conversion — `float(b)` on a `byte` is `E395`, and the two steps
-through the hub are written instead (`float(int(b))`). A `float` SOURCE is the one absence that is a
-decision rather than a missing step: `int(x)` on a float is `E394`, and the fraction is dropped by a verb
-— `math.trunc` / `floor` / `ceil` / `round`, each answering an `int` — or by `//`.
+**Which pairs `T(x)` accepts is a closed table**, and `int` is the hub every one of them has on a side. A
+pair that is not on it is not a conversion — `float(b)` on a `byte` is `E395`, and the two steps through
+the hub are written instead. A `float` SOURCE is absent by decision rather than by a missing step:
+`int(x)` on a float is `E394`, and the fraction is dropped by a verb. The table and both reasons are in
+[Types](../core/types.md).
 
 > **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
 > types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E465
 > NotImplemented: `i32` is part of the fixed-width ladder — … the built-in widths are `int`, `uint`, `byte`,
-> `rune` and `float`_. The six named above all work, and `uint(-1)` aborts with _OverflowError: integer
-> conversion out of range_ exactly as specified.
+> `rune` and `float`_. The six named above all work, and a negative the compiler cannot see aborts with
+> _OverflowError: integer conversion out of range_ exactly as specified — one it CAN see is refused at
+> compile time instead (`E330`), by the constant rule in [Types](../core/types.md).
 
 ## Parsing a string
 
@@ -84,10 +84,25 @@ See [Collections](../code/collections.md).
 
 ## Error constructors
 
-The **fixed** set `ValueError` / `OverflowError` / `IOError` / `EncodingError` / `IndexError` / `KeyError`,
-each called as `Kind(msg: str) -> Err`, builds an `Err` of that kind carrying the message. Use one with
-`raise` to abort, or in an `Either` value; test an erased `Err` with `e is IOError`. The set is
-compiler-owned — a program cannot define a new kind this phase. See [Null-safety & Errors](../code/errors.md).
+The taxonomy is **eleven compiler-owned kinds**, and each is `Kind(msg: str) -> Err` — an `Err` of that
+kind carrying the message. Use one with `raise` to abort, or in an `Either` value; test an erased `Err`
+with `e is IOError`. A program cannot define a new kind this phase. See
+[Null-safety & Errors](../code/errors.md).
+
+`ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
+`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError`
+
+Their **numbering is an ABI** shared between the runtime (`ZRT_ERR_*`) and both compilers, which is why the
+table stops nowhere: a kind added to one and not the others would make one number mean two things depending
+on which compiler built the program.
+
+**`StopIteration` is testable but not constructible**, the one place the set is asymmetric. It is the
+sentinel a clean channel close carries, so a sender able to build one could close its channel wearing the
+marker for an ordinary ending and its consumer would read the crash as a clean finish. Writing it is
+_E726 `StopIteration` is testable but not constructible_; `e is StopIteration` costs nothing and stays.
+
+**`AssertionError` is raised by `assert` and by nothing else**, which is what lets `zerg test` tell a claim
+that did not hold from a program that fell over without reading a message as a protocol.
 
 ## Raw pointers (`unsafe`)
 
@@ -96,21 +111,16 @@ addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast)
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](../core/memory.md).
 
-> **[not yet]** None of it is built, and the refusals say so — _E413 NotImplemented: the raw-pointer
-> built-in `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, and
-> _NotImplemented: `ptr` is not an expression this compiler reads_. A TYPE position now answers with the
-> same `E413`: `fn f(p: ptr)` and `p: ptr = 0` both name the raw-pointer built-in rather than reading as
-> though `ptr` were an existing type the value did not suit. The `unsafe` context they need is itself
-> unbuilt.
+> **[not yet]** None of it is built, and every position says so with one code — _E413 NotImplemented: the
+> raw-pointer built-in `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, the
+> same for `ptr`, and the same again in a TYPE position: `fn f(p: ptr)` and `p: ptr = 0` name the
+> raw-pointer built-in rather than reading as though `ptr` were an existing type the value did not suit.
+> The `unsafe` context they need is itself unbuilt.
 
-## `sizeof` / `alignof`
+## `sizeof` / `alignof` — deferred
 
-`sizeof[T] -> uint` and `alignof[T] -> uint` are a type's **byte size** and **alignment**, resolved at
-**compile time** — the one built-in that needs compiler layout knowledge, unexpressible in pure Zerg. The
-argument is a **type**, written like a type argument on `list[T]`: `sizeof[int]` (8), `sizeof[Point]`,
-`sizeof[list[byte]]`. Mainly for FFI and low-level layout. See [Values & Memory](../core/memory.md).
-
-> **[not yet]** Refused by name — _NotImplemented: the compile-time built-in `sizeof[T]` — this compiler does
-> not compute a type's layout_, and the same for `alignof[T]`. Note that [FFI](ffi.md) describes the same
-> pair as a **standard-library** facility rather than a built-in; the two chapters disagree about where it
-> will live, and neither has it.
+**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E414 NotImplemented:
+the compile-time built-in `sizeof[T]` — this compiler does not compute a type's layout_ — and the question of
+whether a type's layout is a **built-in** or a **standard-library** facility is open. The chapter that described
+them as one and the [FFI](ffi.md) chapter that described them as the other are both removed rather than left
+disagreeing; the decision comes before the feature.

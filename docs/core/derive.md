@@ -76,8 +76,10 @@ spec**, distinct from both tiers above.
 - the **compiler** — which is not user-authored.
 
 So a user-defined structural derive is impossible **by construction**, not by omission. The derivable
-set is **fixed and compiler-owned**; a user spec is never in it (`#[derive(UserSpec)]` is a compile
-error). The extensible tier is the behavioral default above; the structural tier is closed.
+set is **fixed and compiler-owned**; a user spec is never in it — _E437 cannot derive `Show`: on a struct
+the derivable specs are compiler-owned, and a `spec` you write is never one of them … write
+`impl Show for P` instead_. The extensible tier is the behavioral default above; the structural tier is
+closed.
 
 ## Delegating derive — on an `enum`, for any spec
 
@@ -117,12 +119,13 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
 via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** is built;
-**`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
-naming one in a `#[derive(…)]` is a clean compile error today.
+**`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** — naming one is
+`E436`.
 
-> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by name. Its rule needs
-> the tag **and** the payload matched on both sides at once; a fieldless `enum` derives, because its
-> variants differ exactly as their discriminants do. Hand-write `impl Eq` with a `match` meanwhile.
+> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by its own code — _E438 …
+> it carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants
+> differ exactly as their discriminants do; write `impl Eq for E` with a `match`_. Its rule needs the tag
+> **and** the payload matched on both sides at once.
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |
 | -------- | --------------------------------------------- | --------------------- | ------------------------ |
@@ -210,30 +213,10 @@ impl Encode for User {                            # generated, not written
 }
 ```
 
-A sum type derives over its variants — **tag, then payload**:
-
-```text
-#[derive(Encode)]                     # generated: write the variant tag, then each payload field
-enum Shape {
-    Circle(float)
-    Rect(float, float)
-}
-```
-
-When the wire format must differ, **hand-write the impl instead of deriving** — still one canonical
-implementation, still no macro:
-
-```text
-impl Encode for User {                            # replaces the derived one
-    fn encode(mut &out: Sink) {
-        out.field("uid")
-        this.id.encode(out)       # custom key
-        out.field("name")
-        this.name.encode(out)
-        # tags and email deliberately omitted from the wire form
-    }
-}
-```
+A sum type derives over its variants the same way — **tag, then payload**. When the wire format must
+differ — a different key, a field deliberately left off the wire — **hand-write the impl instead of
+deriving**; it replaces the generated one, so there is still one canonical implementation and still no
+macro.
 
 `Decode` returns `Result[This]`, so a malformed input is an ordinary value-tier failure — `guard`-free
 on the happy path, `?`-propagated on error — never an abort. (`Result[T]` is not FFI-safe, but that's

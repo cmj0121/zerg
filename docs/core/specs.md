@@ -31,11 +31,10 @@ inherent methods are invisible. So:
   `Object` spec** and no implicit `==`. A type gains structural equality (`==` / `!=`) only through
   **`#[derive(Eq)]`** or a hand-written `impl Eq`, a total order through `derive(Ord)`, and a hash through
   `derive(Hash)` (both **[not yet]**); comparing two values of a type that has no `Eq` impl is a compile
-  error. What _every_ value has, with no spec bound at all, are the **structural memory operations** the
-  memory model guarantees — copy, `del`, pass, store, send over a channel — because those are properties of
-  the representation, not behavior a spec abstracts. The compiler-owned **structural derivation** that backs
-  `derive` (built for **`Eq`** on a `struct` and on a fieldless `enum`; **[not yet]** for `Ord`, `Hash`,
-  `Encode`, `Decode`, and for `Eq` on a payload `enum`) is the
+  error. The structural memory operations above are the exception, because they are properties of the
+  representation rather than behavior a spec abstracts. The compiler-owned **structural derivation** that
+  backs `derive` (built for **`Eq`** on a `struct` and on a fieldless `enum`; **[not yet]** for `Ord`,
+  `Hash`, `Encode`, `Decode`, and for `Eq` on a payload `enum`) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
@@ -43,9 +42,8 @@ type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (
 picked at runtime from the value's real type). Erasure is **one-way for the value** — once boxed, the
 concrete value is hidden and **can never be recovered** (no downcast, no reinterpret; the only route to a
 concrete type is to have kept it, never to un-erase one). Its **identity** is a separate matter: **`x is
-T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`** — a test that
-reads the dispatch identity the box already carries, and **never recovers the value or reads its
-structure** (Type tests, below).
+T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`**, read off the
+dispatch identity the box already carries (Type tests, below).
 
 On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
@@ -64,9 +62,10 @@ offers precisely what dispatches through `this` alone — re-boxing a `This`-ret
 
 > **[not yet]** A `spec` cannot be used **as a type** at all, so the three paragraphs above — the heap-boxed
 > existential, its dynamic dispatch, and the member-by-member account of what a box does and does not offer —
-> describe a facility no program can reach. `fn go(g: Greet)` is refused by name: the `spec` is a bound and an
-> interface here, not yet a value's type, and the refusal says to take the concrete type or a generic
-> parameter bounded by it instead. A `spec` fills two of its three roles here and not the third; the same
+> describe a facility no program can reach. `fn go(g: Greet)` is _E416 NotImplemented: the `spec` `Greet`
+> used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface here, not yet a value's type;
+> take the concrete type, or a generic parameter bounded by it_. A `spec` fills two of its three roles here
+> and not the third; the same
 > claim in the [Language Reference](../language.md) overview is unbuilt for the same reason, and the
 > dynamic-dispatch half of the codegen paragraph below has nothing to dispatch on.
 >
@@ -94,18 +93,19 @@ so an implementation can be neither hidden nor duplicated — it is in effect ex
 and its spec are visible. Implementations are written for a **concrete or generic type** — `list[T]` may
 implement `Iterator`.
 
-> **[not yet]** An `impl` whose **target carries type arguments** is refused by name, in both of the
-> shapes `GRAMMAR#impl-decl` derives for it: the parameterized `impl[T] Spec for list[T]` — the parameters
-> sit on the `impl` precisely so the target may spell them — and the fully concrete
+> **[not yet]** An `impl` whose **target carries type arguments** is _E292 NotImplemented: an `impl` on
+> `list[int]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare
+> name, so every instantiation of `list` would share one_ — and it is both of the shapes
+> `GRAMMAR#impl-decl` derives, the parameterized `impl[T] Spec for list[T]` and the fully concrete
 > `impl Spec for list[int]`. So no implementation can be attached to a container type at all, and
 > `list[T]` implementing `Iterator`, the line above, is specification rather than something `zerg`
 > builds. What it needs is one implementation monomorphized per instantiation of its target, and a
 > generic `fn` is the only thing this compiler monomorphizes. The form that works is an `impl` on a
 > `struct` or an `enum` the program declares.
 
-A **blanket implementation** conditioned on a bound — one covering every type that satisfies some spec —
-is not offered, keeping resolution decidable. There is **no "every type" implementation**: even equality
-is the per-type opt-in `Eq`, generated by `derive` where asked, never an implicit blanket impl.
+A **blanket implementation** conditioned on a bound — one covering every type that satisfies some spec — is
+not offered, keeping resolution decidable; and there is **no "every type" implementation** either, the
+per-type opt-in `Eq` above included.
 
 > **[deviation]** The intended coherence rule is **one impl per `(spec, type)` program-wide**, keyed by
 > each concrete instantiation — so `impl X for list[int]` and `impl X for list[str]` would be
@@ -118,9 +118,8 @@ is the per-type opt-in `Eq`, generated by `derive` where asked, never an implici
 > is that its methods collide in the one namespace a type's methods share, which is a narrower question
 > than the one the rule asks. And the INSTANTIATION half of the key is a **[not yet]** rather than a
 > deviation: a target carrying type arguments is refused above, so no instantiation ever reaches a key
-> for a key to be imprecise about. This paragraph used to claim the key over-approximates — that
-> `list[int]` and `list[str]` collide and the second is wrongly rejected as a duplicate. Measured, that
-> was false: the FIRST of the two is refused, and neither is ever keyed.
+> for a key to be imprecise about. Measured, the FIRST of `impl X for list[int]` / `impl X for list[str]`
+> is refused and neither is ever keyed — so the key does not over-approximate, it is never consulted.
 
 ## `#[obj]` — a spec's methods, held as values
 
@@ -223,8 +222,8 @@ ambiguous** — only a bare use on a value with several impls is. For a choice m
 than by the argument's type, use an `enum` instead.
 
 > **[not yet]** A parameterized spec may be implemented at **one** argument, not several, which is the whole
-> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _`C` declares
-> `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
+> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _E451 `C`
+> declares `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
 > canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
 > with the first instead of being told apart by the very argument that is supposed to distinguish them. The
 > `Indexable[int, T]` / `Indexable[Range, list[T]]` pair above therefore cannot be declared, and the
@@ -244,7 +243,9 @@ never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `an
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
 [Null-safety & Errors](../code/errors.md)). This phase, **that is the only implemented use** — `is` works on the
 built-in error taxonomy, while the general existential test `x is T` for a
-**non-error** type is **[not yet]**.
+**non-error** type is **[not yet]**: _E494 NotImplemented: `is P` — an `is` test names one of the built-in
+error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
+than the grammar writes_.
 
 ## Methods, `this` / `This`, and default bodies
 
@@ -266,7 +267,7 @@ A spec's methods come in two kinds:
   `(type, spec)` implementation stays canonical either way.
 
 > **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
-> _NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
+> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
 > nothing in it is checked and it is not the method that runs; declare the signature and write the body in
 > each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
 > the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
@@ -294,14 +295,11 @@ element type (`T` → `U`).
 
 **Dispatch is uniform.** Every spec method, required or provided, resolves to the type's **canonical
 implementation** — its override if it has one, else the default. So a default body that calls another spec
-method reaches the type's override (a defaulted `count` built on `next` uses an overridden
-`next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
-defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
-through its **vtable** to the actual impl. This holds for a **direct call on a concrete value** as well
-(**[not yet]** — a provided method is refused at its declaration, above):
-`c.provided()` runs the type's **override** if it has one, else the spec's **default
-body** — with no boxing needed, so a provided method is not confined to the
-dynamic-dispatch path.
+method reaches the type's override (a defaulted `count` built on `next` uses an overridden `next`) — there is
+**no static-dispatch exception for defaults**, and the mechanism is the one already defined above. This holds
+for a **direct call on a concrete value** as well (**[not yet]** — a provided method is refused at its
+declaration, above): `c.provided()` runs the type's **override** if it has one, else the spec's **default
+body** — with no boxing needed, so a provided method is not confined to the dynamic-dispatch path.
 
 ## Associated types and values
 
@@ -338,7 +336,7 @@ which no spec demanded and **none can require** — a spec that wanted one would
 the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
 (`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** `NAME := 32` inside an `impl` reports _NotImplemented: an associated value binding
+> **[not yet]** `NAME := 32` inside an `impl` reports _E218 NotImplemented: an associated value binding
 > `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
 > fixed-array size that a type constant was to supply is written as a module-level constant instead.
 
@@ -353,8 +351,18 @@ store, send over a channel) belong to the **memory model**, not to any spec boun
 else is a spec a type **opts into**, a generic bound gating on it:
 
 - **`Eq`** — structural equality, driving `==` / `!=`, gained by `#[derive(Eq)]` or a hand-written
-  `impl Eq`; a channel or `fn` field compares by identity. A type with **no `Eq` impl cannot be
-  compared** — `==` on it is a compile error, never a silent structural default.
+  `impl Eq`; a channel or `fn` field compares by identity. It requires **both** `eq` and `ne` — an impl
+  supplying only one is _E318 `P` does not implement `ne`, which `Eq` requires_ — because `!=` is
+  dispatched, not derived by negating `==`. A type with **no `Eq` impl cannot be compared** — `==` on it
+  is a compile error, never a silent structural default.
+
+  > **[not yet]** A **container** cannot gain one at all, which is the rule met from a direction it has no
+  > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E445 NotImplemented: `==` on a
+  > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
+  > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
+  > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
+  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E449`,
+  > one operator over.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
@@ -406,7 +414,7 @@ box (see [Values & Memory](memory.md)). Ordinary code **uses `Ref[T]`; it never 
 shared by reference?" always has a definite answer: only `chan` and `Ref[T]` are.
 
 **Operators desugar to specs**, so a user type may overload the value operators by implementing the
-matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
+matching one — `==` / `!=` already route through `Eq`'s `eq` / `ne`, and `<` through `Ord`. An overload must mean the
 **conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The **logical
 operators are keywords** — `not` (unary), and the **short-circuiting** `and` / `or` — over `bool` only,
 yielding `bool` (no truthiness; cast with `bool(x)`): `and` skips its right operand when the left is
@@ -419,7 +427,7 @@ operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable*
 `float` is never a sorted-collection element or a key, and a composite **containing** one inherits this
 transparently: a **derived `Eq`** compares the field with `==`, so it is **non-reflexive** for a
 `NaN`, and the type gets no `Ord`/`Hash` either. To key or sort such a type the author **implements them
-explicitly**, handling `float`'s two traps: a **reflexive** `equal` with **canonical `±0.0`** (equal, so
+explicitly**, handling `float`'s two traps: a **reflexive** `eq` with **canonical `±0.0`** (equal, so
 must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
 stdlib total-order/hashable `float` wrapper is deferred.
 

@@ -123,8 +123,8 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
   **解析**十進位字串（[型別](core/types.zh-TW.md)）。
 - **`str(bytes)` / `str(runes)`** 與 **`bytearray(s)` / `runearray(s)`**——str ⇄ list 的橋接，驗證
   `str` 不變式（[Collection](code/collections.zh-TW.md)）。
-- **Error 建構子**——固定的 `ValueError` / `OverflowError` / `IOError` / `EncodingError` / `IndexError` /
-  `KeyError`，各自建出該 kind 的 `Err`（[Null-safety 與錯誤處理](code/errors.zh-TW.md)）。
+- **Error 建構子**——每個內建 kind 各一個，各自建出該 kind 的 `Err`。kind 有**十一**個、建構子有**十**個：
+  `StopIteration` 可以被測試，但不能被建構（[Null-safety 與錯誤處理](code/errors.zh-TW.md)）。
 - **Raw pointer 內建（僅限 `unsafe`）**——`addr` / `ptr` / `ptr[T]` / `uint(p)`，以及指標方法
   `.load` / `.store` / `.offset`（[值與記憶體](core/memory.zh-TW.md)）。
 

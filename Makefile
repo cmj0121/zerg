@@ -94,13 +94,13 @@ test-runner:                    # the test runner can see a test that fails
 # failure; this asks the standard library the questions, and it is a separate target because
 # a red board should say which of the two broke.
 #
-# THE SUITES ARE NOT BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md puts
-# a white-box test. They no longer HAVE to be out here — a test build resolves a test file's
-# package the way an import is resolved, so a `strings_test.zg` beside `strings.zg` is a package
-# of that pair and none of `src/stdlib`'s other seventeen modules is compiled with it — but moving
-# a suite is a change of its own, and this one stays where it was written until somebody makes
-# it. What it costs meanwhile is the white-box position: a suite here reaches its module the way
-# a user does, through `import`, so a module-private name is out of its reach.
+# THE SUITES ARE BESIDE THE MODULES THEY TEST, which is where docs/runtime/package.md puts a
+# white-box test, and this target reads `src/stdlib` for that reason. A test build resolves a
+# test file's package the way an import is resolved, so `strings_test.zg` beside `strings.zg`
+# is a package of that pair and none of `src/stdlib`'s other seventeen modules is compiled
+# with it. They sat under `tests/` for years because that is where they were written; what it
+# cost was the white-box position, and a suite that reached its module through `import` could
+# ask nothing about a module-private name.
 #
 # A FLOOR, of the kind `corpus` and `test-runner` carry, and here it is not a formality: a
 # `zerg test` over a tree it finds no test in prints `no tests` and EXITS 0. So a walk that
@@ -113,6 +113,10 @@ STDLIB_TEST_MIN ?= 159
 # ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
 # against what came out. The list is a variable so that adding a module's examples is one
 # name here rather than a second copy of the rule.
+#
+# IT NAMES THE MODULES AND NOT THE SUITES NOW BESIDE THEM, and it is a list rather than a
+# glob, so the move did not quietly widen it: an example is a claim a module's DOC COMMENT
+# makes to a reader, and a `*_test.zg` makes its claims in `assert`.
 DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/os.zg src/stdlib/strings.zg src/stdlib/time.zg
 
 stdlib-test:                    # the standard library's own suites, and a floor under them
@@ -124,7 +128,7 @@ stdlib-test:                    # the standard library's own suites, and a floor
 	@# source. It rides here rather than on the board of its own because it is the same question
 	@# this target already asks: does the standard library do what it says.
 	./scripts/log-check.sh
-	@out=$$(./bin/zerg test tests/stdlib); status=$$?; \
+	@out=$$(./bin/zerg test src/stdlib); status=$$?; \
 	printf '%s\n' "$$out"; \
 	[ $$status -eq 0 ] || exit 1; \
 	n=$$(printf '%s\n' "$$out" | sed -n 's/^\([0-9][0-9]*\) passed,.*/\1/p'); \
@@ -187,7 +191,13 @@ install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the 
 	@# zrt_test.* is the C suite's harness and belongs to no program; the others are the
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
-	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
+	@# and the suites are filtered out for the reason the line above filters `zrt_test.*`: a
+	@# `*_test.zg` belongs to no program. Nothing would break if they went — `module_at`
+	@# resolves no test file, so no import could ever reach one — but an install is what a
+	@# user's `import "strings"` reads, and 2,400 lines of somebody else's assertions is not
+	@# part of that answer. It is the same glob `src/stdlib/*.zg` everywhere else in this file,
+	@# and the one place where widening it leaves this tree.
+	@cp $(filter-out %_test.zg,$(wildcard src/stdlib/*.zg)) "$(PREFIX)/lib/zerg/stdlib/"
 	@# cloc ships no Zerg, so a count of any tree holding some reports a large unnamed
 	@# remainder. `.cloc.def` is the missing definition and cloc reads
 	@# `$(CLOC_CONFIG)/options.txt` before every run, so installing it there is what makes
@@ -325,7 +335,15 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # notice, so a whole directory of the compiler was outside the rule that every other line
 # of it is held to. A gate whose SCOPE is written twice is a gate with a blind spot the
 # size of whatever was added last.
-SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg tests/stdlib/*/*.zg
+#
+# `src/stdlib/*.zg` REACHES THE SUITES TOO now that they sit beside their modules, and there
+# is no `filter-out` in front of it: a suite is checked here AS A FILE, which is the only
+# thing `zerg fmt` ever asks about one. Formatting has no package — the tool reads a source,
+# writes the canonical form of it and compares, and which module a file belongs to is not a
+# question it can be handed. So `strings_test.zg` is held to the rule `strings.zg` is held
+# to, and the glob that used to reach the suites under `tests/` is GONE rather than
+# rewritten: the set is the same set, named once instead of twice.
+SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
 
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
@@ -663,7 +681,7 @@ seed-gaps:                      # the seed's gap list says the same thing in bot
 # target has always claimed and what, for a long time, it did not do: the recipe below was one
 # `zerg lint $(ZERG_ENTRY)`, so the compiler was gated and nothing else was. A stdlib module the
 # compiler does not import was unlinted, and so was every test suite. Both shipped findings —
-# `tests/stdlib/os/os_test.zg` carried an `L103` into main, hours after it was written.
+# `src/stdlib/os_test.zg` carried an `L103` into main, hours after it was written.
 #
 # THE UNIT IS AN ENTRY, NOT A FILE, and that is the one way this list differs from SELF_SRCS
 # next door. `zerg lint` takes a program: it resolves the entry's imports and lints the merged
@@ -671,16 +689,30 @@ seed-gaps:                      # the seed's gap list says the same thing in bot
 # another module of the same program is not dead. So the compiler contributes ONE entry and not
 # its forty files, while a stdlib module and a test suite are each a program of their own.
 #
+# A SUITE IS STILL AN ENTRY OF ITS OWN, and now that it lives beside its module that is what
+# the one glob below says rather than a second one: `src/stdlib/*.zg` reaches `strings.zg` and
+# `strings_test.zg` alike, and both are handed to `zerg lint` separately. There is no
+# `filter-out %_test.zg` here, and the absence is the DECISION and not an oversight — a suite
+# the linter never reads is exactly how the `L103` above shipped, and it is the one file in a
+# package a `zerg lint <module>` cannot see, because a normal build resolves no `*_test.zg`.
+#
+# WHAT IT COSTS is that the two halves of a package are asked separately, so neither sees the
+# other's calls. A module-private function used ONLY from the suite beside it would be `L102`
+# when the module is linted — correctly, in the sense the rule means it: nothing a shipping
+# build compiles calls it. The way out is to delete it or to use it, not to widen this list;
+# an entry that merged the two would be `zerg lint` inventing a package shape only `zerg test`
+# has.
+#
 # `atomic` is the one exclusion and it is not a judgement about the module: it declares
 # `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
 # name (`E511`, chk_unbuilt_module) and there is no program for the linter to be handed. The
 # entry deletes itself the day a generic struct is built — the same end state CORPUS_SKIP has.
 LINT_SKIP := src/stdlib/atomic.zg
-LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg)) $(wildcard tests/stdlib/*/*_test.zg)
+LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
-# carry. Two of the three globs above reach directories, and a glob that matches nothing leaves
-# a loop with nothing to iterate and a gate that exits 0 for having asked one question.
+# carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop
+# with nothing to iterate and a gate that exits 0 for having asked one question.
 #
 # 16 against the 20 there are today: far enough below that adding a module or retiring a suite
 # is not a chore here, far enough above that a pattern which stopped matching cannot pass.

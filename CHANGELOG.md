@@ -7,6 +7,75 @@ under [`notes/`](notes); each entry links to its own.
 The number a build reports comes from [`VERSION`](VERSION) at the repository root. That file is the single source
 both compilers are generated from, and `make version-check` is what holds the three derivations of it together.
 
+## Unreleased
+
+**0.1.0 was written up but never tagged**, so `VERSION` still reads `0.1.0` and a build made from `main` today
+reports that number while containing everything below. This section exists so that is written down rather than
+discovered. 1059 commits since the entry beneath it.
+
+- **The standing contract is true on both halves, and measured.** _A form is implemented or refused by name —
+  never a crash, never a silently wrong answer, never a `cc` error._ Every gap the 0.1.0 notes listed is closed:
+  a `str` literal match arm fires, an if-expression checks that its branches agree, `~` on a `byte` is a byte,
+  `defer` runs on the abort path out of `main`, nothing reaches `cc`, and 800 levels of nesting raises
+  `StackOverflowError` instead of a SIGSEGV. `make reject` now pins **526** ill-formed programs and `make refuse`
+  **238** refusals by name.
+- **`zerg test`.** Recursive discovery over a directory or a single file; a package is the module its test file
+  names, so a suite sits beside what it tests and reaches its private surface; `#[test]` is found wherever it is
+  written; fixtures are stood up once and torn down in reverse; `--only` filters before anything is built;
+  a test that does not finish is `STUCK`, which is its own verdict and not a failure. Four exit codes, and a run
+  that searched and found nothing is no longer a run that passed.
+- **`assert` is a reserved word**, self-hosting only. It reports the file, the line, the source text of the claim
+  and the values the operands held — three things a function cannot carry, because Zerg has no `__FILE__` and no
+  caller location. Operands bind to temporaries before the test, so a condition with a side effect happens once.
+  `AssertionError` is the eleventh error kind, and it earns the ABI slot immediately: the runner tells a claim
+  that did not hold from a program that broke.
+- **`log`, and the standard library's first `unsafe` group.** A zerolog-shaped builder where a line nobody
+  prints costs nothing to not print, with a floor under that claim. Its global is the tree's reference for
+  process-wide mutable state, and the comment above the cell is the document — what it is an exception to, what
+  it costs, when not to copy it, and what would take the `unsafe` away.
+- **The standard library is 15 modules.** `json` moved out of the language server rather than being copied;
+  `time` learned to render; `os` gained `isatty`, `set_env` and `del_env`, and with them the naming rule
+  `xxx` reads, `set_xxx` writes, `del_xxx` removes — for a property, which is something with a getter named for
+  the thing.
+- **`zerg build --emit check`** — the front end without code generation, 2.30 s / 0.14 GB where `--emit c` costs
+  3.16 s / 2.40 GB. A `check-equal` gate pins the two stages to byte-identical diagnostics, because a check that
+  reports less than the build would show a clean buffer for a file that will not build.
+- **The tools got honest.** `zerg fmt` had been rewriting a valid file into one that does not parse and then
+  calling it canonical; both ends are closed under one invariant — _if the input parses, the output must_ — and a
+  round-trip gate holds it. The linter's usage walk was missing three of the places a name can appear. The
+  language server had been treating the opened file as the program's entry point, so it underlined correct code
+  in every multi-file module.
+- **The driver is a command line again**: `src/compiler/zergc.zg` went from 3359 lines to 95, with the
+  sub-commands and their shared machinery in `src/compiler/cmd/`. The emitted C is byte-identical, which is what
+  makes it a move rather than a rewrite.
+- **The gate board is 39**, from 33.
+
+### Known issues
+
+Filed with the measurement that found each one, so nobody has to rediscover it.
+
+- [#10](https://github.com/cmj0121/zerg/issues/10) — the emitter assembles its output quadratically, so 3.6 MB
+  of C costs 2.4 GB to produce. Everything the compiler decides costs 0.22 GB; the rest is string accumulation.
+- [#11](https://github.com/cmj0121/zerg/issues/11) — a value that is not a binding is never released: a nested
+  call's temporary, and the old buffer of a field that is overwritten. Both leak without bound in a loop.
+- [#12](https://github.com/cmj0121/zerg/issues/12) — a bare `{ }` block hides what is written inside it from
+  the statement walks, so a type parameter used there is refused with a reason that is not true.
+- [#13](https://github.com/cmj0121/zerg/issues/13) — a file in a module directory shadows the module its name
+  spells, for every file beside it. The loud case is the lucky one.
+- [#14](https://github.com/cmj0121/zerg/issues/14) — a `const` initialised through a call reads a later `const`
+  as zero, silently. A direct reference is handled correctly, so this is a hole in an existing fix.
+- [#26](https://github.com/cmj0121/zerg/issues/26) — a refusal carries no place, so an editor can only
+  underline the top of the file.
+
+Two bodies of work are open as stories rather than defects: the language server
+([#15](https://github.com/cmj0121/zerg/issues/15)) cannot yet answer where a name is declared, and `zerg doc`
+([#16](https://github.com/cmj0121/zerg/issues/16)) does not exist — though 43 of the examples it would render are
+already compiled and diffed against their stated output.
+
+Refused by name, and therefore not defects: generic `struct` and `enum` (`E215`, which is why `atomic` ships
+unusable), a structural `Display` for composites (`E449`/`E417`/`E445`, three faces of one gap), named arguments
+(`E223`), destructuring (`E238`), `set[T]` (`E466`) and `[T; N]` (`E233`).
+
 ## 0.1.0 — 2026-08-05
 
 The first release: 1308 commits, 2026-04-22 to 2026-08-05. It is the release in which Zerg stopped being a Go

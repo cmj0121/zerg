@@ -278,8 +278,17 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# end left the driver behind: `zerg test src/stdlib` stopped at an `E215` inside
 	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
 	# standard library — a directory the compiler resolves imports by LISTING.
+	# WHAT THIS UNIT ALREADY IS, handed to the loader so nothing loads it a second time. A
+	# package built on a one-file module IS that module — `json.zg` is among the files above —
+	# and an import of it reached from anywhere else in this program must land on these sources
+	# rather than on a second copy of the same file.
+	mut provides: list[str] = []
+	if p.mod != "" {
+		provides.append(p.mod)
+	}
+
 	res := guard {
-		load_units_of(files, p.dir, p.dir)
+		load_units_of(files, p.dir, p.dir, provides)
 	}
 	rm_file(drv)
 	for c in copies {

@@ -1,6 +1,9 @@
 # The `os` suite — the questions about the host that have an answer a test can know.
 #
-# BLACK-BOX, for the reason tests/stdlib/strings/strings_test.zg sets out.
+# WHITE-BOX, for the reason src/stdlib/strings_test.zg sets out — and it buys this suite
+# nothing, because `os` declares no private function at all: every line of it is `pub`, so
+# the surface IS the module. The position still matters here for what it removes: there is
+# no `import "os"` to keep in step with the module beside it.
 #
 # MOST OF THIS MODULE CANNOT BE TESTED HERE AND SHOULD NOT PRETEND TO BE. `exit` ends the
 # process and `env` answers whatever the host was started with — a suite that asserted a value
@@ -20,7 +23,6 @@
 # but they share one process and therefore one `environ`, so a leftover variable is a test
 # writing into its successor's world.
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -36,11 +38,11 @@ import (
 #[test]
 fn test_isatty_says_no_to_a_descriptor_that_is_not_one(ctx: testing.Context) {
 	ctx.log("a negative fd cannot be open at all")
-	assert not os.isatty(-1)
-	assert not os.isatty(-99)
+	assert not isatty(-1)
+	assert not isatty(-99)
 
 	ctx.log("and one far above what this process opened")
-	assert not os.isatty(4096)
+	assert not isatty(4096)
 }
 
 # IT IS TOTAL: every fd is a question with an answer, and none of them raises. A logger asks
@@ -52,7 +54,7 @@ fn test_isatty_never_raises() {
 	mut asked := 0
 	for fd < 8 {
 		# the answer is the host's; that it HAS one is the claim
-		if os.isatty(fd) {
+		if isatty(fd) {
 			asked = asked + 1
 		} else {
 			asked = asked + 1
@@ -69,14 +71,14 @@ fn test_isatty_never_raises() {
 # could answer "" on a host the module has not met.
 #[test]
 fn test_platform_is_one_of_the_names_the_module_knows() {
-	p := os.platform()
+	p := platform()
 	assert p != ""
 	assert p in ["darwin", "linux", "windows", "freebsd", "unknown"]
 }
 
 #[test]
 fn test_arch_is_a_name() {
-	a := os.arch()
+	a := arch()
 	assert a != ""
 	assert not strings.contains(a, " ")
 }
@@ -84,8 +86,8 @@ fn test_arch_is_a_name() {
 # Both are stable within a run — they are the target, not a reading.
 #[test]
 fn test_platform_and_arch_do_not_change() {
-	assert os.platform() == os.platform()
-	assert os.arch() == os.arch()
+	assert platform() == platform()
+	assert arch() == arch()
 }
 
 # --- env ------------------------------------------------------------------------------------
@@ -100,7 +102,7 @@ fn test_platform_and_arch_do_not_change() {
 #[test]
 fn test_env_of_something_nobody_sets_is_absent(ctx: testing.Context) {
 	ctx.log("a name chosen to be absent rather than empty")
-	v := os.env("ZERG_A_NAME_NOTHING_SETS_9f3a")
+	v := env("ZERG_A_NAME_NOTHING_SETS_9f3a")
 	assert not present(v)
 	assert (v ?? "fallback") == "fallback"
 }
@@ -127,7 +129,7 @@ fn present(v: str?) -> bool {
 # the claim that says `env` can answer at all rather than always answering nothing.
 #[test]
 fn test_env_finds_a_variable_that_is_always_set() {
-	p := os.env("PATH")
+	p := env("PATH")
 	assert present(p)
 	assert (p ?? "") != ""
 }
@@ -142,16 +144,16 @@ fn test_set_env_is_read_back_by_env(ctx: testing.Context) {
 	k := "ZERG_OS_SUITE_ROUNDTRIP"
 
 	ctx.log("nothing sets it to begin with")
-	assert not present(os.env(k))
+	assert not present(env(k))
 
-	os.set_env(k, "first")
-	assert (os.env(k) ?? "") == "first"
+	set_env(k, "first")
+	assert (env(k) ?? "") == "first"
 
 	ctx.log("a second write replaces the value rather than adding one")
-	os.set_env(k, "second")
-	assert (os.env(k) ?? "") == "second"
+	set_env(k, "second")
+	assert (env(k) ?? "") == "second"
 
-	assert os.del_env(k)
+	assert del_env(k)
 }
 
 # A VALUE MAY BE EMPTY, AND EMPTY IS NOT ABSENT. `env` answers `str?` precisely so a caller can
@@ -164,16 +166,16 @@ fn test_set_env_is_read_back_by_env(ctx: testing.Context) {
 fn test_set_env_can_write_an_empty_value_which_is_not_the_same_as_unset(ctx: testing.Context) {
 	k := "ZERG_OS_SUITE_EMPTY"
 
-	os.set_env(k, "")
+	set_env(k, "")
 	ctx.log("present, and its value is the empty string")
-	assert present(os.env(k))
-	assert (os.env(k) ?? "sentinel") == ""
+	assert present(env(k))
+	assert (env(k) ?? "sentinel") == ""
 
 	ctx.log("and `?? default` does NOT fire for it")
-	assert (os.env(k) ?? "default") != "default"
+	assert (env(k) ?? "default") != "default"
 
-	assert os.del_env(k)
-	assert not present(os.env(k))
+	assert del_env(k)
+	assert not present(env(k))
 }
 
 # IT RAISES ON A NAME THE HOST WILL NOT TAKE rather than failing quietly. `setenv(3)` refuses an
@@ -182,16 +184,16 @@ fn test_set_env_can_write_an_empty_value_which_is_not_the_same_as_unset(ctx: tes
 #[test]
 fn test_set_env_raises_on_a_name_setenv_refuses(ctx: testing.Context) {
 	ctx.log("an empty name")
-	e := testing.assert_raises(guard { os.set_env("", "value") })
+	e := testing.assert_raises(guard { set_env("", "value") })
 	assert e is ValueError
 
 	ctx.log("and one carrying the separator")
-	e2 := testing.assert_raises(guard { os.set_env("ZERG_OS_SUITE=X", "value") })
+	e2 := testing.assert_raises(guard { set_env("ZERG_OS_SUITE=X", "value") })
 	assert e2 is ValueError
 
 	ctx.log("neither of them left anything behind")
-	assert not present(os.env(""))
-	assert not present(os.env("ZERG_OS_SUITE=X"))
+	assert not present(env(""))
+	assert not present(env("ZERG_OS_SUITE=X"))
 }
 
 # --- del_env --------------------------------------------------------------------------------
@@ -203,20 +205,20 @@ fn test_set_env_raises_on_a_name_setenv_refuses(ctx: testing.Context) {
 fn test_del_env_answers_whether_the_key_was_there(ctx: testing.Context) {
 	k := "ZERG_OS_SUITE_ONCE"
 
-	os.set_env(k, "here")
+	set_env(k, "here")
 	ctx.log("the first removal found it")
-	assert os.del_env(k)
+	assert del_env(k)
 
 	ctx.log("and the second had nothing to remove")
-	assert not os.del_env(k)
-	assert not present(os.env(k))
+	assert not del_env(k)
+	assert not present(env(k))
 }
 
 # A KEY THAT WAS NEVER SET ANSWERS `false`, which is the answer for the absent case stated on
 # its own rather than as the tail of a round trip.
 #[test]
 fn test_del_env_of_a_name_nobody_ever_set_is_false() {
-	assert not os.del_env("ZERG_OS_SUITE_NEVER_SET_4c81")
+	assert not del_env("ZERG_OS_SUITE_NEVER_SET_4c81")
 }
 
 # IT IS TOTAL, and that is the asymmetry with `set_env`: a name the host would refuse WAS NOT
@@ -224,8 +226,8 @@ fn test_del_env_of_a_name_nobody_ever_set_is_false() {
 # about. A write to such a name has no answer at all, which is why only that one raises.
 #[test]
 fn test_del_env_is_total_on_the_names_set_env_refuses() {
-	assert not os.del_env("")
-	assert not os.del_env("ZERG_OS_SUITE=X")
+	assert not del_env("")
+	assert not del_env("ZERG_OS_SUITE=X")
 }
 
 # --- run, and the environment a child inherits ----------------------------------------------
@@ -242,17 +244,17 @@ fn test_run_hands_the_child_the_environment_as_it_stands(ctx: testing.Context) {
 	k := "ZERG_OS_SUITE_CHILD"
 
 	ctx.log("with nothing set, the child falls back")
-	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
+	assert run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
 
 	ctx.log("a write before the run reaches the child")
-	os.set_env(k, "7")
-	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 7
+	set_env(k, "7")
+	assert run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 7
 
 	ctx.log("and so does the LATEST write, not the first")
-	os.set_env(k, "3")
-	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 3
+	set_env(k, "3")
+	assert run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 3
 
 	ctx.log("a removal reaches it too")
-	assert os.del_env(k)
-	assert os.run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
+	assert del_env(k)
+	assert run(["sh", "-c", "exit ${ZERG_OS_SUITE_CHILD:-9}"]) == 9
 }

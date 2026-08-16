@@ -280,7 +280,7 @@ optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住�
 建構時省略的部分：`T?` 欄位補 `nil`，其餘則指名報錯。
 
 `f"…"` 只接受單純的 hole，而 `:spec`、`!r`/`!s`/`!a`、`{x=}` 與會內插的命令形式，每一種都是**指名**
-拒絕，不是沉默略過（[格式化器與檢查器](../../docs/tooling/fmt.zh-TW.md)）。它**在 parser 裡**就
+拒絕，不是沉默略過（[編譯診斷](../../docs/tooling/diagnostics.zh-TW.md)）。它**在 parser 裡**就
 desugar 成這個形式本來被定義成的那條 `+` 鏈——這既是 AST 與 emitter 對 f-string 一無所知的原因，
 也是種子只要能 lex 與 parse 它就建得出 stage 1 的原因。
 

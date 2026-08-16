@@ -487,8 +487,8 @@ fn has_nul(sb: list[byte]) -> bool {
 }
 
 # nul_bad is that refusal, once. Three literal forms can decode to a NUL — a plain string,
-# a triple string and a raw string — and E110 is ONE row in docs/tooling/fmt.md, so the
-# sentence is written here rather than at each of the three exits.
+# a triple string and a raw string — and E110 is ONE row in docs/tooling/diagnostics.md, so
+# the sentence is written here rather than at each of the three exits.
 fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
 }

@@ -41,7 +41,7 @@
   斷言失敗或 abort 即令測試失敗。宣告了回傳型別會被 `zerg test` **拒絕**,並指出位置:driver 是把測試當成一個
   statement 呼叫的,那個值會被丟掉,而把它當成判定結果的讀者必須被告知它不是。它可以寫在**任何地方**,`zerg test`
   會在它被寫下的地方找到它;寫在 `*_test.zg` **之外**是合法的,而且會**被打包出去**,所以 `zerg lint` 會對它發出
-  警告（**L601**,見 [fmt 與 lint](../tooling/fmt.zh-TW.md)）——linter 說測試該住在哪裡,runner 執行寫下來的東西。
+  警告（**L601**,見[檢查器](../tooling/lint.zh-TW.md)）——linter 說測試該住在哪裡,runner 執行寫下來的東西。
   測試住在哪裡見 [模組、套件與程式](../runtime/package.zh-TW.md)。
 - **`#[fixture]`** — 掛在 `fn`,而它該住在 `*_test.zg` 裡。把該函式標記為 `zerg test` 會**為指名它的測試建置**的
   東西。它把自己的測試當作 **continuation** 收下:一個型別為 `fn (T)` 的參數,以型別辨識,它同時是那些測試執行的

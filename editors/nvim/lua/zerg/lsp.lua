@@ -72,8 +72,9 @@ end
 -- sets `vim.g.zerg_diagnostic = false` and keeps it.
 --
 -- The code travels with the text because the server sends one (`Diagnostic.code`) and it is
--- the name of a RULE — the thing to look up in docs/tooling/fmt.md, and the thing to say
--- when reporting the finding is wrong.
+-- the name of a RULE — the thing to look up in docs/tooling/diagnostics.md when it is an
+-- `E` and docs/tooling/lint.md when it is an `L`, and the thing to say when reporting the
+-- finding is wrong.
 -- Once per CLIENT, not once per buffer. `root_dir` makes one client serve a whole checkout, and
 -- `vim.diagnostic.config` re-shows the namespace across every loaded buffer — so opening the
 -- n-th `.zg` file re-drew the n-1 already open, for a configuration that had not changed.

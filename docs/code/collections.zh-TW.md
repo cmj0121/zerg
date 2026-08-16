@@ -178,7 +178,7 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
 - **寫進簽章**——函式透過**值泛型**對長度泛化,`fn sum[N: int](xs: [int; N])`,`N` 由引數推出、呼叫端從不寫它。
 
-  > **[not yet]** 值參數會被拒絕——_NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
+  > **[not yet]** 值參數會被拒絕——_E266 NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
   > 一個具體長度（`[int; 4]`）,要處理任意長度就改收 `list[T]`。
 
 - **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 是 [not yet]**，對每一

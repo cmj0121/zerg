@@ -199,7 +199,7 @@ of the rules already stated for `list`:
 - **In a signature** — a function is generic over the length through a **value generic**,
   `fn sum[N: int](xs: [int; N])`, with `N` inferred from the argument and never written at the call site.
 
-  > **[not yet]** A value parameter is refused — _NotImplemented: a value generic parameter `N: int`_ — so a
+  > **[not yet]** A value parameter is refused — _E266 NotImplemented: a value generic parameter `N: int`_ — so a
   > function today takes one concrete length (`[int; 4]`) and nothing else, and a routine over arbitrary
   > lengths takes a `list[T]` instead.
 

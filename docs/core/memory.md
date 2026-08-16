@@ -16,6 +16,10 @@ passed **by value**. Copy-by-value is the semantics; the compiler elides copies 
 > - **the old buffer of a field written over.** `b.xs = […]` in a loop peaks at **25.7 MB** over 300 000
 >   rounds and **49.9 MB** over 600 000 — it doubles with the loop, so it is unbounded, not a fixed cost.
 >
+> The two peaks agreeing at 25.7 MB is a coincidence of the round counts each repro chose, not one figure
+> written twice; they were measured separately and the 600 000-round doubling is what shows the second is
+> a rate rather than a ceiling.
+>
 > Both are legal programs that run correctly and consume memory forever, which the standing contract —
 > _implemented, or refused by name_ — has no third state for. Neither has a case in `make mem-check`, and
 > the section on assignment below carries the same defect from the binding side.

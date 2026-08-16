@@ -196,6 +196,11 @@ declaration name (a method also carrying its type, e.g. `zg_<pkg>_<name>` / `zg_
 A clash on the flat exported surface is a compile error in library mode. (The exact scheme, and any
 per-declaration link-name override, are open questions — see below.)
 
+> **[deviation]** The prefix is `zg_` and there is **no package segment**, because there is no package
+> layer to name (Four layers, [package.md](package.md)): `pub fn add` in a `--emit lib` build exports
+> `zg_add`, measured with `nm`. So the names are stable and unmangled as specified, and the part that
+> makes them collision-free across packages is the part that does not exist yet.
+
 ## Importing C — a stdlib facility
 
 There is **no import block** in the grammar either. Binding a foreign C symbol — naming

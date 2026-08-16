@@ -37,9 +37,10 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > position in a sorted list of the program's modules. Sorted rather than first-seen because that name has
 > to be the same on every run.
 >
-> The public case has nowhere to be unique. This page declines a global registry on purpose (below), so a
-> public collision is a compile error plus a **link-name override**, which is what [FFI](ffi.md) already
-> specifies and which needs the package layer to exist first.
+> The public case has nowhere to be unique. This page declines a global registry on purpose (below), so
+> what a public collision would need is a compile error plus a **link-name override** — and that override
+> is an **open question** in [FFI](ffi.md), not a thing either chapter specifies. It waits on the package
+> layer either way: there is no unit for a name to be unique within until one exists.
 
 ### Programs & the entry point
 

@@ -191,7 +191,13 @@ install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the 
 	@# zrt_test.* is the C suite's harness and belongs to no program; the others are the
 	@# per-platform slots the driver picks between, and it needs all of them present.
 	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
-	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
+	@# and the suites are filtered out for the reason the line above filters `zrt_test.*`: a
+	@# `*_test.zg` belongs to no program. Nothing would break if they went — `module_at`
+	@# resolves no test file, so no import could ever reach one — but an install is what a
+	@# user's `import "strings"` reads, and 2,400 lines of somebody else's assertions is not
+	@# part of that answer. It is the same glob `src/stdlib/*.zg` everywhere else in this file,
+	@# and the one place where widening it leaves this tree.
+	@cp $(filter-out %_test.zg,$(wildcard src/stdlib/*.zg)) "$(PREFIX)/lib/zerg/stdlib/"
 	@# cloc ships no Zerg, so a count of any tree holding some reports a large unnamed
 	@# remainder. `.cloc.def` is the missing definition and cloc reads
 	@# `$(CLOC_CONFIG)/options.txt` before every run, so installing it there is what makes

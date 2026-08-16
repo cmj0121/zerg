@@ -70,6 +70,7 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 | 章節                                         | 涵蓋                                           |
 | -------------------------------------------- | ---------------------------------------------- |
 | [格式化器與檢查器規則](tooling/fmt.zh-TW.md) | `zerg fmt` 與 `zerg lint` 的每一條規則及其代碼 |
+| [編譯診斷](tooling/diagnostics.zh-TW.md)     | 編譯器回報的每一個 `E` 代碼及其規則            |
 | [Desugar 規則](tooling/desugar.zh-TW.md)     | `zerg desugar` 的每一條規則及其代碼            |
 | [Language Server](tooling/lsp.zh-TW.md)      | `zerg lsp`——它回答什麼,以及什麼讓它保持誠實    |
 

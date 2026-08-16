@@ -74,11 +74,9 @@ c := connect("example.com", port: 8080, tls: false)  # 只具名覆寫想改的
 cfg := Config(host: "example.com", port: 8080)
 ```
 
-> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做（見 [函式與閉包](functions.zh-TW.md)）：
-> `connect("example.com", port: 8080, tls: false)` 與 `Config(host: "example.com", port: 8080)` 一樣報
-> _E223 NotImplemented: the named argument `port:` — this compiler binds arguments by position only_。今天 struct
-> 是 positional 建構的——`Config("example.com", 8080)`——而有預設的參數只能從呼叫的尾端省略，所以本節拿來取代
-> 流式儀式的那個「一次呼叫的 builder」，正是它目前沒有東西可跑的部分。
+> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做：兩者都是 `E223`（見
+> [函式與閉包](functions.zh-TW.md)）。今天 struct 是 positional 建構的——`Config("example.com", 8080)`——而有預設
+> 的參數只能從呼叫的尾端省略，所以本節拿來取代流式儀式的那個「一次呼叫的 builder」，正是它目前沒有東西可跑的部分。
 
 若真需要**分階段 / 流式**的 builder（如 query builder）,**copy-by-value 讓 fluent-immutable 天然成立**——每步
 讀 `this`、改一份 copy、回傳,鏈式全程不共享可變狀態:
@@ -102,13 +100,13 @@ q := new_query().where("age > 18").order("name").limit(10)
 一個 pattern 能是什麼、以及每個未建置的形狀被哪個碼拒絕,見
 [控制流](control-flow.zh-TW.md);這裡要談的是在它們落地之前還站得住的慣用法。
 
-會觸發的那幾種——**variant**、**literal**（含負數）、**萬用 `_`** 與 **range**——各自單獨都成立,而且每一種都只有
-**一層深**。所以日常寫法是:tuple 用靜態索引（`.0` / `.1`）讀回、struct 用欄位讀回,兩者都不要解構;而在有巢狀
-pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、把 payload 綁起來,再對那個 binding 做一次 `match`。
+每一種會觸發的 pattern 都只有**一層深**。所以 tuple 用靜態索引（`.0` / `.1`）讀回、struct 用欄位讀回,而不是
+解構;而在有巢狀 pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、把 payload 綁起來,再對那個 binding 做
+一次 `match`。
 
-> **[not yet]** variant pattern 的 payload 位置只收一個 binding 名字或 `_`,所以 `L(Yes(v))` 與 `L(0)` 都是
-> _E492 NotImplemented: a sub-pattern inside a variant payload, beginning at `…`_。該位置上的**保留字**是另一條
-> 規則、保有它自己的碼：`L(this)` 是 _E245 `this` is a reserved word and cannot name a pattern binding_。
+> **[not yet]** `L(Yes(v))` 與 `L(0)` 都是 _E492 NotImplemented: a sub-pattern inside a variant payload,
+> beginning at `…`_。payload 位置上的**保留字**是另一條規則、保有它自己的碼：`L(this)` 是
+> _E245 `this` is a reserved word and cannot name a pattern binding_。
 
 ## 刻意不加的
 

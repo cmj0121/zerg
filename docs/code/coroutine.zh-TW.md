@@ -27,7 +27,7 @@ fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的
   > **[not yet]** 會 `spawn` 的程式不能同時收命令列引數：`fn main(args: list[str])` 與任何 `spawn` 並存都是
   > _E734 NotImplemented: main(args) in a program that uses concurrency_。`main` 是以 **coroutine 0** 執行的，
   > 而每一個 scheduler entry shim 都收一個無參數的函式指標，`args` 無處可穿過去;在這樣的 shim 出現之前,並行程式
-  > 從環境變數或檔案讀取設定。非並行的 entry 早就把引數傳進去了,所以問題不在形狀。
+  > 從環境變數或檔案讀取設定。
 
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
   共享可變的 Zerg 狀態（不會有 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
@@ -430,9 +430,9 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 `fetch_add` / `compare_swap`。
 
 > **[not yet]** 原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而還沒有 `Ref[T]`（`E446`）。
-> 模組本身有出貨，被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E511 the module `atomic`
-> ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has
-> not built. Share state across coroutines with a channel until it has_——所以上面的 actor 才是今天成立的做法。
+> 被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E511 the module `atomic` ships and cannot be
+> imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built. Share state
+> across coroutines with a channel until it has_——所以上面的 actor 才是今天成立的做法。
 > 顯式的**記憶體順序引數**與 generic 的 **`Atomic[T]`** 在語言層面同樣是 **[not yet]**。
 
 ## producer——generator pattern
@@ -500,7 +500,7 @@ coroutine。這是對**可觀察性質、而非機制**的保證：公平**如�
 queue，coroutine 在 worker 之間自由遷移，因此可能在一條它從未啟動於其上的 thread 恢復。**`main` 是 coroutine 0**:
 它在任何 worker 存在之前就已經排進那條 run queue,而呼叫它的那條 thread 自己也成為一個 worker、不是 supervisor。
 所以 pool 是在 `main` 的第一個敘述前後就已經起來,而不是等第一次 `spawn` 才啟動;`M` 就是全部的預算——沒有一條
-thread 是替程式自己的 coroutine 留著的,這也正是下面那條 deviation 是一個**數字**的原因。它**不是**的，是搶佔式。
+thread 是替程式自己的 coroutine 留著的。它**不是**的，是搶佔式。
 
 > **[deviation]** 規格要求沒有任何 coroutine 能無限期餓死其他人；而 scheduler 是**合作式**的：coroutine **只在**
 > channel 操作、`select` 或 sleep 讓出，在它自己讓出之前沒有東西能把它從 worker 上拿下來。因此一個**從不 park

@@ -78,13 +78,12 @@ AssertionError: parse.zg:41  assert lo == hi
   hi = 2
 ```
 
-That is why the message has no parameter to pass, and `assert` is for the claim whose own text is the
-explanation. A claim needing an explanation rather than a display is `raise ValueError("why") if not cond`,
-which is the production form — and the only conditional one, since `assert` is the one diverge that takes
-**no postfix `if`**: `assert c if d` does not parse (`E205`). `assert` is **always compiled in** and there
-is no flag that strips it, because a program with and without its assertions would be two programs; so
-`zerg lint` reports one outside a `*_test.zg` file as `L602` — not a weaker check than you meant, a
-**less specific** one.
+So `assert` is for the claim whose own text is the explanation. A claim needing an explanation rather than a
+display is `raise ValueError("why") if not cond`, which is the production form — and the only conditional
+one, since `assert` is the one diverge that takes **no postfix `if`**: `assert c if d` does not parse
+(`E205`). `assert` is **always compiled in** and there is no flag that strips it, because a program with and
+without its assertions would be two programs; so `zerg lint` reports one outside a `*_test.zg` file as
+`L602` — not a weaker check than you meant, a **less specific** one.
 
 **The built-in error taxonomy is a TREE.** This phase ships a **fixed set of six** error kinds, and some
 of them are **kinds of** others:

@@ -83,10 +83,8 @@ For plain data, **construction is a call** with named fields, which does the sam
 cfg := Config(host: "example.com", port: 8080)
 ```
 
-> **[not yet]** Both calls above are the named-argument form, and named arguments are not built (see
-> [Functions & Closures](functions.md)): `connect("example.com", port: 8080, tls: false)` and
-> `Config(host: "example.com", port: 8080)` alike report _E223 NotImplemented: the named argument `port:` —
-> this compiler binds arguments by position only_. A struct is built positionally today —
+> **[not yet]** Both calls above are the named-argument form, and named arguments are not built: each is
+> `E223` (see [Functions & Closures](functions.md)). A struct is built positionally today —
 > `Config("example.com", 8080)` — and a defaulted parameter can only be dropped off the end of a call, so the
 > one-call builder this section recommends over the fluent ceremony is the part of it with nothing to run on.
 
@@ -114,15 +112,13 @@ struct, tuple and `as` patterns in a `match`. The catalogue of what a pattern ma
 unbuilt shape is refused by, is [Control Flow](control-flow.md); what matters here is the idiom left
 standing while they wait.
 
-The kinds that fire — **variant**, **literal** (a negative one included), **wildcard `_`**, and **range** —
-each work on their own, and each works **one level deep**. So the everyday shapes are: read a tuple back by
-static index (`.0` / `.1`) and a struct by field rather than destructuring either; and where a language with
-nested patterns would write `L(Yes(v))`, match one level, bind the payload, and `match` the binding in turn.
+Every kind that fires works **one level deep**. So a tuple is read back by static index (`.0` / `.1`) and a
+struct by field rather than destructured, and where a language with nested patterns would write `L(Yes(v))`,
+match one level, bind the payload, and `match` the binding in turn.
 
-> **[not yet]** A variant pattern's payload position accepts a binding name or `_` and nothing else, so
-> `L(Yes(v))` and `L(0)` are both _E492 NotImplemented: a sub-pattern inside a variant payload, beginning at
-> `…`_. A RESERVED WORD there is a different rule and keeps its own: `L(this)` is _E245 `this` is a reserved
-> word and cannot name a pattern binding_.
+> **[not yet]** `L(Yes(v))` and `L(0)` are both _E492 NotImplemented: a sub-pattern inside a variant payload,
+> beginning at `…`_. A RESERVED WORD in a payload position is a different rule and keeps its own: `L(this)`
+> is _E245 `this` is a reserved word and cannot name a pattern binding_.
 
 ## Deliberately not added
 

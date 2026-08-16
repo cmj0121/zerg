@@ -125,10 +125,10 @@ greet("Sam", "Hi", true)     # all positional
   the rest must be named too** (no positional after a name).
 
   > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _E223
-  > NotImplemented: the named argument `loud:` — this compiler binds arguments by position only_, and the rest of the
-  > mechanism goes with it: there is no way to skip a defaulted parameter in the middle, and the "once you
-  > name an argument the rest must be named too" rule has nothing left to govern. A call fills its parameters
-  > left to right, and a defaulted one can only be dropped off the **end** of the argument list.
+  > NotImplemented: the named argument `loud:` — this compiler binds arguments by position only_, and the
+  > rest of the mechanism goes with it: no skipping a defaulted parameter in the middle, and no ordering
+  > rule left to govern. A call fills its parameters left to right, and a defaulted one can only be dropped
+  > off the **end** of the argument list.
 
 Because a parameter can be selected by name, **the name is part of the function's contract** — renaming it
 breaks callers, exactly as changing a type would. Yet neither defaults nor names ride in the _type_:

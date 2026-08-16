@@ -114,8 +114,8 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
 且兩個相等的 literal 不保證共用儲存。
 
-> **[not yet]** 上面三種 pattern 是在 **parser** 裡就被拒絕的,所以它們沒有一種抵達得了檢查器或 emitter,也因此每
-> 一種都指名自己:
+> **[not yet]** 上面三種 pattern 是在 **parser** 裡就被拒絕的,沒有一種抵達得了檢查器或 emitter,而每一種都指名
+> 自己:
 >
 > - **nested pattern**——`Left(Some(v))`，還有 `L(0)`——是 _E492 NotImplemented: a sub-pattern inside a variant
 >   payload_,所以 payload 位置只收一個綁定名字或 `_`,每個 pattern 都只有一層深;
@@ -124,8 +124,8 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 >   收成 range `1..=2`,規則 `F408`);
 > - **list pattern** 是 _E240 NotImplemented: a list pattern in a `match` arm_——改用索引與切片來解構一個 list。
 >
-> 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來會弱於完整覆蓋
-> ——證明頂層 variant 已覆蓋、卻不總是證明每一種巢狀組合。現在已經沒有巢狀 case 可以讓它弱了。
+> 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來只證明頂層
+> variant、不證明每一種巢狀組合——而現在沒有巢狀 case 抵達得了它。
 
 ```text
 msg := match ev {

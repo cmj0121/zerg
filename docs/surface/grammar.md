@@ -595,9 +595,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives (`#[repr]` /
   `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E496 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than
-  being sealed in silence_, which is the shape every one of them takes: the name is known, the effect is
-  not applied, and neither happens quietly. `#[` is the one `#` that is not a comment — the lexer peeks one
-  character.
+  being sealed in silence_. `#[` is the one `#` that is not a comment — the lexer peeks one character.
 
 ## Group 8 — Null-safety & Errors
 
@@ -796,12 +794,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
 name**, and no program that uses one compiles into something else. This list is not prose —
-`scripts/refuse-check.sh` holds a case for each row, pinned by the refusal's `E###`, so a
-form that quietly starts working, or quietly starts failing differently, fails the gate.
-The three rows that once carried no code, and so could be pinned by nothing, all carry one
-now: a range used as a value is `E493`, a generic `type X[T] = …` alias is `E491`, and a
-`match` arm whose body is a reassignment or a send is `E607`, which names which of the two
-it found.
+`scripts/refuse-check.sh` holds a case for each row, pinned by the refusal's `E###` — a
+range used as a value is `E493`, a generic `type X[T] = …` alias is `E491`, a `match` arm
+whose body is a reassignment or a send is `E607` — so a form that quietly starts working,
+or quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
 production, not the one that first mentions it.

@@ -62,8 +62,7 @@ collection 也能拿來當 key。
 
 > **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
 > **`int`** 或 **`str`**:其他一律是 _E431 NotImplemented: a map key of type … — a key needs `Hash`, and this
-> compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別尚未建置，而 `set[T]` 整體是
-> **[not yet]**。
+> compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別尚未建置。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 
@@ -107,7 +106,7 @@ elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 
 
 > **[not yet]** 容器相等性尚未建置：今天用 `==` / `!=` 比較兩個 `list` 或兩個 `map` 是
 > _E445 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a container
-> has no declaration to derive it on_，而 `set[T]` 還不存在。只有 **`str ==`** 能比。`for mut x` 走訪一個
+> has no declaration to derive it on_。只有 **`str ==`** 能比。`for mut x` 走訪一個
 > collection 對**每一種**元素型別都是 **[not yet]**、包含 POD：不論 `ys` 裝什麼，`for mut x in ys` 都是 `E242`，
 > 所以下面範例的第二行不是一個程式。
 

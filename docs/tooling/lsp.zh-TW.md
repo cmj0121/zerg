@@ -85,7 +85,7 @@ module 與測試檔正好都是這一類。
 也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
 所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
 ——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
-([linter 的嚴重度](fmt.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
+([linter 的嚴重度](lint.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
 
 | `Finding.sev` | `zerg lint` 印出  | LSP 嚴重度      |
 | ------------- | ----------------- | --------------- |
@@ -237,7 +237,7 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 的更糟,因為使用者學到的是「這個選單會騙人」。
 
 這個改寫**不是** `zerg fmt` 的工作。formatter 讀的是 token,而且必須能在編譯器編不過的原始碼上運作(見
-[Formatter 與 Linter](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
+[格式化器規則](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
 最需要它的那種 buffer 裡失效。它同時也是一個意見——`1.5 + 1` 是合法程式——而 formatter 沒有意見。
 
 ## 大綱是 parser 的清單,不是 server 的

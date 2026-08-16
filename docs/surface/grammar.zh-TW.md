@@ -184,11 +184,12 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
 
 ## Group 4 — Bindings & Expressions
 
-**binding** 引入一個名字；reassign 更新一個既有名字：
+**binding** 引入一個名字；reassign 更新一個既有名字。**模組層級**的 binding 前面的 `pub`
+把它暴露給 package 的其餘部分，和其他宣告上的 `pub` 一樣；區塊裡面沒有東西可以暴露，寫了就是錯誤：
 
 ```text
-binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # 推斷；'const' = shadow-proof；bind-target：識別字/模式
-              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # 帶型別註記；'=' 前的 ':' 使其有別於 reassign
+binding       ::= 'pub'? ( 'mut' | 'const' )? bind-target ':=' expr  # 推斷；'const' = shadow-proof
+              | 'pub'? ( 'mut' | 'const' )? identifier ':' type '=' expr  # 帶型別註記；'=' 前的 ':' 使其有別於 reassign
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple 元素

@@ -92,5 +92,6 @@ fn env_help() -> str {
 		"  ZERG_ROOT          installation root (default: the current directory)\n" +
 		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
 		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n" +
+		"  ZERG_CACHE         the build cache (default: $ZERG_ROOT/.zerg-cache)\n" +
 		"  ZERG_CSTD          the C dialect cc compiles the emitted code with (default: c17)\n"
 }

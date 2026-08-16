@@ -12,8 +12,9 @@ one canonical type per role, no variant zoo. They're just ordinary **scope-owned
 | `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[not yet]** |
 
 The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
-(see [Keys](#keys--eq-free-hash-explicit) below), and `set[T]` is **[not yet]** in both type and value
-position.
+(see [Keys](#keys--eq-free-hash-explicit) below). The two **[not yet]** rows each name themselves: `set[T]`
+in either type or value position is _E466 NotImplemented: the built-in `set`_, and `[T; N]` is _E233
+NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type_.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -44,8 +45,8 @@ So one `list` type is both a frozen sequence (plain) and a growable vector (`mut
 collection can modify its elements**.
 
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
-> refused by name on both `list` and `map` (``NotImplemented: the list method `insert` ``), so a collection
-> grows at its end and does not shrink at all.
+> refused by name on both `list` and `map` (_E444 NotImplemented: the list method `insert` — this compiler
+> has `len` and `append`_), so a collection grows at its end and does not shrink at all.
 
 ```text
 xs := [1, 2, 3]            # frozen: xs.append(4) and xs[0] = 9 are errors
@@ -63,8 +64,9 @@ author owns the contract the compiler can't check: **equal ⇒ same hash**. Beca
 frozen snapshot, even a `mut` collection is usable as one.
 
 > **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
-> key is restricted to **`int`** or **`str`**; `derive(Hash)` and general keyed types are not built, and
-> `set[T]` is **[not yet]** entirely.
+> key is restricted to **`int`** or **`str`**: anything else is _E431 NotImplemented: a map key of type … —
+> a key needs `Hash`, and this compiler has one for `int` and for `str`_. `derive(Hash)` and general keyed
+> types are not built, and `set[T]` is **[not yet]** entirely.
 
 ## Access — `[]` asserts, `.get` checks
 
@@ -83,7 +85,7 @@ first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
-> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both refused by name, so
+> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both `E444`, so
 > the `m.get(id) ?? "anon"` line above does not compile and indexing — which aborts — is the only way into
 > a container. Expected absence is therefore not a question a program can ask; it is one it has to head off
 > with `k in m` before indexing.
@@ -100,7 +102,7 @@ alongside copy-elision and the move (Values & Memory), adding no visible sharing
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
 materializing a `str` only when it keeps a token.
 
-> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is refused by name. The
+> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is `E444`. The
 > **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
 > `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
 > form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
@@ -113,11 +115,11 @@ Iterating reads each element **by value** (elidable to read-only by-ref); to edi
 **in order** and `map`s / `set`s compare **order-insensitively** (insertion order governs iteration, never
 equality).
 
-> **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is a
-> **loud compile error** today, and `set[T]` does not exist yet. Only **`str ==`** compares. `for mut x`
-> over a collection is **[not yet]** for **every** element type, POD included: `for mut x in ys` is refused
-> by name whatever `ys` holds, so the second line of the example below is not a program, and
-> [Control Flow](control-flow.md)'s unconditional marker on the form is the accurate one.
+> **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is
+> _E445 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a
+> container has no declaration to derive it on_, and `set[T]` does not exist yet. Only **`str ==`**
+> compares. `for mut x` over a collection is **[not yet]** for **every** element type, POD included:
+> `for mut x in ys` is `E242` whatever `ys` holds, so the second line of the example below is not a program.
 
 ```text
 for x in xs { total = total + x }         # read
@@ -146,8 +148,8 @@ To transform in place, use a single `mut` method whose internal walk is controll
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.
 
-> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both refused by
-> name, so a transform is written as a `for` that appends into a second `list`, and a rebind after the loop.
+> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both `E444`, so a
+> transform is written as a `for` that appends into a second `list`, and a rebind after the loop.
 
 ## Fixed-size arrays — `[T; N]`
 
@@ -232,10 +234,6 @@ element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f
 
 ## Deferred
 
-- **`set[T]`** — the unique-membership set is specified above but **[not yet]** built, in both type and
-  value position.
-- **Container equality** — structural `==` / `!=` on `list` and `map` is **[not yet]**; only `str ==`
-  compares today.
-- **Slicing** — the `slice(a, b)` **method** is **[not yet]**; the **`x[a..b]` slice-index sugar** is built
-  and correct, and is how a subrange is taken today.
-- **Ordered variants** — a sorted `map`/`set` keyed on `Ord` rather than `Hash`, if wanted.
+Everything marked **[not yet]** above is deferred with the feature it names. One shape is deferred without
+being specified anywhere else: an **ordered variant** — a sorted `map` / `set` keyed on `Ord` rather than
+`Hash` — if the need proves real.

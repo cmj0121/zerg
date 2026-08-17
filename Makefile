@@ -39,7 +39,26 @@ VERSION := $(shell tr -d ' \t\n\r' <VERSION)
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-include mk/gates.mk
+GATES_MK := mk/gates.mk
+
+# `make help gates` — the word after `help` is a TOPIC and not a second goal, and make has
+# no notion of that. Left alone it would build `help` and then RUN the gate called `gates`;
+# defining the topic as a no-op instead collides with the real target and make says so out
+# loud. So a help run that names a topic leaves the gate file out of the parse, which is the
+# one thing that makes the name free. Nothing else is affected — with any other first goal
+# the include below is the ordinary one, and that is what `make -n` and shell completion
+# see. Only the topics listed here are treated this way; `make help build` is two goals and
+# help says it has no such topic.
+HELP_TOPICS := gates verbs
+HELP_TOPIC := $(if $(filter help,$(firstword $(MAKECMDGOALS))),$(word 2,$(MAKECMDGOALS)))
+
+ifeq ($(filter $(HELP_TOPIC),$(HELP_TOPICS)),)
+include $(GATES_MK)
+else
+.PHONY: $(HELP_TOPIC)
+$(HELP_TOPIC): help
+	@:
+endif
 
 .PHONY: all test clean run build install uninstall upgrade linux-ci lint fmt help $(SUBDIR)
 
@@ -136,11 +155,46 @@ uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
 upgrade:			            # upgrade all the necessary packages
 	pre-commit autoupdate
 
+# The six a person needs to know. Fifty-two flat lines was the whole of `make help` and it
+# answered nobody's question: a reader looking for how to build this thing had to pick
+# `build` out of forty-odd gates, and a reader who wanted a gate got no more than a name.
+#
+# The rest are one topic away rather than absent, which is the trade — every target here
+# and in mk/gates.mk still has a line, and `make help verbs` / `make help gates` are where
+# the line is. A target that is in NEITHER listing is a target nobody can find.
+HELP_VERBS := build run test install clean help
+
+# `target: … # what it does` is where a description is written in this project, so a
+# listing reads them out of the file instead of keeping a second copy that can disagree
+# with the target it describes. $(1) is the name column's width.
+#
+# HASH, because a `#` in a variable assignment starts a make comment and would take the
+# rest of the line with it — the field separator this splits on is the very character.
+# It costs nothing in a recipe, which is why the one-line `help` this replaces never
+# needed it, and it is silent: the truncated awk is still a program, and it prints the
+# whole line in one column rather than failing.
+# It splits at the FIRST `#` rather than with a field separator, and that is a fix and not
+# a style: awk has no lazy repetition, so the `FS = ":.*?#"` this replaces was greedy and
+# split at the LAST one. `docs-links` describes itself as ``every `#fragment` names a
+# heading`` and `make help` printed it as ``fragment` names a heading``, silently, for as
+# long as that sentence has been there.
+HASH := \#
+help-column = awk '{ n = $$0; sub(/:.*/, "", n); d = $$0; \
+	sub(/^[^$(HASH)]*$(HASH)[ \t]*/, "", d); printf "    %-$(1)s %s\n", n, d }'
+
 help:				            # show this message
-	@printf "Usage: make [OPTION]\n"
-	@printf "\n"
-	@perl -nle 'print $$& if m{^[\w-]+:.*?#.*$$}' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?#"} {printf "    %-18s %s\n", $$1, $$2}'
+	@case "$(HELP_TOPIC)" in \
+	"") printf "Usage: make [target]\n\n"; \
+		$(foreach v,$(HELP_VERBS),grep -hE '^$(v):' Makefile | $(call help-column,10);) \
+		printf "\n  make help gates    the %s gates, and what each one holds\n" "$(words $(LINUX_GATES))"; \
+		printf "  make help verbs    every verb, including the ones above\n" ;; \
+	gates) printf "The gates. \`make test\` runs them all; each also runs alone by its own name.\n\n"; \
+		grep -hE '^[a-z][a-z0-9-]*:.*#' $(GATES_MK) | $(call help-column,18); \
+		printf "\n  build and lint are gates too, and are listed under \`make help verbs\`.\n" ;; \
+	verbs) printf "Usage: make [target]\n\n"; \
+		grep -hE '^[a-z][a-z0-9-]*:.*#' Makefile | $(call help-column,18) ;; \
+	*) echo "make help: there is no topic called '$(HELP_TOPIC)' — try: $(HELP_TOPICS)"; exit 1 ;; \
+	esac
 
 # VERSION rides along on the fan-out because the seed's Makefile stamps it into the binary,
 # and a sub-make inherits nothing that is not handed to it. It is passed to every

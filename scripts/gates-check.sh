@@ -2,8 +2,8 @@
 #
 # gates-check — a gate nobody runs is a gate that finds nothing.
 #
-# This repository's gates are Makefile targets, and there are three places a target has
-# to appear before it protects anything: the Makefile that defines it, `LINUX_GATES`
+# This repository's gates are make targets, and there are three places a target has
+# to appear before it protects anything: the makefile that defines it, `LINUX_GATES`
 # that names the board, and the workflow that runs the board on every push. Adding a
 # gate touches the first one and it is easy to stop there — the target works, `make x`
 # is green, and nothing ever runs it again.
@@ -14,7 +14,7 @@
 # `error-codes-check`, were on no list at all. Nine gates, each green whenever somebody
 # thought to type it.
 #
-# So: every gate the Makefile defines is on the board, and everything on the board is
+# So: every gate the makefiles define is on the board, and everything on the board is
 # run by CI. What a gate ASSERTS is its own business; this is only about whether anyone
 # asks it.
 set -uo pipefail
@@ -36,6 +36,26 @@ for f in "$MAKEFILE" "$WORKFLOW"; do
 	}
 done
 
+# WHICH FILES THE GATES ARE WRITTEN IN. Not necessarily one: the root Makefile may keep
+# the verbs and `include` the file the gates live in, and a check that went on reading
+# `Makefile` alone would then find a dozen targets, no LINUX_GATES at all, and either
+# report a complete board while looking at the verbs or fall over on the extraction
+# below. A gate that guards the board's completeness must not be blinded by the board
+# being reorganised.
+#
+# It follows the root's own `include` lines rather than being handed a path, so whatever
+# make parses is what this reads. An include that names a file which is not there is an
+# error and not a shorter list — the same standard the loop above holds $MAKEFILE to.
+MAKEFILES=$MAKEFILE
+for inc in $(sed -n 's/^include  *//p' "$MAKEFILE"); do
+	[ -f "$inc" ] || {
+		printf 'gates-check: %s includes %s and it is not there — nothing was checked\n' \
+			"$MAKEFILE" "$inc" >&2
+		exit 1
+	}
+	MAKEFILES="$MAKEFILES $inc"
+done
+
 # NOT A GATE. Each of these is a command rather than an assertion, and the reason is
 # per-entry rather than a pattern — which is why they are listed and not matched:
 #
@@ -45,8 +65,10 @@ done
 #   ci linux-ci                  — they ARE the board, and a board on the board recurses
 NOT_A_GATE="all clean run help upgrade install uninstall fmt ci linux-ci"
 
-targets=$(grep -oE '^[a-z][a-z0-9-]*:' "$MAKEFILE" | tr -d ':' | sort -u)
-board=$(grep -oE '^LINUX_GATES \?= .*' "$MAKEFILE" | sed 's/^LINUX_GATES ?= //' | tr ' ' '\n' | grep -v '^$' | sort -u)
+# shellcheck disable=SC2086 # $MAKEFILES is a list of paths and is meant to split
+targets=$(grep -hoE '^[a-z][a-z0-9-]*:' $MAKEFILES | tr -d ':' | sort -u)
+# shellcheck disable=SC2086 # ditto
+board=$(grep -hoE '^LINUX_GATES \?= .*' $MAKEFILES | sed 's/^LINUX_GATES ?= //' | tr ' ' '\n' | grep -v '^$' | sort -u)
 
 if [ "$(printf '%s\n' "$board" | wc -l)" -lt 20 ]; then
 	note "LINUX_GATES did not extract — $(printf '%s\n' "$board" | wc -l) entries found"

@@ -59,4 +59,4 @@ the compiler emits.
 - **Layout is a build contract.** The `Ref` / `list` / `map` header layouts the compiler depends on are fixed here;
   they are internal and never FFI-frozen.
 - The runtime is the **irreducible floor** — all higher-level logic lives in pure Zerg in
-  [`src/stdlib/`](../stdlib) (see [`../README.md`](../README.md)).
+  [`src/stdlib/`](../../stdlib) (see [`../README.md`](../README.md)).

@@ -205,6 +205,13 @@ jobs:
       - name: No editor file states a language fact the compiler denies
         run: make editor-align
 
+      # The chapters' own code blocks, for the same reason and in the same place: a
+      # ` ```zerg ` fence is a claim about its contents that only the compiler can settle,
+      # so it needs the toolchain and cannot sit in the docs job with docs-links and
+      # docs-mirror. Those two compare text to text; this one compiles.
+      - name: Every ```zerg block in the docs is a program
+        run: make docs-zerg
+
       # The linter over the compiler and the stdlib — the only bodies of Zerg large
       # enough for a dead private function to hide in — and the check that every rule
       # it documents still has a program that makes it fire.

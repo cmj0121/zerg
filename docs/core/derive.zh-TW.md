@@ -80,7 +80,7 @@ compiler-owned, and a `spec` you write is never one of them … write `impl Show
 **結構**,所以那一半是編譯器擁有的封閉集合;在 enum 上它是**委派**——每個 arm 把呼叫交給 payload,而 payload
 已經實作了 `S`——而那個改寫對**任何** spec 都是機械可得的,包括你自己寫的。
 
-```zerg
+```text
 #[derive(Show)]
 enum Shape {
     Circle(C)

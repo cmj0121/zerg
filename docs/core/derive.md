@@ -89,7 +89,7 @@ half is a closed set of compiler-owned specs. On an enum it is **delegation** â€
 to the payload, which already implements `S` â€” and that rewrite is mechanical for **any** spec at all,
 including one you wrote.
 
-```zerg
+```text
 #[derive(Show)]
 enum Shape {
     Circle(C)

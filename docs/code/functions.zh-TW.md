@@ -16,8 +16,14 @@
 `return`、struct 欄位、參數的預設值。
 
 ```zerg
+fn apply(f: fn (int) -> int, n: int) -> int {
+    return f(n)
+}
+
+fn main() {
     apply(fn (x) { return x + 1 }, 41)          # x 是 int,答案是 int
     g: fn (int) -> int = fn (x) { return x * 2 }
+}
 ```
 
 寫出來的型別**贏**——`fn (x: str)` 放在 `fn (int) -> …` 的位置是一個指名兩個型別的型別錯誤,而不是被悄悄

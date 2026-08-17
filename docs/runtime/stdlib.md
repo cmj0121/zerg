@@ -271,7 +271,13 @@ since both compilers would be running this same source.
 Structured logging, as a **chained builder**:
 
 ```zerg
-log.info().str("file", path).int("line", n).msg("compiling")
+import "log"
+
+fn main() {
+    path := "lexer.zg"
+    n := 42
+    log.info().str("file", path).int("line", n).msg("compiling")
+}
 ```
 
 The builder is the shape **this** language leaves — no varargs, no `any`, no generic struct, each argued in
@@ -281,8 +287,16 @@ rather than a string it built first. What is still paid is evaluating the **argu
 before the call. That is why `enabled` is public:
 
 ```zerg
-if log.enabled(log.Level.DEBUG) {
- log.debug().str("dump", expensive()).msg("state")
+import "log"
+
+fn expensive() -> str {
+    return "the whole state, rendered"
+}
+
+fn main() {
+    if log.enabled(log.Level.DEBUG) {
+        log.debug().str("dump", expensive()).msg("state")
+    }
 }
 ```
 
@@ -321,7 +335,11 @@ module-private `parse` in any program that imports `log`.
 were a second way to say the same thing that happened to mutate shared state four times where one would do.
 
 ```zerg
-log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+import "log"
+
+fn main() {
+    log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+}
 ```
 
 It is `install` and not `level` because `level` already means _derive a logger at this level_, and one word

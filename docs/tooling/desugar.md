@@ -67,7 +67,7 @@ the gate exists to catch. After that the rules run in numbered order, and `D101`
 
 ### `D101` — a postfix guard becomes its block
 
-```zerg
+```text
 fn clamp(n: int) -> int {        fn clamp(n: int) -> int {
     return 0 if n < 0                if n < 0 {
     return 9 if n > 9        →           return 0
@@ -92,7 +92,7 @@ left where it fell it would head the statement _after_ the block instead.
 
 ### `D102` — a while-`for` becomes the infinite one
 
-```zerg
+```text
 mut i := 0                       mut i := 0
 for i < 4 {                      for {
     print i              →           if not (i < 4) {
@@ -117,7 +117,7 @@ reading as an iteration.
 
 ### `D103` — a range-`for` becomes the infinite one
 
-```zerg
+```text
 for i in 0..3 {                  mut zgd_i7c2 := 0
     print i              →       zgd_hi7c2 := 3
 }                                for {
@@ -146,7 +146,7 @@ one: the step overflows, and under this language's [checked arithmetic](../core/
 **raises** rather than wrapping. The emitter answers with a flag that goes false at the last value
 instead of stepping past it, and so does this:
 
-```zerg
+```text
 for i in 1..=4 { … }     →     zgd_hi3c2 := 4
                                mut zgd_i3c2 := 1
                                mut zgd_done3c2 := zgd_i3c2 > zgd_hi3c2
@@ -178,7 +178,7 @@ statements do not fit — the whole loop declines rather than the rule inventing
 
 ### `D104` — an `assert` becomes its guarded raise
 
-```zerg
+```text
 assert count(xs) == 3    →    zga_l7c9 := count(xs)
                               if not (zga_l7c9 == 3) {
                                   raise AssertionError(f"a.zg:7  assert count(xs) == 3\n  count(xs) = {zga_l7c9}")

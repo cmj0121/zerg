@@ -52,6 +52,15 @@ jobs:
 
       - name: Check every docs path the repo cites
         run: make docs-links
+  docs-mirror:
+    name: docs links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check every docs path the repo cites
+        run: make docs-mirror
 
       # Same job, same reason: a GRAMMAR citation is a plain-text mention no tool
       # but this one reads. It needs the same nothing — no toolchain, no submodule.

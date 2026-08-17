@@ -9,9 +9,10 @@
 # An Atomic[int] is a `Ref[int]` — a refcounted heap cell — so a copy of the binding
 # (including one captured by a `spawn`ed coroutine) names the SAME cell; the leaf
 # operations run under sequential-consistency ordering (the `__zrt_atomic_*`
-# intrinsics over sys.c). Under the 1e N:1 cooperative scheduler atomicity already
-# holds without preemption; the SC ops keep the surface correct for a future M:N
-# scheduler with no source change.
+# intrinsics over sys.c). That ordering is what makes them correct under the M:N
+# scheduler, where two coroutines really do run on two CPUs at once; it was already
+# the ordering when the scheduler was N:1 and atomicity fell out of there being no
+# preemption, so nothing here changed when M:N landed.
 #
 # MVP scope: int-typed only (a generic `Atomic[T]` awaits the bundle importer's
 # support for stdlib struct/method surfaces); sequential-consistency ordering only

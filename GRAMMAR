@@ -234,9 +234,15 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 # plain ':=' may still be shadowed). This is ORTHOGONAL to compile-time folding (group 7): a
 # 'const' whose RHS is a const-expr is also usable in compile-time positions, but the two
 # properties are independent — 'const' is only about shadowing.
+#
+# 'pub' leads a binding for the same reason it leads every other declaration (group 11): a
+# MODULE-LEVEL binding is a module item, and 'pub' is what exposes it to the rest of the
+# package — 'pub const SEED: int = 5', read as 'unit.SEED' from another module. WHERE it is
+# legal is a SEMANTIC rule, exactly as a decorator's placement is (group 1): a binding inside
+# a block is a local and has nothing to expose, so 'pub' there is an error naming the form.
 
-binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr          # inferred; 'const' = shadow-proof (bidirectional)
-             | ( 'mut' | 'const' )? identifier ':' type '=' expr      # type-ANNOTATED; the ':' picks this form
+binding      ::= 'pub'? ( 'mut' | 'const' )? bind-target ':=' expr    # inferred; 'const' = shadow-proof (bidirectional)
+             | 'pub'? ( 'mut' | 'const' )? identifier ':' type '=' expr  # type-ANNOTATED; the ':' picks this form
 bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6 (inferred ':=' only)
 reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr

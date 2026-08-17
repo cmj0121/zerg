@@ -27,7 +27,7 @@ the compiler emits.
 
 ### Concurrency
 
-- **`sched.c`** — the N:1 cooperative coroutine scheduler and `spawn`.
+- **`sched.c`** — the M:N cooperative coroutine scheduler and `spawn`.
 - **`chan.c`** — channels: typed, buffered, with `select`.
 - **`ctx_arm64.S`** — the AArch64 coroutine context switch.
 - **`ctx_x86_64.S`** — the x86-64 (System V) coroutine context switch.
@@ -59,4 +59,4 @@ the compiler emits.
 - **Layout is a build contract.** The `Ref` / `list` / `map` header layouts the compiler depends on are fixed here;
   they are internal and never FFI-frozen.
 - The runtime is the **irreducible floor** — all higher-level logic lives in pure Zerg in
-  [`src/stdlib/`](../stdlib) (see [`../README.md`](../README.md)).
+  [`src/stdlib/`](../../stdlib) (see [`../README.md`](../README.md)).

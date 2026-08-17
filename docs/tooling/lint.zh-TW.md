@@ -117,10 +117,16 @@ L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instea
 不會被那個呼叫看到 —— coroutine 可能還沒開始，延後的呼叫也還沒執行：
 
 ```zerg
-mut k := 5
-spawn show(k)      # 捕獲 5
-k = 99
-# coroutine 印出 5
+fn show(n: int) {
+    print n
+}
+
+fn main() {
+    mut k := 5
+    spawn show(k)      # 捕獲 5
+    k = 99
+    # coroutine 印出 5
+}
 ```
 
 那是正確的語意，也是這個語言裡最容易被誤讀的一件事。它是 **lint** 而不是 error，因為程式是對的、

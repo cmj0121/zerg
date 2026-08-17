@@ -130,10 +130,16 @@ written on. A write to `k` afterwards is not seen by the call — the coroutine 
 started, and the deferred call has not run:
 
 ```zerg
-mut k := 5
-spawn show(k)      # captures 5
-k = 99
-# the coroutine prints 5
+fn show(n: int) {
+    print n
+}
+
+fn main() {
+    mut k := 5
+    spawn show(k)      # captures 5
+    k = 99
+    # the coroutine prints 5
+}
 ```
 
 That is the right semantics and it is the single most misreadable thing in the language.

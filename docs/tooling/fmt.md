@@ -107,7 +107,7 @@ together.
 `F106` reads a match over a small closed set as what it is — a **lookup table** — and lays
 its arms out as rows:
 
-```zerg
+```text
 Tok.Eof       => "EOF"
 Tok.Illegal   => "ILLEGAL"
 Tok.FStrBegin => "FSTR_BEGIN"
@@ -118,9 +118,11 @@ pass over a different mark, because a column of notes beside a column of code is
 same way:
 
 ```zerg
-kind: int   # what the lexer decided this is
-lexeme: str # the source spelling, kept verbatim
-line: int   # 1-based, for a diagnostic
+struct Token {
+    pub kind: int   # what the lexer decided this is
+    pub lexeme: str # the source spelling, kept verbatim
+    pub line: int   # 1-based, for a diagnostic
+}
 ```
 
 A **run** is consecutive lines, at the same indent, that each carry the mark. Everything
@@ -263,7 +265,7 @@ Note what this postfix `if` is NOT. It attaches to a jump, not to an expression 
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
 `x := if c { 1 } else { 2 }`.
 
-```zerg
+```text
 fn clamp(n: int) -> int {        # before
     if n < 0 {
         return 0
@@ -306,7 +308,7 @@ author chose.
 `F404` then folds the run into the parenthesized form `GRAMMAR` gives `import`, one spec
 per line, with `F402`'s blank line surviving as the separator inside it:
 
-```zerg
+```text
 import "cli"          import (
 import "zerg"    →        "cli"
 import "io"               "io"
@@ -328,8 +330,8 @@ because it **reorders**, and this rule moves nothing past anything:
 ```zerg
 import (
     "io"
-    pub "util/text"
-    "a/text" as at
+    pub "strings"
+    "strconv" as sc
 )
 ```
 
@@ -355,7 +357,7 @@ When one does, the group breaks at **every** top-level comma instead. Never half
 a group broken around one of its elements used to print the rest after the closer, leaving
 a `), 3` hanging off the end, which is neither shape.
 
-```zerg
+```text
 x := sum(                        # before
     1,
     2,
@@ -427,7 +429,7 @@ parser turns away — exactly the file a person reaches for a formatter over.
 `F405` is `F401`'s principle applied to strings: where the language offers a shorter
 surface for exactly what is written, the canonical form is the shorter one.
 
-```zerg
+```text
 "n=" + s + " of " + t                    →   f"n={s} of {t}"
 "v=" + strconv.to_string(n, 10) + "!"    →   f"v={n}!"
 ```
@@ -462,7 +464,7 @@ rule DECLINES, below, and not a count anybody can take again.
 
 A run of **more than one** guard is followed by a blank:
 
-```zerg
+```text
 fn conv_ty(s: str) -> Ty {        fn conv_ty(s: str) -> Ty {
     return TInt if s == "int"         return TInt if s == "int"
     return TStr if s == "str"    →    return TStr if s == "str"
@@ -479,7 +481,7 @@ rule: 182 of this tree's 218 guard runs are a single guard and none of them is t
 A **run of three or more declarations** starting mid-block gets a blank in front of it, and
 nothing after it:
 
-```zerg
+```text
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
     em.used_rt = true
 
@@ -515,7 +517,7 @@ places in this tree — not a rule about readability but a rewrite of the tree.
 
 `F407` drops the binder from a select arm that discards what it receives:
 
-```zerg
+```text
 _ := <-cancel => { … }    →    <-cancel => { … }
 ```
 
@@ -532,7 +534,7 @@ is [`L104`](lint.md)'s, which suggests rather than rewrites.
 
 `F408` is that principle a third time, over a match arm's pattern:
 
-```zerg
+```text
 4 | 5 | 6 | 7 => "mid"    →    4..=7 => "mid"
 ```
 

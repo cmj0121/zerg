@@ -275,8 +275,10 @@ long zrt_write_int(int fd, int64_t v) {
  * Atomic[int] cell operations (Phase 1f U2). The stdlib `atomic` module lowers a
  * shared Atomic[int] onto a Ref[int] box and calls these on its payload pointer,
  * so every copy of the box (including one sent across `spawn`) names one cell.
- * Sequential-consistency ordering keeps the API correct beyond the current N:1
- * cooperative scheduler. The __atomic_* builtins operate on a plain int64_t*, so
+ * Sequential-consistency ordering is what makes them correct under the M:N
+ * scheduler, where two coroutines really do run on two CPUs at once — it was
+ * already the ordering before M:N landed, so nothing about the Zerg surface
+ * changed when it did. The __atomic_* builtins operate on a plain int64_t*, so
  * the payload needs no _Atomic storage qualifier.
  */
 int64_t zrt_atomic_load(int64_t *p) {

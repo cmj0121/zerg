@@ -48,6 +48,17 @@ done
 # error and not a shorter list — the same standard the loop above holds $MAKEFILE to.
 MAKEFILES=$MAKEFILE
 for inc in $(sed -n 's/^include  *//p' "$MAKEFILE"); do
+	# `include $(GATES_MK)` is a path make expands and this script does not, because it
+	# reads the makefile as text. One simple reference is resolved against the `NAME :=
+	# value` in the same file — enough for a path named once and used twice, and anything
+	# more elaborate is caught below as a file that is not there rather than skipped.
+	case $inc in
+	'$('*')' | '${'*'}')
+		name=${inc#??}
+		name=${name%?}
+		inc=$(sed -n "s/^$name *:\{0,1\}= *//p" "$MAKEFILE" | head -1)
+		;;
+	esac
 	[ -f "$inc" ] || {
 		printf 'gates-check: %s includes %s and it is not there — nothing was checked\n' \
 			"$MAKEFILE" "$inc" >&2

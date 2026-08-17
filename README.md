@@ -131,9 +131,9 @@ preemptive**, so a CPU-bound coroutine occupies a worker until it parks
 constants, not yet on types or fields ([modules](docs/runtime/package.md)).
 
 Everything else — what is built, what is refused by name, and every remaining deviation — is marked
-where it belongs in the specification. The gates that keep those markers honest are the targets in
-`make help`; **`make test`** runs the whole board, and `make gates` is what stops a gate from being
-on it in name only.
+where it belongs in the specification. The gates that keep those markers honest are the targets
+`make help gates` lists; **`make test`** runs the whole board, and `make gates` is what stops a gate
+from being on it in name only.
 
 ## License
 

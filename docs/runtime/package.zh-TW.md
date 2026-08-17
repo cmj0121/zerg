@@ -384,7 +384,7 @@ package，就是原本就會編到它所在檔案的那一個——所以上面�
 （[Grammar](../surface/grammar.zh-TW.md)，group 8），它自己寫出訊息，不需要 context 給它任何東西。teardown 是
 `defer`，語言自己的慣用法，所以 runner 不必為它準備任何東西。
 
-```zerg
+```text
 #[fixture]
 fn db(use: fn (Conn)) {
     c := connect("postgres://tmp/test")

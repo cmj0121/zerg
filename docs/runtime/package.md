@@ -490,7 +490,7 @@ a `Ref` value, so a copy shares it; what it carries is in [Standard Library](std
 needs nothing from the context. Teardown is `defer`, the language's own idiom, so the runner supplies
 nothing for it.
 
-```zerg
+```text
 #[fixture]
 fn db(use: fn (Conn)) {
     c := connect("postgres://tmp/test")

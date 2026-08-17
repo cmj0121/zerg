@@ -6,7 +6,7 @@
 # that — it runs the gates as separate parallel jobs, one `run: make <gate>` per step,
 # so that a red board says which gate rather than that the board is red.
 #
-# `make ci` runs the lot, in the order LINUX_GATES gives below. `make help gates`
+# `make test` runs the lot, in the order LINUX_GATES gives below. `make help gates`
 # lists them with the sentence each one is worth.
 #
 # Two gates are NOT here, and both are on the board: `build` and `lint`. They are verbs
@@ -19,13 +19,22 @@
 # LINUX_GATES, and a step in .github/workflows/ci.yml. `make gates` holds all three
 # to each other.
 
-.PHONY: test test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
+.PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check
 
-test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
+# The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
+# examples corpus. It answered to `test` until the board took that name, and `suites` is what
+# it holds: four collections of unit tests, none of which is the whole toolchain.
+#
+# It fans out with an explicit `test` goal rather than through the `$(SUBDIR)` rule's
+# `$(MAKECMDGOALS)`, and that is the one line the rename could not be done without: each
+# sub-Makefile still calls its own suite `test`, so passing this target's name down would
+# ask all three of them for a target none of them has.
+suites: examples                # each subdirectory's own unit suite, and the examples corpus
+	@for d in $(SUBDIR); do $(MAKE) -C $$d test VERSION=$(VERSION) || exit 1; done
 
 # `zerg test` is the command the tests of this project will eventually be written for, and
 # this is the gate on IT rather than on them: a runner that cannot detect a failing test
@@ -287,7 +296,7 @@ corpus:                         # run zerg against the test-data corpus it now o
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.
 #
-# This is NOT in `make test`, for the same reason `corpus` is not. `test` is the fan-out
+# This is NOT in `make suites`, for the same reason `corpus` is not. `suites` is the fan-out
 # over the subdirectories, and each of those suites answers for the code beside it: it
 # stays runnable while the whole-program build is in pieces, which is exactly when a unit
 # suite is the thing worth having. This target answers for the toolchain as a whole and
@@ -300,7 +309,7 @@ fixpoint:                       # prove the compiler still emits the same C for 
 
 # `corpus` checks what these cases PRINT, which is blind to a coroutine stack freed under a
 # live fiber or a channel the scheduler forgot on the way out — the program answers
-# correctly and leaves the damage behind. Deliberate rather than in `test`, again: it
+# correctly and leaves the damage behind. Deliberate rather than in `suites`, again: it
 # rebuilds every case against the sanitizers, and on Linux it is the only leak gate the
 # concurrency path has (LeakSanitizer does not exist on macOS).
 sanitize-conc:                  # run the concurrency corpus under address/UB/leak sanitizers
@@ -325,7 +334,7 @@ mem-check:                      # a value that outlives its scope, counted rathe
 # and the property it pins is not that a bad program fails — it always did — but WHO says
 # so. A program the compiler emits anyway reaches cc, which reports a real error against
 # generated C in .zerg-cache, at a line the programmer cannot open. That regresses silently,
-# because the case still "fails". Not in `test` for the same reason `corpus` is not: it
+# because the case still "fails". Not in `suites` for the same reason `corpus` is not: it
 # needs the whole toolchain, both compilers, built.
 refuse:                         # every program that must be turned away, is — by the compiler
 	$(MAKE) build
@@ -413,7 +422,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

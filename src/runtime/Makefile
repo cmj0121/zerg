@@ -7,7 +7,7 @@
 # detail of a Zerg program.
 #
 # Until this file existed the root Makefile's SUBDIR fan-out could not reach the
-# directory, so `make test` never ran a single one of those tests. A map bug and a
+# directory, so `make suites` never ran a single one of those tests. A map bug and a
 # scheduler race both lived here undisturbed because of it.
 GO      := go
 PKG     := ./...

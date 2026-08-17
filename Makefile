@@ -41,7 +41,7 @@ JOBS ?= 4
 
 include mk/gates.mk
 
-.PHONY: all ci clean run build install uninstall upgrade linux-ci lint fmt help $(SUBDIR)
+.PHONY: all test clean run build install uninstall upgrade linux-ci lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -153,12 +153,21 @@ $(SUBDIR):
 # only Linux shows; this is what a developer runs before asking for that. The LIST is the
 # point — `make gates` holds it to the makefiles' own targets and to what CI runs, because
 # a gate that is only on one of the three is a gate somebody has to remember.
-ci:                             # every gate on the board, in order
+#
+# It is called `test` because a gate IS a test: every one of them is a question this
+# project can be told no to, and a person who types `make test` wants all of them asked,
+# not the four subdirectory suites that used to answer to the name. Those are `suites`.
+#
+# WHAT IT COSTS: about 26 minutes from a cold tree on an M-series laptop, half of that in
+# the four gates that rebuild a corpus against the compiler. That is a verb worth typing
+# before asking for review and not one to type while waiting; `make suites` is seconds and
+# `make build` a minute, and any single gate runs alone by its own name.
+test:                           # everything that can say no — the whole board of gates
 	@fail=""; for t in $(LINUX_GATES); do printf '%-20s ' $$t; \
 		$(MAKE) $$t >/dev/null 2>&1 && echo OK || { echo FAIL; fail="$$fail $$t"; }; \
 	done; \
-	[ -z "$$fail" ] || { echo "ci: failed —$$fail (run each alone for its report)"; exit 1; }; \
-	echo "ci: $(words $(LINUX_GATES)) gates green"
+	[ -z "$$fail" ] || { echo "test: failed —$$fail (run each alone for its report)"; exit 1; }; \
+	echo "test: $(words $(LINUX_GATES)) gates green"
 
 # Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
 # can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
@@ -173,7 +182,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 	@# anything about this repository.
 	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
 		apt-get update >/dev/null && apt-get install -y cloc >/dev/null && \
-		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && make ci'
+		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && make test'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 

@@ -55,7 +55,7 @@ policy is built into the runtime, because none of it has to be.
 ## Testing the scheduler, and where ThreadSanitizer stops
 
 `make -C src/runtime test` compiles `csrc/` with the host `cc` and runs it. That suite is the only place the runtime
-is exercised as C rather than as a by-product of a Zerg program, and until it was wired into the root `make test` it
+is exercised as C rather than as a by-product of a Zerg program, and until it was wired into the root `make suites` it
 never ran at all — a `map` bug and three scheduler races all lived here undisturbed.
 
 `TestConcurrencyStress` is the part that watches for races. It cannot check _when_ things happened, because under M:N

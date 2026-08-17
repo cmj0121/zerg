@@ -62,8 +62,8 @@ done
 #   all clean run help upgrade   — the ordinary verbs of a Makefile
 #   install uninstall            — they CHANGE the machine; `install-check` is the gate
 #   fmt                          — it rewrites sources; `fmt-self` is the gate
-#   ci linux-ci                  — they ARE the board, and a board on the board recurses
-NOT_A_GATE="all clean run help upgrade install uninstall fmt ci linux-ci"
+#   test linux-ci                — they ARE the board, and a board on the board recurses
+NOT_A_GATE="all clean run help upgrade install uninstall fmt test linux-ci"
 
 # shellcheck disable=SC2086 # $MAKEFILES is a list of paths and is meant to split
 targets=$(grep -hoE '^[a-z][a-z0-9-]*:' $MAKEFILES | tr -d ':' | sort -u)
@@ -90,7 +90,7 @@ done
 #    the step RUNS. Six board gates sit behind `if: steps.corpus_fetch.outputs.available ==
 #    'true'` because they need the private submodule, and a skipped step is green — which is
 #    the exact failure the header above recounts, one level up. Closing it means the board
-#    being single-sourced (CI running `make ci`, or its steps generated from a matrix) rather
+#    being single-sourced (CI running `make test`, or its steps generated from a matrix) rather
 #    than a third copy of the list this script compares against; until then the conditional
 #    six are trusted, and that is the declared limit of clause 2.
 #    A leading `VAR=value` is allowed on the run line. A gate may need one — `treesitter`

@@ -251,7 +251,13 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 結構化 logging，寫成一條**鏈式 builder**：
 
 ```zerg
-log.info().str("file", path).int("line", n).msg("compiling")
+import "log"
+
+fn main() {
+    path := "lexer.zg"
+    n := 42
+    log.info().str("file", path).int("line", n).msg("compiling")
+}
 ```
 
 builder 是**這個語言**留下來的形狀——沒有 varargs、沒有 `any`、沒有 generic struct，每一件都在 `src/stdlib/log.zg`
@@ -260,8 +266,16 @@ builder 是**這個語言**留下來的形狀——沒有 varargs、沒有 `any`
 做的事。這正是 `enabled` 必須公開的原因：
 
 ```zerg
-if log.enabled(log.Level.DEBUG) {
- log.debug().str("dump", expensive()).msg("state")
+import "log"
+
+fn expensive() -> str {
+    return "the whole state, rendered"
+}
+
+fn main() {
+    if log.enabled(log.Level.DEBUG) {
+        log.debug().str("dump", expensive()).msg("state")
+    }
 }
 ```
 
@@ -296,7 +310,11 @@ lexer 撞上 `E705`，而這裡的 `pub parse` 會跟任何 import `log` 的程�
 改了四次——而一次就夠。
 
 ```zerg
-log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+import "log"
+
+fn main() {
+    log.install(log.new().level(log.Level.DEBUG).format(log.Format.JSON))
+}
 ```
 
 它叫 `install` 而不是 `level`，因為 `level` 已經表示*衍生一個在這個等級的 logger*，而同一個詞不能在 instance 上是純的、

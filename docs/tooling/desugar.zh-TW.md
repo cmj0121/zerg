@@ -56,7 +56,7 @@ postfix guard 有四種是在 **parser** 裡就 desugar 掉的,第五種(`c_retu
 
 ### `D101`——postfix guard 變回它的 block
 
-```zerg
+```text
 fn clamp(n: int) -> int {        fn clamp(n: int) -> int {
     return 0 if n < 0                if n < 0 {
     return 9 if n > 9        →           return 0
@@ -79,7 +79,7 @@ block 形式,而 parser 在來這裡找之前就先讀成 guard 了。
 
 ### `D102`——while-`for` 變回無限 `for`
 
-```zerg
+```text
 mut i := 0                       mut i := 0
 for i < 4 {                      for {
     print i              →           if not (i < 4) {
@@ -101,7 +101,7 @@ statement。
 
 ### `D103`——range-`for` 變回無限 `for`
 
-```zerg
+```text
 for i in 0..3 {                  mut zgd_i7c2 := 0
     print i              →       zgd_hi7c2 := 3
 }                                for {
@@ -125,7 +125,7 @@ for i in 0..3 {                  mut zgd_i7c2 := 0
 言的[檢查式算術](../core/types.zh-TW.md)下它會 **raise** 而不是回繞。emitter 的答案是一個在最後一個值時變 false 的
 旗標,而不是踏過去,這條規則也一樣:
 
-```zerg
+```text
 for i in 1..=4 { … }     →     zgd_hi3c2 := 4
                                mut zgd_i3c2 := 1
                                mut zgd_done3c2 := zgd_i3c2 > zgd_hi3c2
@@ -154,7 +154,7 @@ statement。做不到的時候——因為 `D101` 被關掉而還帶著自己 gu
 
 ### `D104`——`assert` 變回它的 guarded raise
 
-```zerg
+```text
 assert count(xs) == 3    →    zga_l7c9 := count(xs)
                               if not (zga_l7c9 == 3) {
                                   raise AssertionError(f"a.zg:7  assert count(xs) == 3\n  count(xs) = {zga_l7c9}")

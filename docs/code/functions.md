@@ -21,8 +21,14 @@ function type it is checked against, which is [carve-out (c)](../core/types.md).
 supplies one: a declared binding, an argument, a `return`, a struct field, a parameter's default.
 
 ```zerg
+fn apply(f: fn (int) -> int, n: int) -> int {
+    return f(n)
+}
+
+fn main() {
     apply(fn (x) { return x + 1 }, 41)          # x is int, the answer is int
     g: fn (int) -> int = fn (x) { return x * 2 }
+}
 ```
 
 A written type **wins** — `fn (x: str)` at a `fn (int) -> …` position is a type error naming both, not an

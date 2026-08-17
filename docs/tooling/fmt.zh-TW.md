@@ -65,9 +65,9 @@ zerg fmt --off F401 <file.zg>...   # 放過某一條規則（可重複）
 
 ```zerg
 a := (
- builder()
- .run()
- .fast()
+    builder()
+    .run()
+    .fast()
 )
 ```
 
@@ -78,11 +78,11 @@ a := (
 
 ```zerg
 x := sum(
- sum(
-  1,
-  2
- ),
- 3
+    sum(
+        1,
+        2
+    ),
+    3
 )
 ```
 
@@ -94,7 +94,7 @@ x := sum(
 
 `F106` 把「對一個小的封閉集合做 match」讀成它本來的樣子——一張**查表**——並把它的 arm 排成一列列：
 
-```zerg
+```text
 Tok.Eof       => "EOF"
 Tok.Illegal   => "ILLEGAL"
 Tok.FStrBegin => "FSTR_BEGIN"
@@ -104,9 +104,11 @@ Tok.FStrBegin => "FSTR_BEGIN"
 一欄程式碼」是用同樣的方式讀的：
 
 ```zerg
-kind: int   # what the lexer decided this is
-lexeme: str # the source spelling, kept verbatim
-line: int   # 1-based, for a diagnostic
+struct Token {
+    pub kind: int   # what the lexer decided this is
+    pub lexeme: str # the source spelling, kept verbatim
+    pub line: int   # 1-based, for a diagnostic
+}
 ```
 
 一個 **run** 是連續、同一縮排層、且每行都帶有該標記的那些行。其他任何東西都會終止它，而這些邊界
@@ -230,7 +232,7 @@ Idempotence 仍然是 printer 的。兩個 token 之間的空白不是 token，�
 要注意這個後綴 `if` **不是**什麼：它掛在跳轉上，不掛在運算式上——Zerg 沒有 `A if X else B`。
 條件**運算式**是區塊形式，而且 `else` 是強制的：`x := if c { 1 } else { 2 }`。
 
-```zerg
+```text
 fn clamp(n: int) -> int {          fn clamp(n: int) -> int {
  if n < 0 {                             return 0 if n < 0
   return 0                   →       return 9 if n > 9
@@ -262,7 +264,7 @@ import，排序會讓它變成孤兒），或 `import pub`（它的 re-export �
 接著 `F404` 把這串收進 `GRAMMAR` 給 `import` 的括號形式，一行一個 spec，而 `F402` 的那個空行
 會活著進去，在裡面當同樣的分隔：
 
-```zerg
+```text
 import "cli"          import (
 import "zerg"    →        "cli"
 import "io"               "io"
@@ -282,9 +284,9 @@ import "io"               "io"
 
 ```zerg
 import (
- "io"
- pub "util/text"
- "a/text" as at
+    "io"
+    pub "strings"
+    "strconv" as sc
 )
 ```
 
@@ -306,7 +308,7 @@ import (
 只要有一條否決，群組就改為在**每一個**頂層逗號斷開。不會各半：一個只圍著其中一個元素斷行的
 群組，以前會把其餘的印在收尾後面，留下一條掛在尾巴上的 `), 3`，那兩種形狀都不是。
 
-```zerg
+```text
 x := sum(                        # 之前
  1,
  2,
@@ -350,8 +352,8 @@ call 裡面放一個 block。內含 block 的群組不管作者怎麼寫都算�
 
 ```zerg
 n := (
- builder()
- .run()
+    builder()
+    .run()
 )
 ```
 
@@ -366,7 +368,7 @@ n := (
 `F405` 是 `F401` 的原則套用在字串上：只要語言為「已經寫下的東西」提供了更短的表面形式，標準形
 就是短的那個。
 
-```zerg
+```text
 "n=" + s + " of " + t                    →   f"n={s} of {t}"
 "v=" + strconv.to_string(n, 10) + "!"    →   f"v={n}!"
 ```
@@ -395,7 +397,7 @@ body 內總共只有**十個**空行，而 `fmt.zg` 當時 1300 行一個也沒�
 
 **超過一個** guard 組成的一段，後面接一個空行：
 
-```zerg
+```text
 fn conv_ty(s: str) -> Ty {        fn conv_ty(s: str) -> Ty {
  return TInt if s == "int"         return TInt if s == "int"
  return TStr if s == "str"    →    return TStr if s == "str"
@@ -410,7 +412,7 @@ fn conv_ty(s: str) -> Ty {        fn conv_ty(s: str) -> Ty {
 
 **三個以上的連續宣告**若從區塊中途開始，前面加一個空行，後面不加：
 
-```zerg
+```text
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
  em.used_rt = true
 
@@ -441,7 +443,7 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 
 `F407` 把「丟棄接收值」的那個 select arm 的 binder 刪掉：
 
-```zerg
+```text
 _ := <-cancel => { … }    →    <-cancel => { … }
 ```
 
@@ -455,7 +457,7 @@ _ := <-cancel => { … }    →    <-cancel => { … }
 
 `F408` 是同一個原則的第三次，這次是在 match arm 的 pattern 上：
 
-```zerg
+```text
 4 | 5 | 6 | 7 => "mid"    →    4..=7 => "mid"
 ```
 

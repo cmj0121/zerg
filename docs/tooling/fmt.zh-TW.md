@@ -465,7 +465,7 @@ or-pattern 說的事，而且不管有幾個值都只說一次。
 **`F409`** 是同一個原則用在 `GRAMMAR` 另一條以展開式定義的糖上:`with e as x { … }` **就是**
 `{ x := e; … }`,所以第一個敘述是 binding 的裸 block,就寫成它本來就是的那個 `with`。
 
-```zerg
+```text
 {                        →   with acquire() as h {
     h := acquire()               use(h)
     use(h)                   }

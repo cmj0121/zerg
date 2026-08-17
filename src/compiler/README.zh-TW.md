@@ -81,6 +81,7 @@ zerg --help             # 命令、旗標，以及下面那些環境變數
 | `ZERG_RUNTIME` | runtime 的 C 原始碼 | `$ZERG_ROOT/src/runtime/csrc` |
 | `ZERG_STDLIB`  | 標準函式庫          | `$ZERG_ROOT/src/stdlib`       |
 | `ZERG_CACHE`   | build cache         | `$ZERG_ROOT/.zerg-cache`      |
+| `ZERG_CSTD`    | cc 用的 C 方言      | `c17`                         |
 
 一個 import 先對進入點檔案自己的目錄解析，然後才是標準函式庫；而一個模組要嘛是 `<name>.zg`，
 要嘛是一個**目錄**——目錄裡的原始碼以排序後的順序讀取。之所以排序，是因為產生出來的 C 不可以

@@ -26,7 +26,7 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 
 ### Concurrency
 
-- **`sched.c`**——N:1 cooperative coroutine scheduler 與 `spawn`。
+- **`sched.c`**——M:N cooperative coroutine scheduler 與 `spawn`。
 - **`chan.c`**——channels：typed、buffered、支援 `select`。
 - **`ctx_arm64.S`**——AArch64 的 coroutine context switch。
 - **`ctx_x86_64.S`**——x86-64（System V）的 coroutine context switch。
@@ -55,5 +55,5 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
   allocator wrapper（`alloc.c`）與單執行緒 reference count（`ref.c`）。
 - **Layout 是一份 build contract。** 編譯器依賴的 `Ref` / `list` / `map` header layout 固定在此；它們是內部的，
   絕不被 FFI 凍結。
-- runtime 是**不可再壓縮的底層**——所有更高層邏輯都在 [`src/stdlib/`](../stdlib) 以純 Zerg 實作
+- runtime 是**不可再壓縮的底層**——所有更高層邏輯都在 [`src/stdlib/`](../../stdlib) 以純 Zerg 實作
   （見 [`../README.md`](../README.md)）。

@@ -24,12 +24,6 @@ The linter's `L` codes are the same scheme over a different question — what th
 rather than what it looks like ([Linter Rules](lint.md)). The compiler's `E` codes are not a
 tool's rules at all: they name what stops a build ([Compile Diagnostics](diagnostics.md)).
 
-```sh
-zerg fmt <file.zg>...              # rewrite in place; prints the files it changed
-zerg fmt --check <file.zg>...      # report what is not canonical, change nothing
-zerg fmt --off F401 <file.zg>...   # leave one rule alone (repeatable)
-```
-
 The formatter works from **tokens**, not from the AST. That is the whole design decision:
 an AST has already thrown away the comments and the blank lines a reader put there, and a
 formatter that eats those is one nobody runs twice.
@@ -238,24 +232,6 @@ with no way to tell them apart by looking.
 | `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
 | `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
 | `F409` | a bare block that opens with a binding becomes the `with` it is sugar for      | on      |
-
-**`F409`** is the same move on the other sugar `GRAMMAR` defines by expansion: `with e as x { … }` **is**
-`{ x := e; … }`, so a bare block whose first statement binds is written as the `with` it already is.
-
-```text
-{                        →   with acquire() as h {
-    h := acquire()               use(h)
-    use(h)                   }
-}
-```
-
-The trigger is **purely syntactic** — a bare block, a first statement that binds. It must not read the
-binding's **`defer`**: `with` carries no teardown of its own, so a rule that folded
-`{ x := e; defer x.close(); … }` into one would delete the `defer`.
-
-Both are **token rules**, and [`L105`](lint.md) is the reason to say so: `with` expands in the PARSER, so by the
-time there is an AST there is no `with` left to lint. Every rule about this form reads tokens for that
-reason, the linter's included.
 
 `GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
 for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the
@@ -582,6 +558,24 @@ The shape it accepts is narrow, and each part of it is load-bearing:
 
 Each bound keeps its own **lexeme**, so `0x10 | 0x11` becomes `0x10..=0x11` rather than being
 restated in decimal. A literal's surface is the author's.
+
+**`F409`** is the same move on the other sugar `GRAMMAR` defines by expansion: `with e as x { … }` **is**
+`{ x := e; … }`, so a bare block whose first statement binds is written as the `with` it already is.
+
+```text
+{                        →   with acquire() as h {
+    h := acquire()               use(h)
+    use(h)                   }
+}
+```
+
+The trigger is **purely syntactic** — a bare block, a first statement that binds. It must not read the
+binding's **`defer`**: `with` carries no teardown of its own, so a rule that folded
+`{ x := e; defer x.close(); … }` into one would delete the `defer`.
+
+Both are **token rules**, and [`L105`](lint.md) is the reason to say so: `with` expands in the PARSER, so by the
+time there is an AST there is no `with` left to lint. Every rule about this form reads tokens for that
+reason, the linter's included.
 
 ## Which rules can be switched off
 

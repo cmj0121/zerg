@@ -454,7 +454,7 @@ void zrt_chan_close(zrt_chan *ch) {
 
 /* g_sel_rot rotates the fair ready-scan's start index so that, when several arms are
  * ready at once, the winner rotates rather than always being the first (front) arm —
- * enough fairness to keep a back arm from starving under the N:1 scheduler. */
+ * enough fairness to keep a back arm from starving under a cooperative scheduler. */
 static size_t g_sel_rot;
 
 /* g_sel_lock serialises whole selects. A select touches SEVERAL channels' queues, so it

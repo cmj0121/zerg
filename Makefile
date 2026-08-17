@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens fmt-roundtrip linux-ci docs-links docs-mirror grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens fmt-roundtrip linux-ci docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -566,7 +566,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -593,6 +593,14 @@ docs-links:                     # every docs path resolves, and every `#fragment
 
 docs-mirror:                    # a page and its zh-TW twin are the same document
 	./scripts/docs-mirror.sh
+
+# docs-mirror's blind spot, and the reason this exists. It compares the LANGUAGE of a fence
+# between a page and its twin, so a diagram tagged ` ```zerg ` in both is a pair that matches
+# and a claim that is false — 21 of the 30 in the English chapters were exactly that. The only
+# reader that can tell is the compiler, so this asks it.
+docs-zerg:                      # every ```zerg block in the docs is a program that compiles
+	$(MAKE) build
+	./scripts/docs-zerg.sh
 
 # docs-links's sibling, for the other half of the specification. It builds nothing and reads
 # no binary: a citation is text, and whether it resolves is a fact about the tree.

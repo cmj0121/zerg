@@ -26,7 +26,7 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 
 ### Concurrency
 
-- **`sched.c`**——N:1 cooperative coroutine scheduler 與 `spawn`。
+- **`sched.c`**——M:N cooperative coroutine scheduler 與 `spawn`。
 - **`chan.c`**——channels：typed、buffered、支援 `select`。
 - **`ctx_arm64.S`**——AArch64 的 coroutine context switch。
 - **`ctx_x86_64.S`**——x86-64（System V）的 coroutine context switch。

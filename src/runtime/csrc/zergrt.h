@@ -886,10 +886,11 @@ long zrt_write_int(int fd, int64_t v);
  *
  * The stdlib `atomic` module lowers onto these: an Atomic[int] is a `Ref[int]`
  * box (a shared, refcounted heap cell) whose int64 payload these functions read
- * and write with sequential-consistency ordering. Under the 1e N:1 cooperative
- * scheduler there is no preemption, so atomicity holds even without hardware
- * fences; the SC ops keep the API correct for a future M:N scheduler with no
- * change to the Zerg surface. Each takes the payload pointer (from
+ * and write with sequential-consistency ordering. That ordering is what makes
+ * them correct under the M:N scheduler, where two coroutines really do run on
+ * two CPUs at once; it was already the ordering when the scheduler was N:1 and
+ * atomicity fell out of there being no preemption, so nothing about the Zerg
+ * surface changed when M:N landed. Each takes the payload pointer (from
  * zrt_ref_payload) so a copy of the box — shared across `spawn` — names the same
  * cell.
  *
@@ -1026,9 +1027,11 @@ zrt_list zrt_os_args(int argc, char **argv);
  * (it uses `spawn` / a channel). A program without concurrency neither links
  * sched.c nor the per-arch context switch, so these declarations are unused and
  * its emitted C is byte-identical to the non-concurrent path. The scheduler is
- * N:1 cooperative: one OS thread, a FIFO run queue of stackful coroutines, and a
- * context switch hidden behind the zrt_ctx shim (ctx_arm64.S / ctx_x86_64.S, or
- * ctx_ucontext.c as a portable floor). */
+ * M:N cooperative: M worker OS threads draining ONE shared FIFO run queue of N
+ * stackful coroutines, with the context switch hidden behind the zrt_ctx shim
+ * (ctx_arm64.S / ctx_x86_64.S, or ctx_ucontext.c as a portable floor) and the
+ * threads behind the zrt_thread shim. With one worker it is exactly the N:1
+ * scheduler it grew out of — the same queue, the same order. */
 
 /* zrt_ctx is an opaque saved machine context: the callee-saved registers, the
  * stack pointer, and the resume point. Its storage must be large enough for every

@@ -27,7 +27,7 @@ the compiler emits.
 
 ### Concurrency
 
-- **`sched.c`** — the N:1 cooperative coroutine scheduler and `spawn`.
+- **`sched.c`** — the M:N cooperative coroutine scheduler and `spawn`.
 - **`chan.c`** — channels: typed, buffered, with `select`.
 - **`ctx_arm64.S`** — the AArch64 coroutine context switch.
 - **`ctx_x86_64.S`** — the x86-64 (System V) coroutine context switch.

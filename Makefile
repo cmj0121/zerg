@@ -68,7 +68,7 @@ CORPUS_MIN ?= 60
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens fmt-roundtrip linux-ci docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
+.PHONY: all ci sha256 clean test test-runner stdlib-test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz check-equal fmt-tokens fmt-roundtrip linux-ci docs-links docs-mirror grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check cache-key-check gates lint lint-check version-check fmt desugar lsp editor-align treesitter install-check help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -566,7 +566,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 
 LINUX_IMAGE ?= golang:1.26-bookworm
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check test test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -588,20 +588,11 @@ check-equal:                    # the check stage finds exactly what the build f
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	./scripts/check-equal.sh
 
-docs-links:                     # every docs path the repo cites must resolve
-	@fail=0; \
-	for p in $$(git grep -hoE 'docs/[A-Za-z0-9_./-]+\.md' -- . ':!docs' | sort -u); do \
-		[ -f "$$p" ] || { echo "CITED  $$p"; fail=1; }; \
-	done; \
-	for f in $$(git ls-files 'docs/**/*.md' 'docs/*.md'); do \
-		d=$$(dirname $$f); \
-		for l in $$(sed -E 's/\]\(/\n\]\(/g' $$f \
-			| sed -nE 's/^\]\((\.\.\/[^)#:]*|[^)#:]*\.md)(#[^)]*)?\).*/\1/p'); do \
-			[ -e "$$d/$$l" ] || { echo "LINK   $$f -> $$l"; fail=1; }; \
-		done; \
-	done; \
-	[ $$fail -eq 0 ] || { echo "docs-links: a cited path does not exist"; exit 1; }; \
-	echo "docs-links: every cited docs path resolves"
+docs-links:                     # every docs path resolves, and every `#fragment` names a heading
+	./scripts/docs-links.sh
+
+docs-mirror:                    # a page and its zh-TW twin are the same document
+	./scripts/docs-mirror.sh
 
 # docs-links's sibling, for the other half of the specification. It builds nothing and reads
 # no binary: a citation is text, and whether it resolves is a fact about the tree.

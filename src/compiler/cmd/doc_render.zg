@@ -476,15 +476,24 @@ fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 }
 
 # doc_flush turns the paragraph collected so far into filled lines and empties it.
+#
+# THE AUTHOR'S LINE BREAK BECOMES A SPACE, because in text written with spaces that is what it
+# stands for — the two lines are two runs of words, and the break between them is the gap. It
+# becomes NOTHING between two ideographs: Chinese is written with no spaces in it, so a joiner
+# that put one there would be writing a character into the sentence that its author did not,
+# and the reader would see a gap in the middle of a word the source has none in.
 fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
 	return if para.len() == 0
 
 	mut text := ""
+	mut ideo := false
 	for p in para {
-		if text != "" {
+		rs := runearray(p)
+		if text != "" and not (ideo and doc_is_ideograph(rs[0])) {
 			text = text + " "
 		}
 		text = text + p
+		ideo = doc_is_ideograph(rs[rs.len() - 1])
 	}
 	doc_wrap(out, text, indent)
 	para = []
@@ -506,29 +515,29 @@ fn doc_wrap(mut &out: list[str], text: str, indent: int) {
 
 # doc_fill is the greedy fill itself, answering unindented lines of at most `width` columns.
 #
-# A WORD LONGER THAN THE BUDGET STANDS ON ITS OWN LINE AND IS NEVER CUT. What is long is a URL,
-# a path, or a piece of inline code, and each of those is a thing a reader copies: a break
+# A PIECE LONGER THAN THE BUDGET STANDS ON ITS OWN LINE AND IS NEVER CUT. What is long is a
+# URL, a path, or a piece of inline code, and each of those is a thing a reader copies: a break
 # inserted in the middle of one produces text that looks right and does not work. Overrunning
 # the margin is the visible failure, and the visible one is the right one to have.
 fn doc_fill(text: str, width: int) -> list[str] {
 	mut out: list[str] = []
 	mut line := ""
 	mut n := 0
-	for w in doc_words(text) {
-		k := doc_width(w)
+	for p in doc_pieces(text) {
+		k := doc_width(p.text)
 		if line == "" {
-			line = w
+			line = p.text
 			n = k
 			continue
 		}
-		if n + 1 + k > width {
+		if n + p.gap + k > width {
 			out.append(line)
-			line = w
+			line = p.text
 			n = k
 			continue
 		}
-		line = line + " " + w
-		n = n + 1 + k
+		line = line + blanks(p.gap) + p.text
+		n = n + p.gap + k
 	}
 	if line != "" {
 		out.append(line)
@@ -536,23 +545,59 @@ fn doc_fill(text: str, width: int) -> list[str] {
 	return out
 }
 
-# doc_words splits on spaces and drops the empties, so a double space between two sentences
-# does not become a word of its own.
-fn doc_words(text: str) -> list[str] {
-	mut out: list[str] = []
-	mut cur: list[byte] = []
-	for c in bytearray(text) {
-		if c == b' ' or c == b'\t' {
+# DocPiece is one run of text the fill places whole: the characters of it, and the number of
+# spaces that go in front of it when it lands after something else on the same line.
+#
+# THE GAP IS CARRIED RATHER THAN ASSUMED, because the two kinds of break this fill knows are
+# not the same break. A break at a space puts the space back when the two halves stay
+# together; a break between two ideographs does not, and a fill that put one there would be
+# writing a space into a Chinese sentence that its author did not.
+struct DocPiece {
+	pub text: str
+	pub gap: int
+}
+
+# doc_pieces cuts one paragraph at every place a line may end: at whitespace, and BETWEEN TWO
+# IDEOGRAPHS. Empty pieces are dropped, so a double space between two sentences does not
+# become a piece of its own.
+#
+# The second cut is what makes a comment in Chinese a document at all. Chinese is written with
+# no spaces in it, so a whole line of it arrives here as one unbreakable run — and a run longer
+# than the budget takes the rule above and stands on its own line, four or five columns past
+# the margin every time. The space is not the only place a line may end; it is only the place a
+# language that uses spaces puts one.
+#
+# WHERE THE CUT IS NOT MADE is beside anything that is not an ideograph, which is the cheap
+# half of UAX #14 and the half worth having. Punctuation is the reason: `。` may not open a
+# line and `「` may not close one, and a cut taken next to either would move it there. Nothing
+# here knows which side each mark belongs to — so no cut is taken beside a mark at all, and a
+# sentence of ideographs with a comma in the middle of it simply breaks somewhere else.
+fn doc_pieces(text: str) -> list[DocPiece] {
+	mut out: list[DocPiece] = []
+	mut cur: list[rune] = []
+	mut gap := 0
+	mut ideo := false
+	for r in runearray(text) {
+		if r == ' ' or r == '\t' {
 			if cur.len() > 0 {
-				out.append(str(cur))
+				out.append(DocPiece(str(cur), gap))
 				cur = []
 			}
-		} else {
-			cur.append(c)
+			gap = 1
+			ideo = false
+			continue
 		}
+		here := doc_is_ideograph(r)
+		if cur.len() > 0 and ideo and here {
+			out.append(DocPiece(str(cur), gap))
+			cur = []
+			gap = 0
+		}
+		cur.append(r)
+		ideo = here
 	}
 	if cur.len() > 0 {
-		out.append(str(cur))
+		out.append(DocPiece(str(cur), gap))
 	}
 	return out
 }
@@ -727,4 +772,25 @@ fn doc_rune_width(r: rune) -> int {
 	return 2 if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
 
 	return 1
+}
+
+# doc_is_ideograph reports whether a line may end after this code point and begin with the next
+# one — which is to say whether it is a character a language writes words with and puts no
+# spaces between.
+#
+# THIS IS A SHORTER LIST THAN THE WIDTHS ABOVE, and deliberately not derived from it. Every
+# code point named here is two columns wide, but "wide" and "breakable" are two questions: the
+# fullwidth Latin letters are wide and spell words that must not be cut, the punctuation is
+# wide and has a side of the line it belongs on, and the kana have non-starters — the small
+# `っ`, the sound mark `ー` — which are a table this file does not carry. Han and Hangul
+# syllables are what is left, and they are what the tree's own Chinese is written in.
+fn doc_is_ideograph(r: rune) -> bool {
+	c := int(r)
+	return true if c >= 0x3400 and c <= 0x4DBF   # CJK unified ideographs extension A
+	return true if c >= 0x4E00 and c <= 0x9FFF   # CJK unified ideographs
+	return true if c >= 0xAC00 and c <= 0xD7A3   # Hangul syllables
+	return true if c >= 0xF900 and c <= 0xFAFF   # CJK compatibility ideographs
+	return true if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
+
+	return false
 }

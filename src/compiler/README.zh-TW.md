@@ -40,6 +40,7 @@ src/compiler/
     layout.zg     # 共用：東西在哪裡，以及 cc 用什麼參數呼叫
     unit.zg       # 共用：一個 unit、它的快取 object，以及連結
   zerg/           # 編譯器函式庫——一個目錄模組，共用同一個 scope
+    rule.zg       # 每一個診斷的代碼，以單一 enum 宣告一次
     token.zg      # Kind enum + Token 型別
     lexer.zg      # 原始碼文字 -> token 串（可要求保留註解）
     ast.zg        # 遞迴的 AST 節點型別（enum payload）

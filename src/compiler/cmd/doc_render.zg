@@ -232,13 +232,18 @@ fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 # type's method, a spec's requirement — so there is one function and an indent rather than one
 # function per level.
 #
-# An UNDOCUMENTED declaration is marked where its comment would have been. A gap there would be
-# indistinguishable from a rendering fault, and the tree has twelve of them today: the document
-# says so rather than reading as though it had lost something.
+# `(undocumented)` IS KEYED ON THERE BEING NO COMMENT, and on nothing else. A gap where a
+# comment would have been is indistinguishable from a rendering fault, so a declaration nobody
+# wrote about says so; but `json.null` carries a ```zerg``` example and no prose, and calling
+# THAT undocumented is a false claim about a source that documents itself — the same lie as the
+# silence, pointing the other way. What the mark answers is `doc.len() == 0`; what a summary
+# is, and whether there is one, is a separate question asked below.
+#
+# ONE BLANK LINE BETWEEN ENTRIES, in both views. `--brief` used to run them together, and a
+# first sentence that fills three lines (`strings.join`, `strings.replace`) then merged into
+# its neighbour: a listing whose rows cannot be told apart is not a listing.
 fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col: bool) {
-	if not brief {
-		doc_gap(out)
-	}
+	doc_gap(out)
 	out.append(doc_at(indent, doc_sig_line(d, col)))
 
 	if brief {
@@ -254,14 +259,22 @@ fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col
 	doc_members(out, d, indent + 4, col)
 }
 
-# doc_summary is the brief view of one comment: its first sentence, filled, or the mark.
+# doc_summary is the brief view of one comment: its first sentence, filled — the mark when
+# there is no comment, and NOTHING when there is one that has no sentence in it.
+#
+# The two cases are different and were one. A comment made only of an example has no first
+# sentence, so a summary keyed on the sentence declared it undocumented; keyed on the comment,
+# it prints the signature and stops, and the whole document — which is where an example is
+# readable anyway — still carries the example. An empty line under the signature would be the
+# other thing to do here, and it is not done: `doc_at` leaves a blank line blank, and a blank
+# line that means "documented, but not in a sentence" is a distinction no reader can see.
 fn doc_summary(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
-	s := zerg.doc_first_sentence(d.doc)
-	if s == "" {
+	if d.doc.len() == 0 {
 		out.append(doc_at(indent, doc_mark(col)))
-	} else {
-		doc_wrap(out, s, indent)
+		return
 	}
+
+	doc_wrap(out, zerg.doc_first_sentence(d.doc), indent)
 }
 
 # doc_members lists a struct's public fields, an enum's variants, or a spec's requirements, and

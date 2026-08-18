@@ -29,6 +29,16 @@
 #      does break it, and needs no rule of its own: a blank line emits no token, so the run
 #      simply ends further up than the line above.
 #
+# A RUN THAT OPENS WITH A SECTION BANNER — `# --- levels ------` — DOCUMENTS NOTHING, and the
+# WHOLE run goes, not just the banner line. A banner is a mark on the FILE: it divides the
+# source into chapters for someone reading the source, and what a chapter is called is not what
+# the first declaration under it is called. What follows the banner is the CHAPTER'S prose, and
+# it is prose about the group — `log.zg`'s "the two formats, and where each is chosen" goes on
+# to talk about `Format`, about `Logger.col`, and about which default zerolog chose — so
+# keeping it and dropping only the dashes would hand one declaration a paragraph written about
+# several. Dropped, `enum Level` reads as undocumented, which is what it is; kept, it read as
+# documented by 89 characters of dashes, which is the failure this tool exists to prevent.
+#
 # The private declarations take part in pass 2 although nothing prints them, because the
 # MODULE HEADER is defined as the run nothing claimed: the first run in the file, with no code
 # above it, still unclaimed once every declaration has taken its own. That is what tells
@@ -80,11 +90,16 @@ pub struct DocModule {
 # DocDecl is one exposed declaration: what it is, what it is called, how it is called, and
 # what was written above it.
 pub struct DocDecl {
-	# "fn" | "struct" | "enum" | "type" | "const" | "spec" — the keyword the declaration is
-	# written with, which is also the first word of `sig`. It is a `str` and not an enum
-	# because the readers do three things with it: group by it, print it, and compare it. An
-	# enum crossing the module boundary would have to publish every variant to buy a spelling
-	# check on six words that are already the first word of a string beside them.
+	# "fn" | "struct" | "enum" | "type" | "const" | "spec" — WHAT is declared, which is the
+	# section a renderer files it under. It is a `str` and not an enum because the readers do
+	# three things with it: group by it, print it, and compare it. An enum crossing the module
+	# boundary would have to publish every variant to buy a spelling check on six words that
+	# are already a string beside them.
+	#
+	# It is the word `sig` leads with wherever the language HAS a keyword for the form, but it
+	# is not promised to be: a signature may carry a modifier in front of it (`unsafe fn`), and
+	# a module-level binding is `const`, `mut`, or no keyword at all while all three are filed
+	# under "const". A renderer that emphasises the name checks before it counts.
 	pub kind: str
 
 	# the bare declared name — `split`, `Logger`, `level`
@@ -143,6 +158,11 @@ pub struct DocMember {
 # diagnostic's own text cannot come back through a `guard`, so the sentence is a general one
 # pointing at where the module's status is already written down.
 pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
+	# the two lists are ONE table, and a caller that hands over a short one would otherwise
+	# leave an `IndexError` to come out of a `pub` function with nothing said about whose
+	# mistake it was
+	raise p_impossible(f"doc_module was given {srcs.len()} sources and {paths.len()} paths — they are one table, a source and the file it was read from, and a document cannot name a file it was not told about") if srcs.len() != paths.len()
+
 	mut header: list[str] = []
 	mut decls: list[DocDecl] = []
 	mut broken: list[str] = []
@@ -230,6 +250,22 @@ fn doc_is_fence(line: str) -> bool {
 	b := bytearray(line)
 	return false if b.len() < 3
 	return b[0] == b'`' and b[1] == b'`' and b[2] == b'`'
+}
+
+# doc_is_banner reports whether a comment line is a section banner — `--- levels ---------`,
+# the form all two hundred of them in this tree are written in. It is asked of a run's FIRST
+# line only, and the file header explains why the whole run goes with it.
+#
+# The shape is required at both ends: `--- ` opens it, and it closes on the dashes that pad it
+# out to the source's right margin. A paragraph that happens to begin with an em-rule does not
+# end in one, and a line of prose does not begin with three hyphens and a space.
+fn doc_is_banner(line: str) -> bool {
+	b := bytearray(line)
+
+	return false if b.len() < 8
+	return false if b[0] != b'-' or b[1] != b'-' or b[2] != b'-' or b[3] != b' '
+
+	return b[b.len() - 1] == b'-' and b[b.len() - 2] == b'-' and b[b.len() - 3] == b'-'
 }
 
 # --- the declarations of one file -----------------------------------------------------------
@@ -351,8 +387,14 @@ fn doc_sorted(ds: list[DocDecl]) -> list[DocDecl] {
 # A METHOD DROPS ITS FIRST PARAMETER: the parser prepends `this: T` when it flattens an
 # `impl`, so printing the list as the AST holds it would show a receiver nobody writes at the
 # call site. The receiver survives as `DocDecl.recv`, which is where the renderer reads it.
+#
+# A FUNCTION DECLARED IN A MODULE-LEVEL `unsafe { … }` GROUP IS AN `unsafe fn`, and says so.
+# GRAMMAR group 12 gives the group that meaning — "unsafe throughout its body, callable only
+# from unsafe" — and group 5 gives the single-function form the same spelling, so this is the
+# language's own word for it and not a marker invented here. Leaving it off would document a
+# function as callable from anywhere when it is callable from one place.
 fn doc_fn_sig(fd: FnDecl) -> str {
-	mut out := "fn " + fd.name
+	mut out := doc_fn_word(fd) + fd.name
 	if fd.tparams.len() > 0 {
 		out = out + "["
 		mut i := 0
@@ -400,6 +442,11 @@ fn doc_fn_sig(fd: FnDecl) -> str {
 # CONJUNCTION carried joined by `+` in one string (ast.zg, FnDecl.tbounds), and `c_split_bounds`
 # is the one function that takes it apart — the emitter's, because that is where a bound is
 # checked, and a second splitter would be a second opinion about where a spec name ends.
+fn doc_fn_word(fd: FnDecl) -> str {
+	return "unsafe fn " if fd.in_unsafe
+	return "fn "
+}
+
 fn doc_bound(bound: str) -> str {
 	mut out := ""
 	for sp in c_split_bounds(bound) {
@@ -411,12 +458,31 @@ fn doc_bound(bound: str) -> str {
 	return out
 }
 
+# doc_const_sig spells a module-level binding with the keyword that was WRITTEN, and with none
+# when none was.
+#
+# It used to print `const` for all three forms, on the argument that a module-level binding is
+# the module's immutable state (docs/runtime/package.md). A `mut` binding inside a module-level
+# `unsafe { … }` group is precisely what that argument is the exception to (GRAMMAR group 12),
+# so the one mutable global the language has was documented as the one thing it is not.
+#
+# `in_unsafe` is deliberately NOT spelled here, and it is the only fact about the declaration
+# this signature leaves out. GRAMMAR group 12 says in as many words that there is no `unsafe
+# mut` prefix, so writing one would put into a document a form the language will not read; and
+# what the group grants a binding is exactly the `mut`, which is already the first word. A
+# function is the other way round — `unsafe fn` IS a spelling (group 5) — which is why
+# `doc_fn_sig` prints it and this does not.
 fn doc_const_sig(c: ConstDecl) -> str {
-	# `const` is printed whether or not the keyword was written: a module-level binding IS the
-	# module's immutable state (docs/runtime/package.md), and the first word of every signature
-	# in this document is the kind of thing it declares.
-	return f"const {c.name}: {ty_name(c.ty)} = {doc_lit(c.value)}" if c.has_ty
-	return f"const {c.name} := {doc_lit(c.value)}"
+	head := doc_bind_word(c) + c.name
+	return f"{head}: {ty_name(c.ty)} = {doc_lit(c.value)}" if c.has_ty
+	return f"{head} := {doc_lit(c.value)}"
+}
+
+fn doc_bind_word(c: ConstDecl) -> str {
+	return "const " if c.is_const
+	return "mut " if c.is_mut
+
+	return ""
 }
 
 fn doc_field_sig(fd: FieldDef) -> str {
@@ -624,6 +690,11 @@ fn doc_attach(mut &tv: DocTrivia, line: int) -> list[str] {
 	mut none: list[str] = []
 	at := doc_claim(tv, line)
 	return none if at < 0
+
+	# claimed and then thrown away: a section banner is taken OUT of circulation, so that
+	# `doc_header` cannot pick it up either, and answers nothing
+	return none if doc_is_banner(tv.runs[at].lines[0])
+
 	return tv.runs[at].lines
 }
 
@@ -649,7 +720,8 @@ fn doc_claim(mut &tv: DocTrivia, line: int) -> int {
 }
 
 # doc_header is the module's own comment: the FIRST run in the file, with no code above it,
-# that no declaration claimed, and with nothing but a blank line or an `import` under it.
+# that no declaration claimed, that is not a section banner, and with nothing but a blank line
+# or an `import` under it.
 #
 # Each of the four conditions is doing work. FIRST, because a comment further down a file is
 # about what is under it. NO CODE ABOVE, because a comment written below the first declaration
@@ -677,6 +749,8 @@ fn doc_header(tv: DocTrivia) -> list[str] {
 	return none if tv.taken[0]
 
 	r := tv.runs[0]
+	return none if doc_is_banner(r.lines[0])
+
 	mut i := 1
 	for i < r.first {
 		return none if tv.code[i]

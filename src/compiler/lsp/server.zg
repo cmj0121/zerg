@@ -395,7 +395,7 @@ fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
 #
 # LEXICAL FIRST, and alone. A source that does not lex is not a program, and the driver
 # stops there for the same reason: a parser handed unreadable text can only say something
-# untrue about it. Reporting a parse error beside `E101 a string literal is not closed`
+# untrue about it. Reporting a parse error beside `E1001 a string literal is not closed`
 # would be exactly that untrue thing.
 fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.Val] {
 	mut out: list[json.Val] = []

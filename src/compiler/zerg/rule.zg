@@ -2,416 +2,414 @@
 #
 # A diagnostic names a RULE, and the code in front of its sentence is that rule's stable
 # identity: prose gets better and a gate that pinned the sentence would turn red every time
-# it did. The catalogue a reader looks the code up in is docs/tooling/diagnostics.md; this
-# file is what the COMPILER holds, and the two are held to each other by
-# `make error-codes-check`.
+# it did. The catalogue a reader looks the code up in is docs/tooling/diagnostics.md — it is
+# the authority on what the scheme IS — and `make error-codes-check` holds it to this file.
 #
 # It is an enum and not a string at the site for three reasons, each of which was a way the
 # scheme had already drifted:
 #
 #   A CODE IS DECLARED ONCE. Every reporting channel takes a `Rule`, so a hand-spelled
-#   `"E204"` is a type error rather than a finding some gate has to go looking for. A rule
+#   `"E2004"` is a type error rather than a finding some gate has to go looking for. A rule
 #   with no identity cannot be written at all.
 #
-#   TWO PRs COLLIDE IN GIT. Three collisions happened in one week — `E387`, `E477` and
-#   `E288`/`E289` — because parallel work could only grep the catalogue and never see a
-#   sibling's choice. Every new code is a line in THIS file, so a second one lands on the
-#   same lines and the merge says so, before CI is asked.
+#   TWO CHANGES COLLIDE IN GIT. Three collisions happened in one week, because parallel work
+#   could only grep the catalogue and never see a sibling's choice. Every new code is a line
+#   in THIS file, appended to its stage, so a second one lands on the same lines and the
+#   merge says so — before CI is asked.
 #
 #   THE NUMBER IS NOT THE IDENTITY. A variant names the rule and the discriminant carries
-#   the number, so renumbering the scheme is an edit to this file and to nothing else.
-#
-# The variants are grouped by the STAGE that reports them, which is the order a build meets
-# them, and that grouping is what the ranges spell: `E1xx` lexical, `E2xx` parser, `E3xx`
-# checking, `E4xx` emitting, `E5xx` building. A `NotYet…` name is the other class of
-# refusal — a form the language has and this compiler has not built — and it retires when
-# the form is built rather than when a rule changes its mind.
+#   the number, so renumbering the whole scheme is an edit to this file and to nothing else.
+#   That is not hypothetical: it is how the four-digit numbering below was arrived at, in one
+#   commit that touched no reporting site.
 #
 # ONE NUMBER IS NEVER REUSED. A retired code leaves this file for the catalogue's retired
 # table: an old build's message must go on meaning what it meant, and reissuing a number
 # silently reassigns every report, log and bug filed under it.
 
 pub enum Rule {
-	# lexical — text that is not Zerg tokens — the scanner's refusals, reported before a form exists to name
-	StrUnterminated = 101
-	RuneEmpty = 102
-	RuneTooLong = 103
-	CharNotAToken = 104
-	TripleStrUnterminated = 105
-	RawStrUnterminated = 106
-	CommandUnterminated = 107
-	BasedNumberNoDigit = 108
-	EscapeInvalid = 109
-	StrHoldsNul = 110
-	SourceNotUtf8 = 111
+	# lexical — text that is not Zerg tokens — the scanner's refusals, reported before there is
+	# a form to name
+	StrUnterminated = 1001
+	RuneEmpty = 1002
+	RuneTooLong = 1003
+	CharNotAToken = 1004
+	TripleStrUnterminated = 1005
+	RawStrUnterminated = 1006
+	CommandUnterminated = 1007
+	BasedNumberNoDigit = 1008
+	EscapeInvalid = 1009
+	StrHoldsNul = 1010
+	SourceNotUtf8 = 1011
 
-	# parser — tokens that are not a Zerg form. `E6xx` is `E2xx` continued: a range is a hundred numbers and
-	# the parser used ninety-eight of them
-	SelectArmClose = 201
-	SelectNoArms = 202
-	SelectArmHead = 203
-	ExpectedFound = 204
-	ExpectedStatementEnd = 205
-	EitherSameType = 206
-	NotYetParameterizedSpec = 207
-	DeriveNoDeclaration = 208
-	NotYetSpecMemberBody = 210
-	AssocValueNotSpecMember = 211
-	NotYetGenericEnum = 212
-	EnumDiscriminantRepeated = 213
-	DiscriminantOnPayloadEnum = 214
-	NotYetGenericStruct = 215
-	NotYetDecorator = 217
-	NotYetImplAssocValue = 218
-	NotYetImplItem = 219
-	NotYetStructPattern = 221
-	NotYetCallee = 222
-	NotYetNamedArgument = 223
-	NotYetUnsafeExpr = 224
-	NotYetFStringFormatSpec = 225
-	NotYetFStringConversion = 226
-	NotYetFStringSelfDoc = 227
-	AssocTypeNotSpecMember = 230
-	NotYetImplAssocType = 231
-	NotYetTuplePattern = 232
-	NotYetArrayType = 233
-	NotYetAsPattern = 234
-	NotYetCommandInterpolating = 235
-	NotYetCommandLiteral = 236
-	NotYetDestructuringBinding = 238
-	NotYetRangeNoLower = 239
-	NotYetListPattern = 240
-	NotYetOrPattern = 241
-	NotYetForMutBinding = 242
-	NotYetStructPatternInMatch = 243
-	NestingTooDeep = 244
-	ReservedWordAsName = 245
-	TupleTypeOneElement = 246
-	PubImport = 247
-	PubOnInit = 248
-	PubOnImpl = 249
-	PubInsideDecorator = 250
-	FreeFnMut = 251
-	PubOnUnsafeGroup = 252
-	UnsafeGroupNested = 253
-	UnsafeGroupHoldsDeclarations = 254
-	PubOnStatement = 255
-	UnsafeGroupUnterminated = 256
-	ReservedWordAsBinding = 257
-	ScalarConvNoValue = 258
-	ScalarConvManyValues = 259
-	ListConvNoValue = 260
-	ListConvManyValues = 261
-	MatchGuardPlacement = 262
-	ParamMutRefOrNothing = 263
-	NotYetUnsafeFn = 264
-	NotYetAssocTypeProjection = 265
-	NotYetValueGenericParam = 266
-	ImportPathNotString = 267
-	NotYetTypeArgsNoCall = 268
-	NotYetIfExprManyStatements = 269
-	NotYetIfExprBindingHead = 270
-	NotYetAsm = 271
-	ArrayConvNoValue = 272
-	ArrayConvManyValues = 273
-	TypeArgsAsIndex = 275
-	SpecMemberNeitherSigNorBody = 276
-	ImplOrphan = 277
-	DeriveSpecEnumThisParam = 278
-	DeriveSpecEnumVariantNoValue = 279
-	ObjNotOnSpec = 280
-	ObjWithMutFn = 281
-	ObjWithThisParam = 282
-	DeriveOnStructureless = 283
-	CoalesceDivergeGuard = 284
-	NotYetClosureParamDefault = 285
-	NotYetFnTypeMutRefParam = 286
-	NotYetUnsafeSpecSignature = 287
-	TupleLitOneElement = 288
-	TrailingComma = 289
-	BraceOpeningHead = 290
-	NotYetImplTypeParams = 291
-	NotYetImplTypeArgument = 292
-	ReservedWordAsField = 293
-	FieldNameExpected = 294
-	DelUnknownName = 295
-	DelNotABinding = 296
-	UseAfterDel = 297
-	UseAfterDelOnSomePaths = 298
-	NameExpected = 601
-	ChanDirectionPrefix = 602
-	MutBeforeNonFn = 603
-	IsWantsTypeName = 604
-	NotYetStatementAsExpr = 605
-	NotYetExprForm = 606
-	NotYetMatchArmStatement = 607
-	FStringTextMalformed = 608
-	FStringHoleManyExprs = 609
-	TypeNameNotUpper = 610
-	PreludeNameAsName = 611
-	DecoratorOnStatement = 612
-	SecondDecorator = 613
-	AllowNamesNoCodes = 614
+	# parser — tokens that are not a Zerg form
+	SelectArmClose = 2001
+	SelectNoArms = 2002
+	SelectArmHead = 2003
+	ExpectedFound = 2004
+	ExpectedStatementEnd = 2005
+	EitherSameType = 2006
+	DeriveNoDeclaration = 2007
+	AssocValueNotSpecMember = 2008
+	EnumDiscriminantRepeated = 2009
+	DiscriminantOnPayloadEnum = 2010
+	AssocTypeNotSpecMember = 2011
+	NestingTooDeep = 2012
+	ReservedWordAsName = 2013
+	TupleTypeOneElement = 2014
+	PubImport = 2015
+	PubOnInit = 2016
+	PubOnImpl = 2017
+	PubInsideDecorator = 2018
+	FreeFnMut = 2019
+	PubOnUnsafeGroup = 2020
+	UnsafeGroupNested = 2021
+	UnsafeGroupHoldsDeclarations = 2022
+	PubOnStatement = 2023
+	UnsafeGroupUnterminated = 2024
+	ReservedWordAsBinding = 2025
+	ScalarConvNoValue = 2026
+	ScalarConvManyValues = 2027
+	ListConvNoValue = 2028
+	ListConvManyValues = 2029
+	MatchGuardPlacement = 2030
+	ParamMutRefOrNothing = 2031
+	ImportPathNotString = 2032
+	ArrayConvNoValue = 2033
+	ArrayConvManyValues = 2034
+	TypeArgsAsIndex = 2035
+	SpecMemberNeitherSigNorBody = 2036
+	ImplOrphan = 2037
+	DeriveSpecEnumThisParam = 2038
+	DeriveSpecEnumVariantNoValue = 2039
+	ObjNotOnSpec = 2040
+	ObjWithMutFn = 2041
+	ObjWithThisParam = 2042
+	DeriveOnStructureless = 2043
+	CoalesceDivergeGuard = 2044
+	TupleLitOneElement = 2045
+	TrailingComma = 2046
+	BraceOpeningHead = 2047
+	ReservedWordAsField = 2048
+	FieldNameExpected = 2049
+	DelUnknownName = 2050
+	DelNotABinding = 2051
+	UseAfterDel = 2052
+	UseAfterDelOnSomePaths = 2053
+	NameExpected = 2054
+	ChanDirectionPrefix = 2055
+	MutBeforeNonFn = 2056
+	IsWantsTypeName = 2057
+	FStringTextMalformed = 2058
+	FStringHoleManyExprs = 2059
+	TypeNameNotUpper = 2060
+	PreludeNameAsName = 2061
+	DecoratorOnStatement = 2062
+	SecondDecorator = 2063
+	AllowNamesNoCodes = 2064
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
-	NotPublicMember = 301
-	AssignTargetNotAPlace = 302
-	AssignToConst = 303
-	NotYetTypedefNonScalar = 304
-	AssignToModuleBinding = 305
-	AssignToThis = 306
-	AssignToImmutable = 307
-	AssignThroughImmutable = 308
-	MutRefParamDefault = 309
-	ParamDefaultType = 310
-	CtorArgCount = 311
-	MutRefArgEscapes = 312
-	StoreThroughValue = 313
-	SpecUnknown = 314
-	ImplTypeArgCount = 315
-	SpecExtendsUnknown = 316
-	SpecMethodMismatch = 317
-	SpecRequirementUnmet = 318
-	IntLiteralOverflow = 319
-	StrNotIndexable = 320
-	IfBranchTypes = 321
-	MatchArmTypes = 322
-	BorrowOfValue = 323
-	WriteBackToThis = 324
-	WriteBackToImmutable = 325
-	MutRefAliasInCall = 326
-	CallArgCount = 327
-	CallMissingArgs = 328
-	ListElementType = 329
-	ValueOutOfType = 330
-	DivideByZero = 331
-	IntRangeOverflow = 332
-	ReturnType = 333
-	BindingTypeMismatch = 335
-	BindingHasNoType = 336
-	TypedefNamesNoType = 337
-	FieldOrPayloadType = 338
-	AssignType = 339
-	ArgumentType = 340
-	OptionalOperand = 341
-	OpNoMeaning = 342
-	OpWantsBool = 343
-	OpWantsInt = 344
-	OpWantsNumeric = 345
-	OpWantsOrdered = 346
-	CompareVariantWithNumber = 347
-	CompareDifferentKinds = 348
-	UnaryOpNoMeaning = 349
-	NotWantsBool = 350
-	NegWantsNumeric = 351
-	BitNotWantsInt = 352
-	OpOperandsDiffer = 353
-	ConditionOptional = 354
-	ConditionNotBool = 355
-	ConstRebound = 356
-	ConstShadows = 357
-	TopLevelMutOutsideUnsafe = 358
-	DisplayTakesNoArgs = 359
-	DisplayNotMutFn = 360
-	DisplayAnswersStr = 361
-	DeclaredTwiceOneGeneric = 362
-	GenericAndPlainFn = 363
-	ThisOutsideImpl = 364
-	ParamNameTwice = 365
-	ConvOneValue = 366
-	ConvNotFromStr = 367
-	NotCallable = 369
-	FieldMissingInLiteral = 370
-	ThisWithoutReceiver = 371
-	UndefinedName = 372
-	SliceBoundNotInt = 374
-	IndexNotInt = 375
-	NoSuchField = 376
-	TupleAccessOnNonTuple = 377
-	TupleIndexOutOfRange = 378
-	NotIterable = 379
-	RaiseCarriesErr = 380
-	DeclaredTwiceDifferentKind = 381
-	DeclaredTwiceSameKind = 382
-	VariantNamedBare = 383
-	EitherSideNamedBare = 384
-	ClosureParamNoType = 385
-	FnValueArgCount = 386
-	UnsafeNameInSafeCode = 387
-	ModuleNoSuchName = 388
-	ImportNameTaken = 389
-	NilWhereValueNeeded = 390
-	TopLevelStatement = 391
-	CollectionNotMut = 392
-	CollectionFrozenInLoop = 393
-	IntConvOnFloat = 394
-	ConvTwoSteps = 395
-	PrimitiveUnknown = 396
-	PrimitiveArgCount = 397
-	PrimitiveOperandType = 398
+	NotPublicMember = 3001
+	AssignTargetNotAPlace = 3002
+	AssignToConst = 3003
+	AssignToModuleBinding = 3004
+	AssignToThis = 3005
+	AssignToImmutable = 3006
+	AssignThroughImmutable = 3007
+	MutRefParamDefault = 3008
+	ParamDefaultType = 3009
+	CtorArgCount = 3010
+	MutRefArgEscapes = 3011
+	StoreThroughValue = 3012
+	SpecUnknown = 3013
+	ImplTypeArgCount = 3014
+	SpecExtendsUnknown = 3015
+	SpecMethodMismatch = 3016
+	SpecRequirementUnmet = 3017
+	IntLiteralOverflow = 3018
+	StrNotIndexable = 3019
+	IfBranchTypes = 3020
+	MatchArmTypes = 3021
+	BorrowOfValue = 3022
+	WriteBackToThis = 3023
+	WriteBackToImmutable = 3024
+	MutRefAliasInCall = 3025
+	CallArgCount = 3026
+	CallMissingArgs = 3027
+	ListElementType = 3028
+	ValueOutOfType = 3029
+	DivideByZero = 3030
+	IntRangeOverflow = 3031
+	ReturnType = 3032
+	BindingTypeMismatch = 3033
+	BindingHasNoType = 3034
+	TypedefNamesNoType = 3035
+	FieldOrPayloadType = 3036
+	AssignType = 3037
+	ArgumentType = 3038
+	OptionalOperand = 3039
+	OpNoMeaning = 3040
+	OpWantsBool = 3041
+	OpWantsInt = 3042
+	OpWantsNumeric = 3043
+	OpWantsOrdered = 3044
+	CompareVariantWithNumber = 3045
+	CompareDifferentKinds = 3046
+	UnaryOpNoMeaning = 3047
+	NotWantsBool = 3048
+	NegWantsNumeric = 3049
+	BitNotWantsInt = 3050
+	OpOperandsDiffer = 3051
+	ConditionOptional = 3052
+	ConditionNotBool = 3053
+	ConstRebound = 3054
+	ConstShadows = 3055
+	TopLevelMutOutsideUnsafe = 3056
+	DisplayTakesNoArgs = 3057
+	DisplayNotMutFn = 3058
+	DisplayAnswersStr = 3059
+	DeclaredTwiceOneGeneric = 3060
+	GenericAndPlainFn = 3061
+	ThisOutsideImpl = 3062
+	ParamNameTwice = 3063
+	ConvOneValue = 3064
+	ConvNotFromStr = 3065
+	NotCallable = 3066
+	FieldMissingInLiteral = 3067
+	ThisWithoutReceiver = 3068
+	UndefinedName = 3069
+	SliceBoundNotInt = 3070
+	IndexNotInt = 3071
+	NoSuchField = 3072
+	TupleAccessOnNonTuple = 3073
+	TupleIndexOutOfRange = 3074
+	NotIterable = 3075
+	RaiseCarriesErr = 3076
+	DeclaredTwiceDifferentKind = 3077
+	DeclaredTwiceSameKind = 3078
+	VariantNamedBare = 3079
+	EitherSideNamedBare = 3080
+	ClosureParamNoType = 3081
+	FnValueArgCount = 3082
+	UnsafeNameInSafeCode = 3083
+	ModuleNoSuchName = 3084
+	ImportNameTaken = 3085
+	NilWhereValueNeeded = 3086
+	TopLevelStatement = 3087
+	CollectionNotMut = 3088
+	CollectionFrozenInLoop = 3089
+	IntConvOnFloat = 3090
+	ConvTwoSteps = 3091
+	PrimitiveUnknown = 3092
+	PrimitiveArgCount = 3093
+	PrimitiveOperandType = 3094
 
-	# emitting — a form this compiler will not lower, including a `[not yet]`. `E7xx` is `E4xx` continued,
-	# for the reason `E6xx` continues `E2xx`
-	LoopKeywordOutsideLoop = 401
-	FromCauseNotErr = 402
-	NotYetJumpOutOfGuard = 403
-	ChanOfOptional = 404
-	EitherSideOneValue = 405
-	OptionalChainOnNonOptional = 406
-	IntOnPayloadEnum = 407
-	TryCarrierMismatch = 408
-	NotYetGenericMethod = 409
-	GenericInstantiationDepth = 410
-	TypeParamUndecided = 411
-	TypeParamBoundUnmet = 412
-	NotYetRawPointerBuiltin = 413
-	NotYetCompileTimeBuiltin = 414
-	NotYetImplOnBuiltin = 415
-	NotYetSpecAsType = 416
-	StrOfListElement = 417
-	ConvOfOptional = 418
-	EnumConvOnlyInt = 419
-	OfOnPayloadEnum = 420
-	IndexOfOptional = 421
-	NotYetMutateListRvalue = 422
-	NotYetOpenRangeHere = 423
-	NotYetAssociatedFn = 424
-	UndefinedFunction = 425
-	StructLiteralFieldCount = 426
-	VariantPatternWrongEnum = 427
-	MatchMissingVariant = 428
-	EqRequired = 430
-	NotYetMapKeyType = 431
-	OptionalNotUnwrapped = 432
-	PrintOfOptional = 433
-	NotYetIfBindOver = 434
-	FallsOffTheEnd = 435
-	NotYetDerive = 436
-	DeriveNotCompilerOwned = 437
-	NotYetDeriveEq = 438
-	NotYetListMethod = 444
-	NotYetContainerEquality = 445
-	NotYetRefBox = 446
-	NotYetRenderAsText = 449
-	MethodDeclaredTwice = 451
-	ByValueCycle = 452
-	MemberDeclaredTwice = 453
-	ChainTooDeep = 454
-	ScalarConvOfNonScalar = 455
-	NotAVariantOf = 456
-	VariantOfOtherEnum = 457
-	CatchAllNotLast = 458
-	EitherSideUndeclared = 459
-	IdentityHasNoEquality = 460
-	NotYetSecondIntoImpl = 461
-	NotYetInOverNoEq = 462
-	NotYetInOverType = 463
-	IntoNotBuiltIn = 464
-	NotYetFixedWidthLadder = 465
-	NotYetSetBuiltin = 466
-	MatchMissingCatchAll = 467
-	ReturnWithoutValue = 468
-	NotYetFnValueMutRef = 469
-	NotYetDelChannel = 470
-	NotYetGenericConstructor = 471
-	NotYetNilPattern = 472
-	OptionalCompare = 473
-	DiscriminantNotConstant = 474
-	FillCountNotConstant = 475
-	FillCountNegative = 476
-	RangeArmBoundNotConstant = 477
-	NotAChannel = 478
-	MapEntryNoColon = 479
-	NotYetValueUnnameableType = 480
-	NotYetRebindMatchBinding = 481
-	PrivateFieldNeedsDefault = 482
-	NotYetDefaultReadsField = 483
-	PubMutGlobal = 484
-	ImportCycle = 485
-	NotYetDestructuringAssign = 486
-	DecoratorOnNonType = 487
-	NotYetUnsafeFnType = 488
-	NotYetImplDottedTarget = 489
-	ImplSpecNotBare = 490
-	NotYetGenericTypedef = 491
-	NotYetSubPatternInPayload = 492
-	NotYetRangeAsValue = 493
-	NotYetIsErrorKind = 494
-	DecoratorEmpty = 495
-	NotYetSealed = 496
-	DeriveNamesNoSpec = 497
-	ChanDirectionForm = 498
-	EitherBareValue = 701
-	NoSuchFieldInChain = 702
-	NotYetTryOnType = 703
-	TryRightUnanswered = 704
-	NotYetTwoModulesDefine = 705
-	NotYetNamespaceCollision = 706
-	NoSuchType = 707
-	NotYetForceOnType = 708
-	NotYetCoalesceOnType = 709
-	IsWantsErr = 710
-	InWantsErr = 711
-	ListConvOfNonStr = 712
-	ListConvElementType = 713
-	NotYetRenderEnumAsText = 714
-	IndexOfNonContainer = 715
-	NotYetErrMethodArgs = 716
-	NotYetErrMethod = 717
-	NotYetOkOrNoArg = 718
-	NotYetOkOrManyArgs = 719
-	NotYetOkOrNotErr = 720
-	NotYetOkTakesNoArg = 721
-	NotYetCarrierMethod = 722
-	NotYetEnumTypeMethod = 723
-	OfTakesOneInt = 724
-	NotYetMethodOnType = 725
-	TestableNotConstructible = 726
-	NoSuchTypeToConstruct = 727
-	NoSuchVariantInPattern = 728
-	MatchMissingEitherSide = 729
-	MatchMissingBoolCase = 730
-	NotYetResultPattern = 731
-	ConstCycle = 732
-	NotYetMainSignature = 733
-	NotYetMainArgsWithConcurrency = 734
-	ClosureCaptureUnknown = 735
-	NotYetSpawnOfNonFunction = 736
-	NotYetSpawnOfUnknownName = 737
-	LenTakesNoArgument = 738
-	HasTakesOneKey = 739
-	NotYetMapMethod = 740
-	NotYetErrField = 741
-	TypeParamCount = 742
-	NotYetOpenRangeInclusive = 743
-	NotYetSpawnOfBinding = 744
-	DeclaredTwiceInFile = 745
+	# emitting — a form this compiler will not lower
+	LoopKeywordOutsideLoop = 4001
+	FromCauseNotErr = 4002
+	ChanOfOptional = 4003
+	EitherSideOneValue = 4004
+	OptionalChainOnNonOptional = 4005
+	IntOnPayloadEnum = 4006
+	TryCarrierMismatch = 4007
+	GenericInstantiationDepth = 4008
+	TypeParamUndecided = 4009
+	TypeParamBoundUnmet = 4010
+	StrOfListElement = 4011
+	ConvOfOptional = 4012
+	EnumConvOnlyInt = 4013
+	OfOnPayloadEnum = 4014
+	IndexOfOptional = 4015
+	UndefinedFunction = 4016
+	StructLiteralFieldCount = 4017
+	VariantPatternWrongEnum = 4018
+	MatchMissingVariant = 4019
+	EqRequired = 4020
+	OptionalNotUnwrapped = 4021
+	PrintOfOptional = 4022
+	FallsOffTheEnd = 4023
+	DeriveNotCompilerOwned = 4024
+	MethodDeclaredTwice = 4025
+	ByValueCycle = 4026
+	MemberDeclaredTwice = 4027
+	ChainTooDeep = 4028
+	ScalarConvOfNonScalar = 4029
+	NotAVariantOf = 4030
+	VariantOfOtherEnum = 4031
+	CatchAllNotLast = 4032
+	EitherSideUndeclared = 4033
+	IdentityHasNoEquality = 4034
+	IntoNotBuiltIn = 4035
+	MatchMissingCatchAll = 4036
+	ReturnWithoutValue = 4037
+	OptionalCompare = 4038
+	DiscriminantNotConstant = 4039
+	FillCountNotConstant = 4040
+	FillCountNegative = 4041
+	RangeArmBoundNotConstant = 4042
+	NotAChannel = 4043
+	MapEntryNoColon = 4044
+	PrivateFieldNeedsDefault = 4045
+	PubMutGlobal = 4046
+	ImportCycle = 4047
+	DecoratorOnNonType = 4048
+	ImplSpecNotBare = 4049
+	DecoratorEmpty = 4050
+	DeriveNamesNoSpec = 4051
+	ChanDirectionForm = 4052
+	EitherBareValue = 4053
+	NoSuchFieldInChain = 4054
+	TryRightUnanswered = 4055
+	NoSuchType = 4056
+	IsWantsErr = 4057
+	InWantsErr = 4058
+	ListConvOfNonStr = 4059
+	ListConvElementType = 4060
+	IndexOfNonContainer = 4061
+	OfTakesOneInt = 4062
+	TestableNotConstructible = 4063
+	NoSuchTypeToConstruct = 4064
+	NoSuchVariantInPattern = 4065
+	MatchMissingEitherSide = 4066
+	MatchMissingBoolCase = 4067
+	ConstCycle = 4068
+	ClosureCaptureUnknown = 4069
+	LenTakesNoArgument = 4070
+	HasTakesOneKey = 4071
+	TypeParamCount = 4072
+	DeclaredTwiceInFile = 4073
 
-	# building — the program as a set of files, which no single file's text answers: imports resolved before
-	# anything is lexed, and `fn main` looked for after everything is emitted
-	EntryHasNoMain = 501
-	ImportUnresolved = 502
-	RecvOnSendOnly = 503
-	SendOnRecvOnly = 504
-	CloseRecvOnly = 505
-	ChanDirectionNarrows = 506
-	ModuleNotImported = 507
-	NotPublicType = 508
-	PrivateTypeOnPubDecl = 509
-	NotPublicField = 510
-	NotYetAtomicImport = 511
-	TestFileImported = 512
+	# building — the program as a set of files, which no single file's text answers: imports resolved
+	# before anything is lexed, and `fn main` looked for after everything is emitted
+	EntryHasNoMain = 5001
+	ImportUnresolved = 5002
+	RecvOnSendOnly = 5003
+	SendOnRecvOnly = 5004
+	CloseRecvOnly = 5005
+	ChanDirectionNarrows = 5006
+	ModuleNotImported = 5007
+	NotPublicType = 5008
+	PrivateTypeOnPubDecl = 5009
+	NotPublicField = 5010
+	TestFileImported = 5011
+
+	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
+	# range because it is its own class: each of these retires when the form is built, and
+	# keeping that churn out of the five stage ranges is what keeps them dense
+	NotYetParameterizedSpec = 9001
+	NotYetSpecMemberBody = 9002
+	NotYetGenericEnum = 9003
+	NotYetGenericStruct = 9004
+	NotYetDecorator = 9005
+	NotYetImplAssocValue = 9006
+	NotYetImplItem = 9007
+	NotYetStructPattern = 9008
+	NotYetCallee = 9009
+	NotYetNamedArgument = 9010
+	NotYetUnsafeExpr = 9011
+	NotYetFStringFormatSpec = 9012
+	NotYetFStringConversion = 9013
+	NotYetFStringSelfDoc = 9014
+	NotYetImplAssocType = 9015
+	NotYetTuplePattern = 9016
+	NotYetArrayType = 9017
+	NotYetAsPattern = 9018
+	NotYetCommandInterpolating = 9019
+	NotYetCommandLiteral = 9020
+	NotYetDestructuringBinding = 9021
+	NotYetRangeNoLower = 9022
+	NotYetListPattern = 9023
+	NotYetOrPattern = 9024
+	NotYetForMutBinding = 9025
+	NotYetStructPatternInMatch = 9026
+	NotYetUnsafeFn = 9027
+	NotYetAssocTypeProjection = 9028
+	NotYetValueGenericParam = 9029
+	NotYetTypeArgsNoCall = 9030
+	NotYetIfExprManyStatements = 9031
+	NotYetIfExprBindingHead = 9032
+	NotYetAsm = 9033
+	NotYetClosureParamDefault = 9034
+	NotYetFnTypeMutRefParam = 9035
+	NotYetUnsafeSpecSignature = 9036
+	NotYetImplTypeParams = 9037
+	NotYetImplTypeArgument = 9038
+	NotYetStatementAsExpr = 9039
+	NotYetExprForm = 9040
+	NotYetMatchArmStatement = 9041
+	NotYetTypedefNonScalar = 9042
+	NotYetJumpOutOfGuard = 9043
+	NotYetGenericMethod = 9044
+	NotYetRawPointerBuiltin = 9045
+	NotYetCompileTimeBuiltin = 9046
+	NotYetImplOnBuiltin = 9047
+	NotYetSpecAsType = 9048
+	NotYetMutateListRvalue = 9049
+	NotYetOpenRangeHere = 9050
+	NotYetAssociatedFn = 9051
+	NotYetMapKeyType = 9052
+	NotYetIfBindOver = 9053
+	NotYetDerive = 9054
+	NotYetDeriveEq = 9055
+	NotYetListMethod = 9056
+	NotYetContainerEquality = 9057
+	NotYetRefBox = 9058
+	NotYetRenderAsText = 9059
+	NotYetSecondIntoImpl = 9060
+	NotYetInOverNoEq = 9061
+	NotYetInOverType = 9062
+	NotYetFixedWidthLadder = 9063
+	NotYetSetBuiltin = 9064
+	NotYetFnValueMutRef = 9065
+	NotYetDelChannel = 9066
+	NotYetGenericConstructor = 9067
+	NotYetNilPattern = 9068
+	NotYetValueUnnameableType = 9069
+	NotYetRebindMatchBinding = 9070
+	NotYetDefaultReadsField = 9071
+	NotYetDestructuringAssign = 9072
+	NotYetUnsafeFnType = 9073
+	NotYetImplDottedTarget = 9074
+	NotYetGenericTypedef = 9075
+	NotYetSubPatternInPayload = 9076
+	NotYetRangeAsValue = 9077
+	NotYetIsErrorKind = 9078
+	NotYetSealed = 9079
+	NotYetTryOnType = 9080
+	NotYetTwoModulesDefine = 9081
+	NotYetNamespaceCollision = 9082
+	NotYetForceOnType = 9083
+	NotYetCoalesceOnType = 9084
+	NotYetRenderEnumAsText = 9085
+	NotYetErrMethodArgs = 9086
+	NotYetErrMethod = 9087
+	NotYetOkOrNoArg = 9088
+	NotYetOkOrManyArgs = 9089
+	NotYetOkOrNotErr = 9090
+	NotYetOkTakesNoArg = 9091
+	NotYetCarrierMethod = 9092
+	NotYetEnumTypeMethod = 9093
+	NotYetMethodOnType = 9094
+	NotYetResultPattern = 9095
+	NotYetMainSignature = 9096
+	NotYetMainArgsWithConcurrency = 9097
+	NotYetSpawnOfNonFunction = 9098
+	NotYetSpawnOfUnknownName = 9099
+	NotYetMapMethod = 9100
+	NotYetErrField = 9101
+	NotYetOpenRangeInclusive = 9102
+	NotYetSpawnOfBinding = 9103
+	NotYetAtomicImport = 9104
 }
 
-# rule_code is the text a rule is reported under — the `E204` a gate pins and a reader looks
+# rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks
 # up. It is built from the discriminant rather than stored beside it so the number lives in
 # exactly one place, which is what makes renumbering an edit to this file alone.
 pub fn rule_code(r: Rule) -> str {
 	return f"E{int(r)}"
 }
 
-# rule_msg opens a message with its code, for the two refusals that raise a string rather
-# than going through a reporting channel. A channel does this itself.
+# rule_msg opens a message with its code, for the refusals that raise a string rather than
+# going through a reporting channel. A channel does this itself.
 pub fn rule_msg(r: Rule, msg: str) -> str {
 	return f"{rule_code(r)} {msg}"
 }

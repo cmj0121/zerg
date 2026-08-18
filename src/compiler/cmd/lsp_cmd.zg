@@ -5,7 +5,7 @@
 # THE FILE IS NOT CALLED `lsp.zg`, and it is the only one here that is not named after its
 # command. A module is resolved BESIDE THE IMPORTER first, so `cmd/lsp.zg` would be what
 # `import "lsp"` resolves to from inside this directory — the language server would import
-# itself, which the cycle rule refuses as `E485 lsp -> lsp`. A file in a module directory
+# itself, which the cycle rule refuses as `E4047 lsp -> lsp`. A file in a module directory
 # shadows the module its name spells, for every file in that directory.
 
 import (

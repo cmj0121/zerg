@@ -417,7 +417,7 @@ pub struct FnDecl {
 	# marks a function `zerg test` BUILDS for the tests that name it (docs/runtime/package.md).
 	# It rides here for every reason `is_test` does, and it is a SECOND flag rather than one
 	# field holding which of the two: a `#[test]` and a `#[fixture]` are different declarations
-	# that the same discovery walk reads, and an item takes one decorator (E613), so nothing
+	# that the same discovery walk reads, and an item takes one decorator (E2063), so nothing
 	# can ever be both — a single field would encode that fact a second time, where it could
 	# drift from the rule that enforces it.
 	pub is_fixture: bool
@@ -435,7 +435,7 @@ pub struct Diag {
 	pub line: int
 	pub col: int
 
-	# `code` is the rule's IDENTITY — `E307`, `L502` — and it is a field rather than the first
+	# `code` is the rule's IDENTITY — `E3006`, `L502` — and it is a field rather than the first
 	# word of `msg` because everything that reads a diagnostic wants it separately: the
 	# renderer puts it in front of the sentence, a gate pins it instead of the prose, and an
 	# editor filters and groups by it. A code spelled only inside the text is one every reader
@@ -560,7 +560,7 @@ pub struct TypeDecl {
 # resolve, since the constant may be declared in another file of the same program and nothing
 # has merged them yet. So the fold happens in c_build_enums, over the whole program, and what
 # survives the parse is the tree; `has_discr` is what tells `A = 0` from an `A` that merely
-# sits at position 0, a distinction E214 rests on. `line` / `col` are the variant's own name
+# sits at position 0, a distinction E2010 rests on. `line` / `col` are the variant's own name
 # token, so a discriminant that does not fold is reported at the variant and not at the enum.
 pub struct VariantDef {
 	pub name: str

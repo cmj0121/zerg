@@ -49,12 +49,12 @@ import (
 #
 # IT IS AN ENUM AND NOT A SET OF `int` CONSTANTS, and the difference is what the type can
 # refuse. Against `pub const INFO := 2`, both `.level(2)` and `.level(99)` are legal and
-# neither says anything; the enum seals it in both directions — `E340` for an `int` where a
-# `Level` belongs and for a `Level` where an `int` does, and `E347` for comparing a variant
+# neither says anything; the enum seals it in both directions — `E3038` for an `int` where a
+# `Level` belongs and for a `Level` where an `int` does, and `E3045` for comparing a variant
 # with a number.
 #
 # THE DEEPER WIN IS THE EXHAUSTIVE `match`. Every renderer below is one, so a level added
-# here cannot be added without ranking it, naming it and colouring it: `E428 non-exhaustive
+# here cannot be added without ranking it, naming it and colouring it: `E4019 non-exhaustive
 # match: missing variant Level.FATAL` is what a forgotten arm gets. The `int`-constant
 # version printed a blank and said nothing.
 #
@@ -116,15 +116,15 @@ fn rank(l: Level) -> int {
 #
 # IT IS `parse_level` AND NOT `parse` for the reason `at_level` is not `at`, and this one was
 # measured after the shorter name was written: a `pub` name has no package to be unique
-# within, so `pub fn parse` here is `E705` against a module-PRIVATE `fn parse` anywhere in the
+# within, so `pub fn parse` here is `E9081` against a module-PRIVATE `fn parse` anywhere in the
 # program. A standard library module that exported `parse` would take that word away from
 # every program importing it, and `parse` is the commonest private helper name there is. (The
 # module already spends `new`, `info`, `warn` and `error` the same way, which is a language
 # gap rather than a choice — but it is not a reason to spend one more.)
 #
 # IT IS A DIVERGE CHAIN AND NOT A `match`, and both halves of that are language rules rather
-# than taste: a `match` arm is an expression and may not hold a `return` (`E605`), and every
-# arm of one must answer the SAME type (`E322`), so `Level` and `nil` do not unify.
+# than taste: a `match` arm is an expression and may not hold a `return` (`E9039`), and every
+# arm of one must answer the SAME type (`E3021`), so `Level` and `nil` do not unify.
 #
 # ```zerg
 # log.new().level(log.parse_level("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
@@ -180,7 +180,7 @@ pub enum Format {
 # THE DESTINATION IS A VALUE CARRYING A MODE, and it was chosen over the two alternatives
 # after measuring both. A spec with `#[dyn]` is the shape this would take in a language with
 # interfaces, and this compiler has a deferred gap around non-`#[dyn]` provided spec methods;
-# a closure would work but a closure that names an imported module is `E735` in this compiler,
+# a closure would work but a closure that names an imported module is `E4069` in this compiler,
 # which is every writer that would want to reach `io`. A value needs no dynamic dispatch and
 # no capture, so it is the one of the three that is simply available.
 #
@@ -202,7 +202,7 @@ pub enum Format {
 # cannot disagree with itself is the whole improvement.
 #
 # `lines` is `pub` for the reason `testing.Context.events` is: a module-private field must
-# carry a default (`E482`), and there is no default channel to write — so the field is public
+# carry a default (`E4045`), and there is no default channel to write — so the field is public
 # and `to_stderr` / `to_chan` are the way one is made.
 pub struct Sink {
 	pub lines: chan[str]?
@@ -259,13 +259,13 @@ fn emit(sk: Sink, line: str) {
 # logging.
 #
 # THE DEFAULTS ARE THE ENVIRONMENT, AND THEY ARE WRITTEN HERE RATHER THAN IN `new`, which is
-# one line that constructs this. A module-private field MUST carry a default (`E482`), so
+# one line that constructs this. A module-private field MUST carry a default (`E4045`), so
 # `Logger()` exists whatever this module wants; writing the environment into `new` as well
 # would have made it a SECOND constructor that silently ignores `ZERG_LOG` — the kind of thing
 # nobody finds until a `ZERG_LOG=json` is quietly dropped on the floor.
 #
 # AND BECAUSE THE THREE CONSTS ARE PRIVATE, `log.Logger()` IS REFUSED OUTSIDE THIS MODULE —
-# `E301 ENV_LEVEL is not a public member`, three times, at the construction. So the accidental
+# `E3001 ENV_LEVEL is not a public member`, three times, at the construction. So the accidental
 # second constructor is not merely made to agree with `new`; it is gone, and `log.new()` is
 # the only way a Logger is built from outside. (The message names consts the caller cannot see,
 # and calls the module `stdlib` rather than `log`. Both are compiler defects worth reporting;
@@ -300,9 +300,9 @@ pub struct Logger {
 # `make mem-check` still puts the disabled line at +0.
 #
 # `log.Entry()` IS REFUSED OUTSIDE THIS MODULE for the reason `Logger()` is, and it INHERITS
-# that rather than arranging it: every field must carry a default (`E482` again), so the
+# that rather than arranging it: every field must carry a default (`E4045` again), so the
 # zero-argument construction exists — but `lg`'s default is `Logger()`, whose own defaults name
-# module-private consts, so the same `E301` lands here. Measured, after the opposite was
+# module-private consts, so the same `E3001` lands here. Measured, after the opposite was
 # written down and believed for a round. Inside the module it is inert anyway: `live` is false,
 # so every method returns at once, and `lvl` is `OFF`, so `msg` writes nothing and does not
 # exit.
@@ -355,7 +355,7 @@ fn env_level() -> Level {
 # ALL THREE READERS ARE WRITTEN WITH `??` RATHER THAN `if s := v { … }`, and that is not a
 # style choice. `zerg fmt` collapses a lone `return` inside an `if` into the postfix form, and
 # `return false if s := off` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
-# CONDITION and a binding head is not one (`E205`). The formatter turns a valid program into an
+# CONDITION and a binding head is not one (`E2005`). The formatter turns a valid program into an
 # invalid one, and `fmt --check` then calls the invalid one canonical, which is how this module
 # broke itself once. Reported; four lines reproduce it. `??` is the shorter answer anyway.
 fn env_format() -> Format {
@@ -477,7 +477,7 @@ impl Logger {
 	# `at_level` IS PUBLIC AND `debug()` IS NOT WRITTEN, and that is a language rule rather
 	# than a preference. `debug` is a RESERVED METHOD NAME in Zerg: `display` and `debug` are
 	# the two renderings every value has (docs/runtime/format.md), so a method by either name
-	# must answer the `str` the value shows as — and `E361 Logger.debug() answers the str the
+	# must answer the `str` the value shows as — and `E3059 Logger.debug() answers the str the
 	# value shows as, and this one does not` is what a level method by that name gets.
 	#
 	# The rule is about METHODS ONLY, measured: the free `log.debug()` further down is the
@@ -487,7 +487,7 @@ impl Logger {
 	# drift from the constant it stands for.
 	#
 	# AND IT IS `at_level` RATHER THAN `at` because of the OTHER rule: the global surface
-	# below wants the same function as a free one, and a free `pub at` is `E705` against the
+	# below wants the same function as a free one, and a free `pub at` is `E9081` against the
 	# compiler's own lexer, which has a module-private `at`. A `pub` name has no package to
 	# be unique within, so a private name in one module can take a public one away from
 	# another. One name for one concept was worth four characters.
@@ -647,7 +647,7 @@ fn tag(lvl: Level, col: bool) -> str {
 # short_name, level_name and colour_of are the three renderings of a level, and each is an
 # EXHAUSTIVE `match` rather than a chain of comparisons with a fallback. That is the whole
 # reason `Level` is an enum: a level added above cannot reach a program without an answer
-# here, because `E428` names the variant each of these three forgot. The chain they replaced
+# here, because `E4019` names the variant each of these three forgot. The chain they replaced
 # ended in `"???"` and would have shipped one silently.
 #
 # THE `OFF` ARM IS UNREACHABLE AND SAYS `"OFF"` ANYWAY. `msg` never renders one — `enabled`
@@ -748,10 +748,10 @@ fn needs_quotes(s: str) -> bool {
 #
 # 1. ONE CELL, MODULE-PRIVATE, ALREADY VALID — AND NAMED AFTER THE MODULE.
 #
-#    A bare `mut` at module level is refused: `E358 the top-level binding `log_cell` may not
+#    A bare `mut` at module level is refused: `E3056 the top-level binding `log_cell` may not
 #    be `mut` outside a module-level `unsafe { … }` group — module state is immutable, and
 #    shared mutable state travels by value or through channels`. Inside the group it is
-#    allowed, and `pub` on it is refused in turn: `E484 the mutable global `log_cell` may not
+#    allowed, and `pub` on it is refused in turn: `E4046 the mutable global `log_cell` may not
 #    be `pub` — a module-level `unsafe { … }` group is one module's bargain with its own
 #    author`. So "configure by function" is not the RECOMMENDED way here, it is the ONLY way
 #    the language permits, and nothing is left for a reviewer to remember.
@@ -782,7 +782,7 @@ fn needs_quotes(s: str) -> bool {
 #    NAME THE CELL AFTER THE MODULE — `log_cell`, `settings_cell` — and not `process` or
 #    `state`. This compiler flattens every module into one namespace, so two modules that copy
 #    this pattern and both name their cell `process` cannot be linked, PRIVATE OR NOT:
-#    `E706 … both define `process` — this compiler flattens every module into one namespace`.
+#    `E9082 … both define `process` — this compiler flattens every module into one namespace`.
 #    Measured with a second module built on this shape.
 #
 # 2. ONE WRITER, AND IT TAKES A VALUE THAT IS ALREADY BUILT.
@@ -799,7 +799,7 @@ fn needs_quotes(s: str) -> bool {
 #    THE NAME IS `install` AND NOT `level`, because `level` already means *derive a logger at
 #    this level*, and one word may not be pure on an instance and effectful on the module.
 #    (`enabled` lives in both places precisely because it means the same thing in both.)
-#    Note that the writer's name is program-global too, by `E705` rather than `E706`: a second
+#    Note that the writer's name is program-global too, by `E9081` rather than `E9082`: a second
 #    module cannot also call its writer `install`, so this one is a word `log` is spending.
 #
 #    THERE IS NO `current()`. A `current().level(…)` interface would read as mid-flight
@@ -811,7 +811,7 @@ fn needs_quotes(s: str) -> bool {
 #    Every public function below is one line that reaches the cell and calls a method that
 #    already exists — `log_cell.info()`, not `log_cell.at_level(Level.INFO)`, so the level a
 #    name means is written once. The one exception is `debug`, which has no method to call
-#    because `E361` reserves that name for a rendering, and is therefore the only global that
+#    because `E3059` reserves that name for a rendering, and is therefore the only global that
 #    names its own level. There is exactly one level check, one builder and one writer in this
 #    module. A global that grew its own comparison would be a second logger drifting from the
 #    first, which is the argument that keeps one JSON escaper in this tree.
@@ -820,7 +820,7 @@ fn needs_quotes(s: str) -> bool {
 #    global that is a bare `int` or a `map`, there is no instance to delegate to and rule 3
 #    says nothing; and for one whose whole point is being MUTATED as the program runs — a
 #    counter, a registry — this pattern does not apply at all. That case wants one owning
-#    coroutine and a channel, which is what `E358`'s own message points at.
+#    coroutine and a channel, which is what `E3056`'s own message points at.
 #
 # 4. WHAT IT COSTS, WITHOUT ROUNDING IT UP.
 #
@@ -857,7 +857,7 @@ fn needs_quotes(s: str) -> bool {
 #
 #   - an immutable binding holding a stdlib `Atomic[T]`, which is the safe alternative GRAMMAR
 #     names for exactly this. `atomic` today is `Atomic[int]` and cannot be imported at all
-#     (`E511`: a generic struct is a form this compiler has not built), so this waits on
+#     (`E9104`: a generic struct is a form this compiler has not built), so this waits on
 #     generic structs and on `Atomic[T]` reaching a struct payload.
 #   - a language in which a whole struct store is one atomic operation, which would make
 #     rule 4's window close rather than merely be avoided.

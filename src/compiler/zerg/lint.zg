@@ -346,7 +346,7 @@ fn lint_ships_an_assert(mut &toks: list[Token], path: str, mut &out: list[Findin
 
 # deco_of spells which of the two decorators a declaration carries, for the one sentence that
 # has to name it. They cannot both be on one item — a decorator leads a declaration and there
-# is one per item (E613) — so the question has an answer.
+# is one per item (E2063) — so the question has an answer.
 fn deco_of(fd: FnDecl) -> str {
 	return "#[fixture]" if fd.is_fixture
 
@@ -393,7 +393,7 @@ fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
 # the reading that a bare use of it resolved to whichever enum was declared first — so
 # `c := Red` was a coin toss and moving an `enum` changed what a program meant.
 #
-# Neither half of that survives. A variant is named THROUGH its enum (E383, c_bare_variant),
+# Neither half of that survives. A variant is named THROUGH its enum (E3079, c_bare_variant),
 # so a bare `Red` is not a value in either enum; and a qualified `Signal.Red` is resolved
 # inside the enum it names (c_var_row_in), so two enums that both declare a `Red` declare
 # two different variants that are spelled alike and never compete. A lint whose reason has
@@ -830,7 +830,7 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 # whole reason this note is here, because they briefly did not. This walk has a second caller
 # that is not a lint rule at all: `c_lambda_free_all` subtracts what a body BINDS from what it
 # READS to get a closure's captures, so a name in one half and not the other becomes a capture
-# out of nothing. It did: a closure holding an `assert` was turned away with _E735 a closure
+# out of nothing. It did: a closure holding an `assert` was turned away with _E4069 a closure
 # captures `zga_l3c10`_, a diagnostic naming a temporary the reader never wrote.
 #
 # The temporaries cost nothing here. Every one of them is READ — by the condition that tests
@@ -1251,7 +1251,7 @@ fn lint_allows(srcs: list[str], paths: list[str]) -> list[Allow] {
 # `allow` item names.
 #
 # IT READS THE WHOLE DECORATOR, not just its first item. One decorator per item is the rule
-# (E613), so a `#[test]` that wants an allow beside it has to write `#[allow(L601), test]` —
+# (E2063), so a `#[test]` that wants an allow beside it has to write `#[allow(L601), test]` —
 # and a scan that only looked at the item after the `#[` would see nothing in exactly the
 # program the merged form was made for.
 fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {
@@ -1273,7 +1273,7 @@ fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {
 }
 
 # lint_allow_args reads one `( CODE, … )` argument list onto `codes` and answers the index
-# just past it — or `at` itself when the item took no arguments, which is E614's program and
+# just past it — or `at` itself when the item took no arguments, which is E2064's program and
 # not this walk's business.
 fn lint_allow_args(toks: list[Token], at: int, mut &codes: list[str]) -> int {
 	return at if at >= toks.len() or toks[at].kind != Kind.LParen

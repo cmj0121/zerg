@@ -15,8 +15,8 @@
 # of it: the surviving `greeting` is the module's, not the test's.
 #
 # The other direction is refused rather than demonstrated, because there is nothing to
-# demonstrate: `lib.only_in_test()` is `E388 module `lib` has no `only_in_test``, and
-# `import "lib/lib_test"` is `E512`. Both live in scripts/reject-check.sh.
+# demonstrate: `lib.only_in_test()` is `E3084 module `lib` has no `only_in_test``, and
+# `import "lib/lib_test"` is `E5011`. Both live in scripts/reject-check.sh.
 import "lib"
 
 fn main() {

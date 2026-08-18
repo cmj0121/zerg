@@ -41,6 +41,7 @@ src/compiler/
     layout.zg     # shared: where things are, and what cc is called with
     unit.zg       # shared: a unit, its cached object, and the link
   zerg/           # the compiler library — one directory module, shared scope
+    rule.zg       # every diagnostic's code, declared once as one enum
     token.zg      # Kind enum + Token type
     lexer.zg      # source text -> token stream (comments kept on request)
     ast.zg        # recursive AST node types (enum payloads)

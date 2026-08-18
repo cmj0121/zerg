@@ -1,6 +1,8 @@
 package sema
 
 import (
+	"strings"
+
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
@@ -729,6 +731,30 @@ func (c *checker) enumTypeNamed(id *ast.Ident) (*types.Enum, *Symbol, bool) {
 	return &types.Enum{Def: sym.TypeDef}, sym, true
 }
 
+// enumTypeQualified answers the enum a `mod.Enum` field names, when the left of the dot
+// is an imported namespace and the member it reaches is an enum type. It is the qualified
+// half of enumTypeNamed: the seed's own source reaches the compiler's diagnostic registry
+// this way, and the enum name is a value namespace wherever it is spelled from.
+// It answers the TAG the whole-program flatten put in front of the module's names as well:
+// a merged declaration is `lib__Rule` and its variants are `lib__Alpha`, so the variant a
+// reader spells bare has to be looked up under the same prefix.
+func (c *checker) enumTypeQualified(fld *ast.Field) (*types.Enum, *Symbol, string, bool) {
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return nil, nil, "", false
+	}
+	ns := c.module.lookup(id.Name)
+	if ns == nil || ns.Kind != SymNamespace {
+		return nil, nil, "", false
+	}
+	res := c.resolveMember(ns, id.Name, fld.Name)
+	if !res.Found || res.Sym == nil || res.Sym.Kind != SymType || res.Sym.TypeDef == nil || res.Sym.TypeDef.Enum == nil {
+		return nil, nil, "", false
+	}
+	c.recordMember(fld, res.Key)
+	return &types.Enum{Def: res.Sym.TypeDef}, res.Sym, strings.TrimSuffix(res.Key, fld.Name), true
+}
+
 // enumNamespaceCall checks a call whose callee reaches into an enum name as a value
 // namespace: `E.of(n) -> E?` (the discriminant reverse) or `E.Variant(...)` (a
 // qualified variant constructor, the mirror of the bare `Variant(...)`). It reports
@@ -1241,6 +1267,24 @@ func (c *checker) inferField(n *ast.Field) Type {
 				c.errorf(n.Span(), "enum %s has no variant %q", en.Def.Name, n.Name)
 				return Invalid
 			}
+		}
+	}
+	// the same value one module over: `mod.Enum.Variant`. The left of the dot is itself a
+	// field — a namespace member naming an enum TYPE — so the Ident path above never sees
+	// it, and namespaceMember would report a type used as a value. A module flattens into
+	// one program, so the variant it names is the ordinary variant value.
+	if fld, ok := n.X.(*ast.Field); ok {
+		if en, sym, tag, ok := c.enumTypeQualified(fld); ok {
+			if vsym := c.enumVariantSym(sym, tag+n.Name); vsym != nil {
+				if len(vsym.Variant.Payload) != 0 {
+					c.errorf(n.Span(), "variant %q requires a payload; use %s.%s(...)", n.Name, en.Def.Name, n.Name)
+					return Invalid
+				}
+				c.info.ExprTypes[n] = en
+				return en
+			}
+			c.errorf(n.Span(), "enum %s has no variant %q", en.Def.Name, n.Name)
+			return Invalid
 		}
 	}
 	xt := c.synth(n.X)

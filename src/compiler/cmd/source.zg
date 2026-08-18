@@ -48,7 +48,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 		chain = chain + path_tail(stack[j]) + " -> "
 		j = j + 1
 	}
-	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
+	raise zerg.rule_msg(zerg.Rule.ImportCycle, f"import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all")
 }
 
 # chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
@@ -81,14 +81,14 @@ fn chk_test_import(im: zerg.ImportDecl) {
 	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
+	raise zerg.rule_msg(zerg.Rule.TestFileImported, f"`{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}")
 }
 
 fn chk_unbuilt_module(im: zerg.ImportDecl) {
 	return if path_tail(im.path) != "atomic"
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
+	raise zerg.rule_msg(zerg.Rule.NotYetAtomicImport, f"the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}")
 }
 
 # --- a program's sources, entry first ------------------------------------------------------
@@ -181,7 +181,7 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 	}
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
+	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}")
 }
 
 # WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written in
@@ -447,7 +447,7 @@ fn read_source(path: str) -> str {
 		src = str(b)
 		ok = true
 	}
-	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
+	raise zerg.rule_msg(zerg.Rule.SourceNotUtf8, f"`{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text") if not ok
 
 	return src
 }

@@ -105,7 +105,7 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	# driver it cost a second read of the entry off disk and a second parse of it.
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
-		nomain.append(zerg.diag_at(entry, 1, 1, "E501", "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		nomain.append(zerg.diag_at(entry, 1, 1, zerg.Rule.EntryHasNoMain, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 		report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 

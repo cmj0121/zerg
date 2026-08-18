@@ -177,7 +177,7 @@ fn test_rfc3339_pads_every_field() {
 }
 
 # The rendered string is exactly 20 bytes for every year the format has, which is the
-# property a fixed-width column in a log line depends on. `str` has no `len` (E725), so the
+# property a fixed-width column in a log line depends on. `str` has no `len` (E9094), so the
 # question is asked of the bytes — which is the right unit anyway: this is ASCII, and a
 # column is measured in what gets written.
 #[test]

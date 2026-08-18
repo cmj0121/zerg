@@ -17,7 +17,7 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 > [標準函式庫](stdlib.zh-TW.md#io)——外加 `print` 關鍵字。檔案不存在或不可讀會 raise **`IOError`**，可用
 > `guard { io.read_file(p) }` 降級為 `Result`；內容為文字時以 `str(…)` 解碼。
 > **`Reader` / `Writer` spec 面**——下文的 `read_bytes` / `read()` / `write` 與 `io.stdin` · `io.stdout` ·
-> `io.stderr` 串流物件——為 **[not yet]**：預期語意一如規格所述，而寫出其中任一個名字得到的是 **`E388`**——
+> `io.stderr` 串流物件——為 **[not yet]**：預期語意一如規格所述，而寫出其中任一個名字得到的是 **`E3084`**——
 > _module `io` has no `stdout`_——任何位置皆然，包含作為方法呼叫的 receiver。
 
 ## 串流——`Reader` 與 `Writer`
@@ -74,7 +74,7 @@ import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
 
-> **[not yet]** `io.stdin` / `io.stdout` / `io.stderr` 串流物件尚未建置，寫出其中一個得到的是 **`E388`**——
+> **[not yet]** `io.stdin` / `io.stdout` / `io.stderr` 串流物件尚未建置，寫出其中一個得到的是 **`E3084`**——
 > _module `io` has no `stdout`_——包含作為方法呼叫的 receiver，也就是上方範例寫它的位置。此階段接好的是自由
 > 函式（見[標準函式庫](stdlib.zh-TW.md#io)）；各寫出器回 `Result[nil]`，但為 best-effort 寫出，尚不會產出 `Err`。
 >
@@ -98,7 +98,7 @@ thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 ## Process 與命令執行
 
 **[not yet]**——命令字面量被 lex 之後由 **parser 拒絕**，兩種形式各以自己的名字、各帶位置:靜態的
-`` `git status` `` 是 `E236`，會內插的 `` f`git checkout {b}` `` 是 `E235`。下方的預期模型不變，待 runtime 落地。
+`` `git status` `` 是 `E9020`，會內插的 `` f`git checkout {b}` `` 是 `E9019`。下方的預期模型不變，待 runtime 落地。
 真正有出貨的是 `os.run(argv: list[str]) -> int`（[標準函式庫](stdlib.zh-TW.md)）——argv 直接交給 OS，沒有 shell 也
 沒有 pipe，所以它只涵蓋「跑一個子行程、讀它的 exit status」，本節其餘的一概沒有。
 

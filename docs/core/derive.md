@@ -39,7 +39,7 @@ invariant above). It lets a spec expose many methods from a small required core;
 **inherits** them or **overrides** one. Every user spec can carry these — this is the **extensible**
 tier.
 
-> **[not yet]** A `spec` member with a **body** is refused at the declaration — _E210 NotImplemented: a
+> **[not yet]** A `spec` member with a **body** is refused at the declaration — _E9002 NotImplemented: a
 > `spec` member with a BODY_ — so the block below declares an interface no program can carry today.
 > Declare the signature and write the body in each `impl`; see [Specs & Generics](specs.md).
 
@@ -76,7 +76,7 @@ spec**, distinct from both tiers above.
 - the **compiler** — which is not user-authored.
 
 So a user-defined structural derive is impossible **by construction**, not by omission. The derivable
-set is **fixed and compiler-owned**; a user spec is never in it — _E437 cannot derive `Show`: on a struct
+set is **fixed and compiler-owned**; a user spec is never in it — _E4024 cannot derive `Show`: on a struct
 the derivable specs are compiler-owned, and a `spec` you write is never one of them … write
 `impl Show for P` instead_. The extensible tier is the behavioral default above; the structural tier is
 closed.
@@ -120,9 +120,9 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
 via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** is built;
 **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** — naming one is
-`E436`.
+`E9054`.
 
-> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by its own code — _E438 …
+> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by its own code — _E9055 …
 > it carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants
 > differ exactly as their discriminants do; write `impl Eq for E` with a `match`_. Its rule needs the tag
 > **and** the payload matched on both sides at once.

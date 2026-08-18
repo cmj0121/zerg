@@ -496,9 +496,9 @@ fi
 #
 # Everything above opens a file that IS a program. An editor mostly opens one that is not:
 # a member of a directory module, whose types, whose callers and whose second source root
-# all live outside it. Read as an entry, such a file reports `E707 no type named ...` for a
+# all live outside it. Read as an entry, such a file reports `E4056 no type named ...` for a
 # struct in the file next to it, `L102 private function ... is never called` for a function
-# its sibling calls, and `E502 cannot resolve import` for a module that sits beside its own
+# its sibling calls, and `E5002 cannot resolve import` for a module that sits beside its own
 # directory rather than inside it — three sentences about correct code, which is the one
 # failure that makes a person turn the server off.
 #

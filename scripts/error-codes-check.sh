@@ -15,6 +15,14 @@
 # catalogue with no source is a rule a reader looks up and cannot reach. Neither breaks a
 # build, and neither would be noticed by any other gate here.
 #
+# THE SOURCE IS TWO THINGS NOW, and they are asked separately. `src/compiler/zerg/rule.zg`
+# DECLARES every code as a variant of `Rule` carrying its number, and a site REPORTS one by
+# naming that variant. A declaration nobody reports is a code the compiler does not have; a
+# report of a variant that is not declared cannot be written at all, because the reporting
+# channels take a `Rule` and the compiler refuses anything else. That is the half of this
+# gate the type system took over, and what is left here is the half it cannot see: whether
+# the number a rule was given is asserted by a case and listed for a reader.
+#
 # It reads the SOURCES rather than running the compiler, because a code that no program can
 # reach still owes a row and a case — being unreachable is a separate finding, and one this
 # gate would hide if it only looked at what it could make fire.
@@ -31,13 +39,13 @@
 # The catalogue has a page of its own, and the F and L schemes have theirs. It sat with them
 # for as long as there were three tables on one page, which was fine while the question was
 # "what does this code mean" and stopped being fine when the page grew to half again the size
-# of any other chapter: a reader who meets `E204` in a terminal has no reason to look under
+# of any other chapter: a reader who meets `E2004` in a terminal has no reason to look under
 # `zerg fmt`. The three are still one discipline — a code is an identity, and this script
 # holds all of them to that — but a reader arrives at each of them by a different road.
 #
 # AND IT ANSWERS ONE MORE QUESTION, which is the reason for the second half of this script:
-# what is the NEXT FREE CODE. Three collisions happened in one week — `E387`, `E477` and
-# `E288`/`E289` — each because parallel work could only grep the catalogue and could not see
+# what is the NEXT FREE CODE. Three collisions happened in one week — `E3083`, `E4042` and
+# `E2045`/`E2046` — each because parallel work could only grep the catalogue and could not see
 # a sibling's choice. This gate catches a collision once both halves are in one tree, which
 # is too late to be cheap; reporting the next free code per range is what lets it be asked
 # BEFORE, by a person or by an agent, with one command.
@@ -51,6 +59,7 @@
 set -uo pipefail
 
 SRC=${SRC:-src/compiler}
+REG=${REG:-src/compiler/zerg/rule.zg}
 DOC=${DOC:-docs/tooling/diagnostics.md}
 
 # The TRANSLATED catalogue, held to the same code set. It is asked separately from the three
@@ -64,10 +73,23 @@ GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
 fail=0
 
-# A code in the source is one that a diagnostic string OPENS with — `raise "E204 …"`,
-# `f"E413 …"`, `bad(l, "E109", …)`. A mention inside prose (a comment naming a code it
-# explains) is not a report and is not counted, which is why the patterns anchor on the
-# quote or on the argument position rather than matching the bare word.
+# THE REGISTRY, read as `Name E2004` a line: the variants of `pub enum Rule`, each carrying
+# the number its rule is reported under. It is the one place a code is declared, and reading
+# it here rather than restating the numbers is what lets the scheme be renumbered by editing
+# that file alone.
+registry_rows() {
+	sed -n '/^pub enum Rule {/,/^}/p' "$REG" |
+		sed -nE 's/^\t([A-Za-z][A-Za-z0-9]*) = ([0-9]+)$/\1 E\2/p'
+}
+
+codes_declared() {
+	registry_rows | awk '{print $2}' | sort -u
+}
+
+# A code REPORTED is a site naming a variant — `chk_at(em, Rule.AssignToConst, …)`, and
+# `zerg.Rule.EntryHasNoMain` one module over. The registry file itself is left out: it
+# DECLARES the names and reports none of them, so counting it would make every code look
+# reported and this gate would only ever compare the registry with itself.
 #
 # `--include='*.zg'` because `grep -r` reads whatever is in the tree, and what is in the tree
 # is not only the compiler: an editor's `parser.zg.bak`, a patch left by a rebase, a copy
@@ -75,15 +97,17 @@ fail=0
 # so this reports 99 duplicates and the gate is red for a file nobody meant to keep. A gate
 # that can be broken by a stray backup is a gate people learn to disbelieve.
 code_reports() {
-	grep -rhoE --include='*.zg' '((raise |return |, )f?"E[0-9]{3} |"E[0-9]{3}",)' "$SRC" | grep -oE 'E[0-9]{3}'
+	grep -rhoE --include='*.zg' --exclude="$(basename "$REG")" '\bRule\.[A-Za-z][A-Za-z0-9]*' "$SRC" |
+		sed 's/^Rule\.//' |
+		awk 'NR == FNR { m[$1] = $2; next } { print ($1 in m) ? m[$1] : "undeclared:" $1 }' <(registry_rows) -
 }
 
 codes_in_source() {
-	code_reports | sort -u
+	code_reports | grep -E '^E[0-9]{4}$' | sort -u
 }
 
 # A code a gate asserts. Both scripts spell the assertion as a bare argument — `expect …
-# E204` in one, `reject … E307 …` in the other — so the word is looked for anywhere on a
+# E2004` in one, `reject … E3006 …` in the other — so the word is looked for anywhere on a
 # line that is a case, and comments are dropped first.
 #
 # A case may be INDENTED, because a family of them is written as a loop over the shapes it
@@ -91,7 +115,7 @@ codes_in_source() {
 # such a family asserts, and reported it as a code no gate pins.
 codes_in_gates() {
 	# shellcheck disable=SC2086
-	grep -hoE '^[[:space:]]*(expect|reject) [^#]*' $GATES | grep -oE '\bE[0-9]{3}\b' | sort -u
+	grep -hoE '^[[:space:]]*(expect|reject) [^#]*' $GATES | grep -oE '\bE[0-9]{4}\b' | sort -u
 }
 
 # A code the catalogue lists: one row per code, in a table whose first cell is the code.
@@ -102,19 +126,19 @@ codes_in_gates() {
 # layout would be a second spelling of a code for the sake of a grep.
 codes_in_doc() {
 	sed -n "1,/^### Retired codes/p" "$DOC" |
-		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
+		grep -oE '^\| `E[0-9]{4}`' | grep -oE 'E[0-9]{4}' | sort -u
 }
 
 codes_retired() {
 	sed -n "/^### Retired codes/,\$p" "$DOC" |
-		grep -oE '^\| `E[0-9]{3}`' | grep -oE 'E[0-9]{3}' | sort -u
+		grep -oE '^\| `E[0-9]{4}`' | grep -oE 'E[0-9]{4}' | sort -u
 }
 
 # The translated table, live and retired rows together: what the zh-TW page owes is the same
 # SET of codes, and which side of its own retired heading each one sits on is that page's
 # business rather than this gate's.
 codes_in_doc_zh() {
-	grep -oE '^\| `E[0-9]{3}`' "$DOC_ZH" | grep -oE 'E[0-9]{3}' | sort -u
+	grep -oE '^\| `E[0-9]{4}`' "$DOC_ZH" | grep -oE 'E[0-9]{4}' | sort -u
 }
 
 # WHICH STAGE A RANGE BELONGS TO, read from the catalogue's range table — `| \`E2xx\` | parser
@@ -127,8 +151,8 @@ codes_in_doc_zh() {
 # numbers continue in `E6xx`, so "the next free code" has to be answered per STAGE or it
 # answers twice and names neither — which is the collision this half of the script exists to
 # prevent, arriving by a different road.
-stages_in_doc() {
-	grep -oE '^\| `E[0-9]xx` \| [a-z]+' "$DOC" | sed -E 's/^\| `E([0-9])xx` \| /\1 /' | sort -u
+ranges_in_doc() {
+	grep -oE '^\| `E[0-9]xxx` \| [a-z]+' "$DOC" | sed -E 's/^\| `E([0-9])xxx` \| /\1 /' | sort -u
 }
 
 src=$(codes_in_source)
@@ -140,7 +164,7 @@ doc_zh=$(codes_in_doc_zh)
 # A FLOOR, and it is on the catalogue rather than on the compiler. Every comparison below is
 # a set difference, and a difference against an empty set is empty: a renamed heading, a
 # reformatted table, a `sed` range that stops matching, and all four `report` calls go quiet
-# while the range walk finds no marks to walk to. 150 against the 348 live rows there are today.
+# while the range walk finds no marks to walk to. 150 against the 357 live rows there are today.
 MIN_CODES=${MIN_CODES:-150}
 n_doc=$(printf '%s\n' "$doc" | grep -c .)
 if [ "$n_doc" -lt "$MIN_CODES" ]; then
@@ -159,8 +183,7 @@ fi
 # they list the same SET: two independently tunable water lines for one set is two knobs that
 # can contradict each other. It is compared against a count that includes the retired rows
 # (codes_in_doc_zh does not split them, deliberately), so it is measured against a larger
-# base than the English one — 150 against the 368 rows there are today, where the English
-# floor is 150 against 348 live ones. Both are far enough below to survive ordinary growth
+# base than the English one, where the English floor is 150 against 357 live rows. Both are far enough below to survive ordinary growth
 # and far enough above that a table which lost most of itself cannot pass.
 n_doc_zh=$(printf '%s\n' "$doc_zh" | grep -c .)
 if [ "$n_doc_zh" -lt "$MIN_CODES" ]; then
@@ -192,15 +215,16 @@ report "listed in English, missing from the zh-TW catalogue" \
 report "listed in the zh-TW catalogue, missing from English" \
 	"$(comm -13 <(printf '%s\n%s\n' "$doc" "$retired" | sort -u) <(printf '%s\n' "$doc_zh"))"
 
-# EVERY RULE HAS ONE, which is the half the three sets cannot see: they compare codes that
-# already exist, so a rule reported with no code at all is absent from all three and nothing
-# fires. The reporting functions take the code as an ARGUMENT, so the compiler's own arity
-# rule already refuses a call that omits it — what is left to check is that the argument is a
-# code rather than a string that happens to be there, and the only calls exempt are the
-# forwarding ones that pass a `code` they were handed.
-uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|p_diag\(|c_diag\(|c_derive_diag\(|Diag\(' "$SRC" --include='*.zg' |
-	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn ([cp]_)?(chk_(at|note)|_?diag(_at)?|derive_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
-report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
+# A DECLARED CODE NOBODY REPORTS. The compiler cannot have this one both ways: a `Rule` a
+# site never names is a number spent on nothing, and it would otherwise sail through every
+# comparison below — the catalogue would list it, a case could even be written for a message
+# no program can produce, and the range walk would count it as taken.
+#
+# The other direction needs no rule here. A site naming a variant the registry does not
+# declare is not a finding, it is a program that does not compile, because every reporting
+# channel takes a `Rule` and there is no way to spell one that was never declared.
+report "declared in $REG, reported by no site" \
+	"$(comm -23 <(codes_declared) <(printf '%s\n' "$src"))"
 
 # THE TWO RAISING STAGES REPORT THROUGH THEIR CHANNEL, and this is what keeps that true one
 # site at a time. The rule above holds a channel CALL to a literal code; it cannot see a
@@ -239,6 +263,17 @@ done
 dup=$(code_reports | sort | uniq -d)
 report "reported from more than one place — two rules under one identity" "$dup"
 
+# TWO ROWS WITH THE SAME SENTENCE. A code is an identity, and a catalogue that gives two of
+# them the same words hands a reader two rules they cannot tell apart — which is what the row
+# is FOR, since the message at the site carries the values and the row carries the rule. It
+# had already happened twice: a conversion refused for taking no value, and the same refusal
+# for `bytearray`/`runearray`, written out identically two ranges apart.
+dup_rule=$(sed -n "1,/^### Retired codes/p" "$DOC" |
+	grep -E '^\| `E[0-9]{4}`' |
+	sed -E 's/^\| `E[0-9]{4}` *\| *//; s/ *\|$//; s/ *$//' |
+	sort | uniq -d)
+report "listed twice with the same words — a reader cannot tell the two rules apart" "$dup_rule"
+
 # A code that is BOTH live and retired is the one state the two tables must never be in
 # together: a reader looking it up gets two answers, and the range walk below would accept
 # the number twice over.
@@ -255,25 +290,18 @@ report "listed as live and as retired at once" \
 # retiring the highest code in a range must not hand the number straight back.
 #
 # THE RANGES ARE READ FROM THE CATALOGUE rather than listed here, because a hardcoded
-# `1 2 3 4 5` is a second statement of which ranges exist: the day the parser's numbers ran
-# past `E298` and continued in `E6xx`, the walk would have skipped the new range entirely —
-# no gap check, no next-free answer — and said nothing, which is the one failure mode this
-# whole script is against.
+# `1 2 3 4 5 9` is a second statement of which ranges exist, and the day somebody opens one
+# the walk would skip it entirely — no gap check, no next-free answer — and say nothing,
+# which is the one failure mode this whole script is against.
 #
 # AND A FULL RANGE SAYS SO. `mark + 1` is the next free code only while there is one: at
-# `x99` it names the first number of the NEXT range, which belongs to a different stage. The
-# advice was the thing this script exists to make trustworthy, and E2xx reached `E298` — one
-# number from handing out `E300` to whoever asked for a parser code.
-#
-# THE ANSWER IS PER STAGE, not per range, and that is the difference a continuation range
-# makes. A person does not ask "what is free in E2xx", they ask "what number does the next
-# PARSER rule take" — and once one stage owns two ranges, a per-range answer names two
-# numbers and cannot say which. So the ranges are grouped by the stage the catalogue gives
-# them and the answer is the highest range's, because that is what a continuation MEANS: the
-# parent range is closed, and a number left below it is retired rather than held open, or
-# there are two places to allocate from and the collision is back.
-all_codes=$(printf '%s\n%s\n' "$doc" "$retired" | grep -E '^E[0-9]{3}$' | sort -u)
-stages=$(stages_in_doc)
+# `x999` it names the first number of the NEXT range, which belongs to somebody else. Under
+# the three-digit numbering this was not a hypothetical — `E2xx` reached its ninety-eighth
+# number, one away from handing a parser rule the checker's range. A range is a thousand
+# numbers now and the largest holds a hundred, which is why the answer below is per RANGE
+# again: one range is one stage, and there is no continuation to pick between.
+all_codes=$(printf '%s\n%s\n' "$doc" "$retired" | grep -E '^E[0-9]{4}$' | sort -u)
+ranges=$(ranges_in_doc)
 
 # `<digit> <answer>` per range, accumulated in a string rather than an associative array:
 # `declare -A` is bash 4, and the bash a macOS box has without homebrew is 3.2.
@@ -284,7 +312,7 @@ for r in $(printf '%s\n' "$all_codes" | sed -E 's/^E([0-9]).*/\1/' | sort -u); d
 	mark=$(printf '%s\n' "$in_range" | sort -n | tail -1)
 
 	missing=""
-	n=$((r * 100 + 1))
+	n=$((r * 1000 + 1))
 	while [ "$n" -le "$mark" ]; do
 		printf '%s\n' "$in_range" | grep -qx "$n" || missing="$missing E$n"
 		n=$((n + 1))
@@ -297,8 +325,8 @@ for r in $(printf '%s\n' "$all_codes" | sed -E 's/^E([0-9]).*/\1/' | sort -u); d
 		printf '    retire it in the catalogue instead, with the reason\n' >&2
 		fail=1
 	fi
-	if [ "$mark" -ge $((r * 100 + 99)) ]; then
-		range_answer="$range_answer$r E${r}xx-is-full
+	if [ "$mark" -ge $((r * 1000 + 999)) ]; then
+		range_answer="$range_answer$r E${r}xxx-is-full
 "
 	else
 		range_answer="$range_answer$r E$((mark + 1))
@@ -309,21 +337,21 @@ for r in $(printf '%s\n' "$all_codes" | sed -E 's/^E([0-9]).*/\1/' | sort -u); d
 	# one thing about it a reader cannot work out from the number, and the answer below is
 	# grouped by it — so a range with no row is a range whose codes are advice nobody can act
 	# on, and it would drop out of the report silently rather than say why.
-	if ! printf '%s\n' "$stages" | grep -q "^$r "; then
-		printf 'error-codes-check: E%sxx holds codes and the range table in %s does not describe it\n' "$r" "$DOC" >&2
-		printf '    add a row naming the stage it reports for; the next-free answer is grouped by that name\n' >&2
+	if ! printf '%s\n' "$ranges" | grep -q "^$r "; then
+		printf 'error-codes-check: E%sxxx holds codes and the range table in %s does not describe it\n' "$r" "$DOC" >&2
+		printf '    add a row naming what reports it; the next-free answer is labelled with that name\n' >&2
 		fail=1
 	fi
 done
 
-# ONE ANSWER PER STAGE, from the highest range that stage owns. See the paragraph above the
-# walk: a stage may own two ranges and only one of them is open.
+# ONE ANSWER PER RANGE, labelled with what the catalogue says reports it. A person does not
+# ask "what is free in E2xxx", they ask what number the next PARSER rule takes.
 next_free=""
-for stage in $(printf '%s\n' "$stages" | awk '{print $2}' | sort -u); do
-	top=$(printf '%s\n' "$stages" | awk -v s="$stage" '$2 == s {print $1}' | sort -n | tail -1)
-	answer=$(printf '%s\n' "$range_answer" | awk -v r="$top" '$1 == r {print $2}')
-	[ -z "$answer" ] && answer="E${top}01"
-	next_free="$next_free $stage $answer,"
+for r in $(printf '%s\n' "$ranges" | awk '{print $1}' | sort -n); do
+	label=$(printf '%s\n' "$ranges" | awk -v r="$r" '$1 == r {print $2}')
+	answer=$(printf '%s\n' "$range_answer" | awk -v r="$r" '$1 == r {print $2}')
+	[ -z "$answer" ] && answer="E${r}001"
+	next_free="$next_free $label $answer,"
 done
 next_free=${next_free%,}
 
@@ -337,4 +365,4 @@ fi
 printf 'error-codes-check: %s codes — each reported once, asserted by a gate, and listed (%s retired)\n' \
 	"$(printf '%s\n' "$src" | wc -l | tr -d ' ')" \
 	"$(printf '%s\n' "$retired" | grep -c .)"
-printf 'error-codes-check: next free code per stage —%s\n' "$next_free"
+printf 'error-codes-check: next free code per range —%s\n' "$next_free"

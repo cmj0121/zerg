@@ -573,7 +573,7 @@ func (l *Lexer) scanUnicodeEscape(sb *strings.Builder) bool {
 	// Past U+10FFFF, or a surrogate: NOT a code point, so not an escape. WriteRune used to
 	// substitute U+FFFD here and say nothing, so `'\u{110000}'` and `'\u{D800}'` both became
 	// 65533 — a program that named one character got another. `false` is "not a valid
-	// escape", which the caller reports as E109, and it is what the shipping compiler says.
+	// escape", which the caller reports as E1009, and it is what the shipping compiler says.
 	if !utf8.ValidRune(r) {
 		return false
 	}

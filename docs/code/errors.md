@@ -81,7 +81,7 @@ AssertionError: parse.zg:41  assert lo == hi
 So `assert` is for the claim whose own text is the explanation. A claim needing an explanation rather than a
 display is `raise ValueError("why") if not cond`, which is the production form — and the only conditional
 one, since `assert` is the one diverge that takes **no postfix `if`**: `assert c if d` does not parse
-(`E205`). `assert` is **always compiled in** and there is no flag that strips it, because a program with and
+(`E2005`). `assert` is **always compiled in** and there is no flag that strips it, because a program with and
 without its assertions would be two programs; so `zerg lint` reports one outside a `*_test.zg` file as
 `L602` — not a weaker check than you meant, a **less specific** one.
 
@@ -144,12 +144,12 @@ the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError`
 kind buys over a message: `zerg test` reports a claim that did not hold as a **failure** and anything else
 that reached the top of a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
-**[not yet]** — `err is AliasError` is _E494 NotImplemented: `is AliasError` — an `is` test names one of
+**[not yet]** — `err is AliasError` is _E9078 NotImplemented: `is AliasError` — an `is` test names one of
 the built-in error kinds here, and `AliasError` is not one_, in **both** compilers — and the abort carries
 no distinct reified kind for them, only a generic message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
-of `is` and may **not** call: `raise StopIteration("…")` is _E726 `StopIteration` is testable but not
+of `is` and may **not** call: `raise StopIteration("…")` is _E4063 `StopIteration` is testable but not
 constructible_ in **both** compilers, because it is the marker a channel's clean close already wears —
 see [Concurrency](coroutine.md) for what a sender able to raise it would cost its consumer.
 `StackOverflowError` is a **[deviation]** (see below). An abort is **not
@@ -202,7 +202,7 @@ fn read_config(s: str) -> Result[Config] {
 ```
 
 > **One limit on what a guarded block may be, and it is loud.** A `return`, `break` or `continue`
-> that LEAVES the block is refused in both compilers — _E403 NotImplemented: `return` leaving a
+> that LEAVES the block is refused in both compilers — _E9043 NotImplemented: `return` leaving a
 > `guard` block — the guard's handler would stay installed on a frame that has returned_. The
 > handler is pushed before the block and popped after it, so a jump in between takes the frame
 > away and leaves the handler on it. A loop written **inside** the guard is unaffected: its
@@ -247,7 +247,7 @@ match guard { work() } {
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
 is built **for the error taxonomy** — the eleven reified kinds above and nothing else, which is why a name
-outside them is `E494` rather than a test that answers `false`; the general existential test `x is T` for a
+outside them is `E9078` rather than a test that answers `false`; the general existential test `x is T` for a
 **non-error** type is **[not yet]**.
 The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
 exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but
@@ -262,6 +262,6 @@ says "here is my exact error kind". (A user-defined error `enum` gathering sever
 is deferred with user error types above.)
 
 > **[not yet]** A built-in error kind cannot appear in a **type** position: `fn f() -> Either[int, ValueError]`
-> reports _E707 no type named `ValueError`_. The kinds are constructors the runtime knows, not names the type
+> reports _E4056 no type named `ValueError`_. The kinds are constructors the runtime knows, not names the type
 > checker resolves, so the closed-set half of the split just described has no program that can be written
 > today; the erased `Result[T]` with an `is`-chain is the one of the two routes that exists.

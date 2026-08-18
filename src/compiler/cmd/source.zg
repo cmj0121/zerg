@@ -48,7 +48,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 		chain = chain + path_tail(stack[j]) + " -> "
 		j = j + 1
 	}
-	raise f"E485 import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all"
+	raise zerg.rule_msg(zerg.Rule.ImportCycle, f"import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all")
 }
 
 # chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
@@ -56,7 +56,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 #
 # `atomic` is the whole list, and it earns the entry the hard way: the module is written, it
 # is formatted and checked with the rest of the stdlib, and it declares `Atomic[T]`, a generic
-# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E215
+# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E9004
 # NotImplemented: a generic struct` pointing INTO `src/stdlib/atomic.zg`, a file the reader
 # did not write and cannot fix. That is the same shape as a cc error against generated C, and
 # it is the shape this repo's gates exist to turn away.
@@ -65,7 +65,7 @@ fn chk_import_cycle(stack: list[str], im: str) {
 # means moving the source out of `src/stdlib/`, because this compiler resolves the stdlib by
 # LISTING that directory — and the moment it leaves, `zerg fmt --check` and the rest of
 # SELF_SRCS stop reading it, so a hundred lines of Zerg rot quietly until generics land. What
-# is left behind would be `E502 cannot resolve import`, which is a sentence about a module
+# is left behind would be `E5002 cannot resolve import`, which is a sentence about a module
 # that is right there. Between a listing that needs a marker and a diagnostic that is false,
 # the marker is the honest one, and docs/runtime/stdlib.md carries it.
 #
@@ -81,14 +81,14 @@ fn chk_test_import(im: zerg.ImportDecl) {
 	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E512 `{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}"
+	raise zerg.rule_msg(zerg.Rule.TestFileImported, f"`{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}")
 }
 
 fn chk_unbuilt_module(im: zerg.ImportDecl) {
 	return if path_tail(im.path) != "atomic"
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}"
+	raise zerg.rule_msg(zerg.Rule.NotYetAtomicImport, f"the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}")
 }
 
 # --- a program's sources, entry first ------------------------------------------------------
@@ -135,17 +135,17 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 # `near` is the directory of the FILE that wrote this import, and it is searched first.
 # Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
 # own imports were resolved against a directory that module knows nothing about: `api/api.zg`
-# importing `"util/text"` was refused with E502 while `api/util/text/` sat right beside it,
+# importing `"util/text"` was refused with E5002 while `api/util/text/` sat right beside it,
 # and the same import resolved once the directory was moved next to the entry file instead.
-# E502's own sentence — "a module is a directory of `.zg` files beside the importer" — was
+# E5002's own sentence — "a module is a directory of `.zg` files beside the importer" — was
 # describing the layout it turned away.
 #
 # The entry directory STAYS as the second root rather than being replaced: a nested module
 # reaching a module beside the program resolved before this and still does. So the change
 # only ever adds a place to look.
 #
-# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E502 was the last
-# import rule with no place: the two beside it (E511, E512) are handed the `ImportDecl` and
+# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E5002 was the last
+# import rule with no place: the two beside it (E9104, E5011) are handed the `ImportDecl` and
 # spell `place_line` from it, and this one was handed the path alone — a string that knows
 # what was written and not which line wrote it. A reader told an import resolves nowhere and
 # not which import is left grepping their own program for the quoted path.
@@ -181,7 +181,7 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 	}
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise f"E502 cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}"
+	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}")
 }
 
 # WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written in
@@ -308,9 +308,9 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 # second source root, and everything else follows. An editor says only WHICH FILE IS OPEN,
 # and that file is usually not an entry at all — it is one member of a directory module,
 # and its siblings are where its types come from. Reading it as an entry is what made the
-# server underline correct code: the field `Parser.toks` reported E707 no type named `Token`
+# server underline correct code: the field `Parser.toks` reported E4056 no type named `Token`
 # because `token.zg` sits beside `parser.zg` and no walk from `parser.zg` reaches it, and
-# `import "zerg"` from `cmd/build.zg` reported E502 cannot resolve because the `zerg/`
+# `import "zerg"` from `cmd/build.zg` reported E5002 cannot resolve because the `zerg/`
 # directory is beside `cmd/` rather than inside it. Neither file is wrong; the walk started
 # in the wrong place.
 #
@@ -447,7 +447,7 @@ fn read_source(path: str) -> str {
 		src = str(b)
 		ok = true
 	}
-	raise f"E111 `{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text" if not ok
+	raise zerg.rule_msg(zerg.Rule.SourceNotUtf8, f"`{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text") if not ok
 
 	return src
 }

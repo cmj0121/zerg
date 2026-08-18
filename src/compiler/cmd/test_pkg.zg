@@ -19,8 +19,8 @@ import (
 #
 # A test build used to know only the second shape, and that made a white-box test of a
 # stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other
-# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E215`, a
-# generic struct) and then at the `pub` names two modules share (`E705 is_digit`, in `ascii`
+# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E9004`, a
+# generic struct) and then at the `pub` names two modules share (`E9081 is_digit`, in `ascii`
 # and `strconv`) — pointing at files the author did not write, before one test had run.
 #
 # So a test file is now resolved the way an import is, MOST SPECIFIC FIRST: `strings_test.zg`
@@ -294,7 +294,7 @@ fn pkg_key(p: Pkg) -> str {
 # A COPY, BECAUSE A MODULE IS A DIRECTORY. The file is read from an ancestor, and a
 # declaration read from another directory belongs to another module however the build was
 # told to compile it — so every type and function an inherited fixture file declares would be
-# `E508` / `E301` to the tests that asked for it. Writing it into the package is what the
+# `E5008` / `E3001` to the tests that asked for it. Writing it into the package is what the
 # driver already does for exactly this reason, and it is the only thing that puts the two in
 # one scope.
 #

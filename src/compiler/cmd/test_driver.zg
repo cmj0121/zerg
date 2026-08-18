@@ -28,7 +28,7 @@
 # and none of those four is a rule this file enforces at runtime — each is a consequence of
 # where the text was put. There is no topological sort in the driver and no teardown registry.
 #
-# THE CLOSURE BODIES ARE ONE CALL EACH, and that is not a style: `E735 a closure captures
+# THE CLOSURE BODIES ARE ONE CALL EACH, and that is not a style: `E4069 a closure captures
 # `io`, and this compiler cannot work out what it holds` — a lambda may not reach a module
 # namespace, so anything a level does that touches `io` or `testing` has to be in a top-level
 # function. Each level is one, and the closure passed to a fixture only ever calls it.
@@ -351,7 +351,7 @@ fn gen_blame(id: str, name: str, tests: list[Tst], sub: list[int]) -> str {
 # deadline in it, which would be the same rule in two places.
 #
 # THE TIMER IS WRITTEN HERE AND NOT IMPORTED from `time`, even though `time.after` is exactly
-# this. A driver's imports land in the package's namespace, and `E705` refuses two modules
+# this. A driver's imports land in the package's namespace, and `E9081` refuses two modules
 # defining one `pub` name — so importing `time` would make a package that declares its own
 # `after`, `now` or `ticker` stop compiling the moment it grew a test. Everything the driver
 # declares is `zt_`-prefixed for that reason, and the timer is four lines over the same runtime

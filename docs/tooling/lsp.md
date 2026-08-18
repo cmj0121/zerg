@@ -86,8 +86,8 @@ a server that underlines correct code is one a person turns off.
 
 **And which program that is, is found rather than assumed.** An editor says only which file is open,
 and an open file is usually not an entry: it is one member of a directory module, whose types, whose
-callers and whose second source root all live outside it. Read as an entry it reports `E707` for a
-struct declared in the file beside it, `L102` for a private function its sibling calls, and `E502`
+callers and whose second source root all live outside it. Read as an entry it reports `E4056` for a
+struct declared in the file beside it, `L102` for a private function its sibling calls, and `E5002`
 for a module that sits beside its own directory rather than inside it — three sentences about correct
 code. So the driver **searches for an entry that reaches the buffer**: the `.zg` files directly in
 the parent of the buffer's directory, then its parent, stopping at the first level that holds any
@@ -121,7 +121,7 @@ status** turns on and the right is how loudly an **editor** draws. The mapping i
 `zerg lint` would have printed, adjective included, so a server that flattened all three into one
 severity would fail rather than agree about every count.
 
-**A code travels as a code.** `Diag` carries the rule's identity — `E307`, `L502` — in a field of
+**A code travels as a code.** `Diag` carries the rule's identity — `E3006`, `L502` — in a field of
 its own, so the server sends LSP's `Diagnostic.code` and an editor can filter, group and link by it.
 That is the rule this page is about, applied to itself: a code spelled only inside the sentence is
 one every reader has to parse back out, and the server reading it out would be a second copy of a

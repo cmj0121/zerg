@@ -832,7 +832,7 @@ say "the test below was not told that the fixture it named is not in its scope" 
 # three independent modules, exactly as `src/stdlib` is sixteen.
 #
 # `broken.zg` and `clash.zg` are the two failures the pilot actually met, reproduced: a generic
-# struct is `E215` in this compiler, and two modules defining one `pub` name is `E705`. Neither
+# struct is `E9004` in this compiler, and two modules defining one `pub` name is `E9081`. Neither
 # is imported by anything. A runner that took the DIRECTORY as the package would compile both
 # beside `good.zg` and report an error inside a file the author never wrote — before one test
 # had run.
@@ -900,15 +900,15 @@ grep -qE '^2 passed, 0 failed, 0 skipped, 0 timed out$' "$tmp/flat.out"
 say "the flat-directory run does not count 2 passed" $?
 
 # 31. and the two SIBLINGS were never compiled. Asserted by their error codes rather than by
-#     their names: `E215` and `E705` are what reaching them costs, and they are what the pilot
+#     their names: `E9004` and `E9081` are what reaching them costs, and they are what the pilot
 #     was shown instead of a test result.
-grep -qF 'E215' "$tmp/flat.out"
+grep -qF 'E9004' "$tmp/flat.out"
 [ $? -ne 0 ]
-say "an independent module beside the one under test was compiled into the same package (E215)" $?
+say "an independent module beside the one under test was compiled into the same package (E9004)" $?
 
-grep -qF 'E705' "$tmp/flat.out"
+grep -qF 'E9081' "$tmp/flat.out"
 [ $? -ne 0 ]
-say "a \`pub\` name in an unrelated module of the same directory collided with the one under test (E705)" $?
+say "a \`pub\` name in an unrelated module of the same directory collided with the one under test (E9081)" $?
 
 # --- nothing is left behind on a path that FAILED --------------------------------------------
 #
@@ -968,7 +968,7 @@ status=$?
 [ "$status" -ne 0 ]
 say "a test build whose import resolves nowhere exited 0" $?
 
-printf '%s\n' "$raises" | grep -qF 'E502'
+printf '%s\n' "$raises" | grep -qF 'E5002'
 say "the unresolvable import was not reported" $?
 
 [ "$(ls "$tmp/left/raises")" = "raises_test.zg" ]

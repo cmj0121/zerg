@@ -140,7 +140,7 @@ seed checks that body ABSTRACTLY, so the refusal lands at the declaration whethe
 function is ever called. The SAME rendering spelled `f"{x}"` both compilers build: `inferFStr`
 synthesizes the hole and yields `str`, leaving the rendering to lowering, which runs after
 substitution. `zerg` asks after substitution for both spellings — `show(7)` builds, and
-`show(p)` on a struct is `E449` naming `P`, which is the diagnostic a reader can act on. What
+`show(p)` on a struct is `E9059` naming `P`, which is the diagnostic a reader can act on. What
 the gap costs is a rule for every module the seed compiles: `src/stdlib/testing.zg`
 interpolates rather than converts (`raise f"assert_eq failed: {a} != {b}"`), and a generic
 body in the stdlib that reaches for `str(x)` breaks the chain rather than one program.
@@ -205,6 +205,12 @@ because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
 the program, which is what the assertion exists to catch.
 
+- **A module this file did not import, named through a qualified enum variant, is
+  accepted.** `lib.Colour.Red` where the file imports only `mid` (which imports `lib`) is a
+  name the whole-program flatten makes reachable and the language refuses; the seed enforces
+  that rule for no namespace member, and a variant is now one more of them — it reads
+  `mod.Enum.Variant` because the compiler's diagnostic registry is an enum one module over.
+  `zerg` refuses it with `E5007`.
 - **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
   segfaults.** GRAMMAR#param makes a `mut &` valid only for the call and its argument a `mut`
   lvalue; a default has no caller variable to point at. The seed emits the default
@@ -356,15 +362,15 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   the seed lowers a conversion by SHAPE, a class and a width, and a shape has an answer for
   every pair. So `float(b)` on a `byte`, `rune(b)`, `uint(b)`, `byte(3.5)`, `uint(3.5)`,
   `rune(65.5)` and `int(1.9)` all build here. `zerg` refuses each: a `float` source is a
-  decision spelled with a verb (`E394`, `math.trunc` and its three siblings), and any other
-  absent pair is the two steps through `int` written as one (`E395`). Seventeen cases in
+  decision spelled with a verb (`E3090`, `math.trunc` and its three siblings), and any other
+  absent pair is the two steps through `int` written as one (`E3091`). Seventeen cases in
   `reject-check.sh` carry the marker, and this is the chapter where `zerg` is the stricter
   compiler rather than the reverse. (The seed's own sources need no migration: nothing in
   `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
   the same standard library.)
 - **TWO MODULES EACH DECLARING ONE `pub` FUNCTION OF THE SAME NAME are accepted, and one of
   them wins.** A public name has no package to be unique within
-  ([package](../../docs/runtime/package.md)), so `zerg` refuses the pair by name (`E705`) and
+  ([package](../../docs/runtime/package.md)), so `zerg` refuses the pair by name (`E9081`) and
   says what would be needed to keep both — the link-name override
   [ffi](../../docs/runtime/ffi.md) specifies. The seed flattens every module into one
   namespace as `zerg` does, but asks the question only of the PRIVATE pair, which it tags by
@@ -373,12 +379,12 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
   matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
   one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
-  (`E743`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
+  (`E9102`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
   every value and the `match` falls through to its catch-all with nothing said. One case in
   `reject-check.sh` carries the marker.
 - **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,
   not a value's type ([specs](../../docs/core/specs.md)), and `zerg` refuses it at every
-  position a type is written (`E416`). The seed asks the question of a parameter and a result
+  position a type is written (`E9048`). The seed asks the question of a parameter and a result
   and not of a field, so `pub v: Tag` declares a field whose type nothing gives a
   representation and the program builds. One case in `reject-check.sh` carries the marker.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
@@ -410,7 +416,7 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   name in both compilers.
 - **A DECLARED TYPE NAME NEED NOT BEGIN WITH AN UPPER-CASE LETTER.** `struct _Box`,
   `struct __Box` and `struct lower` all build and run here. `zerg` refuses each at the
-  declaration (`E610`): the case of the first letter is how it tells a construction from a
+  declaration (`E2060`): the case of the first letter is how it tells a construction from a
   call and a module qualifier from an associated type, and the last two are decided by the
   PARSER, which has resolved nothing and has no table to consult — so a lower-case type
   would be legal in one position and misread in three. GRAMMAR#type-ident derives the rule.
@@ -420,7 +426,7 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `unaryIntrinsic(n, Float, Int)` in `internal/sema/infer.go` names the argument type — and it
   does not fire, so `__zrt_trunc(true)` builds and prints `1`, and `__zrt_trunc("hello")` is
   emitted for cc to reject against a temp C file nobody wrote. `zerg` answers both at the call
-  (`E398`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
+  (`E3094`): a primitive is lowered by NAME to a C function with a real signature, so a wrong
   operand is either a cc diagnostic or an answer that is quietly wrong where C converts it.
   Two cases in `reject-check.sh` carry the marker.
 - **A `#[test]` FUNCTION IS NOT TYPE-CHECKED.** The seed strips every `#[test]` out of the item
@@ -450,7 +456,7 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   'unsafe'_, at the importer's line and not at the group.
 
   The group is `log`'s global logger, and it cannot be written any other way: module state is
-  immutable (`E358`) and a system-wide logger is module state by definition. The rule the rest
+  immutable (`E3056`) and a system-wide logger is module state by definition. The rule the rest
   of `src/stdlib` follows — stay inside the subset the seed reads, which is why nothing there
   writes `assert` — is broken by exactly one module, deliberately, and only that module. Every
   other stdlib module still builds under both compilers, and nothing the seed itself compiles

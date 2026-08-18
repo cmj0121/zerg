@@ -293,12 +293,20 @@ the fill as one unbreakable word, and a word longer than the budget takes the ru
 every line of it past the margin. A space is where a language that uses spaces allows a break; it is not the only
 place a line may end. The cut is taken between two Han or Hangul characters and never beside a mark — `。` may not
 open a line and `「` may not close one, and nothing here knows which side a mark belongs to, so a sentence with a
-comma in the middle of it breaks somewhere else instead. The author's own line break becomes a space between words
-and **nothing** between two ideographs, for the same reason.
+comma in the middle of it breaks somewhere else instead.
+
+**The author's own line break becomes a space, or nothing.** Between two words it stands for the gap between them.
+Between two **full-width** characters it becomes nothing: a language written with no spaces in it would otherwise
+gain a character its author never typed, in the middle of a sentence the source has no gap in. That is a question
+about WIDTH, and deliberately not the question above — a full-width comma is not a place a line MAY END, nothing
+here knowing which side of the line a mark belongs on, and it is still a place no space belongs. When only **one**
+side is full-width the space stays: `而 zerg doc 的排版` is how this tree's own zh-TW documents are written, and
+that space is one the author put there.
 
 `make doc-check` §7 is that as a gate. It documents a module whose comments are in Chinese and measures the display
 width of every line that comes out: none over 80 columns, and the widest at least 70, or the paragraph was never
-filled and the first assertion measured nothing.
+filled and the first assertion measured nothing. The same section reads the spaces, which no width can see: no line
+carries one between two full-width characters, and none has lost the one between a Han character and a Latin word.
 
 **A directory module is documented one file at a time.** One section per file, headed by the
 path as a reader could type it back, each with that file's own header and that file's own

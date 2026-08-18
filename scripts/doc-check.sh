@@ -72,13 +72,28 @@ cd "$ROOT" || exit 2
 
 ZERG="${ZERG:-./bin/zerg}"
 
-# The counts this gate would report success for having measured nothing. 183 exposed
-# declarations across the 14 stdlib modules that parse, 15 modules in the list, and 18
-# declarations that carry no comment.
+# The counts this gate would report success for having measured nothing, and each of them is
+# the number this tree MEASURES rather than a round one under it: 183 exposed declarations
+# across the 14 stdlib modules that parse, 16 modules in the list, 18 declarations that carry
+# no comment, 25 attachment and form rules, and 55 checks.
+#
+# THE FLOORS ARE THE MEASUREMENT AND NOT A MARGIN UNDER IT. `MIN_CHECKS` stood at 45 against a
+# run of 55, so ten checks could stop running with nothing said; a floor with slack in it
+# reports success for the checks that are left.
+#
+# `MIN_MODULES` is the one floor that guards something no loop below does. Every stdlib module
+# is asked for by name (§1, and the listing check at the end), and `local_modules` — the OTHER
+# half of what `zerg doc` can resolve — is guarded by this number alone: the 16th name is
+# `examples`, the modules standing beside the reader, and at 15 that half could empty out in
+# silence.
+#
+# 55 is the count on a host with no `script`, which is the smaller of the two runs: the
+# terminal half of §6 adds five more. A floor pinned to the larger one would turn every host
+# without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
-MIN_MODULES="${MIN_MODULES:-15}"
+MIN_MODULES="${MIN_MODULES:-16}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
-MIN_CHECKS="${MIN_CHECKS:-45}"
+MIN_CHECKS="${MIN_CHECKS:-55}"
 MIN_RULES="${MIN_RULES:-25}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written

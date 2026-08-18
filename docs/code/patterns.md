@@ -32,7 +32,7 @@ fn positive(x: int) -> bool { return x > 0 }
 result := xs.map(double).filter(positive).fold(0, add)
 ```
 
-> **[not yet]** The adapters themselves do not exist. `xs.map(double)` reports _E444 NotImplemented: the list
+> **[not yet]** The adapters themselves do not exist. `xs.map(double)` reports _E9056 NotImplemented: the list
 > method `map` — this compiler has `len` and `append`_, and `filter` and `fold` answer the same way, so the
 > chain above has nothing to chain. Method calls do chain, and the ones a `list` has are the two named in
 > that message; until the adapters land, the loop below is not merely the procedural-first alternative but
@@ -49,7 +49,7 @@ for x in xs {
 }
 ```
 
-The type is written on the left because the empty list has none of its own — `mut out := []` is _E336 the
+The type is written on the left because the empty list has none of its own — `mut out := []` is _E3034 the
 binding `out` gives the empty list `[]`, which has no type of its own_. That matters more here than it
 usually would: with the adapters unbuilt this loop is the only spelling, so it had better be one that
 builds.
@@ -84,7 +84,7 @@ cfg := Config(host: "example.com", port: 8080)
 ```
 
 > **[not yet]** Both calls above are the named-argument form, and named arguments are not built: each is
-> `E223` (see [Functions & Closures](functions.md)). A struct is built positionally today —
+> `E9010` (see [Functions & Closures](functions.md)). A struct is built positionally today —
 > `Config("example.com", 8080)` — and a defaulted parameter can only be dropped off the end of a call, so the
 > one-call builder this section recommends over the fluent ceremony is the part of it with nothing to run on.
 
@@ -116,9 +116,9 @@ Every kind that fires works **one level deep**. So a tuple is read back by stati
 struct by field rather than destructured, and where a language with nested patterns would write `L(Yes(v))`,
 match one level, bind the payload, and `match` the binding in turn.
 
-> **[not yet]** `L(Yes(v))` and `L(0)` are both _E492 NotImplemented: a sub-pattern inside a variant payload,
+> **[not yet]** `L(Yes(v))` and `L(0)` are both _E9076 NotImplemented: a sub-pattern inside a variant payload,
 > beginning at `…`_. A RESERVED WORD in a payload position is a different rule and keeps its own: `L(this)`
-> is _E245 `this` is a reserved word and cannot name a pattern binding_.
+> is _E2013 `this` is a reserved word and cannot name a pattern binding_.
 
 ## Deliberately not added
 

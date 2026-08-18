@@ -54,14 +54,14 @@ holder's scope exit.
 ---
 
 > **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
-> through one. `struct Node { value: int; next: Node? }` is rejected with _E452 `Node` is part of a cycle of
+> through one. `struct Node { value: int; next: Node? }` is rejected with _E4026 `Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
 > that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
 > refcount-sharing as described — what it does not do is free, which is the deviation above. The `Node`
 > used below — in Copy vs reference semantics, where it is the one place a shared mutation is observable —
 > is the specified form and does not compile today. It
-> carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E223`, since
+> carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E9010`, since
 > arguments bind by position here (see [Types](types.md)).
 
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
@@ -90,7 +90,7 @@ through:
 > **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
 > aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
 > rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
-> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
+> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
 > keeps it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
 > legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
 
@@ -296,9 +296,9 @@ the storage.
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
 > **Status.** The last row of the table is the one `zerg` does not reach at all. `del` of a `Ref` value is
-> **[not yet]** in both of its halves: `del ch` on a channel is refused by name (_E470 NotImplemented:
+> **[not yet]** in both of its halves: `del ch` on a channel is refused by name (_E9066 NotImplemented:
 > `del ch` on a CHANNEL_, which says to write `close(ch)` instead), and there is no `Ref[T]` type here to
-> `del` in the first place — naming `Ref` refuses too (`E446`). What the compiler does with a channel is
+> `del` in the first place — naming `Ref` refuses too (`E9058`). What the compiler does with a channel is
 > release it where its binding's scope ends, so the holder is dropped and `drop` still runs at the last
 > one; what is missing is the ability to say so **early**, by name.
 >
@@ -325,7 +325,7 @@ afterwards — a later `ch <- v` or `<-ch` is a compile error (_`ch` is used aft
 statement **`close(ch)`**; to end it by scope, let the binding's scope exit release what it holds. Both are
 in [Coroutines](../code/coroutine.md). Use `del ch` when you are finished with the **name** as well.
 
-> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E470`, the Status
+> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E9066`, the Status
 > note above). The half of it that already holds is the advice: `close(ch)` ends a stream and scope exit
 > releases the hold, and those are what a program writes today.
 

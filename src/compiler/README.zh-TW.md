@@ -13,7 +13,7 @@
 2. **driver 透過一個 runtime `exec` leaf 呼叫 `cc`。** `zrt_exec` 是一層 OS syscall 地基——
    `posix_spawn`/`execvp` 之後 `waitpid`，零第三方依賴——以 `__zrt_exec` intrinsic 曝露出來，
    再包進 `os`。它**沒有**補上規格裡 command literal 的缺口：`` `…` `` 至今仍是指名拒絕
-   （`E236`）。
+   （`E9020`）。
 3. **涵蓋範圍——先做 `Zerg-boot` 子集，再往外長。** 編譯器得先編得動自己的原始碼，才談得上編別
    的；而那個子集就是今天種子的契約
    （[`src/bootstrap/README.zh-TW.md`](../bootstrap/README.zh-TW.md)）。`zerg` 在那之**外**還
@@ -59,7 +59,7 @@ src/compiler/
 `cmd` 裡標成**共用**的那四個檔案之所以在那裡，是因為不只一個子命令會用到它們，而且「是哪些」是在 call graph 上量出來的，
 不是猜的：`diag`、`layout`、`unit` 是 `build` 與 `test` 的（`lint` 也讀前兩個），`source` 則是這三個再加上 `lsp`。
 它們放在命令旁邊而不是放進其中任何一個裡面——一個目錄就是一個模組，所以沒有任何東西為了共用而變成 `pub`，
-也就沒有任何東西變成 `pub` 之後可能跟第二個模組相撞（`E705`）。
+也就沒有任何東西變成 `pub` 之後可能跟第二個模組相撞（`E9081`）。
 
 ## 怎麼使用
 
@@ -135,7 +135,7 @@ make reject     # 每一支不是 Zerg 的程式都被拒絕——由編譯器�
 `CORPUS_SKIP` 擋著，而把一個名字從裡面刪掉，**就是**那個名字所等的功能的閘門。
 
 還在等的有六個，每一個都是**指名**拒絕、不是誤譯——`gen_struct` 回答的是
-_E215 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and a
+_E9004 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and a
 field names one_——它們等的是泛型的 `struct` 或 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」以外
 的 `derive`。另外兩個，`spec_bound` 與 `gen_identity`，今天建得起來、也印得出該印的東西：是這份
 清單還沒跟上。
@@ -286,10 +286,10 @@ optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住�
 desugar 成這個形式本來被定義成的那條 `+` 鏈——這既是 AST 與 emitter 對 f-string 一無所知的原因，
 也是種子只要能 lex 與 parse 它就建得出 stage 1 的原因。
 
-仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E446`）、泛型的 `struct` 或
-`enum`——也就是被欄位或 payload 指名的型別參數（`E215` / `E212`；而讓 `import "atomic"` 變成
-`E511` 的正是 `Atomic[T]`）、具名引數的建構 `T(a: 1)`（`E223`），以及 command literal
-（`E236`）。
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E9058`）、泛型的 `struct` 或
+`enum`——也就是被欄位或 payload 指名的型別參數（`E9004` / `E9003`；而讓 `import "atomic"` 變成
+`E9104` 的正是 `Atomic[T]`）、具名引數的建構 `T(a: 1)`（`E9010`），以及 command literal
+（`E9020`）。
 
 ## 效能還剩下什麼
 

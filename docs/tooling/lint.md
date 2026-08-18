@@ -174,7 +174,7 @@ than every shape that could.
 name was a variant when it resolved to one, resolution took the **first** declaration, and
 `c := Red` was a coin toss decided by declaration order. Neither half of that survives. A
 variant is named through its enum ([Grammar](../surface/grammar.md)), so `Red` alone is
-_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_ in either
+_E3079 `Red` is a variant of `Colour`, and a variant is named through its enum_ in either
 enum; and a qualified `Signal.Red` is resolved **inside the enum it names**, so the two
 declarations are two different variants that never compete. The rule is gone from the
 linter rather than left running, which is what its own case in `lint-check` would otherwise

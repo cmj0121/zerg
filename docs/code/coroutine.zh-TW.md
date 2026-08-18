@@ -11,7 +11,7 @@ join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
 
-> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕——`E222 NotImplemented: calling
+> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕——`E9009 NotImplemented: calling
 fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的形狀,與 closure 無關:lambda
 > **捕獲得了**(`add := fn (x: int) -> int { return x + n }` 讀得到 `n` 也跑得動),所以環境是有的;缺的是
 > 「透過名字以外的東西呼叫」。把 closure 綁到一個名字上,再用那個名字 `spawn`。
@@ -25,7 +25,7 @@ fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
 
   > **[not yet]** 會 `spawn` 的程式不能同時收命令列引數：`fn main(args: list[str])` 與任何 `spawn` 並存都是
-  > _E734 NotImplemented: main(args) in a program that uses concurrency_。`main` 是以 **coroutine 0** 執行的，
+  > _E9097 NotImplemented: main(args) in a program that uses concurrency_。`main` 是以 **coroutine 0** 執行的，
   > 而每一個 scheduler entry shim 都收一個無參數的函式指標，`args` 無處可穿過去;在這樣的 shim 出現之前,並行程式
   > 從環境變數或檔案讀取設定。
 
@@ -100,7 +100,7 @@ abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 
 **`StopIteration` 叫得出名字，卻刻意無法建構。** `err is StopIteration` 是合法的測試，但**沒有**任何程式能
-`raise StopIteration(…)`——在**兩個編譯器**裡都是 _E726_（見 [錯誤處理](errors.zh-TW.md)）。這個哨兵是 runtime
+`raise StopIteration(…)`——在**兩個編譯器**裡都是 _E4063_（見 [錯誤處理](errors.zh-TW.md)）。這個哨兵是 runtime
 自己的 end-of-stream 標記：一個能 raise 它的 sender，會讓自己的 channel 戴著那個標記關閉，而它的 consumer 會把
 崩潰讀成乾淨結束。今天接收端看得到的東西也沒有一個會讓那個測試成立，因為下面的 receive 已經以**從哪一條路抵達**
 分辨了乾淨結束與崩潰。
@@ -132,7 +132,7 @@ receive 回傳 **`T?`**。一條串流會結束的兩種方式，在這個語言
 這個分家正是「原因不會遺失」的全部理由。`Result` 逼收方先問「我拿到的 `Right` 是哪一種」才分得出結束與死亡；
 忘了問的人就把死亡弄丟了。現在沒有人忘得掉。
 
-`chan[T?]` 因此被**拒絕**（`E404`），理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束
+`chan[T?]` 因此被**拒絕**（`E4003`），理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束
 了」，沒有任何運算子分得開。包進一個 struct，或約定一個哨兵值。
 
 被拒絕的是**型別**，不是某一種寫法：參數、回傳型別、struct 欄位、帶標註的繫結、`type` 宣告、
@@ -151,7 +151,7 @@ x := <-(<-cc)         # 被拒絕——`<-ch` 需要一個 channel，而 chan[in
 
 這不是一條關於巢狀的規則。**每一個** channel 運算都對拿到的東西問同一個問題——`<-x`、`x <- v`、
 `close(x)`，以及兩種 `select` arm——而只要它不是一個 channel 端點，答案就是同一句具名、帶位置的拒絕：
-_E478 `<-ch` needs a channel, and chan[int]? is not one_。
+_E4043 `<-ch` needs a channel, and chan[int]? is not one_。
 
 每種需求都由 `T?` 本來就有的四個運算子掉出來——由 **receiver** 決定：
 
@@ -207,7 +207,7 @@ defer close(ch)        # ……在區塊離開時，每一條路徑都算，含 
 - **已 buffered 的值照樣送達**——receive 會先交出 channel 手上的東西，才回答 `Right`。
 - **之後的 send 會 abort**（`SendOnClosedError`），而不是被默默丟掉。
 - **receive-only 端不得 close**——consumer 不可以代替 producer 結束一條 stream。那是編譯錯誤
-  （_E505 cannot close a receive-only channel_）。
+  （_E5005 cannot close a receive-only channel_）。
 
 `close` **不**取代 auto-close，兩種形狀說明了原因。**崩潰中**的 producer 到不了任何敘述。而在 **fan-in** 裡，數個
 producer 中最後完成的那個自然結束了 stream、完全不需要協調——由其中一個手足呼叫的 channel 層級 close，會替其他人
@@ -429,8 +429,8 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
 `fetch_add` / `compare_swap`。
 
-> **[not yet]** 原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而還沒有 `Ref[T]`（`E446`）。
-> 被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E511 the module `atomic` ships and cannot be
+> **[not yet]** 原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而還沒有 `Ref[T]`（`E9058`）。
+> 被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E9104 the module `atomic` ships and cannot be
 > imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built. Share state
 > across coroutines with a channel until it has_——所以上面的 actor 才是今天成立的做法。
 > 顯式的**記憶體順序引數**與 generic 的 **`Atomic[T]`** 在語言層面同樣是 **[not yet]**。

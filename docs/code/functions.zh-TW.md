@@ -28,22 +28,22 @@ fn main() {
 
 寫出來的型別**贏**——`fn (x: str)` 放在 `fn (int) -> …` 的位置是一個指名兩個型別的型別錯誤,而不是被悄悄
 覆蓋掉的註記。而一個**遇不到**這種位置的 closure 無處可取,那是錯誤、不是猜測:`f := fn (x) { … }` 會報
-_E385 the closure parameter `x` has no type, and this position gives it none_。
+_E3081 the closure parameter `x` has no type, and this position gives it none_。
 
 > **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
-> 寫在它上一行的 `f := text.make` 會報 _E388 module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條
+> 寫在它上一行的 `f := text.make` 會報 _E3084 module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條
 > 路上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
 >
 > **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
 > method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
-> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕——_E275 `id[int](…)`
+> postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕——_E2035 `id[int](…)`
 > writes a call's type arguments, and a postfix `[ … ]` is an index_。型別引數從引數型別推論,是今天實例化一個
 > generic 的唯一途徑。
 >
 > **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被讀完、然後被指名拒絕：
-> `f: fn(mut &int) = bump` 報 _E286 NotImplemented: a `mut &` parameter in a function type_，並帶上那個前綴
+> `f: fn(mut &int) = bump` 報 _E9035 NotImplemented: a `mut &` parameter in a function type_，並帶上那個前綴
 > 所在的位置。拒絕的理由就是值那一側早已說過的同一條：在這個編譯器裡，被持有的函式是一個裸指標，而呼叫端是從
-> 被呼叫者的**名字**讀出 `mut &` 的，值沒有名字（`E469`）——所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的
+> 被呼叫者的**名字**讀出 `mut &` 的，值沒有名字（`E9065`）——所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的
 > 相異只留在紙上。
 
 **一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
@@ -96,13 +96,13 @@ greet("Sam", "Hi", true)     # 全 positional
   的參數仍是**必填**。
 
   > **[not yet]** **讀取前面參數**的預設值——`fn g(a: int, b: int = a * 2)`——是唯一沒做出來的形狀。預設值在
-  > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _E372 undefined name `a`_，
+  > **呼叫端**被展開，而被呼叫者的參數名字在那裡不在 scope 內，所以那次呼叫會報 _E3069 undefined name `a`_，
   > 而不是求值 `a * 2`。其餘每種預設值都如規格 lower，純常數與計算出來的運算式一樣：`b: int = 1 + 2`、
   > `b: int = side()` 與 `greeting: str = "a" + "b"` 都在呼叫處、每次求值。
   >
   > **[not yet]** **匿名**函式參數上的預設值沒做。`GRAMMAR` 推導得出它——
   > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`，尾巴的 `( '=' expr )?` 與宣告
-  > 裡的參數同一條——而 `f := fn (x: int = 5) -> int { … }` 報 _E285 NotImplemented: a default on the closure
+  > 裡的參數同一條——而 `f := fn (x: int = 5) -> int { … }` 報 _E9034 NotImplemented: a default on the closure
   > parameter `x`_，並帶上位置。理由就是上面那一條：預設值是在**呼叫端**、從被呼叫者的**宣告**展開出來的，而
   > 閉包是透過一個**值**取得的，那個值沒有帶著任何宣告可讀。每次呼叫都把引數傳進去。
 
@@ -110,7 +110,7 @@ greet("Sam", "Hi", true)     # 全 positional
   positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
   不能再回到 positional）。
 
-  > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _E223 NotImplemented: the named argument
+  > **[not yet]** 具名引數完全沒做。`greet("Sam", loud: true)` 報 _E9010 NotImplemented: the named argument
   > `loud:` — this compiler binds arguments by position only_，機制的其餘部分也跟著沒有：沒辦法跳過中間那個有
   > 預設的參數，也沒有具名順序的規則要遵守。一次呼叫由左往右填它的參數，有預設的參數只能從引數列的**尾端**省略。
 
@@ -164,8 +164,8 @@ for x in xs {
 ```
 
 > **[not yet]** 這個迴圈的 coroutine 寫法用不了。closure **literal** 不在 `spawn` 的三種 callee 形式之列——
-> `spawn fn () { … }()` 是 _E222 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫
-> `spawn work()` 是 _E744_,帶著位置:這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的是一個符號,
+> `spawn fn () { … }()` 是 _E9009 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫
+> `spawn work()` 是 _E9103_,帶著位置:這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的是一個符號,
 > 函式值沒有符號。(它以前會把 `zg_work()` 寫進那個 thunk 裡,建置死在 `cc`——那正是總則明文禁止的結局。)
 > 行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
 > [Coroutines 與 Channels](coroutine.zh-TW.md)。

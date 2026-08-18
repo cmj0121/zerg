@@ -19,11 +19,11 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > **[not yet]** **package 這一層在本工具鏈中不存在**。沒有 manifest、沒有版本宣告、沒有解析器、也沒有相依下載：
 > 一次建置就是一個 entry 檔，加上它的 import 在磁碟上碰得到的那些 module。下文凡是提到 package 的部分——版本、
 > package DAG、單一版本選擇、以位置定義的 package-public、以及倚賴圖無環的 orphan rule——描述的都是還沒有任何
-> 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E502 cannot resolve
+> 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E5002 cannot resolve
 > import `name` under any source root_——而且早在它被 lex 之前就報出來。
 >
 > **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
-> 而可見性只檢查了 module 所持有的一部分、不是全部——函式與 module 常數有檢查(_E301 `helper` is not a public
+> 而可見性只檢查了 module 所持有的一部分、不是全部——函式與 module 常數有檢查(_E3001 `helper` is not a public
 > member of module `lib`_,且帶位置),struct 的欄位沒有。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
@@ -70,7 +70,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 statement**。`GRAMMAR#program` 推導得出它——`program ::= stmt-list` 就是 Zerg 的 **script mode**，而 grammar 正是
 用 `nop` 程式為這個語言開場——所以它是合法語法，編譯器會把它整句讀完。但**編譯出來**的程式沒有任何一刻可以跑它：
 執行從 `main` 開始，上面的一切都是在那之前備妥的狀態。因此它會被**具名拒絕、並帶位置**，而且是由 build 而不是由
-parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）——即 _E391 `print`
+parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Conformance](../conformance.zh-TW.md)）——即 _E3087 `print`
 opens a statement at the top level, and a compiled program has nowhere to run it_。`nop` 是唯一的例外，而且其實
 不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
 
@@ -81,7 +81,7 @@ opens a statement at the top level, and a compiled program has nowhere to run it
 
 對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
-_E732 these constants depend on each other and none can be given a value first_。
+_E4068 these constants depend on each other and none can be given a value first_。
 
 > **[deviation]** reads-from 圖是由初始化式**寫出來**的名字建的,所以一個**穿過呼叫**的讀取不是一條邊。
 > `const A: str = mk()` 寫在 `const B: str = "x"` 上面、而 `mk()` 讀 `B`,會讓 `A` 持有**零值**,而且完全沒有
@@ -135,7 +135,7 @@ coherence **不需要全域註冊表**——orphan rule 加上**無環**的 pack
 選擇正是讓「一型別、一實作」有明確定義的前提。
 
 orphan rule 有被強制,而且是以 module、而不是以上文推理所依據的 package 為單位:第三個 module 寫 `impl Spec
-for T`、spec 與型別都不擁有時,會被 _E277 `impl Speak for Dog` is in neither's module — a spec and a type
+for T`、spec 與型別都不擁有時,會被 _E2037 `impl Speak for Dog` is in neither's module — a spec and a type
 belong to whoever declared them, and an impl belongs with one of the two_ 拒絕,且帶位置。同一次建置中兩個
 `impl` 給同一型別同一個方法名也會被拒絕,那是壓平命名空間自己看得到的那件較窄的事。
 
@@ -162,11 +162,11 @@ module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** �
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
 
 > **[deviation]** **entry 檔自己的目錄不是一個 module**。與 entry 檔並列的檔案不在它的命名空間裡，也不會被編進這次
-> 建置：指名該檔宣告的函式會得到 _E425 undefined function `beside`_。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
+> 建置：指名該檔宣告的函式會得到 _E4016 undefined function `beside`_。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
 > 都成立；以 entry 檔為根的那個 module 是例外。
 >
 > **[deviation]** **單一檔案** import 得起來。`import "sib"` 在旁邊有一個 `sib.zg` 時,會解析到那一個檔案與它的
-> `pub` 名字,即使這裡的 module 是目錄、而 `E502` 自己的句子也這麼說——_a module is a directory of `.zg` files
+> `pub` 名字,即使這裡的 module 是目錄、而 `E5002` 自己的句子也這麼說——_a module is a directory of `.zg` files
 > beside the importer or in the standard library_。於是 import 路徑多了第二種未載於文件的形狀,而那則本該教會讀者
 > 第一種的診斷,否認第二種存在。
 
@@ -209,8 +209,8 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個
-import 它的人。兩個代碼從兩側守住同一條規則：_E358 the top-level binding `x` may not be `mut` outside a
-module-level `unsafe { … }` group_，以及 _E484 the mutable global `x` may not be `pub`_。要對外開放，就寫一個讀它
+import 它的人。兩個代碼從兩側守住同一條規則：_E3056 the top-level binding `x` may not be `mut` outside a
+module-level `unsafe { … }` group_，以及 _E4046 the mutable global `x` may not be `pub`_。要對外開放，就寫一個讀它
 的 `pub fn`——`src/stdlib/log.zg` 是這棵樹的示範，也是出貨 stdlib 裡唯一這樣的分組。
 
 ### 匯入與引用
@@ -281,7 +281,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
 >
 > **[deviation]** 被保留的是**工具鏈真正綁定的名字**，比本頁所述的 prelude 窄。`struct list`、`fn int`、
-> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E611 `list` is a prelude name — a built-in container type —
+> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E2061 `list` is a prelude name — a built-in container type —
 > and cannot name a struct_，並附位置——`map`、`bytearray`、`runearray`、`Either`、`Result`、`Err`、`Right`
 > 與 `Into` 亦然。同一段承諾、但**這裡沒有任何東西宣告**的那些名字——`Ord`、`Hash`、`Error`、`Iterator`、
 > `Iterable`、`Ref` 與 `set`——沒有被保留：程式自己的 `spec Ord` 就是唯一的 `Ord`，拒絕它等於為一個不存在的
@@ -333,7 +333,7 @@ package 是用哪些檔案建起來的。
 **而一個「本身就是某個 module」的測試 package，就是那個 module。** `src/stdlib/strings_test.zg` 形成的 package
 是用 `strings.zg` 建的，所以同一支程式裡任何其他地方的 `import "strings"`，解析到的是**這個 package 的原始碼**，
 而不是把該 module 的檔案再載入一次。沒有這條規則，那個 module 會在程式裡出現兩次，建置會停在
-_E745 `get` is declared twice in this file_，指著一份沒有人動過的原始碼。沒有任何刻意的安排才到得了它：一份 suite
+_E4073 `get` is declared twice in this file_，指著一份沒有人動過的原始碼。沒有任何刻意的安排才到得了它：一份 suite
 會 import `testing`，`testing` 透過 `log` 輸出一則 note，而 `log` 用 `json` 編碼——所以 `testing` 依賴閉包裡的那些
 stdlib module，恰好就是有 suite 的那幾個。這與「一個 module 無論被幾個人 import 都只載入一次」是同一套機制，不是
 額外栓在 loader 上的一條測試檔專屬規則。
@@ -420,7 +420,7 @@ built: …_，而這一輪以非零結束：一個根本沒能跑的測試，絕
 同一個 scope 裡一個名字兩份宣告，會被當作它本來就是的那種碰撞而拒絕。
 
 **scope 是 package，不是 session。** `pkg/sub` 與 `pkg/sub2` 各自建一份繼承來的 fixture 的**自己的**實例，因為各是
-一個 driver、一個行程——就是 pytest 的 `scope="package"`。session scope 是刻意不要的，而且本來也到不了：`E705` 拒絕
+一個 driver、一個行程——就是 pytest 的 `scope="package"`。session scope 是刻意不要的，而且本來也到不了：`E9081` 拒絕
 兩個 module 都定義同一個 `pub` 名字，所以一個橫跨整棵樹的 driver 根本建不起來，而一個活的值也不會跨過行程邊界。
 同理，當某個測試把行程結束掉、剩下的以一個行程一個測試重跑時，那些行程各自只進入它被指派的那個測試所在的那些層。
 
@@ -432,8 +432,8 @@ built: …_，而這一輪以非零結束：一個根本沒能跑的測試，絕
 
 一般建置一個 `*_test.zg` 都不編——檔名在讀取 module 目錄的地方比對，兩個編譯器都是——所以測試宣告的任何東西都到不了
 出貨產物、也不會加入 module 的表面，而它重複的名字或一個根本不能 parse 的檔案，對一般建置毫無代價。指名它的某個宣告
-會得到 _E388 module `lib` has no `only_in_test`_，指名那個檔案則是 _E512 `lib/lib_test` names a test file, and a
-normal build compiles none_，兩者都帶位置。E388 不會進一步說「有個測試檔宣告了它」：那個事實屬於 loader，而回報的
+會得到 _E3084 module `lib` has no `only_in_test`_，指名那個檔案則是 _E5011 `lib/lib_test` names a test file, and a
+normal build compiles none_，兩者都帶位置。E3084 不會進一步說「有個測試檔宣告了它」：那個事實屬於 loader，而回報的
 規則在 checker 裡。
 
 測試檔從任何地方都 import 不得，包含另一個測試檔——白箱測試共享它所屬 module 的命名空間、完全不需要 import 就摸得到
@@ -442,7 +442,7 @@ normal build compiles none_，兩者都帶位置。E388 不會進一步說「有
 > **[not yet]** 上述之外還有四件事：doc comment（`##`）、把 doc 範例當測試跑、benchmark，以及**同時跑兩個測試**
 > ——測試是循序的，`ctx.parallel()` 還沒建，等它落地時，共用同一個 fixture 的測試將共用同一份實例。
 >
-> 已經建好的部分裡唯一的缺口是對**複合型別**的主張：`assert xs == ys` 比較兩個 list 是 `E445`，所以這類主張要透過
+> 已經建好的部分裡唯一的缺口是對**複合型別**的主張：`assert xs == ys` 比較兩個 list 是 `E9057`，所以這類主張要透過
 > 某個能把它化約成 scalar 的東西來寫（[Spec 與泛型](../core/specs.zh-TW.md)）。
 
 ### Target 條件式檔案

@@ -377,7 +377,7 @@ arguments read as a list to scan rather than a line to read, however short each 
 > **[deviation]** A group the pass **declines** keeps its trailing comma, and nothing else
 > then objects. `x := sum( # before` with `1,` / `2,` under it holds a comment on the open
 > line, so `F403` leaves the group broken — and `zerg fmt --check` calls the file canonical,
-> exit 0, while `zerg build` refuses the same file with _E289 a trailing comma before the
+> exit 0, while `zerg build` refuses the same file with _E2046 a trailing comma before the
 > closing `)` of an argument list_. A formatter that certifies a file the compiler will not
 > take is worse than one that reformats it, because the certificate is the whole point.
 
@@ -422,7 +422,7 @@ something a person put there and joining lines has nowhere to put it back.
 The **trailing comma goes** either way, joined or split, and it is a repair rather than a
 preference: `GRAMMAR` writes the comma BETWEEN elements and derives one before a closer
 nowhere at all — not in a call, not in a tuple, list or map literal, not in a signature —
-so a file carrying one is not a Zerg program and the compiler says so (`E289`). The
+so a file carrying one is not a Zerg program and the compiler says so (`E2046`). The
 formatter reads the token stream and not the tree, which is what lets it fix a file the
 parser turns away — exactly the file a person reaches for a formatter over.
 

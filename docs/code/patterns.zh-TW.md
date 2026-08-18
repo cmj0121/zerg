@@ -27,7 +27,7 @@ fn positive(x: int) -> bool { return x > 0 }
 result := xs.map(double).filter(positive).fold(0, add)
 ```
 
-> **[not yet]** 這些 adapter 本身不存在。`xs.map(double)` 報 _E444 NotImplemented: the list method `map` — this
+> **[not yet]** 這些 adapter 本身不存在。`xs.map(double)` 報 _E9056 NotImplemented: the list method `map` — this
 > compiler has `len` and `append`_，`filter` 與 `fold` 的回答一樣，所以上面那條鏈沒有東西可鏈。method call 確實
 > 可鏈，而一個 `list` 有的就是那則訊息裡點名的兩個；在 adapter 落地之前，下面的迴圈就不只是 procedural-first
 > 的替代方案，而是唯一的寫法。
@@ -43,7 +43,7 @@ for x in xs {
 }
 ```
 
-型別寫在左邊,因為空 list 自己沒有型別——`mut out := []` 是 _E336 the binding `out` gives the empty list `[]`,
+型別寫在左邊,因為空 list 自己沒有型別——`mut out := []` 是 _E3034 the binding `out` gives the empty list `[]`,
 which has no type of its own_。這件事在這裡比平常更要緊:adapter 尚未建置時,這個迴圈是唯一的寫法,那它最好是一個
 建得起來的寫法。
 
@@ -74,7 +74,7 @@ c := connect("example.com", port: 8080, tls: false)  # 只具名覆寫想改的
 cfg := Config(host: "example.com", port: 8080)
 ```
 
-> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做：兩者都是 `E223`（見
+> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做：兩者都是 `E9010`（見
 > [函式與閉包](functions.zh-TW.md)）。今天 struct 是 positional 建構的——`Config("example.com", 8080)`——而有預設
 > 的參數只能從呼叫的尾端省略，所以本節拿來取代流式儀式的那個「一次呼叫的 builder」，正是它目前沒有東西可跑的部分。
 
@@ -104,9 +104,9 @@ q := new_query().where("age > 18").order("name").limit(10)
 解構;而在有巢狀 pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、把 payload 綁起來,再對那個 binding 做
 一次 `match`。
 
-> **[not yet]** `L(Yes(v))` 與 `L(0)` 都是 _E492 NotImplemented: a sub-pattern inside a variant payload,
+> **[not yet]** `L(Yes(v))` 與 `L(0)` 都是 _E9076 NotImplemented: a sub-pattern inside a variant payload,
 > beginning at `…`_。payload 位置上的**保留字**是另一條規則、保有它自己的碼：`L(this)` 是
-> _E245 `this` is a reserved word and cannot name a pattern binding_。
+> _E2013 `this` is a reserved word and cannot name a pattern binding_。
 
 ## 刻意不加的
 

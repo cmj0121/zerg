@@ -27,7 +27,7 @@
 [值與記憶體](../core/memory.zh-TW.md)。
 
 > **[not yet]** 本編譯器沒有 `Ref[T]` 型別，所以這兩個內建都不存在，兩者都被具名拒絕——
-> _E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
+> _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
 > reference count 的是 `chan`、`str` 與遞迴型別，各由編譯器自行管理、而非透過這個 box；`atomic` 模組與
 > `Reader` 表面都在等這一項。
 
@@ -43,14 +43,14 @@
 [型別](../core/types.zh-TW.md)。
 
 **`T(x)` 接受哪些配對是一張封閉的表**，而 `int` 是每一組配對都有一側是它的中樞。不在表上的配對就不是一個轉換
-——`byte` 上的 `float(b)` 是 `E395`，改寫成穿過中樞的那兩步。`float` 作為**來源**的缺席屬於決定、而非缺了一步：
-`float` 上的 `int(x)` 是 `E394`，小數要由一個動詞丟掉。表與這兩個理由都在[型別](../core/types.zh-TW.md)。
+——`byte` 上的 `float(b)` 是 `E3091`，改寫成穿過中樞的那兩步。`float` 作為**來源**的缺席屬於決定、而非缺了一步：
+`float` 上的 `int(x)` 是 `E3090`，小數要由一個動詞丟掉。表與這兩個理由都在[型別](../core/types.zh-TW.md)。
 
 > **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
-> 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E465 NotImplemented: `i32` is part of the fixed-width
+> 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E9063 NotImplemented: `i32` is part of the fixed-width
 > ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用；編譯器看不見
 > 的負值確實以 _OverflowError: integer conversion out of range_ abort，與規格一致——它**看得見**的那種則改在編譯期
-> 被拒（`E330`），依 [型別](../core/types.zh-TW.md) 的常數規則。
+> 被拒（`E3029`），依 [型別](../core/types.zh-TW.md) 的常數規則。
 
 ## 解析字串（Parsing a string）
 
@@ -89,7 +89,7 @@
 
 **`StopIteration` 可被測試、但不可被建構**，這是這組唯一不對稱之處。它是 channel 乾淨關閉所攜帶的 sentinel，
 所以一個能建出它的 sender 會讓自己的 channel 戴著「正常結束」的記號關閉，而消費端會把當掉讀成善終。寫出它是
-_E726 `StopIteration` is testable but not constructible_；`e is StopIteration` 不花任何代價，予以保留。
+_E4063 `StopIteration` is testable but not constructible_；`e is StopIteration` 不花任何代價，予以保留。
 
 **`AssertionError` 由 `assert` raise，而且只有它會**，這正是 `zerg test` 能在不把訊息當協定讀的情況下，分辨
 「一個不成立的主張」與「一支垮掉的程式」的原因。
@@ -100,14 +100,14 @@ _E726 `StopIteration` is testable but not constructible_；`e is StopIteration` 
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 全部都沒有建，而每一個位置都以同一個代碼說明——_E413 NotImplemented: the raw-pointer built-in
+> **[not yet]** 全部都沒有建，而每一個位置都以同一個代碼說明——_E9045 NotImplemented: the raw-pointer built-in
 > `addr` — bare-metal memory access, which is `unsafe`-only and not built here_，`ptr` 相同，**型別**位置也相同：
 > `fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個 raw-pointer 內建，而不再讀起來像是 `ptr` 是個既有型別、只是值不合。
 > 它們所需的 `unsafe` 情境本身也還沒建。
 
 ## `sizeof` / `alignof` —— 已延後
 
-**不屬於本規格。** `sizeof[T]` 與 `alignof[T]` 具名拒絕 —— _E414 NotImplemented: the compile-time built-in
+**不屬於本規格。** `sizeof[T]` 與 `alignof[T]` 具名拒絕 —— _E9046 NotImplemented: the compile-time built-in
 `sizeof[T]` — this compiler does not compute a type's layout_ —— 而「型別的佈局屬於 **built-in** 還是
 **標準函式庫**設施」這個問題尚未決定。原本一章說是前者、[FFI](ffi.zh-TW.md) 說是後者,兩處一併移除而不是留著
 互相矛盾;**決定先於功能**。

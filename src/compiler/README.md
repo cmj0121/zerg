@@ -14,7 +14,7 @@ in the language itself. The compiler here is the one that ships; the Go seed exi
 2. **The driver invokes `cc` through a runtime `exec` leaf.** `zrt_exec` is an OS-syscall
    floor — `posix_spawn`/`execvp` then `waitpid`, zero third-party dependency — surfaced
    as the `__zrt_exec` intrinsic and wrapped in `os`. It does **not** fill the spec's
-   command-literal gap: `` `…` `` is still refused by name (`E236`).
+   command-literal gap: `` `…` `` is still refused by name (`E9020`).
 3. **Coverage — the `Zerg-boot` subset first, grown outward.** The compiler had only to
    compile its own source before it could compile anything else, and that subset is the
    seed's contract today ([`src/bootstrap/README.md`](../bootstrap/README.md)). What `zerg`
@@ -62,7 +62,7 @@ them, and which ones was measured over the call graph rather than guessed: `diag
 and `unit` are `build` and `test`'s (and `lint` reads the first two), `source` is those
 three plus `lsp`. They sit beside the commands rather than inside any of them — a directory
 is one module, so nothing had to become `pub` for them to be shared, and nothing became
-`pub` that a second module could then collide with (`E705`).
+`pub` that a second module could then collide with (`E9081`).
 
 ## Using it
 
@@ -150,7 +150,7 @@ is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and del
 from it **is** the gate for the feature that name waits on.
 
 Six are waiting, each refused **by name** rather than mis-emitted — `gen_struct` answers
-_E215 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and
+_E9004 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and
 a field names one_ — on a generic `struct` or `enum`, `#[dyn]`, or `derive` beyond `Eq` on a
 fieldless enum. Two more, `spec_bound` and `gen_identity`, build and print what they must
 today: the list has not caught up with them.
@@ -322,10 +322,10 @@ interpolating-command forms are each refused by name rather than by silence
 chain the form is defined to be, which is why the AST and the emitter know nothing about
 f-strings at all — and why the seed only has to lex and parse one to build stage 1.
 
-Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (`E446`), a
-generic `struct` or `enum` — a type parameter that a field or a payload names (`E215` /
-`E212`, and it is `Atomic[T]` that makes `import "atomic"` an `E511`), named-argument
-construction `T(a: 1)` (`E223`), and the command literal (`E236`).
+Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (`E9058`), a
+generic `struct` or `enum` — a type parameter that a field or a payload names (`E9004` /
+`E9003`, and it is `Atomic[T]` that makes `import "atomic"` an `E9104`), named-argument
+construction `T(a: 1)` (`E9010`), and the command literal (`E9020`).
 
 ## What performance work is left
 

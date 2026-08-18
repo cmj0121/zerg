@@ -207,6 +207,52 @@ Under `--brief` it prints the signature and stops: a comment with no sentence in
 summary, and a blank line meaning "documented, but not in a sentence" is a distinction no
 reader can see.
 
+## The form of an example
+
+A worked example lives in the comment, as a pair of fenced blocks: **one expression per line** in a ` ```zerg `
+fence, and what those lines print in an ` ```output ` fence written directly beside it. Nothing declares the lines
+and nothing wraps them — the runner puts `print` in front of each one, in source order, and diffs what came out
+against the `output` block **line for line**.
+
+````text
+# ```zerg
+# strings.contains("hello world", "o w")
+# strings.contains("hello", "z")
+# ```
+# ```output
+# true
+# false
+# ```
+````
+
+Every example in one file becomes **one program**, so the lines run in source order in a single process and a later
+one sees what an earlier one did. Both fences are carried into the document exactly as they were written, like any
+other fenced block.
+
+Two kinds of function cannot have an example in that form, and both are in the standard library today rather than
+hypothetical:
+
+- **One answering a `list`, a `map` or a struct.** `print` renders no composite in this compiler (`E9059`), so the
+  example has to reduce the answer to something printable. `strings.split` detours through `join` for exactly that
+  reason — `strings.join(strings.split("a,b,c", ","), "|")` prints `a|b|c`, which shows the pieces **and** that
+  `join` inverts `split`. Issue [#16](https://github.com/cmj0121/zerg/issues/16) files it as `E449`, a composite
+  has no rendering.
+- **One answering nothing.** `print` of it needs a value and is handed nil (`E3086`), so `os.set_env` carries an
+  **indented illustration** instead of a fence — printed in the document exactly as written, and never run. #16
+  files that one as `E390`; the round trip is asserted in `src/stdlib/os_test.zg` instead, where a claim about a
+  write can be made in full.
+
+An illustration is the honest shape for either, and it is not an example: nothing executes it and nothing holds it
+to what it says. That is the whole distinction — an example is a claim that is checked, and everything else in a
+comment is a claim that is written down.
+
+**`zerg doc --check` is not built**, so the fences are executed by
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) instead, over the modules `mk/gates.mk` lists
+in `DOC_EXAMPLE_SRCS` — `json`, `log`, `os`, `strings` and `time` — on the gate board under `stdlib-test`. A module
+outside that list is not run at all: `cli.zg`'s one ` ```zerg ` fence has no `output` beside it and is a fragment of
+a method chain, which is an illustration that happens to be fenced. Moving the run into the command is the rest of
+[#17](https://github.com/cmj0121/zerg/issues/17).
+
 ## The shape of a document
 
 Four indents, and every nesting is the same pair four columns further in:
@@ -323,10 +369,9 @@ itself is the one failure it cannot recover from:
 
 `--check` is the second half of the issue this first version came from, deliberately left for
 its own commit. Until it lands, the examples go on being run by
-[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh): it compiles every
-`zerg` fence in the standard library's comments, runs it, and diffs what came out against the
-`output` fence written beside it. It is on the gate board under `stdlib-test`, and nothing in
-`zerg doc` overlaps it.
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh), over the modules
+`DOC_EXAMPLE_SRCS` names — the form of an example, and what that script does with it, is a
+section of its own above. Nothing in `zerg doc` overlaps it.
 
 `##` waits **deliberately**. This codebase's comments are long and largely addressed to
 maintainers, and separating the reader's half from the maintainer's half cannot be automated —

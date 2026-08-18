@@ -184,6 +184,46 @@ FUNCTIONS
 `zerg doc json.null` 會印出那個範例，而且**不會**標記它。在 `--brief` 之下它印出簽名就停住：一則裡面沒有句子的
 註解沒有摘要可寫，而一個意思是「有文件，但不是一句話」的空行，是沒有讀者看得出來的區別。
 
+## 範例的形狀
+
+一個範例住在註解裡，形式是一對圍欄區塊：` ```zerg ` 圍欄裡**一行一個運算式**，而它們印出來的東西寫在緊鄰的
+` ```output ` 圍欄裡。那些行不必宣告、也不必被包起來——跑它的東西在每一行前面加上 `print`，照原始碼順序執行，再把跑
+出來的結果跟 `output` 區塊**一行對一行**地 diff。
+
+````text
+# ```zerg
+# strings.contains("hello world", "o w")
+# strings.contains("hello", "z")
+# ```
+# ```output
+# true
+# false
+# ```
+````
+
+同一個檔案裡的所有範例會合成**一支程式**，所以那些行是在同一個行程裡照原始碼順序跑的，後面那行看得到前面那行做了什
+麼。兩個圍欄都原樣帶進文件裡，跟任何其他圍欄區塊一樣。
+
+有兩種函式沒辦法用這個形式寫範例，而且兩種在今天的標準函式庫裡都有實例，不是假設：
+
+- **回答 `list`、`map` 或結構的函式。** 這個編譯器的 `print` 算繪不了任何複合型別（`E9059`），所以範例必須把答案化
+  約成印得出來的東西。`strings.split` 正是為了這個理由繞道 `join`——`strings.join(strings.split("a,b,c", ","), "|")`
+  印出 `a|b|c`，同時展示了那些片段**以及** `join` 是 `split` 的反向。issue
+  [#16](https://github.com/cmj0121/zerg/issues/16) 把它記為 `E449`：複合型別沒有算繪。
+- **什麼都不回答的函式。** 對它 `print` 是「這個位置要一個值，而給它的是 nil」（`E3086`），所以 `os.set_env` 帶的是
+  一段**縮排的圖示**而不是圍欄——原樣印進文件裡，而且永遠不會被執行。#16 把這一個記為 `E390`；那個來回改由
+  `src/stdlib/os_test.zg` 斷言，在那裡才有辦法把一次寫入的主張完整說完。
+
+圖示對這兩種函式來說都是誠實的形狀，而它不是範例：沒有東西執行它，也沒有東西要它為自己說的話負責。這就是整個分別
+——範例是一個被檢查過的主張，註解裡其他每一樣東西都只是一個被寫下來的主張。
+
+**`zerg doc --check` 還沒做**，所以那些圍欄目前是由
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) 執行的，範圍是 `mk/gates.mk` 在
+`DOC_EXAMPLE_SRCS` 裡列出的那幾個 module——`json`、`log`、`os`、`strings` 與 `time`——掛在 gate 板的 `stdlib-test`
+底下。不在那份清單裡的 module 完全不會被跑：`cli.zg` 唯一的那個 ` ```zerg ` 圍欄旁邊沒有 `output`，內容是一段方法
+鏈的片段，那是一個剛好被圍起來的圖示。把這件事搬進命令裡，就是
+[#17](https://github.com/cmj0121/zerg/issues/17) 的其餘部分。
+
 ## 一份文件的形狀
 
 四個縮排，而且每一層巢狀都是同一對往內四欄：
@@ -277,9 +317,8 @@ listed (see docs/runtime/stdlib.md)
 | `--serve`                               | [#21](https://github.com/cmj0121/zerg/issues/21) |
 
 `--check` 是這個第一版所出自的那個 issue 的後半，刻意留給它自己的一次 commit。在 `--check` 落地之前，那些範例仍然由
-[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) 在跑：它會把標準函式庫註解裡的每一個
-`zerg` 圍欄編譯起來、執行，再把跑出來的東西跟寫在旁邊的 `output` 圍欄 diff。它掛在 gate 板的 `stdlib-test` 底下，而
-`zerg doc` 沒有任何東西跟它重疊。
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) 在跑，範圍是 `DOC_EXAMPLE_SRCS` 指名的那幾個
+module——範例的形式，以及那支腳本拿它做什麼，上面有自己的一段。`zerg doc` 沒有任何東西跟它重疊。
 
 `##` 是**刻意**在等的。這個 codebase 的註解很長，而且大半是寫給維護者的，把讀者的那一半跟維護者的那一半分開來沒辦法
 自動化——讀這個工具真正的輸出，才是學會那條線落在哪裡的方式，所以先設計那個標記等於在猜。

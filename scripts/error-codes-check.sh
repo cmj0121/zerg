@@ -263,6 +263,17 @@ done
 dup=$(code_reports | sort | uniq -d)
 report "reported from more than one place — two rules under one identity" "$dup"
 
+# TWO ROWS WITH THE SAME SENTENCE. A code is an identity, and a catalogue that gives two of
+# them the same words hands a reader two rules they cannot tell apart — which is what the row
+# is FOR, since the message at the site carries the values and the row carries the rule. It
+# had already happened twice: a conversion refused for taking no value, and the same refusal
+# for `bytearray`/`runearray`, written out identically two ranges apart.
+dup_rule=$(sed -n "1,/^### Retired codes/p" "$DOC" |
+	grep -E '^\| `E[0-9]{4}`' |
+	sed -E 's/^\| `E[0-9]{4}` *\| *//; s/ *\|$//; s/ *$//' |
+	sort | uniq -d)
+report "listed twice with the same words — a reader cannot tell the two rules apart" "$dup_rule"
+
 # A code that is BOTH live and retired is the one state the two tables must never be in
 # together: a reader looking it up gets two answers, and the range walk below would accept
 # the number twice over.

@@ -24,7 +24,7 @@ import "zerg"
 #
 # THE CONTINUATION IS WHY THERE ARE NO GENERICS HERE. The shape this replaced had the
 # fixture hand its value over with `ctx.ready(v)` and block; `ready` would have had to be
-# generic over the value's type, and `impl Context { fn ready[T] }` is `E409` in this
+# generic over the value's type, and `impl Context { fn ready[T] }` is `E9044` in this
 # compiler. `use(c)` is an ordinary call of an ordinary function value, so the whole
 # mechanism is one the language already had — and the value's type is checked by the
 # compiler at the call, not by anything written here.
@@ -43,7 +43,7 @@ import "zerg"
 # WHAT A PACKAGE IS STAYS WHAT IT WAS: one directory, one driver, one process. So `pkg/sub`
 # and `pkg/sub2` each build their OWN instance of an inherited fixture, because they are
 # separate processes — pytest's `scope="package"`, not `scope="session"`. Session scope is
-# not wanted and is anyway unreachable: `E705` refuses two modules both defining a `pub`
+# not wanted and is anyway unreachable: `E9081` refuses two modules both defining a `pub`
 # name, so one driver over a whole tree cannot be built, and a live value does not cross a
 # process boundary.
 

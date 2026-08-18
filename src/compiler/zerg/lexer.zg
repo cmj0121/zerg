@@ -130,7 +130,7 @@ fn next(mut &l: Lex) -> Token {
 			# put it. That silently swallowed a LONE CR — a classic-Mac line ending, or one
 			# left by an editor mid-line — so a file whose statements were separated by CR
 			# alone lexed as ONE line and the ASI `;` was never inserted. Out of the class,
-			# a lone CR reaches bad_char like any other character no token claims (E104).
+			# a lone CR reaches bad_char like any other character no token claims (E1004).
 			advance(l)
 		} else if c == byte(10) {
 			sline := l.line
@@ -198,7 +198,7 @@ fn scan_token(mut &l: Lex) -> Token {
 	return scan_operator(l, sline, scol, soff)
 }
 
-# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR#letter makes the source
+# scan_nonascii is the E1004 a character outside ASCII gets. GRAMMAR#letter makes the source
 # UTF-8 — which is what lets a comment, a string and a rune hold any character at all —
 # and GRAMMAR#identifier derives ASCII letters, digits and `_`, so a character reaching
 # here spells nothing: the same lexical error `@` is, under the same code.
@@ -412,7 +412,7 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 		# answer U+FFFD, matching what the seed's WriteRune does with a bad rune, and the
 		# substitution was silent: `int('\u{110000}')` and `int('\u{D800}')` both printed
 		# 65533, so a program that named one character got another with nothing said. -1 is
-		# "not an escape", which the caller reports as E109 at the literal's own place.
+		# "not an escape", which the caller reports as E1009 at the literal's own place.
 		return -1 if cp > 1114111 or (cp >= 55296 and cp <= 57343)
 		return cp
 	}
@@ -487,7 +487,7 @@ fn has_nul(sb: list[byte]) -> bool {
 }
 
 # nul_bad is that refusal, once. Three literal forms can decode to a NUL — a plain string,
-# a triple string and a raw string — and E110 is ONE row in docs/tooling/diagnostics.md, so
+# a triple string and a raw string — and E1010 is ONE row in docs/tooling/diagnostics.md, so
 # the sentence is written here rather than at each of the three exits.
 fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad(l, Rule.StrHoldsNul, "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
@@ -820,7 +820,7 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad_char(l, sline, scol, soff)
 }
 
-# bad_char is E104's ONE reporting site. Two characters reach it — an ASCII one no operator
+# bad_char is E1004's ONE reporting site. Two characters reach it — an ASCII one no operator
 # claims, and a non-ASCII one scan_nonascii has consumed whole — and they are one rule, so
 # they are one code and therefore one raise (scripts/error-codes-check.sh counts a code
 # reported twice as two rules sharing an identity).

@@ -228,7 +228,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
 	# module is a directory and that is the only thing that puts its declarations in the same
 	# scope. A driver in a temp directory is a module of its own, and every test function it
-	# calls is then `E301 … is not a public member of module lib` — which would make a `pub` on
+	# calls is then `E3001 … is not a public member of module lib` — which would make a `pub` on
 	# each test the price of running it, i.e. exactly the test-only backdoor into visibility
 	# that docs/runtime/package.md says there is not.
 	#
@@ -241,7 +241,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	sel := join_path(test_dir(), key + ".sel")
 
 	# THE TWO PATHS ARE BAKED INTO THE DRIVER rather than handed to it on the command line,
-	# and that is not a preference: `E734 NotImplemented: main(args) in a program that uses
+	# and that is not a preference: `E9097 NotImplemented: main(args) in a program that uses
 	# concurrency` — a `fn main(args)` and a `spawn` cannot be in one program in this
 	# compiler, and the driver now has both. A generated file has no need of an argument
 	# anyway: whatever a run would have passed, the run also wrote the file.
@@ -275,7 +275,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# not a return is a raise, which the guard has.
 	#
 	# It used to be the last thing run_pkg did, which meant every path that did NOT reach the
-	# end left the driver behind: `zerg test src/stdlib` stopped at an `E215` inside
+	# end left the driver behind: `zerg test src/stdlib` stopped at an `E9004` inside
 	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
 	# standard library — a directory the compiler resolves imports by LISTING.
 	# WHAT THIS UNIT ALREADY IS, handed to the loader so nothing loads it a second time. A
@@ -360,7 +360,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 # only thing that survives a test taking the process with it.
 #
 # THE NAME TRAVELS IN A FILE for the reason the driver's paths do: the driver cannot read a
-# command line (E734), so the one thing that varies between these runs is written where the
+# command line (E9097), so the one thing that varies between these runs is written where the
 # driver looks for it.
 fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
 	rm_file(rep)

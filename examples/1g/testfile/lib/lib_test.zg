@@ -4,7 +4,7 @@
 # THIS FILE IS WHAT PROVES THE EXCLUSION, and it does it by being a file the build cannot
 # survive. It declares `greeting` a second time, so a build that compiled it would be turned
 # away by name — rename it off the `_test` suffix and the example beside it stops building
-# with `E705`, which is the control that says this gate measures something. An exclusion that
+# with `E9081`, which is the control that says this gate measures something. An exclusion that
 # quietly stopped working looks exactly like one that works, and the only way to tell them
 # apart is to make the included case fail.
 #

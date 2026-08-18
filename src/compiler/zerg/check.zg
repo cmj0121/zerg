@@ -122,7 +122,7 @@ fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
 # no module here, be quiet". So `zerg build m.zg` gave the ENTRY the sentinel, and every rule
 # that asks which module a reference is in went silent: `text.helper()` on a module-private
 # `helper` printed 42, while the identical program spelled `./m.zg`, `t9/m.zg` or with an
-# absolute path was refused with E301 and a place. The module identity was a function of how
+# absolute path was refused with E3001 and a place. The module identity was a function of how
 # the entry path happened to be TYPED.
 #
 # A bare filename denotes a file in the current directory, so the dirname is `.` — which is
@@ -245,7 +245,7 @@ fn chk_ty_visible(mut &em: Emitter, nm: str) {
 # decided to hand the type out, and it is the only party that can mark the type `pub` or
 # stop returning it. A dependent reading `s.hidden` can do neither — telling it alone would
 # be reporting a mistake to the one person who cannot correct it. That is the same call
-# `E484` already makes about a `pub mut` global ("the finding lands on the DECLARATION and
+# `E4046` already makes about a `pub mut` global ("the finding lands on the DECLARATION and
 # not on either use").
 #
 # A TYPE PARAMETER never reaches here: the walk asks c_is_type_name first, and a bound name
@@ -264,7 +264,7 @@ fn chk_ty_exported(mut &em: Emitter, nm: str, site: str, decl_pub: bool) {
 # chk_fld_visible is the field half, and the reason a field needs its own rule is that the
 # type may be perfectly public while the field is not: GRAMMAR#field makes a non-`pub` field
 # module-private and requires it to carry a DEFAULT, precisely so external code can
-# construct the type without naming a value it may not read. `E482` enforced the default and
+# construct the type without naming a value it may not read. `E4045` enforced the default and
 # nothing enforced the "may not read" it exists for, so the default was a courtesy and the
 # field was public in every way that mattered.
 #
@@ -289,7 +289,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 #
 # THE POINT OF THE RULE IS THE DISTINCTION IT DRAWS, and the trap is that both sides look
 # alike from inside one flattened namespace. `bogus.f()` names nothing anywhere and is an
-# undefined name (E372) — that answer is right and must not become a visibility finding.
+# undefined name (E3069) — that answer is right and must not become a visibility finding.
 # `lib.f()` where some OTHER module imported `lib` names something real that this module has
 # no right to; reporting THAT as an undefined name would be false, and would send the reader
 # looking for a typo in a name that is spelled correctly. So the namespace question answers
@@ -1424,7 +1424,7 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 #
 # `TUnknown` IS AN OPERAND WITH NO CONSTRAINT, and it is written where this compiler cannot
 # state one rather than where none exists. The atomics take a `Ref[int]` cell first, and `zerg`
-# has no `Ref[T]` at all (`E446`) — so the row says unknown, chk_fits lets it past, and the int
+# has no `Ref[T]` at all (`E9058`) — so the row says unknown, chk_fits lets it past, and the int
 # operands beside it are checked as the seed checks them.
 #
 # A primitive is not a function anyone declares. The emitter lowers the name directly, by
@@ -1565,7 +1565,7 @@ fn chk_conv_pair(mut &em: Emitter, want: Ty, got: Ty, nm: str) {
 	chk_at(em, Rule.ConvTwoSteps, f"a conversion is ONE STEP, and `{ty_name(got)}` -> `{ty_name(want)}` is `{ty_name(got)}` -> `int` -> `{ty_name(want)}` — write the two, as `{nm}(int(x))`")
 }
 
-# chk_conv_verb is the spelling E394 sends a reader to. An `int` target is the verb alone; any
+# chk_conv_verb is the spelling E3090 sends a reader to. An `int` target is the verb alone; any
 # other target is the verb and then the conversion that was written, which is the two-step rule
 # arriving at the same place from the other side.
 fn chk_conv_verb(want: Ty, nm: str) -> str {
@@ -1647,7 +1647,7 @@ fn chk_fold_in_range(mut &em: Emitter, want: Ty, f: Folded) -> bool {
 # A NAME is said together with what it holds, "`big`, which is 300", because the name IS on the
 # line and the number is what the name is hiding. Anything else is a tree the fold computed —
 # `N * 3`, `big - 0` — where no single fragment is the offender and quoting the product would
-# name none of the three things actually written; "this expression" is the phrase E332 already
+# name none of the three things actually written; "this expression" is the phrase E3031 already
 # uses next door for the same situation, so the two read alike.
 #
 # A literal tree never arrives here at all: chk_conv_const gives it to chk_const_into_at, which
@@ -1703,7 +1703,7 @@ fn chk_const_into_at(mut &em: Emitter, want: Ty, e: Expr, noted: bool) {
 	chk_out_of_range(em, want, f"`{chk_lit_offender(em, want, e, false)}`")
 }
 
-# chk_out_of_range is E330's ONE report site, and it is one because a code is an IDENTITY. Two
+# chk_out_of_range is E3029's ONE report site, and it is one because a code is an IDENTITY. Two
 # callers reach it — a written literal tree, which can be told which leaf is wrong, and a value
 # arriving through a name, which is named together with what it holds — and they are one rule
 # said two ways: the value is known, and the conversion is known to fail. A second `chk_at`
@@ -2435,7 +2435,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	#
 	# c_check_named_ty is the walk a DECLARATION's types already get (c_check_named_types),
 	# with a site of this binding's own. That is one rule for four sites rather than two rules
-	# for four sites: a parameter, a result, a field and now a local all answer `E707`, and
+	# for four sites: a parameter, a result, a field and now a local all answer `E4056`, and
 	# the module-visibility question the block below used to ask separately is one of the two
 	# the walk asks of every leaf it reaches.
 	c_check_named_ty(em, declared, Site(declared, f"the binding `{name}`", [], em.at_path, em.at_line, em.at_col, false))
@@ -2624,7 +2624,7 @@ fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 # which mistake you made.
 #
 # IT NAMES THE FIELD, which docs/core/types.md requires of the missing-field rule ("a
-# construction short of one is an error naming the field") and which `E482` beside it has
+# construction short of one is an error naming the field") and which `E4045` beside it has
 # always done. It said "field 2 of `Config`" instead — a number the reader then has to count
 # their own declaration against, and one that means a different field the moment a field is
 # inserted above it. The position is what the CONSTRUCTION gives, since it binds by position;
@@ -3202,7 +3202,7 @@ fn chk_no_member(mut &em: Emitter, ns: str, member: str) {
 # coexisted with it, and which of the two a `text…` reached depended on whether the reader
 # wrote a `(` or a `.`.
 #
-# It is asked of the WHOLE program, which is the grain E382 already states for the same
+# It is asked of the WHOLE program, which is the grain E3078 already states for the same
 # reason: every module of a program flattens into one namespace here, so a name taken
 # anywhere is taken. A repeat of the SAME import is not a collision — a module two files
 # import is the ordinary case, and it binds one namespace to one module either way.

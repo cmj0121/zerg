@@ -1612,6 +1612,17 @@ func (e *emitter) expr(x ast.Expr) string {
 				return e.constructVariant(n, nil, n.Name)
 			}
 		}
+		// the same value spelled through a module: `mod.Enum.Variant`. sema typed the whole
+		// field as the enum, and a module flattens into one program, so the variant it names
+		// is built exactly as a same-module one is.
+		if fld, ok := n.X.(*ast.Field); ok {
+			if _, isEnum := e.cur.ExprType(e.info, n).(*types.Enum); isEnum {
+				// the merged program tags a module's declarations, so the variant is looked up
+				// under the same prefix its enum carries — `lib__Alpha`, not `Alpha`.
+				tag := strings.TrimSuffix(e.info.NsMembers[fld], fld.Name)
+				return e.constructVariant(n, nil, tag+n.Name)
+			}
+		}
 		// `mod.f` taken as a value rather than called: the Field analogue of the bare
 		// function name above, and the same value — a module flattens into one program, so
 		// the resolved merged name is what it holds.

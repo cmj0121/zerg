@@ -72,7 +72,17 @@ clean: $(SUBDIR)                # clean-up environment
 	@rm -f bin/zerg bin/zerg.c bin/.zerg-stage1 bin/.zerg-stage1.c
 	@rm -rf .zerg-cache
 
-run: $(SUBDIR)                  # run in the local environment
+# A PLACEHOLDER, and deliberately one. `run` is one of the three verbs this Makefile is meant
+# to be readable through, and until there is something for it to run it does nothing rather
+# than something wrong: it used to depend on $(SUBDIR), which reached the bootstrap
+# Makefile's own `run` and executed ZERG0 — the seed a reader is told they never meet — then
+# exited 0 on the seed's own usage error.
+#
+# What it is waiting for is `zerg run`, the build-then-execute subcommand this toolchain does
+# not have. When that lands this becomes one line; until then a verb that does nothing is
+# honest and a verb that runs the wrong program is not.
+run:                            # run in the local environment (not yet built)
+	@echo 'make run: nothing to run yet — the `zerg run` subcommand is not built'
 
 build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, then zerg
 	@# BEFORE the seed reads a line of the compiler: version.zg is one of the compiler's own

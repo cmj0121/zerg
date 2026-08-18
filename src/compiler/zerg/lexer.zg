@@ -855,7 +855,6 @@ fn tokenize(src: str) -> list[Token] {
 	return lex_with(src, false)
 }
 
-# tokenize_trivia lexes with comments retained, for the formatter.
 # lex_diags is every LEXICAL error in a source: one per token the lexer could not read,
 # each with the reason it recorded and the place it recorded it at.
 #
@@ -876,6 +875,11 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 	return out
 }
 
+# tokenize_trivia lexes with comments retained. Three passes want them: `zerg fmt` writes
+# them back out, `zerg desugar` carries them across the rewrite, and `zerg doc` reads a
+# declaration's documentation off them — which is why the comment no longer names one of the
+# three, and why a comment token is part of this module's answer rather than the formatter's
+# private business.
 fn tokenize_trivia(src: str) -> list[Token] {
 	return lex_with(src, true)
 }

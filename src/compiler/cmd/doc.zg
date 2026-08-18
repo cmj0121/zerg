@@ -84,6 +84,12 @@ fn run_doc(args: list[str], brief: bool) -> int {
 # dot is handed to `doc_find` exactly as written, because `Logger.level` is the same key the
 # renderer groups a method under — one spelling of a method, in the tool and in the document.
 #
+# ONE NAME MAY BE TWO DECLARATIONS, and both are printed. `doc_find` answers every declaration
+# with the key rather than the first in source order, because a module may declare `pub struct
+# Pair` and `pub fn Pair` — the language keeps them apart by position and `zerg lint` accepts
+# it — and a page that showed the struct alone would be a document with a declaration missing
+# and nothing said about it.
+#
 # `--brief` is not read here. A single declaration is shown whole, which is what a reader asking
 # for one wants; brief is what shortens a LISTING, and a listing of one is the thing itself.
 fn run_doc_decl(name: str, col: bool) -> int {
@@ -98,10 +104,10 @@ fn run_doc_decl(name: str, col: bool) -> int {
 	raise doc_no_such(name) if files.len() == 0
 
 	m := doc_read(path_tail(mod), files)
-	i := zerg.doc_find(m, key)
-	raise doc_no_decl(m, key) if i < 0
+	hits := zerg.doc_find(m, key)
+	raise doc_no_decl(m, key) if hits.len() == 0
 
-	io.write(render_doc_decl(m, i, col))
+	io.write(render_doc_decls(m, hits, col))
 	return 0
 }
 

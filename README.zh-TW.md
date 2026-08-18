@@ -41,6 +41,7 @@ ZG
 | `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                           |
 | `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                   |
 | `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
+| `zerg doc [name]`     | 讀一個 module 露出什麼，以及記錄它們的那些註解         |
 | `zerg lsp`            | language server，走 stdio（JSON-RPC）                  |
 
 `--emit` 則是停在某個階段：`tokens`、`ast`、`check`（只出診斷）、`c`、`lib`（object）、`bin`（執行檔）。程式是逐模組

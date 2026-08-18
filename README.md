@@ -44,6 +44,7 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 | `zerg fmt <file>`     | rewrite source in the one canonical style                           |
 | `zerg lint <file>`    | report unused imports and dead private declarations                 |
 | `zerg desugar <file>` | rewrite source into the core forms its sugar stands for             |
+| `zerg doc [name]`     | read what a module exposes and the comments that document it        |
 | `zerg lsp`            | the language server, over stdio (JSON-RPC)                          |
 
 `--emit` stops at a stage instead: `tokens`, `ast`, `check` (the diagnostics alone), `c`, `lib` (an

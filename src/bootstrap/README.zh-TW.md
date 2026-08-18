@@ -173,6 +173,10 @@ src/bootstrap/
 同一支程式，在 macOS 讀起來是綠的，在 Linux 是紅的。cc 的診斷代表種子已經把那支程式 emit 出去了，而那正
 是這項斷言存在要抓的事。
 
+- **本檔案沒有 import 的模組，透過帶限定的 enum variant 命名時會被接受。** 檔案只 import 了 `mid`
+  （而 `mid` import 了 `lib`），此時 `lib.Colour.Red` 是整個程式攤平後才可及的名字，語言拒絕它；種子
+  對任何 namespace 成員都沒有執行這條規則，而 variant 現在也成為其中之一——它讀得懂
+  `mod.Enum.Variant`，因為編譯器自己的診斷登錄表就是隔壁模組的一個 enum。`zerg` 會以 `E507` 拒絕。
 - **帶預設值的 `mut &` 參數會被接受，而用到該預設值的呼叫會 segfault。** GRAMMAR#param 讓 `mut &` 只在
   該次呼叫中成立，且它的引數必須是 `mut` 的 lvalue；預設值沒有任何呼叫端變數可指。種子把預設值運算式
   emit 在該放指標的位置，於是對 `fn f(a: int, mut &b: int = 0)` 呼叫 `f(5)` 會對一個字面值解參考。

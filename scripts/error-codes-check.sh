@@ -15,6 +15,14 @@
 # catalogue with no source is a rule a reader looks up and cannot reach. Neither breaks a
 # build, and neither would be noticed by any other gate here.
 #
+# THE SOURCE IS TWO THINGS NOW, and they are asked separately. `src/compiler/zerg/rule.zg`
+# DECLARES every code as a variant of `Rule` carrying its number, and a site REPORTS one by
+# naming that variant. A declaration nobody reports is a code the compiler does not have; a
+# report of a variant that is not declared cannot be written at all, because the reporting
+# channels take a `Rule` and the compiler refuses anything else. That is the half of this
+# gate the type system took over, and what is left here is the half it cannot see: whether
+# the number a rule was given is asserted by a case and listed for a reader.
+#
 # It reads the SOURCES rather than running the compiler, because a code that no program can
 # reach still owes a row and a case — being unreachable is a separate finding, and one this
 # gate would hide if it only looked at what it could make fire.
@@ -51,6 +59,7 @@
 set -uo pipefail
 
 SRC=${SRC:-src/compiler}
+REG=${REG:-src/compiler/zerg/rule.zg}
 DOC=${DOC:-docs/tooling/diagnostics.md}
 
 # The TRANSLATED catalogue, held to the same code set. It is asked separately from the three
@@ -64,10 +73,23 @@ GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
 
 fail=0
 
-# A code in the source is one that a diagnostic string OPENS with — `raise "E204 …"`,
-# `f"E413 …"`, `bad(l, "E109", …)`. A mention inside prose (a comment naming a code it
-# explains) is not a report and is not counted, which is why the patterns anchor on the
-# quote or on the argument position rather than matching the bare word.
+# THE REGISTRY, read as `Name E204` a line: the variants of `pub enum Rule`, each carrying
+# the number its rule is reported under. It is the one place a code is declared, and reading
+# it here rather than restating the numbers is what lets the scheme be renumbered by editing
+# that file alone.
+registry_rows() {
+	sed -n '/^pub enum Rule {/,/^}/p' "$REG" |
+		sed -nE 's/^\t([A-Za-z][A-Za-z0-9]*) = ([0-9]+)$/\1 E\2/p'
+}
+
+codes_declared() {
+	registry_rows | awk '{print $2}' | sort -u
+}
+
+# A code REPORTED is a site naming a variant — `chk_at(em, Rule.AssignToConst, …)`, and
+# `zerg.Rule.EntryHasNoMain` one module over. The registry file itself is left out: it
+# DECLARES the names and reports none of them, so counting it would make every code look
+# reported and this gate would only ever compare the registry with itself.
 #
 # `--include='*.zg'` because `grep -r` reads whatever is in the tree, and what is in the tree
 # is not only the compiler: an editor's `parser.zg.bak`, a patch left by a rebase, a copy
@@ -75,11 +97,13 @@ fail=0
 # so this reports 99 duplicates and the gate is red for a file nobody meant to keep. A gate
 # that can be broken by a stray backup is a gate people learn to disbelieve.
 code_reports() {
-	grep -rhoE --include='*.zg' '((raise |return |, )f?"E[0-9]{3} |"E[0-9]{3}",)' "$SRC" | grep -oE 'E[0-9]{3}'
+	grep -rhoE --include='*.zg' --exclude="$(basename "$REG")" '\bRule\.[A-Za-z][A-Za-z0-9]*' "$SRC" |
+		sed 's/^Rule\.//' |
+		awk 'NR == FNR { m[$1] = $2; next } { print ($1 in m) ? m[$1] : "undeclared:" $1 }' <(registry_rows) -
 }
 
 codes_in_source() {
-	code_reports | sort -u
+	code_reports | grep -E '^E[0-9]{3}$' | sort -u
 }
 
 # A code a gate asserts. Both scripts spell the assertion as a bare argument — `expect …
@@ -192,15 +216,16 @@ report "listed in English, missing from the zh-TW catalogue" \
 report "listed in the zh-TW catalogue, missing from English" \
 	"$(comm -13 <(printf '%s\n%s\n' "$doc" "$retired" | sort -u) <(printf '%s\n' "$doc_zh"))"
 
-# EVERY RULE HAS ONE, which is the half the three sets cannot see: they compare codes that
-# already exist, so a rule reported with no code at all is absent from all three and nothing
-# fires. The reporting functions take the code as an ARGUMENT, so the compiler's own arity
-# rule already refuses a call that omits it — what is left to check is that the argument is a
-# code rather than a string that happens to be there, and the only calls exempt are the
-# forwarding ones that pass a `code` they were handed.
-uncoded=$(grep -rnE 'chk_at\(|chk_at_place\(|chk_note\(|chk_note_at\(|diag_at\(|p_diag\(|c_diag\(|c_derive_diag\(|Diag\(' "$SRC" --include='*.zg' |
-	grep -vE '"[ELF][0-9]{3}"|, code,|fstr_slice\(|fn ([cp]_)?(chk_(at|note)|_?diag(_at)?|derive_diag)|:[[:space:]]*#|list\[(zerg\.)?Diag\]')
-report "reported without a code — a rule with no identity is one no gate can pin" "$uncoded"
+# A DECLARED CODE NOBODY REPORTS. The compiler cannot have this one both ways: a `Rule` a
+# site never names is a number spent on nothing, and it would otherwise sail through every
+# comparison below — the catalogue would list it, a case could even be written for a message
+# no program can produce, and the range walk would count it as taken.
+#
+# The other direction needs no rule here. A site naming a variant the registry does not
+# declare is not a finding, it is a program that does not compile, because every reporting
+# channel takes a `Rule` and there is no way to spell one that was never declared.
+report "declared in $REG, reported by no site" \
+	"$(comm -23 <(codes_declared) <(printf '%s\n' "$src"))"
 
 # THE TWO RAISING STAGES REPORT THROUGH THEIR CHANNEL, and this is what keeps that true one
 # site at a time. The rule above holds a channel CALL to a literal code; it cannot see a

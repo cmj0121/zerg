@@ -59,12 +59,19 @@ rune literal`. Where a diagnostic carries a place, the renderer's `error:` opens
 ahead of it (`error: E109 …`); a refusal that has not learned its place yet prints the
 message alone, so the code is the first thing on the line either way.
 
+**A code is declared once, in the compiler.** `src/compiler/zerg/rule.zg` is the registry:
+one variant of `pub enum Rule` per rule, carrying its number, and every reporting channel
+takes a `Rule` rather than a string. So a hand-spelled code is a type error, a rule with no
+identity cannot be written, and renumbering the scheme is an edit to that one file. It is
+also where two parallel changes meet: a new code is a line there, so a second one lands on
+the same lines and **git** says so, before CI is asked.
+
 **A code exists when a gate pins it, and not before.** `scripts/refuse-check.sh` and
 `scripts/reject-check.sh` assert the code rather than the sentence, and a `zerg` case that
 pins prose instead is a failure by name — otherwise a list that is mostly codes with a few
 sentences left in it looks finished from the outside. `scripts/error-codes-check.sh` holds
-the three lists to each other: what the compiler reports, what a gate pins, and what this
-table lists. Asking it that question is what found
+the four lists to each other: what the registry declares, what a site reports, what a gate
+pins, and what this table lists. Asking it that question is what found
 **thirteen rules no case had ever made fire**; they are the last section of
 `reject-check.sh`.
 

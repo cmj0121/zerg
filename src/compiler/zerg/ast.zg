@@ -458,8 +458,8 @@ pub struct Diag {
 # module-qualified struct constructor (`zerg.Diag(…)` emits a type name in call position),
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
-pub fn diag_at(path: str, line: int, col: int, code: str, msg: str) -> Diag {
-	return Diag(path, line, col, code, msg, "")
+pub fn diag_at(path: str, line: int, col: int, code: Rule, msg: str) -> Diag {
+	return Diag(path, line, col, rule_code(code), msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
@@ -1409,7 +1409,7 @@ fn ty_chan_elem(t: Ty) -> Ty {
 # It is "" for the one caller that cannot know: a `chan[T]` whose element arrives by
 # SUBSTITUTION is written nowhere in the source, so there is no position to point at.
 fn ty_chan_elem_check(elem: Ty, at: str) {
-	raise f"E404 `chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel" + at if ty_is_opt(elem)
+	raise rule_msg(Rule.ChanOfOptional, f"`chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel") + at if ty_is_opt(elem)
 }
 
 # ty_chan is the ONE WAY to build a channel type, and it exists so the rule above cannot be

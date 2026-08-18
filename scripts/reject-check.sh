@@ -5426,12 +5426,13 @@ pub struct Counter {
 }
 EOF
 
-# NO `seed-gap` ON THIS ONE, and not because the seed enforces the rule: it refuses
-# `lib.Colour.Red` outright with `type "Colour" used as a value`, and refuses it identically
-# when `lib` IS imported — so its "no" is about a form it does not read, not about who
-# imported what. The marker asserts its own opposite, so carrying one here would report a gap
-# closed the first time anybody ran this. (Same shape as the `spawn` case below.)
-reject a-namespace-this-module-did-not-import-naming-a-variant E507 at=4:2 <<'EOF'
+# `seed-gap`, and it EARNED the marker rather than always having carried it: the seed used to
+# refuse `lib.Colour.Red` with `type "Colour" used as a value` — a no about a form it did not
+# read, and one it gave identically when `lib` WAS imported — so a marker here would have
+# asserted its own opposite. It reads the form now (the compiler's own diagnostic registry is
+# an enum one module over), and reading it is what leaves the rule about WHO IMPORTED WHAT
+# unenforced, exactly as it is for every other member a namespace reaches.
+reject a-namespace-this-module-did-not-import-naming-a-variant E507 at=4:2 seed-gap <<'EOF'
 import "mid"
 
 fn main() {

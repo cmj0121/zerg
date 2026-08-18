@@ -115,23 +115,18 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 
 # --- module resolution ------------------------------------------------------------------
 
-# module_files resolves one import path to the source files that make up that module,
-# searched BESIDE THE IMPORTER first — the directory of the file that wrote the import —
-# then in the entry program's own directory, then the standard library. A module is either
-# a single `<path>.zg` file or a DIRECTORY
-# of them — the compiler's own `zerg` module is the second kind, and its files are read in
-# the sorted order the runtime guarantees so the emitted C never depends on the
-# filesystem.
+# resolve_module is the SEARCH by itself: one module path tried under each source root, and
+# the answer is whatever files it finds — possibly none. `module_files` is this search plus
+# a refusal, and the two are separate because `zerg doc` runs the same search by name and
+# wants the empty answer back (module_sources, below). One resolver either way: a second
+# copy of the root order kept in step by hand is the thing this module exists to prevent.
 #
-# AN IMPORT THAT RESOLVES TO NOTHING IS REFUSED HERE, and it used to yield an empty list that
-# both loaders skipped: each read the files the import resolved to, found none, and moved on.
-# `import "nope"` compiled and ran, and the first USE of the module reported "the method
-# `thing` on a ?", naming neither the module nor the import. A dependency that is not there is
-# the one thing a loader cannot work around, and the seed has said so since 1g; the two
-# compilers now agree, in the same words.
+# The module is searched BESIDE THE IMPORTER first — the directory of the file that wrote
+# the import — then in the entry program's own directory, then the standard library. A
+# module is either a single `<path>.zg` file or a DIRECTORY of them — the compiler's own
+# `zerg` module is the second kind, and its files are read in the sorted order the runtime
+# guarantees so the emitted C never depends on the filesystem.
 #
-# The refusal is the RESOLVER's rather than each caller's, because both callers want the same
-# answer and a third would have to remember to ask for it.
 # `near` is the directory of the FILE that wrote this import, and it is searched first.
 # Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
 # own imports were resolved against a directory that module knows nothing about: `api/api.zg`
@@ -143,14 +138,7 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 # The entry directory STAYS as the second root rather than being replaced: a nested module
 # reaching a module beside the program resolved before this and still does. So the change
 # only ever adds a place to look.
-#
-# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E5002 was the last
-# import rule with no place: the two beside it (E9104, E5011) are handed the `ImportDecl` and
-# spell `place_line` from it, and this one was handed the path alone — a string that knows
-# what was written and not which line wrote it. A reader told an import resolves nowhere and
-# not which import is left grepping their own program for the quoted path.
-fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
-	path := im.path
+fn resolve_module(path: str, near: str, from_dir: str) -> list[str] {
 	mut roots: list[str] = []
 	roots.append(near)
 
@@ -180,8 +168,71 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 		}
 	}
 
+	mut none: list[str] = []
+	return none
+}
+
+# module_files resolves one import to the source files that make up the module it names.
+#
+# AN IMPORT THAT RESOLVES TO NOTHING IS REFUSED HERE, and it used to yield an empty list that
+# both loaders skipped: each read the files the import resolved to, found none, and moved on.
+# `import "nope"` compiled and ran, and the first USE of the module reported "the method
+# `thing` on a ?", naming neither the module nor the import. A dependency that is not there is
+# the one thing a loader cannot work around, and the seed has said so since 1g; the two
+# compilers now agree, in the same words.
+#
+# The refusal is the RESOLVER's rather than each caller's, because both callers want the same
+# answer and a third would have to remember to ask for it.
+#
+# IT TAKES THE DECLARATION AND NOT THE PATH, so the refusal can say WHERE. E5002 was the last
+# import rule with no place: the two beside it (E9104, E5011) are handed the `ImportDecl` and
+# spell `place_line` from it, and this one was handed the path alone — a string that knows
+# what was written and not which line wrote it. A reader told an import resolves nowhere and
+# not which import is left grepping their own program for the quoted path.
+fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
+	found := resolve_module(im.path, near, from_dir)
+	return found if found.len() > 0
+
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}")
+	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}")
+}
+
+# module_sources is the same resolution asked BY NAME rather than by import: the files that
+# make up module `name`, or an empty list when nothing resolves. It exists for `zerg doc`,
+# which wants to answer "no such module, and here is what I can see" — a sentence, not the
+# E5002 an import earns — and which holds no `ImportDecl` to be refused at anyway: nobody
+# wrote an import, so there is no line for a place to name.
+#
+# There is no importer either, which is why `from_dir` stands as both roots: the directory
+# the reader asked from plays the part the importing file's directory plays in a build.
+#
+# READING A MODULE IS NOT IMPORTING IT, so none of the import checks apply here —
+# deliberately. `chk_unbuilt_module` turns away `import "atomic"` because this compiler
+# cannot BUILD a generic struct, but the module's documentation is exactly as readable as
+# the rest of the stdlib, and a doc tool that refused it would hide the one module whose
+# documentation is all a user can get.
+pub fn module_sources(name: str, from_dir: str) -> list[str] {
+	return resolve_module(name, from_dir, from_dir)
+}
+
+# stdlib_modules is every module name the standard library holds, in the sorted order the
+# runtime lists a directory in. It is the other half of module_sources' contract: when a
+# name resolves to nothing, `zerg doc` names the modules that WOULD have — and the same
+# listing is what `zerg doc` with no argument prints.
+#
+# What is filtered out is what is not a Zerg module. The stdlib directory also carries
+# `embed.go`, `go.mod` and `LICENSE`, which the `.zg` suffix turns away, and its own test
+# files, which `zerg.is_test_file` does — the SAME rule `module_at` drops them by, because
+# a naming convention answered in two places is one that drifts. `atomic` IS in the answer:
+# unimportable is not unreadable (see module_sources).
+pub fn stdlib_modules() -> list[str] {
+	mut out: list[str] = []
+	for name in __zrt_listdir(stdlib_dir()) {
+		if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+			out.append(drop_suffix(name, ".zg"))
+		}
+	}
+	return out
 }
 
 # WHICH SOURCES ARE TEST FILES is `zerg.is_test_file`. The convention used to be written in

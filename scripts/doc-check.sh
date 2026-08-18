@@ -44,6 +44,13 @@
 # library contains not one comment in Chinese, so the fixture is beside §5's for the same
 # reason.
 #
+# §8 is the last row of the chapter's four-question table — anything else is a refusal that
+# lists what it can see, exit 1 — asked of the three names that used to end somewhere else:
+# `.`, which resolved to the standard library's own directory; a directory with no `.zg` in
+# it, which printed nothing and exited 0; and a declaration asked of a module that did not
+# parse. A file with nothing to document is beside them, for being the same silence one level
+# down.
+#
 # FLOORS, like every other gate here. An extraction that stops matching finds nothing, and
 # nothing satisfies every claim above — the comparison passes, each fixture rule is vacuous,
 # and the gate reports success for having measured no declarations at all. So the module
@@ -626,6 +633,68 @@ EOF
 else
 	note 'no `perl` on this host, so the width of the page was not measured — §7 is the one section that cannot be skipped, its whole subject being how wide a character is'
 fi
+
+# --- 8. a name that answers nothing is refused, and says what it can see -----------------
+#
+# docs/tooling/doc.md's four-question table ends with one row: anything else is a refusal that
+# lists what it can see, exit 1. Three commands a reader types by accident used to end
+# somewhere else, and each of them printed something a reader would read as an answer:
+#
+#   - `zerg doc .` printed two thousand lines of the standard library as one module.
+#     `module_at`'s directory arm asks whether `<root>/<name>` exists, and `<stdlib>/.` does.
+#   - `zerg doc docs/` printed zero bytes and exited 0. A trailing slash left by a shell's
+#     completion is the whole of how a reader gets there.
+#   - `zerg doc atomic.load` said the module declares nothing called `load` and listed
+#     nothing, of a module whose declarations are MISSING rather than absent.
+#
+# The exit code alone would pass a command that printed nothing and failed, so each case
+# asserts the sentence too — and for `.` the sentence is the proof it did not answer, a stdlib
+# document being the one thing that does not carry the index.
+mkdir -p "$tmp/empty" "$tmp/proj/sub"
+
+# refused <dir> <what> <name> <wanted-substring-of-the-refusal>
+#
+# The DIRECTORY is a parameter because `.` and `..` are answered relative to it. `..` is asked
+# from inside `$tmp/proj/sub`, so the directory above it is §4's own fixture directory and
+# holds sources — asked from anywhere whose parent happens to hold none, the case would pass
+# on the compiler that had the bug.
+refused() {
+	local dir=$1 what=$2 name=$3 want=$4 out rc
+	out="$(cd "$dir" && "$ZERG_ABS" doc "$name" 2>&1)"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		note "$what — \`zerg doc $name\` exited 0, and a name nothing answers is a refusal"
+		return
+	fi
+	case $out in
+	*"$want"*) checks=$((checks + 1)) ;;
+	*) note "$what — \`zerg doc $name\` was refused with \"$(printf '%s' "$out" | head -1)\", wanted \"$want\"" ;;
+	esac
+}
+
+refused "$ROOT" 'the current directory is not a module name' '.' 'the modules it can see:'
+refused "$tmp/proj/sub" 'the parent directory is not a module name' '..' 'the modules it can see:'
+refused "$ROOT" 'a directory with no source in it' "$tmp/empty/" 'holds no source'
+refused "$ROOT" 'a declaration of a module that did not parse' 'atomic.load' 'does not parse under this compiler'
+
+# and that refusal does not go on to head an empty list, which is the claim the note corrects
+"$ZERG" doc atomic.load >"$tmp/decl.out" 2>&1
+grep -q '^what it does declare:' "$tmp/decl.out" &&
+	note '`zerg doc atomic.load` heads a list of what the module declares and then lists nothing — the module did not parse, which the note above it has just said'
+checks=$((checks + 1))
+
+# A FILE WITH NOTHING TO DOCUMENT SAYS SO. `zerg doc examples` was twelve headings with
+# nothing under them: no header comment, no exposed declaration, and a blank line where the
+# document would be. A heading with nothing beneath it reads as a rendering that broke.
+cat >"$tmp/proj/quiet.zg" <<'ZG'
+fn main() {
+	print 1
+}
+ZG
+"$ZERG" doc "$tmp/proj/quiet.zg" >"$tmp/quiet.out" 2>&1
+grep -qx '(nothing exposed)' "$tmp/quiet.out" ||
+	note "a file with no header and nothing exposed renders as a heading and a blank line: $(cat "$tmp/quiet.out")"
+checks=$((checks + 1))
 
 # --- the module list, and the floors ----------------------------------------------------
 #

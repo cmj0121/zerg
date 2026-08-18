@@ -49,7 +49,7 @@ timer 也落在這條線上，而且正好標出它的位置。runtime 只擁有
 ## 測試排程器,以及 ThreadSanitizer 停在哪裡
 
 `make -C src/runtime test` 用宿主的 `cc` 編譯 `csrc/` 並執行。那套測試是 runtime 唯一被當作 C 來操練的地方——
-而不是當成某支 Zerg 程式的副產物——而在它被接進根目錄的 `make test` 之前,它**從來沒有跑過**:一個 `map` 的
+而不是當成某支 Zerg 程式的副產物——而在它被接進根目錄的 `make suites` 之前,它**從來沒有跑過**:一個 `map` 的
 bug 和三個排程器 race 就這樣安然住在裡面。
 
 `TestConcurrencyStress` 是盯著 race 的那一部分。它不能檢查事情**何時**發生,因為 M:N 之下沒有任何順序是被承諾

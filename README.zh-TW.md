@@ -120,7 +120,7 @@ park 之前會一直佔住一個 worker（[coroutine](docs/code/coroutine.zh-TW.
 強制，型別與欄位尚未（[模組](docs/runtime/package.zh-TW.md)）。
 
 其餘的一切——什麼已建置、什麼被指名拒絕、還有哪些偏差——都標在規格對應的位置。讓這些標記保持誠實的關卡，
-就是 `make help` 列出的那些 target；**`make ci`** 跑整塊板，而 `make gates` 是用來擋下「只是掛在板上、
+就是 `make help gates` 列出的那些 target；**`make test`** 跑整塊板，而 `make gates` 是用來擋下「只是掛在板上、
 其實沒人跑」的關卡。
 
 ## 授權（License）

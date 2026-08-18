@@ -1,0 +1,689 @@
+# The extractor answers two questions about a module and nothing else: WHAT DOES IT EXPOSE,
+# and WHICH COMMENT DOCUMENTS EACH OF THOSE DECLARATIONS. It renders nothing. There is no
+# indent here, no column budget, no colour, no terminal — `zerg doc`'s typography is
+# cmd/doc_render.zg's, and issue #20's HTML will be a SECOND rendering of exactly what comes
+# out of here. A fact about the source that only one of those two could read would be a fact
+# the other one has to re-derive, which is how a project ends up with two extractors that
+# disagree about what a module contains.
+#
+# It lives in this module rather than beside the command because of one function:
+# `tokenize_trivia` (lexer.zg) is private here, and it is the only honest way to find a
+# comment. The alternative — scanning the source text for `#` — reads the `#` inside a string
+# literal as the start of a comment, and a documentation tool that lies about the source is
+# worse than no documentation tool. The lexer already separates the two, already separates a
+# `#[…]` decorator (Kind.Hash) from a comment, and already carries a line number on every
+# token, so the attachment below is line arithmetic over a stream that has done the reading.
+#
+# WHAT A COMMENT IS ATTACHED TO is decided by geometry, in two passes over that stream:
+#
+#   1. the token stream is reduced to three facts per line — is there a doc RUN ending here,
+#      does this line carry CODE, is this line inside a DECORATOR — and a run is a block of
+#      whole-line comments on consecutive lines. A comment with code before it on its line is
+#      a trailing note (`}  # so far so good`) and is dropped: it belongs to the line it sits
+#      on, and stitching it onto whatever is declared below would attribute a remark about a
+#      closing brace to the next function.
+#
+#   2. every declaration — private ones included — claims the run that ENDS ON THE LINE ABOVE
+#      IT, stepping over any `#[derive(Eq)]` in between, since a decorator standing between a
+#      comment and its declaration does not break the adjacency a reader sees. A blank line
+#      does break it, and needs no rule of its own: a blank line emits no token, so the run
+#      simply ends further up than the line above.
+#
+# The private declarations take part in pass 2 although nothing prints them, because the
+# MODULE HEADER is defined as the run nothing claimed: the first run in the file, with no code
+# above it, still unclaimed once every declaration has taken its own. That is what tells
+# `strings.zg`'s file header — which sits flush against `import "ascii"`, with no blank line
+# anywhere near it — from a comment that documents the first declaration. An import claims
+# nothing: it binds a namespace, it declares no member of this module's surface, and a reader
+# looking at the top of a file is reading about the file.
+#
+# WHAT IT DELIBERATELY IS NOT:
+#
+#   - a second type printer. Every type is spelled by `ty_name` (ast.zg) and every
+#     spec-with-arguments by `spec_key`, because a signature in a document that disagreed with
+#     a signature in a diagnostic would be one of them lying about the language.
+#   - a second parser. `doc_lit` prints a default value only when it is a LITERAL, reading the
+#     surface text the literal node already carries, and prints `…` for everything else. A
+#     document's signature answers "how do I call this"; it does not promise to evaluate.
+#   - an evaluator of examples. A ```zerg``` fence is carried through as written. Running one
+#     is `--check`'s job, and re-writing one for a reader is issue #18's.
+#   - silent about what it could not read. A file whose parse RAISES still yields its header —
+#     the header rule needs no AST — and the failure is recorded in `DocModule.broken` for the
+#     renderer to print. `src/stdlib/atomic.zg` is the live case: E9004 comes from the PARSER
+#     (a generic struct), so a doc tool that let the raise through would drop a whole module,
+#     and one that swallowed it would drop the module's declarations without saying so.
+
+# --- what a document is -------------------------------------------------------------------
+
+# DocModule is one module's whole document. It is extracted once and rendered many ways, so it
+# carries what the SOURCE says and nothing about how it is shown.
+pub struct DocModule {
+	# the name the reader asked for, which is the document's title
+	pub name: str
+
+	# the module header comment, stripped of its `#` markers; empty when the file opens with
+	# a declaration or with nothing at all
+	pub header: list[str]
+
+	# every exposed declaration, in SOURCE ORDER — the order the author put them in, which
+	# this tree treats as part of the document (`strings.zg` keeps the trim family together,
+	# and its header narrates the file in the order the file is written). Finding one
+	# declaration by name is `doc_find`'s job, and alphabetical order is that question's,
+	# not this list's.
+	pub decls: list[DocDecl]
+
+	# one honest sentence per file whose parse raised. Empty is the normal case; when it is
+	# not, a renderer that dropped it would turn a missing chapter into a silence.
+	pub broken: list[str]
+}
+
+# DocDecl is one exposed declaration: what it is, what it is called, how it is called, and
+# what was written above it.
+pub struct DocDecl {
+	# "fn" | "struct" | "enum" | "type" | "const" | "spec" — the keyword the declaration is
+	# written with, which is also the first word of `sig`. It is a `str` and not an enum
+	# because the readers do three things with it: group by it, print it, and compare it. An
+	# enum crossing the module boundary would have to publish every variant to buy a spelling
+	# check on six words that are already the first word of a string beside them.
+	pub kind: str
+
+	# the bare declared name — `split`, `Logger`, `level`
+	pub name: str
+
+	# a method's receiver type, "" for everything else. The parser flattens `impl T { … }`
+	# into ordinary functions carrying a receiver (ast.zg, FnDecl), and this follows the AST
+	# rather than re-nesting them: a method is a top-level DocDecl with `recv` set, which the
+	# renderer groups under its type and `doc_find` reaches as `Logger.level` in one scan.
+	pub recv: str
+
+	# the signature as plain text, `pub` omitted. Everything in a document is exposed by
+	# definition, so the marker is noise on every line; dropping it also leaves all six forms
+	# beginning with their keyword, which is what lets a renderer find the name to emphasise
+	# by counting characters instead of parsing the string back.
+	pub sig: str
+
+	# the attached comment, stripped; empty means UNDOCUMENTED, and a renderer must say so
+	# rather than leave a gap the reader cannot tell from a rendering bug
+	pub doc: list[str]
+
+	# the struct's public fields, the enum's variants, or the spec's required signatures —
+	# each a line and its own comment. It is deliberately one level deep: none of the three
+	# has anything below it, and a recursive container would invite a shape no source has.
+	pub members: list[DocMember]
+
+	# how many fields were NOT listed because they are private. Go's `contains unexported
+	# fields` note, for the same reason: they are not interface, but a document that showed a
+	# struct with two of its six fields would be describing a constructor call that does not
+	# compile. The count is taken here, where every field is visible; the wording is the
+	# renderer's.
+	pub hidden: int
+
+	# where it was declared. The `--check` that runs a document's examples has to report a
+	# failure at a place, and the place is in hand exactly here — afterwards nobody can
+	# recover it. This is ConstDecl's argument for carrying its own position, one layer up.
+	pub path: str
+	pub line: int
+}
+
+# DocMember is one field, variant, or required signature: a line, and whatever was written
+# above it.
+pub struct DocMember {
+	pub sig: str
+	pub doc: list[str]
+}
+
+# --- extraction -------------------------------------------------------------------------
+
+# doc_module extracts one module's document from its sources. `srcs` and `paths` are row for
+# row — the pairing `load_sources_at` already keeps — because attaching a comment is per-FILE
+# work and a file that will not parse has to be named in the sentence that says so.
+#
+# EVERY FILE IS PARSED UNDER `guard`. A module that cannot be parsed must still yield its
+# header and an honest marker, never a silent absence; `atomic` is that module today. The
+# diagnostic's own text cannot come back through a `guard`, so the sentence is a general one
+# pointing at where the module's status is already written down.
+pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
+	mut header: list[str] = []
+	mut decls: list[DocDecl] = []
+	mut broken: list[str] = []
+
+	mut i := 0
+	for i < srcs.len() {
+		path := paths[i]
+		mut tv := doc_trivia(srcs[i])
+		parsed := guard {
+			parse_at(srcs[i], path)
+		}
+		if f := parsed {
+			doc_file_decls(f, tv, decls)
+		} else {
+			broken.append(f"{path} does not parse under this compiler; its declarations are not listed (see docs/runtime/stdlib.md)")
+		}
+
+		# after the claim pass, never before it: a header is the run no declaration wanted
+		hd := doc_header(tv)
+		if hd.len() > 0 {
+			if header.len() > 0 {
+				header.append("")
+			}
+			for line in hd {
+				header.append(line)
+			}
+		}
+		i = i + 1
+	}
+	return DocModule(name, header, decls, broken)
+}
+
+# doc_find answers WHERE in `m.decls` the named declaration is, and -1 when it is not there.
+# `name` is `split` or `Logger.level` — a method is reached by the same key the renderer
+# groups it under, and the comparison is case sensitive because an identifier is.
+#
+# It answers an INDEX rather than a `DocDecl?` so that the caller can render the hit together
+# with what belongs to it: a type's entry is the type plus the methods that follow it in the
+# same list, which needs the position and not just the row.
+pub fn doc_find(m: DocModule, name: str) -> int {
+	mut i := 0
+	for i < m.decls.len() {
+		d := m.decls[i]
+		mut key := d.name
+		if d.recv != "" {
+			key = f"{d.recv}.{d.name}"
+		}
+		return i if key == name
+		i = i + 1
+	}
+	return -1
+}
+
+# doc_first_sentence is the one-line summary that a brief listing and a module index both
+# show: the first paragraph flattened onto one line, cut at the first `.` that ends a word.
+#
+# It lives beside the extraction rather than in either renderer because both of them ask it,
+# and issue #20's HTML will be the third — two copies of "what is a sentence" would drift into
+# two different summaries of the same comment. A fence ends the paragraph: an example is not
+# a description, and the first line of one reads as a fragment.
+pub fn doc_first_sentence(doc: list[str]) -> str {
+	mut para := ""
+	for line in doc {
+		break if line == ""
+		break if doc_is_fence(line)
+
+		if para != "" {
+			para = para + " "
+		}
+		para = para + line
+	}
+
+	b := bytearray(para)
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'.' {
+			return fstr_slice(b, 0, i + 1) if i + 1 == b.len() or b[i + 1] == b' '
+		}
+		i = i + 1
+	}
+	return para
+}
+
+fn doc_is_fence(line: str) -> bool {
+	b := bytearray(line)
+	return false if b.len() < 3
+	return b[0] == b'`' and b[1] == b'`' and b[2] == b'`'
+}
+
+# --- the declarations of one file -----------------------------------------------------------
+
+# doc_file_decls walks one parsed file, claims a comment for EVERY declaration in it, and
+# appends the exposed ones to `out` in source order.
+#
+# The private ones are walked for their claim alone. That is what keeps `doc_header` honest —
+# a run a private function owns is not the file's header — and it costs one pass either way.
+# An `impl` head claims too: it declares nothing this document lists, but a comment above
+# `impl Display for Meters` is about that impl, and if the impl were the first thing in a file
+# the comment would otherwise be read as the module's header.
+#
+# The file's own lists are per KIND, so nothing in them is where the author left it; they are
+# collected and then put back into source order by `doc_sorted`.
+fn doc_file_decls(f: File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
+	mut ds: list[DocDecl] = []
+
+	for c in f.consts {
+		doc := doc_attach(tv, c.line)
+		mut none: list[DocMember] = []
+		if c.is_pub {
+			ds.append(DocDecl("const", c.name, "", doc_const_sig(c), doc, none, 0, c.path, c.line))
+		}
+	}
+
+	for s in f.structs {
+		doc := doc_attach(tv, s.line)
+		mut ms: list[DocMember] = []
+		mut hidden := 0
+		for fd in s.fields {
+			fdoc := doc_attach(tv, fd.line)
+			if fd.is_pub {
+				ms.append(DocMember(doc_field_sig(fd), fdoc))
+			} else {
+				hidden = hidden + 1
+			}
+		}
+		if s.is_pub {
+			ds.append(DocDecl("struct", s.name, "", "struct " + s.name, doc, ms, hidden, s.path, s.line))
+		}
+	}
+
+	for e in f.enums {
+		doc := doc_attach(tv, e.line)
+		mut ms: list[DocMember] = []
+		for vd in e.variants {
+			vdoc := doc_attach(tv, vd.line)
+			ms.append(DocMember(doc_variant_sig(vd), vdoc))
+		}
+		if e.is_pub {
+			ds.append(DocDecl("enum", e.name, "", "enum " + e.name, doc, ms, 0, e.path, e.line))
+		}
+	}
+
+	for t in f.types {
+		doc := doc_attach(tv, t.line)
+		mut none: list[DocMember] = []
+		if t.is_pub {
+			ds.append(DocDecl("type", t.name, "", f"type {t.name} = {ty_name(t.under)}", doc, none, 0, t.path, t.line))
+		}
+	}
+
+	for sp in f.specs {
+		doc := doc_attach(tv, sp.line)
+		mut ms: list[DocMember] = []
+		for req in sp.reqs {
+			rdoc := doc_attach(tv, req.line)
+			ms.append(DocMember(doc_fn_sig(req), rdoc))
+		}
+		if sp.is_pub {
+			ds.append(DocDecl("spec", sp.name, "", doc_spec_sig(sp), doc, ms, 0, sp.path, sp.line))
+		}
+	}
+
+	for ip in f.impls {
+		doc_claim(tv, ip.line)
+	}
+
+	for fd in f.fns {
+		doc := doc_attach(tv, fd.line)
+		mut none: list[DocMember] = []
+		if fd.is_pub {
+			ds.append(DocDecl("fn", fd.name, fd.recv, doc_fn_sig(fd), doc, none, 0, fd.path, fd.line))
+		}
+	}
+
+	for d in doc_sorted(ds) {
+		out.append(d)
+	}
+}
+
+# doc_sorted puts one file's declarations back into source order.
+#
+# Insertion sort by adjacent swaps, for the reason `sym_sorted` (ast.zg) gives about the same
+# job on the same data: a file's top level is tens of declarations, and what matters is that
+# the sort is STABLE, so two declarations reported at one line keep the order they were
+# collected in instead of trading places between runs.
+fn doc_sorted(ds: list[DocDecl]) -> list[DocDecl] {
+	mut out: list[DocDecl] = []
+	for d in ds {
+		out.append(d)
+		mut j := out.len() - 1
+		for j > 0 {
+			break if out[j].line >= out[j - 1].line
+			tmp := out[j - 1]
+			out[j - 1] = out[j]
+			out[j] = tmp
+			j = j - 1
+		}
+	}
+	return out
+}
+
+# --- signatures -----------------------------------------------------------------------------
+
+# doc_fn_sig spells a function the way its declaration is written, without the `pub`.
+#
+# A METHOD DROPS ITS FIRST PARAMETER: the parser prepends `this: T` when it flattens an
+# `impl`, so printing the list as the AST holds it would show a receiver nobody writes at the
+# call site. The receiver survives as `DocDecl.recv`, which is where the renderer reads it.
+fn doc_fn_sig(fd: FnDecl) -> str {
+	mut out := "fn " + fd.name
+	if fd.tparams.len() > 0 {
+		out = out + "["
+		mut i := 0
+		for i < fd.tparams.len() {
+			if i > 0 {
+				out = out + ", "
+			}
+			out = out + fd.tparams[i]
+			if fd.tbounds[i] != "" {
+				out = out + ": " + doc_bound(fd.tbounds[i])
+			}
+			i = i + 1
+		}
+		out = out + "]"
+	}
+
+	out = out + "("
+	mut k := 0
+	if fd.recv != "" {
+		k = 1
+	}
+	mut first := true
+	for k < fd.params.len() {
+		p := fd.params[k]
+		if not first {
+			out = out + ", "
+		}
+		first = false
+		if p.is_ref {
+			out = out + "mut &"
+		}
+		out = out + p.name + ": " + ty_name(p.ty)
+		if p.has_def {
+			out = out + " = " + doc_lit(p.def)
+		}
+		k = k + 1
+	}
+	out = out + ")"
+
+	return f"{out} -> {ty_name(fd.ret)}" if fd.has_ret
+	return out
+}
+
+# doc_bound reads a type parameter's bound back into the source's spelling. A bound is a
+# CONJUNCTION carried joined by `+` in one string (ast.zg, FnDecl.tbounds), and `c_split_bounds`
+# is the one function that takes it apart — the emitter's, because that is where a bound is
+# checked, and a second splitter would be a second opinion about where a spec name ends.
+fn doc_bound(bound: str) -> str {
+	mut out := ""
+	for sp in c_split_bounds(bound) {
+		if out != "" {
+			out = out + " + "
+		}
+		out = out + sp
+	}
+	return out
+}
+
+fn doc_const_sig(c: ConstDecl) -> str {
+	# `const` is printed whether or not the keyword was written: a module-level binding IS the
+	# module's immutable state (docs/runtime/package.md), and the first word of every signature
+	# in this document is the kind of thing it declares.
+	return f"const {c.name}: {ty_name(c.ty)} = {doc_lit(c.value)}" if c.has_ty
+	return f"const {c.name} := {doc_lit(c.value)}"
+}
+
+fn doc_field_sig(fd: FieldDef) -> str {
+	out := f"{fd.name}: {ty_name(fd.ty)}"
+	return f"{out} = {doc_lit(fd.def)}" if fd.has_def
+	return out
+}
+
+fn doc_variant_sig(vd: VariantDef) -> str {
+	mut out := vd.name
+	if vd.fields.len() > 0 {
+		out = out + "(" + ty_names(vd.fields) + ")"
+	}
+	return f"{out} = {doc_lit(vd.discr)}" if vd.has_discr
+	return out
+}
+
+fn doc_spec_sig(sp: SpecDecl) -> str {
+	mut out := "spec " + sp.name
+	if sp.params.len() > 0 {
+		out = out + "[" + join_commas(sp.params) + "]"
+	}
+	mut i := 0
+	for i < sp.supers.len() {
+		if i == 0 {
+			out = out + ": "
+		} else {
+			out = out + " + "
+		}
+		out = out + spec_key(sp.supers[i], sp.super_args[i])
+		i = i + 1
+	}
+	return out
+}
+
+# doc_lit prints a default value when it IS a literal and `…` when it is not.
+#
+# It reads the surface text the literal node already kept (the invariant ast.zg opens with) and
+# it does not recurse: a call, a name, a negation are all `…`. That is not a gap to be filled
+# later — a signature in a document says how to CALL something, and a default built out of an
+# expression is a fact about the source, which the `…` sends the reader to.
+fn doc_lit(e: Expr) -> str {
+	return match e {
+		Expr.EInt(lex, _, _) => lex
+		Expr.EFloat(lex) => lex
+		Expr.EStr(v) => f"\"{v}\""
+		Expr.EBool(v) => doc_bool(v)
+		Expr.ENil => "nil"
+		_ => "…"
+	}
+}
+
+fn doc_bool(v: bool) -> str {
+	return "true" if v
+	return "false"
+}
+
+# --- comments, on the token stream --------------------------------------------------------
+
+# DocRun is one block of whole-line comments on consecutive lines — a candidate for being some
+# declaration's documentation, or the file's header.
+struct DocRun {
+	pub first: int
+	pub last: int
+	pub lines: list[str]
+}
+
+# DocTrivia is the whole first pass: the runs a file holds, and two facts per LINE that decide
+# which declaration each run belongs to. `taken` runs beside `runs` and records the claim, so
+# a run answers exactly one declaration and `doc_header` can ask what is left.
+#
+# `code`, `deco` and `imp` are indexed BY LINE NUMBER, one slot per line of the file plus a
+# spare, so the arithmetic below can read the line above or below without a bound test at every
+# step.
+struct DocTrivia {
+	pub runs: list[DocRun]
+	pub taken: list[bool]
+	pub code: list[bool]
+	pub deco: list[bool]
+
+	# whether the line holds an `import`. It is asked lexically, off Kind.Import, rather than
+	# from `File.imports`, so that a file whose parse RAISED can still be asked — which is the
+	# only condition under which a module has a header and no declarations at all.
+	pub imp: list[bool]
+}
+
+# doc_trivia is the first pass: one walk of the lexed-with-comments stream.
+#
+# A `#[…]` decorator is Kind.Hash and not a comment — the lexer separated them long before
+# this — and its lines are marked as BOTH code and decorator: code, because something is
+# written there, and decorator, because the claim in pass two steps over exactly those lines.
+# The bracket depth is what carries a decorator that spans lines.
+#
+# The ASI semicolons and the Eof are neither: they are punctuation the lexer inserted, and a
+# line that holds nothing else is a blank line to a reader.
+fn doc_trivia(src: str) -> DocTrivia {
+	toks := tokenize_trivia(src)
+
+	mut last_line := 1
+	for t in toks {
+		if t.line > last_line {
+			last_line = t.line
+		}
+	}
+
+	mut code: list[bool] = []
+	mut deco: list[bool] = []
+	mut imp: list[bool] = []
+	mut n := 0
+	for n <= last_line + 1 {
+		code.append(false)
+		deco.append(false)
+		imp.append(false)
+		n = n + 1
+	}
+
+	mut runs: list[DocRun] = []
+	mut taken: list[bool] = []
+	mut prev := 0
+	mut depth := 0
+
+	for t in toks {
+		if depth > 0 {
+			code[t.line] = true
+			deco[t.line] = true
+			prev = t.line
+			if t.kind == Kind.LBrack {
+				depth = depth + 1
+			} else if t.kind == Kind.RBrack {
+				depth = depth - 1
+			}
+			continue
+		}
+
+		if t.kind == Kind.Comment {
+			# a note at the end of a line of code, which documents nothing below it
+			continue if prev == t.line
+
+			doc_add_line(runs, taken, t.line, doc_strip(t.lexeme))
+			continue
+		}
+
+		continue if t.kind == Kind.Semi or t.kind == Kind.Eof
+
+		code[t.line] = true
+		prev = t.line
+		if t.kind == Kind.Hash {
+			deco[t.line] = true
+			depth = 1
+		} else if t.kind == Kind.Import {
+			imp[t.line] = true
+		}
+	}
+	return DocTrivia(runs, taken, code, deco, imp)
+}
+
+# doc_add_line puts one comment line into the run it continues, or opens a new run. A run is
+# extended only when the line ABOVE was the previous comment line, which is what makes a blank
+# line a separator without anything here looking at whitespace.
+fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text: str) {
+	if runs.len() > 0 {
+		k := runs.len() - 1
+		if runs[k].last == line - 1 {
+			mut r := runs[k]
+			r.last = line
+			r.lines.append(text)
+			runs[k] = r
+			return
+		}
+	}
+
+	mut ls: list[str] = []
+	ls.append(text)
+	runs.append(DocRun(line, line, ls))
+	taken.append(false)
+}
+
+# doc_strip takes the `#` off a comment, and one space after it, and any trailing whitespace.
+# What is left is the text as written — the fence lines, the indentation of an example, and
+# the blank line between two paragraphs all survive, because they are what the author put
+# there and the renderer needs them to tell prose from a code block.
+fn doc_strip(lexeme: str) -> str {
+	b := bytearray(lexeme)
+	mut lo := 0
+	if lo < b.len() and b[lo] == b'#' {
+		lo = lo + 1
+	}
+	if lo < b.len() and b[lo] == b' ' {
+		lo = lo + 1
+	}
+	mut hi := b.len()
+	for hi > lo and (b[hi - 1] == b' ' or b[hi - 1] == b'\t') {
+		hi = hi - 1
+	}
+	return fstr_slice(b, lo, hi)
+}
+
+# doc_attach is pass two for one declaration: the run that ends on the line above it, stepping
+# over the decorator lines in between, or nothing when the line above holds code or a blank.
+#
+# One run can answer only one declaration, and it cannot answer two by accident: a run's last
+# line is unique, so at most one declaration is on the line below it. `taken` records the claim
+# for `doc_header`, which is the only thing that asks about the runs nobody wanted.
+fn doc_attach(mut &tv: DocTrivia, line: int) -> list[str] {
+	mut none: list[str] = []
+	at := doc_claim(tv, line)
+	return none if at < 0
+	return tv.runs[at].lines
+}
+
+# doc_claim is doc_attach without the text — the index of the run claimed, or -1. It is what an
+# `impl` head calls: an impl takes its comment out of circulation without putting it in the
+# document.
+fn doc_claim(mut &tv: DocTrivia, line: int) -> int {
+	mut a := line
+	for a > 1 and tv.deco[a - 1] {
+		a = a - 1
+	}
+	return -1 if a < 2
+
+	mut i := 0
+	for i < tv.runs.len() {
+		if tv.runs[i].last == a - 1 and not tv.taken[i] {
+			tv.taken[i] = true
+			return i
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# doc_header is the module's own comment: the FIRST run in the file, with no code above it,
+# that no declaration claimed, and with nothing but a blank line or an `import` under it.
+#
+# Each of the four conditions is doing work. FIRST, because a comment further down a file is
+# about what is under it. NO CODE ABOVE, because a comment written below the first declaration
+# is a remark inside the file and not a description of it. UNCLAIMED, because a file may open
+# with a comment that documents its first declaration — `has_prefix`, example and all, is the
+# first thing in `strings.zg` after the header — and that comment belongs to the function,
+# leaving the module with no header, which is the honest answer rather than a stolen one.
+#
+# THE LINE BELOW is the fourth, and it is there because pass two cannot see everything that can
+# be written. An INHERENT `impl T { … }` head is not in the parsed file at all: the parser
+# flattens the block into methods and records an ImplDecl only for `impl Spec for T`, so a
+# comment above `impl Thing {` is claimed by nobody, and the first three conditions alone would
+# read it as the module's header — a remark about one type presented as the document's opening
+# paragraph. Nothing may be under a header but a blank line or an import.
+#
+# The import half of that is not a concession but the case that fixed the whole rule:
+# `strings.zg`'s header runs straight into `import "ascii"` with no blank line between them, so
+# a rule phrased as "separated by a blank line" gives the most-read module in the standard
+# library no header at all. An import declares no member of this module's surface and claims no
+# comment; a reader looking above it is reading about the file.
+fn doc_header(tv: DocTrivia) -> list[str] {
+	mut none: list[str] = []
+
+	return none if tv.runs.len() == 0
+	return none if tv.taken[0]
+
+	r := tv.runs[0]
+	mut i := 1
+	for i < r.first {
+		return none if tv.code[i]
+		i = i + 1
+	}
+
+	below := r.last + 1
+	return none if tv.code[below] and not tv.imp[below]
+	return r.lines
+}

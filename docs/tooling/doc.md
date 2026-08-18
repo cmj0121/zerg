@@ -241,6 +241,10 @@ hundred lines of stacked prose before the first declaration — each of those he
 arguing for itself, and read end to end they argue past each other. A module of one file, which
 is every module in the standard library, has exactly one section and no heading above it.
 
+A file with neither a header of its own nor an exposed declaration says `(nothing exposed)`. A
+heading standing over a blank line reads as a rendering that broke rather than as a file with no
+surface, which is the same failure `(undocumented)` keeps a declaration out of, one level up.
+
 ## Colour follows the terminal, and the shape never does
 
 `NO_COLOR`'s **presence** decides first — any value at all, the empty one included — and after

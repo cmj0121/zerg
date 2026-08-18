@@ -132,8 +132,8 @@ shipping compiler rather than a part of it (the line
 | `E2030` | a match arm's guard goes before the `=>`                                                                |
 | `E2031` | a parameter is `mut &` or nothing                                                                       |
 | `E2032` | an import path is a string                                                                              |
-| `E2033` | `…(…)` converts a VALUE and was given none                                                              |
-| `E2034` | `…(…)` converts one value, and this gives …                                                             |
+| `E2033` | `bytearray(…)` / `runearray(…)` converts a VALUE and was given none                                     |
+| `E2034` | `bytearray(…)` / `runearray(…)` converts one value, and this gives …                                    |
 | `E2035` | a call writes its type arguments, and a postfix `[ … ]` is an index                                     |
 | `E2036` | a `spec` member that is neither a signature nor a provided method                                       |
 | `E2037` | an `impl` in neither the spec's module nor the type's                                                   |

@@ -58,11 +58,11 @@ separate command nobody runs. A compiler that could not reproduce itself would n
 
 **Each of the three answers a different question.**
 
-| Compiler       | In   | Its job                                                      | Its contract                |
-| -------------- | ---- | ------------------------------------------------------------ | --------------------------- |
-| `zerg0`        | Go   | build the self-hosting compiler, nothing else                | the seed's own README       |
-| `.zerg-stage1` | Zerg | build `zerg` — it exists for one command and is then removed | none; it is never installed |
-| `zerg`         | Zerg | everything: `build`, `test`, `fmt`, `lint`, `desugar`, `lsp` | this specification          |
+| Compiler       | In   | Its job                                                             | Its contract          |
+| -------------- | ---- | ------------------------------------------------------------------- | --------------------- |
+| `zerg0`        | Go   | build the self-hosting compiler, nothing else                       | the seed's own README |
+| `.zerg-stage1` | Zerg | build `zerg` — it exists for one command and is then removed        | none; never installed |
+| `zerg`         | Zerg | everything: `build`, `test`, `fmt`, `lint`, `desugar`, `doc`, `lsp` | this specification    |
 
 The seed understands only **`Zerg-boot`** — the slice of the language `src/compiler/` is written in.
 Anything outside it is refused **by name** rather than miscompiled, and a reader writing Zerg never

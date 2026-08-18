@@ -1,0 +1,284 @@
+# `zerg doc`. What a module exposes is `zerg/doc.zg`'s answer and how it is laid out is
+# `doc_render.zg`'s; what is here is the command — the four things a reader may name, the rule
+# that tells them apart, and the sentence for a name that is none of them.
+#
+# THE FOUR FORMS, and they are read in this order:
+#
+#     zerg doc                  the modules that can be read
+#     zerg doc strings          that module's whole document
+#     zerg doc --brief strings  its exposed surface, one line each
+#     zerg doc strings.split    one declaration — `log.Logger.level` for a method
+#     zerg doc path/to/file.zg  a file or a directory, documented where it stands
+#
+# A PATH IS RECOGNISED FIRST, and only when it exists: a name carrying a `/` or ending in `.zg`
+# that names nothing on disk is not a path, it is a mistake, and it falls through to the same
+# refusal every other unknown name gets. Then a whole module, because that is the common
+# question and `strings` is not a declaration of anything. Only then is the name split, and
+# what is left over is a name nothing answers.
+#
+# NOTHING HERE BUILDS ANYTHING. `module_sources` resolves by name without the three checks an
+# import is held to, so a module that ships and cannot be compiled is still a module that can
+# be read — `atomic` is the one, and its header comes out of the token stream while its
+# declarations are reported missing. The document of a module nobody can import is the only
+# documentation that module has.
+
+import (
+	"cli"
+	"io"
+
+	"zerg"
+)
+
+pub fn doc_cmd() -> cli.Command {
+	return (
+		cli.command("doc", "read what a module exposes and the comments that document it")
+		.flag("b", "brief", "one line for each declaration instead of the whole comment")
+		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
+		.run(do_doc)
+	)
+}
+
+fn do_doc(c: cli.Ctx) -> int {
+	return run_doc(c.args(), c.has("brief"))
+}
+
+# run_doc answers the one thing that was asked for, and writes it once.
+#
+# ONE NAME AT A TIME. `zerg doc strings os` would have to decide whether that is two documents
+# or one, and neither answer is worth a flag: what a reader wants from two modules is two runs,
+# and what a script wants is a loop.
+#
+# The device is asked ONCE, here, and handed down as a value. A renderer that asked for itself
+# would be a function whose answer depends on where the process's output happens to be pointed,
+# which is exactly the function a test cannot ask anything of.
+fn run_doc(args: list[str], brief: bool) -> int {
+	raise "`zerg doc` reads one thing at a time — a module, one of its declarations, or a path" if args.len() > 1
+
+	col := doc_colour()
+	if args.len() == 0 {
+		io.write(render_doc_list(doc_index(), col))
+		return 0
+	}
+
+	name := args[0]
+	if doc_is_path(name) {
+		files := doc_path_files(name)
+		raise doc_no_source(name) if files.len() == 0
+
+		io.write(render_doc_module(doc_read(doc_path_name(name), files), brief, col))
+		return 0
+	}
+
+	whole := module_sources(name, ".")
+	if whole.len() > 0 {
+		io.write(render_doc_module(doc_read(path_tail(name), whole), brief, col))
+		return 0
+	}
+
+	return run_doc_decl(name, col)
+}
+
+# run_doc_decl reads `module.declaration`, which is the form left once the name has resolved to
+# neither a path nor a module.
+#
+# IT SPLITS AT THE FIRST `.`, not the last. A method is asked for as `log.Logger.level`, and the
+# module is the first segment of that: splitting at the last one leaves `log.Logger`, which
+# resolves to nothing and turns a question with an answer into a refusal. What follows the first
+# dot is handed to `doc_find` exactly as written, because `Logger.level` is the same key the
+# renderer groups a method under — one spelling of a method, in the tool and in the document.
+#
+# ONE NAME MAY BE TWO DECLARATIONS, and both are printed. `doc_find` answers every declaration
+# with the key rather than the first in source order, because a module may declare `pub struct
+# Pair` and `pub fn Pair` — the language keeps them apart by position and `zerg lint` accepts
+# it — and a page that showed the struct alone would be a document with a declaration missing
+# and nothing said about it.
+#
+# `--brief` is not read here. A single declaration is shown whole, which is what a reader asking
+# for one wants; brief is what shortens a LISTING, and a listing of one is the thing itself.
+fn run_doc_decl(name: str, col: bool) -> int {
+	at := doc_first_of(name, b'.')
+	raise doc_no_such(name) if at < 0
+
+	b := bytearray(name)
+	mod := line_slice(b, 0, at)
+	key := line_slice(b, at + 1, b.len())
+
+	files := module_sources(mod, ".")
+	raise doc_no_such(name) if files.len() == 0
+
+	m := doc_read(path_tail(mod), files)
+	hits := zerg.doc_find(m, key)
+	raise doc_no_decl(m, key) if hits.len() == 0
+
+	io.write(render_doc_decls(m, hits, col))
+	return 0
+}
+
+# --- what was named ---------------------------------------------------------------------------
+
+# doc_is_path reports whether the name is a path that is really there. Both halves matter: a
+# bare `strings` is a module however many files of that name exist elsewhere, and a
+# `notes/draft.zg` that has been deleted is not a path this can read.
+fn doc_is_path(name: str) -> bool {
+	return false if not has_suffix(name, ".zg") and doc_first_of(name, b'/') < 0
+
+	return __zrt_exists(name)
+}
+
+# doc_path_files is the sources a path names, resolved by `module_at` and not by a listing of
+# its own: what makes a directory of `.zg` files a module — and which of them are left out —
+# is written down once, in `source.zg`, and a second copy here would be the one that forgets
+# about test files the day the convention moves.
+fn doc_path_files(name: str) -> list[str] {
+	p := doc_no_slash(name)
+	return module_at(dir_of(p), doc_path_name(name))
+}
+
+# doc_path_name is what the document is titled when a path was named: the last segment with the
+# `.zg` taken off, which is the name that path would be imported by.
+fn doc_path_name(name: str) -> str {
+	seg := path_tail(doc_no_slash(name))
+	return drop_suffix(seg, ".zg") if has_suffix(seg, ".zg")
+
+	return seg
+}
+
+# doc_no_slash drops the trailing slashes a shell's completion leaves on a directory, so that
+# `src/compiler/cmd/` and `src/compiler/cmd` are one question.
+fn doc_no_slash(path: str) -> str {
+	b := bytearray(path)
+	mut hi := b.len()
+	for hi > 1 and b[hi - 1] == b'/' {
+		hi = hi - 1
+	}
+	return line_slice(b, 0, hi)
+}
+
+# doc_first_of is where `c` first appears in a name, or -1. Two questions are asked of it —
+# where the module name ends, and whether the name carries a path separator at all — and they
+# are one scan rather than two because the second differs from the first only in the byte.
+fn doc_first_of(name: str, c: byte) -> int {
+	b := bytearray(name)
+	mut i := 0
+	for i < b.len() {
+		return i if b[i] == c
+		i = i + 1
+	}
+	return -1
+}
+
+# --- reading -------------------------------------------------------------------------------
+
+# doc_read is the extraction, given the files: their text and their paths, row for row, which
+# is the pairing `doc_module` attaches a comment with and names a file it could not parse by.
+fn doc_read(name: str, files: list[str]) -> zerg.DocModule {
+	mut srcs: list[str] = []
+	mut paths: list[str] = []
+	for f in files {
+		srcs.append(read_source(f))
+		paths.append(f)
+	}
+	return zerg.doc_module(name, srcs, paths)
+}
+
+# doc_index is every module that can be read, extracted. It is the whole standard library and
+# whatever modules stand beside the reader, which is exactly the list the refusal names — one
+# answer to "what is there", so a name that is turned away is turned away against the same
+# listing `zerg doc` on its own prints.
+fn doc_index() -> list[zerg.DocModule] {
+	mut out: list[zerg.DocModule] = []
+	for n in doc_module_names() {
+		files := module_sources(n, ".")
+		if files.len() > 0 {
+			out.append(doc_read(n, files))
+		}
+	}
+	return out
+}
+
+# doc_module_names is what `module_sources` can resolve, in the order a reader cares about it:
+# the modules beside them first, then the standard library. A name in both is one module — the
+# nearer one, which is the one `module_sources` would have resolved.
+fn doc_module_names() -> list[str] {
+	mut out: list[str] = []
+	for n in local_modules(".") {
+		out.append(n)
+	}
+	for n in stdlib_modules() {
+		if not has_str(out, n) {
+			out.append(n)
+		}
+	}
+	return out
+}
+
+# --- refusals -------------------------------------------------------------------------------
+
+# doc_no_such is the sentence for a name that is not a path, not a module, and not a module's
+# declaration. It LISTS WHAT CAN BE READ, because the failure is almost always a name the reader
+# guessed and the answer is almost always in that list — and because the alternative, letting
+# the resolution reach the loader, would report `E5002 cannot resolve import` about an import
+# nobody wrote.
+fn doc_no_such(name: str) -> str {
+	return f"nothing here is called `{name}` — `zerg doc` reads a module (`strings`), one of its declarations (`strings.split`, `log.Logger.level`), or a path to a source file" + doc_can_see()
+}
+
+# doc_no_source is the refusal for a path that IS there and holds nothing this can read: a
+# directory with no `.zg` file in it, or one whose only sources are test files.
+#
+# IT USED TO PRINT NOTHING AND EXIT 0. `module_at` answered an empty list, `doc_read` built a
+# `DocModule` with no files, and the renderer had no file to render — so `zerg doc docs/`,
+# `zerg doc mk/` and `zerg doc ./` each wrote zero bytes and reported success. That is the one
+# thing this tool's extractor says in as many words it is not (zerg/doc.zg: "silent about what
+# it could not read"), and a trailing slash left by a shell's completion is how a reader
+# arrives at it.
+#
+# It ends with the same listing every other refusal ends with, because the reader who typed a
+# directory meant to read something and the something is almost always on it.
+fn doc_no_source(name: str) -> str {
+	return f"`{name}` holds no source `zerg doc` can read — a directory is read as the module it would be, which is its `.zg` files, and a `*_test.zg` is on no module's surface" + doc_can_see()
+}
+
+# doc_can_see is the listing both refusals end with. It is one function because the two
+# sentences differ and the list under them must not: a name turned away by either is turned
+# away against exactly the index `zerg doc` on its own prints.
+fn doc_can_see() -> str {
+	mut out := "\n\nthe modules it can see:"
+	for n in doc_module_names() {
+		out = out + "\n  " + n
+	}
+	return out
+}
+
+# doc_no_decl is the same courtesy one level down: the module was found and the declaration was
+# not, so what is listed is what that module declares. A field is deliberately not among them —
+# `doc_find` reaches declarations, and a field is shown inside the entry for the type that holds
+# it.
+#
+# A FILE THAT DID NOT PARSE IS SAID SO HERE TOO. `zerg doc atomic.load` answered "the module
+# `atomic` declares nothing called `load`" and then listed nothing at all, which is a sentence
+# about a module whose declarations are MISSING read as one about a module that has none. The
+# whole-module path has printed that note since it was written (`doc_note`); this one is the
+# same module reached by the other door, so it is the same note, from the same function.
+#
+# The listing is left off entirely when there is nothing in it, because "what it does declare:"
+# above an empty list is the claim the note has just corrected.
+fn doc_no_decl(m: zerg.DocModule, key: str) -> str {
+	mut out := f"the module `{m.name}` declares nothing called `{key}`"
+	for f in m.files {
+		if not f.ok {
+			out = out + "\n\n" + doc_note_text(f)
+		}
+	}
+	return out if m.decls.len() == 0
+
+	out = out + "\n\nwhat it does declare:"
+	for d in m.decls {
+		if d.recv == "" {
+			out = out + f"\n  {m.name}.{d.name}"
+		} else {
+			out = out + f"\n  {m.name}.{d.recv}.{d.name}"
+		}
+	}
+	return out
+}

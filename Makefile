@@ -115,7 +115,7 @@ CLOC_CONFIG ?= $(HOME)/.config/cloc
 
 # `build` runs as a recipe line, not a prerequisite: as a prerequisite it would race the
 # submodule work under `make -j`, and what is installed must be the binary this run built.
-install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
+install: $(SUBDIR)              # install the toolchain and the editor integrations into PREFIX
 	$(MAKE) build
 	@# `mkdir -p` and NOT `install -d`. BSD install(1) chmods the directory even when it
 	@# already exists, so `install -d /usr/local/bin` fails with

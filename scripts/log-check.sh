@@ -293,11 +293,16 @@ fn main() {
 ZG
 
 # on_a_pty <program> — run it with a pty for stdout AND stderr, echoing what came out.
+#
+# STANDARD INPUT IS EXPLICITLY /dev/null. `script` forwards its own stdin into the pty, so a
+# caller that hands it a CLOSED descriptor — which is what a CI runner does — leaves it waiting
+# on a read that can never complete. The gate would then hang until the job's step timeout,
+# burning the step rather than failing it, and saying nothing about why.
 on_a_pty() {
-	if script -q /dev/null "$1" >"$WORK/pty.out" 2>&1; then
+	if script -q /dev/null "$1" >"$WORK/pty.out" 2>&1 </dev/null; then
 		return 0
 	fi
-	if script -q -c "$1" /dev/null >"$WORK/pty.out" 2>&1; then
+	if script -q -c "$1" /dev/null >"$WORK/pty.out" 2>&1 </dev/null; then
 		return 0
 	fi
 	return 1

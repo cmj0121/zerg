@@ -413,7 +413,9 @@ fn doc_sorted(ds: list[DocDecl]) -> list[DocDecl] {
 #
 # A METHOD DROPS ITS FIRST PARAMETER: the parser prepends `this: T` when it flattens an
 # `impl`, so printing the list as the AST holds it would show a receiver nobody writes at the
-# call site. The receiver survives as `DocDecl.recv`, which is where the renderer reads it.
+# call site. The receiver survives as `DocDecl.recv`, which is where the renderer reads it,
+# and its MUTABILITY survives as the word `mut` — see `doc_fn_word`, which reads that fact out
+# of the very parameter this drops.
 #
 # A FUNCTION DECLARED IN A MODULE-LEVEL `unsafe { … }` GROUP IS AN `unsafe fn`, and says so.
 # GRAMMAR group 12 gives the group that meaning — "unsafe throughout its body, callable only
@@ -465,15 +467,39 @@ fn doc_fn_sig(fd: FnDecl) -> str {
 	return out
 }
 
+# doc_fn_word spells the words that stand between `pub` and the name, in the order
+# GRAMMAR#fn-decl derives them: `'pub'? 'unsafe'? 'mut'? 'fn'`.
+#
+# `mut fn` IS READ OUT OF THE PARAMETER THE SIGNATURE DROPS. The parser encodes it as the
+# prepended `this` being a MUTABLE REFERENCE (`parse_fn_head`), so a method's `mut` lives
+# nowhere but the parameter `doc_fn_sig` skips. Leaving it off is the lie a dropped `mut`
+# binding would be, and a sharper one: GRAMMAR#fn-decl says the CALL SITE must hold the
+# receiver in a `mut` binding, so a signature printed without the word tells a reader they may
+# call the method on an immutable binding — and the compiler then refuses the program the
+# document described.
+fn doc_fn_word(fd: FnDecl) -> str {
+	mut out := ""
+	if fd.in_unsafe {
+		out = out + "unsafe "
+	}
+	if doc_is_mut_fn(fd) {
+		out = out + "mut "
+	}
+	return out + "fn "
+}
+
+# doc_is_mut_fn answers whether a declaration is a `mut fn`. Only a method can be one — a free
+# function has no receiver to mutate — so `recv` is asked first, and the answer is then the
+# receiver's own `mut &`.
+fn doc_is_mut_fn(fd: FnDecl) -> bool {
+	return false if fd.recv == ""
+	return fd.params[0].is_ref
+}
+
 # doc_bound reads a type parameter's bound back into the source's spelling. A bound is a
 # CONJUNCTION carried joined by `+` in one string (ast.zg, FnDecl.tbounds), and `c_split_bounds`
 # is the one function that takes it apart — the emitter's, because that is where a bound is
 # checked, and a second splitter would be a second opinion about where a spec name ends.
-fn doc_fn_word(fd: FnDecl) -> str {
-	return "unsafe fn " if fd.in_unsafe
-	return "fn "
-}
-
 fn doc_bound(bound: str) -> str {
 	mut out := ""
 	for sp in c_split_bounds(bound) {

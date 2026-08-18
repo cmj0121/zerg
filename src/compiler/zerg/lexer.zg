@@ -91,8 +91,8 @@ fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
 #
 # The reason rides in the token's VALUE, which an Illegal has no other use for, and
 # `lex_diags` turns every one of them into a diagnostic with a place and a code.
-fn bad(mut &l: Lex, code: str, why: str, line: int, col: int, lexeme: str) -> Token {
-	return emit_val(l, Kind.Illegal, line, col, lexeme, f"{code} {why}")
+fn bad(mut &l: Lex, code: Rule, why: str, line: int, col: int, lexeme: str) -> Token {
+	return emit_val(l, Kind.Illegal, line, col, lexeme, f"{rule_code(code)} {why}")
 }
 
 fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
@@ -130,7 +130,7 @@ fn next(mut &l: Lex) -> Token {
 			# put it. That silently swallowed a LONE CR — a classic-Mac line ending, or one
 			# left by an editor mid-line — so a file whose statements were separated by CR
 			# alone lexed as ONE line and the ASI `;` was never inserted. Out of the class,
-			# a lone CR reaches bad_char like any other character no token claims (E104).
+			# a lone CR reaches bad_char like any other character no token claims (E1004).
 			advance(l)
 		} else if c == byte(10) {
 			sline := l.line
@@ -198,7 +198,7 @@ fn scan_token(mut &l: Lex) -> Token {
 	return scan_operator(l, sline, scol, soff)
 }
 
-# scan_nonascii is the E104 a character outside ASCII gets. GRAMMAR#letter makes the source
+# scan_nonascii is the E1004 a character outside ASCII gets. GRAMMAR#letter makes the source
 # UTF-8 — which is what lets a comment, a string and a rune hold any character at all —
 # and GRAMMAR#identifier derives ASCII letters, digits and `_`, so a character reaching
 # here spells nothing: the same lexical error `@` is, under the same code.
@@ -299,7 +299,7 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		# lexer standing inside the literal, and `_1F` would come back as an identifier —
 		# one mistake, two messages, the second of them about a name nobody wrote.
 		consume_based(l, base)
-		return bad(l, "E108", "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
+		return bad(l, Rule.BasedNumberNoDigit, "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
 		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 
@@ -412,7 +412,7 @@ fn decode_escape(mut &l: Lex, byte_mode: bool) -> int {
 		# answer U+FFFD, matching what the seed's WriteRune does with a bad rune, and the
 		# substitution was silent: `int('\u{110000}')` and `int('\u{D800}')` both printed
 		# 65533, so a program that named one character got another with nothing said. -1 is
-		# "not an escape", which the caller reports as E109 at the literal's own place.
+		# "not an escape", which the caller reports as E1009 at the literal's own place.
 		return -1 if cp > 1114111 or (cp >= 55296 and cp <= 57343)
 		return cp
 	}
@@ -447,7 +447,7 @@ fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int)
 # code, and this was one — the gate that says so could not see it until a code moved out of a
 # message and into an argument.
 fn bad_escape_here(mut &l: Lex, noun: str, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, "E109", f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
+	return bad(l, Rule.EscapeInvalid, f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
 fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -455,7 +455,7 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, "E101", "a string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, Rule.StrUnterminated, "a string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if c == b'"' {
 			advance(l)
@@ -487,10 +487,10 @@ fn has_nul(sb: list[byte]) -> bool {
 }
 
 # nul_bad is that refusal, once. Three literal forms can decode to a NUL — a plain string,
-# a triple string and a raw string — and E110 is ONE row in docs/tooling/diagnostics.md, so
+# a triple string and a raw string — and E1010 is ONE row in docs/tooling/diagnostics.md, so
 # the sentence is written here rather than at each of the three exits.
 fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, "E110", "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
+	return bad(l, Rule.StrHoldsNul, "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
 }
 
 # scan_fstring scans an f-string as ONE token: the lexeme is the verbatim source `f"a{x}b"`
@@ -586,7 +586,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening """
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, "E105", "a triple-quoted string is never closed", sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, Rule.TripleStrUnterminated, "a triple-quoted string is never closed", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'"' and at(l, 1) == b'"' and at(l, 2) == b'"' {
 			advance(l)
 			advance(l)
@@ -625,7 +625,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, "E106", "a raw string has no closing quote on this line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, Rule.RawStrUnterminated, "a raw string has no closing quote on this line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		break if at(l, 0) == b'"'
 
 		sb.append(advance(l))
@@ -640,7 +640,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening '
 	mut sb: list[byte] = []
-	return bad(l, "E102", "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
+	return bad(l, Rule.RuneEmpty, "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
 	mut val := 0
 	if at(l, 0) == b'\\' {
 		val = decode_escape(l, byte_mode)
@@ -667,7 +667,7 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 	}
 	if at(l, 0) != b'\'' {
 		eat_to_quote(l, b'\'')
-		return bad(l, "E103", "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
+		return bad(l, Rule.RuneTooLong, "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
 	}
 	advance(l) # closing '
 
@@ -694,7 +694,7 @@ fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening `
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, "E107", "a command literal has no closing backtick", sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, Rule.CommandUnterminated, "a command literal has no closing backtick", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'`' {
 			advance(l)
 			break
@@ -820,12 +820,12 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad_char(l, sline, scol, soff)
 }
 
-# bad_char is E104's ONE reporting site. Two characters reach it — an ASCII one no operator
+# bad_char is E1004's ONE reporting site. Two characters reach it — an ASCII one no operator
 # claims, and a non-ASCII one scan_nonascii has consumed whole — and they are one rule, so
 # they are one code and therefore one raise (scripts/error-codes-check.sh counts a code
 # reported twice as two rules sharing an identity).
 fn bad_char(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, "E104", "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
+	return bad(l, Rule.CharNotAToken, "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 
 # brace_push saves the enclosing paren/bracket depth and resets it, so ASI resumes

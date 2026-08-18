@@ -20,7 +20,7 @@ each reusing an existing model:
 > or unreadable file raises **`IOError`**, which `guard { io.read_file(p) }` demotes to a `Result`; decode
 > with `str(…)` when the bytes are text. The **`Reader` / `Writer` spec surface** — `read_bytes` / `read()`
 > / `write` and the `io.stdin` · `io.stdout` · `io.stderr` stream objects described below — is
-> **[not yet]**: the intended semantics stand as specified, and reaching one of those names is **`E388`** —
+> **[not yet]**: the intended semantics stand as specified, and reaching one of those names is **`E3084`** —
 > _module `io` has no `stdout`_ — in any position, including a method call's receiver.
 
 ## Streams — `Reader` & `Writer`
@@ -85,7 +85,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
 
 > **[not yet]** The `io.stdin` / `io.stdout` / `io.stderr` stream objects are unbuilt, and writing one is
-> **`E388`** — _module `io` has no `stdout`_ — including as a method call's receiver, the position the
+> **`E3084`** — _module `io` has no `stdout`_ — including as a method call's receiver, the position the
 > example above writes it in. What is wired this phase is free functions
 > ([Standard Library](stdlib.md#io)); each writer returns `Result[nil]` but writes best-effort, never
 > yielding an `Err` yet.
@@ -114,8 +114,8 @@ own that frame ([FFI](ffi.md)).
 ## Process & command execution
 
 **[not yet]** — a command literal is lexed and then **refused by the parser**, each form by its own name and
-each with a place: the static `` `git status` `` is `E236`, the interpolating `` f`git checkout {b}` `` is
-`E235`. The intended model below stands unchanged for when the runtime lands. What does ship is
+each with a place: the static `` `git status` `` is `E9020`, the interpolating `` f`git checkout {b}` `` is
+`E9019`. The intended model below stands unchanged for when the runtime lands. What does ship is
 `os.run(argv: list[str]) -> int` ([Standard Library](stdlib.md)) — argv straight to the OS, no shell and no
 pipes, so it covers running a child and reading its exit status and nothing else about this section.
 

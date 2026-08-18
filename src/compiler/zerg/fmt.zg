@@ -184,7 +184,7 @@ fn fmt_guard_at(mut &toks: list[Token], at: int, mut &out: list[Token]) -> int {
 # second answer to a question the parser has already settled, and the two would drift.
 #
 # Rewriting the binding form produced source that is not a program — `if s := v { return s }`
-# came back as `return s if s := v`, which stops at the `:=` with E205, and the `s` being
+# came back as `return s if s := v`, which stops at the `:=` with E2005, and the `s` being
 # returned names nothing once its binding is gone. The block stays a block.
 fn fmt_head_binds(mut &toks: list[Token], at: int, lb: int) -> bool {
 	mut i := at + 1

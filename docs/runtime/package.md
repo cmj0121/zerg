@@ -23,12 +23,12 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > reach on disk. Everything below that names a package — versioning, the package DAG, one-version
 > selection, package-public as a position, and the orphan rule that rests on the graph being acyclic —
 > describes a layer nothing implements yet. An `import "name"` that resolves to nothing on disk is a hard
-> build error, not a silence — _E502 cannot resolve import `name` under any source root_ — reported before
+> build error, not a silence — _E5002 cannot resolve import `name` under any source root_ — reported before
 > a byte of it is lexed.
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
 > module is flattened into one namespace, and visibility is checked on some of what a module holds and not
-> all — a function and a module constant are (_E301 `helper` is not a public member of module `lib`_, with
+> all — a function and a module constant are (_E3001 `helper` is not a public member of module `lib`_, with
 > a place), a struct's fields are not. See Visibility below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
@@ -88,7 +88,7 @@ stmt-list` is Zerg's **script mode**, and the grammar opens the language with th
 well-formed syntax and a compiler reads it whole. A **compiled** program has no moment at which to run it:
 execution begins at `main`, and everything above is state readied before that. It is therefore **refused by
 name, with a place**, by the build rather than by the parse — the same split a program with no `fn main`
-takes ([Conformance](../conformance.md)) — as _E391 `print` opens a statement at the top level, and a
+takes ([Conformance](../conformance.md)) — as _E3087 `print` opens a statement at the top level, and a
 compiled program has nowhere to run it_. `nop` is the one exception, and not really an exception: it does
 nothing and yields nothing, so running nothing for it is running it.
 
@@ -100,7 +100,7 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 
 Both halves of it are built for a **direct** read. A constant whose initializer names one declared
 **after** it gets the value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields
-`A == 11` — and a cycle is a named refusal: _E732 these constants depend on each other and none can be
+`A == 11` — and a cycle is a named refusal: _E4068 these constants depend on each other and none can be
 given a value first_.
 
 > **[deviation]** The reads-from graph is built from the names an initializer **writes**, so a read that
@@ -170,7 +170,7 @@ construction. Single-version selection is what makes "one type, one implementati
 well-defined.
 
 The orphan rule is enforced, and by the module rather than by the package the paragraph above reasons
-from: a third module writing `impl Spec for T` while owning neither is refused with _E277 `impl Speak for
+from: a third module writing `impl Spec for T` while owning neither is refused with _E2037 `impl Speak for
 Dog` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with
 one of the two_, with a place. Two `impl`s giving one type the same method name in one build are refused
 too, which is the narrower thing the flattened namespace can see on its own.
@@ -209,13 +209,13 @@ its own value.
 
 > **[deviation]** The **entry file's own directory** is not a module. A file beside the entry file is not
 > in its namespace and is not compiled into the build: naming a function declared there reports
-> _E425 undefined function `beside`_. Files share one namespace in every module that is reached by an `import`; the
+> _E4016 undefined function `beside`_. Files share one namespace in every module that is reached by an `import`; the
 > module rooted at the entry file is the exception.
 >
 > ---
 >
 > **[deviation]** A **single file** is importable as a module. `import "sib"` beside a `sib.zg` resolves
-> to that one file and its `pub` names, though a module is a directory here and `E502`'s own sentence says
+> to that one file and its `pub` names, though a module is a directory here and `E5002`'s own sentence says
 > so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
 > import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
 > denies the second exists.
@@ -271,8 +271,8 @@ collide — that refusal is about the name, not about the visibility.
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`
 group 12). A group is one module's bargain with its own author, and `pub` on it would offer that bargain
-to everyone who imports the module. Two codes hold the one rule from its two sides: _E358 the top-level
-binding `x` may not be `mut` outside a module-level `unsafe { … }` group_, and _E484 the mutable global
+to everyone who imports the module. Two codes hold the one rule from its two sides: _E3056 the top-level
+binding `x` may not be `mut` outside a module-level `unsafe { … }` group_, and _E4046 the mutable global
 `x` may not be `pub`_. Expose a `pub fn` that reads the binding instead — `src/stdlib/log.zg` is the
 tree's worked example, and the only such group in the shipping stdlib.
 
@@ -362,7 +362,7 @@ exception.
 >
 > **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
 > this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
-> — _E611 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
+> — _E2061 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
 > — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
 > the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
 > `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
@@ -426,7 +426,7 @@ each with its own driver and its own process.
 **And a test package that IS a module is that module.** `src/stdlib/strings_test.zg` forms a package built
 from `strings.zg`, so an `import "strings"` reached from anywhere else in that same program resolves to
 **this package's sources** rather than loading the module's file a second time. Without that rule the
-module arrives in the program twice and the build stops at _E745 `get` is declared twice in this file_,
+module arrives in the program twice and the build stops at _E4073 `get` is declared twice in this file_,
 pointing into a source nobody touched. Nothing contrived reaches it: a suite imports `testing`, `testing`
 renders a note through `log`, and `log` encodes with `json` — so the stdlib modules in `testing`'s closure
 are exactly the ones whose suites sit beside them. It is the same mechanism that loads a module once
@@ -534,7 +534,7 @@ fixture: two declarations of one name in one scope are refused as the collision 
 
 **The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own** instance
 of an inherited fixture, because each is one driver in one process — pytest's `scope="package"`. Session
-scope is deliberately not wanted and is anyway unreachable: `E705` refuses two modules both defining a
+scope is deliberately not wanted and is anyway unreachable: `E9081` refuses two modules both defining a
 `pub` name, so one driver over a whole tree cannot be built, and a live value does not cross a process
 boundary. Likewise, when a test ends the process and the remainder is re-run one process each, each of
 those processes enters only the levels its own test is under.
@@ -550,8 +550,8 @@ reads.
 A normal build compiles no `*_test.zg` — the name is matched where a module's directory is read, in both
 compilers — so nothing a test declares reaches the shipped artifact or joins a module's surface, and a name
 it repeats or a file that does not parse costs a normal build nothing. Naming one of its declarations is
-_E388 module `lib` has no `only_in_test`_, and naming the file is _E512 `lib/lib_test` names a test file,
-and a normal build compiles none_, both with a place. E388 does not go on to say that a test file declares
+_E3084 module `lib` has no `only_in_test`_, and naming the file is _E5011 `lib/lib_test` names a test file,
+and a normal build compiles none_, both with a place. E3084 does not go on to say that a test file declares
 one: that fact is the loader's, and the rule that reports it is in the checker.
 
 A test file is not importable from anywhere, a sibling test file included — a white-box test shares its
@@ -563,7 +563,7 @@ matter of compiling more files rather than of relaxing a visibility rule.
 > tests sharing a fixture will share one instance of it.
 >
 > A claim over a **composite** is the one gap inside what is built: `assert xs == ys` over two lists is
-> `E445`, so such a claim is made through something that reduces it to a scalar
+> `E9057`, so such a claim is made through something that reduces it to a scalar
 > ([Specs & Generics](../core/specs.md)).
 
 ### Target-conditional files

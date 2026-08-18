@@ -230,7 +230,7 @@ that is a rule rather than a convention: the case of the first letter is the who
 separates its two namespaces. `Point(1, 2)` constructs and `point(1, 2)` calls; `cli.Opt` qualifies a
 module and `It.Item` projects an associated type. Those are decided before any name is resolved, so a
 `struct lower` — or a `struct _Box`, since `_` has no case and is therefore in neither namespace — is
-refused at the declaration, as `E610`. A **use** is not constrained the same way: the built-in type
+refused at the declaration, as `E2060`. A **use** is not constrained the same way: the built-in type
 names (`int`, `str`, `list`, the fixed-width members) are lower case, and no declaration introduces one.
 
 **Visibility (`pub`)** — every declaration (a type, a field, a function) is **private to its module
@@ -251,9 +251,9 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E452` (below), and the
-> **generic `enum`** is _E212 NotImplemented: a generic enum `Either[…]` — this compiler erases type
-> parameters, and a variant's payload names one_. A generic `struct` is `E215` for the same reason. The
+> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E4026` (below), and the
+> **generic `enum`** is _E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type
+> parameters, and a variant's payload names one_. A generic `struct` is `E9004` for the same reason. The
 > block shows the specified shapes; both of them wait on generic types.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
@@ -286,10 +286,10 @@ the **enum name is a value namespace** — `Color.Green` names the variant and `
 The namespace is the **enum's**, and two enums may each declare a `Red`: with `enum Colour { Red; Green }`
 and `enum Signal { Amber; Red }`, `Colour.Red` and `Signal.Red` are two different variants that are spelled
 alike, each with its own discriminant. A qualified name is resolved **inside the enum it names**, so naming
-one the enum does not declare is _E457 `Apple` is a variant of `Fruit`, not of `Colour`_ — a sentence about
+one the enum does not declare is _E4031 `Apple` is a variant of `Fruit`, not of `Colour`_ — a sentence about
 the enum on the line, with a place.
 
-> **[deviation]** A **bare** variant name is not a value in this compiler: `c := Red` is _E383 `Red` is a
+> **[deviation]** A **bare** variant name is not a value in this compiler: `c := Red` is _E3079 `Red` is a
 > variant of `Colour`, and a variant is named through its enum_, where [Grammar](../surface/grammar.md)
 > makes a bare name a variant when it resolves to one. Where two enums declare the name, the suggestion in
 > that sentence names the first of them — it is one of the two spellings that would work, not necessarily
@@ -320,12 +320,12 @@ result is **first-class** — stored, passed, or destructured — so multiple re
 mechanism ([Pattern matching](../code/control-flow.md)).
 
 > **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
-> is _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> is _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
 > derivation over an unnamed form is what is missing.
-> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E205 expected
+> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E2005 expected
 > a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
-> name (the parenthesized `(a, b) := two()` does say it, as `E238`). Either way a tuple result is stored
+> name (the parenthesized `(a, b) := two()` does say it, as `E9021`). Either way a tuple result is stored
 > and passed as specified, and read back only through `.0` / `.1`.
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
@@ -346,7 +346,7 @@ and need an explicit `ok_or` / `ok` to cross.
 
 > **[deviation]** `type X = Y` is implemented only for a **scalar** underlying `Y`, and the new type does
 > **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+` without an
-> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E304
+> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E9042
 > NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
 > scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
 > the copy and drop rules to follow the name_. The intended semantics (a fresh identity reusing `Y`'s whole
@@ -358,7 +358,7 @@ The one primitive for building a value is the **struct literal** — it names ev
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
 (usually `pub`) associated function that returns a literal, which runs inside the type's module and can
 establish the type's invariant at the moment of construction (**[not yet]** — an associated function is
-refused by name, _E424 `User.from_id(…)` is an associated function_, so the invariant-establishing
+refused by name, _E9051 `User.from_id(…)` is an associated function_, so the invariant-establishing
 constructor this section reasons from is written as a free function today). A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
@@ -388,7 +388,7 @@ is `nil` for a `T?` field, its natural absent state — a `T?` is omittable with
 The two halves meet at visibility: a **non-`pub` field is module-private, and must carry a default**. The
 field-wise constructor is public, so a required field is one every construction has to supply a value for
 — and an outsider cannot supply a value for a field it may not read. A private field with no default is
-rejected at the field's own declaration (`E482`), naming the field.
+rejected at the field's own declaration (`E4045`), naming the field.
 
 > **[not yet]** A default that **reads another field** — `struct P { pub a: int; pub b: int = a * 2 }` — is
 > the one shape that is not built, and it is the same shape (and the same reason) as a parameter default
@@ -465,7 +465,7 @@ spec Into[T] {
   [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
   `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
   `str(x)` answers for every type — a generic that wants text needs no bound at all. (**[not yet]** for a
-  **composite**: `str(P(7))` on a `struct` is _E449 NotImplemented: rendering a P as text — a composite
+  **composite**: `str(P(7))` on a `struct` is _E9059 NotImplemented: rendering a P as text — a composite
   needs the structural `Display` this compiler does not generate_, and a generic reaches the same refusal
   once monomorphized. The no-bound rule is what holds; the rendering behind it is unbuilt for composites,
   as [Specs & Generics](specs.md) marks.)
@@ -492,17 +492,17 @@ promoted, and no target is ever pushed down into an expression.
 **The conversions `T(x)` accepts** are these, and no others. They are not `Into` impls and never were
 one: `T(x)` is a built-in form, and this is the list of pairs it has an answer for.
 
-| from    | to                               | can raise   | note                                                   |
-| ------- | -------------------------------- | ----------- | ------------------------------------------------------ |
-| `byte`  | `int`                            | no          | every byte is an int                                   |
-| `rune`  | `int`                            | no          | every code point is an int                             |
-| `int`   | `float`                          | no          | never fails; may lose precision past 2^53              |
-| `int`   | `byte`                           | yes         | out of range → `OverflowError`                         |
-| `int`   | `rune`                           | yes         | not a code point → `OverflowError`                     |
-| `int`   | `uint`                           | yes         | negative → `OverflowError`                             |
-| `uint`  | `int`                            | yes         | past the signed maximum → `OverflowError`              |
-| `str`   | `int` / `uint` / `float`         | yes         | **parses** the text — `ValueError` / `OverflowError`   |
-| `float` | `int` / `byte` / `uint` / `rune` | **refused** | `E394` — dropping a fraction is a decision; use a verb |
+| from    | to                               | can raise   | note                                                    |
+| ------- | -------------------------------- | ----------- | ------------------------------------------------------- |
+| `byte`  | `int`                            | no          | every byte is an int                                    |
+| `rune`  | `int`                            | no          | every code point is an int                              |
+| `int`   | `float`                          | no          | never fails; may lose precision past 2^53               |
+| `int`   | `byte`                           | yes         | out of range → `OverflowError`                          |
+| `int`   | `rune`                           | yes         | not a code point → `OverflowError`                      |
+| `int`   | `uint`                           | yes         | negative → `OverflowError`                              |
+| `uint`  | `int`                            | yes         | past the signed maximum → `OverflowError`               |
+| `str`   | `int` / `uint` / `float`         | yes         | **parses** the text — `ValueError` / `OverflowError`    |
+| `float` | `int` / `byte` / `uint` / `rune` | **refused** | `E3090` — dropping a fraction is a decision; use a verb |
 
 **The table's shape is a hub, and the hub is `int`.** Every accepted pair has `int` on one side, which
 is the one-step rule stated as a picture. So a pair that is not on it is not a conversion this language
@@ -510,14 +510,14 @@ has, and there are exactly two ways to be off it.
 
 **`byte → float` is absent** because it would be `byte → int → float`, and one step is what a conversion
 is: write the two, `float(int(b))`. Every missing pair between two numbers is that same sentence with
-other names in it — `byte → rune`, `byte → uint`, `rune → uint` — and each is `E395`, which prints the
+other names in it — `byte → rune`, `byte → uint`, `rune → uint` — and each is `E3091`, which prints the
 two steps it wants.
 
 **A `float` SOURCE is absent for a different reason**, and it is the only asymmetry here: dropping a
 fraction is not a missing step but a **decision**, and four answers are defensible. So the language
 declines to make it and the program spells it with a verb — `math.trunc`, `math.floor`, `math.ceil` or
 `math.round`, each of which answers an `int` and is therefore the whole conversion rather than half of
-one — or takes it with `//`, the division that lands in an `int` already. `int(x)` on a float is `E394`,
+one — or takes it with `//`, the division that lands in an `int` already. `int(x)` on a float is `E3090`,
 and it names the verb to write; a narrower target is the verb and then the conversion,
 `byte(math.trunc(x))`. A magnitude no `int` holds raises `OverflowError`, like every other conversion
 that can fail (see [Standard Library](../runtime/stdlib.md)).
@@ -547,7 +547,7 @@ the same words. A `mut` binding is excluded for a reason of its own: it can be w
 and the conversion, so what it holds there is not what it holds here.
 
 **The two positions differ in what they DO with an unknown value, not in what counts as one.** A fill
-count must have a number, so it is refused (`E475`); a conversion of a value is an ordinary conversion, so
+count must have a number, so it is refused (`E4040`); a conversion of a value is an ordinary conversion, so
 it is checked where it runs.
 
 **It survives monomorphization.** A generic body is checked as its **specialization** — `y: T = 300` in
@@ -555,7 +555,7 @@ it is checked where it runs.
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
 
-> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E461 NotImplemented: a
+> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E9060 NotImplemented: a
 > second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;
 > the language allows several, and reaching that needs the method keyed by the spec and its arguments_.
 > That is the same thing the bound above needs, and what would let a written `x.into()` say which one it

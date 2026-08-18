@@ -105,7 +105,7 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	# driver it cost a second read of the entry off disk and a second parse of it.
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
-		nomain.append(zerg.diag_at(entry, 1, 1, "E501", "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
+		nomain.append(zerg.diag_at(entry, 1, 1, zerg.Rule.EntryHasNoMain, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
 		report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 
@@ -277,7 +277,7 @@ fn load_units(entry: str) -> list[Unit] {
 # suite is a file OF its module: the package `src/stdlib/json_test.zg` forms is built from
 # `json.zg`, so an `import "json"` reached from anywhere in that program names files this unit
 # already holds. Loading them again put `json.zg` into the program twice and the build stopped
-# at `E745 get is declared twice in this file` — pointing at a module source nobody had
+# at `E4073 get is declared twice in this file` — pointing at a module source nobody had
 # touched. Seeding `seen` is what says "that module is here already", and it is the same
 # mechanism that loads a module once however many importers it has.
 #

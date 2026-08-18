@@ -81,7 +81,7 @@ fn jfield(fs: list[Field], key: str) -> Val {
 # walk follows a path of keys — `walk3(msg, "params", "textDocument", "uri")` — which is
 # what a nested request needs and what three chained `get`s per caller would otherwise be.
 #
-# IT IS NOT NAMED `at`. `E705` refuses two modules a shared name when either is `pub`, and the
+# IT IS NOT NAMED `at`. `E9081` refuses two modules a shared name when either is `pub`, and the
 # compiler's own lexer has a module-private `at` — so the name was not available, and `walk`
 # says what it does anyway.
 # ```zerg
@@ -207,7 +207,7 @@ pub fn is_null(v: Val) -> bool {
 # THERE IS NO `fields()` CONSTRUCTOR, and its absence is the rule above stated exactly: a
 # `list[Field]` is not a variant, so a caller can build one — `mut fs: list[json.Field] = []`
 # — and a function handing back an empty list would be a public name bought for nothing.
-# (It would also be `json.fields`, which `strings.fields` already is; `E705` refuses two
+# (It would also be `json.fields`, which `strings.fields` already is; `E9081` refuses two
 # modules a `pub` name, so the surface that needed no function could not have had one.)
 
 # ```zerg

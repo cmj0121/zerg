@@ -21,10 +21,10 @@ whether a `{` opens a block or a **map literal** is the `:` (see [Types](../core
 
 At a **statement's start** the same braces are a block **statement** whose value is discarded, and a
 `{`-opening expression at the start of an `if` / `for` / `with` / `match` head must be parenthesized
-(`E290`).
+(`E2047`).
 
 **`if`** — as a **statement**, `if cond { … }` with optional `else` / `else if` runs for effect and yields
-no value; the condition is a `bool` and there is **no truthiness**, so an optional there is _E354 the
+no value; the condition is a `bool` and there is **no truthiness**, so an optional there is _E3052 the
 condition of an `if` … must be bool, and this one is int? — bind it with `if v := x { … }`, which also hands
 over what it holds_. With a **mandatory trailing `else`** it is instead an
 **expression** (`if-expr`, a `primary`): it yields the **taken branch's block value**, and **every branch
@@ -39,7 +39,7 @@ use(x) } else { fallback }`). It carries a non-POD `str?` too — the unwrapped 
 then-block only.
 
 **Every branch must yield the same type**, and both constructs say so in the same words —
-_E321 an `if` expression answers ONE type, and its branches give int and float_, beside `match`'s `E322`. A
+_E3020 an `if` expression answers ONE type, and its branches give int and float_, beside `match`'s `E3021`. A
 `nil` branch is the exception, and not one: it carries no type to disagree with, so
 `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence on the
 other. Every other branch brings its own type, a literal included — a branch is not a typed
@@ -55,7 +55,7 @@ inside a present carrier and the absence was gone with nothing reported; the mir
 
 > **[not yet]** One shape of the value form is refused by name: **if-let in an expression position**.
 > `return if x := opt { use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, reports
-> _E270 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this
+> _E9032 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this
 > phase, not the "wherever an `if` does" the paragraph above specifies. The **`else if` chain** used to stand
 > beside it and no longer does: `x := if a { 1 } else if b { 2 } else { 3 }` is built, yields the taken
 > branch, and the one-type rule holds across the whole chain.
@@ -68,9 +68,9 @@ re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the 
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
 the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
-writes each edited element back to its slot, is **[not yet]** (`E242`). Testing membership with **`v in range`**
+writes each edited element back to its slot, is **[not yet]** (`E9025`). Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
-refused by name and with a place (`E493`); a range exists only as the thing a `for` walks, a `match` arm
+refused by name and with a place (`E9077`); a range exists only as the thing a `for` walks, a `match` arm
 contains, and an `in` tests against.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
@@ -96,7 +96,7 @@ conditional-return `if` takes a **bare condition and no block**.
 `for` is a statement — it yields no value; build a result with an iterator adapter (`map` / `filter` /
 `fold`) or by appending into another collection ([Collections](collections.md)), never a break-with-value.
 
-> **[not yet]** The iterator adapters are not built: `map`, `filter` and `fold` are each _E444 NotImplemented:
+> **[not yet]** The iterator adapters are not built: `map`, `filter` and `fold` are each _E9056 NotImplemented:
 > the list method `…` — this compiler has `len` and `append`_, so appending into another collection is the
 > only way to carry a result out of a loop this phase.
 
@@ -107,12 +107,12 @@ conditional-return `if` takes a **bare condition and no block**.
 that fits, and yields its result. An arm's body is an **expression** (`GRAMMAR#match-arm`), and a **block
 is one** — so `pattern => { … }` holds several statements and still yields, its value being the block's
 last statement's. What an arm's whole body may **not** be is a statement, because there the arm has
-nothing left to yield: `1 => print "one"` is _E605 NotImplemented: `print` is a statement, and an expression
-is wanted here_ (a `return` in an arm is the same refusal), and a reassignment or a send is _E607_, which
+nothing left to yield: `1 => print "one"` is _E9039 NotImplemented: `print` is a statement, and an expression
+is wanted here_ (a `return` in an arm is the same refusal), and a reassignment or a send is _E9041_, which
 names which of the two it found. Brace it and the arm has a block, which yields.
-Every arm yields the **same type** (_E322 a `match` answers ONE type, and its arms give … and …_), so a
+Every arm yields the **same type** (_E3021 a `match` answers ONE type, and its arms give … and …_), so a
 `match` is a value usable at a `:=`, a `return`, or an argument — arms that yield `nil` read as a plain
-statement. Coverage is **required** — a `match` that misses a case is _E428 non-exhaustive match: missing
+statement. Coverage is **required** — a `match` that misses a case is _E4019 non-exhaustive match: missing
 variant …_ (so **adding an `enum` variant a dependent's `match` doesn't handle breaks the build**, caught at
 compile time rather than silently). A guarded or range arm (below) does **not** count toward coverage — the
 compiler can't prove a guard holds — so a case still needs an **unguarded** arm or a trailing **`_`**.
@@ -138,13 +138,13 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 > **[not yet]** Three of the pattern kinds above are refused **in the parser**, so none of them reaches the
 > checker or the emitter, and each names itself:
 >
-> - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E492 NotImplemented: a sub-pattern inside a
+> - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E9076 NotImplemented: a sub-pattern inside a
 >   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
-> - an **or-pattern** is _E241 NotImplemented: an or-pattern_ — `|` there would otherwise read as the bitwise
+> - an **or-pattern** is _E9024 NotImplemented: an or-pattern_ — `|` there would otherwise read as the bitwise
 >   operator, folding `1 | 2 =>` to `3 =>` and matching neither side, which is the silent wrong answer a
 >   compiler must not give. `zerg fmt` rewrites the one case with a working spelling (consecutive integers
 >   become the range `1..=2`, rule `F408`);
-> - a **list pattern** is _E240 NotImplemented: a list pattern in a `match` arm_ — destructure a list with
+> - a **list pattern** is _E9023 NotImplemented: a list pattern in a `match` arm_ — destructure a list with
 >   indexing and a slice instead.
 >
 > Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
@@ -167,7 +167,7 @@ as a binding that hands the concrete value back. A **product pattern** destructu
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
 return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
-Each of its four shapes is refused by its own name — `E238` and `E221` at a binding, `E232` and `E243` in
+Each of its four shapes is refused by its own name — `E9021` and `E9008` at a binding, `E9016` and `E9026` in
 an arm — so the tuple and the struct are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to

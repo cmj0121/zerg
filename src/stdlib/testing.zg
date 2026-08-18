@@ -47,7 +47,7 @@ fn not_raised() -> Err {
 # A `guard` AND NOT AN `fn ()`, and the difference was measured rather than preferred. The
 # closure reads better — `assert_raises(fn () { strings.split("a,b", "") })` says what it
 # does — and this compiler cannot compile it: a closure body naming an imported module is
-# _E735 a closure captures `strings`, and this compiler cannot work out what it holds_,
+# _E4069 a closure captures `strings`, and this compiler cannot work out what it holds_,
 # because a namespace is a free name and a capture needs a type. Every test that reaches
 # its module through `import` is exactly that shape, so the closure form would be a form
 # that works only for the tests that need it least. The `guard` is evaluated at the CALL
@@ -136,7 +136,7 @@ pub struct Context {
 	# stream.
 	#
 	# THE FIELD IS `pub` BECAUSE THE ALTERNATIVE IS A DEFAULT NOBODY CAN WRITE. A
-	# module-private field must carry one (`E482`), and the only value that would serve is
+	# module-private field must carry one (`E4045`), and the only value that would serve is
 	# a FRESH channel per construction — `chan[Event]()`, a call. `zerg` takes that: a
 	# default is evaluated per construction and may be a call (docs/core/types.md, "Field
 	# defaults"). The bootstrap SEED does not, and `testing` is a module the seed's own
@@ -167,7 +167,7 @@ impl Context {
 	# tree does, and there is one renderer rather than two. The rendered line's trailing
 	# newline comes off because the runner joins notes with its own.
 	#
-	# `log` IS BOTH A METHOD HERE AND AN IMPORTED MODULE, and that is not a collision: `E705`
+	# `log` IS BOTH A METHOD HERE AND AN IMPORTED MODULE, and that is not a collision: `E9081`
 	# keys a name by its receiver, so `Context.log` and the namespace `log` never meet. It was
 	# checked before the module was written.
 	pub fn log(msg: str) {
@@ -231,7 +231,7 @@ fn rendered(msg: str) -> str {
 	# THE RESULT IS ASSIGNED RATHER THAN RETURNED FROM INSIDE THE `if`, and that is not a style
 	# choice: `zerg fmt` collapses a lone `return` in an `if` into the postfix form, and
 	# `return … if line := <-lines` DOES NOT PARSE — the trailing `if` on a diverge takes a bare
-	# CONDITION and a binding head is not one (`E205`). An assignment is not a diverge, so the
+	# CONDITION and a binding head is not one (`E2005`). An assignment is not a diverge, so the
 	# formatter leaves this shape alone. Reported; four lines reproduce it.
 	mut out := msg
 	if line := <-lines {

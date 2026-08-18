@@ -12,7 +12,7 @@ handle, no join/await; you observe results and completion **only through channel
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 
-> A **closure literal** is not one of the three callee forms, and is refused by name — `E222
+> A **closure literal** is not one of the three callee forms, and is refused by name — `E9009
 NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. The reason is the callee
 > shape and nothing about closures: a lambda **does** capture (`add := fn (x: int) -> int { return x + n }`
 > reads `n` and runs), so an environment exists; what is missing is a call through anything but a name.
@@ -31,7 +31,7 @@ NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. 
   send it over a channel the observer holds.
 
   > **[not yet]** A program that `spawn`s cannot also take command-line arguments: `fn main(args: list[str])`
-  > beside any `spawn` is _E734 NotImplemented: main(args) in a program that uses concurrency_. `main` runs
+  > beside any `spawn` is _E9097 NotImplemented: main(args) in a program that uses concurrency_. `main` runs
   > as **coroutine 0**, and every scheduler entry shim takes a nullary function pointer, so there is nowhere
   > to thread `args` through; a concurrent program reads its configuration from the environment or a file
   > until one exists.
@@ -118,7 +118,7 @@ Both channel error kinds are **reified and nameable**: a send on a closed channe
 deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).
 
 **`StopIteration` is nameable but deliberately not constructible.** `err is StopIteration` is a legal
-test, but **no** program can `raise StopIteration(…)` — _E726_ in **both** compilers ([Errors](errors.md)).
+test, but **no** program can `raise StopIteration(…)` — _E4063_ in **both** compilers ([Errors](errors.md)).
 The sentinel is the runtime's own end-of-stream marker: a sender able to raise it would close its channel
 wearing that marker, and its consumer would read a crash as a clean finish. Nothing a receiver sees answers
 the test today either, because the receive below already tells a clean end from a crash by **which of the
@@ -154,7 +154,7 @@ That split is the whole reason the reason cannot be lost. A `Result` made the re
 kind of `Right` it was holding before it could tell an ending from a death; anyone who forgot lost
 the death. Nobody can forget now.
 
-`chan[T?]` is **refused** (`E404`) for the same reason it is now unnecessary: `nil` would mean both the
+`chan[T?]` is **refused** (`E4003`) for the same reason it is now unnecessary: `nil` would mean both the
 value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
 or agree on a sentinel.
 
@@ -177,7 +177,7 @@ x := <-(<-cc)         # refused — `<-ch` needs a channel, and chan[int]? is no
 
 That is not a rule about nesting. **Every** channel operation asks the same question of what it is
 handed — `<-x`, `x <- v`, `close(x)`, and both kinds of `select` arm — and for anything that is not a
-channel end the answer is one refusal, by name and with a place: _E478 `<-ch` needs a channel, and
+channel end the answer is one refusal, by name and with a place: _E4043 `<-ch` needs a channel, and
 chan[int]? is not one_.
 
 Every need falls out of the four operators `T?` already had — the **receiver** chooses:
@@ -244,7 +244,7 @@ It marks the **channel**, not a holder, and everything follows from that:
   answers the `Right`.
 - **A send after it aborts** (`SendOnClosedError`) rather than being quietly dropped.
 - **A receive-only end may not close** — a consumer must not end a stream on the producers' behalf. It
-  is a compile error (_E505 cannot close a receive-only channel_).
+  is a compile error (_E5005 cannot close a receive-only channel_).
 
 `close` does **not** replace auto-close, and two shapes say why. A **crashing** producer never reaches
 any statement. And in **fan-in** the last of several producers to finish ends the stream with no
@@ -495,8 +495,8 @@ For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`**
 provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
 > **[not yet]** And not because of anything about atomics: an `Atomic[int]` IS a `Ref[int]`, and there
-> is no `Ref[T]` yet (`E446`). The **import** is what is refused, rather than a type nothing declares
-> reaching the emitter — _E511 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`,
+> is no `Ref[T]` yet (`E9058`). The **import** is what is refused, rather than a type nothing declares
+> reaching the emitter — _E9104 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`,
 > and a generic struct is a form this compiler has not built. Share state across coroutines with a channel
 > until it has_ — so the actor above is the pattern that works today. The explicit
 > **memory-ordering argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.

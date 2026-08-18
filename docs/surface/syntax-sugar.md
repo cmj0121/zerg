@@ -30,25 +30,25 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 
 **Status.** Every row above works except inside an f-string hole, plus `del ch` and the operator rows on a
 user-defined type. In a hole only the plain `{x}` form does: a **conversion** (`!r` / `!s` / `!a`) is
-`E226`, a **format spec** (`{x:.2f}`) is `E225`, and the self-documenting `f"{x=}"` is `E227`. A
+`E9013`, a **format spec** (`{x:.2f}`) is `E9012`, and the self-documenting `f"{x=}"` is `E9014`. A
 **composite** hole is rejected too, so structural rendering is **[not yet]** — a `struct` by name
-(_E449 NotImplemented:
+(_E9059 NotImplemented:
 rendering a P as text_) and a `list` or `map` by an ordinary checked rule that blames a bridge the program
-never wrote (_E417 `str(…)` over a list bridges bytes or code points_) — see
+never wrote (_E4011 `str(…)` over a list bridges bytes or code points_) — see
 [Formatting & Text](../runtime/format.md).
 
-**`del ch`** is **[not yet]**: _E470 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
+**`del ch`** is **[not yet]**: _E9066 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
 and at the release the binding's scope already performs. And the **operator** row desugars only where the
-operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E314 no spec named
-`Add`_ and `P(1) + P(2)` is _E345_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
+operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E3013 no spec named
+`Add`_ and `P(1) + P(2)` is _E3043_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
 `#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals are **[not yet]**, and they are told
-apart: the plain `` `…` `` is _E236 NotImplemented: a command literal_, the interpolating `` f`…` ``
-(grammar, not listed here) _E235_. Each desugaring above is otherwise exactly as written.
+apart: the plain `` `…` `` is _E9020 NotImplemented: a command literal_, the interpolating `` f`…` ``
+(grammar, not listed here) _E9019_. Each desugaring above is otherwise exactly as written.
 
 **Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and
-so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` (`E238`) and
-its struct form `P{x, y} := e` (`E221`), which this compiler asks you to write as one name and a field
-access — and a **named argument** `f(x: 1)` (`E223`), arguments binding by position only. A default
+so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` (`E9021`) and
+its struct form `P{x, y} := e` (`E9008`), which this compiler asks you to write as one name and a field
+access — and a **named argument** `f(x: 1)` (`E9010`), arguments binding by position only. A default
 parameter is the half of that row that did land, and is above. The whole list of forms in this state, with
 the gate that holds it, is
 [What is specified and not built](grammar.md#what-is-specified-and-not-built).

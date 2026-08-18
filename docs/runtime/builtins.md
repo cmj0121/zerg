@@ -28,7 +28,7 @@ is the one value shared **by reference** (copies retain, the last holder frees i
 outlives its defining scope or is shared across a `spawn`. See [Values & Memory](../core/memory.md).
 
 > **[not yet]** There is no `Ref[T]` type in this compiler, so neither built-in exists. Both are refused by
-> name — _E446 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
+> name — _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
 > IS reference-counted is `chan`, a `str` and a recursive type, each managed by the compiler rather than
 > through this box; the `atomic` module and the `Reader` surface both wait on this one.
 
@@ -45,17 +45,17 @@ value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-
 loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
 
 **Which pairs `T(x)` accepts is a closed table**, and `int` is the hub every one of them has on a side. A
-pair that is not on it is not a conversion — `float(b)` on a `byte` is `E395`, and the two steps through
+pair that is not on it is not a conversion — `float(b)` on a `byte` is `E3091`, and the two steps through
 the hub are written instead. A `float` SOURCE is absent by decision rather than by a missing step:
-`int(x)` on a float is `E394`, and the fraction is dropped by a verb. The table and both reasons are in
+`int(x)` on a float is `E3090`, and the fraction is dropped by a verb. The table and both reasons are in
 [Types](../core/types.md).
 
 > **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
-> types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E465
+> types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E9063
 > NotImplemented: `i32` is part of the fixed-width ladder — … the built-in widths are `int`, `uint`, `byte`,
 > `rune` and `float`_. The six named above all work, and a negative the compiler cannot see aborts with
 > _OverflowError: integer conversion out of range_ exactly as specified — one it CAN see is refused at
-> compile time instead (`E330`), by the constant rule in [Types](../core/types.md).
+> compile time instead (`E3029`), by the constant rule in [Types](../core/types.md).
 
 ## Parsing a string
 
@@ -99,7 +99,7 @@ on which compiler built the program.
 **`StopIteration` is testable but not constructible**, the one place the set is asymmetric. It is the
 sentinel a clean channel close carries, so a sender able to build one could close its channel wearing the
 marker for an ordinary ending and its consumer would read the crash as a clean finish. Writing it is
-_E726 `StopIteration` is testable but not constructible_; `e is StopIteration` costs nothing and stays.
+_E4063 `StopIteration` is testable but not constructible_; `e is StopIteration` costs nothing and stays.
 
 **`AssertionError` is raised by `assert` and by nothing else**, which is what lets `zerg test` tell a claim
 that did not hold from a program that fell over without reading a message as a protocol.
@@ -111,7 +111,7 @@ addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast)
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](../core/memory.md).
 
-> **[not yet]** None of it is built, and every position says so with one code — _E413 NotImplemented: the
+> **[not yet]** None of it is built, and every position says so with one code — _E9045 NotImplemented: the
 > raw-pointer built-in `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, the
 > same for `ptr`, and the same again in a TYPE position: `fn f(p: ptr)` and `p: ptr = 0` name the
 > raw-pointer built-in rather than reading as though `ptr` were an existing type the value did not suit.
@@ -119,7 +119,7 @@ These are the one door to bare-metal work. See [Values & Memory](../core/memory.
 
 ## `sizeof` / `alignof` — deferred
 
-**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E414 NotImplemented:
+**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E9046 NotImplemented:
 the compile-time built-in `sizeof[T]` — this compiler does not compute a type's layout_ — and the question of
 whether a type's layout is a **built-in** or a **standard-library** facility is open. The chapter that described
 them as one and the [FFI](ffi.md) chapter that described them as the other are both removed rather than left

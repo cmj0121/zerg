@@ -33,25 +33,25 @@ fn main() {
 
 A written type **wins** — `fn (x: str)` at a `fn (int) -> …` position is a type error naming both, not an
 annotation quietly overruled. And a closure that meets **no** such position has nowhere to take them from,
-which is an error rather than a guess: `f := fn (x) { … }` reports _E385 the closure parameter `x` has no
+which is an error rather than a guess: `f := fn (x) { … }` reports _E3081 the closure parameter `x` has no
 type, and this position gives it none_.
 
 > **[not yet]** The value stops at the module boundary. A function named through another module is a **call
-> target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _E388 module `text`
+> target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _E3084 module `text`
 > has no `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name
 > path never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
 > **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
 > VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
 > language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
-> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E275
+> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E2035
 > `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is an index_.
 >
 > **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
-> **type** carrying it is read and then refused by name: `f: fn(mut &int) = bump` reports _E286
+> **type** carrying it is read and then refused by name: `f: fn(mut &int) = bump` reports _E9035
 > NotImplemented: a `mut &` parameter in a function type_, with the place the prefix sits at. The refusal is
 > the same rule the value side already states — a held function is a bare pointer here and the call site reads
-> a `mut &` from the callee's **name**, which a value has not got (`E469`) — so `fn(mut &int) -> bool` has no
+> a `mut &` from the callee's **name**, which a value has not got (`E9065`) — so `fn(mut &int) -> bool` has no
 > spelling, and the two types stay distinct only on paper.
 
 **A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
@@ -114,13 +114,13 @@ greet("Sam", "Hi", true)     # all positional
 
   > **[not yet]** A default that **reads an earlier parameter** — `fn g(a: int, b: int = a * 2)` — is the one
   > shape that is not built. The default is materialised at the **call site**, where the callee's parameter
-  > names are not in scope, so the call reports _E372 undefined name `a`_ instead of evaluating `a * 2`.
+  > names are not in scope, so the call reports _E3069 undefined name `a`_ instead of evaluating `a * 2`.
   > Every other default is lowered as specified, a bare constant and a computed expression alike:
   > `b: int = 1 + 2`, `b: int = side()` and `greeting: str = "a" + "b"` all evaluate at the call, each time.
   >
   > **[not yet]** A default on an **anonymous** function's parameter is not built. `GRAMMAR` derives it —
   > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`, the same `( '=' expr )?` tail a
-  > declaration's parameter has — and `f := fn (x: int = 5) -> int { … }` reports _E285 NotImplemented: a
+  > declaration's parameter has — and `f := fn (x: int = 5) -> int { … }` reports _E9034 NotImplemented: a
   > default on the closure parameter `x`_, with the place. The reason is the one above: a default is
   > materialised at the **call site** out of the callee's **declaration**, and a closure is reached through a
   > **value**, which carries no declaration to read one from. Pass the argument at every call.
@@ -130,7 +130,7 @@ greet("Sam", "Hi", true)     # all positional
   any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
   the rest must be named too** (no positional after a name).
 
-  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _E223
+  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _E9010
   > NotImplemented: the named argument `loud:` — this compiler binds arguments by position only_, and the
   > rest of the mechanism goes with it: no skipping a defaulted parameter in the middle, and no ordering
   > rule left to govern. A call fills its parameters left to right, and a defaulted one can only be dropped
@@ -195,8 +195,8 @@ for x in xs {
 ```
 
 > **[not yet]** The coroutine spelling of that loop is not available. A closure **literal** is not one of
-> `spawn`'s three callee forms — `spawn fn () { … }()` is _E222 NotImplemented: calling fn-expr_ — and
-> `spawn work()` on the **named** closure above is _E744_, with a place: both keywords lower to a C thunk
+> `spawn`'s three callee forms — `spawn fn () { … }()` is _E9009 NotImplemented: calling fn-expr_ — and
+> `spawn work()` on the **named** closure above is _E9103_, with a place: both keywords lower to a C thunk
 > whose body names a symbol, and a function value has none. (It used to emit `zg_work()` into that thunk
 > and die inside `cc`, which is the one outcome the standing rule forbids.) `spawn handle(x)` is the form
 > that works, and it snapshots its argument at the `spawn`, which gets the same per-iteration value by the

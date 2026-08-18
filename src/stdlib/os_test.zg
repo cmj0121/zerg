@@ -97,7 +97,7 @@ fn test_platform_and_arch_do_not_change() {
 # neither, so what it asserts is the one it can be sure of — a name nothing sets.
 #
 # `assert` CANNOT TAKE THE OPTIONAL ITSELF. The keyword renders each operand, and a `str?` has
-# no rendering in this compiler (`E449`), so the claim is asked through a `bool` — which is
+# no rendering in this compiler (`E9059`), so the claim is asked through a `bool` — which is
 # what `present` is for, and why the two tests below use it rather than `== nil`.
 #[test]
 fn test_env_of_something_nobody_sets_is_absent(ctx: testing.Context) {
@@ -116,7 +116,7 @@ const ABSENT := "\u{1}nothing set this"
 
 # present is "this optional holds something", as a bool an assertion can render.
 #
-# THE UNWRAPPING FORM IS NOT AVAILABLE, and neither is the obvious one. `v == nil` is `E341` —
+# THE UNWRAPPING FORM IS NOT AVAILABLE, and neither is the obvious one. `v == nil` is `E3039` —
 # an optional is not an operand of `==` — and the unwrap the compiler suggests in its place,
 # `if s := v { ok = true }`, BINDS A NAME NOTHING READS, which is `L103`. That is the whole of
 # what a presence test needs to say, and both spellings of it cost a finding. Coalescing to a

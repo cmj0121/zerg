@@ -135,20 +135,27 @@ fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
 	return doc_join(out)
 }
 
-# render_doc_decl is one declaration on its own — the same entry the whole document holds, with
-# no header and no section around it.
+# render_doc_decls is what one name answered with — the same entries the whole document holds,
+# with no header and no section around them.
 #
-# A TYPE STILL BRINGS ITS METHODS, which is why this takes the module and an index rather than
-# the row: `zerg doc log.Logger` that answered a struct with no methods would be describing a
+# IT TAKES EVERY HIT, because a name can be two declarations: `doc_find` answers `pub struct
+# Pair` and `pub fn Pair` both, and a page that showed one of them would be a document hiding a
+# declaration. They come out in source order, one blank line apart, which is the separation
+# every other pair of entries in this file already has.
+#
+# A TYPE STILL BRINGS ITS METHODS, which is why this takes the module and indices rather than
+# the rows: `zerg doc log.Logger` that answered a struct with no methods would be describing a
 # type nobody can use. A METHOD ASKED FOR BY NAME is promoted to the top indent instead —
 # alone on the page there is no type above it for the deeper indent to mean anything against.
-fn render_doc_decl(m: zerg.DocModule, i: int, col: bool) -> str {
+fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
 	mut out: list[str] = []
-	d := m.decls[i]
-	doc_entry(out, d, 2, false, col)
-	if doc_is_type(d.kind) {
-		for j in doc_methods_of(m, d.name) {
-			doc_entry(out, m.decls[j], 6, false, col)
+	for i in hits {
+		d := m.decls[i]
+		doc_entry(out, d, 2, false, col)
+		if doc_is_type(d.kind) {
+			for j in doc_methods_of(m, d.name) {
+				doc_entry(out, m.decls[j], 6, false, col)
+			}
 		}
 	}
 	return doc_join(out)

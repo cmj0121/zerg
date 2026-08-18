@@ -205,6 +205,12 @@ because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
 the program, which is what the assertion exists to catch.
 
+- **A module this file did not import, named through a qualified enum variant, is
+  accepted.** `lib.Colour.Red` where the file imports only `mid` (which imports `lib`) is a
+  name the whole-program flatten makes reachable and the language refuses; the seed enforces
+  that rule for no namespace member, and a variant is now one more of them — it reads
+  `mod.Enum.Variant` because the compiler's diagnostic registry is an enum one module over.
+  `zerg` refuses it with `E507`.
 - **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
   segfaults.** GRAMMAR#param makes a `mut &` valid only for the call and its argument a `mut`
   lvalue; a default has no caller variable to point at. The seed emits the default

@@ -14,7 +14,7 @@
 #
 #     if s := v { return s }   ->   return s if s := v
 #
-# which stops at the `:=` with E205, and whose `s` names nothing now that its binding is
+# which stops at the `:=` with E2005, and whose `s` names nothing now that its binding is
 # gone. `zerg fmt` destroyed the file, said nothing, exited 0, and `zerg fmt --check` then
 # called the wreckage canonical. Three files were lost to it before it was found by hand.
 #
@@ -35,7 +35,7 @@
 #      fmt genuinely rewrites them, and a rewrite is the only thing that can be wrong.
 #
 #   2. THE COMPILER ITSELF — which cannot be done file by file, because a module's file is
-#      not an entry point and `--emit ast` on one alone answers E502 about its imports. So
+#      not an entry point and `--emit ast` on one alone answers E5002 about its imports. So
 #      the whole of `src/` is copied, every source in the copy is formatted, and the COPY is
 #      parsed through ENTRIES that reach it. Nothing in the real tree is written.
 
@@ -127,7 +127,7 @@ self=$(ls "$tmp"/tree/src/compiler/*.zg "$tmp"/tree/src/compiler/cmd/*.zg \
 #
 # Each is probed BEFORE anything is formatted, and dropped if it does not parse then — the
 # precondition again, one module at a time. `atomic` is the reason: it declares a generic
-# struct and refuses to be imported at all (E511), which is a fact about this compiler and
+# struct and refuses to be imported at all (E9104), which is a fact about this compiler and
 # not about the formatter.
 entries=""
 for m in "$tmp"/tree/src/stdlib/*.zg; do

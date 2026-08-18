@@ -331,7 +331,7 @@ seed_refuses() {
 # A binding is immutable unless it says `mut`, and a write to a field or an element is a
 # write to the binding that owns it.
 
-reject assign-to-plain-binding E307 <<'EOF'
+reject assign-to-plain-binding E3006 <<'EOF'
 fn main() {
 	x := 1
 	x = 2
@@ -339,7 +339,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-value-parameter E307 <<'EOF'
+reject assign-to-value-parameter E3006 <<'EOF'
 fn f(a: int) {
 	a = 2
 	print(f"{a}")
@@ -350,7 +350,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-field-of-immutable E308 <<'EOF'
+reject assign-to-field-of-immutable E3007 <<'EOF'
 struct P {
 	pub x: int
 }
@@ -362,7 +362,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-element-of-immutable E308 <<'EOF'
+reject assign-to-element-of-immutable E3007 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	xs[0] = 9
@@ -370,7 +370,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-module-const E303 <<'EOF'
+reject assign-to-module-const E3003 <<'EOF'
 const N: int = 5
 
 fn main() {
@@ -384,7 +384,7 @@ EOF
 # used to answer "it is a module `const`", which sends the reader to look up a keyword they
 # did not write; the two sentences are asserted apart because one message covering two
 # rules is how a message comes to be wrong about one of them.
-reject assign-to-module-binding E305 <<'EOF'
+reject assign-to-module-binding E3004 <<'EOF'
 N := 5
 
 fn main() {
@@ -393,7 +393,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-loop-variable E307 <<'EOF'
+reject assign-to-loop-variable E3006 <<'EOF'
 fn main() {
 	for i in 0..2 {
 		i = 5
@@ -415,7 +415,7 @@ EOF
 # user-declared `mut fn` (mut-fn-on-an-immutable-receiver, below) — what these pin is the
 # built-in method and the freeze.
 
-reject append-on-a-plain-binding E392 <<'EOF'
+reject append-on-a-plain-binding E3088 <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	xs.append(4)
@@ -423,7 +423,7 @@ fn main() {
 }
 EOF
 
-reject append-inside-its-own-for E393 'cannot `append` to' <<'EOF'
+reject append-inside-its-own-for E3089 'cannot `append` to' <<'EOF'
 fn main() {
 	mut xs := [1, 2, 3]
 	for x in xs {
@@ -433,7 +433,7 @@ fn main() {
 }
 EOF
 
-reject rebind-inside-its-own-for E393 'cannot rebind' <<'EOF'
+reject rebind-inside-its-own-for E3089 'cannot rebind' <<'EOF'
 fn main() {
 	mut xs := [1, 2, 3]
 	for x in xs {
@@ -446,7 +446,7 @@ EOF
 # `m[k] = v` INSERTS when `k` is new, and whether it is new is a runtime fact — so inside
 # the map's own loop the whole form is refused. The LIST spelling of the same syntax stays
 # legal there (`xs[0] = 9` moves no cursor), which is why the case pins the map.
-reject map-index-assign-inside-its-own-for E393 'cannot assign into' <<'EOF'
+reject map-index-assign-inside-its-own-for E3089 'cannot assign into' <<'EOF'
 fn main() {
 	mut m := {"a": 1}
 	for k in m {
@@ -509,7 +509,7 @@ fi
 # pinned by the corpus (const_shadow_allowed), because a program that must COMPILE belongs
 # there, not here.
 
-reject shadow-a-const-from-an-inner-block E356 <<'EOF'
+reject shadow-a-const-from-an-inner-block E3054 <<'EOF'
 const k := 1
 
 fn main() {
@@ -525,7 +525,7 @@ EOF
 # to a core form that CONTAINS a binding: refusing the desugared program and accepting the
 # surface one would break `make desugar`'s contract that the two behave the same, and the
 # seed refuses the surface form as well.
-reject loop-variable-takes-a-const-name E356 <<'EOF'
+reject loop-variable-takes-a-const-name E3054 <<'EOF'
 const k := 1
 
 fn main() {
@@ -535,7 +535,7 @@ fn main() {
 }
 EOF
 
-reject const-shadowing-an-outer-binding E357 <<'EOF'
+reject const-shadowing-an-outer-binding E3055 <<'EOF'
 fn main() {
 	x := 1
 	if true {
@@ -549,7 +549,7 @@ EOF
 # the SAME-block collision is one mistake and gets one message — the const one, whose
 # advice is right. The redeclaration message says "an inner block may shadow it", which is
 # exactly what a `const` does not allow.
-reject const-collision-in-the-same-block E356 <<'EOF'
+reject const-collision-in-the-same-block E3054 <<'EOF'
 fn main() {
 	const k := 1
 	k := 2
@@ -562,7 +562,7 @@ EOF
 # identical. One mistake earns one message (chk_at_place drops an exact repeat), which is
 # what `one-finding` pins; the place is the whole STATEMENT's, the SAt marker's
 # documented grain, so the arm itself is not pointed at and this case does not claim it.
-reject const-rebound-by-a-match-arm E356 one-finding <<'EOF'
+reject const-rebound-by-a-match-arm E3054 one-finding <<'EOF'
 const v := 1
 
 enum E {
@@ -582,7 +582,7 @@ EOF
 # columns out by hand, so it asked neither this rule nor the substitution rule beside it.
 # Its real cost was worse than a missed refusal — one of the eight columns was left off
 # and every later binding read the wrong row of it — but this is the half a gate can see.
-reject const-rebound-by-a-select-arm E356 <<'EOF'
+reject const-rebound-by-a-select-arm E3054 <<'EOF'
 fn gen(out: chan[int]<-) {
 	out <- 1
 }
@@ -608,7 +608,7 @@ EOF
 # unsafe_group_mut pins that half, so the refusal here cannot leak into the group without
 # a gate noticing from both sides.
 
-reject top-level-mut-in-safe-code E358 <<'EOF'
+reject top-level-mut-in-safe-code E3056 <<'EOF'
 mut counter := 0
 
 fn main() {
@@ -616,7 +616,7 @@ fn main() {
 }
 EOF
 
-reject top-level-pub-mut E358 <<'EOF'
+reject top-level-pub-mut E3056 <<'EOF'
 pub mut counter := 0
 
 fn main() {
@@ -629,7 +629,7 @@ EOF
 # than a second `undefined name` or `cannot assign` at every use site. `at=` and
 # `one-finding` are those two claims as markers; the case used to fork the helper's first
 # half by hand, and the fork silently lost the cache, cc-shape and seed assertions.
-reject top-level-mut-that-is-used E358 at=1:1 one-finding <<'EOF'
+reject top-level-mut-that-is-used E3056 at=1:1 one-finding <<'EOF'
 mut counter := 0
 
 fn main() {
@@ -644,7 +644,7 @@ EOF
 # group's contents were parsed at all, this was dropped one token at a time — the same
 # shredder that ate the group's `mut` bindings — so the case pins the refusal that
 # replaced the silence.
-reject statement-in-unsafe-group E254 <<'EOF'
+reject statement-in-unsafe-group E2022 <<'EOF'
 unsafe {
 	print "hello"
 }
@@ -660,7 +660,7 @@ EOF
 # chk_top_muts' refusal, the whole reason the flag exists, was switchable by a typo with
 # no diagnostic anywhere. The place is the `unsafe` that was never closed, which is where
 # the reader has to go, so `at=` pins it rather than accepting an answer at the last line.
-reject unsafe-group-never-closed E256 at=1:1 <<'EOF'
+reject unsafe-group-never-closed E2024 at=1:1 <<'EOF'
 unsafe {
 	fn raw() -> int { return 1 }
 
@@ -676,7 +676,7 @@ EOF
 # not a form. It used to nest, which is the other half of the same counter: the inner `}`
 # closed the outer one as far as it could tell, leaving the tail of the file outside a
 # context the reader thinks it is in.
-reject unsafe-group-nested E253 at=2:2 <<'EOF'
+reject unsafe-group-nested E2021 at=2:2 <<'EOF'
 unsafe {
 	unsafe {
 		mut counter := 0
@@ -697,7 +697,7 @@ EOF
 #
 # The seed refuses both of these by not parsing a module-level group at all, which is its
 # own contract (src/bootstrap/README.md) and not a gap in this rule.
-reject unsafe-group-fn-called-from-safe E387 'this call is in safe code' <<'EOF'
+reject unsafe-group-fn-called-from-safe E3083 'this call is in safe code' <<'EOF'
 unsafe {
 	fn poke() -> int {
 		return 7
@@ -713,7 +713,7 @@ EOF
 # wanted IS that function, so binding it and calling the binding would be the identical
 # call one line later — a rule that only watched call sites would be one `f := poke` away
 # from meaning nothing.
-reject unsafe-group-fn-as-a-value E387 'hand safe code the same call' <<'EOF'
+reject unsafe-group-fn-as-a-value E3083 'hand safe code the same call' <<'EOF'
 unsafe {
 	fn poke() -> int {
 		return 7
@@ -732,7 +732,7 @@ EOF
 # discarded the annotation, so the program got an int named answer — an annotation the
 # compiler does not check is a comment. The positive half (the annotation DECIDING the
 # type, `half: float = 1` printing 0.5 for `half / 2`) is the corpus case topconst_typed.
-reject top-level-annotation-mismatch E335 'cannot bind int to a bool binding' at=1:1 seed-gap <<'EOF'
+reject top-level-annotation-mismatch E3033 'cannot bind int to a bool binding' at=1:1 seed-gap <<'EOF'
 answer: bool = 42
 
 fn main() {
@@ -746,7 +746,7 @@ EOF
 # visibility rule's sake) and a rule firing in there reported a bare `line:col` — the line
 # a STALE marker still held, near some use inside `main`. `at=1:1` is the whole claim:
 # the constant's own place, not a marker left over from whatever was emitted before it.
-reject const-initializer-reports-the-declaration E345 'operator `+` takes numeric operands' at=1:1 <<'EOF'
+reject const-initializer-reports-the-declaration E3043 'operator `+` takes numeric operands' at=1:1 <<'EOF'
 const answer := 1 + "s"
 
 fn main() {
@@ -769,7 +769,7 @@ EOF
 # exactly a form whose arm has to say so; a case for one of them proves nothing about the
 # next. These are the six.
 
-reject pub-on-an-impl-block E249 at=9:1 <<'EOF'
+reject pub-on-an-impl-block E2017 at=9:1 <<'EOF'
 spec S {
 	fn f() -> int
 }
@@ -789,7 +789,7 @@ fn main() {
 }
 EOF
 
-reject pub-before-a-statement E255 at=1:1 <<'EOF'
+reject pub-before-a-statement E2023 at=1:1 <<'EOF'
 pub 42
 
 fn main() {
@@ -797,7 +797,7 @@ fn main() {
 }
 EOF
 
-reject pub-on-an-import E247 at=1:1 <<'EOF'
+reject pub-on-an-import E2015 at=1:1 <<'EOF'
 pub import "std/io"
 
 fn main() {
@@ -805,7 +805,7 @@ fn main() {
 }
 EOF
 
-reject pub-on-init E248 at=1:1 <<'EOF'
+reject pub-on-init E2016 at=1:1 <<'EOF'
 pub init() {
 	print "ok"
 }
@@ -815,7 +815,7 @@ fn main() {
 }
 EOF
 
-reject pub-before-a-decorator E250 at=1:1 <<'EOF'
+reject pub-before-a-decorator E2018 at=1:1 <<'EOF'
 pub #[derive(Eq)]
 struct A {
 	pub x: int
@@ -835,7 +835,7 @@ EOF
 #
 # It is a rejection rather than a refusal: no future feature makes `#[derive]` on a binding
 # mean something. The seed refuses it too, by not reading a decorator inside a body at all.
-reject derive-leading-a-statement E612 '`#[derive(Eq)]`' at=2:2 <<'EOF'
+reject derive-leading-a-statement E2062 '`#[derive(Eq)]`' at=2:2 <<'EOF'
 fn main() {
 	#[derive(Eq)]
 	n := 1
@@ -844,9 +844,9 @@ fn main() {
 EOF
 
 # `#[test]` gets the sentence about a `fn`, not the derive's about a type — the same split
-# E487 makes one position up, and the reason is the same: advice for the other decorator is
+# E4048 makes one position up, and the reason is the same: advice for the other decorator is
 # advice the reader cannot act on.
-reject test-leading-a-statement E612 '`#[test]`' at=2:2 <<'EOF'
+reject test-leading-a-statement E2062 '`#[test]`' at=2:2 <<'EOF'
 fn main() {
 	#[test]
 	n := 1
@@ -857,7 +857,7 @@ EOF
 # ONE DECORATOR PER ITEM. Stacking parsed in both compilers and said exactly what the comma
 # list says — two spellings for one thing, which is what `zerg fmt` exists to remove and what
 # it cannot remove once both are legal.
-reject stacked-decorators-on-a-declaration E613 at=2:1 <<'EOF'
+reject stacked-decorators-on-a-declaration E2063 at=2:1 <<'EOF'
 #[derive(Eq)]
 #[obj]
 spec Draw {
@@ -871,7 +871,7 @@ EOF
 
 # and in the position that opened this: `#[allow]` puts nothing on the pending list, so a
 # stack that began with one would have read as no decorator at all without a flag of its own
-reject stacked-decorators-on-a-statement E613 at=3:2 <<'EOF'
+reject stacked-decorators-on-a-statement E2063 at=3:2 <<'EOF'
 fn main() {
 	#[allow(L103)]
 	#[allow(L104)]
@@ -881,8 +881,8 @@ fn main() {
 EOF
 
 # `#[allow]` NAMES THE CODES IT SUPPRESSES. With none it suppresses nothing while reading as
-# though it did — E497's argument for `#[derive]`, one decorator over.
-reject an-allow-with-no-codes E614 at=2:4 <<'EOF'
+# though it did — E4051's argument for `#[derive]`, one decorator over.
+reject an-allow-with-no-codes E2064 at=2:4 <<'EOF'
 fn main() {
 	#[allow]
 	n := 1
@@ -890,7 +890,7 @@ fn main() {
 }
 EOF
 
-reject pub-on-an-unsafe-group E252 at=1:1 <<'EOF'
+reject pub-on-an-unsafe-group E2020 at=1:1 <<'EOF'
 pub unsafe {
 	mut counter := 0
 }
@@ -916,7 +916,7 @@ EOF
 # The seed has said `undefined name` to all four of them since it was written. That is the
 # reason reject-check makes it the oracle, said once more.
 
-reject an-invented-namespace-prefix E372 'undefined name `bogus`' <<'EOF'
+reject an-invented-namespace-prefix E3069 'undefined name `bogus`' <<'EOF'
 import "util/text"
 
 fn main() {
@@ -928,7 +928,7 @@ pub fn shout(s: str) -> str {
 }
 EOF
 
-reject a-path-segment-is-not-a-namespace E372 'undefined name `util`' <<'EOF'
+reject a-path-segment-is-not-a-namespace E3069 'undefined name `util`' <<'EOF'
 import "util/text"
 
 fn main() {
@@ -944,7 +944,7 @@ EOF
 # `hidden` is module-private, and the visibility rule caught it — through the invented
 # prefix, reporting "`hidden` is not a public member of module `text`" about a module the
 # program never named here. The right answer is about `bogus`, and it is now the only one.
-reject an-invented-prefix-onto-a-private-member E372 'undefined name `bogus`' <<'EOF'
+reject an-invented-prefix-onto-a-private-member E3069 'undefined name `bogus`' <<'EOF'
 import "caller"
 
 fn main() {
@@ -965,7 +965,7 @@ EOF
 # `spawn` and `defer` resolve a callee down their own path, so a rule the ordinary call
 # enforces is one they get only by asking the same question — which is why this asks it
 # once (c_ns_kind) and all three read the answer.
-reject an-invented-prefix-in-a-defer E372 'undefined name `bogus`' <<'EOF'
+reject an-invented-prefix-in-a-defer E3069 'undefined name `bogus`' <<'EOF'
 import "util/text"
 
 fn main() {
@@ -982,7 +982,7 @@ EOF
 # resolution — the prefix resolved, the member did not — and it used to be three different
 # answers depending on which shape asked: a placeless raise from a member read, "the method
 # `nosuch` on a ?" from a call, and a not-built refusal from a `spawn`.
-reject a-namespace-without-that-member E388 <<'EOF'
+reject a-namespace-without-that-member E3084 <<'EOF'
 import "util/text"
 
 fn main() {
@@ -999,7 +999,7 @@ EOF
 # docs/runtime/io.md marks `[not yet]`, and the answer was "the method `write` on a ?" — the
 # fourth shape of the finding above, and the one that survived it, because the method path
 # INFERS its receiver's type and never LOWERS it, so the receiver's own rule was never asked.
-reject a-namespace-member-that-does-not-exist-as-a-receiver E388 'has no `stdout`' <<'EOF'
+reject a-namespace-member-that-does-not-exist-as-a-receiver E3084 'has no `stdout`' <<'EOF'
 import "io"
 
 fn main() {
@@ -1011,7 +1011,7 @@ EOF
 # namespace holding the union of two modules' members, with no diagnostic. GRAMMAR says
 # `as` is "how two imports sharing a last segment coexist", which is only true if not
 # renaming them is an error.
-reject two-imports-sharing-a-last-segment E389 'is already the namespace of' at=3:2 <<'EOF'
+reject two-imports-sharing-a-last-segment E3085 'is already the namespace of' at=3:2 <<'EOF'
 import (
 	"alt/text"
 	"util/text"
@@ -1033,7 +1033,7 @@ EOF
 # AND THE COLLISION WITH A LOCAL NAME, which is the one GRAMMAR states outright. `text()`
 # and `text.shout()` both worked, and which of the two a reader reached depended on whether
 # they wrote a `(` or a `.`.
-reject an-import-colliding-with-a-function E389 'is already a function in this program' at=1:8 <<'EOF'
+reject an-import-colliding-with-a-function E3085 'is already a function in this program' at=1:8 <<'EOF'
 import "util/text"
 
 fn text() -> str {
@@ -1055,7 +1055,7 @@ EOF
 # a generic took an import's name in silence — while the identical non-generic pair above
 # was refused. It reads the table c_build_top_names records now, and that walk runs over the
 # whole program, templates and all, for exactly this reason.
-reject an-import-colliding-with-a-generic-function E389 'is already a function in this program' at=1:8 <<'EOF'
+reject an-import-colliding-with-a-generic-function E3085 'is already a function in this program' at=1:8 <<'EOF'
 import "util/text"
 
 fn text[T](v: T) -> T {
@@ -1077,7 +1077,7 @@ EOF
 # a form arrives is not nothing: it is the PROGRAM's own mistake, which is permanent and
 # belongs here.
 
-reject explicit-type-args-on-a-plain-fn E275 <<'EOF'
+reject explicit-type-args-on-a-plain-fn E2035 <<'EOF'
 fn id(x: int) -> int {
 	return x
 }
@@ -1089,7 +1089,7 @@ EOF
 
 # THE MULTI-ARGUMENT SHAPE, which never looked like an index at all — a comma is what
 # settles the bracket. It is the same rule and it is refused in the same place.
-reject explicit-type-args-multi E275 seed-gap <<'EOF'
+reject explicit-type-args-multi E2035 seed-gap <<'EOF'
 fn pairup[A, B](a: A, b: B) -> A {
 	return a
 }
@@ -1106,7 +1106,7 @@ EOF
 #
 # The third is the one that was not refused at all. `spec Buf { SIZE := 4096 }` was accepted
 # in silence and the member vanished: no impl had to supply it, and nothing said so.
-reject associated-type-in-a-spec E230 seed-gap <<'EOF'
+reject associated-type-in-a-spec E2011 seed-gap <<'EOF'
 spec It {
 	type Item
 
@@ -1118,7 +1118,7 @@ fn main() {
 }
 EOF
 
-reject associated-value-in-a-spec E211 seed-gap <<'EOF'
+reject associated-value-in-a-spec E2008 seed-gap <<'EOF'
 spec Bits {
 	BITS: int
 }
@@ -1128,7 +1128,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-member-that-is-not-one E276 <<'EOF'
+reject a-spec-member-that-is-not-one E2036 <<'EOF'
 spec Buf {
 	SIZE := 4096
 	fn f()
@@ -1145,7 +1145,7 @@ EOF
 # and an impl belongs with one of the two.
 #
 # It is the first case here that needs TWO FILES, which is why `reject` learned to split one.
-reject an-orphan-impl E277 <<'EOF'
+reject an-orphan-impl E2037 <<'EOF'
 import "far"
 
 impl Show for P {
@@ -1171,7 +1171,7 @@ EOF
 # THE REWRITE DOES NOT EXIST — which is the whole test a decorator has to pass here. A method
 # taking `This` would have to match the other argument too, and nothing says the two arms
 # agree; a variant with no payload has nothing to delegate to.
-reject derive-delegation-with-a-self-parameter E278 <<'EOF'
+reject derive-delegation-with-a-self-parameter E2038 <<'EOF'
 spec Show {
 	fn show() -> str
 	fn same(o: This) -> bool
@@ -1201,7 +1201,7 @@ fn main() {
 }
 EOF
 
-reject derive-delegation-over-a-bare-variant E279 <<'EOF'
+reject derive-delegation-over-a-bare-variant E2039 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1229,7 +1229,7 @@ EOF
 
 # and the OTHER half of derive is unchanged: on a struct the generated code is read out of
 # the type's STRUCTURE, which only compiler-owned code may do.
-reject derive-a-user-spec-on-a-struct E437 <<'EOF'
+reject derive-a-user-spec-on-a-struct E4024 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1248,7 +1248,7 @@ EOF
 # `mut fn` would write through a COPY, so the write reaches nothing anybody can read; a
 # method taking `This` needs the type an object has forgotten, which is what the enum
 # delegation is for; and a `spec` is the only thing with methods to hold as values.
-reject obj-on-a-mut-method E281 <<'EOF'
+reject obj-on-a-mut-method E2041 <<'EOF'
 #[obj]
 spec Draw {
 	mut fn bump()
@@ -1259,7 +1259,7 @@ fn main() {
 }
 EOF
 
-reject obj-with-a-self-parameter E282 <<'EOF'
+reject obj-with-a-self-parameter E2042 <<'EOF'
 #[obj]
 spec Draw {
 	fn same(o: This) -> bool
@@ -1270,7 +1270,7 @@ fn main() {
 }
 EOF
 
-reject obj-on-something-that-is-not-a-spec E280 <<'EOF'
+reject obj-on-something-that-is-not-a-spec E2040 <<'EOF'
 #[obj]
 struct P {
 	pub x: int
@@ -1282,7 +1282,7 @@ fn main() {
 EOF
 
 # and its mirror: a `spec` has no structure for a derive to read.
-reject derive-on-a-spec E283 seed-gap <<'EOF'
+reject derive-on-a-spec E2043 seed-gap <<'EOF'
 #[derive(Eq)]
 spec Draw {
 	fn draw() -> str
@@ -1306,7 +1306,7 @@ EOF
 # language's — a `const` is shadow-proof, so a re-declaration may not cross one in either
 # direction, same block included (the const cases above and below).
 
-reject redeclare-plain-then-const-in-one-block E357 <<'EOF'
+reject redeclare-plain-then-const-in-one-block E3055 <<'EOF'
 fn main() {
 	x := 1
 	const x := 2
@@ -1318,7 +1318,7 @@ EOF
 #
 # Zerg has no truthiness. Every form that asks a question asks it of a bool.
 
-reject int-as-if-condition E355 "must be bool, and this one is int" <<'EOF'
+reject int-as-if-condition E3053 "must be bool, and this one is int" <<'EOF'
 fn main() {
 	if 1 {
 		print("yes")
@@ -1326,7 +1326,7 @@ fn main() {
 }
 EOF
 
-reject str-as-if-condition E355 "must be bool, and this one is str" <<'EOF'
+reject str-as-if-condition E3053 "must be bool, and this one is str" <<'EOF'
 fn main() {
 	s := "abc"
 	if s {
@@ -1335,7 +1335,7 @@ fn main() {
 }
 EOF
 
-reject int-as-for-condition E355 'the condition of a `for` must be bool' <<'EOF'
+reject int-as-for-condition E3053 'the condition of a `for` must be bool' <<'EOF'
 fn main() {
 	mut n := 3
 	for n {
@@ -1345,7 +1345,7 @@ fn main() {
 }
 EOF
 
-reject int-as-conditional-return E355 'the condition of a conditional `return` must be bool' <<'EOF'
+reject int-as-conditional-return E3053 'the condition of a conditional `return` must be bool' <<'EOF'
 fn f() -> int {
 	return 1 if 2
 	return 0
@@ -1356,7 +1356,7 @@ fn main() {
 }
 EOF
 
-reject int-as-if-expression-condition E355 'the condition of an `if` expression must be bool' <<'EOF'
+reject int-as-if-expression-condition E3053 'the condition of an `if` expression must be bool' <<'EOF'
 fn main() {
 	x := if 5 {
 		1
@@ -1374,14 +1374,14 @@ EOF
 # 2, `not 1` printed false. A str operand is BOUND first rather than written inline: a
 # quote inside an f-string hole is its own unrelated argument.
 
-reject int-plus-str E345 'operator `+` takes numeric operands' <<'EOF'
+reject int-plus-str E3043 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	s := "s"
 	print(f"{1 + s}")
 }
 EOF
 
-reject str-plus-int E345 'operator `+` takes numeric operands' <<'EOF'
+reject str-plus-int E3043 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	s := "s"
 	print(f"{s + 1}")
@@ -1392,26 +1392,26 @@ EOF
 # arithmetic family — a str is not one. It matters more than the others that this is said:
 # `//` opens a comment in most languages a reader arrives from, and silently accepting
 # `a // b` on two strings would be the worst possible way to learn that Zerg's is `#`.
-reject floor-div-on-str E345 'operator `//` takes numeric operands' <<'EOF'
+reject floor-div-on-str E3043 'operator `//` takes numeric operands' <<'EOF'
 fn main() {
 	s := "s"
 	print s // s
 }
 EOF
 
-reject bool-plus-int E345 'operator `+` takes numeric operands' <<'EOF'
+reject bool-plus-int E3043 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	print(f"{true + 1}")
 }
 EOF
 
-reject int-as-logical-operand E343 <<'EOF'
+reject int-as-logical-operand E3041 <<'EOF'
 fn main() {
 	print(f"{1 and 2}")
 }
 EOF
 
-reject order-int-against-str E346 <<'EOF'
+reject order-int-against-str E3044 <<'EOF'
 fn main() {
 	s := "s"
 	print(f"{1 < s}")
@@ -1423,7 +1423,7 @@ EOF
 # door among the not-yet-built forms, asserting a `NotImplemented` the EMITTER raised — and a
 # raise ends the run, so those words replaced this rule's on every program that hit both. The
 # rule that answers is this one, and it always was.
-reject order-a-struct-that-has-eq E346 'and these are P and P' <<'EOF'
+reject order-a-struct-that-has-eq E3044 'and these are P and P' <<'EOF'
 #[derive(Eq)]
 struct P {
 	pub x: int
@@ -1434,7 +1434,7 @@ fn main() {
 }
 EOF
 
-reject compare-int-with-str E348 <<'EOF'
+reject compare-int-with-str E3046 <<'EOF'
 fn main() {
 	s := "s"
 	print(f"{1 == s}")
@@ -1452,7 +1452,7 @@ EOF
 # list of other elements, a function against a function of another signature. The seed has
 # refused all four since it had a semantic pass, with the same words minus the code.
 
-reject compare-two-different-tuples E348 'cannot compare (int, int) and (str, str)' <<'EOF'
+reject compare-two-different-tuples E3046 'cannot compare (int, int) and (str, str)' <<'EOF'
 fn main() {
 	t := (1, 2)
 	u := ("a", "b")
@@ -1460,7 +1460,7 @@ fn main() {
 }
 EOF
 
-reject compare-two-different-maps E348 'cannot compare map[str, int] and map[str, str]' <<'EOF'
+reject compare-two-different-maps E3046 'cannot compare map[str, int] and map[str, str]' <<'EOF'
 fn main() {
 	a: map[str, int] = {"x": 1}
 	b: map[str, str] = {"x": "y"}
@@ -1468,7 +1468,7 @@ fn main() {
 }
 EOF
 
-reject compare-two-different-lists E348 'cannot compare list[int] and list[str]' <<'EOF'
+reject compare-two-different-lists E3046 'cannot compare list[int] and list[str]' <<'EOF'
 fn main() {
 	xs := [1, 2]
 	ys := ["a"]
@@ -1476,7 +1476,7 @@ fn main() {
 }
 EOF
 
-reject compare-two-different-fns E348 'cannot compare fn(int) -> int and fn(str) -> str' <<'EOF'
+reject compare-two-different-fns E3046 'cannot compare fn(int) -> int and fn(str) -> str' <<'EOF'
 fn takes_int(x: int) -> int {
 	return x
 }
@@ -1492,7 +1492,7 @@ fn main() {
 }
 EOF
 
-reject add-an-int-to-a-uint E353 <<'EOF'
+reject add-an-int-to-a-uint E3051 <<'EOF'
 fn main() {
 	i: int = 3
 	u: uint = 5
@@ -1500,7 +1500,7 @@ fn main() {
 }
 EOF
 
-reject compare-an-int-with-a-uint E353 <<'EOF'
+reject compare-an-int-with-a-uint E3051 <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1
@@ -1508,7 +1508,7 @@ fn main() {
 }
 EOF
 
-reject equate-an-int-with-a-uint E353 <<'EOF'
+reject equate-an-int-with-a-uint E3051 <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1
@@ -1516,26 +1516,26 @@ fn main() {
 }
 EOF
 
-reject bitwise-on-float E344 <<'EOF'
+reject bitwise-on-float E3042 <<'EOF'
 fn main() {
 	print(f"{3.0 & 1}")
 }
 EOF
 
-reject bitwise-on-bool E344 <<'EOF'
+reject bitwise-on-bool E3042 <<'EOF'
 fn main() {
 	print(f"{true & 1}")
 }
 EOF
 
-reject negate-a-str E351 <<'EOF'
+reject negate-a-str E3049 <<'EOF'
 fn main() {
 	s := "a"
 	print(f"{-s}")
 }
 EOF
 
-reject not-an-int E350 <<'EOF'
+reject not-an-int E3048 <<'EOF'
 fn main() {
 	print(f"{not 1}")
 }
@@ -1556,35 +1556,35 @@ EOF
 # ones are below — a binding, an assignment, a return and an argument, because a rule that
 # holds in one slot and not the others is the shape this whole rule set exists to catch.
 
-reject bind-str-to-int E335 'cannot bind str to a int binding' <<'EOF'
+reject bind-str-to-int E3033 'cannot bind str to a int binding' <<'EOF'
 fn main() {
 	x: int = "hello"
 	print(f"{x}")
 }
 EOF
 
-reject bind-int-to-bool E335 'cannot bind int to a bool binding' <<'EOF'
+reject bind-int-to-bool E3033 'cannot bind int to a bool binding' <<'EOF'
 fn main() {
 	b: bool = 1
 	print(f"{b}")
 }
 EOF
 
-reject bind-float-to-int E335 'cannot bind float to a int binding' <<'EOF'
+reject bind-float-to-int E3033 'cannot bind float to a int binding' <<'EOF'
 fn main() {
 	x: int = 1.5
 	print(f"{x}")
 }
 EOF
 
-reject bind-int-list-to-str-list E329 <<'EOF'
+reject bind-int-list-to-str-list E3028 <<'EOF'
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
 }
 EOF
 
-reject typedef-value-into-its-underlying E340 'argument 1 of `f` is int, and this gives Celsius' <<'EOF'
+reject typedef-value-into-its-underlying E3038 'argument 1 of `f` is int, and this gives Celsius' <<'EOF'
 type Celsius = int
 
 fn f(n: int) -> int {
@@ -1596,7 +1596,7 @@ fn main() {
 }
 EOF
 
-reject logical-operator-on-a-typedef E342 'has no meaning on Flag and Flag' <<'EOF'
+reject logical-operator-on-a-typedef E3040 'has no meaning on Flag and Flag' <<'EOF'
 type Flag = bool
 
 fn main() {
@@ -1606,7 +1606,7 @@ fn main() {
 }
 EOF
 
-reject bitwise-operator-on-a-typedef E342 'has no meaning on Mask and int' <<'EOF'
+reject bitwise-operator-on-a-typedef E3040 'has no meaning on Mask and int' <<'EOF'
 type Mask = int
 
 fn main() {
@@ -1615,7 +1615,7 @@ fn main() {
 }
 EOF
 
-reject prefix-operator-on-a-typedef E349 <<'EOF'
+reject prefix-operator-on-a-typedef E3047 <<'EOF'
 type Flag = bool
 
 fn main() {
@@ -1624,7 +1624,7 @@ fn main() {
 }
 EOF
 
-reject arithmetic-on-a-typedef E342 <<'EOF'
+reject arithmetic-on-a-typedef E3040 <<'EOF'
 type Celsius = int
 
 fn main() {
@@ -1633,7 +1633,7 @@ fn main() {
 }
 EOF
 
-reject typedef-declared-twice E382 seed-gap <<'EOF'
+reject typedef-declared-twice E3078 seed-gap <<'EOF'
 type Celsius = int
 type Celsius = float
 
@@ -1642,7 +1642,7 @@ fn main() {
 }
 EOF
 
-reject typedef-over-an-undeclared-type E337 <<'EOF'
+reject typedef-over-an-undeclared-type E3035 <<'EOF'
 type Celsius = Nope
 
 fn main() {
@@ -1650,7 +1650,7 @@ fn main() {
 }
 EOF
 
-reject typedef-conversion-takes-one-value E366 <<'EOF'
+reject typedef-conversion-takes-one-value E3064 <<'EOF'
 type Celsius = int
 
 fn main() {
@@ -1658,7 +1658,7 @@ fn main() {
 }
 EOF
 
-reject str-sent-on-an-int-channel E338 'the value sent on this channel is int' <<'EOF'
+reject str-sent-on-an-int-channel E3036 'the value sent on this channel is int' <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	ch <- "hi"
@@ -1666,7 +1666,7 @@ fn main() {
 }
 EOF
 
-reject str-appended-to-an-int-list E338 'the element `append` adds is int' <<'EOF'
+reject str-appended-to-an-int-list E3036 'the element `append` adds is int' <<'EOF'
 fn main() {
 	mut xs: list[int] = []
 	xs.append("hi")
@@ -1674,7 +1674,7 @@ fn main() {
 }
 EOF
 
-reject str-written-into-an-int-map E338 'the value written into this map is int' <<'EOF'
+reject str-written-into-an-int-map E3036 'the value written into this map is int' <<'EOF'
 fn main() {
 	mut m: map[str, int] = {:}
 	m["a"] = "hi"
@@ -1682,21 +1682,21 @@ fn main() {
 }
 EOF
 
-reject str-among-a-map-literals-ints E338 'a value of this map literal is int' <<'EOF'
+reject str-among-a-map-literals-ints E3036 'a value of this map literal is int' <<'EOF'
 fn main() {
 	m := {"a": 1, "b": "hi"}
 	print(f"{m.len()}")
 }
 EOF
 
-reject str-as-an-int-coalesce-fallback E338 'the `??` fallback is int' <<'EOF'
+reject str-as-an-int-coalesce-fallback E3036 'the `??` fallback is int' <<'EOF'
 fn main() {
 	x: int? = 1
 	print(f"{x ?? "no"}")
 }
 EOF
 
-reject str-into-an-int-variant-payload E338 'payload 1 of `Line` is int' <<'EOF'
+reject str-into-an-int-variant-payload E3036 'payload 1 of `Line` is int' <<'EOF'
 enum Shape {
 	Line(int)
 }
@@ -1710,7 +1710,7 @@ fn main() {
 }
 EOF
 
-reject str-into-an-int-struct-field E338 'the field `x` of `P` is int, and this gives str' <<'EOF'
+reject str-into-an-int-struct-field E3036 'the field `x` of `P` is int, and this gives str' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -1721,7 +1721,7 @@ fn main() {
 }
 EOF
 
-reject oversized-literal-into-a-byte-struct-field E330 '`300` is not a value a byte holds' <<'EOF'
+reject oversized-literal-into-a-byte-struct-field E3029 '`300` is not a value a byte holds' <<'EOF'
 struct P {
 	pub x: byte
 }
@@ -1732,14 +1732,14 @@ fn main() {
 }
 EOF
 
-reject bind-oversized-literal-to-byte E330 '`300` is not a value a byte holds' <<'EOF'
+reject bind-oversized-literal-to-byte E3029 '`300` is not a value a byte holds' <<'EOF'
 fn main() {
 	b: byte = 300
 	print(f"{b}")
 }
 EOF
 
-reject bind-negative-literal-to-uint E330 '`-1` is not a value a uint holds' <<'EOF'
+reject bind-negative-literal-to-uint E3029 '`-1` is not a value a uint holds' <<'EOF'
 fn main() {
 	u: uint = -1
 	print(f"{u}")
@@ -1753,10 +1753,10 @@ EOF
 # WHAT IS PINNED HERE IS `zerg`'s CONTRACT, and only `zerg`'s. It needs no `seed-gap` because the
 # seed refuses the program too — but for a different reason, and the difference is worth writing
 # down rather than letting the shared exit status imply agreement. `zerg` substitutes and then
-# reports `E330` against the `byte` it substituted; the seed says `cannot bind int to a T binding`,
+# reports `E3029` against the `byte` it substituted; the seed says `cannot bind int to a T binding`,
 # which is the whole FORM turned away with no substitution having happened. The harness only asks
 # the seed to say no, so the case is honest; the seed is not evidence for the rule.
-reject oversized-literal-in-a-specialization E330 '`300` is not a value a byte holds' <<'EOF'
+reject oversized-literal-in-a-specialization E3029 '`300` is not a value a byte holds' <<'EOF'
 fn hold[T](v: T) -> T {
 	y: T = 300
 	return v
@@ -1780,14 +1780,14 @@ EOF
 # and raises where it runs. Where the line ENDS is held by test-data/codegen/conv_const_line.zg,
 # because a rule that only ever appears here is a rule nobody has watched stop.
 
-reject oversized-binding-converted E330 '`big`, which is 300' seed-gap <<'EOF'
+reject oversized-binding-converted E3029 '`big`, which is 300' seed-gap <<'EOF'
 fn main() {
 	big := 300
 	print(f"{int(byte(big))}")
 }
 EOF
 
-reject oversized-const-converted E330 '`N`, which is 300' seed-gap <<'EOF'
+reject oversized-const-converted E3029 '`N`, which is 300' seed-gap <<'EOF'
 const N := 300
 
 fn main() {
@@ -1798,7 +1798,7 @@ EOF
 # The sentence is pinned because it is the one that must NOT quote `300`: nothing on this line
 # says 300, and a reader shown it in backticks goes looking for it. A name can be quoted — it is
 # written — and the two cases above pin that half.
-reject oversized-const-arithmetic-converted E330 'this expression, whose value is 300' seed-gap <<'EOF'
+reject oversized-const-arithmetic-converted E3029 'this expression, whose value is 300' seed-gap <<'EOF'
 const N := 100
 
 fn main() {
@@ -1812,95 +1812,95 @@ EOF
 # every one of them has on a side. A pair that is not on it is not a conversion this
 # language has, and the two ways to be off the table read differently:
 #
-#   E394  the source is a FLOAT. Dropping a fraction is a decision, not a step, so it is
+#   E3090  the source is a FLOAT. Dropping a fraction is a decision, not a step, so it is
 #         spelled with a verb — `math.trunc` / `floor` / `ceil` / `round`, each answering
 #         an `int` — and there is no second conversion to send a reader to.
-#   E395  any other absent pair, which is the two steps through `int` written as one.
+#   E3091  any other absent pair, which is the two steps through `int` written as one.
 #
 # Every case here is `seed-gap`. The seed lowers a conversion by SHAPE, and a shape has an
 # answer for every pair of scalars; this is a chapter where `zerg` is the stricter compiler.
 
-reject int-of-a-float E394 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject int-of-a-float E3090 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	print(f"{int(1.9)}")
 }
 EOF
 
-reject byte-of-a-float E394 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject byte-of-a-float E3090 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	print(f"{int(byte(3.5))}")
 }
 EOF
 
-reject uint-of-a-float E394 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject uint-of-a-float E3090 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	print(f"{int(uint(3.5))}")
 }
 EOF
 
-reject rune-of-a-float E394 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject rune-of-a-float E3090 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	print(f"{int(rune(65.5))}")
 }
 EOF
 
-reject float-of-a-byte E395 '`byte` -> `float`' seed-gap <<'EOF'
+reject float-of-a-byte E3091 '`byte` -> `float`' seed-gap <<'EOF'
 fn main() {
 	b: byte = 65
 	print(f"{float(b)}")
 }
 EOF
 
-reject rune-of-a-byte E395 '`byte` -> `rune`' seed-gap <<'EOF'
+reject rune-of-a-byte E3091 '`byte` -> `rune`' seed-gap <<'EOF'
 fn main() {
 	b: byte = 65
 	print(f"{int(rune(b))}")
 }
 EOF
 
-reject uint-of-a-byte E395 '`byte` -> `uint`' seed-gap <<'EOF'
+reject uint-of-a-byte E3091 '`byte` -> `uint`' seed-gap <<'EOF'
 fn main() {
 	b: byte = 65
 	print(f"{int(uint(b))}")
 }
 EOF
 
-reject byte-of-a-uint E395 '`uint` -> `byte`' seed-gap <<'EOF'
+reject byte-of-a-uint E3091 '`uint` -> `byte`' seed-gap <<'EOF'
 fn main() {
 	u: uint = 65
 	print(f"{int(byte(u))}")
 }
 EOF
 
-reject rune-of-a-uint E395 '`uint` -> `rune`' seed-gap <<'EOF'
+reject rune-of-a-uint E3091 '`uint` -> `rune`' seed-gap <<'EOF'
 fn main() {
 	u: uint = 65
 	print(f"{int(rune(u))}")
 }
 EOF
 
-reject float-of-a-uint E395 '`uint` -> `float`' seed-gap <<'EOF'
+reject float-of-a-uint E3091 '`uint` -> `float`' seed-gap <<'EOF'
 fn main() {
 	u: uint = 65
 	print(f"{float(u)}")
 }
 EOF
 
-reject byte-of-a-rune E395 '`rune` -> `byte`' seed-gap <<'EOF'
+reject byte-of-a-rune E3091 '`rune` -> `byte`' seed-gap <<'EOF'
 fn main() {
 	r: rune = 'A'
 	print(f"{int(byte(r))}")
 }
 EOF
 
-reject uint-of-a-rune E395 '`rune` -> `uint`' seed-gap <<'EOF'
+reject uint-of-a-rune E3091 '`rune` -> `uint`' seed-gap <<'EOF'
 fn main() {
 	r: rune = 'A'
 	print(f"{int(uint(r))}")
 }
 EOF
 
-reject float-of-a-rune E395 '`rune` -> `float`' seed-gap <<'EOF'
+reject float-of-a-rune E3091 '`rune` -> `float`' seed-gap <<'EOF'
 fn main() {
 	r: rune = 'A'
 	print(f"{float(r)}")
@@ -1910,31 +1910,31 @@ EOF
 # THE SOURCE IS A BINDING and not a literal, which is the same rule reached down the other
 # path. A written `1.9` is a literal tree, and the folding rule types it from the position it
 # stands in before this rule ever looks; a `float` binding arrives already typed. The four
-# cases above are all literals, so the whole of E394 rested on one of its two approaches —
+# cases above are all literals, so the whole of E3090 rested on one of its two approaches —
 # and the half nobody wrote a case for is the half a change to constant folding moves.
 
-reject int-of-a-float-binding E394 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject int-of-a-float-binding E3090 '`int(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	f: float = 1.9
 	print(f"{int(f)}")
 }
 EOF
 
-reject byte-of-a-float-binding E394 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject byte-of-a-float-binding E3090 '`byte(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	f: float = 3.5
 	print(f"{int(byte(f))}")
 }
 EOF
 
-reject uint-of-a-float-binding E394 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject uint-of-a-float-binding E3090 '`uint(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	f: float = 3.5
 	print(f"{int(uint(f))}")
 }
 EOF
 
-reject rune-of-a-float-binding E394 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
+reject rune-of-a-float-binding E3090 '`rune(…)` drops the fraction of a `float`' seed-gap <<'EOF'
 fn main() {
 	f: float = 65.5
 	print(f"{int(rune(f))}")
@@ -1951,7 +1951,7 @@ EOF
 # `fn __my_helper()` is an ordinary declaration; the first cut of this rule refused it, which is a
 # legal program turned away and exactly what this list must not grow. There is a codegen case for
 # that spelling, because a narrowing nobody exercises is a narrowing nobody checks.
-reject an-unknown-compiler-primitive E396 <<'EOF'
+reject an-unknown-compiler-primitive E3092 <<'EOF'
 fn main() {
 	__zrt_trunk(1.5)
 }
@@ -1960,13 +1960,13 @@ EOF
 # The NAME being in the set does not make the CALL one. Arity was one half escaping: the emitter
 # wrote the operands out as given, so `__zrt_trunc()` reached clang as a call with no argument,
 # against generated C, with no code and no place.
-reject a-compiler-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
+reject a-compiler-primitive-with-no-argument E3093 'takes 1 argument and this gives 0' <<'EOF'
 fn main() {
 	print __zrt_trunc()
 }
 EOF
 
-reject a-compiler-primitive-with-too-many-arguments E397 'takes 1 argument and this gives 2' <<'EOF'
+reject a-compiler-primitive-with-too-many-arguments E3093 'takes 1 argument and this gives 2' <<'EOF'
 fn main() {
 	print __zrt_trunc(1.5, 2.5)
 }
@@ -1979,13 +1979,13 @@ EOF
 #
 # Both carry `seed-gap`. The seed has the machinery — `unaryIntrinsic(n, Float, Int)` names the
 # argument type — and it does not fire, so it builds the bool and hands the str to cc.
-reject a-compiler-primitive-given-a-bool E398 'is float, and this gives bool' seed-gap <<'EOF'
+reject a-compiler-primitive-given-a-bool E3094 'is float, and this gives bool' seed-gap <<'EOF'
 fn main() {
 	print __zrt_trunc(true)
 }
 EOF
 
-reject a-compiler-primitive-given-a-str E398 'is float, and this gives str' seed-gap <<'EOF'
+reject a-compiler-primitive-given-a-str E3094 'is float, and this gives str' seed-gap <<'EOF'
 fn main() {
 	print __zrt_trunc("hello")
 }
@@ -1996,13 +1996,13 @@ EOF
 # a different line from the row that gives it a result type. A leaf added to one and not the
 # other is accepted with the wrong arity or handed the wrong operand, which reaches cc as a
 # diagnostic against a file nobody wrote.
-reject the-newest-primitive-given-a-str E398 'is int, and this gives str' seed-gap <<'EOF'
+reject the-newest-primitive-given-a-str E3094 'is int, and this gives str' seed-gap <<'EOF'
 fn main() {
 	print __zrt_isatty("2")
 }
 EOF
 
-reject the-newest-primitive-with-no-argument E397 'takes 1 argument and this gives 0' <<'EOF'
+reject the-newest-primitive-with-no-argument E3093 'takes 1 argument and this gives 0' <<'EOF'
 fn main() {
 	print __zrt_isatty()
 }
@@ -2017,19 +2017,19 @@ EOF
 # The seed grew a `binaryIntrinsic` for the same leaf, and it is the operand half of it that
 # does not fire, exactly as `unaryIntrinsic`'s does not: hence `seed-gap` on the two type cases
 # and not on the arity one.
-reject a-two-operand-primitive-given-one E397 'takes 2 arguments and this gives 1' <<'EOF'
+reject a-two-operand-primitive-given-one E3093 'takes 2 arguments and this gives 1' <<'EOF'
 fn main() {
 	__zrt_set_env("K")
 }
 EOF
 
-reject a-two-operand-primitives-second-operand E398 'operand 2 of the compiler primitive `__zrt_set_env` is str, and this gives int' seed-gap <<'EOF'
+reject a-two-operand-primitives-second-operand E3094 'operand 2 of the compiler primitive `__zrt_set_env` is str, and this gives int' seed-gap <<'EOF'
 fn main() {
 	__zrt_set_env("K", 1)
 }
 EOF
 
-reject the-environment-removal-given-an-int E398 'is str, and this gives int' seed-gap <<'EOF'
+reject the-environment-removal-given-an-int E3094 'is str, and this gives int' seed-gap <<'EOF'
 fn main() {
 	print __zrt_del_env(2)
 }
@@ -2040,7 +2040,7 @@ EOF
 # A signature is a promise. The conditional `return` is here on its own because it takes a
 # different path through the emitter than the plain one.
 
-reject return-str-from-int-fn E333 "this function's answer is int, and this gives str" <<'EOF'
+reject return-str-from-int-fn E3032 "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> int {
 	return "nope"
 }
@@ -2050,7 +2050,7 @@ fn main() {
 }
 EOF
 
-reject return-int-from-bool-fn E333 "this function's answer is bool, and this gives int" <<'EOF'
+reject return-int-from-bool-fn E3032 "this function's answer is bool, and this gives int" <<'EOF'
 fn f() -> bool {
 	return 1
 }
@@ -2060,7 +2060,7 @@ fn main() {
 }
 EOF
 
-reject conditional-return-wrong-type E333 "this function's answer is int, and this gives str" <<'EOF'
+reject conditional-return-wrong-type E3032 "this function's answer is int, and this gives str" <<'EOF'
 fn f(n: int) -> int {
 	return "x" if n > 0
 	return 0
@@ -2080,7 +2080,7 @@ EOF
 # call is measured against is shifted by one — and the message says `P.add`, which is what
 # was written, not the `P#add` the signature table keys on.
 
-reject call-with-too-few-arguments E328 '`add` needs 2 arguments and this gives 1' <<'EOF'
+reject call-with-too-few-arguments E3027 '`add` needs 2 arguments and this gives 1' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -2090,7 +2090,7 @@ fn main() {
 }
 EOF
 
-reject call-with-too-many-arguments E327 '`add` takes 2 arguments and this gives 3' <<'EOF'
+reject call-with-too-many-arguments E3026 '`add` takes 2 arguments and this gives 3' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -2100,7 +2100,7 @@ fn main() {
 }
 EOF
 
-reject call-past-a-default E327 '`scale` takes 2 arguments and this gives 3' <<'EOF'
+reject call-past-a-default E3026 '`scale` takes 2 arguments and this gives 3' <<'EOF'
 fn scale(n: int, by: int = 2) -> int {
 	return n * by
 }
@@ -2110,7 +2110,7 @@ fn main() {
 }
 EOF
 
-reject method-with-too-many-arguments E327 '`P.add` takes 2 arguments and this gives 3' <<'EOF'
+reject method-with-too-many-arguments E3026 '`P.add` takes 2 arguments and this gives 3' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2133,7 +2133,7 @@ EOF
 # written, so the parameter index and the argument's place on the line differ by one, and
 # the message says the one the reader can count.
 
-reject float-argument-into-int-parameter E340 'argument 1 of `f` is int, and this gives float' <<'EOF'
+reject float-argument-into-int-parameter E3038 'argument 1 of `f` is int, and this gives float' <<'EOF'
 fn f(a: int) -> int {
 	return a
 }
@@ -2143,7 +2143,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-int-parameter E340 'argument 2 of `add` is int, and this gives str' <<'EOF'
+reject str-argument-into-int-parameter E3038 'argument 2 of `add` is int, and this gives str' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -2154,7 +2154,7 @@ fn main() {
 }
 EOF
 
-reject str-argument-into-a-method E340 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
+reject str-argument-into-a-method E3038 'argument 1 of `P.add` is int, and this gives str' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2181,7 +2181,7 @@ EOF
 # value enters: `mut b: bool = true` then `b = 1` is the declaration bug one statement
 # later, and the rule set had covered the other three.
 
-reject int-as-match-arm-guard E355 "the condition of a match arm's guard must be bool" <<'EOF'
+reject int-as-match-arm-guard E3053 "the condition of a match arm's guard must be bool" <<'EOF'
 fn main() {
 	n := 1
 	print(match n {
@@ -2191,13 +2191,13 @@ fn main() {
 }
 EOF
 
-reject wrapping-operator-on-a-bool E345 'operator `+%` takes numeric operands' <<'EOF'
+reject wrapping-operator-on-a-bool E3043 'operator `+%` takes numeric operands' <<'EOF'
 fn main() {
 	print(f"{true +% 1}")
 }
 EOF
 
-reject assign-int-to-a-bool-binding E339 'cannot assign int to `b`, which holds bool' <<'EOF'
+reject assign-int-to-a-bool-binding E3037 'cannot assign int to `b`, which holds bool' <<'EOF'
 fn main() {
 	mut b: bool = true
 	b = 1
@@ -2205,7 +2205,7 @@ fn main() {
 }
 EOF
 
-reject assign-str-to-an-int-field E339 'cannot assign str to that part of `p`, which holds int' <<'EOF'
+reject assign-str-to-an-int-field E3037 'cannot assign str to that part of `p`, which holds int' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2226,7 +2226,7 @@ EOF
 # could not: two unrelated structs through all three slots, and a nested list whose
 # elements differ two levels down.
 
-reject bind-a-struct-to-another-struct E335 'cannot bind B to a A binding' <<'EOF'
+reject bind-a-struct-to-another-struct E3033 'cannot bind B to a A binding' <<'EOF'
 struct A {
 	pub x: int
 }
@@ -2241,7 +2241,7 @@ fn main() {
 }
 EOF
 
-reject pass-a-struct-where-another-goes E340 'argument 1 of `take` is A, and this gives B' <<'EOF'
+reject pass-a-struct-where-another-goes E3038 'argument 1 of `take` is A, and this gives B' <<'EOF'
 struct A {
 	pub x: int
 }
@@ -2259,7 +2259,7 @@ fn main() {
 }
 EOF
 
-reject return-a-struct-the-signature-does-not-name E333 "this function's answer is A, and this gives B" <<'EOF'
+reject return-a-struct-the-signature-does-not-name E3032 "this function's answer is A, and this gives B" <<'EOF'
 struct A {
 	pub x: int
 }
@@ -2277,7 +2277,7 @@ fn main() {
 }
 EOF
 
-reject bind-a-nested-list-of-the-wrong-element E329 <<'EOF'
+reject bind-a-nested-list-of-the-wrong-element E3028 <<'EOF'
 fn main() {
 	xs: list[list[str]] = [[1]]
 	print(f"{xs.len()}")
@@ -2294,28 +2294,28 @@ EOF
 # `b'ba'` is here beside `'ba'` because a bad rune literal used to leave the lexer standing
 # INSIDE it, and the surviving quote opened a second one — one mistake, two messages.
 
-reject rune-with-two-characters E103 <<'EOF'
+reject rune-with-two-characters E1003 <<'EOF'
 fn main() {
 	c := 'ba'
 	print(f"{c}")
 }
 EOF
 
-reject byte-with-two-characters E103 <<'EOF'
+reject byte-with-two-characters E1003 <<'EOF'
 fn main() {
 	c := b'ba'
 	print(f"{c}")
 }
 EOF
 
-reject string-that-never-closes E101 <<'EOF'
+reject string-that-never-closes E1001 <<'EOF'
 fn main() {
 	s := "no closing quote
 	print(s)
 }
 EOF
 
-reject a-character-no-token-uses E104 <<'EOF'
+reject a-character-no-token-uses E1004 <<'EOF'
 fn main() {
 	x := 1 @ 2
 	print(f"{x}")
@@ -2326,13 +2326,13 @@ EOF
 # letters, digits and `_` and nothing else, so a character outside a string, a rune or a
 # comment is the same lexical error `@` is — and this used to KILL the compiler instead:
 # `EncodingError: bytes are not valid UTF-8 for a str`, an uncaught runtime abort with no
-# code, no place and no form named. The lexer had reached its own E104 and then built the
+# code, no place and no form named. The lexer had reached its own E1004 and then built the
 # diagnostic's lexeme out of ONE byte of a three-byte character.
 #
 # It is in the reject list rather than the refuse list because no future feature makes it
 # legal: `GRAMMAR#letter` says the source is UTF-8, which is what lets this character be WRITTEN
 # in a comment or a literal, and identifier says which characters can spell a name.
-reject a-character-that-is-not-ascii E104 <<'EOF'
+reject a-character-that-is-not-ascii E1004 <<'EOF'
 fn main() {
 	x := 1
 	print 值
@@ -2355,13 +2355,13 @@ EOF
 # `seed-gap`: the seed is byte-oriented and has no str invariant to violate, so it emits
 # `"\377"` into the C and answers nothing at all — the one direction where zerg is the
 # stricter compiler on an encoding.
-reject a-source-file-that-is-not-utf8 E111 no-place seed-gap <<EOF
+reject a-source-file-that-is-not-utf8 E1011 no-place seed-gap <<EOF
 fn main() {
 	print "$(printf '\377')"
 }
 EOF
 
-reject based-number-with-no-digits E108 <<'EOF'
+reject based-number-with-no-digits E1008 <<'EOF'
 fn main() {
 	n := 0x
 	print(f"{n}")
@@ -2378,7 +2378,7 @@ EOF
 # `0x__1F` are all the same question asked at the same place — is the byte after the prefix a
 # digit — and differ only in which `based_valid` they ask it with; the seed has answered no to
 # all four since it was written, and it is the oracle here.
-reject based-number-with-a-leading-underscore E108 <<'EOF'
+reject based-number-with-a-leading-underscore E1008 <<'EOF'
 fn main() {
 	n := 0x_1F
 	print(f"{n}")
@@ -2395,49 +2395,49 @@ EOF
 # through the decoder and its callers; the shapes that share one (`b'\xz1'`, `'\x41'`,
 # `'\u{41'`) are the same fix and ride on these.
 
-reject byte-escape-with-non-hex-digits E109 'invalid escape in a byte literal' <<'EOF'
+reject byte-escape-with-non-hex-digits E1009 'invalid escape in a byte literal' <<'EOF'
 fn main() {
 	print(int(b'\xzz'))
 }
 EOF
 
-reject byte-escape-with-one-hex-digit E109 'invalid escape in a byte literal' <<'EOF'
+reject byte-escape-with-one-hex-digit E1009 'invalid escape in a byte literal' <<'EOF'
 fn main() {
 	print(int(b'\x1'))
 }
 EOF
 
-reject unicode-escape-in-a-byte-literal E109 'invalid escape in a byte literal' <<'EOF'
+reject unicode-escape-in-a-byte-literal E1009 'invalid escape in a byte literal' <<'EOF'
 fn main() {
 	print(int(b'\u{41}'))
 }
 EOF
 
-reject unknown-escape-in-a-rune-literal E109 'invalid escape in a rune literal' <<'EOF'
+reject unknown-escape-in-a-rune-literal E1009 'invalid escape in a rune literal' <<'EOF'
 fn main() {
 	print(int('\q'))
 }
 EOF
 
-reject unicode-escape-with-no-digits E109 'invalid escape in a rune literal' <<'EOF'
+reject unicode-escape-with-no-digits E1009 'invalid escape in a rune literal' <<'EOF'
 fn main() {
 	print(int('\u{}'))
 }
 EOF
 
-reject unicode-escape-without-braces E109 'invalid escape in a rune literal' <<'EOF'
+reject unicode-escape-without-braces E1009 'invalid escape in a rune literal' <<'EOF'
 fn main() {
 	print(int('\u41'))
 }
 EOF
 
-reject unknown-escape-in-a-string E109 'invalid escape in a string literal' <<'EOF'
+reject unknown-escape-in-a-string E1009 'invalid escape in a string literal' <<'EOF'
 fn main() {
 	print("a\qb")
 }
 EOF
 
-reject unknown-escape-in-a-triple-string E109 'invalid escape in a string literal' <<'EOF'
+reject unknown-escape-in-a-triple-string E1009 'invalid escape in a string literal' <<'EOF'
 fn main() {
 	s := """
 a\qb
@@ -2446,7 +2446,7 @@ a\qb
 }
 EOF
 
-reject string-that-spells-a-nul E110 <<'EOF'
+reject string-that-spells-a-nul E1010 <<'EOF'
 fn main() {
 	print("a\0b")
 }
@@ -2460,21 +2460,21 @@ EOF
 # every other call is measured — and they are the two forms whose bad arguments are
 # hardest to read back from generated C, since the call cc sees is a thunk.
 
-reject compare-an-optional-with-nil E341 'an optional is not an operand of `==`' <<'EOF'
+reject compare-an-optional-with-nil E3039 'an optional is not an operand of `==`' <<'EOF'
 fn main() {
 	x: int? = nil
 	print(f"{x == nil}")
 }
 EOF
 
-reject compare-an-optional-with-a-value E341 'an optional is not an operand of `==`' <<'EOF'
+reject compare-an-optional-with-a-value E3039 'an optional is not an operand of `==`' <<'EOF'
 fn main() {
 	x: int? = 1
 	print(f"{x == 1}")
 }
 EOF
 
-reject spawn-with-too-few-arguments E328 '`work` needs 2 arguments and this gives 1' <<'EOF'
+reject spawn-with-too-few-arguments E3027 '`work` needs 2 arguments and this gives 1' <<'EOF'
 fn work(a: int, b: int) {
 	print(f"{a + b}")
 }
@@ -2484,7 +2484,7 @@ fn main() {
 }
 EOF
 
-reject defer-with-the-wrong-argument-type E340 'argument 1 of `note` is str, and this gives int' <<'EOF'
+reject defer-with-the-wrong-argument-type E3038 'argument 1 of `note` is str, and this gives int' <<'EOF'
 fn note(s: str) {
 	print(s)
 }
@@ -2505,28 +2505,28 @@ EOF
 # a refusal that names the PATTERN rather than the `==` nobody wrote; it lives in
 # refuse-check now.
 
-reject order-an-optional E341 'an optional is not an operand of `>`' <<'EOF'
+reject order-an-optional E3039 'an optional is not an operand of `>`' <<'EOF'
 fn main() {
 	x: int? = 1
 	print(f"{x > 0}")
 }
 EOF
 
-reject add-to-an-optional E341 'an optional is not an operand of `+`' <<'EOF'
+reject add-to-an-optional E3039 'an optional is not an operand of `+`' <<'EOF'
 fn main() {
 	x: int? = 1
 	print(f"{x + 1}")
 }
 EOF
 
-reject and-an-optional E341 'an optional is not an operand of `and`' <<'EOF'
+reject and-an-optional E3039 'an optional is not an operand of `and`' <<'EOF'
 fn main() {
 	x: bool? = true
 	print(f"{x and true}")
 }
 EOF
 
-reject match-an-optional-against-a-range E341 'an optional is not an operand of `>=`' seed-gap <<'EOF'
+reject match-an-optional-against-a-range E3039 'an optional is not an operand of `>=`' seed-gap <<'EOF'
 fn f(x: int?) -> int {
 	return match x {
 		1..=2 => 10
@@ -2545,7 +2545,7 @@ EOF
 # `spawn` refused it in a pass of its own and `defer`, which the same sentence covers,
 # reached cc — so the refusal moved to the choke point both of them share.
 
-reject spawn-captures-a-borrow E312 'is a `mut &` and cannot cross a `spawn`' <<'EOF'
+reject spawn-captures-a-borrow E3011 'is a `mut &` and cannot cross a `spawn`' <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -2557,7 +2557,7 @@ fn main() {
 }
 EOF
 
-reject defer-captures-a-borrow E312 'is a `mut &` and cannot cross a `defer`' seed-gap <<'EOF'
+reject defer-captures-a-borrow E3011 'is a `mut &` and cannot cross a `defer`' seed-gap <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -2577,7 +2577,7 @@ EOF
 # `defer` capture the defaults they backfill, so a bad one was diagnosed only when spawned,
 # with a message naming an argument nobody wrote.
 
-reject a-default-that-does-not-fit E310 seed-gap <<'EOF'
+reject a-default-that-does-not-fit E3009 seed-gap <<'EOF'
 fn f(a: int, b: str = 1) {
 	print(f"{a}{b}")
 }
@@ -2589,7 +2589,7 @@ EOF
 
 # seed-gap: zerg0 accepts this, and a call that USES the default segfaults — it emits the
 # literal where a pointer goes. Recorded in src/bootstrap/README.md.
-reject a-mut-ref-with-a-default E309 seed-gap <<'EOF'
+reject a-mut-ref-with-a-default E3008 seed-gap <<'EOF'
 fn f(a: int, mut &b: int = 0) {
 	b = a
 }
@@ -2599,7 +2599,7 @@ fn main() {
 }
 EOF
 
-reject a-pattern-that-binds-too-much E311 '`Line` carries 1 argument and this pattern binds 2' <<'EOF'
+reject a-pattern-that-binds-too-much E3010 '`Line` carries 1 argument and this pattern binds 2' <<'EOF'
 enum Shape {
 	Line(int)
 	Dot
@@ -2617,7 +2617,7 @@ fn main() {
 }
 EOF
 
-reject a-construction-that-gives-too-few E311 '`Line` carries 2 arguments and this gives 1' <<'EOF'
+reject a-construction-that-gives-too-few E3010 '`Line` carries 2 arguments and this gives 1' <<'EOF'
 enum Shape {
 	Line(int, int)
 	Dot
@@ -2629,7 +2629,7 @@ fn main() {
 }
 EOF
 
-reject a-pattern-that-binds-too-few E311 '`Line` carries 2 arguments and this pattern binds 1' <<'EOF'
+reject a-pattern-that-binds-too-few E3010 '`Line` carries 2 arguments and this pattern binds 1' <<'EOF'
 enum Shape {
 	Line(int, int)
 	Dot
@@ -2647,7 +2647,7 @@ fn main() {
 }
 EOF
 
-reject a-construction-that-gives-too-much E311 '`Line` carries 1 argument and this gives 2' <<'EOF'
+reject a-construction-that-gives-too-much E3010 '`Line` carries 1 argument and this gives 2' <<'EOF'
 enum Shape {
 	Line(int)
 	Dot
@@ -2664,7 +2664,7 @@ EOF
 # A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
 # like one and is not: it lowers to a statement expression, so `&` on it reached cc.
 
-reject a-borrow-of-a-map-index E323 <<'EOF'
+reject a-borrow-of-a-map-index E3022 <<'EOF'
 fn poke(mut &n: int) {
 	n = 5
 }
@@ -2682,7 +2682,7 @@ EOF
 # them stores into a value C has no address for, and cc said "expression is not assignable"
 # about a statement expression this compiler wrote.
 
-reject store-through-a-map-index E313 'cannot store through a map index' <<'EOF'
+reject store-through-a-map-index E3012 'cannot store through a map index' <<'EOF'
 fn main() {
 	mut d: map[str, list[int]] = {"k": [1, 2]}
 	d["k"][0] = 7
@@ -2690,7 +2690,7 @@ fn main() {
 }
 EOF
 
-reject store-through-a-call-result E313 'cannot store through a call result' <<'EOF'
+reject store-through-a-call-result E3012 'cannot store through a call result' <<'EOF'
 fn get() -> list[int] {
 	return [1, 2]
 }
@@ -2706,7 +2706,7 @@ EOF
 # The whole match took its type from the FIRST arm, the only one anything looked at, so a
 # later arm answering something else went to cc — as a WARNING under clang, which links.
 
-reject match-arms-disagree E322 <<'EOF'
+reject match-arms-disagree E3021 <<'EOF'
 fn pick(n: int) -> int {
 	return match n {
 		0 => 1
@@ -2728,7 +2728,7 @@ EOF
 # parameter, a field, a function, a type, a variant, a pattern binding. In a METHOD it
 # reached cc, because the parser has already put a `this` at parameter 0.
 
-reject this-as-a-parameter E245 'is a reserved word and cannot name a parameter' <<'EOF'
+reject this-as-a-parameter E2013 'is a reserved word and cannot name a parameter' <<'EOF'
 fn f(this: int) -> int {
 	return this
 }
@@ -2738,7 +2738,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-method-parameter E245 'is a reserved word and cannot name a parameter' <<'EOF'
+reject this-as-a-method-parameter E2013 'is a reserved word and cannot name a parameter' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2754,7 +2754,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-field E245 'is a reserved word and cannot name a struct field' <<'EOF'
+reject this-as-a-field E2013 'is a reserved word and cannot name a struct field' <<'EOF'
 struct P {
 	pub this: int
 }
@@ -2765,7 +2765,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-function E245 'is a reserved word and cannot name a function' <<'EOF'
+reject this-as-a-function E2013 'is a reserved word and cannot name a function' <<'EOF'
 fn this() -> int {
 	return 1
 }
@@ -2775,7 +2775,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-type E245 'is a reserved word and cannot name a struct' <<'EOF'
+reject this-as-a-type E2013 'is a reserved word and cannot name a struct' <<'EOF'
 struct this {
 	pub x: int
 }
@@ -2785,7 +2785,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-variant E245 'is a reserved word and cannot name an enum variant' <<'EOF'
+reject this-as-a-variant E2013 'is a reserved word and cannot name an enum variant' <<'EOF'
 enum E {
 	this
 	B
@@ -2796,7 +2796,7 @@ fn main() {
 }
 EOF
 
-reject this-as-a-pattern-binding E245 'is a reserved word and cannot name a pattern binding' <<'EOF'
+reject this-as-a-pattern-binding E2013 'is a reserved word and cannot name a pattern binding' <<'EOF'
 enum E {
 	A(int)
 	B
@@ -2819,7 +2819,7 @@ EOF
 #
 # The seed has no reserved-name rule at all for it, which is why these four are marked: it
 # refuses `this` only because its lexer makes that a keyword token, and `This` is not one.
-reject capital-this-as-a-variant E245 'cannot name an enum variant' seed-gap <<'EOF'
+reject capital-this-as-a-variant E2013 'cannot name an enum variant' seed-gap <<'EOF'
 enum E {
 	This
 	B
@@ -2830,7 +2830,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-type E245 'cannot name a struct' seed-gap <<'EOF'
+reject capital-this-as-a-type E2013 'cannot name a struct' seed-gap <<'EOF'
 struct This {
 	pub x: int
 }
@@ -2840,7 +2840,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-function E245 'cannot name a function' seed-gap <<'EOF'
+reject capital-this-as-a-function E2013 'cannot name a function' seed-gap <<'EOF'
 fn This() {
 	print 1
 }
@@ -2850,7 +2850,7 @@ fn main() {
 }
 EOF
 
-reject capital-this-as-a-parameter E245 'cannot name a parameter' seed-gap <<'EOF'
+reject capital-this-as-a-parameter E2013 'cannot name a parameter' seed-gap <<'EOF'
 fn f(This: int) {
 	print This
 }
@@ -2866,7 +2866,7 @@ EOF
 # for `int` at module level while `This` inside an `impl` went on meaning the implementing
 # type — the same word with two meanings in one program, which is exactly what reserving it
 # is for.
-reject capital-this-as-a-type-alias E245 'cannot name a type alias' seed-gap <<'EOF'
+reject capital-this-as-a-type-alias E2013 'cannot name a type alias' seed-gap <<'EOF'
 type This = int
 
 fn main() {
@@ -2874,7 +2874,7 @@ fn main() {
 }
 EOF
 
-reject this-outside-a-method E371 <<'EOF'
+reject this-outside-a-method E3068 <<'EOF'
 fn f() -> int {
 	return this
 }
@@ -2884,7 +2884,7 @@ fn main() {
 }
 EOF
 
-reject self-type-outside-an-impl E364 <<'EOF'
+reject self-type-outside-an-impl E3062 <<'EOF'
 fn f() -> This {
 	return 1
 }
@@ -2901,7 +2901,7 @@ EOF
 # borrow "cannot ALIAS (the same variable to two `mut &` in one call), which keeps it safe
 # with no borrow checker". Only the callee's half was ever read.
 
-reject mut-ref-of-an-immutable E325 'writes back to `k`, which is not `mut`' <<'EOF'
+reject mut-ref-of-an-immutable E3024 'writes back to `k`, which is not `mut`' <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -2913,7 +2913,7 @@ fn main() {
 }
 EOF
 
-reject mut-ref-aliased E326 <<'EOF'
+reject mut-ref-aliased E3025 <<'EOF'
 fn two(mut &a: int, mut &b: int) {
 	a = a + 1
 	b = b + 10
@@ -2926,7 +2926,7 @@ fn main() {
 }
 EOF
 
-reject mut-fn-on-an-immutable-receiver E325 'which is a `mut fn`, writes back to `p`' <<'EOF'
+reject mut-fn-on-an-immutable-receiver E3024 'which is a `mut fn`, writes back to `p`' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -2947,7 +2947,7 @@ EOF
 # GRAMMAR#fn-decl — `mut fn` is meaningful only on a method; "a free function or closure
 # has no receiver, so it is never `mut fn`". The token fell into the top-level skip, so the
 # `mut` was swallowed and the function compiled as if it had never been written.
-reject mut-fn-free-function E251 at=1:1 seed-gap <<'EOF'
+reject mut-fn-free-function E2019 at=1:1 seed-gap <<'EOF'
 mut fn f() -> int {
 	return 1
 }
@@ -2963,7 +2963,7 @@ EOF
 # enum is not a scalar and the equality branch returned early for it, leaving the tags to be
 # compared as whatever C made of them. Both are tag 0.
 
-reject compare-two-enums E347 'cannot compare Color and Fruit' <<'EOF'
+reject compare-two-enums E3045 'cannot compare Color and Fruit' <<'EOF'
 enum Color {
 	Red
 	Green
@@ -2978,7 +2978,7 @@ fn main() {
 }
 EOF
 
-reject compare-an-enum-and-an-int E347 'cannot compare Color and int' <<'EOF'
+reject compare-an-enum-and-an-int E3045 'cannot compare Color and int' <<'EOF'
 enum Color {
 	Red
 	Green
@@ -2990,7 +2990,7 @@ fn main() {
 }
 EOF
 
-reject qualify-with-the-wrong-enum E457 <<'EOF'
+reject qualify-with-the-wrong-enum E4031 <<'EOF'
 enum Color {
 	Red
 }
@@ -3005,7 +3005,7 @@ fn main() {
 }
 EOF
 
-reject qualify-a-name-that-is-not-a-variant E456 <<'EOF'
+reject qualify-a-name-that-is-not-a-variant E4030 <<'EOF'
 enum Color {
 	Red
 }
@@ -3016,12 +3016,12 @@ fn main() {
 }
 EOF
 
-# AND THE SENTENCE HAS TO BE TRUE ABOUT THE PROGRAM. E457 used to read the FLAT variant
+# AND THE SENTENCE HAS TO BE TRUE ABOUT THE PROGRAM. E4031 used to read the FLAT variant
 # table — which enum declares this bare name, program-wide, first — so with two enums that
 # both declare a `Red` it said "`Red` is a variant of `Color`, not of `Fruit`" about a `Fruit`
 # that has one, and the second enum's variant was unreachable. The shared name is in this case
 # on purpose: it is what the rule used to answer from, and the finding is about `Apple`.
-reject qualify-with-the-wrong-enum-of-two-that-share-a-name E457 '`Apple` is a variant of `Fruit`, not of `Color`' <<'EOF'
+reject qualify-with-the-wrong-enum-of-two-that-share-a-name E4031 '`Apple` is a variant of `Fruit`, not of `Color`' <<'EOF'
 enum Color {
 	Red
 	Green
@@ -3045,20 +3045,20 @@ EOF
 # `list[int]()` was worse — the parser indexed an empty argument list, so the COMPILER
 # aborted with its own IndexError, no place and no form named.
 
-reject convert-nothing-to-a-list E260 <<'EOF'
+reject convert-nothing-to-a-list E2028 <<'EOF'
 fn main() {
 	xs := list[int]()
 	print(f"{xs.len()}")
 }
 EOF
 
-reject convert-nothing-to-an-int E258 <<'EOF'
+reject convert-nothing-to-an-int E2026 <<'EOF'
 fn main() {
 	print(f"{int()}")
 }
 EOF
 
-reject convert-two-values E259 <<'EOF'
+reject convert-two-values E2027 <<'EOF'
 fn main() {
 	print(f"{int(1, 2)}")
 }
@@ -3073,19 +3073,19 @@ EOF
 #
 # A composite is not a scalar to re-construct at all, and that one reached cc.
 
-reject parse-a-str-as-a-bool E367 <<'EOF'
+reject parse-a-str-as-a-bool E3065 <<'EOF'
 fn main() {
 	print(f"{bool("1")}")
 }
 EOF
 
-reject parse-a-str-as-a-byte E367 <<'EOF'
+reject parse-a-str-as-a-byte E3065 <<'EOF'
 fn main() {
 	print(f"{byte("65")}")
 }
 EOF
 
-reject convert-a-list-to-an-int E455 <<'EOF'
+reject convert-a-list-to-an-int E4029 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print(f"{int(xs)}")
@@ -3103,7 +3103,7 @@ EOF
 # No emitted byte moved. A valid program never converts a struct, so the differential that
 # accepted that refactor could not have seen it: what a compiler REFUSES is not visible in
 # what it emits.
-reject convert-a-struct-to-an-int E455 <<'EOF'
+reject convert-a-struct-to-an-int E4029 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -3121,25 +3121,25 @@ EOF
 # non-container and let a str through to the LIST path: `s[0]` read a `const char*` as a
 # list header and printed a different number every run, and `s[1..3]` reached cc.
 
-reject index-a-str E320 <<'EOF'
+reject index-a-str E3019 <<'EOF'
 fn main() {
 	s := "hello"
 	print(f"{s[0]}")
 }
 EOF
 
-reject slice-a-str E320 <<'EOF'
+reject slice-a-str E3019 <<'EOF'
 fn main() {
 	s := "hello"
 	print(s[1..3])
 }
 EOF
 
-# THE SAME RULE, SEEN THROUGH `assert` — and the reason the two below are here is not E320
+# THE SAME RULE, SEEN THROUGH `assert` — and the reason the two below are here is not E3019
 # at all. `assert` hoists each operand of its condition into a temporary of its own so that
 # the failure message can report the value without running the condition twice, and a
 # temporary is a binding in the ordinary environment: a rejected operand left it there with
-# no type, every read of it came back _E372 undefined name `zga_l3c9`_, and the reader was
+# no type, every read of it came back _E3069 undefined name `zga_l3c9`_, and the reader was
 # told about a name that appears nowhere in their file. One per conjunct, so an `and` with
 # two bad operands answered with three messages for two mistakes.
 #
@@ -3150,14 +3150,14 @@ EOF
 # (src/bootstrap/README.md) — so its half of this gate is honest about the program and says
 # nothing about the rule. Only `zerg`'s answer is normative here, which is what that split
 # is for.
-reject assert-on-a-str-index E320 one-finding <<'EOF'
+reject assert-on-a-str-index E3019 one-finding <<'EOF'
 fn main() {
 	s := "hello"
 	assert s[0] == 104
 }
 EOF
 
-reject assert-and-on-two-str-indexes E320 one-finding <<'EOF'
+reject assert-and-on-two-str-indexes E3019 one-finding <<'EOF'
 fn main() {
 	s := "hello"
 	t := "world"
@@ -3170,7 +3170,7 @@ EOF
 # therefore silent AND the template won, including against a module: `strconv.to_string` and a
 # local `to_string[T]` are one name here, and the local one answered.
 
-reject generic-shadows-a-plain-function E363 <<'EOF'
+reject generic-shadows-a-plain-function E3061 <<'EOF'
 fn idg[T](x: T) -> T {
 	return x
 }
@@ -3184,7 +3184,7 @@ fn main() {
 }
 EOF
 
-reject generic-declared-twice E362 <<'EOF'
+reject generic-declared-twice E3060 <<'EOF'
 fn idg[T](x: T) -> T {
 	return x
 }
@@ -3205,19 +3205,19 @@ EOF
 # i64 "is still rejected". It was not: the lexer accumulated the digits in a wrapping i64,
 # so three literals gave three wrong numbers with no diagnostic anywhere.
 
-reject int-literal-past-i64 E319 <<'EOF'
+reject int-literal-past-i64 E3018 <<'EOF'
 fn main() {
 	print(f"{9223372036854775808}")
 }
 EOF
 
-reject int-literal-far-past-i64 E319 <<'EOF'
+reject int-literal-far-past-i64 E3018 <<'EOF'
 fn main() {
 	print(f"{99999999999999999999999}")
 }
 EOF
 
-reject hex-literal-past-i64 E319 <<'EOF'
+reject hex-literal-past-i64 E3018 <<'EOF'
 fn main() {
 	print(f"{0xFFFFFFFFFFFFFFFFF}")
 }
@@ -3228,14 +3228,14 @@ EOF
 # surrogates, which are not characters. The second case is the one a width test cannot see —
 # 55296 fits an i32 comfortably, and no rune holds it.
 
-reject rune-literal-past-the-last-code-point E330 'is not a value a rune holds' <<'EOF'
+reject rune-literal-past-the-last-code-point E3029 'is not a value a rune holds' <<'EOF'
 fn main() {
 	r: rune = 1114112
 	print(f"{int(r)}")
 }
 EOF
 
-reject rune-literal-inside-the-surrogates E330 'is not a value a rune holds' <<'EOF'
+reject rune-literal-inside-the-surrogates E3029 'is not a value a rune holds' <<'EOF'
 fn main() {
 	r: rune = 55296
 	print(f"{int(r)}")
@@ -3249,7 +3249,7 @@ EOF
 # nothing at all. This is a LANGUAGE rule and no future feature makes it legal, which is why
 # it lives here and not with the not-yet-built forms next door.
 
-reject impl-misses-a-required-member E318 'does not implement `show`' seed-gap <<'EOF'
+reject impl-misses-a-required-member E3017 'does not implement `show`' seed-gap <<'EOF'
 struct P {
 	pub n: int
 }
@@ -3266,7 +3266,7 @@ fn main() {
 }
 EOF
 
-reject impl-misses-one-of-two E318 'does not implement `tag`' seed-gap <<'EOF'
+reject impl-misses-one-of-two E3017 'does not implement `tag`' seed-gap <<'EOF'
 struct P {
 	pub n: int
 }
@@ -3299,7 +3299,7 @@ EOF
 # Position matters because Zerg has positional calls: if the order were free, every call
 # through a spec would have to be written with named arguments.
 
-reject impl-returns-the-wrong-type E317 'it returns str, and the spec declares int' seed-gap <<'EOF'
+reject impl-returns-the-wrong-type E3016 'it returns str, and the spec declares int' seed-gap <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -3319,7 +3319,7 @@ fn main() {
 }
 EOF
 
-reject impl-takes-the-wrong-count E317 'it takes 0 arguments, and the spec declares 1' seed-gap <<'EOF'
+reject impl-takes-the-wrong-count E3016 'it takes 0 arguments, and the spec declares 1' seed-gap <<'EOF'
 spec Tag {
 	fn tag(n: int) -> int
 }
@@ -3339,7 +3339,7 @@ fn main() {
 }
 EOF
 
-reject impl-renames-a-parameter E317 'a named argument selects by that name' seed-gap <<'EOF'
+reject impl-renames-a-parameter E3016 'a named argument selects by that name' seed-gap <<'EOF'
 spec Tag {
 	fn tag(n: int) -> int
 }
@@ -3359,7 +3359,7 @@ fn main() {
 }
 EOF
 
-reject impl-drops-the-by-ref E317 'is not `mut &` and the spec' seed-gap <<'EOF'
+reject impl-drops-the-by-ref E3016 'is not `mut &` and the spec' seed-gap <<'EOF'
 spec Tag {
 	fn tag(mut &n: int) -> int
 }
@@ -3380,7 +3380,7 @@ fn main() {
 }
 EOF
 
-reject impl-adds-a-default E317 'has a default and the spec declares none' seed-gap <<'EOF'
+reject impl-adds-a-default E3016 'has a default and the spec declares none' seed-gap <<'EOF'
 spec Tag {
 	fn tag(n: int) -> int
 }
@@ -3400,7 +3400,7 @@ fn main() {
 }
 EOF
 
-reject impl-drops-the-mut-fn E317 'it is not a `mut fn` and the spec' seed-gap <<'EOF'
+reject impl-drops-the-mut-fn E3016 'it is not a `mut fn` and the spec' seed-gap <<'EOF'
 spec Bump {
 	mut fn bump() -> int
 }
@@ -3421,7 +3421,7 @@ fn main() {
 }
 EOF
 
-reject impl-adds-a-mut-fn E317 'it is a `mut fn` and the spec' <<'EOF'
+reject impl-adds-a-mut-fn E3016 'it is a `mut fn` and the spec' <<'EOF'
 spec Bump {
 	fn bump() -> int
 }
@@ -3442,7 +3442,7 @@ fn main() {
 }
 EOF
 
-reject impl-breaks-the-self-type E317 'parameter `other` is int, and the spec declares A' seed-gap <<'EOF'
+reject impl-breaks-the-self-type E3016 'parameter `other` is int, and the spec declares A' seed-gap <<'EOF'
 spec Same {
 	fn same(other: This) -> bool
 }
@@ -3462,7 +3462,7 @@ fn main() {
 }
 EOF
 
-reject impl-breaks-a-spec-parameter E317 'parameter `k` is str, and the spec declares int' <<'EOF'
+reject impl-breaks-a-spec-parameter E3016 'parameter `k` is str, and the spec declares int' <<'EOF'
 spec Ix[K] {
 	fn at(k: K) -> int
 }
@@ -3482,7 +3482,7 @@ fn main() {
 }
 EOF
 
-reject super-spec-is-not-satisfied E318 'does not implement `same`, which `Same` requires' <<'EOF'
+reject super-spec-is-not-satisfied E3017 'does not implement `same`, which `Same` requires' <<'EOF'
 spec Same {
 	fn same() -> bool
 }
@@ -3506,7 +3506,7 @@ fn main() {
 }
 EOF
 
-reject impl-of-a-spec-that-does-not-exist E314 <<'EOF'
+reject impl-of-a-spec-that-does-not-exist E3013 <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3522,7 +3522,7 @@ fn main() {
 }
 EOF
 
-reject a-type-declares-a-method-twice E451 <<'EOF'
+reject a-type-declares-a-method-twice E4025 <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -3548,7 +3548,7 @@ fn main() {
 }
 EOF
 
-reject impl-does-not-bind-a-spec-parameter E315 <<'EOF'
+reject impl-does-not-bind-a-spec-parameter E3014 <<'EOF'
 spec Ix[K] {
 	fn at(k: K) -> int
 }
@@ -3586,12 +3586,12 @@ EOF
 # constant walk, and a second check had a second extent — it knew about functions and not
 # about types, so `const A := 1` beside `struct A` went straight to cc.
 
-# The construction below reports E370 as well, because this rule RECORDS now rather than
+# The construction below reports E3067 as well, because this rule RECORDS now rather than
 # ending the run: `A(7)` is read against the second declaration, whose `w` it leaves unset.
 # The follow-on is deliberate and c_dup_say's comment says why, so this case does not pin a
 # count — a later change that suppressed it would be a decision, and one this file should be
 # made to state rather than absorb.
-reject a-struct-declared-twice E382 <<'EOF'
+reject a-struct-declared-twice E3078 <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3605,7 +3605,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-declared-twice E382 seed-gap <<'EOF'
+reject an-enum-declared-twice E3078 seed-gap <<'EOF'
 enum E {
 	X
 }
@@ -3619,7 +3619,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-declared-twice E382 seed-gap <<'EOF'
+reject a-spec-declared-twice E3078 seed-gap <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -3643,7 +3643,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-and-a-spec-share-a-name E381 'once as a struct, once as a spec' seed-gap <<'EOF'
+reject a-struct-and-a-spec-share-a-name E3077 'once as a struct, once as a spec' seed-gap <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3663,7 +3663,7 @@ EOF
 # finding must land on the `fn` either way: a FnDecl knows its place and a struct does not,
 # so walking the types first is what makes this whole family a rule that says WHERE.
 
-reject a-struct-and-a-function-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+reject a-struct-and-a-function-share-a-name E3077 'once as a struct, once as a function' at=5:1 <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3677,7 +3677,7 @@ fn main() {
 }
 EOF
 
-reject a-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=1:1 <<'EOF'
+reject a-function-and-a-struct-share-a-name E3077 'once as a struct, once as a function' at=1:1 <<'EOF'
 fn A(n: int) -> int {
 	return n
 }
@@ -3691,7 +3691,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-and-a-function-share-a-name E381 'once as an enum, once as a function' at=5:1 <<'EOF'
+reject an-enum-and-a-function-share-a-name E3077 'once as an enum, once as a function' at=5:1 <<'EOF'
 enum E {
 	X
 }
@@ -3705,7 +3705,7 @@ fn main() {
 }
 EOF
 
-reject a-typedef-and-a-function-share-a-name E381 'once as a type declaration, once as a function' at=3:1 <<'EOF'
+reject a-typedef-and-a-function-share-a-name E3077 'once as a type declaration, once as a function' at=3:1 <<'EOF'
 type Celsius = int
 
 fn Celsius(n: int) -> int {
@@ -3717,7 +3717,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-and-a-function-share-a-name E381 'once as a spec, once as a function' at=5:1 <<'EOF'
+reject a-spec-and-a-function-share-a-name E3077 'once as a spec, once as a function' at=5:1 <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -3735,7 +3735,7 @@ EOF
 # that lower it, on the grounds that a template is not a function — but it still claims
 # `Box` at the top level, and `Box(3)` beside `struct Box` quietly meant the constructor.
 # This case is what holds the name walk to the list that still has the templates in it.
-reject a-generic-function-and-a-struct-share-a-name E381 'once as a struct, once as a function' at=5:1 <<'EOF'
+reject a-generic-function-and-a-struct-share-a-name E3077 'once as a struct, once as a function' at=5:1 <<'EOF'
 struct Box {
 	pub v: int
 }
@@ -3753,7 +3753,7 @@ EOF
 # refused; the constant-versus-type pair is what the separate check could not see, and it
 # is the case that would go quiet again the day this rule is asked in two places. Every one
 # of them is reported at the CONSTANT, which is where the old check reported it from.
-reject a-struct-and-a-module-constant-share-a-name E381 'once as a struct, once as a module constant' at=1:1 <<'EOF'
+reject a-struct-and-a-module-constant-share-a-name E3077 'once as a struct, once as a module constant' at=1:1 <<'EOF'
 const A := 1
 
 struct A {
@@ -3765,7 +3765,7 @@ fn main() {
 }
 EOF
 
-reject const-taking-a-function-name E381 'once as a function, once as a module constant' at=1:1 <<'EOF'
+reject const-taking-a-function-name E3077 'once as a function, once as a module constant' at=1:1 <<'EOF'
 const f := 1
 
 fn f() {
@@ -3777,7 +3777,7 @@ fn main() {
 }
 EOF
 
-reject function-taking-a-const-name E381 'once as a function, once as a module constant' at=5:1 <<'EOF'
+reject function-taking-a-const-name E3077 'once as a function, once as a module constant' at=5:1 <<'EOF'
 fn f() {
 	print "x"
 }
@@ -3795,7 +3795,7 @@ EOF
 # discriminant, so it was unreachable, and a `match` naming the first was "exhaustive" over
 # an enum that had two.
 
-reject a-field-declared-twice E453 'declares a field named `v` twice' seed-gap <<'EOF'
+reject a-field-declared-twice E4027 'declares a field named `v` twice' seed-gap <<'EOF'
 struct A {
 	pub v: int
 	pub v: str
@@ -3806,7 +3806,7 @@ fn main() {
 }
 EOF
 
-reject a-variant-declared-twice E453 'declares a variant named `X` twice' seed-gap <<'EOF'
+reject a-variant-declared-twice E4027 'declares a variant named `X` twice' seed-gap <<'EOF'
 enum E {
 	X
 	X
@@ -3817,7 +3817,7 @@ fn main() {
 }
 EOF
 
-reject a-parameter-declared-twice E365 <<'EOF'
+reject a-parameter-declared-twice E3063 <<'EOF'
 fn f(a: int, a: int) -> int {
 	return a
 }
@@ -3834,7 +3834,7 @@ EOF
 # being absent. The whole tuple TYPE was unparsed until this branch, so every position that
 # wanted one reported whatever token came next instead: five positions, five messages.
 
-reject a-one-element-tuple-type E246 <<'EOF'
+reject a-one-element-tuple-type E2014 <<'EOF'
 fn f() -> (int) {
 	return 1
 }
@@ -3852,14 +3852,14 @@ EOF
 # the name rather than the reserved word in it. `print := 1` never even got that far: the
 # `print` statement arm answered first and read `:= 1` as the thing to print.
 
-reject reserved-word-as-a-binding E257 <<'EOF'
+reject reserved-word-as-a-binding E2025 <<'EOF'
 fn main() {
 	this := 1
 	print(f"{this}")
 }
 EOF
 
-reject reserved-word-as-a-loop-binding E245 'cannot name a loop binding' <<'EOF'
+reject reserved-word-as-a-loop-binding E2013 'cannot name a loop binding' <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2]
 	for this in xs {
@@ -3868,7 +3868,7 @@ fn main() {
 }
 EOF
 
-reject reserved-word-as-an-if-let-binding E245 'cannot name an `if let` binding' <<'EOF'
+reject reserved-word-as-an-if-let-binding E2013 'cannot name an `if let` binding' <<'EOF'
 fn main() {
 	o: int? = 5
 	if this := o {
@@ -3878,7 +3878,7 @@ fn main() {
 }
 EOF
 
-reject statement-keyword-as-a-binding E257 <<'EOF'
+reject statement-keyword-as-a-binding E2025 <<'EOF'
 fn main() {
 	print := 1
 	print(f"{print}")
@@ -3890,13 +3890,13 @@ EOF
 # `GRAMMAR#keyword` says outright that none of them can be an identifier, and `GRAMMAR#postfix`
 # derives `'.' identifier` and `'.' dec-int`. Every DECLARING position above already answers
 # that way; the postfix did not — it read whatever token followed the `.` as a field name and
-# handed it downstream, so `x.if` was answered by the CHECKER as ``E376 no field `if` on int``:
+# handed it downstream, so `x.if` was answered by the CHECKER as ``E3072 no field `if` on int``:
 # a sentence that treats a reserved word as a field somebody might plausibly have declared.
 #
 # The four sites that read a selector — `.` and `?.`, in `parse_postfix` and in
 # `parse_chain_tail` — now share one function, because a rule written at one of four slots is
 # the shape of bug this repo keeps finding.
-reject a-reserved-word-as-a-field E293 '`if` is a reserved word' <<'EOF'
+reject a-reserved-word-as-a-field E2048 '`if` is a reserved word' <<'EOF'
 fn main() {
 	x := 1
 	print x.if
@@ -3906,8 +3906,8 @@ EOF
 # THE SWALLOWED LINE, and it is why this belongs at the postfix rather than at the checker.
 # A `.` suppresses ASI, so the `print` on the NEXT line was read as the field name of `1.` and
 # the line vanished from the program — what got reported was `2`, on a line that is correct,
-# under E205. Two statements in, three lines down, about the wrong one.
-reject a-dot-that-eats-the-next-line E293 '`print` is a reserved word' <<'EOF'
+# under E2005. Two statements in, three lines down, about the wrong one.
+reject a-dot-that-eats-the-next-line E2048 '`print` is a reserved word' <<'EOF'
 fn main() {
 	print 1.
 	print 2
@@ -3915,10 +3915,10 @@ fn main() {
 EOF
 
 # NOT A NAME AT ALL is the rest of the production, and it went the same way: an operator or a
-# literal after the `.` became a "field" whose name is `+` or `"a"`, and E376 said no int has
+# literal after the `.` became a "field" whose name is `+` or `"a"`, and E3072 said no int has
 # one. The seed has asked for "a field name or tuple index" since it was written and is the
 # oracle for all four of these.
-reject a-field-name-that-is-not-a-name E294 'found `+`' <<'EOF'
+reject a-field-name-that-is-not-a-name E2049 'found `+`' <<'EOF'
 fn main() {
 	x := 1
 	print x.+
@@ -3928,7 +3928,7 @@ EOF
 # `?.` derives ONLY an identifier — a tuple index is on `.` alone (GRAMMAR#postfix) — and this
 # read the `0` as a field, reaching the checker as ``no field `0` on (int, int)``, with no code
 # and no place on it at all.
-reject a-tuple-index-through-an-optional-chain E294 'after `?.`' <<'EOF'
+reject a-tuple-index-through-an-optional-chain E2049 'after `?.`' <<'EOF'
 fn main() {
 	t := (1, 2)
 	p: (int, int)? = t
@@ -3945,7 +3945,7 @@ EOF
 # slot: `ys: list[int] = list[byte]("Hi")` printed 26952, and a longer string read past the
 # end. Convert the elements, or take the bytes as bytes.
 
-reject bind-a-byte-list-to-an-int-list E335 'cannot bind list[byte] to a list[int] binding' <<'EOF'
+reject bind-a-byte-list-to-an-int-list E3033 'cannot bind list[byte] to a list[int] binding' <<'EOF'
 fn main() {
 	ys: list[int] = list[byte]("Hi")
 	print(f"{ys[0]}")
@@ -3955,7 +3955,7 @@ EOF
 # `take(1000)` on a `byte` parameter is the CONSTANT layer of Into: `int -> byte` is a real
 # conversion, so it type-checks, and then the compiler evaluates it and reports the value
 # rather than emitting the truncation cc used to complain about.
-reject narrow-an-int-to-a-byte E330 '`1000` is not a value a byte holds' <<'EOF'
+reject narrow-an-int-to-a-byte E3029 '`1000` is not a value a byte holds' <<'EOF'
 fn take(b: byte) -> int {
 	return int(b)
 }
@@ -3983,21 +3983,21 @@ EOF
 # saying "the binding `x`", so the message read `the binding `x` is int` about a binding the
 # reader had declared `int?` two words earlier. The slot the value is entering is the
 # carrier's payload, and the label now says which carrier.
-reject str-into-an-optional-binding E338 'the int? payload of the binding `x`' <<'EOF'
+reject str-into-an-optional-binding E3036 'the int? payload of the binding `x`' <<'EOF'
 fn main() {
 	x: int? = "s"
 	print x ?? 0
 }
 EOF
 
-reject str-into-an-optional-list-element E338 'element 1 of this list literal is int' <<'EOF'
+reject str-into-an-optional-list-element E3036 'element 1 of this list literal is int' <<'EOF'
 fn main() {
 	xs: list[int?] = ["a"]
 	print xs.len()
 }
 EOF
 
-reject str-into-an-optional-struct-field E338 'the field `v` of `Box`' <<'EOF'
+reject str-into-an-optional-struct-field E3036 'the field `v` of `Box`' <<'EOF'
 struct Box {
 	pub v: int?
 }
@@ -4008,7 +4008,7 @@ fn main() {
 }
 EOF
 
-reject str-assigned-into-an-optional E338 '`x` is int, and this gives str' <<'EOF'
+reject str-assigned-into-an-optional E3036 '`x` is int, and this gives str' <<'EOF'
 fn main() {
 	mut x: int? = 1
 	x = "hi"
@@ -4016,7 +4016,7 @@ fn main() {
 }
 EOF
 
-reject str-into-a-result-left E338 "this function's answer is int, and this gives str" <<'EOF'
+reject str-into-a-result-left E3036 "this function's answer is int, and this gives str" <<'EOF'
 fn f() -> Result[int] {
 	return Either.Left("hi")
 }
@@ -4026,7 +4026,7 @@ fn main() {
 }
 EOF
 
-reject int-into-an-either-right E338 "this function's answer is str, and this gives int" <<'EOF'
+reject int-into-an-either-right E3036 "this function's answer is str, and this gives int" <<'EOF'
 fn f() -> Either[int, str] {
 	return Either.Right(7)
 }
@@ -4058,14 +4058,14 @@ EOF
 # The one case that does not come through the parser is the last: a template's `chan[T]`
 # becomes a `chan[int?]` by SUBSTITUTION, with nothing written in the source to point at.
 
-reject a-channel-of-optionals-constructed E404 <<'EOF'
+reject a-channel-of-optionals-constructed E4003 <<'EOF'
 fn main() {
 	ch := chan[int?](1)
 	print 1
 }
 EOF
 
-reject a-channel-of-optionals-as-a-parameter E404 <<'EOF'
+reject a-channel-of-optionals-as-a-parameter E4003 <<'EOF'
 fn f(ch: <-chan[int?]) {
 	print 1
 }
@@ -4075,7 +4075,7 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-as-a-result E404 <<'EOF'
+reject a-channel-of-optionals-as-a-result E4003 <<'EOF'
 fn f() -> chan[int?] {
 	return chan[int](1)
 }
@@ -4088,7 +4088,7 @@ EOF
 # the place is PINNED on this one, because a struct field is the position that carries no
 # statement and no declaration position of its own: the finding has to come from the type
 # as it is written, and nothing else here would notice it drifting to the file's first line.
-reject a-channel-of-optionals-as-a-field E404 at=2:10 <<'EOF'
+reject a-channel-of-optionals-as-a-field E4003 at=2:10 <<'EOF'
 struct Box {
 	pub ch: chan[int?]
 }
@@ -4098,14 +4098,14 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-in-a-typed-binding E404 <<'EOF'
+reject a-channel-of-optionals-in-a-typed-binding E4003 <<'EOF'
 fn main() {
 	ch: chan[int?] = chan[int](1)
 	print 1
 }
 EOF
 
-reject a-channel-of-optionals-under-a-typedef E404 <<'EOF'
+reject a-channel-of-optionals-under-a-typedef E4003 <<'EOF'
 type C = chan[int?]
 
 fn main() {
@@ -4113,7 +4113,7 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-inside-a-list E404 <<'EOF'
+reject a-channel-of-optionals-inside-a-list E4003 <<'EOF'
 struct Box {
 	pub xs: list[chan[int?]]
 }
@@ -4127,7 +4127,7 @@ EOF
 # `mk` for `int?` is one. The parser never sees that type, so the rule has to be on the
 # substitution too — and there is no source position to report, because the type is not
 # written anywhere.
-reject a-channel-of-optionals-by-substitution E404 no-place <<'EOF'
+reject a-channel-of-optionals-by-substitution E4003 no-place <<'EOF'
 fn mk[T](v: T) {
 	ch := chan[T](1)
 	ch <- v
@@ -4149,7 +4149,7 @@ EOF
 # which is the one door that cannot be walked around.
 #
 # No place, for the same reason as the case above: nothing in this source spells the type.
-reject a-channel-of-optionals-by-spec-substitution E404 no-place <<'EOF'
+reject a-channel-of-optionals-by-spec-substitution E4003 no-place <<'EOF'
 spec Ix[K] {
 	fn c() -> chan[K]
 }
@@ -4182,7 +4182,7 @@ EOF
 # way to self-hosting, which `make oracle` cannot see because oracle compares the two
 # compilers on programs the seed ACCEPTS.
 
-reject a-channel-of-another-element E335 'cannot bind chan[int] to a chan[str] binding' <<'EOF'
+reject a-channel-of-another-element E3033 'cannot bind chan[int] to a chan[str] binding' <<'EOF'
 fn main() {
 	ch: chan[str] = chan[int](1)
 	print 1
@@ -4191,7 +4191,7 @@ EOF
 
 # it compiled to `zrt_chan *zg_ch = 7;`, which cc reported as an integer-to-pointer
 # conversion against a line nobody wrote
-reject an-int-into-a-channel E335 'cannot bind int to a chan[int] binding' <<'EOF'
+reject an-int-into-a-channel E3033 'cannot bind int to a chan[int] binding' <<'EOF'
 fn main() {
 	ch: chan[int] = 7
 	print 1
@@ -4203,13 +4203,13 @@ EOF
 # Four rules, and until now none of them carried a code or a place — so a reader was told a
 # direction was wrong and left to find which of their sends it was, and no gate could pin
 # any of the four without pinning its prose. The SEED reports all four with a place, and
-# numbers a call's arguments from 1 the way `E340` does; these numbered from 0, so a reader
+# numbers a call's arguments from 1 the way `E3038` does; these numbered from 0, so a reader
 # following one of them looked at the wrong parameter.
 #
-# Two rules and not one: what a NAME MAY DO with an end (E503-E505) is a different question
-# from where an end MAY GO (E506), which is why the narrowing rule has a code of its own.
+# Two rules and not one: what a NAME MAY DO with an end (E5003-E5005) is a different question
+# from where an end MAY GO (E5006), which is why the narrowing rule has a code of its own.
 
-reject receive-on-a-send-only-channel E503 <<'EOF'
+reject receive-on-a-send-only-channel E5003 <<'EOF'
 fn take(ch: chan[int]<-) {
 	print <-ch!
 }
@@ -4220,7 +4220,7 @@ fn main() {
 }
 EOF
 
-reject send-on-a-receive-only-channel E504 <<'EOF'
+reject send-on-a-receive-only-channel E5004 <<'EOF'
 fn take(ch: <-chan[int]) {
 	ch <- 1
 }
@@ -4231,7 +4231,7 @@ fn main() {
 }
 EOF
 
-reject close-a-receive-only-channel E505 <<'EOF'
+reject close-a-receive-only-channel E5005 <<'EOF'
 fn take(ch: <-chan[int]) {
 	close(ch)
 }
@@ -4244,7 +4244,7 @@ EOF
 
 # THE ARGUMENT IS NUMBERED FROM 1, which is what the sentence is asserted for: `take` has
 # one parameter, and this used to call it argument 0.
-reject a-direction-that-does-not-narrow-at-an-argument E506 'argument 1 of `take`' <<'EOF'
+reject a-direction-that-does-not-narrow-at-an-argument E5006 'argument 1 of `take`' <<'EOF'
 fn take(ch: chan[int]<-) {
 	ch <- 1
 }
@@ -4256,7 +4256,7 @@ fn main() {
 }
 EOF
 
-reject a-direction-that-does-not-narrow-at-a-binding E506 'binding `s`' <<'EOF'
+reject a-direction-that-does-not-narrow-at-a-binding E5006 'binding `s`' <<'EOF'
 fn main() {
 	c := chan[int]()
 	r: <-chan[int] = c
@@ -4265,7 +4265,7 @@ fn main() {
 }
 EOF
 
-reject a-direction-that-does-not-narrow-at-a-return E506 "this function's answer" <<'EOF'
+reject a-direction-that-does-not-narrow-at-a-return E5006 "this function's answer" <<'EOF'
 fn f(c: <-chan[int]) -> chan[int]<- {
 	return c
 }
@@ -4275,7 +4275,7 @@ fn main() {
 }
 EOF
 
-reject an-int-into-a-map E335 'cannot bind int to a map[str, int] binding' <<'EOF'
+reject an-int-into-a-map E3033 'cannot bind int to a map[str, int] binding' <<'EOF'
 fn main() {
 	m: map[str, int] = 7
 	print 1
@@ -4284,7 +4284,7 @@ EOF
 
 # a map against a map is the pairing the literal escape does NOT cover: both sides are
 # maps and neither is a literal, so nothing here is taking its shape from the declaration
-reject a-map-of-another-value-type E335 'cannot bind map[str, int] to a map[str, str] binding' <<'EOF'
+reject a-map-of-another-value-type E3033 'cannot bind map[str, int] to a map[str, str] binding' <<'EOF'
 fn main() {
 	a: map[str, int] = {"a": 1}
 	b: map[str, str] = a
@@ -4295,7 +4295,7 @@ EOF
 # A CARRIER PASSES THROUGH OR IS INJECTED, and a carrier of another shape does neither: an
 # `int?` cannot pass through into a `str?` — they are different C types — and cannot be the
 # `str` payload either. It reached cc as an incompatible-pointer argument to `zrt_str_retain`.
-reject an-optional-of-another-element E335 'cannot bind int? to a str? binding' <<'EOF'
+reject an-optional-of-another-element E3033 'cannot bind int? to a str? binding' <<'EOF'
 fn main() {
 	y: int? = 5
 	x: str? = y
@@ -4311,7 +4311,7 @@ EOF
 # took the `TUnknown` it got back for a type, so a receive on a non-channel came out as
 # `TOpt(TUnknown)` — an optional of nothing, printed `?` — and the program went on being
 # compiled around it. What the reader was told about afterwards was the `?`: `` `??` on a
-# ? ``, `E434 … over a ?`, sentences about a type nothing in the source had written. Where
+# ? ``, `E9053 … over a ?`, sentences about a type nothing in the source had written. Where
 # the walk did not touch the broken type at all, the C came out with a carrier struct in a
 # `zrt_chan *` slot and cc rejected generated code nobody wrote.
 #
@@ -4326,7 +4326,7 @@ EOF
 # `chan[int]?` is not a channel. The well-formed spelling unwraps in between, `<-((<-cc)!)`,
 # and it lives in the corpus as `chan_of_chan`.
 
-reject a-receive-of-a-receive E478 "chan[int]? is not one" at=6:2 <<'EOF'
+reject a-receive-of-a-receive E4043 "chan[int]? is not one" at=6:2 <<'EOF'
 fn main() {
 	cc := chan[chan[int]](1)
 	inner := chan[int](1)
@@ -4337,7 +4337,7 @@ fn main() {
 }
 EOF
 
-reject a-receive-on-an-int E478 "and int is not one" <<'EOF'
+reject a-receive-on-an-int E4043 "and int is not one" <<'EOF'
 fn main() {
 	n := 3
 	x := <-n
@@ -4345,7 +4345,7 @@ fn main() {
 }
 EOF
 
-reject a-send-on-an-int E478 "and int is not one" <<'EOF'
+reject a-send-on-an-int E4043 "and int is not one" <<'EOF'
 fn main() {
 	mut n := 3
 	n <- 7
@@ -4353,7 +4353,7 @@ fn main() {
 }
 EOF
 
-reject a-close-on-an-int E478 "and int is not one" <<'EOF'
+reject a-close-on-an-int E4043 "and int is not one" <<'EOF'
 fn main() {
 	n := 3
 	close(n)
@@ -4361,7 +4361,7 @@ fn main() {
 }
 EOF
 
-reject a-select-receive-arm-on-an-int E478 "and int is not one" <<'EOF'
+reject a-select-receive-arm-on-an-int E4043 "and int is not one" <<'EOF'
 fn main() {
 	n := 3
 	select {
@@ -4370,7 +4370,7 @@ fn main() {
 }
 EOF
 
-reject a-select-send-arm-on-an-int E478 "and int is not one" <<'EOF'
+reject a-select-send-arm-on-an-int E4043 "and int is not one" <<'EOF'
 fn main() {
 	n := 3
 	select {
@@ -4389,7 +4389,7 @@ EOF
 # nobody wrote; the seed has enforced this rule all along, which is why no marker excuses
 # it below.
 
-reject program-without-fn-main E501 at=1:1 <<'EOF'
+reject program-without-fn-main E5001 at=1:1 <<'EOF'
 x := 1
 EOF
 
@@ -4462,7 +4462,7 @@ fi
 # corpus case's boundary (a rendering may not mutate), and the seed refuses `mut fn` for
 # reasons of its own, so that spelling needs no case here.
 
-reject display-override-with-arguments E359 seed-gap <<'EOF'
+reject display-override-with-arguments E3057 seed-gap <<'EOF'
 struct Point {
 	pub x: int
 }
@@ -4478,7 +4478,7 @@ fn main() {
 }
 EOF
 
-reject display-override-wrong-answer E361 seed-gap <<'EOF'
+reject display-override-wrong-answer E3059 seed-gap <<'EOF'
 struct Point {
 	pub x: int
 }
@@ -4544,16 +4544,16 @@ for shape in nested flat; do
 	e=$(deep_expr "$shape")
 
 	printf 'fn main() {\n\tprint %s\n}\n' "$e" |
-		reject "deep-$shape-in-a-body" E244 seed-gap
+		reject "deep-$shape-in-a-body" E2012 seed-gap
 
 	printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e" |
-		reject "deep-$shape-in-an-instantiated-generic" E244 seed-gap
+		reject "deep-$shape-in-an-instantiated-generic" E2012 seed-gap
 
 	printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e" |
-		reject "deep-$shape-in-a-module-constant" E244 seed-gap
+		reject "deep-$shape-in-a-module-constant" E2012 seed-gap
 
 	printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e" |
-		reject "deep-$shape-in-a-default-parameter" E244 seed-gap
+		reject "deep-$shape-in-a-default-parameter" E2012 seed-gap
 done
 
 # The ninth case, and the only one the PARSER cannot answer: a tree the compiler COMPOSES.
@@ -4568,7 +4568,7 @@ done
 # halves are the same chain so the arithmetic is visible rather than tuned.
 half=$(awk 'BEGIN { s = "1"; for (i = 0; i < 190; i++) s = s " + 1"; printf "%s", s }')
 printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half" |
-	reject deep-composed-by-a-default-splice E454 seed-gap
+	reject deep-composed-by-a-default-splice E4028 seed-gap
 
 # --- report ------------------------------------------------------------------------
 
@@ -4580,7 +4580,7 @@ printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + 
 # that turn them away, so the sentence each one is owed is decided by what a reader needs and
 # not by whatever the fix happened to produce.
 
-reject add-two-lists E345 'operator `+` takes numeric operands' <<'EOF'
+reject add-two-lists E3043 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	xs := [1]
 	ys := xs + [2]
@@ -4588,7 +4588,7 @@ fn main() {
 }
 EOF
 
-reject subtract-two-lists E345 'operator `-` takes numeric operands' <<'EOF'
+reject subtract-two-lists E3043 'operator `-` takes numeric operands' <<'EOF'
 fn main() {
 	xs := [1]
 	ys := xs - [2]
@@ -4596,7 +4596,7 @@ fn main() {
 }
 EOF
 
-reject add-two-maps E345 'operator `+` takes numeric operands' <<'EOF'
+reject add-two-maps E3043 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	m := {"a": 1}
 	n := {"b": 2}
@@ -4609,7 +4609,7 @@ EOF
 # the wrong kind", which answers NO for a value that is not a scalar at all — so every
 # aggregate walked past every one of them. Only ORDER had a rule of its own (`Ord`).
 
-reject bitwise-on-two-lists E344 <<'EOF'
+reject bitwise-on-two-lists E3042 <<'EOF'
 fn main() {
 	xs := [1]
 	ys := xs & [2]
@@ -4617,14 +4617,14 @@ fn main() {
 }
 EOF
 
-reject logical-on-two-lists E343 <<'EOF'
+reject logical-on-two-lists E3041 <<'EOF'
 fn main() {
 	xs := [1]
 	print str(xs and [2])
 }
 EOF
 
-reject negate-a-list E351 <<'EOF'
+reject negate-a-list E3049 <<'EOF'
 fn main() {
 	xs := [1]
 	ys := -xs
@@ -4632,7 +4632,7 @@ fn main() {
 }
 EOF
 
-reject complement-a-list E352 <<'EOF'
+reject complement-a-list E3050 <<'EOF'
 fn main() {
 	xs := [1]
 	ys := ~xs
@@ -4640,14 +4640,14 @@ fn main() {
 }
 EOF
 
-reject index-a-map-with-the-wrong-key E338 'a key of this map[str, int] is str, and this gives int' <<'EOF'
+reject index-a-map-with-the-wrong-key E3036 'a key of this map[str, int] is str, and this gives int' <<'EOF'
 fn main() {
 	m := {"a": 1}
 	print m[1]
 }
 EOF
 
-reject call-a-binding-that-shadows-a-function E369 <<'EOF'
+reject call-a-binding-that-shadows-a-function E3066 <<'EOF'
 fn f() -> int {
 	return 1
 }
@@ -4658,7 +4658,7 @@ fn main() {
 }
 EOF
 
-reject field-on-a-non-struct E376 <<'EOF'
+reject field-on-a-non-struct E3072 <<'EOF'
 fn main() {
 	n := 5
 	print n.a
@@ -4670,7 +4670,7 @@ EOF
 # lived among the not-yet-built forms because it raised without a place, which is what a
 # form this compiler has not reached looks like — and it is neither. It is the language's
 # answer, and it is permanent.
-reject field-the-struct-does-not-have E376 <<'EOF'
+reject field-the-struct-does-not-have E3072 <<'EOF'
 struct P {
 	pub n: int
 }
@@ -4683,14 +4683,14 @@ EOF
 
 # --- bad paths, sweep two: tuples, slices, iteration ------------------------------------
 
-reject tuple-index-past-its-arity E378 <<'EOF'
+reject tuple-index-past-its-arity E3074 <<'EOF'
 fn main() {
 	t := (1, 2)
 	print t.5
 }
 EOF
 
-reject tuple-index-on-a-non-tuple E377 <<'EOF'
+reject tuple-index-on-a-non-tuple E3073 <<'EOF'
 fn main() {
 	n := 5
 	print n.0
@@ -4698,7 +4698,7 @@ fn main() {
 EOF
 
 # SILENT: a str bound on a slice was accepted and lowered, so the range walked from a pointer
-reject slice-with-a-str-bound E374 <<'EOF'
+reject slice-with-a-str-bound E3070 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	ys := xs["a"..1]
@@ -4708,7 +4708,7 @@ EOF
 
 # The message named the LOOP VARIABLE as undefined, which is the consequence: the loop gave it
 # no type because the thing being walked is not walkable, and `x` was blamed for it.
-reject for-over-a-non-iterable E379 <<'EOF'
+reject for-over-a-non-iterable E3075 <<'EOF'
 fn main() {
 	n := 5
 	for x in n {
@@ -4723,7 +4723,7 @@ EOF
 # cycle (`A` holding `B` holding `A`) and one through a carrier (`p: P?`), and skipped the
 # simplest case of all — a field of the struct's own type — so the copy helper recursed until
 # the stack ran out. A compiler that dies says nothing at all, about anything.
-reject struct-holding-itself-by-value E452 <<'EOF'
+reject struct-holding-itself-by-value E4026 <<'EOF'
 struct P {
 	pub p: P
 }
@@ -4740,7 +4740,7 @@ EOF
 # string — the last of the three import rules to be told which line wrote the import. The
 # other half of that old sentence, a method call whose RECEIVER is the ill-formed part, is
 # now the receiver's own finding (a-method-on-a-namespace-member-that-does-not-exist below).
-reject import-a-module-that-does-not-exist E502 <<'EOF'
+reject import-a-module-that-does-not-exist E5002 <<'EOF'
 import "nope"
 
 fn main() {
@@ -4754,13 +4754,13 @@ EOF
 # (docs/code/errors.md). Anything else was handed to the runtime's unwind as though it were an
 # Err — `raise 5` reached cc as an incompatible-type argument, and a struct the same way.
 
-reject raise-an-int E380 <<'EOF'
+reject raise-an-int E3076 <<'EOF'
 fn main() {
 	raise 5
 }
 EOF
 
-reject raise-a-struct E380 <<'EOF'
+reject raise-a-struct E3076 <<'EOF'
 struct P {
 	pub a: int
 }
@@ -4778,19 +4778,19 @@ EOF
 # a literal ADOPTING a type (`b: byte = 300`) and not for the WRITTEN conversion beside it,
 # which is the spelling the sentence uses.
 
-reject written-byte-conversion-out-of-range E330 'is not a value a byte holds' <<'EOF'
+reject written-byte-conversion-out-of-range E3029 'is not a value a byte holds' <<'EOF'
 fn main() {
 	print int(byte(300))
 }
 EOF
 
-reject written-rune-conversion-out-of-range E330 'is not a value a rune holds' <<'EOF'
+reject written-rune-conversion-out-of-range E3029 'is not a value a rune holds' <<'EOF'
 fn main() {
 	print int(rune(1114112))
 }
 EOF
 
-reject written-uint-conversion-negative E330 'is not a value a uint holds' <<'EOF'
+reject written-uint-conversion-negative E3029 'is not a value a uint holds' <<'EOF'
 fn main() {
 	print int(uint(-1))
 }
@@ -4801,7 +4801,7 @@ EOF
 # An assignment needs a PLACE — a name, a field, an index. A call's result and a literal are
 # values with nowhere to live, and both were rendered to the left of a C `=`.
 
-reject assign-to-a-call E302 <<'EOF'
+reject assign-to-a-call E3002 <<'EOF'
 fn f() -> int {
 	return 1
 }
@@ -4812,7 +4812,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-a-literal E302 <<'EOF'
+reject assign-to-a-literal E3002 <<'EOF'
 fn main() {
 	5 = 2
 	print 1
@@ -4825,28 +4825,28 @@ EOF
 # anything at all: `xs["a"]` reached cc, and `xs[1.5]` and `xs[true]` COMPILED AND RAN — the
 # float silently truncated to 1 by a C conversion cc only warned about, the bool read as 1.
 
-reject index-a-list-with-a-str E375 <<'EOF'
+reject index-a-list-with-a-str E3071 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print xs["a"]
 }
 EOF
 
-reject index-a-list-with-a-float E375 <<'EOF'
+reject index-a-list-with-a-float E3071 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print xs[1.5]
 }
 EOF
 
-reject index-a-list-with-a-bool E375 <<'EOF'
+reject index-a-list-with-a-bool E3071 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print xs[true]
 }
 EOF
 
-reject index-assign-a-list-with-a-str E375 <<'EOF'
+reject index-assign-a-list-with-a-str E3071 <<'EOF'
 fn main() {
 	mut xs := [1, 2]
 	xs["a"] = 5
@@ -4858,7 +4858,7 @@ EOF
 # `type X = Y`'s underlying name too; a local's was the one that did not have to, and reported
 # "cannot bind int to a Nope binding" — a sentence about the VALUE that treats an unknown name
 # as a type the value failed to be.
-reject local-annotation-names-no-type E707 '(the binding `x`)' <<'EOF'
+reject local-annotation-names-no-type E4056 '(the binding `x`)' <<'EOF'
 fn main() {
 	x: Nope = 5
 	print 1
@@ -4870,14 +4870,14 @@ EOF
 # so `Nope` was refused and `Nope?` was emitted as `zg_Nope` for cc to report against a file
 # under .zerg-cache. These are the two wrappers a local is likeliest to spell; the walk that
 # answers them answers `chan[…]`, `map[…]`, a tuple and a fn type by the same recursion.
-reject local-optional-annotation-names-no-type E707 '(the binding `h`)' <<'EOF'
+reject local-optional-annotation-names-no-type E4056 '(the binding `h`)' <<'EOF'
 fn main() {
 	mut h: Nope? = nil
 	print 1
 }
 EOF
 
-reject local-list-annotation-names-no-type E707 '(the binding `xs`)' <<'EOF'
+reject local-list-annotation-names-no-type E4056 '(the binding `xs`)' <<'EOF'
 fn main() {
 	mut xs: list[Nope] = []
 	print xs.len()
@@ -4888,7 +4888,7 @@ EOF
 # — nothing in this compiler declares the type. It earned its own line here because it is the
 # spelling that found the wrapper hole above, and because a reader who follows that chapter
 # should be told the name resolves to nothing rather than be handed a cc diagnostic.
-reject an-ffi-handle-annotation E707 '(the binding `h`)' <<'EOF'
+reject an-ffi-handle-annotation E4056 '(the binding `h`)' <<'EOF'
 fn main() {
 	mut h: handle? = nil
 	print 1
@@ -4902,21 +4902,21 @@ EOF
 # paired one for one with the last it admits in test-data/codegen/type_boundaries.zg. A range
 # rule's defects live entirely at its ends.
 
-reject byte-one-past-the-last E330 'is not a value a byte holds' <<'EOF'
+reject byte-one-past-the-last E3029 'is not a value a byte holds' <<'EOF'
 fn main() {
 	x: byte = 256
 	print int(x)
 }
 EOF
 
-reject rune-one-past-the-last E330 'is not a value a rune holds' <<'EOF'
+reject rune-one-past-the-last E3029 'is not a value a rune holds' <<'EOF'
 fn main() {
 	r: rune = 1114112
 	print int(r)
 }
 EOF
 
-reject uint-one-past-the-last E319 <<'EOF'
+reject uint-one-past-the-last E3018 <<'EOF'
 fn main() {
 	u: uint = 18446744073709551616
 	print u
@@ -4925,7 +4925,7 @@ EOF
 
 # AND THE FOLD'S OWN EDGE, which has two: `200 + 55` is `255` and adopts, `200 + 56` is `256`
 # and does not — the answer measured after the operands, both of which fit either way.
-reject fold-one-past-the-last E330 'is not a value a byte holds' <<'EOF'
+reject fold-one-past-the-last E3029 'is not a value a byte holds' <<'EOF'
 fn main() {
 	x: byte = 200 + 56
 	print int(x)
@@ -4943,14 +4943,14 @@ EOF
 # They are gathered here rather than filed beside their neighbours because what they have in
 # common is how they were found, and that is worth being able to see.
 
-reject a-list-conversion-of-two-values E261 <<'EOF'
+reject a-list-conversion-of-two-values E2029 <<'EOF'
 fn main() {
 	b := list[byte]("a", "b")
 	print b.len()
 }
 EOF
 
-reject a-module-private-name E301 <<'EOF'
+reject a-module-private-name E3001 <<'EOF'
 import "std/strings"
 
 fn main() {
@@ -4964,7 +4964,7 @@ EOF
 # group's function were both reachable by writing `spawn` in front of the call that is
 # refused without it. Three cases, because they are the two shapes the path resolves (a
 # plain name and a namespaced one) and the two rules it skipped.
-reject a-module-private-name-spawned E301 <<'EOF'
+reject a-module-private-name-spawned E3001 <<'EOF'
 import "util/text"
 
 fn main() {
@@ -4981,7 +4981,7 @@ pub fn shout(s: str) -> str {
 }
 EOF
 
-reject a-module-private-name-deferred E301 <<'EOF'
+reject a-module-private-name-deferred E3001 <<'EOF'
 import "util/text"
 
 fn main() {
@@ -5004,7 +5004,7 @@ EOF
 # the value that means "generated, no module a reader could have written". The entry module
 # collapsed into the sentinel and every visibility question went quiet: this exact program,
 # spelled `./m.zg`, was refused, and spelled `m.zg`, printed 42.
-reject a-module-private-name-from-a-bare-entry-path E301 bare-entry <<'EOF'
+reject a-module-private-name-from-a-bare-entry-path E3001 bare-entry <<'EOF'
 import "text"
 
 fn main() {
@@ -5019,7 +5019,7 @@ EOF
 # --- module-level `unsafe { … }`, on its `mut` binding ------------------------------------
 #
 # A module-level `unsafe { … }` group holds two kinds of item, and only one of them had a rule
-# about who may reach it. Its `fn` is an unsafe fn and a safe caller is refused (E387); its
+# about who may reach it. Its `fn` is an unsafe fn and a safe caller is refused (E3083); its
 # `mut` binding — the language's ONLY mutable global (GRAMMAR group 12) — could be written
 # `pub`, and was then genuinely exported: another module's SAFE `main` both read `glob.shared`
 # and assigned it, with no `unsafe` anywhere in that file.
@@ -5028,10 +5028,10 @@ EOF
 # whole of the crossing: without the `pub` a reader outside is refused by the ordinary
 # visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
 # legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
-# `unsafe { … }` as an expression still E224 no function body can open an unsafe context, so
+# `unsafe { … }` as an expression still E9011 no function body can open an unsafe context, so
 # a rule there would make the group unreachable from anything a program can write.
 
-reject a-pub-mutable-global E484 at=2:2 <<'EOF'
+reject a-pub-mutable-global E4046 at=2:2 <<'EOF'
 unsafe {
 	pub mut shared := 5
 }
@@ -5045,7 +5045,7 @@ EOF
 # binding is module-private, so a reader outside is refused by the ordinary visibility rule
 # and there is no second rule owed for a mutable global in particular. Both directions, since
 # a write is what the hole was really about.
-reject a-mutable-global-read-from-another-module E301 'module `glob`' <<'EOF'
+reject a-mutable-global-read-from-another-module E3001 'module `glob`' <<'EOF'
 import "glob"
 
 fn main() {
@@ -5061,7 +5061,7 @@ pub fn read() -> int {
 }
 EOF
 
-reject a-mutable-global-assigned-from-another-module E301 'module `glob`' <<'EOF'
+reject a-mutable-global-assigned-from-another-module E3001 'module `glob`' <<'EOF'
 import "glob"
 
 fn main() {
@@ -5084,7 +5084,7 @@ EOF
 # export is what made the uses possible, and the module that wrote `pub` is the one with a
 # line to change. It is here because the rule walks the unit being emitted, so an imported
 # module has to be spoken about while ITS unit is compiled, not the entry's.
-reject a-pub-mutable-global-in-an-imported-module E484 'may not be `pub`' <<'EOF'
+reject a-pub-mutable-global-in-an-imported-module E4046 'may not be `pub`' <<'EOF'
 import "glob"
 
 fn main() {
@@ -5103,17 +5103,17 @@ EOF
 # three holes below. Each of them is the same sentence from docs/runtime/package.md read at a
 # different declaration, and each was measured before it was closed:
 #
-#   a module-private TYPE was nameable from outside its module (E508)
-#   a `pub` declaration could name a type that is not `pub` (E509)
-#   a module-private FIELD was readable from outside (E510)
-#   a namespace ANY module of the build imported was nameable from EVERY module (E507)
+#   a module-private TYPE was nameable from outside its module (E5008)
+#   a `pub` declaration could name a type that is not `pub` (E5009)
+#   a module-private FIELD was readable from outside (E5010)
+#   a namespace ANY module of the build imported was nameable from EVERY module (E5007)
 #
 # THE SEED IS THE ORACLE FOR THE FIRST and for nothing else here — it has refused a private
 # type through a qualified name since it was written (resolveTypeRef), so that one is a rule
 # `zerg` LOST rather than a rule invented. The other three are seed gaps, recorded by name in
 # src/bootstrap/README.md.
 
-reject a-module-private-type-named-outside-its-module E508 <<'EOF'
+reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "lib"
 
 fn main() {
@@ -5134,7 +5134,7 @@ EOF
 # before anything is lowered (c_ns_unqualify), so a rule written only on the bare form would
 # have left the qualified one — which is the ONLY form the seed refuses — accepted by the
 # compiler the seed builds.
-reject a-module-private-type-named-through-its-namespace E508 <<'EOF'
+reject a-module-private-type-named-through-its-namespace E5008 <<'EOF'
 import "lib"
 
 fn main() {
@@ -5157,7 +5157,7 @@ EOF
 #
 # seed-gap: the seed lets a `pub fn` return a module-private struct, and a dependent then
 # obtains a value of a type it could never have named.
-reject a-pub-fn-that-returns-a-module-private-type E509 'the result of `make`' seed-gap <<'EOF'
+reject a-pub-fn-that-returns-a-module-private-type E5009 'the result of `make`' seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5175,7 +5175,7 @@ EOF
 
 # THE PARAMETER SIDE OF THE SAME RULE, which is not the return side read backwards: a
 # dependent cannot CALL the function either, having no way to spell an argument for it.
-reject a-pub-fn-that-takes-a-module-private-type E509 'parameter `s` of `use`' seed-gap <<'EOF'
+reject a-pub-fn-that-takes-a-module-private-type E5009 'parameter `s` of `use`' seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5198,7 +5198,7 @@ EOF
 # AND THE FIELD OF A `pub` STRUCT, where the struct is on the surface and the field's type is
 # not — the same leak one level in, and the case that says `decl_pub` is a fact about the pair
 # rather than about the struct.
-reject a-pub-field-whose-type-is-module-private E509 'field `Box.it`' seed-gap <<'EOF'
+reject a-pub-field-whose-type-is-module-private E5009 'field `Box.it`' seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5219,12 +5219,12 @@ pub fn tag() -> str {
 EOF
 
 # A MODULE-PRIVATE FIELD IS NOT READABLE FROM OUTSIDE, which is the other half of the rule
-# E482 already enforces: a non-`pub` field must carry a DEFAULT so external code can
+# E4045 already enforces: a non-`pub` field must carry a DEFAULT so external code can
 # construct the type without naming a value it may not read. The default was required and the
 # value was readable anyway, so the requirement protected nothing.
 #
 # seed-gap: the seed prints the private field's value.
-reject a-module-private-field-read-outside-its-module E510 at=5:2 seed-gap <<'EOF'
+reject a-module-private-field-read-outside-its-module E5010 at=5:2 seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5245,7 +5245,7 @@ EOF
 # AND IT IS NOT WRITABLE EITHER. A write reaches the field through the same lowering as a
 # read (c_lvalue goes through c_expr), so one rule covers both — and a rule written on the
 # assignment path alone would have covered the half nobody tries first.
-reject a-module-private-field-written-outside-its-module E510 at=5:2 seed-gap <<'EOF'
+reject a-module-private-field-written-outside-its-module E5010 at=5:2 seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5272,7 +5272,7 @@ EOF
 # unenforced that way for a while, and a `pub fn make() -> Nonexistent` in a dependency
 # reached cc as `unknown type name 'zg_Nonexistent'`: an escape to cc, which is the class
 # this file exists to keep empty.
-reject a-pub-fn-leaking-a-private-type-under-emit-lib E509 'the result of `make`' emit-lib seed-gap <<'EOF'
+reject a-pub-fn-leaking-a-private-type-under-emit-lib E5009 'the result of `make`' emit-lib seed-gap <<'EOF'
 import "lib"
 
 fn main() {
@@ -5291,13 +5291,13 @@ EOF
 # A `pub` METHOD ON A MODULE-PRIVATE TYPE is the same sentence about a receiver, and the
 # receiver is what makes it worth its own case: `this` is SYNTHESIZED, so a message naming it
 # as a parameter names a word the author never wrote — and one this compiler refuses as a
-# parameter name elsewhere (E245). The sentence is pinned here because that is the whole
+# parameter name elsewhere (E2013). The sentence is pinned here because that is the whole
 # claim.
 #
 # It is a real narrowing of the language: docs/runtime/package.md says a type's `pub` methods
 # travel WITH it, so a `pub` method on a type that never reaches a surface promises something
 # to nobody. Both the seed and this compiler accepted it before.
-reject a-pub-method-on-a-module-private-type E509 'the receiver of `shout`' seed-gap <<'EOF'
+reject a-pub-method-on-a-module-private-type E5009 'the receiver of `shout`' seed-gap <<'EOF'
 struct Secret {
 	pub tag: str
 }
@@ -5321,7 +5321,7 @@ EOF
 # still write `lib.make()`, a module it never named.
 #
 # seed-gap: the seed binds namespaces program-wide too, and builds this.
-reject a-namespace-this-module-did-not-import E507 at=5:2 seed-gap <<'EOF'
+reject a-namespace-this-module-did-not-import E5007 at=5:2 seed-gap <<'EOF'
 import "mid"
 
 fn main() {
@@ -5346,7 +5346,7 @@ EOF
 
 # THE SAME NAME, ONE KEYWORD EARLIER — `spawn` and `defer` resolve their callee down a path
 # of their own, which is where every other rule about a namespaced call has had to be asked
-# twice (see the E301 pair above).
+# twice (see the E3001 pair above).
 #
 # NO `seed-gap` MARKER, AND THE SEED DOES NOT ENFORCE THIS EITHER: it refuses `spawn` outright
 # ("concurrency belongs to the self-hosting compiler"), so it says no for a reason that is not
@@ -5363,7 +5363,7 @@ EOF
 # Four cases because the four are four different paths to the same qualifier: an annotation
 # and a signature reach it as a TYPE, and a construction and a variant read reach it as an
 # EXPRESSION that names a type.
-reject a-namespace-this-module-did-not-import-in-an-annotation E507 at=4:2 seed-gap <<'EOF'
+reject a-namespace-this-module-did-not-import-in-an-annotation E5007 at=4:2 seed-gap <<'EOF'
 import "mid"
 
 fn main() {
@@ -5383,7 +5383,7 @@ pub struct Counter {
 }
 EOF
 
-reject a-namespace-this-module-did-not-import-in-a-signature E507 seed-gap <<'EOF'
+reject a-namespace-this-module-did-not-import-in-a-signature E5007 seed-gap <<'EOF'
 import "mid"
 
 fn take(c: lib.Counter) -> str {
@@ -5406,7 +5406,7 @@ pub struct Counter {
 }
 EOF
 
-reject a-namespace-this-module-did-not-import-constructing E507 at=4:2 seed-gap <<'EOF'
+reject a-namespace-this-module-did-not-import-constructing E5007 at=4:2 seed-gap <<'EOF'
 import "mid"
 
 fn main() {
@@ -5432,7 +5432,7 @@ EOF
 # asserted its own opposite. It reads the form now (the compiler's own diagnostic registry is
 # an enum one module over), and reading it is what leaves the rule about WHO IMPORTED WHAT
 # unenforced, exactly as it is for every other member a namespace reaches.
-reject a-namespace-this-module-did-not-import-naming-a-variant E507 at=4:2 seed-gap <<'EOF'
+reject a-namespace-this-module-did-not-import-naming-a-variant E5007 at=4:2 seed-gap <<'EOF'
 import "mid"
 
 fn main() {
@@ -5453,7 +5453,7 @@ pub enum Colour {
 }
 EOF
 
-reject a-namespace-this-module-did-not-import-spawned E507 <<'EOF'
+reject a-namespace-this-module-did-not-import-spawned E5007 <<'EOF'
 import "mid"
 
 fn main() {
@@ -5477,7 +5477,7 @@ EOF
 # "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
 # one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
 # initialization order no chapter defines.
-reject an-import-cycle-between-two-modules E485 no-place <<'EOF'
+reject an-import-cycle-between-two-modules E4047 no-place <<'EOF'
 import "ca"
 
 fn main() {
@@ -5501,7 +5501,7 @@ EOF
 # detector written as "have I seen this on the way down" answers it by a different branch
 # than the two-node one — the `seen` list a loader already keeps for deduplication makes the
 # self-edge look exactly like a module two files import.
-reject a-module-that-imports-itself E485 no-place <<'EOF'
+reject a-module-that-imports-itself E4047 no-place <<'EOF'
 import "solo"
 
 fn main() {
@@ -5515,7 +5515,7 @@ pub fn one() -> int {
 }
 EOF
 
-reject unsafe-group-fn-spawned E387 'this `spawn` is in safe code' <<'EOF'
+reject unsafe-group-fn-spawned E3083 'this `spawn` is in safe code' <<'EOF'
 unsafe {
 	fn poke() {
 		print 7
@@ -5528,7 +5528,7 @@ fn main() {
 }
 EOF
 
-reject assign-to-the-receiver E306 <<'EOF'
+reject assign-to-the-receiver E3005 <<'EOF'
 struct P {
 	pub x: int
 }
@@ -5543,7 +5543,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-extending-no-spec E316 <<'EOF'
+reject a-spec-extending-no-spec E3015 <<'EOF'
 spec A: Nope {
 	fn f()
 }
@@ -5561,7 +5561,7 @@ fn main() {
 }
 EOF
 
-reject an-if-expression-with-two-types E321 <<'EOF'
+reject an-if-expression-with-two-types E3020 <<'EOF'
 fn main() {
 	x := if true { 1 } else { "s" }
 	print x
@@ -5570,7 +5570,7 @@ EOF
 
 # the borrow reaches `this` THROUGH a field, so the method mutates its receiver without
 # saying `mut fn` — the half of the rule that is not about the argument at all.
-reject a-borrow-of-a-field-of-an-immutable-receiver E324 <<'EOF'
+reject a-borrow-of-a-field-of-an-immutable-receiver E3023 <<'EOF'
 struct P {
 	pub x: int
 }
@@ -5589,21 +5589,21 @@ fn main() {
 EOF
 
 # the seed RAISES this one at run time, where `zerg` reads the constant and answers now.
-reject divide-by-a-constant-zero E331 seed-gap <<'EOF'
+reject divide-by-a-constant-zero E3030 seed-gap <<'EOF'
 fn main() {
 	x := 1 / 0
 	print x
 }
 EOF
 
-reject a-fold-past-int-measured-against-a-byte E332 <<'EOF'
+reject a-fold-past-int-measured-against-a-byte E3031 <<'EOF'
 fn main() {
 	x: byte = 9223372036854775807 * 2
 	print int(x)
 }
 EOF
 
-reject a-binding-of-nil E336 <<'EOF'
+reject a-binding-of-nil E3034 <<'EOF'
 fn main() {
 	x := nil
 	print 1
@@ -5619,7 +5619,7 @@ EOF
 # with an expression of incompatible type 'void'`, and as a `void` list element and struct
 # field. The sentence tells the pair apart from the container pair.
 
-reject a-binding-inferred-from-a-void-call E390 'and this one is nil' <<'EOF'
+reject a-binding-inferred-from-a-void-call E3086 'and this one is nil' <<'EOF'
 fn f() {
 	print "f"
 }
@@ -5630,7 +5630,7 @@ fn main() {
 }
 EOF
 
-reject a-binding-inferred-from-a-valueless-block E390 'and this one is nil' <<'EOF'
+reject a-binding-inferred-from-a-valueless-block E3086 'and this one is nil' <<'EOF'
 fn main() {
 	z := {
 		nop
@@ -5639,7 +5639,7 @@ fn main() {
 }
 EOF
 
-reject printing-a-void-call E390 '`print` needs a value' <<'EOF'
+reject printing-a-void-call E3086 '`print` needs a value' <<'EOF'
 fn f() {
 	print "f"
 }
@@ -5649,7 +5649,7 @@ fn main() {
 }
 EOF
 
-reject an-f-string-hole-holding-nil E390 'this rendering needs a value' <<'EOF'
+reject an-f-string-hole-holding-nil E3086 'this rendering needs a value' <<'EOF'
 fn f() {
 	print "f"
 }
@@ -5659,7 +5659,7 @@ fn main() {
 }
 EOF
 
-reject a-list-of-a-void-call E390 'a part of this one is nil' <<'EOF'
+reject a-list-of-a-void-call E3086 'a part of this one is nil' <<'EOF'
 fn f() {
 	print "f"
 }
@@ -5670,7 +5670,7 @@ fn main() {
 }
 EOF
 
-reject a-tuple-holding-a-void-call E390 'a part of this one is nil' <<'EOF'
+reject a-tuple-holding-a-void-call E3086 'a part of this one is nil' <<'EOF'
 fn f() {
 	print "f"
 }
@@ -5690,7 +5690,7 @@ EOF
 #
 # The seed drops them too, which is the narrower compiler being narrower; its README says so.
 
-reject a-print-at-the-top-level E391 '`print` opens a statement' at=1:1 seed-gap <<'EOF'
+reject a-print-at-the-top-level E3087 '`print` opens a statement' at=1:1 seed-gap <<'EOF'
 print 999
 
 fn main() {
@@ -5698,7 +5698,7 @@ fn main() {
 }
 EOF
 
-reject an-if-at-the-top-level E391 '`if` opens a statement' at=1:1 seed-gap <<'EOF'
+reject an-if-at-the-top-level E3087 '`if` opens a statement' at=1:1 seed-gap <<'EOF'
 if true {
 	print 1
 }
@@ -5708,7 +5708,7 @@ fn main() {
 }
 EOF
 
-reject a-loop-at-the-top-level E391 '`for` opens a statement' at=1:1 seed-gap <<'EOF'
+reject a-loop-at-the-top-level E3087 '`for` opens a statement' at=1:1 seed-gap <<'EOF'
 for {
 	break
 }
@@ -5718,7 +5718,7 @@ fn main() {
 }
 EOF
 
-reject an-if-on-an-optional E354 <<'EOF'
+reject an-if-on-an-optional E3052 <<'EOF'
 fn main() {
 	x: int? = 1
 	if x {
@@ -5727,7 +5727,7 @@ fn main() {
 }
 EOF
 
-reject a-display-that-mutates E360 <<'EOF'
+reject a-display-that-mutates E3058 <<'EOF'
 struct P {
 	pub x: int
 }
@@ -5742,7 +5742,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-literal-missing-a-field E370 <<'EOF'
+reject a-struct-literal-missing-a-field E3067 <<'EOF'
 struct P {
 	pub a: int
 	pub b: int
@@ -5757,7 +5757,7 @@ EOF
 # of the written arguments forward, so a construction that stops short of a field with no
 # default is still short — the same rule a `fn` parameter default follows, and the one that
 # would go quiet if a defaulted field anywhere in the type were read as "this may be empty".
-reject a-required-field-before-a-defaulted-one E370 'the field `w` of `Box`' <<'EOF'
+reject a-required-field-before-a-defaulted-one E3067 'the field `w` of `Box`' <<'EOF'
 struct Box {
 	pub w: int
 	pub h: int = 4
@@ -5779,7 +5779,7 @@ EOF
 #
 # The rule was UNENFORCEABLE until field defaults existed, so the compiler accepted this and
 # the MUST was dead in both directions: no program could obey it, and none was asked to.
-reject a-private-field-with-no-default E482 '`m` of `Q`' <<'EOF'
+reject a-private-field-with-no-default E4045 '`m` of `Q`' <<'EOF'
 struct Q {
 	pub n: int
 	m: int
@@ -5794,7 +5794,7 @@ EOF
 # A `T?` IS THE EXCEPTION THE NOTE NAMES — its implicit default is `nil` — so the rule has to
 # be written against a field that is NOT one, and this pins that it still fires when the
 # struct has an optional beside it.
-reject a-private-field-beside-an-optional E482 '`m` of `R`' <<'EOF'
+reject a-private-field-beside-an-optional E4045 '`m` of `R`' <<'EOF'
 struct R {
 	pub n: int
 	o: int?
@@ -5807,7 +5807,7 @@ fn main() {
 }
 EOF
 
-reject an-undefined-name E372 <<'EOF'
+reject an-undefined-name E3069 <<'EOF'
 fn main() {
 	print nosuchname
 }
@@ -5816,14 +5816,14 @@ EOF
 # THE STR BRIDGES UNDER THEIR OWN NAMES. `bytearray` is `list[byte]` and `runearray` is
 # `list[rune]`, so each converts exactly one value — a name that IS a type is a conversion,
 # not a constructor, and `[]` is what builds an empty list.
-reject a-bytearray-of-nothing E272 <<'EOF'
+reject a-bytearray-of-nothing E2033 <<'EOF'
 fn main() {
 	b := bytearray()
 	print b.len()
 }
 EOF
 
-reject a-bytearray-of-two-values E273 <<'EOF'
+reject a-bytearray-of-two-values E2034 <<'EOF'
 fn main() {
 	b := bytearray("a", "b")
 	print b.len()
@@ -5835,11 +5835,11 @@ EOF
 # position is always a fresh binding (GRAMMAR#pattern). So `Red` binds the subject and covers
 # everything, and `Green` below it can never run.
 #
-# It is E458 rather than a rule of its own, and that is the point: this is refused for what
+# It is E4032 rather than a rule of its own, and that is the point: this is refused for what
 # the arms DO and not for how the first letter is typed. The rule that used to stand here
 # read the capital instead, so `n := 3; match n { 1 => …  Zzz => … }` was refused with
 # "`Zzz` is a variant of some enum" in a program that declared no enum at all.
-reject a-bare-name-pattern-covers-the-arms-below E458 <<'EOF'
+reject a-bare-name-pattern-covers-the-arms-below E4032 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -5858,7 +5858,7 @@ EOF
 # meaning change the way a pattern is — it simply resolves, which is the problem: two enums
 # that both declare a `Red` cannot both have it, and an enum that GAINS one takes a name the
 # program was already using.
-reject a-bare-variant-value E383 seed-gap <<'EOF'
+reject a-bare-variant-value E3079 seed-gap <<'EOF'
 enum Color {
 	Red
 	Green
@@ -5878,7 +5878,7 @@ EOF
 # NAME, and a value has none — its comment said so and handed the case to emit, which never
 # took it, so both spellings of the wrong count were rendered into the cast and reported by
 # cc. `reject-fuzz` found it the first time the corpus held a program that calls one.
-reject too-many-arguments-through-a-fn-value E386 <<'EOF'
+reject too-many-arguments-through-a-fn-value E3082 <<'EOF'
 fn apply(f: fn (int) -> int, v: int) -> int {
 	return f(v, 1)
 }
@@ -5888,7 +5888,7 @@ fn main() {
 }
 EOF
 
-reject too-few-arguments-through-a-fn-value E386 <<'EOF'
+reject too-few-arguments-through-a-fn-value E3082 <<'EOF'
 fn apply(f: fn (int) -> int) -> int {
 	return f()
 }
@@ -5901,16 +5901,16 @@ EOF
 # CARVE-OUT (c)'s second sentence. A closure's omitted parameter types come from the
 # function type it is checked against, so a closure that meets no such position has nowhere
 # to take them from — and the specification says that is an error rather than a guess. It
-# was a parser NotImplemented (E209) while the carve-out was unbuilt; now the form is read,
+# was a parser NotImplemented while the carve-out was unbuilt; now the form is read,
 # and this is what is left of it: a rule, with a place, at the closure.
-reject a-closure-with-no-position-to-type-it E385 <<'EOF'
+reject a-closure-with-no-position-to-type-it E3081 <<'EOF'
 fn main() {
 	f := fn (x) { return x + 1 }
 	print f(1)
 }
 EOF
 
-reject a-bare-either-side E384 <<'EOF'
+reject a-bare-either-side E3080 <<'EOF'
 fn f(n: int) -> Either[int, str] {
 	return Right("negative") if n < 0
 
@@ -5926,7 +5926,7 @@ EOF
 # helper said "three different sentences" while answering five, and the two it had not
 # counted were the two with no code. A comment cannot count a function's branches; a gate
 # that asks which codes nothing provokes can.
-reject equality-on-a-carrier E473 <<'EOF'
+reject equality-on-a-carrier E4038 <<'EOF'
 fn main() {
 	a: Either[int, str] = Either.Left(1)
 	b: Either[int, str] = Either.Left(2)
@@ -5955,7 +5955,7 @@ EOF
 # have left the other two silently compiling.
 
 for kw in break continue; do
-	reject "a-coalesce-${kw}-with-a-guard" E284 "a \`??\` right-hand \`${kw}\` takes no trailing \`if\`" <<EOF
+	reject "a-coalesce-${kw}-with-a-guard" E2044 "a \`??\` right-hand \`${kw}\` takes no trailing \`if\`" <<EOF
 fn main() {
 	mut total := 0
 	for i in 0..3 {
@@ -5968,7 +5968,7 @@ fn main() {
 EOF
 done
 
-reject a-coalesce-raise-with-a-guard E284 'a `??` right-hand `raise` takes no trailing `if`' <<'EOF'
+reject a-coalesce-raise-with-a-guard E2044 'a `??` right-hand `raise` takes no trailing `if`' <<'EOF'
 fn get() -> int? {
 	return nil
 }
@@ -5980,7 +5980,7 @@ fn main() {
 }
 EOF
 
-reject a-coalesce-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+reject a-coalesce-return-with-a-guard E2044 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
 fn f() -> int {
 	p: int? = nil
 	q := p ?? return 7 if false
@@ -5995,7 +5995,7 @@ EOF
 # the same rule reached through parse_return's OTHER branch: a bare `return` under a guard
 # is desugared into `if c { return }`, so it comes back as an `if` statement where the one
 # above comes back as a conditional return. Both are the guard, and neither is the form.
-reject a-coalesce-bare-return-with-a-guard E284 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
+reject a-coalesce-bare-return-with-a-guard E2044 'a `??` right-hand `return` takes no trailing `if`' <<'EOF'
 fn f() {
 	p: int? = nil
 	q := p ?? return if false
@@ -6027,7 +6027,7 @@ EOF
 # a list of whatever n happened to be — a form the language does not have, compiled in
 # silence, and one the shipping compiler always refused.
 
-reject a-discriminant-that-names-a-non-constant E474 'the discriminant of `E.A`' <<'EOF'
+reject a-discriminant-that-names-a-non-constant E4039 'the discriminant of `E.A`' <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6044,7 +6044,7 @@ fn main() {
 }
 EOF
 
-reject a-discriminant-that-calls E474 'the discriminant of `E.B`' <<'EOF'
+reject a-discriminant-that-calls E4039 'the discriminant of `E.B`' <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6059,7 +6059,7 @@ fn main() {
 }
 EOF
 
-reject a-fill-count-read-at-run-time E475 <<'EOF'
+reject a-fill-count-read-at-run-time E4040 <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6071,7 +6071,7 @@ fn main() {
 }
 EOF
 
-reject a-fill-count-that-calls E475 <<'EOF'
+reject a-fill-count-that-calls E4040 <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6085,14 +6085,14 @@ EOF
 # A COUNT IS A COUNT. The parser read one integer token here, so `-1` was refused as "not an
 # integer literal" and the case never reached a rule; the fold reaches it, and a negative
 # count that quietly built the empty list is not what `[0; -1]` asks for.
-reject a-negative-fill-count E476 <<'EOF'
+reject a-negative-fill-count E4041 <<'EOF'
 fn main() {
 	xs := [0; -1]
 	print xs.len()
 }
 EOF
 
-reject a-range-bound-read-at-run-time E477 '`lo`' <<'EOF'
+reject a-range-bound-read-at-run-time E4042 '`lo`' <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6116,7 +6116,7 @@ EOF
 # GRAMMAR#tuple-lit is `'(' expr ',' expr ( ',' expr )* ')'` — two or more elements, with
 # the prose beside it saying that "a single `( expr )` is just grouping". So `(1, )` is not
 # a tuple; it built one, of arity one, whose `.0` read back the element.
-reject a-one-tuple E288 <<'EOF'
+reject a-one-tuple E2045 <<'EOF'
 fn main() {
 	x := (1, )
 	print x.0
@@ -6132,28 +6132,28 @@ EOF
 # comma loop in parse_primary, the list's is that primary's `[` branch, the map's is
 # parse_map_lit, and the argument list's is parse_call_args. A rule written against one of
 # them leaves the other three accepting.
-reject a-trailing-comma-in-a-tuple E289 'the closing `)` of a tuple literal' <<'EOF'
+reject a-trailing-comma-in-a-tuple E2046 'the closing `)` of a tuple literal' <<'EOF'
 fn main() {
 	t := (1, 2,)
 	print t.0
 }
 EOF
 
-reject a-trailing-comma-in-a-list E289 'the closing `]` of a list literal' <<'EOF'
+reject a-trailing-comma-in-a-list E2046 'the closing `]` of a list literal' <<'EOF'
 fn main() {
 	xs := [1, 2, ]
 	print xs.len()
 }
 EOF
 
-reject a-trailing-comma-in-a-map E289 'the closing `}` of a map literal' <<'EOF'
+reject a-trailing-comma-in-a-map E2046 'the closing `}` of a map literal' <<'EOF'
 fn main() {
 	m := {"a": 1,}
 	print m.len()
 }
 EOF
 
-reject a-trailing-comma-in-an-argument-list E289 'the closing `)` of an argument list' <<'EOF'
+reject a-trailing-comma-in-an-argument-list E2046 'the closing `)` of an argument list' <<'EOF'
 fn add(a: int, b: int) -> int {
 	return a + b
 }
@@ -6172,7 +6172,7 @@ EOF
 # nothing, so a correct `impl Ix[int]` was then told the spec is "parameterized by K, V"
 # about a list nobody wrote. The other two were not silent, but the `]` below the loop was
 # what complained, so a missing separator was reported as a missing bracket.
-reject a-spec-type-parameter-list-without-a-comma E204 'expected `,`' <<'EOF'
+reject a-spec-type-parameter-list-without-a-comma E2004 'expected `,`' <<'EOF'
 spec Ix[K V] {
 	fn at(k: K) -> int
 }
@@ -6192,7 +6192,7 @@ fn main() {
 }
 EOF
 
-reject a-trailing-comma-in-a-spec-type-parameter-list E289 "the closing \`]\` of a spec's type parameter list" <<'EOF'
+reject a-trailing-comma-in-a-spec-type-parameter-list E2046 "the closing \`]\` of a spec's type parameter list" <<'EOF'
 spec Ix[K,] {
 	fn at(k: K) -> int
 }
@@ -6212,7 +6212,7 @@ fn main() {
 }
 EOF
 
-reject a-type-parameter-list-without-a-comma E204 'expected `,`' <<'EOF'
+reject a-type-parameter-list-without-a-comma E2004 'expected `,`' <<'EOF'
 fn f[T U](a: T, b: U) -> int {
 	return 1
 }
@@ -6222,7 +6222,7 @@ fn main() {
 }
 EOF
 
-reject a-trailing-comma-in-a-type-parameter-list E289 'the closing `]` of a type parameter list' <<'EOF'
+reject a-trailing-comma-in-a-type-parameter-list E2046 'the closing `]` of a type parameter list' <<'EOF'
 fn f[T,](a: T) -> int {
 	return 1
 }
@@ -6233,9 +6233,9 @@ fn main() {
 EOF
 
 # The type ARGUMENT list, which is reached only through a built-in type's own arguments:
-# a program's own `f[int, str](…)` is refused as a form before the list is read (E275), so
+# a program's own `f[int, str](…)` is refused as a form before the list is read (E2035), so
 # `map[K, V]` is where this loop still runs.
-reject a-trailing-comma-in-a-type-argument-list E289 'the closing `]` of a type argument list' <<'EOF'
+reject a-trailing-comma-in-a-type-argument-list E2046 'the closing `]` of a type argument list' <<'EOF'
 fn main() {
 	m := map[str, int,]()
 	print m.len()
@@ -6252,7 +6252,7 @@ EOF
 # needs parentheses. The `for` case is the one with something to decide, since `for { … }`
 # with no head IS the infinite loop — what separates them is whether the brace is CONTINUED
 # as an expression, which is the only reading under which it was a head at all.
-reject a-brace-opening-if-head E290 'the start of an `if` head' <<'EOF'
+reject a-brace-opening-if-head E2047 'the start of an `if` head' <<'EOF'
 fn main() {
 	if {"a": 1}.len() == 1 {
 		print "yes"
@@ -6264,7 +6264,7 @@ EOF
 # A module binding named `lo` is a perfectly good bound everywhere else in the program; here a
 # local of the same name shadows it, and a fold that reached past the shadow to the module
 # would compile this arm against a number the reader cannot see on any line in scope.
-reject a-range-bound-shadowed-by-a-local E477 '`lo`' <<'EOF'
+reject a-range-bound-shadowed-by-a-local E4042 '`lo`' <<'EOF'
 fn size() -> int {
 	return 3
 }
@@ -6285,7 +6285,7 @@ EOF
 # `f()` is read as an ordinary pattern, and the `..` after it is then a token no arm can hold.
 # The other two positions parse their const-expr and reject it on its value; this one has no
 # const-expr to parse.
-reject a-range-bound-that-calls E204 'found `..`' <<'EOF'
+reject a-range-bound-that-calls E2004 'found `..`' <<'EOF'
 fn lo() -> int {
 	return 3
 }
@@ -6299,7 +6299,7 @@ fn main() {
 }
 EOF
 
-reject a-brace-opening-for-head E290 'the start of a `for` head' <<'EOF'
+reject a-brace-opening-for-head E2047 'the start of a `for` head' <<'EOF'
 fn main() {
 	for {"a": 1}.len() == 1 {
 		break
@@ -6316,7 +6316,7 @@ EOF
 # THE MAP ENTRY WITHOUT A `:`. It used to be where the block/map ambiguity was
 # reported — `a block used as an expression`, which is what a match arm's block body got —
 # and with that ambiguity gone what reaches it is a genuine map literal missing a value.
-reject a-map-entry-with-no-colon E479 'a map entry is `key: value`' at=2:30 <<'EOF'
+reject a-map-entry-with-no-colon E4044 'a map entry is `key: value`' at=2:30 <<'EOF'
 fn main() {
 	m: map[str, int] = {"a": 1, "b"}
 	print m.len()
@@ -6337,7 +6337,7 @@ EOF
 # the whole `select`. The later arm is the case worth having twice over, because it was not an
 # escape but a silent ACCEPT — it compiled, and read the slot another arm's receive would fill.
 
-reject an-if-let-bind-in-the-else E372 'undefined name `x`' at=9:3 <<'EOF'
+reject an-if-let-bind-in-the-else E3069 'undefined name `x`' at=9:3 <<'EOF'
 fn find() -> int? {
 	return nil
 }
@@ -6354,7 +6354,7 @@ EOF
 # the `else if` HEAD, which is a distinct place rather than a distinct rule: a chain is a
 # nested if STATEMENT in the else BODY, so the one removal covers it — and the head is where
 # the place assertion has teeth, since that statement is built outside parse_block.
-reject an-if-let-bind-in-an-else-if-head E372 'undefined name `x`' at=8:9 <<'EOF'
+reject an-if-let-bind-in-an-else-if-head E3069 'undefined name `x`' at=8:9 <<'EOF'
 fn a() -> int? {
 	return 1
 }
@@ -6372,7 +6372,7 @@ EOF
 
 # and the far end of a chain — past a second if-let, whose own binding must not be what puts
 # the first one back within reach
-reject an-if-let-bind-in-the-final-else-of-a-chain E372 'undefined name `x`' at=15:3 <<'EOF'
+reject an-if-let-bind-in-the-final-else-of-a-chain E3069 'undefined name `x`' at=15:3 <<'EOF'
 fn a() -> int? {
 	return 1
 }
@@ -6396,7 +6396,7 @@ EOF
 # and the inner one is what makes this more than a repeat: it took a C name of its own
 # (`zg_x__1`) precisely because the outer one was still in the environment, so a fix that only
 # hid the outer name would leave this reading the inner one.
-reject an-if-let-bind-shadowed-in-a-nested-else E372 'undefined name `x`' at=16:4 <<'EOF'
+reject an-if-let-bind-shadowed-in-a-nested-else E3069 'undefined name `x`' at=16:4 <<'EOF'
 fn a() -> int? {
 	return 1
 }
@@ -6418,7 +6418,7 @@ fn main() {
 }
 EOF
 
-reject a-select-arm-bind-after-the-select E372 'undefined name `v`' at=12:2 <<'EOF'
+reject a-select-arm-bind-after-the-select E3069 'undefined name `v`' at=12:2 <<'EOF'
 fn feed(ch: chan[int]) {
 	ch <- 1
 	close(ch)
@@ -6434,7 +6434,7 @@ fn main() {
 }
 EOF
 
-reject a-select-arm-bind-in-a-later-arm E372 'undefined name `v`' at=13:15 <<'EOF'
+reject a-select-arm-bind-in-a-later-arm E3069 'undefined name `v`' at=13:15 <<'EOF'
 fn feed(ch: chan[int]) {
 	ch <- 1
 	close(ch)
@@ -6460,7 +6460,7 @@ EOF
 #
 # The name half: `del` looked the name up, and where nothing answered it revoked nothing and
 # said nothing — so `del totally_undefined` compiled and ran. The same spelling one line
-# further down, in a `print`, is `E372`; the difference was that the read path asks and the
+# further down, in a `print`, is `E3069`; the difference was that the read path asks and the
 # `del` path did not. A function name is the same finding with a different reason: `g` names
 # something, and what it names has no storage a name can be revoked from.
 #
@@ -6476,14 +6476,14 @@ EOF
 # asserting the sentence alone would have gone green against a message that says where
 # nothing.
 
-reject a-del-of-an-undefined-name E295 <<'EOF'
+reject a-del-of-an-undefined-name E2050 <<'EOF'
 fn main() {
 	del totally_undefined
 	print "unreached"
 }
 EOF
 
-reject a-del-of-a-function-name E296 <<'EOF'
+reject a-del-of-a-function-name E2051 <<'EOF'
 fn g() {
 	print "g"
 }
@@ -6493,7 +6493,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del E297 '`x` is used after del' <<'EOF'
+reject a-read-after-del E2052 '`x` is used after del' <<'EOF'
 fn main() {
 	x := 1
 	del x
@@ -6501,7 +6501,7 @@ fn main() {
 }
 EOF
 
-reject a-write-after-del E297 '`x` is used after del' <<'EOF'
+reject a-write-after-del E2052 '`x` is used after del' <<'EOF'
 fn main() {
 	mut x := 1
 	del x
@@ -6510,7 +6510,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+reject a-read-after-del-on-a-mutable-reference E2052 '`x` is used after del' <<'EOF'
 fn f(mut &x: int) -> int {
 	del x
 	return x
@@ -6522,7 +6522,7 @@ fn main() {
 }
 EOF
 
-reject a-write-after-del-on-a-mutable-reference E297 '`x` is used after del' <<'EOF'
+reject a-write-after-del-on-a-mutable-reference E2052 '`x` is used after del' <<'EOF'
 fn f(mut &x: int) {
 	del x
 	x = 9
@@ -6535,7 +6535,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del-on-some-paths E298 'used after del on some paths' <<'EOF'
+reject a-read-after-del-on-some-paths E2053 'used after del on some paths' <<'EOF'
 fn main() {
 	x := 1
 	if x == 1 {
@@ -6553,20 +6553,20 @@ EOF
 # a refusal carried a code only where its author had written one into the string — and they
 # are cases now because the parser reports through one channel that carries both.
 
-reject a-function-name-that-is-not-a-name E601 'a function needs a name' <<'EOF'
+reject a-function-name-that-is-not-a-name E2054 'a function needs a name' <<'EOF'
 fn 1() {
 	print "a"
 }
 EOF
 
-reject a-binding-name-that-is-not-a-name E601 'a binding needs a name' <<'EOF'
+reject a-binding-name-that-is-not-a-name E2054 'a binding needs a name' <<'EOF'
 fn main() {
 	5 := 1
 	print 5
 }
 EOF
 
-reject a-receive-arrow-on-something-that-is-not-a-channel E602 <<'EOF'
+reject a-receive-arrow-on-something-that-is-not-a-channel E2055 <<'EOF'
 fn f(c: <-int) {
 	print "a"
 }
@@ -6576,7 +6576,7 @@ fn main() {
 }
 EOF
 
-reject mut-before-something-that-is-not-a-method E603 <<'EOF'
+reject mut-before-something-that-is-not-a-method E2056 <<'EOF'
 struct S {
 	pub a: int
 }
@@ -6590,7 +6590,7 @@ fn main() {
 }
 EOF
 
-reject is-against-something-that-is-not-a-type E604 <<'EOF'
+reject is-against-something-that-is-not-a-type E2057 <<'EOF'
 fn main() {
 	e := Err("x")
 	if e is 3 {
@@ -6599,13 +6599,13 @@ fn main() {
 }
 EOF
 
-reject an-f-string-whose-literal-text-is-malformed E608 <<'EOF'
+reject an-f-string-whose-literal-text-is-malformed E2058 <<'EOF'
 fn main() {
 	print f"\q"
 }
 EOF
 
-reject an-f-string-hole-holding-two-expressions E609 <<'EOF'
+reject an-f-string-hole-holding-two-expressions E2059 <<'EOF'
 fn main() {
 	print f"{1 2}"
 }
@@ -6620,13 +6620,13 @@ EOF
 # three.
 #
 # It used to be legal in NONE and said so wrongly. `_Box(1)` on a declared `struct _Box`
-# answered `E425 undefined function`, which is false about a program that declares the type
+# answered `E4016 undefined function`, which is false about a program that declares the type
 # eight lines up — the constructor dispatch is `name_is_type`, and `_` is not upper-case.
 # The leading underscore needs no rule of its own: `_` has no case, so a name that starts
 # with one is in neither namespace, which is exactly what this asks about.
 #
 # The seed resolves the name against its symbol table and builds all three (`seed-gap`).
-reject a-struct-named-with-a-leading-underscore E610 '`_Box` cannot name a struct' seed-gap <<'EOF'
+reject a-struct-named-with-a-leading-underscore E2060 '`_Box` cannot name a struct' seed-gap <<'EOF'
 struct _Box {
 	pub v: int
 }
@@ -6637,7 +6637,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-named-in-lower-case E610 '`lower` cannot name a struct' seed-gap <<'EOF'
+reject a-struct-named-in-lower-case E2060 '`lower` cannot name a struct' seed-gap <<'EOF'
 struct lower {
 	pub v: int
 }
@@ -6648,7 +6648,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-named-with-a-leading-underscore E610 '`_E` cannot name an enum' seed-gap <<'EOF'
+reject an-enum-named-with-a-leading-underscore E2060 '`_E` cannot name an enum' seed-gap <<'EOF'
 enum _E {
 	A
 }
@@ -6666,7 +6666,7 @@ EOF
 # its wording. Half of them had no code at all before that change and were pinned, where they
 # were pinned at all, by a sentence.
 
-reject a-bare-value-that-is-neither-side-of-an-either E701 <<'EOF'
+reject a-bare-value-that-is-neither-side-of-an-either E4053 <<'EOF'
 fn g(r: Either[int, str]) -> int {
 	return 1
 }
@@ -6676,7 +6676,7 @@ fn main() {
 }
 EOF
 
-reject an-optional-chain-reading-a-field-that-is-not-there E702 <<'EOF'
+reject an-optional-chain-reading-a-field-that-is-not-there E4054 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -6687,7 +6687,7 @@ fn main() {
 }
 EOF
 
-reject unwrap-a-value-that-carries-nothing E703 <<'EOF'
+reject unwrap-a-value-that-carries-nothing E9080 <<'EOF'
 fn f() -> int? {
 	x := 1
 	return x?
@@ -6698,7 +6698,7 @@ fn main() {
 }
 EOF
 
-reject propagate-a-right-the-enclosing-function-does-not-answer E704 <<'EOF'
+reject propagate-a-right-the-enclosing-function-does-not-answer E4055 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -6713,7 +6713,7 @@ fn main() {
 }
 EOF
 
-reject two-modules-defining-one-public-function E705 seed-gap <<'EOF'
+reject two-modules-defining-one-public-function E9081 seed-gap <<'EOF'
 import (
 	"ma"
 	"mb"
@@ -6735,9 +6735,9 @@ EOF
 # TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
 # is legal — they take a module tag in C — so what this pins is the collision no tag can
 # separate. The sentence is pinned because the case below it shares the shape and not the rule:
-# what E706 has to say here is that there are two FILES, which is the thing this compiler
+# what E9082 has to say here is that there are two FILES, which is the thing this compiler
 # cannot tell from two modules and used to assert it could.
-reject two-files-of-one-module-declaring-a-function E706 'both define `work`' <<'EOF'
+reject two-files-of-one-module-declaring-a-function E9082 'both define `work`' <<'EOF'
 import "one"
 
 fn main() {
@@ -6758,14 +6758,14 @@ fn work() -> int {
 EOF
 
 # ONE FILE declaring a name twice, which is the other half of the same collision and is a
-# different RULE: E706 is a `NotImplemented` the package layer retires, and this is refused by
-# every compiler there will ever be. It was reported as E706 — "two modules both define
+# different RULE: E9082 is a `NotImplemented` the package layer retires, and this is refused by
+# every compiler there will ever be. It was reported as E9082 — "two modules both define
 # `test_same`" about two `#[test]` functions in one file — and a reader following that sentence
 # goes looking for a second module.
 #
 # The sentence is pinned on the half no place carries: the marker points at the SECOND
 # declaration, so the first one's line is the thing the reader cannot see from the caret.
-reject one-file-declaring-a-function-twice E745 'the first is at line 1' <<'EOF'
+reject one-file-declaring-a-function-twice E4073 'the first is at line 1' <<'EOF'
 fn work() -> int {
 	return 1
 }
@@ -6782,7 +6782,7 @@ EOF
 # AND THE CONSTANT, which is the rule's other walk over its other table. The two are one rule
 # and two tables (emit.zg says so where the wording lives), so a case on the function alone
 # pins half of it — and the constant half was the half that used to LINK rather than refuse.
-reject one-file-declaring-a-constant-twice E745 'the first is at line 1' seed-gap <<'EOF'
+reject one-file-declaring-a-constant-twice E4073 'the first is at line 1' seed-gap <<'EOF'
 const N := 1
 const N := 2
 
@@ -6791,7 +6791,7 @@ fn main() {
 }
 EOF
 
-reject a-parameter-typed-by-a-name-no-declaration-carries E707 <<'EOF'
+reject a-parameter-typed-by-a-name-no-declaration-carries E4056 <<'EOF'
 fn f(x: Zork) -> int {
 	return 1
 }
@@ -6801,21 +6801,21 @@ fn main() {
 }
 EOF
 
-reject force-a-value-that-carries-nothing E708 <<'EOF'
+reject force-a-value-that-carries-nothing E9083 <<'EOF'
 fn main() {
 	x := 1
 	print x!
 }
 EOF
 
-reject coalesce-a-value-that-carries-nothing E709 <<'EOF'
+reject coalesce-a-value-that-carries-nothing E9084 <<'EOF'
 fn main() {
 	x := 1
 	print x ?? 2
 }
 EOF
 
-reject an-is-test-on-something-that-is-not-an-err E710 <<'EOF'
+reject an-is-test-on-something-that-is-not-an-err E4057 <<'EOF'
 fn main() {
 	x := 1
 	b := x is IOError
@@ -6823,7 +6823,7 @@ fn main() {
 }
 EOF
 
-reject an-in-test-on-something-that-is-not-an-err E711 <<'EOF'
+reject an-in-test-on-something-that-is-not-an-err E4058 <<'EOF'
 fn main() {
 	x := 1
 	b := x in IOError
@@ -6831,21 +6831,21 @@ fn main() {
 }
 EOF
 
-reject convert-a-list-into-a-list E712 <<'EOF'
+reject convert-a-list-into-a-list E4059 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print list[byte](xs).len()
 }
 EOF
 
-reject bridge-a-str-to-a-list-of-something-that-is-not-a-byte E713 <<'EOF'
+reject bridge-a-str-to-a-list-of-something-that-is-not-a-byte E4060 <<'EOF'
 fn main() {
 	s := "ab"
 	print list[int](s).len()
 }
 EOF
 
-reject render-an-enum-as-text E714 <<'EOF'
+reject render-an-enum-as-text E9085 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -6857,14 +6857,14 @@ fn main() {
 }
 EOF
 
-reject index-something-that-is-neither-a-list-nor-a-map E715 <<'EOF'
+reject index-something-that-is-neither-a-list-nor-a-map E4061 <<'EOF'
 fn main() {
 	x := 1
 	print x[0]
 }
 EOF
 
-reject an-err-method-given-an-argument E716 <<'EOF'
+reject an-err-method-given-an-argument E9086 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -6876,7 +6876,7 @@ fn main() {
 }
 EOF
 
-reject a-method-the-error-interface-does-not-declare E717 <<'EOF'
+reject a-method-the-error-interface-does-not-declare E9087 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -6888,7 +6888,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-no-error-to-answer-with E718 <<'EOF'
+reject ok-or-with-no-error-to-answer-with E9088 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -6899,7 +6899,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-two-errors-to-answer-with E719 <<'EOF'
+reject ok-or-with-two-errors-to-answer-with E9089 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -6910,7 +6910,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-answering-an-absence-with-something-that-is-not-an-err E720 <<'EOF'
+reject ok-or-answering-an-absence-with-something-that-is-not-an-err E9090 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -6921,7 +6921,7 @@ fn main() {
 }
 EOF
 
-reject ok-given-an-argument E721 <<'EOF'
+reject ok-given-an-argument E9091 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -6932,7 +6932,7 @@ fn main() {
 }
 EOF
 
-reject a-carrier-method-neither-carrier-answers E722 <<'EOF'
+reject a-carrier-method-neither-carrier-answers E9092 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -6942,7 +6942,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-type-method-that-is-not-of E723 <<'EOF'
+reject an-enum-type-method-that-is-not-of E9093 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -6954,7 +6954,7 @@ fn main() {
 }
 EOF
 
-reject reverse-a-discriminant-with-two-arguments E724 <<'EOF'
+reject reverse-a-discriminant-with-two-arguments E4062 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -6966,27 +6966,27 @@ fn main() {
 }
 EOF
 
-reject a-method-on-a-value-whose-type-declares-none E725 <<'EOF'
+reject a-method-on-a-value-whose-type-declares-none E9094 <<'EOF'
 fn main() {
 	x := 1
 	print x.wobble()
 }
 EOF
 
-reject construct-the-end-of-stream-sentinel E726 <<'EOF'
+reject construct-the-end-of-stream-sentinel E4063 <<'EOF'
 fn main() {
 	e := StopIteration("x")
 	print 1
 }
 EOF
 
-reject construct-a-name-no-declaration-carries E727 <<'EOF'
+reject construct-a-name-no-declaration-carries E4064 <<'EOF'
 fn main() {
 	print Zork(1)
 }
 EOF
 
-reject a-constructor-pattern-naming-no-variant-of-the-subject E728 <<'EOF'
+reject a-constructor-pattern-naming-no-variant-of-the-subject E4065 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -7001,7 +7001,7 @@ fn main() {
 }
 EOF
 
-reject a-match-over-an-either-naming-one-side E729 <<'EOF'
+reject a-match-over-an-either-naming-one-side E4066 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7013,7 +7013,7 @@ fn main() {
 }
 EOF
 
-reject a-match-over-a-bool-naming-one-value E730 <<'EOF'
+reject a-match-over-a-bool-naming-one-value E4067 <<'EOF'
 fn main() {
 	b := true
 	match b {
@@ -7022,7 +7022,7 @@ fn main() {
 }
 EOF
 
-reject a-constructor-pattern-on-an-either-that-is-neither-side E731 <<'EOF'
+reject a-constructor-pattern-on-an-either-that-is-neither-side E9095 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7035,7 +7035,7 @@ fn main() {
 }
 EOF
 
-reject two-constants-that-name-each-other E732 <<'EOF'
+reject two-constants-that-name-each-other E4068 <<'EOF'
 const A := B + 1
 const B := A + 1
 
@@ -7044,13 +7044,13 @@ fn main() {
 }
 EOF
 
-reject an-entry-answering-something-that-is-neither-int-nor-result E733 <<'EOF'
+reject an-entry-answering-something-that-is-neither-int-nor-result E9096 <<'EOF'
 fn main() -> str {
 	return "a"
 }
 EOF
 
-reject main-with-args-in-a-program-that-uses-concurrency E734 <<'EOF'
+reject main-with-args-in-a-program-that-uses-concurrency E9097 <<'EOF'
 fn main(args: list[str]) {
 	ch := chan[int](1)
 	ch <- 1
@@ -7058,7 +7058,7 @@ fn main(args: list[str]) {
 }
 EOF
 
-reject a-closure-capturing-a-name-with-no-type E735 <<'EOF'
+reject a-closure-capturing-a-name-with-no-type E4069 <<'EOF'
 fn main() {
 	f := fn () -> int {
 		return zz
@@ -7067,14 +7067,14 @@ fn main() {
 }
 EOF
 
-reject spawn-of-something-that-is-not-a-call E736 <<'EOF'
+reject spawn-of-something-that-is-not-a-call E9098 <<'EOF'
 fn main() {
 	x := 1
 	spawn x
 }
 EOF
 
-reject spawn-of-a-method-the-receiver-does-not-declare E737 <<'EOF'
+reject spawn-of-a-method-the-receiver-does-not-declare E9099 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -7089,52 +7089,52 @@ EOF
 # `unsafe` rule are read off a signature ROW and a missing row is deliberately quiet, so a
 # name nothing declares asked two rules with nothing to say and went straight on to spell
 # `zg_<name>()` inside the thunk — reported by cc, against a file under .zerg-cache. The
-# ordinary call has answered by name since `E425` existed; these are the two keywords that
+# ordinary call has answered by name since `E4016` existed; these are the two keywords that
 # reached the same emitter down a path of their own.
-reject spawn-of-a-function-nothing-declares E425 <<'EOF'
+reject spawn-of-a-function-nothing-declares E4016 <<'EOF'
 fn main() {
 	spawn nosuchfn()
 }
 EOF
 
-reject defer-of-a-function-nothing-declares E425 <<'EOF'
+reject defer-of-a-function-nothing-declares E4016 <<'EOF'
 fn main() {
 	defer nosuchfn()
 }
 EOF
 
 # and the same path missed the SHADOWING half of the question, which the ordinary call
-# answers with `E369`: the innermost binding wins, so a `defer x()` under an `x := 1` is a
+# answers with `E3066`: the innermost binding wins, so a `defer x()` under an `x := 1` is a
 # call that cannot happen rather than a call to the function of that name.
-reject defer-of-a-binding-that-holds-an-int E369 'is not callable' <<'EOF'
+reject defer-of-a-binding-that-holds-an-int E3066 'is not callable' <<'EOF'
 fn main() {
 	x := 1
 	defer x()
 }
 EOF
 
-reject map-len-given-an-argument E738 <<'EOF'
+reject map-len-given-an-argument E4070 <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.len(1)
 }
 EOF
 
-reject map-has-given-no-key E739 <<'EOF'
+reject map-has-given-no-key E4071 <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.has()
 }
 EOF
 
-reject a-map-method-this-compiler-does-not-have E740 <<'EOF'
+reject a-map-method-this-compiler-does-not-have E9100 <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.drop(1)
 }
 EOF
 
-reject a-field-an-err-does-not-carry E741 <<'EOF'
+reject a-field-an-err-does-not-carry E9101 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7146,7 +7146,7 @@ fn main() {
 }
 EOF
 
-reject a-list-method-this-compiler-does-not-have E444 <<'EOF'
+reject a-list-method-this-compiler-does-not-have E9056 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	xs.pop()
@@ -7163,7 +7163,7 @@ EOF
 # at `--> 0:0`, and no case here was in a shape that could see it. The rule is one rule; the
 # case list is what decides which of its positions is exercised.
 
-reject a-generic-whose-written-type-arguments-outnumber-its-parameters E742 seed-gap <<'EOF'
+reject a-generic-whose-written-type-arguments-outnumber-its-parameters E4072 seed-gap <<'EOF'
 fn set[T](a: T) -> int {
 	return 1
 }
@@ -7173,7 +7173,7 @@ fn main() {
 }
 EOF
 
-reject an-inclusive-range-arm-whose-upper-bound-is-nil E743 seed-gap <<'EOF'
+reject an-inclusive-range-arm-whose-upper-bound-is-nil E9102 seed-gap <<'EOF'
 fn main() {
 	x := 3
 	match x {
@@ -7183,7 +7183,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-field-typed-by-a-name-no-declaration-carries E707 '(field `A.v`)' <<'EOF'
+reject a-struct-field-typed-by-a-name-no-declaration-carries E4056 '(field `A.v`)' <<'EOF'
 struct A {
 	pub v: Zork
 }
@@ -7193,7 +7193,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-payload-typed-by-a-name-no-declaration-carries E707 '(payload 0 of `E.A`)' <<'EOF'
+reject an-enum-payload-typed-by-a-name-no-declaration-carries E4056 '(payload 0 of `E.A`)' <<'EOF'
 enum E {
 	A(Zork)
 	B
@@ -7204,7 +7204,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-used-as-a-struct-field-type E416 '(field `A.v`)' seed-gap <<'EOF'
+reject a-spec-used-as-a-struct-field-type E9048 '(field `A.v`)' seed-gap <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -7218,7 +7218,7 @@ fn main() {
 }
 EOF
 
-reject the-self-type-as-a-struct-field E364 'field `A.v` is outside an `impl`' <<'EOF'
+reject the-self-type-as-a-struct-field E3062 'field `A.v` is outside an `impl`' <<'EOF'
 struct A {
 	pub v: This
 }
@@ -7233,7 +7233,7 @@ EOF
 # A PRELUDE NAME IS TAKEN BEFORE THE PROGRAM IS READ, so a declaration cannot have one
 # (docs/runtime/package.md). Each case here is `at=1:8` or `at=1:4`, because the whole claim
 # is that the refusal lands on the DECLARATION: `struct list` used to be accepted and the
-# complaint arrived at the first `list(1)` after it, as `E425 undefined function` — a
+# complaint arrived at the first `list(1)` after it, as `E4016 undefined function` — a
 # sentence that is false about a program that does declare one.
 #
 # The three kinds are here rather than one because the message names the slot, and a slot
@@ -7241,7 +7241,7 @@ EOF
 #
 # A TYPE DECLARATION'S NAME IS ASKED TWICE, and the struct case is written with an UPPER-CASE
 # prelude name so that this half of it is what answers. The case below is the other half.
-reject a-prelude-name-names-a-struct E611 'cannot name a struct' at=1:8 <<'EOF'
+reject a-prelude-name-names-a-struct E2061 'cannot name a struct' at=1:8 <<'EOF'
 struct Either {
 	pub n: int
 }
@@ -7254,11 +7254,11 @@ EOF
 # AND `struct list` IS BOTH — a prelude name and a lower-case one — so it is the case that
 # pins WHICH of the two rules answers. The case rule does, and that is a decision rather than
 # an accident: PascalCasing a lower-case prelude name leaves the prelude alone (`List` is a
-# name the reserved set does not hold, and so is every other one of them), so `E610`'s advice
-# clears both rules in one edit where `E611`'s — pick another name — says nothing about the
+# name the reserved set does not hold, and so is every other one of them), so `E2060`'s advice
+# clears both rules in one edit where `E2061`'s — pick another name — says nothing about the
 # letter and lets the second attempt be refused again for a reason the first never mentioned.
-# Swap the two and this case reports `E611`.
-reject a-lower-case-prelude-name-at-a-type-declaration E610 'begins with an UPPER-CASE LETTER' at=1:8 <<'EOF'
+# Swap the two and this case reports `E2061`.
+reject a-lower-case-prelude-name-at-a-type-declaration E2060 'begins with an UPPER-CASE LETTER' at=1:8 <<'EOF'
 struct list {
 	pub n: int
 }
@@ -7268,7 +7268,7 @@ fn main() {
 }
 EOF
 
-reject a-prelude-name-names-a-spec E611 'cannot name a spec' at=1:6 <<'EOF'
+reject a-prelude-name-names-a-spec E2061 'cannot name a spec' at=1:6 <<'EOF'
 spec Eq {
 	fn eq(o: This) -> bool
 }
@@ -7278,7 +7278,7 @@ fn main() {
 }
 EOF
 
-reject a-prelude-name-names-a-function E611 'cannot name a function' at=1:4 <<'EOF'
+reject a-prelude-name-names-a-function E2061 'cannot name a function' at=1:4 <<'EOF'
 fn int() -> int {
 	return 1
 }
@@ -7295,10 +7295,10 @@ EOF
 #
 # It is pinned here, in the reject list, because the claim is about WHICH rule answers: this
 # program is ill-formed for a reason six lines below the declaration, and if `map` were
-# reserved at this slot the answer would be `E611` at `1:4` and this case would never reach
+# reserved at this slot the answer would be `E2061` at `1:4` and this case would never reach
 # `nope`. Swap `map` for `list` — the other container, and one a call CAN spell through
 # `list[byte](s)` — and that is exactly what happens.
-reject a-prelude-name-with-no-call-form-may-name-a-function E425 'undefined function' at=6:2 <<'EOF'
+reject a-prelude-name-with-no-call-form-may-name-a-function E4016 'undefined function' at=6:2 <<'EOF'
 fn map(zz: int) -> int {
 	return zz + 1
 }
@@ -7312,7 +7312,7 @@ EOF
 # reads `Left` and `Right` BY NAME — an arity rule, a tag, and the match-exhaustiveness rule
 # that says which side an arm covers — so a declaration taking one leaves those rules reading
 # a name the program means something else by.
-reject a-prelude-name-names-an-enum E611 'cannot name an enum' at=1:6 <<'EOF'
+reject a-prelude-name-names-an-enum E2061 'cannot name an enum' at=1:6 <<'EOF'
 enum Left {
 	A
 }
@@ -7330,7 +7330,7 @@ EOF
 # The positive half — that a module with a test file beside it still builds, and builds
 # without it — is examples/1g/testfile, because a program that must BUILD cannot be written
 # in this script.
-reject a-member-a-test-file-declares E388 'has no `only_in_test`' <<'EOF'
+reject a-member-a-test-file-declares E3084 'has no `only_in_test`' <<'EOF'
 import "lib"
 
 fn main() {
@@ -7346,7 +7346,7 @@ pub fn only_in_test() -> int {
 }
 EOF
 
-reject an-import-that-names-a-test-file E512 at=1:8 <<'EOF'
+reject an-import-that-names-a-test-file E5011 at=1:8 <<'EOF'
 import "lib/lib_test"
 
 fn main() {

@@ -37,6 +37,13 @@ discovered. 1059 commits since the entry beneath it.
   `time` learned to render; `os` gained `isatty`, `set_env` and `del_env`, and with them the naming rule
   `xxx` reads, `set_xxx` writes, `del_xxx` removes — for a property, which is something with a getter named for
   the thing.
+- **Every diagnostic code is four digits, and declared once.** `E204` is `E2004`: a range is a thousand numbers
+  and a stage owns exactly one, which retires the continuation ranges (`E6xx`, `E7xx`) that had stopped the first
+  digit from naming the stage. The 104 `[not yet]` refusals move to `E9xxx` — a form the language has and this
+  compiler has not built is a different kind of finding, and it retires when the form is built. The codes
+  themselves live in `src/compiler/zerg/rule.zg` as one enum, so a hand-spelled code is a type error and two
+  parallel changes collide in git rather than in CI. The three-digit numbering is retired whole; nothing shipped
+  under it.
 - **`zerg build --emit check`** — the front end without code generation, 2.30 s / 0.14 GB where `--emit c` costs
   3.16 s / 2.40 GB. A `check-equal` gate pins the two stages to byte-identical diagnostics, because a check that
   reports less than the build would show a clean buffer for a file that will not build.

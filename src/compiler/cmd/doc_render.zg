@@ -433,12 +433,19 @@ fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 fn doc_note(mut &out: list[str], f: zerg.DocFile) {
 	return if f.ok
 
-	mut note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
-	if doc_is_stdlib(f.path) {
-		note = note + " (see docs/runtime/stdlib.md)"
-	}
 	doc_gap(out)
-	doc_wrap(out, note, 0)
+	doc_wrap(out, doc_note_text(f), 0)
+}
+
+# doc_note_text is that sentence on its own, for the refusals that have no `out` to fill into.
+# `doc_no_decl` is the caller: it answers "the module `atomic` declares nothing called `load`"
+# from a module whose declarations are missing rather than absent, and the two paths through
+# this tool have to say that in the same words.
+fn doc_note_text(f: zerg.DocFile) -> str {
+	note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
+	return note + " (see docs/runtime/stdlib.md)" if doc_is_stdlib(f.path)
+
+	return note
 }
 
 # --- naming a file to a reader ----------------------------------------------------------------

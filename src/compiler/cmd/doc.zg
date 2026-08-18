@@ -254,8 +254,25 @@ fn doc_can_see() -> str {
 # not, so what is listed is what that module declares. A field is deliberately not among them —
 # `doc_find` reaches declarations, and a field is shown inside the entry for the type that holds
 # it.
+#
+# A FILE THAT DID NOT PARSE IS SAID SO HERE TOO. `zerg doc atomic.load` answered "the module
+# `atomic` declares nothing called `load`" and then listed nothing at all, which is a sentence
+# about a module whose declarations are MISSING read as one about a module that has none. The
+# whole-module path has printed that note since it was written (`doc_note`); this one is the
+# same module reached by the other door, so it is the same note, from the same function.
+#
+# The listing is left off entirely when there is nothing in it, because "what it does declare:"
+# above an empty list is the claim the note has just corrected.
 fn doc_no_decl(m: zerg.DocModule, key: str) -> str {
-	mut out := f"the module `{m.name}` declares nothing called `{key}`\n\nwhat it does declare:"
+	mut out := f"the module `{m.name}` declares nothing called `{key}`"
+	for f in m.files {
+		if not f.ok {
+			out = out + "\n\n" + doc_note_text(f)
+		}
+	}
+	return out if m.decls.len() == 0
+
+	out = out + "\n\nwhat it does declare:"
 	for d in m.decls {
 		if d.recv == "" {
 			out = out + f"\n  {m.name}.{d.name}"

@@ -47,7 +47,7 @@ fi
 # GRAMMAR form at some point in this corpus's life (`expected `=>`, found `|`` was the
 # or-pattern, `no type named `ptr`` was ptr-type), and productions-check.sh asserts against
 # the identical list for the identical reason. It was written out in both and "kept in step
-# by hand", which is how it came to miss the `E204 ` prefix in both at once.
+# by hand", which is how it came to miss the `E2004 ` prefix in both at once.
 
 # TWO PROFILES, and the split is not a convenience. Everything in the core is answerable by
 # an implementation targeting anything at all; the SYSTEM profile is inline assembly, raw

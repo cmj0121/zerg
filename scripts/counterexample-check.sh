@@ -37,7 +37,7 @@
 #
 #   # LATE: <code> <why>   the parse takes it and a later stage refuses it, with that code.
 #                          Then `--emit ast` must ACCEPT and `--emit c` must refuse naming
-#                          the code — `1 = 2` parses as an assignment and E302 is the
+#                          the code — `1 = 2` parses as an assignment and E3002 is the
 #                          checker saying the target is not a place. `--emit c` and not
 #                          `--emit bin` on purpose: it reaches the checker and the emitter
 #                          and never runs cc, so nothing here can be answered by a C

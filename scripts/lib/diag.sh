@@ -61,13 +61,13 @@ cc_answered() {
 # private content that may not be written down in this repo.
 #
 # The CODE is optional in the pattern, and it was not — a fail-open that had already
-# happened once. A checked rule opens its message with `E204 …` now, so the day the codes
+# happened once. A checked rule opens its message with `E2004 …` now, so the day the codes
 # landed this predicate stopped matching the very messages it was written for, and nothing
 # went red, because a stale negative test reports nothing. Both corpora's gates carried
 # their own copy of the pattern and were "kept in step by hand", which is the arrangement
 # that let it happen; there is one copy now.
 is_typo_msg() {
-	printf '%s\n' "$1" | grep -qE "^(error: )?(E[0-9]{3} )?(expected |undefined |no type named |no field |unexpected )"
+	printf '%s\n' "$1" | grep -qE "^(error: )?(E[0-9]{4} )?(expected |undefined |no type named |no field |unexpected )"
 }
 
 # has_place <text> — every diagnostic owes a `--> file:line:col`.
@@ -88,8 +88,8 @@ has_place() {
 # a statement about whose vocabulary a diagnostic is allowed to use. `assert` is what made
 # it worth writing down — its temporaries are bindings in the ordinary environment, so any
 # rule that reports a NAME could reach one, and two already had: a closure capturing an
-# assert was refused as _E735 a closure captures `zga_l3c10`_, and an operand the checker
-# turned away left _E372 undefined name `zga_l3c9`_ behind it, one per conjunct of an `and`.
+# assert was refused as _E4069 a closure captures `zga_l3c10`_, and an operand the checker
+# turned away left _E3069 undefined name `zga_l3c9`_ behind it, one per conjunct of an `and`.
 # Both were found by hand. This is what finds the third.
 #
 # `temp_named` answers WHICH one, so the gate that catches it can put the name in its own
@@ -105,14 +105,14 @@ names_a_temp() {
 }
 
 # opens_with_code <text> <code> — the diagnostic's FIRST line starts with the code. Where a
-# rule reports a place the renderer's `error:` opens the line ahead of it (`error: E307 …`),
+# rule reports a place the renderer's `error:` opens the line ahead of it (`error: E3006 …`),
 # and a rule that raises before there is a place to report prints the message alone — so the
 # code is what the line starts with either way, and that is the whole fact this encodes.
 #
 # It is here rather than in each script because it is the same fact as `has_place`: one
 # statement about where the compiler puts things in a line. Both gates asserted it with their
 # own copy, which is the shape of failure this file's header is about — a renderer that grew
-# an `error[E307]:` form would leave one copy fixed and the other passing while asserting
+# an `error[E3006]:` form would leave one copy fixed and the other passing while asserting
 # nothing.
 opens_with_code() {
 	case $(printf '%s\n' "$1" | head -1) in

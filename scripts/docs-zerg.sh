@@ -5,7 +5,7 @@
 #
 # A FENCE LANGUAGE IS A CLAIM NOBODY WAS CHECKING. When this was written, 30 ` ```zerg ` blocks
 # lived in the English chapters and 21 of them were not Zerg at all — diagrams with a `→` down
-# the middle (`E104 this character is not part of any Zerg token`), before/after pairs that
+# the middle (`E1004 this character is not part of any Zerg token`), before/after pairs that
 # declare the same function twice, notation the lexer has never heard of. The translations
 # agreed with them perfectly, which is why `docs-mirror` could not see it: both languages said
 # `zerg` and both were wrong, so the pair matched. Only the compiler disagreed, and nothing

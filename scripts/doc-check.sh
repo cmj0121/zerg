@@ -252,7 +252,6 @@ pub fn crowded() -> int {
 pub fn hashy() -> str {
 	return "# not a comment"
 }
-
 # tail_commented is documented by this comment and not by the one at the end of the line
 # above it.
 pub fn tail_commented() -> int {
@@ -291,6 +290,12 @@ ZG
 # It sits on the closing brace of `hashy`, which is the line immediately above the comment
 # that documents `tail_commented` — so a rule that sewed a trailing comment onto the run
 # below it would give `tail_commented` a sentence about braces.
+#
+# NO BLANK LINE MAY SEPARATE THE TWO, and one did. A blank line ends a run, so the trailing
+# comment formed a run of its own that the blank-line rule then dropped — it never reached the
+# run below it, and the case measured a rule other than the one it names. Deleting `continue if
+# prev == t.line` from zerg/doc.zg left every check here green, which is this script's own
+# standard turned on itself: a rule with no case is a rule that does not exist.
 sed -i.bak '/^	return "# not a comment"$/{n;s/^}$/}  # this trailing comment documents nothing/;}' \
 	"$tmp/proj/attach.zg" && rm -f "$tmp/proj/attach.zg.bak"
 

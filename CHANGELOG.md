@@ -52,10 +52,19 @@ discovered. 1059 commits since the entry beneath it.
   round-trip gate holds it. The linter's usage walk was missing three of the places a name can appear. The
   language server had been treating the opened file as the program's entry point, so it underlined correct code
   in every multi-file module.
+- **`zerg doc`.** The documentation that was already in the source, read from a terminal: the modules, one
+  module's whole document, one declaration (`log.Logger.level` reaches a method), or a path to a file or a
+  directory. **What is exposed is what is documented, and an exposed declaration nobody wrote about is shown and
+  marked** rather than dropped — a tool that quietly omits one makes the library look more complete than it is,
+  which is the failure the whole line exists to prevent. Comments come from the lexer's trivia, so a `#` inside a
+  string literal is not one; a blank line detaches a comment, a decorator does not, and a `--- banner ---`
+  documents nothing. Colour follows the terminal and the shape never does, so a document redirected into a file is
+  the terminal's with the colour taken off, byte for byte. `--check` — building each example and diffing its
+  output — is the half that is not built, and `scripts/doc-examples-check.sh` goes on running them.
 - **The driver is a command line again**: `src/compiler/zergc.zg` went from 3359 lines to 95, with the
   sub-commands and their shared machinery in `src/compiler/cmd/`. The emitted C is byte-identical, which is what
   makes it a move rather than a rewrite.
-- **The gate board is 39**, from 33.
+- **The gate board is 42**, from 33.
 
 ### Known issues
 
@@ -76,8 +85,11 @@ Filed with the measurement that found each one, so nobody has to rediscover it.
 
 Two bodies of work are open as stories rather than defects: the language server
 ([#15](https://github.com/cmj0121/zerg/issues/15)) cannot yet answer where a name is declared, and `zerg doc`
-([#16](https://github.com/cmj0121/zerg/issues/16)) does not exist — though 43 of the examples it would render are
-already compiled and diffed against their stated output.
+([#16](https://github.com/cmj0121/zerg/issues/16)) has its first version and not its last — reading a module from a
+terminal is [#17](https://github.com/cmj0121/zerg/issues/17); the `##` marker that separates the reader's document
+from the maintainer's notes ([#18](https://github.com/cmj0121/zerg/issues/18)), finding a declaration by name alone
+([#19](https://github.com/cmj0121/zerg/issues/19)) and static HTML ([#20](https://github.com/cmj0121/zerg/issues/20))
+are still ahead of it.
 
 Refused by name, and therefore not defects: generic `struct` and `enum` (`E215`, which is why `atomic` ships
 unusable), a structural `Display` for composites (`E449`/`E417`/`E445`, three faces of one gap), named arguments

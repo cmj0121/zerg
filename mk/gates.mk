@@ -23,7 +23,8 @@
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
-	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check
+	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
+	doc-check
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
 # examples corpus. It answered to `test` until the board took that name, and `suites` is what
@@ -422,7 +423,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -537,3 +538,18 @@ seed-gaps:                      # the seed's gap list says the same thing in bot
 lint-check:                     # every linter rule has a program that makes it fire
 	$(MAKE) build
 	./scripts/lint-check.sh
+
+# `zerg doc` reads the source and prints what a module exposes, and for its first release
+# nothing measured it. The direction it fails in is the reason this is a gate rather than a
+# test: a declaration it quietly leaves out makes the documentation look MORE complete than
+# it is, and a reader cannot tell that from a module with nothing else in it. So the `pub`
+# declarations in the SOURCE are compared by name against the ones in the DOCUMENT, module by
+# module; the undocumented ones are counted and the number pinned; and every comment-
+# attachment rule gets a fixture case of its own, because two of them were wrong once with
+# no gate able to see it.
+#
+# It is NOT `zerg doc --check` — running a doc example and diffing its output is the second
+# half of issue #17 and is not built. `stdlib-test` still runs the examples.
+doc-check:                      # the document is every exposed declaration, and no more
+	$(MAKE) build
+	./scripts/doc-check.sh

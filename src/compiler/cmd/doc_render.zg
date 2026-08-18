@@ -1,0 +1,857 @@
+# The document a terminal reads. What a module CONTAINS is `zerg/doc.zg`'s answer; what is
+# here is the only other half — the order the parts are read in, the four indents, the column
+# the prose is filled to, and the four spans that are allowed to carry colour.
+#
+# EVERY ENTRY POINT ANSWERS A `str` AND WRITES NOTHING. That is `log.render`'s lesson, and it
+# is the difference between a document a test can compare against and one that can only be
+# looked at: `do_doc` performs the single write, and everything above it is a function of a
+# `DocModule` alone. It is also what makes issue #20's HTML a sibling of this file rather than
+# a fork of it — neither renderer owns the extraction, and both are handed the same struct.
+#
+# THE SHAPE NEVER CHANGES WITH THE DEVICE; ONLY COLOUR DOES. A pipe, a file and a terminal all
+# receive the same characters in the same order, and a terminal receives some SGR codes around
+# four of the spans. That line is already drawn in this tree — `os.isatty`'s own comment draws
+# it, and `log.env_colour` follows it — and it is worth drawing because the alternative is a
+# tool whose output cannot be diffed against itself: `zerg doc strings > a` and `zerg doc
+# strings | less` would disagree about where the text is, and a gate over either says nothing
+# about the other.
+#
+# THE FILL IS MEASURED IN DISPLAY COLUMNS, which is neither of the two counts that are easy to
+# reach for. A byte count reads the em-dash that opens every stdlib header as three columns and
+# wraps the line early, which is visible in the output as prose that stops short of the margin
+# for no reason a reader can see. A rune count errs the other way and worse: a full-width CJK
+# glyph occupies two terminal columns, so a comment written in Chinese fills to 80 runes and
+# prints at up to 160 columns — off the edge of the terminal the document was laid out for. It
+# is not a hypothetical comment either, in a tree whose every `docs/*.md` has a zh-TW twin.
+#
+# WHAT `doc_rune_width` COVERS is East Asian Wide and Fullwidth, block by contiguous block,
+# each one named at the function. What it counts as one column, knowing better, is everything
+# that would need a table rather than a block: the scattered single code points the standard
+# also calls Wide (the arrows, the dingbats, the emoji), a combining mark and a zero-width
+# joiner, which take no columns at all, and a grapheme cluster spelled with several code points.
+# Those tables are the dependency this file would be the only caller of; the blocks are what
+# text written in Chinese, Japanese or Korean is made of, and they are what this file is held to.
+#
+# WHAT IT DELIBERATELY IS NOT:
+#
+#   - a width detector. 80 is written down, not asked of the device. The shape not changing
+#     with the device is the whole rule above, and a document that reflows to the window is a
+#     document nobody can quote a line number of.
+#   - a markdown renderer. A ```zerg``` fence is carried through exactly as it was written,
+#     because the text inside one is meant to be copied out and run. Rewriting it for a reader
+#     is issue #18's, and running it is `--check`'s.
+#   - a second opinion about what a sentence is. `zerg.doc_first_sentence` answers that for the
+#     brief listing and the module index alike, and #20 will ask the same function.
+
+import (
+	"zerg"
+)
+
+# The column budget every filled paragraph is measured against, and the only number in this
+# file a reader has to know. Everything else is an indent, and every indent is a multiple of
+# the same step: a signature sits at 2, its comment at 6, and anything nested under it — a
+# field, a variant, a method — repeats the pair four columns further in.
+const DOC_WIDTH := 80
+
+# The two modifiers a signature may carry in front of its keyword, in the order GRAMMAR#fn-decl
+# derives them. They are written down because `doc_sig_line` steps over exactly these and
+# nothing else, and a length counted from a literal at the call site is a length nobody can
+# find from the word.
+const DOC_UNSAFE := "unsafe "
+const DOC_MUT := "mut "
+
+# What a file's section says when the file says nothing: no header of its own and no exposed
+# declaration under it. `zerg doc examples` was twelve headings with nothing beneath them, and
+# a heading with nothing beneath it reads as a rendering that broke rather than as a file with
+# no surface — the same failure `(undocumented)` exists to keep a declaration out of.
+#
+# IT CARRIES NO COLOUR, unlike `(undocumented)`. Four spans take colour in this document and
+# the chapter counts them; a fifth would be a rendering decision made here and written down
+# nowhere.
+const DOC_NOTHING := "(nothing exposed)"
+
+# --- the device ---------------------------------------------------------------------------
+
+# doc_colour answers whether this run may use colour, which is `log.env_colour`'s convention
+# asked about this command's stream: NO_COLOR's PRESENCE decides first (https://no-color.org —
+# any value at all, the empty one included), and after that the device the document is going
+# to, which is stdout.
+#
+# It reads the environment through `__zrt_has_env` the way `env_or` next door does, rather
+# than through the sentinel string `log` carries. The sentinel exists because `log` reaches
+# the variable through `??`, which cannot tell an unset name from one exported empty; the
+# question here is presence, and presence is what the leaf answers.
+fn doc_colour() -> bool {
+	return false if __zrt_has_env("NO_COLOR")
+
+	return __zrt_isatty(1)
+}
+
+# --- the three documents --------------------------------------------------------------------
+
+# render_doc_module is the whole of one module: ONE SECTION PER FILE, each of them the file's
+# own header, whatever could not be read in it, and then CONSTANTS, TYPES and FUNCTIONS over
+# what that file declares — every section left out entirely when there is nothing in it.
+#
+# THE FILE IS THE UNIT because that is the document a reader asked for. Concatenating every
+# file's header made `zerg doc src/compiler/zerg` open with four hundred lines of stacked
+# prose before the first declaration, which is not a document about anything: each of those
+# headers is one file arguing for itself, and read end to end they argue past each other. A
+# module of one file — every module in the standard library — has exactly one section, no
+# heading above it, and therefore exactly the document it had before.
+#
+# THE HEADING IS THE FILE'S PATH, as `doc_short_path` would let the reader type it. A file is
+# what they would open and what they would name to this command to get that one section on its
+# own, and a path is the only name in a document that is already both.
+#
+# `brief` renders the same walk with the comment replaced by its first sentence and the members
+# left out, which is what makes the two views one piece of code rather than two that drift. The
+# surface is the signatures; the whole document is the signatures with everything written above
+# them.
+#
+# A TYPE'S METHODS ARE PRINTED UNDER IT, in the section its TYPE was declared in and not the
+# one they were written in. The parser flattens `impl T { … }` into ordinary functions carrying
+# a receiver, so the extraction hands over a flat list; grouping is a rendering decision, and
+# this is where it is made. A method whose receiver names no type in this module is collected
+# under a bare `impl T` at the end of the TYPES of its own file rather than dropped, because a
+# document that silently omits a declaration is the one failure this tool cannot recover from.
+fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
+	mut out: list[str] = []
+	for f in m.files {
+		if m.files.len() > 1 {
+			doc_heading(out, doc_short_path(f.path), col)
+		}
+		doc_file(out, m, f, brief, col)
+	}
+	return doc_join(out)
+}
+
+# doc_file is one file's section: what the file says about itself, then what it declares.
+fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool, col: bool) {
+	doc_head(out, m, f, brief)
+	doc_note(out, f)
+
+	mut consts: list[int] = []
+	mut types: list[int] = []
+	mut fns: list[int] = []
+	mut orphans: list[int] = []
+	mut i := 0
+	for i < m.decls.len() {
+		d := m.decls[i]
+		if d.path == f.path {
+			if d.kind == "const" {
+				consts.append(i)
+			} else if doc_is_type(d.kind) {
+				types.append(i)
+			} else if d.recv == "" {
+				fns.append(i)
+			} else if doc_index_of(m, d.recv) < 0 {
+				orphans.append(i)
+			}
+		}
+		i = i + 1
+	}
+
+	if consts.len() > 0 {
+		doc_heading(out, "CONSTANTS", col)
+		for k in consts {
+			doc_entry(out, m.decls[k], 2, brief, col)
+		}
+	}
+
+	if types.len() > 0 or orphans.len() > 0 {
+		doc_heading(out, "TYPES", col)
+		for k in types {
+			doc_entry(out, m.decls[k], 2, brief, col)
+			for j in doc_methods_of(m, m.decls[k].name) {
+				doc_entry(out, m.decls[j], 6, brief, col)
+			}
+		}
+		doc_orphans(out, m, orphans, brief, col)
+	}
+
+	if fns.len() > 0 {
+		doc_heading(out, "FUNCTIONS", col)
+		for k in fns {
+			doc_entry(out, m.decls[k], 2, brief, col)
+		}
+	}
+
+	if f.ok and f.header.len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
+		doc_gap(out)
+		out.append(DOC_NOTHING)
+	}
+}
+
+# render_doc_decls is what one name answered with — the same entries the whole document holds,
+# with no header and no section around them.
+#
+# IT TAKES EVERY HIT, because a name can be two declarations: `doc_find` answers `pub struct
+# Pair` and `pub fn Pair` both, and a page that showed one of them would be a document hiding a
+# declaration. They come out in source order, one blank line apart, which is the separation
+# every other pair of entries in this file already has.
+#
+# A TYPE STILL BRINGS ITS METHODS, which is why this takes the module and indices rather than
+# the rows: `zerg doc log.Logger` that answered a struct with no methods would be describing a
+# type nobody can use. A METHOD ASKED FOR BY NAME is promoted to the top indent instead —
+# alone on the page there is no type above it for the deeper indent to mean anything against.
+fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
+	mut out: list[str] = []
+	for i in hits {
+		d := m.decls[i]
+		doc_entry(out, d, 2, false, col)
+		if doc_is_type(d.kind) {
+			for j in doc_methods_of(m, d.name) {
+				doc_entry(out, m.decls[j], 6, false, col)
+			}
+		}
+	}
+	return doc_join(out)
+}
+
+# render_doc_list is the index: every module that can be read, one row each, with the first
+# sentence of its header beside it — and nothing beside it when no file of it speaks for the
+# module as a whole.
+#
+# The name column is padded to the longest name, so the descriptions line up and the eye can
+# run down either column. A description too long for what is left of the line is filled to the
+# same column its first line started at — a hanging indent, which is what keeps the two columns
+# readable as columns rather than as one ragged block.
+fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
+	mut out: list[str] = []
+	doc_heading(out, "MODULES", col)
+
+	mut w := 0
+	for m in mods {
+		n := doc_width(m.name)
+		if n > w {
+			w = n
+		}
+	}
+
+	at := 2 + w + 3
+	for m in mods {
+		rows := doc_fill(doc_tagline(m), DOC_WIDTH - at)
+
+		# a module nothing describes is its name alone: padding it out to a description that
+		# is not there would write trailing whitespace, which this document does not do
+		if rows.len() == 0 {
+			out.append(blanks(2) + doc_bold(m.name, col))
+			continue
+		}
+
+		out.append(blanks(2) + doc_bold(m.name, col) + blanks(at - 2 - doc_width(m.name)) + rows[0])
+		mut k := 1
+		for k < rows.len() {
+			out.append(blanks(at) + rows[k])
+			k = k + 1
+		}
+	}
+	return doc_join(out)
+}
+
+# --- one entry --------------------------------------------------------------------------------
+
+# doc_entry is one declaration: its signature at `indent`, and everything written above it four
+# columns further in. Every nesting in the document is that same pair — a type's field, a
+# type's method, a spec's requirement — so there is one function and an indent rather than one
+# function per level.
+#
+# `(undocumented)` IS KEYED ON THERE BEING NO COMMENT, and on nothing else. A gap where a
+# comment would have been is indistinguishable from a rendering fault, so a declaration nobody
+# wrote about says so; but `json.null` carries a ```zerg``` example and no prose, and calling
+# THAT undocumented is a false claim about a source that documents itself — the same lie as the
+# silence, pointing the other way. What the mark answers is `doc.len() == 0`; what a summary
+# is, and whether there is one, is a separate question asked below.
+#
+# ONE BLANK LINE BETWEEN ENTRIES, in both views. `--brief` used to run them together, and a
+# first sentence that fills three lines (`strings.join`, `strings.replace`) then merged into
+# its neighbour: a listing whose rows cannot be told apart is not a listing.
+fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col: bool) {
+	doc_gap(out)
+	out.append(doc_at(indent, doc_sig_line(d, col)))
+
+	if brief {
+		doc_summary(out, d, indent + 4, col)
+		return
+	}
+
+	if d.doc.len() == 0 {
+		out.append(doc_at(indent + 4, doc_mark(col)))
+	} else {
+		doc_body(out, d.doc, indent + 4)
+	}
+	doc_members(out, d, indent + 4, col)
+}
+
+# doc_summary is the brief view of one comment: its first sentence, filled — the mark when
+# there is no comment, and NOTHING when there is one that has no sentence in it.
+#
+# The two cases are different and were one. A comment made only of an example has no first
+# sentence, so a summary keyed on the sentence declared it undocumented; keyed on the comment,
+# it prints the signature and stops, and the whole document — which is where an example is
+# readable anyway — still carries the example. An empty line under the signature would be the
+# other thing to do here, and it is not done: `doc_at` leaves a blank line blank, and a blank
+# line that means "documented, but not in a sentence" is a distinction no reader can see.
+fn doc_summary(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
+	if d.doc.len() == 0 {
+		out.append(doc_at(indent, doc_mark(col)))
+		return
+	}
+
+	doc_wrap(out, zerg.doc_first_sentence(d.doc), indent)
+}
+
+# doc_members lists a struct's public fields, an enum's variants, or a spec's requirements, and
+# then says how many fields were left out.
+#
+# A member WITH a comment is given air on both sides and a member without one is not, so a run
+# of bare variants reads as the list it is while a documented field reads as an entry. The
+# count of private fields is Go's `contains unexported fields` note, printed for the same
+# reason: they are not interface, but a struct shown with two of its six fields describes a
+# literal that will not compile.
+fn doc_members(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
+	return if d.members.len() == 0 and d.hidden == 0
+
+	doc_gap(out)
+	for mb in d.members {
+		if mb.doc.len() > 0 {
+			doc_gap(out)
+		}
+		out.append(doc_at(indent, mb.sig))
+		if mb.doc.len() > 0 {
+			doc_body(out, mb.doc, indent + 4)
+			doc_gap(out)
+		}
+	}
+
+	if d.hidden > 0 {
+		doc_gap(out)
+		out.append(doc_at(indent, "(private fields not shown)"))
+	}
+}
+
+# doc_orphans collects the methods whose receiver names no type this module declares. Nothing
+# in this tree produces one; it is here because the alternative to a heading nobody sees is a
+# declaration nobody sees.
+fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief: bool, col: bool) {
+	mut done: list[str] = []
+	for k in orphans {
+		recv := m.decls[k].recv
+		continue if has_str(done, recv)
+
+		done.append(recv)
+		doc_gap(out)
+		out.append(doc_at(2, doc_bold("impl " + recv, col)))
+		for j in orphans {
+			if m.decls[j].recv == recv {
+				doc_entry(out, m.decls[j], 6, brief, col)
+			}
+		}
+	}
+}
+
+# doc_sig_line emphasises the words a reader scans for — everything in front of the name, and
+# the name — and leaves the rest of the signature alone.
+#
+# The span is COUNTED AND THEN CHECKED, not parsed. `kind` and `name` are two strings this file
+# was handed beside the signature, so where they end is arithmetic; what the arithmetic cannot
+# know is whether they are really there. So each word that MAY stand in front is stepped over
+# when the signature carries it there, the name is compared at the offset that leaves, and a
+# signature that does not match is printed plain. Reading the signature back to find the name
+# instead would be a small parser of a string `doc.zg` already spelled, and it would disagree
+# with `doc.zg` the first time a form gained a modifier — which is exactly the day this went
+# wrong before.
+#
+# EVERY WORD IN FRONT IS OPTIONAL, including the keyword. Only `unsafe` was stepped over, and
+# the keyword was required — so `mut fn bump()` was measured against `fn bump`, matched
+# nothing, and printed with no emphasis at all, as did the `mut COUNTER := 0` a module-level
+# binding is filed under "const" while spelling `mut` (doc.zg, `doc_const_sig`) and the bare
+# `X := 1` that spells no keyword whatever. `mut fn` is the worst one to lose: GRAMMAR#fn-decl
+# obliges the CALL SITE to hold the receiver in a `mut` binding, so it is the word the eye most
+# needs to catch, and it was the one word printed like the parameter list.
+fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
+	return d.sig if not col
+
+	b := bytearray(d.sig)
+	mut at := 0
+	at = doc_step(b, at, DOC_UNSAFE)
+	at = doc_step(b, at, DOC_MUT)
+	at = doc_step(b, at, d.kind + " ")
+
+	n := at + bytearray(d.name).len()
+	return d.sig if n > b.len() or line_slice(b, at, n) != d.name
+
+	return doc_bold(line_slice(b, 0, n), col) + line_slice(b, n, b.len())
+}
+
+# doc_step is `at` moved past `word` when the signature carries it there, and `at` unchanged
+# when it does not. Every word in front of a name is optional, so every step is this one.
+fn doc_step(b: list[byte], at: int, word: str) -> int {
+	n := at + bytearray(word).len()
+
+	return at if n > b.len()
+	return n if line_slice(b, at, n) == word
+
+	return at
+}
+
+# --- the header, and what could not be read ---------------------------------------------------
+
+# doc_head is one file's own comment, filled at column 0.
+#
+# A FILE WITH NO HEADER FALLS BACK TO THE MODULE'S NAME, and only when the module is that one
+# file: a document that opens straight into a section heading has lost its title, and every
+# stdlib module names itself in its first line (`strings — text utilities …`), so a module that
+# does not gets the same first line from the only other place its name is known. In a module of
+# several files the heading above already names the file, and a module name repeated over every
+# chapter would be a title claimed six times by six different texts.
+fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool) {
+	if f.header.len() == 0 {
+		if m.files.len() == 1 {
+			out.append(m.name)
+		}
+		return
+	}
+
+	if brief {
+		doc_wrap(out, zerg.doc_first_sentence(f.header), 0)
+	} else {
+		doc_body(out, f.header, 0)
+	}
+}
+
+# doc_note says that a file did not parse, and nothing when it did. `atomic` is the live case,
+# and the note is what keeps the module in the index and its header readable while saying
+# plainly that the declarations under it are missing rather than absent.
+#
+# THE FILE IS NAMED AS THE READER COULD NAME IT, and the reader is only sent to the standard
+# library's chapter when the file is IN the standard library. Both used to be wrong in the one
+# sentence: it printed the absolute path `stdlib_dir()` resolved through the executable, and it
+# pointed everyone at `docs/runtime/stdlib.md` — so somebody whose own file was missing a `}`
+# was told to go and read about a library they had not touched.
+fn doc_note(mut &out: list[str], f: zerg.DocFile) {
+	return if f.ok
+
+	doc_gap(out)
+	doc_wrap(out, doc_note_text(f), 0)
+}
+
+# doc_note_text is that sentence on its own, for the refusals that have no `out` to fill into.
+# `doc_no_decl` is the caller: it answers "the module `atomic` declares nothing called `load`"
+# from a module whose declarations are missing rather than absent, and the two paths through
+# this tool have to say that in the same words.
+fn doc_note_text(f: zerg.DocFile) -> str {
+	note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
+	return note + " (see docs/runtime/stdlib.md)" if doc_is_stdlib(f.path)
+
+	return note
+}
+
+# --- naming a file to a reader ----------------------------------------------------------------
+
+# doc_short_path is a source file named the way the reader could name it back.
+#
+# A STDLIB FILE LOSES ITS DIRECTORY. It was reached through `stdlib_dir()`, which resolves
+# against the executable, so its absolute path is a fact about this installation — different on
+# the next machine, different again once installed — and it is not a path the reader has, typed
+# or could type. What is left is the name inside the standard library, which is what `zerg doc`
+# takes. Every other path was reached from something the reader wrote, so it is printed as it
+# stands.
+fn doc_short_path(path: str) -> str {
+	return path if not doc_is_stdlib(path)
+
+	b := bytearray(path)
+	return line_slice(b, bytearray(doc_stdlib_lead()).len(), b.len())
+}
+
+fn doc_is_stdlib(path: str) -> bool {
+	return has_prefix(path, doc_stdlib_lead())
+}
+
+fn doc_stdlib_lead() -> str {
+	return stdlib_dir() + "/"
+}
+
+# --- a comment, as prose ------------------------------------------------------------------------
+
+# doc_body renders one stripped comment: paragraphs are refilled, and four kinds of line are
+# passed through exactly as they were written.
+#
+# REFILLING IS THE POINT. A comment in this tree is written to a 120-column source and read at
+# 80, so keeping the author's line breaks would leave a document broken at columns that mean
+# nothing here. A blank line separates paragraphs, which is the one piece of structure the
+# refill has to preserve.
+#
+# WHAT IS NEVER REFILLED is anything whose columns carry meaning: a ```` ``` ```` fence, every
+# line inside one, and any line indented four or more spaces. Those are examples — text meant
+# to be copied out and run — and a fill would silently join two statements onto one line.
+fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
+	mut para: list[str] = []
+	mut fence := false
+	for ln in doc {
+		if doc_fence(ln) {
+			doc_flush(out, para, indent)
+			out.append(doc_at(indent, ln))
+			fence = not fence
+			continue
+		}
+		if fence {
+			out.append(doc_at(indent, ln))
+			continue
+		}
+		if ln == "" {
+			doc_flush(out, para, indent)
+			doc_gap(out)
+			continue
+		}
+		if has_prefix(ln, "    ") {
+			doc_flush(out, para, indent)
+			out.append(doc_at(indent, ln))
+			continue
+		}
+		para.append(ln)
+	}
+	doc_flush(out, para, indent)
+}
+
+# doc_flush turns the paragraph collected so far into filled lines and empties it.
+#
+# THE AUTHOR'S LINE BREAK BECOMES A SPACE, because in text written with spaces that is what it
+# stands for — the two lines are two runs of words, and the break between them is the gap. It
+# becomes NOTHING BETWEEN TWO FULL-WIDTH CHARACTERS: Chinese is written with no spaces in it,
+# so a joiner that put one there would be writing a character into the sentence that its author
+# did not, and the reader would see a gap in the middle of a sentence the source has none in.
+#
+# THE QUESTION HERE IS WIDTH, WHICH IS WHY IT IS `doc_rune_width` AND NOT `doc_is_ideograph`.
+# The two live beside each other and answer genuinely different questions, and this file needs
+# both. The ideograph list says where a line MAY BREAK, and is deliberately narrow: it never
+# takes a cut beside a punctuation mark, because a mark carries a not-at-line-start or
+# not-at-line-end side nothing here can see. Joining asks something weaker — whether a space
+# belongs BETWEEN two characters — and a full-width comma answers that exactly as a Han
+# character does. Asked the narrow question, a source line ending on `，` was joined with a
+# half-width space dropped into the middle of a Chinese sentence.
+#
+# ONE SIDE FULL-WIDTH KEEPS THE SPACE. `而 zerg doc 的排版` is how this tree's own zh-TW
+# documents are written: the space around a Latin run is one the AUTHOR typed, and swallowing
+# it at a line break would lose a space the source has — the same defect the other way round.
+fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
+	return if para.len() == 0
+
+	mut text := ""
+	mut wide := false
+	for p in para {
+		rs := runearray(p)
+		if text != "" and not (wide and doc_rune_width(rs[0]) == 2) {
+			text = text + " "
+		}
+		text = text + p
+		wide = doc_rune_width(rs[rs.len() - 1]) == 2
+	}
+	doc_wrap(out, text, indent)
+	para = []
+}
+
+# doc_fence reports whether a line opens or closes a fenced block.
+fn doc_fence(line: str) -> bool {
+	return has_prefix(line, "```")
+}
+
+# --- filling ---------------------------------------------------------------------------------
+
+# doc_wrap fills `text` into `out`, every line indented.
+fn doc_wrap(mut &out: list[str], text: str, indent: int) {
+	for ln in doc_fill(text, DOC_WIDTH - indent) {
+		out.append(doc_at(indent, ln))
+	}
+}
+
+# doc_fill is the greedy fill itself, answering unindented lines of at most `width` columns.
+#
+# A PIECE LONGER THAN THE BUDGET IS NEVER CUT. What is long is a URL, a path, or a piece of
+# inline code, and each of those is a thing a reader copies: a break inserted in the middle of
+# one produces text that looks right and does not work. Overrunning the margin is the visible
+# failure, and the visible one is the right one to have.
+#
+# IT DOES NOT START A LINE EITHER. The break exists to bring a line inside the budget, and a
+# piece that overruns wherever it lands is a piece no break can bring inside — so breaking in
+# front of one buys nothing and costs a short line above it. `note: ` and a deep path is the
+# case that showed it: the path was three characters over on its own line and `note:` sat alone
+# above it, a lead with nothing after it and a document that looks broken where it is only
+# wide. The line it joins must not have overrun already, or a run of long pieces would collect
+# on one line without end.
+fn doc_fill(text: str, width: int) -> list[str] {
+	mut out: list[str] = []
+	mut line := ""
+	mut n := 0
+	for p in doc_pieces(text) {
+		k := doc_width(p.text)
+		if line == "" {
+			line = p.text
+			n = k
+			continue
+		}
+		if n + p.gap + k > width and (k <= width or n > width) {
+			out.append(line)
+			line = p.text
+			n = k
+			continue
+		}
+		line = line + blanks(p.gap) + p.text
+		n = n + p.gap + k
+	}
+	if line != "" {
+		out.append(line)
+	}
+	return out
+}
+
+# DocPiece is one run of text the fill places whole: the characters of it, and the number of
+# spaces that go in front of it when it lands after something else on the same line.
+#
+# THE GAP IS CARRIED RATHER THAN ASSUMED, because the two kinds of break this fill knows are
+# not the same break. A break at a space puts the space back when the two halves stay
+# together; a break between two ideographs does not, and a fill that put one there would be
+# writing a space into a Chinese sentence that its author did not.
+struct DocPiece {
+	pub text: str
+	pub gap: int
+}
+
+# doc_pieces cuts one paragraph at every place a line may end: at whitespace, and BETWEEN TWO
+# IDEOGRAPHS. Empty pieces are dropped, so a double space between two sentences does not
+# become a piece of its own.
+#
+# The second cut is what makes a comment in Chinese a document at all. Chinese is written with
+# no spaces in it, so a whole line of it arrives here as one unbreakable run — and a run longer
+# than the budget takes the rule above and stands on its own line, four or five columns past
+# the margin every time. The space is not the only place a line may end; it is only the place a
+# language that uses spaces puts one.
+#
+# WHERE THE CUT IS NOT MADE is beside anything that is not an ideograph, which is the cheap
+# half of UAX #14 and the half worth having. Punctuation is the reason: `。` may not open a
+# line and `「` may not close one, and a cut taken next to either would move it there. Nothing
+# here knows which side each mark belongs to — so no cut is taken beside a mark at all, and a
+# sentence of ideographs with a comma in the middle of it simply breaks somewhere else.
+fn doc_pieces(text: str) -> list[DocPiece] {
+	mut out: list[DocPiece] = []
+	mut cur: list[rune] = []
+	mut gap := 0
+	mut ideo := false
+	for r in runearray(text) {
+		if r == ' ' or r == '\t' {
+			if cur.len() > 0 {
+				out.append(DocPiece(str(cur), gap))
+				cur = []
+			}
+			gap = 1
+			ideo = false
+			continue
+		}
+		here := doc_is_ideograph(r)
+		if cur.len() > 0 and ideo and here {
+			out.append(DocPiece(str(cur), gap))
+			cur = []
+			gap = 0
+		}
+		cur.append(r)
+		ideo = here
+	}
+	if cur.len() > 0 {
+		out.append(DocPiece(str(cur), gap))
+	}
+	return out
+}
+
+# --- lines --------------------------------------------------------------------------------
+
+# doc_at indents one line, and leaves a blank one blank: an indented empty line is trailing
+# whitespace, which this repository does not allow into a source and should not write into a
+# document either.
+fn doc_at(indent: int, line: str) -> str {
+	return "" if line == ""
+
+	return blanks(indent) + line
+}
+
+# doc_gap separates two things by exactly one blank line, however many times it is asked. The
+# alternative is every caller knowing what the one before it emitted, which is how a renderer
+# ends up with a blank line that appears only when a struct has no fields.
+fn doc_gap(mut &out: list[str]) {
+	return if out.len() == 0
+	return if out[out.len() - 1] == ""
+
+	out.append("")
+}
+
+# doc_heading opens a section: a blank line, the title, and a blank line under it.
+fn doc_heading(mut &out: list[str], title: str, col: bool) {
+	doc_gap(out)
+	out.append(doc_bold(title, col))
+	doc_gap(out)
+}
+
+# doc_join is the document: one string, built through a byte buffer rather than by appending to
+# a str in a loop. Reassigning a str copies the whole of it, so the loop that looks like the
+# obvious one is quadratic in the size of the document — which for a module the size of
+# `strings` is a measurable part of the run.
+fn doc_join(lines: list[str]) -> str {
+	mut bs: list[byte] = []
+	for ln in lines {
+		for c in bytearray(ln) {
+			bs.append(c)
+		}
+		bs.append(b'\n')
+	}
+	return str(bs)
+}
+
+# --- colour ---------------------------------------------------------------------------------
+#
+# Four spans and no more, all of them things the eye jumps between rather than reads: the
+# section headings, the keyword and name of each signature, the names in the index, and the
+# undocumented mark. A comment's own text is never coloured and neither is a fence — an example
+# is meant to be copied out, and an escape code pasted into a shell is a fault the document
+# introduced. Only the eight original SGR colours are used, which every terminal since the
+# 1980s has; a documentation tool detecting terminal capabilities would be a second program.
+
+fn doc_bold(s: str, col: bool) -> str {
+	return s if not col
+
+	return "\u{1b}[1m" + s + "\u{1b}[0m"
+}
+
+# doc_mark is what stands where a comment was not written.
+fn doc_mark(col: bool) -> str {
+	return "(undocumented)" if not col
+
+	return "\u{1b}[33m(undocumented)\u{1b}[0m"
+}
+
+# --- small answers about a module ---------------------------------------------------------
+
+# doc_tagline is a module's one line in the index: the first sentence of the header of the file
+# THAT CARRIES THE MODULE'S NAME, with the module's own name taken off the front.
+#
+# WHICH FILE SPEAKS FOR A MODULE IS THE ONE NAMED AFTER IT — `strings.zg` for `strings`,
+# `cmd/cmd.zg` for `cmd` — which is the convention PLAN decision 5 settles and which `cmd.zg`
+# is already written to. A directory module without one has no module-level description, and
+# the index says nothing rather than something: `examples/` is twenty independent programs, and
+# the line it used to carry was whichever of them sorted first ("12 — The actor: mutable state
+# owned by one coroutine"), which describes the directory to nobody.
+#
+# Every header in the standard library opens `name — what it is`, and the name is already the
+# column to the left. Dropping it is a rendering decision and it is made here, not in the
+# extraction: the header is what the file says, and a listing is one arrangement of it.
+fn doc_tagline(m: zerg.DocModule) -> str {
+	s := zerg.doc_first_sentence(doc_module_header(m))
+	return "" if s == ""
+
+	lead := m.name + " — "
+	return s if not has_prefix(s, lead)
+
+	b := bytearray(s)
+	return line_slice(b, bytearray(lead).len(), b.len())
+}
+
+# doc_module_header is the header of the file a module is named after, and nothing when no file
+# in it is.
+fn doc_module_header(m: zerg.DocModule) -> list[str] {
+	mut none: list[str] = []
+	want := m.name + ".zg"
+	for f in m.files {
+		return f.header if path_tail(f.path) == want
+	}
+	return none
+}
+
+# doc_is_type reports whether a declaration belongs under TYPES. The four kinds that do are the
+# four that can carry members or methods.
+fn doc_is_type(kind: str) -> bool {
+	return kind == "struct" or kind == "enum" or kind == "type" or kind == "spec"
+}
+
+# doc_index_of is where a type of this name is declared, or -1. It is `doc_find` without the
+# method key, and it is asked of a receiver: a method whose type is not here is an orphan.
+fn doc_index_of(m: zerg.DocModule, name: str) -> int {
+	mut i := 0
+	for i < m.decls.len() {
+		d := m.decls[i]
+		return i if d.recv == "" and d.name == name and doc_is_type(d.kind)
+		i = i + 1
+	}
+	return -1
+}
+
+# doc_methods_of is every method declared on one type, in source order.
+fn doc_methods_of(m: zerg.DocModule, name: str) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < m.decls.len() {
+		if m.decls[i].recv == name {
+			out.append(i)
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# doc_width is a string's width in terminal columns: every code point asked how wide it is, and
+# the answers added up. Neither the byte count nor the rune count is that number — see the file
+# header for what each of them gets wrong, and which way.
+fn doc_width(s: str) -> int {
+	mut n := 0
+	for r in runearray(s) {
+		n = n + doc_rune_width(r)
+	}
+	return n
+}
+
+# doc_rune_width is one code point's width, and it is the whole of what this file knows about
+# the shape of a character: two columns for East Asian Wide and Fullwidth, one for everything
+# else. The blocks are listed in code point order, and the comment beside each is the name the
+# standard gives it — so a reader can check the list against Unicode's East_Asian_Width without
+# reading the arithmetic, and adding a block is adding a line.
+#
+# The file header says what is deliberately left at one column and why. The short of it: a block
+# is a comparison and a scattered code point is a table.
+fn doc_rune_width(r: rune) -> int {
+	c := int(r)
+	return 2 if c >= 0x1100 and c <= 0x115F   # Hangul Jamo initial consonants
+	return 2 if c >= 0x2E80 and c <= 0x303E   # CJK radicals, Kangxi radicals, CJK punctuation
+	return 2 if c >= 0x3041 and c <= 0x33FF   # kana, Bopomofo, Hangul jamo, enclosed CJK
+	return 2 if c >= 0x3400 and c <= 0x4DBF   # CJK unified ideographs extension A
+	return 2 if c >= 0x4E00 and c <= 0x9FFF   # CJK unified ideographs
+	return 2 if c >= 0xA000 and c <= 0xA4CF   # Yi syllables and Yi radicals
+	return 2 if c >= 0xA960 and c <= 0xA97F   # Hangul Jamo extended-A
+	return 2 if c >= 0xAC00 and c <= 0xD7A3   # Hangul syllables
+	return 2 if c >= 0xF900 and c <= 0xFAFF   # CJK compatibility ideographs
+	return 2 if c >= 0xFE10 and c <= 0xFE19   # vertical forms
+	return 2 if c >= 0xFE30 and c <= 0xFE6F   # CJK compatibility forms, small form variants
+	return 2 if c >= 0xFF00 and c <= 0xFF60   # fullwidth ASCII forms
+	return 2 if c >= 0xFFE0 and c <= 0xFFE6   # fullwidth currency and other signs
+	return 2 if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
+
+	return 1
+}
+
+# doc_is_ideograph reports whether a line may end after this code point and begin with the next
+# one — which is to say whether it is a character a language writes words with and puts no
+# spaces between.
+#
+# THIS IS A SHORTER LIST THAN THE WIDTHS ABOVE, and deliberately not derived from it. Every
+# code point named here is two columns wide, but "wide" and "breakable" are two questions: the
+# fullwidth Latin letters are wide and spell words that must not be cut, the punctuation is
+# wide and has a side of the line it belongs on, and the kana have non-starters — the small
+# `っ`, the sound mark `ー` — which are a table this file does not carry. Han and Hangul
+# syllables are what is left, and they are what the tree's own Chinese is written in.
+fn doc_is_ideograph(r: rune) -> bool {
+	c := int(r)
+	return true if c >= 0x3400 and c <= 0x4DBF   # CJK unified ideographs extension A
+	return true if c >= 0x4E00 and c <= 0x9FFF   # CJK unified ideographs
+	return true if c >= 0xAC00 and c <= 0xD7A3   # Hangul syllables
+	return true if c >= 0xF900 and c <= 0xFAFF   # CJK compatibility ideographs
+	return true if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
+
+	return false
+}

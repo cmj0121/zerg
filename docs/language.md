@@ -71,13 +71,14 @@ other chapter relies on. Read it first.
 
 ### Tooling
 
-| Chapter                                       | Covers                                                 |
-| --------------------------------------------- | ------------------------------------------------------ |
-| [Formatter Rules](tooling/fmt.md)             | every rule `zerg fmt` applies, and its code            |
-| [Linter Rules](tooling/lint.md)               | every rule `zerg lint` applies, and its code           |
-| [Compile Diagnostics](tooling/diagnostics.md) | every `E` code the compiler reports, and its rule      |
-| [Desugar Rules](tooling/desugar.md)           | every rule `zerg desugar` applies, and its code        |
-| [Language Server](tooling/lsp.md)             | `zerg lsp` — what it answers, and what holds it honest |
+| Chapter                                       | Covers                                                   |
+| --------------------------------------------- | -------------------------------------------------------- |
+| [Formatter Rules](tooling/fmt.md)             | every rule `zerg fmt` applies, and its code              |
+| [Linter Rules](tooling/lint.md)               | every rule `zerg lint` applies, and its code             |
+| [Compile Diagnostics](tooling/diagnostics.md) | every `E` code the compiler reports, and its rule        |
+| [Desugar Rules](tooling/desugar.md)           | every rule `zerg desugar` applies, and its code          |
+| [Language Server](tooling/lsp.md)             | `zerg lsp` — what it answers, and what holds it honest   |
+| [Documentation Tool](tooling/doc.md)          | `zerg doc` — what a module exposes, read from a terminal |
 
 ## Types
 

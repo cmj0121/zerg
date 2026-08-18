@@ -63,7 +63,7 @@
 # A refusal that `raise`s still spells its code into the message, because a raise has no
 # structure to put it in. That half is held by the gates, which assert the code opens the
 # line either way.
-fn chk_at(mut &em: Emitter, code: str, msg: str) {
+fn chk_at(mut &em: Emitter, code: Rule, msg: str) {
 	chk_at_place(em, em.at_path, em.at_line, em.at_col, code, msg)
 }
 
@@ -82,10 +82,10 @@ fn chk_at(mut &em: Emitter, code: str, msg: str) {
 # occurrences differ in line or column — what cannot be told apart is two mistakes inside
 # ONE statement, and a single statement-level place is the SAt marker's already-documented
 # grain (see the header above).
-fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, code: str, msg: str) {
+fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, code: Rule, msg: str) {
 	return if chk_seen(em.diags, path, line, col, msg)
 
-	em.diags.append(Diag(path, line, col, code, msg, ""))
+	em.diags.append(Diag(path, line, col, rule_code(code), msg, ""))
 }
 
 # chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
@@ -208,7 +208,7 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	return if is_pub
 	return if not chk_across_modules(em.at_path, decl_mod)
 
-	chk_at(em, "E301", f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
+	chk_at(em, Rule.NotPublicMember, f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
 
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
@@ -230,7 +230,7 @@ fn chk_ty_visible(mut &em: Emitter, nm: str) {
 	decl_mod := c_ty_mod(em, nm)
 	return if not chk_across_modules(em.at_path, decl_mod)
 
-	chk_at(em, "E508", f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
+	chk_at(em, Rule.NotPublicType, f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
 }
 
 # chk_ty_exported is the OTHER sentence, and it is not the same rule read backwards: "a
@@ -258,7 +258,7 @@ fn chk_ty_exported(mut &em: Emitter, nm: str, site: str, decl_pub: bool) {
 	# neither half — the same silence chk_visible keeps for one
 	return if c_ty_mod(em, nm) == ""
 
-	chk_at(em, "E509", f"`{nm}` is module-private, and {site} is on a `pub` declaration — a declaration can never be more visible than the types it names, so a dependent could not name this one")
+	chk_at(em, Rule.PrivateTypeOnPubDecl, f"`{nm}` is module-private, and {site} is on a `pub` declaration — a declaration can never be more visible than the types it names, so a dependent could not name this one")
 }
 
 # chk_fld_visible is the field half, and the reason a field needs its own rule is that the
@@ -277,7 +277,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 	decl_mod := c_ty_mod(em, sname)
 	return if not chk_across_modules(em.at_path, decl_mod)
 
-	chk_at(em, "E510", f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
+	chk_at(em, Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
 }
 
 # chk_ns_bound is NO TRANSITIVITY (docs/runtime/package.md): "importing a package gives you
@@ -303,7 +303,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 fn chk_ns_bound(mut &em: Emitter, ns: str) {
 	return if c_ns_bound_in(em, ns, c_mod_of(em.at_path))
 
-	chk_at(em, "E507", f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
+	chk_at(em, Rule.ModuleNotImported, f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
 }
 
 # chk_ty_quals is the SAME RULE AT A TYPE POSITION, and it is a separate pass for one reason:
@@ -365,7 +365,7 @@ fn chk_unsafe_reachable(mut &em: Emitter, name: str, callee_unsafe: bool, what: 
 	# functions that touch it are declared together, and they reach each other.
 	return if em.in_unsafe_fn
 
-	chk_at(em, "E387", f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+	chk_at(em, Rule.UnsafeNameInSafeCode, f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
@@ -427,7 +427,7 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# through"; emit has none, and rendered both to the left of a C `=`, so cc answered
 	# "expression is not assignable" about generated code.
 	if root == "" {
-		chk_at(em, "E302", f"`{expr_kind(lhs)}` is not a place, and an assignment needs one — a name, or a field or an index reached from one")
+		chk_at(em, Rule.AssignTargetNotAPlace, f"`{expr_kind(lhs)}` is not a place, and an assignment needs one — a name, or a field or an index reached from one")
 		return
 	}
 
@@ -469,9 +469,9 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# of this reported the same assignment twice in two different words.
 	if chk_is_module_binding(em, idx) {
 		if em.env_const[idx] {
-			chk_at(em, "E303", f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+			chk_at(em, Rule.AssignToConst, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
 		} else {
-			chk_at(em, "E305", f"cannot assign to `{root}`: it is a module binding, and the top level is immutable — bind a `mut` copy of it here, since a `mut` binding at the top level is legal only inside a module-level `unsafe` group (docs/runtime/package.md)")
+			chk_at(em, Rule.AssignToModuleBinding, f"cannot assign to `{root}`: it is a module binding, and the top level is immutable — bind a `mut` copy of it here, since a `mut` binding at the top level is legal only inside a module-level `unsafe` group (docs/runtime/package.md)")
 		}
 		return
 	}
@@ -480,17 +480,17 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# grammar has no spelling for. A method's receiver is a copy (GRAMMAR#fn-decl) and the form
 	# that writes through it is `mut fn`, which is what the reader has to reach for.
 	if root == "this" {
-		chk_at(em, "E306", "cannot assign to `this`: a method's receiver is a copy, and the form that writes through it is `mut fn` — the one that marks a method as mutating the instance it is called on")
+		chk_at(em, Rule.AssignToThis, "cannot assign to `this`: a method's receiver is a copy, and the form that writes through it is `mut fn` — the one that marks a method as mutating the instance it is called on")
 		return
 	}
 
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
 	if c_ident_name(lhs) != "" {
-		chk_at(em, "E307", f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write")
+		chk_at(em, Rule.AssignToImmutable, f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write")
 		return
 	}
-	chk_at(em, "E308", f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
+	chk_at(em, Rule.AssignThroughImmutable, f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
 }
 
 # chk_is_module_binding is whether an environment slot is one of the module-level bindings.
@@ -546,7 +546,7 @@ fn chk_frozen_name(mut &em: Emitter, name: str) -> bool {
 # chk_frozen records the one finding every spelling of a structural change shares; `action`
 # names the spelling ("rebind", "`append` to", "assign into"), and the sentence is the rule.
 fn chk_frozen(mut &em: Emitter, name: str, action: str) {
-	chk_at(em, "E393", f"cannot {action} `{name}`: it is the collection this `for` loop walks, and a collection is frozen against structural change inside its own loop (docs/code/collections.md) — append to a different collection, or rebuild after the loop")
+	chk_at(em, Rule.CollectionFrozenInLoop, f"cannot {action} `{name}`: it is the collection this `for` loop walks, and a collection is frozen against structural change inside its own loop (docs/code/collections.md) — append to a different collection, or rebuild after the loop")
 }
 
 # chk_recv_mut judges a `mut this` method's receiver the way chk_assignable judges an
@@ -582,7 +582,7 @@ fn chk_recv_mut(mut &em: Emitter, target: Expr, meth: str) {
 	} else if root == "this" {
 		msg = f"cannot `{meth}` through `this`: a plain method holds its receiver by value, and the form that mutates the instance is `mut fn` — its receiver arrives as a `mut &`"
 	}
-	chk_at(em, "E392", msg)
+	chk_at(em, Rule.CollectionNotMut, msg)
 }
 
 # --- a default is a property of the declaration ------------------------------------
@@ -611,13 +611,13 @@ fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int
 
 	# a `mut &` takes the ADDRESS of a caller's variable; a default has none to take
 	if pm.is_ref {
-		chk_at_place(em, path, line, col, "E309", f"parameter `{pm.name}` of `{chk_call_name(key)}` is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
+		chk_at_place(em, path, line, col, Rule.MutRefParamDefault, f"parameter `{pm.name}` of `{chk_call_name(key)}` is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
 		return
 	}
 
 	got := c_infer(em, pm.def)
 	return if chk_fits_expr(em, pm.ty, got, pm.def)
-	chk_at_place(em, path, line, col, "E310", f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(got)}, and the parameter is {ty_name(pm.ty)}")
+	chk_at_place(em, path, line, col, Rule.ParamDefaultType, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(got)}, and the parameter is {ty_name(pm.ty)}")
 }
 
 # --- a pattern binds, and a construction gives, what the variant holds --------------
@@ -635,7 +635,7 @@ fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int
 fn chk_variant_arity(mut &em: Emitter, en: str, ctor: str, n: int, what: str) {
 	held := chk_variant_held(em, en, ctor)
 	return if n == held
-	chk_at(em, "E311", f"`{ctor}` carries {chk_args(held)} and this {what} {strconv.to_string(n, 10)}")
+	chk_at(em, Rule.CtorArgCount, f"`{ctor}` carries {chk_args(held)} and this {what} {strconv.to_string(n, 10)}")
 }
 
 # chk_variant_held is how many payload values a variant of `en` carries. The table holds one
@@ -691,7 +691,7 @@ fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 		# reference points into entirely. `spawn` refused this in a pass of its own;
 		# `defer`, which the same sentence covers, reached cc.
 		if row >= 0 and em.pr_ref[row] {
-			chk_at(em, "E312", f"argument {strconv.to_string(i + 1, 10)} of `{chk_call_name(key)}` is a `mut &` and cannot cross a `{what}`: a borrow may not be captured, and this one would outlive the call it is valid for")
+			chk_at(em, Rule.MutRefArgEscapes, f"argument {strconv.to_string(i + 1, 10)} of `{chk_call_name(key)}` is a `mut &` and cannot cross a `{what}`: a borrow may not be captured, and this one would outlive the call it is valid for")
 		}
 		i = i + 1
 	}
@@ -710,7 +710,7 @@ fn chk_store_path(mut &em: Emitter, e: Expr) {
 	return if not c_is_index(e) and not c_is_fieldref(e)
 
 	if c_is_index(e) and not c_is_place(em, tgt) {
-		chk_at(em, "E313", f"cannot store through {c_place_why(em, tgt)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
+		chk_at(em, Rule.StoreThroughValue, f"cannot store through {c_place_why(em, tgt)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
 		return
 	}
 	chk_store_path(em, tgt)
@@ -770,7 +770,7 @@ fn chk_impl_local(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl) {
 	type_mod := chk_type_mod(f, ip.target)
 	return if here == spec_mod or here == type_mod or spec_mod == "" or type_mod == ""
 
-	chk_at_place(em, ip.path, ip.line, ip.col, "E277", f"`impl {ip.on} for {ip.target}` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with one of the two (docs/core/specs.md)")
+	chk_at_place(em, ip.path, ip.line, ip.col, Rule.ImplOrphan, f"`impl {ip.on} for {ip.target}` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with one of the two (docs/core/specs.md)")
 }
 
 # chk_type_mod is the module a declared type was written in, or "" for one this program does
@@ -792,7 +792,7 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 	for ip in f.impls {
 		si := chk_spec_index(f, ip.on)
 		if si < 0 {
-			chk_at_place(em, ip.path, ip.line, ip.col, "E314", f"no spec named `{ip.on}` — an `impl … for …` names the interface it supplies, and nothing in this program declares one by that name")
+			chk_at_place(em, ip.path, ip.line, ip.col, Rule.SpecUnknown, f"no spec named `{ip.on}` — an `impl … for …` names the interface it supplies, and nothing in this program declares one by that name")
 			continue
 		}
 		sp := f.specs[si]
@@ -801,7 +801,7 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 			# without this the mismatch surfaces one member at a time, as "parameter `k` is
 			# int, and the spec declares K" — true, and about the wrong thing. What went
 			# wrong is that the impl never said what `K` is.
-			chk_at_place(em, ip.path, ip.line, ip.col, "E315", f"`{ip.on}` is parameterized by {chk_join(sp.params)}, and this `impl` gives {strconv.to_string(ip.args.len(), 10)} type argument(s) — a parameterized spec is implemented once per argument, as `impl {ip.on}[…] for {ip.target}`")
+			chk_at_place(em, ip.path, ip.line, ip.col, Rule.ImplTypeArgCount, f"`{ip.on}` is parameterized by {chk_join(sp.params)}, and this `impl` gives {strconv.to_string(ip.args.len(), 10)} type argument(s) — a parameterized spec is implemented once per argument, as `impl {ip.on}[…] for {ip.target}`")
 			continue
 		}
 		mut seen: list[str] = []
@@ -860,7 +860,7 @@ fn chk_impl_covers(mut &em: Emitter, f: File, ip: ImplDecl, si: int, mut &seen: 
 		sup := sp.supers[si2]
 		up := chk_spec_index(f, sup)
 		if up < 0 {
-			chk_at_place(em, sp.path, sp.line, sp.col, "E316", f"`{sp.name}` extends `{sup}`, and nothing in this program declares a spec by that name")
+			chk_at_place(em, sp.path, sp.line, sp.col, Rule.SpecExtendsUnknown, f"`{sp.name}` extends `{sup}`, and nothing in this program declares a spec by that name")
 			si2 = si2 + 1
 			continue
 		}
@@ -888,12 +888,12 @@ fn chk_impl_member(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl, req: F
 		if sup.recv == ip.target and sup.name == req.name {
 			why := chk_sig_differs(sp, ip, req, sup)
 			if why != "" {
-				chk_at_place(em, sup.path, sup.line, sup.col, "E317", f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
+				chk_at_place(em, sup.path, sup.line, sup.col, Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
 			}
 			return
 		}
 	}
-	chk_at_place(em, ip.path, ip.line, ip.col, "E318", f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
+	chk_at_place(em, ip.path, ip.line, ip.col, Rule.SpecRequirementUnmet, f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
 }
 
 # chk_sig_differs answers WHY two signatures differ, or "" when they do not.
@@ -996,12 +996,12 @@ fn chk_subst_all(ts: list[Ty], sp: SpecDecl, ip: ImplDecl) -> list[Ty] {
 # A LANGUAGE rule, so it carries a place. The seed has rejected all three all along.
 fn chk_int_literal(mut &em: Emitter, lex: str) {
 	if not int_fits(lex) {
-		chk_at(em, "E319", f"the integer literal `{lex}` does not fit an `int` — it is 64 bits wide, and a literal past it is a compile error rather than a value that wraps")
+		chk_at(em, Rule.IntLiteralOverflow, f"the integer literal `{lex}` does not fit an `int` — it is 64 bits wide, and a literal past it is a compile error rather than a value that wraps")
 	}
 }
 
 fn chk_str_not_indexable(mut &em: Emitter) {
-	chk_at(em, "E320", "a `str` is not indexable — it is UTF-8, so a subscript would name a byte and not a character; convert it first with `bytearray(s)`")
+	chk_at(em, Rule.StrNotIndexable, "a `str` is not indexable — it is UTF-8, so a subscript would name a byte and not a character; convert it first with `bytearray(s)`")
 }
 
 fn chk_store_target(e: Expr) -> Expr {
@@ -1053,7 +1053,7 @@ fn chk_branch_types(mut &em: Emitter, then_e: Expr, else_e: Expr) {
 	return if ty_eq(want, Ty.TNil) or ty_eq(got, Ty.TNil)
 	return if chk_fits(em, want, got) or chk_fits(em, got, want)
 
-	chk_at(em, "E321", f"an `if` expression answers ONE type, and its branches give {ty_name(want)} and {ty_name(got)}")
+	chk_at(em, Rule.IfBranchTypes, f"an `if` expression answers ONE type, and its branches give {ty_name(want)} and {ty_name(got)}")
 }
 
 fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
@@ -1066,7 +1066,7 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	for i < arms.len() {
 		got := c_infer_arm_body(em, arms[i], st)
 		if not c_is_unknown(got) and not ty_eq(got, Ty.TVoid) and not chk_fits(em, want, got) {
-			chk_at(em, "E322", f"a `match` answers ONE type, and its arms give {ty_name(want)} and {ty_name(got)}")
+			chk_at(em, Rule.MatchArmTypes, f"a `match` answers ONE type, and its arms give {ty_name(want)} and {ty_name(got)}")
 			return
 		}
 		i = i + 1
@@ -1080,7 +1080,7 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # writing to a copy is not writing.
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	if not c_is_place(em, a) {
-		chk_at(em, "E323", f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
+		chk_at(em, Rule.BorrowOfValue, f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
 		return
 	}
 
@@ -1100,10 +1100,10 @@ fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	# for. A plain method holds its receiver by value; the half that is missing is on the
 	# ENCLOSING method, and `mut fn` is how it is supplied.
 	if root == "this" {
-		chk_at(em, "E324", f"{chk_arg_says(key, pos)} writes back to `this`, and the enclosing method holds its receiver by value — declare that one `mut fn` too, or the mutation lands on a copy")
+		chk_at(em, Rule.WriteBackToThis, f"{chk_arg_says(key, pos)} writes back to `this`, and the enclosing method holds its receiver by value — declare that one `mut fn` too, or the mutation lands on a copy")
 		return
 	}
-	chk_at(em, "E325", f"{chk_arg_says(key, pos)} writes back to `{root}`, which is not `mut` — a caller-visible mutation needs both halves, so declare it `mut {root} := …`")
+	chk_at(em, Rule.WriteBackToImmutable, f"{chk_arg_says(key, pos)} writes back to `{root}`, which is not `mut` — a caller-visible mutation needs both halves, so declare it `mut {root} := …`")
 }
 
 # chk_arg_says names the slot a borrow rule is about. A method's RECEIVER has no written
@@ -1172,7 +1172,7 @@ fn chk_ref_alias(mut &em: Emitter, key: str, args: list[Expr]) {
 			for j < args.len() {
 				rj := c_param_row(em, key, j)
 				if ni != "" and rj >= 0 and em.pr_ref[rj] and chk_root_name(args[j]) == ni {
-					chk_at(em, "E326", f"`{ni}` is given to two `mut &` parameters of `{chk_call_name(key)}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
+					chk_at(em, Rule.MutRefAliasInCall, f"`{ni}` is given to two `mut &` parameters of `{chk_call_name(key)}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
 					return
 				}
 				j = j + 1
@@ -1193,11 +1193,11 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	given := base + argc
 
 	if given > em.sig_nparams[row] {
-		chk_at(em, "E327", f"`{chk_call_name(key)}` takes {chk_args(em.sig_nparams[row])} and this gives {strconv.to_string(given, 10)}")
+		chk_at(em, Rule.CallArgCount, f"`{chk_call_name(key)}` takes {chk_args(em.sig_nparams[row])} and this gives {strconv.to_string(given, 10)}")
 		return
 	}
 	if given < em.sig_nreq[row] {
-		chk_at(em, "E328", f"`{chk_call_name(key)}` needs {chk_args(em.sig_nreq[row])} and this gives {strconv.to_string(given, 10)}")
+		chk_at(em, Rule.CallMissingArgs, f"`{chk_call_name(key)}` needs {chk_args(em.sig_nreq[row])} and this gives {strconv.to_string(given, 10)}")
 	}
 }
 
@@ -1216,7 +1216,7 @@ fn chk_fnval_arity(mut &em: Emitter, fty: Ty, argc: int) {
 	ps := c_fn_params(fty)
 	return if argc == ps.len()
 
-	chk_at(em, "E386", f"this call goes through a {ty_name(fty)}, which takes {chk_args(ps.len())} and this gives {strconv.to_string(argc, 10)}")
+	chk_at(em, Rule.FnValueArgCount, f"this call goes through a {ty_name(fty)}, which takes {chk_args(ps.len())} and this gives {strconv.to_string(argc, 10)}")
 }
 
 # chk_args counts arguments in words a reader does not trip over. "takes 1 arguments" is
@@ -1368,7 +1368,7 @@ fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 		i = i + 1
 		got := c_infer(em, e)
 		if not chk_fits_expr(em, we, got, e) {
-			chk_at(em, "E329", f"{chk_elem_says(i)} is {ty_name(we)}, and this gives {ty_name(got)}")
+			chk_at(em, Rule.ListElementType, f"{chk_elem_says(i)} is {ty_name(we)}, and this gives {ty_name(got)}")
 			reported = true
 		}
 	}
@@ -1512,12 +1512,12 @@ fn chk_intrinsic_call(mut &em: Emitter, name: str, args: list[Expr]) {
 	argc := args.len()
 
 	if n < 0 {
-		chk_at(em, "E396", f"`{name}` is not a compiler primitive — the `__zrt_…` set is closed and belongs to the standard library, which reaches the runtime through it")
+		chk_at(em, Rule.PrimitiveUnknown, f"`{name}` is not a compiler primitive — the `__zrt_…` set is closed and belongs to the standard library, which reaches the runtime through it")
 		return
 	}
 
 	if argc != n {
-		chk_at(em, "E397", f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
+		chk_at(em, Rule.PrimitiveArgCount, f"the compiler primitive `{name}` takes {chk_args(n)} and this gives {strconv.to_string(argc, 10)}")
 		return
 	}
 
@@ -1527,7 +1527,7 @@ fn chk_intrinsic_call(mut &em: Emitter, name: str, args: list[Expr]) {
 		want := ps[i]
 		got := c_infer(em, args[i])
 		if not chk_fits_expr(em, want, got, args[i]) {
-			chk_at(em, "E398", f"operand {strconv.to_string(i + 1, 10)} of the compiler primitive `{name}` is {ty_name(want)}, and this gives {ty_name(got)}")
+			chk_at(em, Rule.PrimitiveOperandType, f"operand {strconv.to_string(i + 1, 10)} of the compiler primitive `{name}` is {ty_name(want)}, and this gives {ty_name(got)}")
 		}
 		i = i + 1
 	}
@@ -1558,11 +1558,11 @@ fn chk_conv_pair(mut &em: Emitter, want: Ty, got: Ty, nm: str) {
 	# fix is a verb and not a second conversion. Sending a reader to "write the two steps"
 	# would send them to `int(x)`, which is this very refusal.
 	if c_is_float(got) {
-		chk_at(em, "E394", f"`{nm}(…)` drops the fraction of a `float`, and dropping a fraction is a decision this language spells with a VERB: `math.trunc`, `math.floor`, `math.ceil` and `math.round` each answer an `int` — write `{chk_conv_verb(want, nm)}`")
+		chk_at(em, Rule.IntConvOnFloat, f"`{nm}(…)` drops the fraction of a `float`, and dropping a fraction is a decision this language spells with a VERB: `math.trunc`, `math.floor`, `math.ceil` and `math.round` each answer an `int` — write `{chk_conv_verb(want, nm)}`")
 		return
 	}
 
-	chk_at(em, "E395", f"a conversion is ONE STEP, and `{ty_name(got)}` -> `{ty_name(want)}` is `{ty_name(got)}` -> `int` -> `{ty_name(want)}` — write the two, as `{nm}(int(x))`")
+	chk_at(em, Rule.ConvTwoSteps, f"a conversion is ONE STEP, and `{ty_name(got)}` -> `{ty_name(want)}` is `{ty_name(got)}` -> `int` -> `{ty_name(want)}` — write the two, as `{nm}(int(x))`")
 }
 
 # chk_conv_verb is the spelling E394 sends a reader to. An `int` target is the verb alone; any
@@ -1713,7 +1713,7 @@ fn chk_const_into_at(mut &em: Emitter, want: Ty, e: Expr, noted: bool) {
 # The sentence says "the value is known" rather than "the conversion is known", which is the
 # criterion docs/core/types.md states and the one both callers actually apply.
 fn chk_out_of_range(mut &em: Emitter, want: Ty, says: str) {
-	chk_at(em, "E330", f"{says} is not a value a {ty_name(want)} holds — the value is known here, so it is reported now rather than raised")
+	chk_at(em, Rule.ValueOutOfType, f"{says} is not a value a {ty_name(want)} holds — the value is known here, so it is reported now rather than raised")
 }
 
 fn chk_lit_fits_noted(mut &em: Emitter, want: Ty, e: Expr, noted: bool) -> bool {
@@ -1740,7 +1740,7 @@ fn chk_const_divisor(mut &em: Emitter, oper: str, eb: Expr) -> bool {
 	f := chk_lit_eval(em, eb)
 	return false if not f.ok or f.value != 0
 
-	chk_at(em, "E331", f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
+	chk_at(em, Rule.DivideByZero, f"this divides by a constant `0` — the value is known here, so it is reported now rather than raised")
 	return true
 }
 
@@ -1757,7 +1757,7 @@ fn chk_const_unfoldable(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 	f := chk_lit_eval(em, e)
 	return false if f.ok or not chk_lit_leaves_fit(e)
 
-	chk_at(em, "E332", f"this expression's value is past what an `int` holds, so it cannot be measured against {ty_name(want)} — every literal is measured against `int` before its position is consulted")
+	chk_at(em, Rule.IntRangeOverflow, f"this expression's value is past what an `int` holds, so it cannot be measured against {ty_name(want)} — every literal is measured against `int` before its position is consulted")
 	return true
 }
 
@@ -2407,7 +2407,7 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
 	if not chk_fits_expr(em, declared, got, e) {
-		chk_at(em, "E333", f"{CHK_ANSWER} is {ty_name(declared)}, and this gives {ty_name(got)}")
+		chk_at(em, Rule.ReturnType, f"{CHK_ANSWER} is {ty_name(declared)}, and this gives {ty_name(got)}")
 	}
 	return got
 }
@@ -2458,7 +2458,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 # differently: a local sits inside a statement the emission walk has marked, and a module
 # `const` is a declaration no statement covers, so it carries its own.
 fn chk_bind_mismatch(mut &em: Emitter, path: str, line: int, col: int, got: Ty, declared: Ty, name: str) {
-	chk_at_place(em, path, line, col, "E335", f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
+	chk_at_place(em, path, line, col, Rule.BindingTypeMismatch, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
 }
 
 # chk_needs_type is the other half of chk_binding: the binding that declares NO type, given a
@@ -2479,7 +2479,7 @@ fn chk_needs_type(mut &em: Emitter, name: str, ival: Expr) -> bool {
 	what := chk_typeless_form(ival)
 	return false if what == ""
 
-	chk_at(em, "E336", f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
+	chk_at(em, Rule.BindingHasNoType, f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
 	return true
 }
 
@@ -2510,7 +2510,7 @@ fn chk_no_nil_value(mut &em: Emitter, t: Ty, where: str) {
 	if not c_is_nil_ty(t) {
 		says = "and a part of this one is nil"
 	}
-	chk_at(em, "E390", f"{where} needs a value, {says} — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl), and so does a block whose last statement is not an expression (GRAMMAR#block); nil has no storage and no rendering, so run it as a statement of its own, or give the `fn` a type to answer with")
+	chk_at(em, Rule.NilWhereValueNeeded, f"{where} needs a value, {says} — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl), and so does a block whose last statement is not an expression (GRAMMAR#block); nil has no storage and no rendering, so run it as a statement of its own, or give the `fn` a type to answer with")
 }
 
 # chk_typeless_form names the form when an expression is one of the ones that carry no type,
@@ -2569,7 +2569,7 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 		em.at_col = td.col
 		c_builtin_check(em, nm)
 
-		chk_at_place(em, td.path, td.line, td.col, "E337", f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+		chk_at_place(em, td.path, td.line, td.col, Rule.TypedefNamesNoType, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
 		return Ty.TUnknown
 	}
 
@@ -2580,7 +2580,7 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) -> Ty {
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
 	if c_scalar_class(td.under) == SC_NONE {
-		chk_at_place(em, td.path, td.line, td.col, "E304", f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		chk_at_place(em, td.path, td.line, td.col, Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
 		return Ty.TUnknown
 	}
 	return td.under
@@ -2614,7 +2614,7 @@ fn chk_file_declares_ty(f: File, nm: str) -> bool {
 fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 	got := c_infer(em, arg)
 	if not chk_fits_expr(em, want, got, arg) {
-		chk_at(em, "E338", f"{where} is {ty_name(want)}, and this gives {ty_name(got)}")
+		chk_at(em, Rule.FieldOrPayloadType, f"{where} is {ty_name(want)}, and this gives {ty_name(got)}")
 	}
 }
 
@@ -2650,7 +2650,7 @@ fn chk_field_says(mut &em: Emitter, sname: str, pos: int) -> str {
 fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 	got := c_infer(em, rhs)
 	if not chk_fits_expr(em, want, got, rhs) {
-		chk_at(em, "E339", f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}")
+		chk_at(em, Rule.AssignType, f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}")
 	}
 }
 
@@ -2691,7 +2691,7 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 		#
 		# It also puts an argument in the same shape as a struct field and a list element,
 		# so the four positional slots read as one family a reader learns once.
-		chk_at(em, "E340", f"{chk_slot_says(key, pos)} is {ty_name(want)}, and this gives {ty_name(got)}")
+		chk_at(em, Rule.ArgumentType, f"{chk_slot_says(key, pos)} is {ty_name(want)}, and this gives {ty_name(got)}")
 	}
 }
 
@@ -2741,7 +2741,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	# five. The language's answer is the binding form, which is also the only one that
 	# hands over the value when there is one.
 	if ty_is_opt(ta) or ty_is_opt(tb) {
-		chk_at(em, "E341", f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
+		chk_at(em, Rule.OptionalOperand, f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
 		return
 	}
 
@@ -2765,20 +2765,20 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
 		return if chk_is_equality(oper) and ty_eq(ta, tb)
 
-		chk_at(em, "E342", f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		chk_at(em, Rule.OpNoMeaning, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
 
 	if chk_is_logical(oper) {
 		if chk_wrong_bool(ta) or chk_wrong_bool(tb) {
-			chk_at(em, "E343", f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+			chk_at(em, Rule.OpWantsBool, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
 	}
 
 	if chk_is_bitwise(oper) {
 		if chk_wrong_int(ta) or chk_wrong_int(tb) {
-			chk_at(em, "E344", f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+			chk_at(em, Rule.OpWantsInt, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
 		return
 	}
@@ -2787,7 +2787,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		# `+` is the one arithmetic operator a str also answers, and only for two of them
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
 		if chk_wrong_num(ta) or chk_wrong_num(tb) {
-			chk_at(em, "E345", f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+			chk_at(em, Rule.OpWantsNumeric, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
 
@@ -2798,7 +2798,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	if chk_is_order(oper) {
 		return if c_is_str(ta) and c_is_str(tb)
 		if chk_wrong_num(ta) or chk_wrong_num(tb) {
-			chk_at(em, "E346", f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
+			chk_at(em, Rule.OpWantsOrdered, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
 			return
 		}
 
@@ -2814,7 +2814,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		# number. Same enum is the one comparison that means anything.
 		if c_is_enum_ty(em, ta) or c_is_enum_ty(em, tb) {
 			return if c_is_enum_ty(em, ta) and c_is_enum_ty(em, tb) and ty_eq(ta, tb)
-			chk_at(em, "E347", f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — a variant is a value of ITS enum, and its discriminant is not a number to compare with")
+			chk_at(em, Rule.CompareVariantWithNumber, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — a variant is a value of ITS enum, and its discriminant is not a number to compare with")
 			return
 		}
 
@@ -2828,7 +2828,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 			return
 		}
 		if not ty_eq(ta, tb) {
-			chk_at(em, "E348", f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
+			chk_at(em, Rule.CompareDifferentKinds, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
 		}
 	}
 }
@@ -2844,17 +2844,17 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	# typedef does not take on. The scalar predicates below all answer no for a TNamed, so
 	# without this the prefix operators were the one family that let a typedef through.
 	if chk_is_typedef_operand(em, t) {
-		chk_at(em, "E349", f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		chk_at(em, Rule.UnaryOpNoMeaning, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
 	if oper == "not" and chk_wrong_bool(t) {
-		chk_at(em, "E350", f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
+		chk_at(em, Rule.NotWantsBool, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}
 	if oper == "-" and chk_wrong_num(t) {
-		chk_at(em, "E351", f"operator `-` takes a numeric operand, and this one is {ty_name(t)}")
+		chk_at(em, Rule.NegWantsNumeric, f"operator `-` takes a numeric operand, and this one is {ty_name(t)}")
 	}
 	if oper == "~" and chk_wrong_int(t) {
-		chk_at(em, "E352", f"operator `~` takes an int operand, and this one is {ty_name(t)}")
+		chk_at(em, Rule.BitNotWantsInt, f"operator `~` takes an int operand, and this one is {ty_name(t)}")
 	}
 }
 
@@ -2933,7 +2933,7 @@ fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: E
 	# one place a literal adopts a type it is not a value of.
 	return if chk_lit_adopts(em, ta, eb) or chk_lit_adopts(em, tb, ea)
 
-	chk_at(em, "E353", f"operator `{oper}` has {ty_name(ta)} on one side and {ty_name(tb)} on the other, and an operator's operands must already be one type — convert one side with `{ty_name(ta)}(…)` or `{ty_name(tb)}(…)`")
+	chk_at(em, Rule.OpOperandsDiffer, f"operator `{oper}` has {ty_name(ta)} on one side and {ty_name(tb)} on the other, and an operator's operands must already be one type — convert one side with `{ty_name(ta)}(…)` or `{ty_name(tb)}(…)`")
 }
 
 # chk_is_num is THE list of numeric types, and chk_is_scalar builds on it rather than
@@ -3007,10 +3007,10 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 	# an optional gets the binding advice ALONE: `x != 0` is a program the operand rule
 	# refuses, so following this diagnostic would earn a second one
 	if ty_is_opt(t) {
-		chk_at(em, "E354", f"the condition of {site} must be bool, and this one is {ty_name(t)} — bind it with `if v := x {{ … }}`, which also hands over what it holds")
+		chk_at(em, Rule.ConditionOptional, f"the condition of {site} must be bool, and this one is {ty_name(t)} — bind it with `if v := x {{ … }}`, which also hands over what it holds")
 		return
 	}
-	chk_at(em, "E355", f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)")
+	chk_at(em, Rule.ConditionNotBool, f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)")
 }
 
 # --- redeclaration ----------------------------------------------------------------
@@ -3070,7 +3070,7 @@ fn chk_const_rebind(mut &em: Emitter, name: str) {
 	return if name == "_"
 
 	if chk_const_in_sight(em, name) {
-		chk_at(em, "E356", f"`{name}` re-binds a `const` — a `const` binding is shadow-proof, so no later binding may take its name; pick another one")
+		chk_at(em, Rule.ConstRebound, f"`{name}` re-binds a `const` — a `const` binding is shadow-proof, so no later binding may take its name; pick another one")
 	}
 }
 
@@ -3087,7 +3087,7 @@ fn chk_const_mint(mut &em: Emitter, name: str) {
 
 	return if idx < 0
 
-	chk_at(em, "E357", f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
+	chk_at(em, Rule.ConstShadows, f"`const {name}` shadows a binding already visible here — a `const` may neither shadow nor be shadowed, so a name collision in either direction is an error")
 }
 
 # chk_const_in_sight is whether an OPEN scope holds a `const` binding of this name. It
@@ -3164,16 +3164,16 @@ fn chk_const_in_sight(mut &em: Emitter, name: str) -> bool {
 # repeat the finding once per module.
 fn chk_top_stmts(mut &em: Emitter, own: File) {
 	for s in own.stmts {
-		chk_at_place(em, s.path, s.line, s.col, "E391", f"`{s.word}` opens a statement at the top level, and a compiled program has nowhere to run it — outside `main` lives only immutable state readied before it (docs/runtime/package.md), so move it into a `fn` body. GRAMMAR#program derives the form for SCRIPT mode, and `nop` is the one that costs nothing to run")
+		chk_at_place(em, s.path, s.line, s.col, Rule.TopLevelStatement, f"`{s.word}` opens a statement at the top level, and a compiled program has nowhere to run it — outside `main` lives only immutable state readied before it (docs/runtime/package.md), so move it into a `fn` body. GRAMMAR#program derives the form for SCRIPT mode, and `nop` is the one that costs nothing to run")
 	}
 }
 
 fn chk_top_muts(mut &em: Emitter, own: File) {
 	for c in own.consts {
 		if c.is_mut and not c.in_unsafe {
-			chk_at_place(em, c.path, c.line, c.col, "E358", f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
+			chk_at_place(em, c.path, c.line, c.col, Rule.TopLevelMutOutsideUnsafe, f"the top-level binding `{c.name}` may not be `mut` outside a module-level " + "`unsafe { … }` group — module state is immutable, and shared mutable state travels by value or through channels")
 		} else if c.is_mut and c.is_pub {
-			chk_at_place(em, c.path, c.line, c.col, "E484", f"the mutable global `{c.name}` may not be `pub` — a module-level " + "`unsafe { … }` group is one module's bargain with its own author, so what it holds is module-private (docs/surface/grammar.md). Expose a `pub fn` that reads it instead")
+			chk_at_place(em, c.path, c.line, c.col, Rule.PubMutGlobal, f"the mutable global `{c.name}` may not be `pub` — a module-level " + "`unsafe { … }` group is one module's bargain with its own author, so what it holds is module-private (docs/surface/grammar.md). Expose a `pub fn` that reads it instead")
 		}
 	}
 }
@@ -3189,7 +3189,7 @@ fn chk_top_muts(mut &em: Emitter, own: File) {
 # A CHECKED rule and not a raise: the question is well formed and the program is wrong, so it
 # owes a place like every other rule here, and the C written after it is discarded.
 fn chk_no_member(mut &em: Emitter, ns: str, member: str) {
-	chk_at(em, "E388", f"module `{ns}` has no `{member}`")
+	chk_at(em, Rule.ModuleNoSuchName, f"module `{ns}` has no `{member}`")
 }
 
 # --- what an import binds ----------------------------------------------------------
@@ -3259,7 +3259,7 @@ fn chk_import_name(mut &em: Emitter, f: File, i: int) {
 # name: the sentence tells the two cases apart and the CODE says it is one rule, which is
 # what a code is for.
 fn chk_import_taken(mut &em: Emitter, im: ImportDecl, what: str) {
-	chk_at_place(em, im.at, im.line, im.col, "E389", f"`{im.name}` is already {what} — an import binds a name into the one value namespace, so rename it with `as`")
+	chk_at_place(em, im.at, im.line, im.col, Rule.ImportNameTaken, f"`{im.name}` is already {what} — an import binds a name into the one value namespace, so rename it with `as`")
 }
 
 # chk_decl_kind is what a top-level declaration of `name` IS, or "" when nothing declares
@@ -3334,14 +3334,14 @@ fn chk_render_shape(mut &em: Emitter, fd: FnDecl) {
 	# row 0 of the parameters is the receiver the parser prepends; a `mut fn` makes it a
 	# `mut &`, and showing a value must not change it
 	if em.sig_nparams[row] != 1 {
-		chk_at_place(em, fd.path, fd.line, fd.col, "E359", f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
+		chk_at_place(em, fd.path, fd.line, fd.col, Rule.DisplayTakesNoArgs, f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it takes no arguments beyond the value it is called on")
 		return
 	}
 	if c_param_is_ref(em, key, 0) {
-		chk_at_place(em, fd.path, fd.line, fd.col, "E360", f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
+		chk_at_place(em, fd.path, fd.line, fd.col, Rule.DisplayNotMutFn, f"`{fd.recv}.{fd.name}()` renders the value as text (docs/runtime/format.md), so it is a plain `fn`, not a `mut fn` — showing a value must not change it")
 		return
 	}
-	chk_at_place(em, fd.path, fd.line, fd.col, "E361", f"`{fd.recv}.{fd.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
+	chk_at_place(em, fd.path, fd.line, fd.col, Rule.DisplayAnswersStr, f"`{fd.recv}.{fd.name}()` answers the `str` the value shows as (docs/runtime/format.md), and this one does not")
 }
 
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,

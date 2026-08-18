@@ -299,11 +299,11 @@ fn main() {
 `Entry` 有 `str`、`int`、`bool`、`dur`、`err`，以及終結用的 `msg`。
 
 **沒有 `Logger.debug()`，原因是一條語言規則。** `display` 與 `debug` 是每個值都有的兩種算繪
-（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E361` 會拒絕一個叫
+（見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E3059` 會拒絕一個叫
 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、而且被接受；
 在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`、`parse_level` 而不是
 `parse`，都是因為 `pub` 名字沒有 package 可以讓它唯一：自由的 `pub at` 會與編譯器自己那個有 module 私有 `at` 的
-lexer 撞上 `E705`，而這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module 私有的 `parse` 相撞。
+lexer 撞上 `E9081`，而這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module 私有的 `parse` 相撞。
 
 **只有一個會改狀態的函式，而且它收下一整個 logger。** `set_level` / `set_format` / `set_colour` / `set_sink`
 這一家是被**刪掉**而不是改名的：模組本來就有四個純 builder，所以那些 setter 只是把同一件事再說一次，順便把共享狀態
@@ -324,15 +324,15 @@ fn main() {
 （見[設定是啟動時的動作](#設定是啟動時的動作)）。要還原預設就是 `log.install(log.new())`——cell 在宣告處就是用同一個
 公開建構子初始化的，所以不需要把它讀回來，測試套件也正是靠這一點把自己隔離開。
 
-**`log.new()` 是模組外唯一能造出 `Logger` 的方法。** 每個欄位都帶預設值（module 私有欄位必須帶，`E482`），
+**`log.new()` 是模組外唯一能造出 `Logger` 的方法。** 每個欄位都帶預設值（module 私有欄位必須帶，`E4045`），
 所以 `Logger()` 不管模組願不願意都存在——而它的預設值指名的是 module 私有的 const，所以外面寫 `log.Logger()` 得到的是
-`E301`，而不是一個會默默忽略環境變數的第二個建構子。
+`E3001`，而不是一個會默默忽略環境變數的第二個建構子。
 
 ### 設定是啟動時的動作
 
 全域 logger 住在標準函式庫唯一一個 module 層級的 `unsafe { … }` group 裡，完整的 pattern 就寫在 `log.zg` 那個 group
-上方——這裡只是摘要。語言本身把關的是四條規則裡的第一條，而且只有那一條：group 之外的頂層 `mut` 是 `E358`，
-group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所以「用函式設定」不是建議做法，而是語言允許的唯一做法；
+上方——這裡只是摘要。語言本身把關的是四條規則裡的第一條，而且只有那一條：group 之外的頂層 `mut` 是 `E3056`，
+group 之內的 `pub` 是 `E4046`——那是同一條規則的兩個代碼。所以「用函式設定」不是建議做法，而是語言允許的唯一做法；
 形狀的其餘部分由讀這個模組原始碼的 `scripts/log-check.sh` 把關。
 
 它的代價，不打折地說：`Logger` 帶著一個 `list` 與一個 `Sink`，所以安裝一個是好幾次機器寫入而不是一次，而在 `install`
@@ -343,8 +343,8 @@ group 之內的 `pub` 是 `E484`——那是同一條規則的兩個代碼。所
 ### 等級
 
 `TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL` 與 `OFF`，是一個 **enum** 的 variant，而不是它們原本的 `int` 常數：
-`E340` 會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E347` 擋下拿 variant 跟數字比較，
-而每個算繪函式都是**窮盡的 `match`**，所以新增一個等級就不可能不替它排序、命名、上色——`E428` 會指名被忘掉的那一條
+`E3038` 會擋下把 `int` 放進 `Level` 的位置、也會擋下把 `Level` 放進 `int` 的位置，`E3045` 擋下拿 variant 跟數字比較，
+而每個算繪函式都是**窮盡的 `match`**，所以新增一個等級就不可能不替它排序、命名、上色——`E4019` 會指名被忘掉的那一條
 arm。`int` 版本連 `log.new().level(99)` 都收，只印出空白，兩次都什麼也不說。
 
 **`OFF` 根本不在那個順序裡。** 它是「什麼都不收」的門檻：設到它的 logger 什麼都不寫，包括寫*在* `OFF` 上的那一行。
@@ -397,7 +397,7 @@ JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的。它固定�
 ### 目的地
 
 `Sink` 是一個**帶著 mode 的值**，不是 spec 也不是 closure：spec 需要 `#[dyn]`（non-`#[dyn]` 的 provided method 有一個
-已知延後的缺口），而 closure 只要提到被 import 的模組就是 `E735`。`to_chan` 是讓 logger 可測的關鍵——`write(2)` 寫出去
+已知延後的缺口），而 closure 只要提到被 import 的模組就是 `E4069`。`to_chan` 是讓 logger 可測的關鍵——`write(2)` 寫出去
 就讀不回來了，所以這個模組自己的 suite 是把那些位元組收下來斷言的。channel sink 需要事先有足夠的容量，因為送進滿的
 channel 會把送出的 coroutine 停住。
 
@@ -512,13 +512,13 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 
 > **[not yet]** 這個模組會出貨，但**無法 import**，而且它是十五個模組中唯一如此的一個。`Atomic[T]` 是 generic
 > struct，而 generic struct 是本編譯器尚未建出的形式，所以 `import "atomic"` 會在提出請求的那一行被具名拒絕
-> ——_E511 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
+> ——_E9104 the module `atomic` ships and cannot be imported_，並附位置。下表的簽章另外還提到 `Ref[T]`，那個型別
 > 也不存在；模組裡另有一組 `Atomic[T]` 形狀的表面（`new_atomic`），等的是同一件事。在這件事落地之前，跨 coroutine
 > 的共享狀態請走 channel。
 >
 > 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
 > `src/stdlib/` 的模組同時也離開了 `zerg fmt --check` 與其餘的 self-source 集合，會在 generics 到來之前無人閱讀
-> 地爛掉。而那樣留在 import 處的會是 _E502 cannot resolve import `atomic`_——一句關於一個明明就在那裡的模組的話。
+> 地爛掉。而那樣留在 import 處的會是 _E5002 cannot resolve import `atomic`_——一句關於一個明明就在那裡的模組的話。
 
 | 函式                                                           | 摘要                                |
 | -------------------------------------------------------------- | ----------------------------------- |
@@ -561,7 +561,7 @@ assert e is ValueError
 ```
 
 > 用 **closure**——`assert_raises(fn () { strings.split("a,b", "") })`——讀起來更好，但編不過：closure 主體
-> 只要提到被 import 的模組就是 _E735 a closure captures `strings`_，因為 namespace 是自由名稱，而 capture 得給它
+> 只要提到被 import 的模組就是 _E4069 a closure captures `strings`_，因為 namespace 是自由名稱，而 capture 得給它
 > 一個型別。每一個透過 `import` 取用自己模組的測試都是這個形狀，所以能服務它們的是 `guard`。
 
 ### 執行中的測試說了什麼

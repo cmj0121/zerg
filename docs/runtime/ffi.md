@@ -7,16 +7,16 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 
 > **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
 > `unsafe` context a foreign call sits inside is where it stops: the **block-expression** form is refused by name,
-> with a place (`E224`), and so is a standalone **`unsafe fn`** (`E264`) and the **`unsafe fn` TYPE** the bindings
-> above are spelled with (`E488`) — which takes the import edge with it. There is no `ffi` module in the shipped
-> standard library, so `import "ffi"` fails at the import itself — _E502 cannot resolve import `ffi` under any source
+> with a place (`E9011`), and so is a standalone **`unsafe fn`** (`E9027`) and the **`unsafe fn` TYPE** the bindings
+> above are spelled with (`E9073`) — which takes the import edge with it. There is no `ffi` module in the shipped
+> standard library, so `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source
 > root_ — rather than later, at the `unsafe` the binding would have needed. The module-level **group** is the shape
 > that IS built, for its `mut` bindings; what its `fn` may do inside is still refused, one operation at a time. On the
 > export edge a `--emit lib` build writes an object and **no header**, and nothing reports which `pub` declarations
 > would have been left out of one. >
 > Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
 > carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
-> where it is written, as _E707 no type named `handle` (the binding `h`)_.
+> where it is written, as _E4056 no type named `handle` (the binding `h`)_.
 
 ## Two edges, one contract
 
@@ -234,11 +234,11 @@ mutable global with nothing said.
 
 The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
 unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is
-rejected as `E387`, with a place. Its callers are the other declarations in the group, which is what the
+rejected as `E3083`, with a place. Its callers are the other declarations in the group, which is what the
 group is for. Until the block-expression above is built, that is also the ONLY caller a program has: an
 entry point is safe, so a group's `fn` is reachable from another group member and from nowhere else.
 
-> **[not yet]** A `handle`-typed binding is refused by name. `mut h: handle? = nil` is _E707 no type named
+> **[not yet]** A `handle`-typed binding is refused by name. `mut h: handle? = nil` is _E4056 no type named
 > `handle` (the binding `h`)_, with a place: no declaration in the program carries the name, and this
 > compiler ships no `ffi` module that could. It used to escape to `cc` as `error: unknown type name
 'zg_handle'` — the one place in this chapter where a form broke the standing contract.
@@ -329,4 +329,4 @@ Deferred for a later design pass — none blocks the model above:
 - The scheduler's policy for **blocking foreign calls** (thread-pool growth) — a runtime detail.
 - Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
 - A compile-time **`sizeof` / `alignof`** — whether a type's layout is a **built-in** or a **stdlib** facility
-  is undecided, and it exists as neither. Refused by name (`E414`).
+  is undecided, and it exists as neither. Refused by name (`E9046`).

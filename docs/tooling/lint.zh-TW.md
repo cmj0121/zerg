@@ -155,7 +155,7 @@ coroutine 拿到的是同一條 channel 的另一個 handle，之後送出的東
 `L401` 曾經在這裡,現已**退休**。它報的是兩個 enum 都宣告的同一個 variant 名:裸名字解析到 variant 時取的是
 **第一個**宣告,`c := Red` 就成了由宣告順序決定的擲硬幣。這說法的兩半如今都不成立。variant 一律由它的 enum
 指名（見[文法](../surface/grammar.zh-TW.md)）,所以 `Red` 單獨一個在哪一個 enum 裡都是
-_E383 `Red` is a variant of `Colour`, and a variant is named through its enum_;而帶限定的 `Signal.Red` 是
+_E3079 `Red` is a variant of `Colour`, and a variant is named through its enum_;而帶限定的 `Signal.Red` 是
 **在它指名的那個 enum 裡面**解析的,兩份宣告因此是兩個不同的 variant、不會相爭。這條規則是從 linter 裡拿掉,
 而不是留著繼續跑——否則它在 `lint-check` 裡那個案例就會一直斷言下去。
 

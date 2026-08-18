@@ -71,7 +71,7 @@ deviation 是一個欠著修的 bug,不是一個被記載下來的狀態。
 由 **checker** 收集的規則透過診斷清單回報，那是完整的形式：
 
 ```text
-error: E335 cannot bind str to a int binding: `x`
+error: E3033 cannot bind str to a int binding: `x`
   --> demo.zg:2:5
    |
  2 |     x: int = "s"
@@ -82,7 +82,7 @@ error: E335 cannot bind str to a int binding: `x`
 既沒有 `error:` 前綴，底下也沒有引出的原始碼行與 caret：
 
 ```text
-E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
+E9011 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
 expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
   --> demo.zg:2:7
 ```
@@ -111,25 +111,25 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 > 絕。三個回答**程式**問題的階段如今都有通道了——check.zg 的 `chk_at`、parser.zg 的 `p_diag`、emit.zg 的
 > `c_diag`——每一條都把碼當成引數收下、位置自己讀，所以一處不可能帶了其中一個卻忘掉另一個。本 deviation 剩下的
 > 是 **f-string 掃描器**,它的兩處 raise 兩者皆無 —— 而這比原本窄:lexer 自己的拒絕走 channel,
-> 帶碼也帶位置(`E101 a string literal is not closed before the end of the line`、
-> `E104 this character is not part of any Zerg token`,皆附 `--> file:line:col`)。剩下的是未封閉的
+> 帶碼也帶位置(`E1001 a string literal is not closed before the end of the line`、
+> `E1004 this character is not part of any Zerg token`,皆附 `--> file:line:col`)。剩下的是未封閉的
 > `f"abc` 與 f-string 內的裸 `}`,它們回一句白話,連 `error:` 前綴都沒有。
 >
 > ---
 >
 > 今日量測。**parser 這一半做完了。** 它 **103** 處 raise 中，除了一處以外都走它的通道。九條原本完全沒有碼的規則——包括萬用兜
-> 底 _`X` is not an expression this compiler reads_——拿到了 `E601`–`E609`，每一條各配一個 gate 案例與一列
+> 底 _`X` is not an expression this compiler reads_——拿到了 `E2054`–`E2059`，每一條各配一個 gate 案例與一列
 > catalogue。剩下一處 raise 刻意兩者皆無：`p_impossible`，那是任何程式都到不了的分支，給它一個碼等於給出一個沒
 > 有任何案例能斷言的身分。那次改動看得見的形狀是：`scripts/reject-check.sh` 退掉 **31** 個 `no-place` 標記，而
 > `reject-fuzz` 的 `write-immutable` 上限，也就是 parser 最後一處沒有位置的拒絕，降到了零。
 >
 > **emitter 這一半也做完了。** 它原本有 **126** 個 raise 語句，其中 **76** 個以碼開頭、**13** 個接上位置；如今
 > 的 **123** 個全部走 `c_diag` / `c_diag_at`，少掉的三個都是不再 raise 的規則——struct 與 enum 現在各自記錄自己
-> 的位置，所以重複宣告和另外四種宣告一樣走檢查通道；而「subject 拿不到的 variant」那兩條（`E456`、`E457`）也
-> 因為同一個理由改成由檢查通道記錄。四十三條原本沒有碼的規則拿到了 `E701`–`E743`，每一條各
-> 配一個 gate 案例與一列 catalogue；`E4xx` 收在 `E498`、`E499` 未發出就退場，和 parser 關掉 `E2xx` 的做法一模一
-> 樣。**這裡沒有任何一處 raise 是例外。** 曾有兩處被寫成 ICE，理由是「唯一能走到它的形式已被 parser 擋下」，而
-> 兩個理由都錯了——`p_builtin_type_ctor` 把六個名字排除在 `E275` 之外，其中四個不是保留字，所以
+> 的位置，所以重複宣告和另外四種宣告一樣走檢查通道；而「subject 拿不到的 variant」那兩條（`E4030`、`E4031`）也
+> 因為同一個理由改成由檢查通道記錄。四十三條原本沒有碼的規則各自拿到一個碼，每一條各
+> 配一個 gate 案例與一列 catalogue；emitter 的號碼段用滿後，最後一個號碼未發出就退場,和 parser 當初關掉自己那
+> 段的做法一模一樣——兩者都發生在這份目錄已經不再使用的三位數編號底下。**這裡沒有任何一處 raise 是例外。** 曾有兩處被寫成 ICE，理由是「唯一能走到它的形式已被 parser 擋下」，而
+> 兩個理由都錯了——`p_builtin_type_ctor` 把六個名字排除在 `E2035` 之外，其中四個不是保留字，所以
 > `fn set[T](…)` 與 `set[int, str](1)` 走得到那條 arity 規則；而 `1..=nil` 是把裸 `..=` 從前留下的形狀親手寫出
 > 來。一條不可達的規則必須被證明不可達，而這兩條都沒有。這次改動看得見的形狀是：再退掉 **18** 個 `no-place`
 > 標記，而 `scripts/refuse-check.sh` 的 `place` 標記整個消失了——那裡的每一個 `zerg` 案例現在都被斷言帶著位置，
@@ -146,14 +146,14 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 >
 > ---
 >
-> **檢查的規則並不豁免**，這正是舊文字說反了的地方，而原本被指名的那兩條都已經搬走了。常數環（`E732`）回報時
-> 沒有位置也沒有碼；如今它以自己的碼開頭，並指向第一個拿不到值的常數。`E382`——一個名字被宣告兩次——原本是有些
+> **檢查的規則並不豁免**，這正是舊文字說反了的地方，而原本被指名的那兩條都已經搬走了。常數環（`E4068`）回報時
+> 沒有位置也沒有碼；如今它以自己的碼開頭，並指向第一個拿不到值的常數。`E3078`——一個名字被宣告兩次——原本是有些
 > 宣告形式帶位置、有些不帶：重複的 `type A = …` 帶位置，重複的 `struct` 不帶，因為 struct 與 enum 是在任何東西
 > 記下位置之前就被登記的。兩者如今都帶著宣告自己的行號，而那條在 raise 與記錄之間做選擇的通道，也隨著它存在的
 > 理由一起消失了。
 >
-> 還有兩條曾經在這份名單上、現在不在了：`` `x` is used after del `` 與它 on-some-paths 的手足，如今是 `E297`
-> 與 `E298`。規則本身沒有任何改變——它們從 `raise` 搬到了檢查通道，而那正是唯一決定這個問題的東西，
+> 還有兩條曾經在這份名單上、現在不在了：`` `x` is used after del `` 與它 on-some-paths 的手足，如今是 `E2052`
+> 與 `E2053`。規則本身沒有任何改變——它們從 `raise` 搬到了檢查通道，而那正是唯一決定這個問題的東西，
 > 這一搬就是整個修正。
 >
 > `zerg` 記錄的位置是**逐語句**的，所以欄位指的是語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到
@@ -168,7 +168,7 @@ linker 對著沒人寫過的產生碼所報的錯。
 > **[deviation]** 在一個**沒有人實例化的 template** 裡，一個形式兩者皆非。這個編譯器強制的每一條規則，都由「把
 > body **下降**」那趟走訪驅動，而 template 在那趟走訪之前就被移除了——只有呼叫端要求的 specialization 會被下降
 > ——所以沒有任何呼叫抵達的 `fn f[T](xs: list[T], v: T) { xs.append(v) }` 安靜地編得過，同一個 body 去寫一個
-> immutable binding 也一樣，而那是 `E307`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷，因為它的語意
+> immutable binding 也一樣，而那是 `E3006`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷，因為它的語意
 > pass 走的是**宣告**而不是下降。這是欠一次的一個缺口，不是任何單一規則的性質。要補上它，body 必須對型別參數的
 > **bound** 檢查、而不是對具體型別——`T: Show` 上的 `x.show()` 在 `T` 還不是某個具體型別以前沒有 method 可解析，
 > 而下降只定義在具體型別上——那是這個編譯器還沒有的檢查器。
@@ -205,7 +205,7 @@ module 的用途。
 > ([文字與格式化](runtime/format.zh-TW.md))；落在集合外的字母以同樣的方式被拒。
 >
 > 這些今天全都搆不到。唯一會要求 width 或 precision 的表面形式是 **f-string hole 裡的 format spec**,而它是
-> `[not yet]`:每一個 `{x:…}`(包含 `{x:.2f}`)都回報 _E225 NotImplemented: an f-string ':spec' format spec_。
+> `[not yet]`:每一個 `{x:…}`(包含 `{x:.2f}`)都回報 _E9012 NotImplemented: an f-string ':spec' format spec_。
 > 三個上限實作在 runtime 裡,而出貨的編譯器不會發出任何抵達它們的呼叫,所以這一段記載的是一份程式還觀察不到的契約。
 
 ## Runtime abort 契約

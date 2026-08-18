@@ -204,7 +204,7 @@ setlocal indentkeys=0{,0},0),0],!^F,o,O
 "
 " The compiler already answers the question `:make` asks, and in two shapes:
 "
-"   error: E307 cannot assign to `x`: …        a finding WITH a place, as a block
+"   error: E3006 cannot assign to `x`: …        a finding WITH a place, as a block
 "     --> f.zg:3:2                             whose second line carries the position
 "   f.zg:10:17: L502 the literal `2` is …      `zerg lint`, one finding per line
 "

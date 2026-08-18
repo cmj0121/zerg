@@ -14,10 +14,10 @@ Three rules hold for every decorator, whatever it names.
   `#[allow(L103)]` above a binding are the same form (`statement`, `decorated-decl`,
   [`GRAMMAR`](../../GRAMMAR) group 1). **Which** decorator is legal where is a **semantic** rule, and a
   short one: `#[derive]`, `#[obj]` and `#[test]` are about a **declaration**, and above a plain statement
-  each is refused by name — _E612 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows
+  each is refused by name — _E2062 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows
   it, and a statement is not one_. `#[allow(…)]` is the one that belongs on a statement.
 - **One decorator per item.** An item that wants several writes the **comma list** — `#[allow(L601), test]`
-  — and stacking one over another is a compile error: _E613 a second decorator on one item — an item takes
+  — and stacking one over another is a compile error: _E2063 a second decorator on one item — an item takes
   ONE decorator, so merge them into its comma list_. Two spellings for one thing is what `zerg fmt` exists
   to remove, and it cannot remove one once both are legal.
 - **It stands on its own line.** A decorator is an item of the statement list like any other, so a
@@ -31,11 +31,11 @@ other one — `#[sealed]`, the layout directives — is **[not yet]** and refuse
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
   `struct` and on a fieldless `enum` — together with **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`**,
-  each specified here and **[not yet]**: naming one is a clean refusal, _E436 NotImplemented:
+  each specified here and **[not yet]**: naming one is a clean refusal, _E9054 NotImplemented:
   `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and
-  unbuilt_. `Eq` on a **payload** `enum` is **[not yet]** by a code of its own, _E438 … it carries a payload
+  unbuilt_. `Eq` on a **payload** `enum` is **[not yet]** by a code of its own, _E9055 … it carries a payload
   (`A`), and this compiler derives equality for a fieldless enum_. There is **no auto-derived `Object`**.
-  A user spec can never be derived **on a struct** — `E437` — while on an **`enum`** any spec may be,
+  A user spec can never be derived **on a struct** — `E4024` — while on an **`enum`** any spec may be,
   because the generated impl is delegation to the payload rather than a reading of structure. See
   **[Derive & Default Behavior](derive.md)**.
 - **`#[obj]`** — on a `spec`, no arguments. Generates a companion **struct of function values** and a
@@ -70,7 +70,7 @@ other one — `#[sealed]`, the layout directives — is **[not yet]** and refuse
   no meaning to it — the catalogue of codes belongs to the linter, and a copy of it in the compiler would be
   the second place a language fact is written down. The linter therefore says two things about a suppression
   itself: **L106** (**info**) when it had nothing to suppress, and **L107** (**warning**) when it names a
-  code no rule has. An `#[allow]` naming no code at all is refused outright — _E614_.
+  code no rule has. An `#[allow]` naming no code at all is refused outright — _E2064_.
 
 ## Reserved, and what a reserved name actually gets
 
@@ -79,16 +79,16 @@ Four names are **specified and unbuilt**, and only one of them is a name the com
 - **`#[sealed]`** — on a `struct`. _Intended_ to demote the default field-wise `T(…)` constructor to
   **module-private**, so external code must build through a public custom constructor (a named associated
   `fn`) while the module still builds with `T(…)` internally — pairing with private, defaulted fields to
-  enforce an invariant. **[not yet]**, with a code of its own: `E496`.
+  enforce an invariant. **[not yet]**, with a code of its own: `E9079`.
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators, for in-memory
   width, padding and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**
 
 > **[not yet]** The layout three are **reserved on this page and nowhere in the compiler**. `#[repr]` has
-> no rule of its own: it falls into the unknown-decorator arm and gets _E217 … this compiler reads
+> no rule of its own: it falls into the unknown-decorator arm and gets _E9005 … this compiler reads
 > `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other_ — the same sentence a
 > misspelled `#[frobnicate]` gets. Nothing is silently dropped; what is lost is the distinction between a
-> name awaiting implementation and a typo, which is exactly what `#[sealed]`'s `E496` bought back.
+> name awaiting implementation and a typo, which is exactly what `#[sealed]`'s `E9079` bought back.
 >
 > **[deviation]** `#[test]` is read by both compilers, but the **seed strips a `#[test]` function before
 > its checker runs**, so the body is never type-checked there while `zerg` checks it like any other. A test

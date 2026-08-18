@@ -143,7 +143,7 @@ make refuse     # every form this compiler has not built is named, not emitted
 make reject     # every program that is not Zerg is rejected — by the compiler, not by cc
 ```
 
-Each case is a `.zg` program beside the stdout it must produce. The Makefile's
+Each case is a `.zg` program beside the stdout it must produce. `mk/gates.mk`'s
 `CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves it
 is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and deleting a name
 from it **is** the gate for the feature that name waits on.

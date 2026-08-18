@@ -129,7 +129,7 @@ make refuse     # 每一個這個編譯器還沒建出來的形式，都是指�
 make reject     # 每一支不是 Zerg 的程式都被拒絕——由編譯器拒絕，不是由 cc
 ```
 
-每個案例是一支 `.zg` 程式，旁邊放著它必須印出的 stdout。Makefile 的 `CORPUS_PASS` 是 `zerg`
+每個案例是一支 `.zg` 程式，旁邊放著它必須印出的 stdout。`mk/gates.mk` 的 `CORPUS_PASS` 是 `zerg`
 今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘的由
 `CORPUS_SKIP` 擋著，而把一個名字從裡面刪掉，**就是**那個名字所等的功能的閘門。
 

@@ -62,7 +62,10 @@ fn run_doc(args: list[str], brief: bool) -> int {
 
 	name := args[0]
 	if doc_is_path(name) {
-		io.write(render_doc_module(doc_read(doc_path_name(name), doc_path_files(name)), brief, col))
+		files := doc_path_files(name)
+		raise doc_no_source(name) if files.len() == 0
+
+		io.write(render_doc_module(doc_read(doc_path_name(name), files), brief, col))
 		return 0
 	}
 
@@ -217,7 +220,30 @@ fn doc_module_names() -> list[str] {
 # the resolution reach the loader, would report `E5002 cannot resolve import` about an import
 # nobody wrote.
 fn doc_no_such(name: str) -> str {
-	mut out := f"nothing here is called `{name}` — `zerg doc` reads a module (`strings`), one of its declarations (`strings.split`, `log.Logger.level`), or a path to a source file\n\nthe modules it can see:"
+	return f"nothing here is called `{name}` — `zerg doc` reads a module (`strings`), one of its declarations (`strings.split`, `log.Logger.level`), or a path to a source file" + doc_can_see()
+}
+
+# doc_no_source is the refusal for a path that IS there and holds nothing this can read: a
+# directory with no `.zg` file in it, or one whose only sources are test files.
+#
+# IT USED TO PRINT NOTHING AND EXIT 0. `module_at` answered an empty list, `doc_read` built a
+# `DocModule` with no files, and the renderer had no file to render — so `zerg doc docs/`,
+# `zerg doc mk/` and `zerg doc ./` each wrote zero bytes and reported success. That is the one
+# thing this tool's extractor says in as many words it is not (zerg/doc.zg: "silent about what
+# it could not read"), and a trailing slash left by a shell's completion is how a reader
+# arrives at it.
+#
+# It ends with the same listing every other refusal ends with, because the reader who typed a
+# directory meant to read something and the something is almost always on it.
+fn doc_no_source(name: str) -> str {
+	return f"`{name}` holds no source `zerg doc` can read — a directory is read as the module it would be, which is its `.zg` files, and a `*_test.zg` is on no module's surface" + doc_can_see()
+}
+
+# doc_can_see is the listing both refusals end with. It is one function because the two
+# sentences differ and the list under them must not: a name turned away by either is turned
+# away against exactly the index `zerg doc` on its own prints.
+fn doc_can_see() -> str {
+	mut out := "\n\nthe modules it can see:"
 	for n in doc_module_names() {
 		out = out + "\n  " + n
 	}

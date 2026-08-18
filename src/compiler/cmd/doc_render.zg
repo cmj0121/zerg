@@ -53,11 +53,12 @@ import (
 # field, a variant, a method — repeats the pair four columns further in.
 const DOC_WIDTH := 80
 
-# The one modifier a signature may carry in front of its keyword — `unsafe fn` (GRAMMAR group
-# 12), which `doc_const_sig`'s comment explains no binding is spelled with. It is written down
-# because `doc_sig_line` steps over exactly this and nothing else, and a length counted from a
-# literal at the call site is a length nobody can find from the word.
+# The two modifiers a signature may carry in front of its keyword, in the order GRAMMAR#fn-decl
+# derives them. They are written down because `doc_sig_line` steps over exactly these and
+# nothing else, and a length counted from a literal at the call site is a length nobody can
+# find from the word.
 const DOC_UNSAFE := "unsafe "
+const DOC_MUT := "mut "
 
 # --- the device ---------------------------------------------------------------------------
 
@@ -335,32 +336,49 @@ fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief
 	}
 }
 
-# doc_sig_line emphasises the two words a reader scans for — the keyword and the name — and
-# leaves the rest of the signature alone.
+# doc_sig_line emphasises the words a reader scans for — everything in front of the name, and
+# the name — and leaves the rest of the signature alone.
 #
 # The span is COUNTED AND THEN CHECKED, not parsed. `kind` and `name` are two strings this file
 # was handed beside the signature, so where they end is arithmetic; what the arithmetic cannot
-# know is whether they are really there, because a signature may lead with a modifier
-# (`unsafe fn null()`) or with no keyword at all (a module-level binding written `X := 1` is
-# filed under "const"). So the offset is measured, the text at it is compared with what was
-# expected, and a signature that does not match is printed plain. Reading the signature back to
-# find the name instead would be a small parser of a string `doc.zg` already spelled, and it
-# would disagree with `doc.zg` the first time a form gained a modifier — which is exactly the
-# day this went wrong before.
+# know is whether they are really there. So each word that MAY stand in front is stepped over
+# when the signature carries it there, the name is compared at the offset that leaves, and a
+# signature that does not match is printed plain. Reading the signature back to find the name
+# instead would be a small parser of a string `doc.zg` already spelled, and it would disagree
+# with `doc.zg` the first time a form gained a modifier — which is exactly the day this went
+# wrong before.
+#
+# EVERY WORD IN FRONT IS OPTIONAL, including the keyword. Only `unsafe` was stepped over, and
+# the keyword was required — so `mut fn bump()` was measured against `fn bump`, matched
+# nothing, and printed with no emphasis at all, as did the `mut COUNTER := 0` a module-level
+# binding is filed under "const" while spelling `mut` (doc.zg, `doc_const_sig`) and the bare
+# `X := 1` that spells no keyword whatever. `mut fn` is the worst one to lose: GRAMMAR#fn-decl
+# obliges the CALL SITE to hold the receiver in a `mut` binding, so it is the word the eye most
+# needs to catch, and it was the one word printed like the parameter list.
 fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 	return d.sig if not col
 
 	b := bytearray(d.sig)
-	head := f"{d.kind} {d.name}"
 	mut at := 0
-	if has_prefix(d.sig, DOC_UNSAFE) {
-		at = bytearray(DOC_UNSAFE).len()
-	}
+	at = doc_step(b, at, DOC_UNSAFE)
+	at = doc_step(b, at, DOC_MUT)
+	at = doc_step(b, at, d.kind + " ")
 
-	n := at + bytearray(head).len()
-	return d.sig if n > b.len() or line_slice(b, at, n) != head
+	n := at + bytearray(d.name).len()
+	return d.sig if n > b.len() or line_slice(b, at, n) != d.name
 
 	return doc_bold(line_slice(b, 0, n), col) + line_slice(b, n, b.len())
+}
+
+# doc_step is `at` moved past `word` when the signature carries it there, and `at` unchanged
+# when it does not. Every word in front of a name is optional, so every step is this one.
+fn doc_step(b: list[byte], at: int, word: str) -> int {
+	n := at + bytearray(word).len()
+
+	return at if n > b.len()
+	return n if line_slice(b, at, n) == word
+
+	return at
 }
 
 # --- the header, and what could not be read ---------------------------------------------------

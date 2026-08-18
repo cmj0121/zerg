@@ -519,21 +519,34 @@ fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 #
 # THE AUTHOR'S LINE BREAK BECOMES A SPACE, because in text written with spaces that is what it
 # stands for — the two lines are two runs of words, and the break between them is the gap. It
-# becomes NOTHING between two ideographs: Chinese is written with no spaces in it, so a joiner
-# that put one there would be writing a character into the sentence that its author did not,
-# and the reader would see a gap in the middle of a word the source has none in.
+# becomes NOTHING BETWEEN TWO FULL-WIDTH CHARACTERS: Chinese is written with no spaces in it,
+# so a joiner that put one there would be writing a character into the sentence that its author
+# did not, and the reader would see a gap in the middle of a sentence the source has none in.
+#
+# THE QUESTION HERE IS WIDTH, WHICH IS WHY IT IS `doc_rune_width` AND NOT `doc_is_ideograph`.
+# The two live beside each other and answer genuinely different questions, and this file needs
+# both. The ideograph list says where a line MAY BREAK, and is deliberately narrow: it never
+# takes a cut beside a punctuation mark, because a mark carries a not-at-line-start or
+# not-at-line-end side nothing here can see. Joining asks something weaker — whether a space
+# belongs BETWEEN two characters — and a full-width comma answers that exactly as a Han
+# character does. Asked the narrow question, a source line ending on `，` was joined with a
+# half-width space dropped into the middle of a Chinese sentence.
+#
+# ONE SIDE FULL-WIDTH KEEPS THE SPACE. `而 zerg doc 的排版` is how this tree's own zh-TW
+# documents are written: the space around a Latin run is one the AUTHOR typed, and swallowing
+# it at a line break would lose a space the source has — the same defect the other way round.
 fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
 	return if para.len() == 0
 
 	mut text := ""
-	mut ideo := false
+	mut wide := false
 	for p in para {
 		rs := runearray(p)
-		if text != "" and not (ideo and doc_is_ideograph(rs[0])) {
+		if text != "" and not (wide and doc_rune_width(rs[0]) == 2) {
 			text = text + " "
 		}
 		text = text + p
-		ideo = doc_is_ideograph(rs[rs.len() - 1])
+		wide = doc_rune_width(rs[rs.len() - 1]) == 2
 	}
 	doc_wrap(out, text, indent)
 	para = []

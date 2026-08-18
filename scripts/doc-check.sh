@@ -42,7 +42,9 @@
 # other and says nothing about how wide either one is. The tree makes the case an ordinary
 # one rather than a hypothetical — every `docs/*.md` here has a zh-TW twin — while the standard
 # library contains not one comment in Chinese, so the fixture is beside §5's for the same
-# reason.
+# reason. The SPACES in that paragraph are asserted there too, for being invisible to every
+# width check in it: joining two source lines wrote a half-width space into the middle of a
+# Chinese sentence, one column wide, and the line stayed inside the budget.
 #
 # §8 is the last row of the chapter's four-question table — anything else is a refusal that
 # lists what it can see, exit 1 — asked of the three names that used to end somewhere else:
@@ -75,7 +77,7 @@ ZERG="${ZERG:-./bin/zerg}"
 # The counts this gate would report success for having measured nothing, and each of them is
 # the number this tree MEASURES rather than a round one under it: 183 exposed declarations
 # across the 14 stdlib modules that parse, 16 modules in the list, 18 declarations that carry
-# no comment, 25 attachment and form rules, and 55 checks.
+# no comment, 26 attachment and form rules, and 56 checks.
 #
 # THE FLOORS ARE THE MEASUREMENT AND NOT A MARGIN UNDER IT. `MIN_CHECKS` stood at 45 against a
 # run of 55, so ten checks could stop running with nothing said; a floor with slack in it
@@ -87,14 +89,14 @@ ZERG="${ZERG:-./bin/zerg}"
 # `examples`, the modules standing beside the reader, and at 15 that half could empty out in
 # silence.
 #
-# 55 is the count on a host with no `script`, which is the smaller of the two runs: the
+# 56 is the count on a host with no `script`, which is the smaller of the two runs: the
 # terminal half of §6 adds five more. A floor pinned to the larger one would turn every host
 # without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-16}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
-MIN_CHECKS="${MIN_CHECKS:-55}"
-MIN_RULES="${MIN_RULES:-25}"
+MIN_CHECKS="${MIN_CHECKS:-56}"
+MIN_RULES="${MIN_RULES:-26}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
 # again here because §7 is the second opinion about it and a second opinion that read the
@@ -566,17 +568,18 @@ fi
 # assertion is that the renderer applied it, and a check that asked the renderer what it
 # thought a column was would be the renderer agreeing with itself.
 cat >"$tmp/proj/width.zg" <<'ZG'
-# width — 一份用中文寫成的 module,它量的是文件的欄寬。
+# width — 一份用中文寫成的 module，它量的是文件的欄寬。
 #
-# 全形字在終端機上佔兩欄。一段以「字數」折行的文字會折到八十個字,印出來卻是一百六十欄,
-# 整份文件因此跑出終端機的右緣;以顯示欄寬折行的則每一行都落在八十欄以內。這一段刻意寫得
-# 夠長,長到只要折行是以字數計算就一定有一行超出,而 zerg doc 的排版正是這裡在量的東西。
+# 全形字在終端機上佔兩欄。一段以「字數」折行的文字會折到八十個字，印出來卻是一百六十欄，
+# 整份文件因此跑出終端機的右緣；以顯示欄寬折行的則每一行都落在八十欄以內。這一段刻意寫得
+# 夠長，長到只要折行是以字數計算就一定有一行超出。兩個全形字之間不該多出作者沒寫的空格，而
+# zerg doc 這種西文詞前後的空格是作者寫的，得留在原處。
 
 # LIMIT 是這份文件量出來的欄數。
 pub const LIMIT: int = 80
 
-# label 回答一個標籤。它的說明也是中文的,而且夠長:縮排六欄之後的內文仍然必須折行,折在
-# 哪一個字上才是這道 gate 真正在看的東西,而 terminal 與 column 這類西文詞夾在其中,讓貪
+# label 回答一個標籤。它的說明也是中文的，而且夠長：縮排六欄之後的內文仍然必須折行，折在
+# 哪一個字上才是這道 gate 真正在看的東西，而 terminal 與 column 這類西文詞夾在其中，讓貪
 # 心填字有得選。
 pub fn label() -> str {
 	return "寬"
@@ -644,6 +647,37 @@ EOF
 		checks=$((checks + 1))
 	else
 		note "the widest line of the Chinese document is $wide_max columns and the floor is $MIN_FILLED — the paragraph was not filled, so a width assertion over it says nothing"
+	fi
+
+	# THE SPACES IN THE DOCUMENT ARE THE AUTHOR'S. Refilling a paragraph joins two source
+	# lines, and what the join puts between them is a space or nothing — a decision the width
+	# above cannot see, because a space dropped into the middle of a Chinese sentence is one
+	# column and the line stays inside the budget. The fixture's paragraph breaks after a
+	# full-width comma, which is exactly where it used to gain one.
+	#
+	# BOTH DIRECTIONS ARE ASSERTED, because the rule has two ways to be wrong. A space is
+	# never right BETWEEN TWO FULL-WIDTH CHARACTERS — Chinese is written with none — and it is
+	# always right between a Han character and a Latin word, which this tree's own zh-TW
+	# documents write and the fixture breaks a line at. A rule that dropped the space whenever
+	# either side was full-width would fix the first and break the second in silence.
+	#
+	# The property is asked of perl's own Unicode tables rather than of the block list written
+	# out above, because here the block list is not the claim: `East_Asian_Width` is, and a
+	# check reusing the renderer's approximation of it would pass a renderer whose
+	# approximation is wrong.
+	joins=$(perl -CSD -ne '
+		chomp;
+		print "a space that is not in the source: $_\n"
+			if /(?<=[\p{Ea=W}\p{Ea=F}]) (?=[\p{Ea=W}\p{Ea=F}])/;
+		print "a space that is in the source and not here: $_\n"
+			if /\p{Han}[A-Za-z]|[A-Za-z]\p{Han}/;
+	' "$tmp/width.out")
+
+	if [ -z "$joins" ]; then
+		checks=$((checks + 1))
+		rules=$((rules + 1))
+	else
+		note "the line break between two source lines was joined with the wrong thing — $(printf '%s' "$joins" | head -1)"
 	fi
 else
 	note 'no `perl` on this host, so the width of the page was not measured — §7 is the one section that cannot be skipped, its whole subject being how wide a character is'
@@ -741,5 +775,5 @@ fi
 	exit 1
 }
 
-printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, colour follows the terminal while the shape does not, and a comment in Chinese lays out inside %s columns — %s checks\n' \
+printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, colour follows the terminal while the shape does not, and a comment in Chinese lays out inside %s columns with no space its source does not have — %s checks\n' \
 	"$decls" "$listed" "$undoc" "$rules" "$DOC_COLUMNS" "$checks"

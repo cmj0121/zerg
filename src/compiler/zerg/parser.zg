@@ -93,7 +93,7 @@ fn p_advance(mut &p: Parser) {
 # same run; a refusal ends the parse, and after it there is no tree left to walk. So these
 # build the message the site raises rather than recording it — which is also why the `raise`
 # stays at the site: a call that raises is not a diverge this compiler can see (a function
-# whose last statement is one still owes its answer, E333), and a third of these sites are
+# whose last statement is one still owes its answer, E3032), and a third of these sites are
 # the postfix `raise … if c` guard, which is a statement form and not a call.
 #
 # scripts/error-codes-check.sh holds the file to it, and it is worth knowing exactly how far
@@ -485,8 +485,8 @@ fn p_reserved_name(mut &p: Parser, role: str, what: str) -> str {
 # `fn N(zz: int) -> int` and call `N(1)`: for every other name in the set the declaration is
 # unreachable, because the callee is read as the prelude's own form before a user symbol is
 # looked for — a conversion for the scalars and the two list aliases, a construction for
-# `Either` / `Result` / `Err` / `Eq` / `Into` (E727), the carrier's constructor for `Left` /
-# `Right` (E459). `list` is reachable here, but a `fn list` costs the SEED the `list[byte](s)`
+# `Either` / `Result` / `Err` / `Eq` / `Into` (E4064), the carrier's constructor for `Left` /
+# `Right` (E4033). `list` is reachable here, but a `fn list` costs the SEED the `list[byte](s)`
 # bridge, and a language rule holds in both compilers or it is not one.
 #
 # `map` alone answers 2 in both: `map[…](…)` as a constructor is built by neither compiler, so
@@ -528,7 +528,7 @@ fn p_fn_name(mut &p: Parser, recv: str) -> str {
 # alone. It would be legal in one position and misread in three.
 #
 # It used to be legal in NONE and said so wrongly: `_Box(1)` on a declared `struct _Box`
-# answered `E425 undefined function`, which is false about the program — the name is a type,
+# answered `E4016 undefined function`, which is false about the program — the name is a type,
 # and the reader declared it eight lines up. The seed builds all of them, so this is a
 # LANGUAGE decision rather than a gap: the upper-case letter is what the declaration owes,
 # and GRAMMAR#type-ident now derives it.
@@ -546,8 +546,8 @@ fn p_fn_name(mut &p: Parser, recv: str) -> str {
 # that ends the matter.
 #
 # It reads the token WITHOUT consuming it, which is what lets it be asked first, and it asks
-# only of an identifier: a reserved word and a token that is no name at all are p_name's E245
-# and E601, and they arrive at a slot that has not been told a type is wanted yet.
+# only of an identifier: a reserved word and a token that is no name at all are p_name's E2013
+# and E2054, and they arrive at a slot that has not been told a type is wanted yet.
 fn p_type_name(mut &p: Parser, what: str) -> str {
 	t := cur(p)
 
@@ -691,7 +691,7 @@ fn parse_param_types(mut &p: Parser) -> list[Ty] {
 		# `mut &` in a type is real in the LANGUAGE: it is part of the type, so `fn(mut &int)`
 		# and `fn(int)` are distinct (docs/code/functions.md). It is refused here because the
 		# value side of it is refused downstream anyway — a held function is a bare pointer in
-		# this compiler and the call site reads its convention from the callee's NAME (E469) —
+		# this compiler and the call site reads its convention from the callee's NAME (E9065) —
 		# so accepting the spelling would only mean a type nothing can ever hold.
 		raise p_diag_at(p, mt.line, mt.col, Rule.NotYetFnTypeMutRefParam, f"NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ty_name(t)})` is a distinct type from `fn({ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured") if is_ref
 
@@ -738,13 +738,13 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
 	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
 	#
-	# It is refused for the reason a standalone `unsafe fn` is (E264): the marker is a TRUST
+	# It is refused for the reason a standalone `unsafe fn` is (E9027): the marker is a TRUST
 	# BOUNDARY this compiler does not enforce, so honouring it in a type would be a promise
 	# about calls it never checks. Dropping the word instead would be worse — a plain `fn`
 	# type is callable from safe code, which is the one thing the marker exists to prevent.
 	if p_at(p, Kind.Unsafe) {
 		u := cur(p)
-		raise p_diag_at(p, u.line, u.col, Rule.NotYetUnsafeFnType, "NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E264), so the type is refused rather than spelled and never honoured")
+		raise p_diag_at(p, u.line, u.col, Rule.NotYetUnsafeFnType, "NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E9027), so the type is refused rather than spelled and never honoured")
 	}
 
 	if p_at(p, Kind.LArrow) {
@@ -1266,7 +1266,7 @@ pub fn parse_at(src: str, path: str) -> File {
 			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
 			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — nothing here
 			# records the marker, so reading the `fn` as safe would erase the one thing the
-			# keyword says, which is the caller rule the GROUP form now carries (E387) — but
+			# keyword says, which is the caller rule the GROUP form now carries (E3083) — but
 			# it must be refused AS ITSELF: the statement fallback below answered
 			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
 			# told it had marked a statement, about a form that is a declaration. `is_pub` is
@@ -1411,7 +1411,7 @@ fn p_not_a_binding() -> ConstDecl {
 # `fn`.
 #
 # A SECOND DECORATOR IS NOT ASKED ABOUT HERE ANY MORE. It used to be let through so that
-# decorators could stack; stacking is E613 now, raised before this is reached, so a `#[` can
+# decorators could stack; stacking is E2063 now, raised before this is reached, so a `#[` can
 # no longer be the token under the cursor while anything is pending.
 #
 # It reads the LIST and not just the token, because the two sets are disjoint: without that,
@@ -1894,10 +1894,10 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> SpecDecl {
 		# language is smaller than it is, by the document that defines it.
 		#
 		# The signature is READ to its end and then refused as itself, with the place a
-		# declaration owes — the same answer a top-level `unsafe fn` gets (E264) for the same
+		# declaration owes — the same answer a top-level `unsafe fn` gets (E9027) for the same
 		# reason, so one unenforced trust boundary now has one story in both positions. The
 		# lookahead is what keeps the catch-all honest for everything else: `unsafe { … }`
-		# inside a spec really does start no member, and still gets E276.
+		# inside a spec really does start no member, and still gets E2036.
 		if p_at(p, Kind.Unsafe) and (peek_kind(p, 1) == Kind.Fn or (peek_kind(p, 1) == Kind.Mut and peek_kind(p, 2) == Kind.Fn)) {
 			u := cur(p)
 			p_advance(p)
@@ -1972,12 +1972,12 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
 	name := p_type_name(p, "a type alias")
 
-	# A code and a place, which this one refusal did without while its two siblings — E212
-	# for a generic `enum` and E215 for a generic `struct` — carry both. Three declarations
+	# A code and a place, which this one refusal did without while its two siblings — E9003
+	# for a generic `enum` and E9004 for a generic `struct` — carry both. Three declarations
 	# refused for one reason, and the alias was the one a gate could not pin.
 	if p_at(p, Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E212 and a generic `struct` E215)")
+		raise p_diag_at(p, b.line, b.col, Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004)")
 	}
 
 	expect(p, Kind.Assign)
@@ -2025,7 +2025,7 @@ fn strings_has_prefix(s: str, pre: str) -> bool {
 # strings_has_suffix is its other end, and it is written here rather than taken from the
 # `strings` module for the reason its neighbour is: this module may not IMPORT one, because
 # `strings.has_suffix` is `pub` and the driver has a private function of that name, which is
-# E705 (docs/runtime/package.md). Two small readers, module-private, beside each other.
+# E9081 (docs/runtime/package.md). Two small readers, module-private, beside each other.
 fn strings_has_suffix(s: str, suf: str) -> bool {
 	b := bytearray(s)
 	q := bytearray(suf)
@@ -2194,7 +2194,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> EnumDecl {
 		# What is READ here and not decided here is the VALUE: the expression is a const-expr,
 		# so it may name a constant, and the numbering it feeds — this variant's value, and
 		# the next variant's default of one past it — is c_build_enums' to work out once the
-		# program is whole. That is also where E213's "distinct across variants" moved to,
+		# program is whole. That is also where E2009's "distinct across variants" moved to,
 		# because two variants only collide once both have numbers.
 		mut has_discr := false
 		mut discr := Expr.ENil
@@ -2377,7 +2377,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		p_advance(p)
 
 		# `#[allow]` and `#[allow()]` SUPPRESS NOTHING while reading as though they suppressed
-		# something — E497's argument one decorator over, and the same answer.
+		# something — E4051's argument one decorator over, and the same answer.
 		mut named := 0
 		if p_at(p, Kind.LParen) {
 			p_advance(p)
@@ -2775,8 +2775,8 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 # `pending` is one about a DECLARATION, and there is no declaration inside a body for it to be
 # about.
 #
-# The sentence is its own rather than E487's, and the difference is what the reader is standing
-# in front of. E487 is raised where declarations live and can say which declaration the
+# The sentence is its own rather than E4048's, and the difference is what the reader is standing
+# in front of. E4048 is raised where declarations live and can say which declaration the
 # decorator wanted; here there are none, so the useful thing to say is which decorator a
 # statement DOES take.
 fn p_stmt_decorator(mut &p: Parser) {
@@ -3056,11 +3056,11 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 #
 # ONLY A COMPARISON COMES APART, NEVER A CALL. `assert contains(xs, 3)` reports its source
 # text and no values: taking its arguments apart would hand the message a `list` to render,
-# and a composite has no rendering here (E417 / E449). A comparison cannot reach that hole
-# from the same direction — a container has no `==` either (E445) — so the two holes very
+# and a composite has no rendering here (E4011 / E9059). A comparison cannot reach that hole
+# from the same direction — a container has no `==` either (E9057) — so the two holes very
 # nearly line up. NEARLY: a `#[derive(Eq)]` struct compares and does NOT render, so
-# `assert p == q` over one is E449 against a program that is otherwise fine. That is a hole
-# `testing.assert_eq` had for the same reason — its own `f"{a} != {b}"` was E449 too, and
+# `assert p == q` over one is E9059 against a program that is otherwise fine. That is a hole
+# `testing.assert_eq` had for the same reason — its own `f"{a} != {b}"` was E9059 too, and
 # reported inside src/stdlib/testing.zg, at a line the reader had not written. What changes
 # here is that the diagnostic points at their own. Closing it needs a structural Display,
 # which is a language feature and not this form's to invent.
@@ -3811,10 +3811,10 @@ fn p_ty_of_name(nm: str) -> Ty {
 # All four used to take `cur(p).lexeme` and advance, whatever token was sitting there, so
 # GRAMMAR#postfix — `'.' identifier`, `'.' dec-int`, `'?.' identifier` — described a surface
 # the parser did not have. What happened to the rest was NOT a parse error: `x.if` became a
-# field access whose field is named `if`, and the CHECKER answered it, ``E376 no field `if`
+# field access whose field is named `if`, and the CHECKER answered it, ``E3072 no field `if`
 # on int`` — a sentence about a field somebody might plausibly have declared, for a word
 # GRAMMAR#keyword says in so many words can never be an identifier. Every declaring position
-# already refuses one (E245, E257); this is the selecting position saying the same thing.
+# already refuses one (E2013, E2025); this is the selecting position saying the same thing.
 #
 # The line-eating is the case that shows why it has to be caught HERE rather than downstream.
 # A `.` suppresses ASI, so in
@@ -3823,7 +3823,7 @@ fn p_ty_of_name(nm: str) -> Ty {
 #     print 2
 #
 # the second line's `print` was read as the field name of `1.`, the statement vanished, and
-# what got reported was `2` — under E205, on a line with nothing wrong with it. By the time
+# what got reported was `2` — under E2005, on a line with nothing wrong with it. By the time
 # a field name is a string in an AST node, the token that was really the error is gone.
 #
 # `tuple_ok` is the difference between the two dots and it is GRAMMAR's: a tuple is read back
@@ -4183,7 +4183,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		#
 		# The same braces at a STATEMENT's start are a block statement (parse_stmt reads
 		# that one, as Stmt.SScope) and their value is discarded; a head that opens with `{`
-		# is E290. Position decides, and this function is only ever the expression position.
+		# is E2047. Position decides, and this function is only ever the expression position.
 		return parse_map_lit(p) if p_brace_is_map(p)
 		return Expr.EBlock(parse_block(p))
 	}
@@ -4409,7 +4409,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 					# place, for a form the grammar has (docs/code/patterns.md says as much,
 					# and asks for exactly this).
 					# A RESERVED WORD IS NOT A SUB-PATTERN, and p_name below owns that
-					# sentence (E245): `E.One(this)` is somebody naming a binding `this`,
+					# sentence (E2013): `E.One(this)` is somebody naming a binding `this`,
 					# not writing a pattern inside a pattern, and answering it here would
 					# take a rule off a case that already had one.
 					pt := cur(p)
@@ -4429,7 +4429,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			# rename the binding `Value` to `value` and the same arm stopped matching a variant
 			# and started binding the subject.
 			#
-			# The rule that stood here — E274, "`{name}` is a variant of some enum" — could not
+			# The rule that stood here — "`{name}` is a variant of some enum" — could not
 			# be true, because the parser has resolved nothing and knows of no enum: it fired
 			# on a program that declared none, and named an enum that did not exist. It is
 			# retired rather than moved, because moving it to where the enums ARE known would
@@ -4438,7 +4438,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			# same file-order coupling GRAMMAR retired the bare-variant form to be rid of.
 			#
 			# What guards the mistake it was aimed at — `match c { Red => …  Green => … }`,
-			# meaning two variants and getting one catch-all — is E458 in the emitter: a
+			# meaning two variants and getting one catch-all — is E4032 in the emitter: a
 			# binding arm covers everything, so any arm after it is unreachable and said so.
 			pat = 1
 			bind = name

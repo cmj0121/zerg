@@ -189,7 +189,7 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — r
   interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
   (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
   ([Process & I/O](../runtime/io.md)), not grammar. Both forms are **[not yet]**, and the parser tells them
-  apart rather than passing either on: `E236` for the plain literal, `E235` for the interpolating one.
+  apart rather than passing either on: `E9020` for the plain literal, `E9019` for the interpolating one.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
@@ -220,9 +220,9 @@ An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
 any lvalue (`(a, obj.f) = …`). **[not yet]** in both directions, and each direction is refused as itself:
-the compiler binds one name at a time (_E238 a destructuring binding `(a, b) := …`_) and assigns to one
-target at a time (_E486 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
-does not read (_E221 a struct pattern `Div{…}`_).
+the compiler binds one name at a time (_E9021 a destructuring binding `(a, b) := …`_) and assigns to one
+target at a time (_E9072 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
+does not read (_E9008 a struct pattern `Div{…}`_).
 
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
@@ -313,9 +313,9 @@ literal** `` f`…` `` (the group-3 command literal, **[not yet]**): it runs thr
 **shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
 
 - **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
-  `display` / ascii. All three are **[not yet]** — a conversion in a hole is `E226`
+  `display` / ascii. All three are **[not yet]** — a conversion in a hole is `E9013`
   ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the expression's source text
-  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well (`E227`).
+  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well (`E9014`).
 - **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
   fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.
@@ -577,7 +577,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   namespace, inherent or from a spec alike; a duplicate is an error.
 - **No associated types or values.** A spec declares neither a type the `impl` fills in (`type Item`,
   projected `I.Item`) nor a compile-time value it supplies (`BITS: int`, bound as `BITS := 32`); both are
-  refused by name — _E230 an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing
+  refused by name — _E2011 an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing
   else_. A single-output protocol is written by parameterizing the spec — `Iterable[T]` with at
   most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
   associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
@@ -593,10 +593,10 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
   the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
   compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
-  decorator is a compile error** (`E217`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]`,
+  decorator is a compile error** (`E9005`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]`,
   `#[fixture]` and `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives
   (`#[repr]` /
-  `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E496 … it is a
+  `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E9079 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than
   being sealed in silence_. `#[` is the one `#` that is not a comment — the lexer peeks one character.
 
@@ -774,11 +774,11 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
   `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** in full: the
   bundled `atomic` module declares `pub struct Atomic[T]`, a generic struct is unbuilt, and the **import**
-  is what is refused — `import "atomic"` on its own reports _E511 the module `atomic` ships and cannot be
+  is what is refused — `import "atomic"` on its own reports _E9104 the module `atomic` ships and cannot be
   imported_, rather than letting a type nothing declares reach the emitter (a generic `struct` written in
-  a program is the general `E215`). Neither `Atomic[int]`,
+  a program is the general `E9004`). Neither `Atomic[int]`,
   the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
-  intended `Atomic[int]` with sequential consistency rests on — is `E446`.
+  intended `Atomic[int]` with sequential consistency rests on — is `E9058`.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as
@@ -798,8 +798,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
 name**, and no program that uses one compiles into something else. This list is not prose —
 `scripts/refuse-check.sh` holds a case for each row, pinned by the refusal's `E###` — a
-range used as a value is `E493`, a generic `type X[T] = …` alias is `E491`, a `match` arm
-whose body is a reassignment or a send is `E607` — so a form that quietly starts working,
+range used as a value is `E9077`, a generic `type X[T] = …` alias is `E9075`, a `match` arm
+whose body is a reassignment or a send is `E9041` — so a form that quietly starts working,
 or quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the

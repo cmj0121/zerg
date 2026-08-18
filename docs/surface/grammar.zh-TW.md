@@ -178,7 +178,7 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
   空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）改為經過 **shell** 並
   對每個 hole **shell-quote**（`{x:raw}` 可退出）。執行面——pipe 作為 `Reader`／`Writer`、行程 `Ref[proc]`——屬
   **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法。兩種形式皆為 **[not yet]**，而 parser 會把它們分開、
-  也不會把任何一種往下傳：純字面量是 `E236`，內插的那個是 `E235`。
+  也不會把任何一種往下傳：純字面量是 `E9020`，內插的那個是 `E9019`。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
@@ -205,9 +205,9 @@ field-target  ::= identifier ( ':' assign-target )?
 或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
 `Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。兩個方向都是 **[not yet]**，而且
-各自被當成自己來拒絕：編譯器一次只綁一個名字（_E238 a destructuring binding `(a, b) := …`_）、一次只賦值給一個
-目標（_E486 a destructuring assignment `(a, b) = …`_），而 struct 形狀則是它讀不懂的
-pattern（_E221 a struct pattern `Div{…}`_）。
+各自被當成自己來拒絕：編譯器一次只綁一個名字（_E9021 a destructuring binding `(a, b) := …`_）、一次只賦值給一個
+目標（_E9072 a destructuring assignment `(a, b) = …`_），而 struct 形狀則是它讀不懂的
+pattern（_E9008 a struct pattern `Div{…}`_）。
 
 expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 
@@ -287,8 +287,8 @@ literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經
 （`{x:raw}` 可退出），使值以單一安全引數插入。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  三者皆為 **[not yet]**——洞裡的轉換是 `E226`（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
-  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——同樣是 **[not yet]**（`E227`）。
+  三者皆為 **[not yet]**——洞裡的轉換是 `E9013`（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
+  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——同樣是 **[not yet]**（`E9014`）。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
   只當它是到 `}` 為止的不透明字串。
@@ -500,7 +500,7 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   `User.from_json(…)`（關聯函式,不用 `this`,以 `Type.f(…)` 呼叫）或私有方法 `u.recompute()`（用 `this`,以
   `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
 - **沒有 associated type,也沒有 associated value。** spec 既不宣告由 `impl` 填入的型別（`type Item`,投影成
-  `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕——_E230 an
+  `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕——_E2011 an
   associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else_。單一輸出的協定改以
   參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
   一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
@@ -513,9 +513,9 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
   而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
   項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
-  是編譯錯誤**(`E217`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與
+  是編譯錯誤**(`E9005`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與
   `#[allow]`;`#[sealed]`
-  與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E496 … it is a
+  與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E9079 … it is a
   reserved decorator … and this compiler does not build it, so the constructor stays public rather than being
   sealed in silence_。`#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
 
@@ -669,10 +669,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
   memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組宣告 `pub struct Atomic[T]`,而泛型 struct
-  尚未建置,被拒絕的是那次 **import**——光是 `import "atomic"` 就會回報 _E511 the module `atomic` ships and cannot
-  be imported_,而不是讓一個沒人宣告的型別走到 emitter（程式裡自己寫的泛型 `struct` 才是通用的 `E215`）。
+  尚未建置,被拒絕的是那次 **import**——光是 `import "atomic"` 就會回報 _E9104 the module `atomic` ships and cannot
+  be imported_,而不是讓一個沒人宣告的型別走到 emitter（程式裡自己寫的泛型 `struct` 才是通用的 `E9004`）。
   `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
-  所倚賴的 `Ref[T]` 是 `E446`。
+  所倚賴的 `Ref[T]` 是 `E9058`。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與
@@ -687,7 +687,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例，以該拒絕的 `E###` 釘住——把 range
-當值是 `E493`、泛型別名 `type X[T] = …` 是 `E491`、body 是 reassignment 或 send 的 `match` arm 是 `E607`——
+當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、body 是 reassignment 或 send 的 `match` arm 是 `E9041`——
 所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。

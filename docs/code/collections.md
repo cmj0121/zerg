@@ -13,7 +13,7 @@ one canonical type per role, no variant zoo. They're just ordinary **scope-owned
 
 The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
 (see [Keys](#keys--eq-free-hash-explicit) below). The two **[not yet]** rows each name themselves: `set[T]`
-in either type or value position is _E466 NotImplemented: the built-in `set`_, and `[T; N]` is _E233
+in either type or value position is _E9064 NotImplemented: the built-in `set`_, and `[T; N]` is _E9017
 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type_.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
@@ -45,7 +45,7 @@ So one `list` type is both a frozen sequence (plain) and a growable vector (`mut
 collection can modify its elements**.
 
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
-> refused by name on both `list` and `map` (_E444 NotImplemented: the list method `insert` — this compiler
+> refused by name on both `list` and `map` (_E9056 NotImplemented: the list method `insert` — this compiler
 > has `len` and `append`_), so a collection grows at its end and does not shrink at all.
 
 ```text
@@ -64,7 +64,7 @@ author owns the contract the compiler can't check: **equal ⇒ same hash**. Beca
 frozen snapshot, even a `mut` collection is usable as one.
 
 > **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
-> key is restricted to **`int`** or **`str`**: anything else is _E431 NotImplemented: a map key of type … —
+> key is restricted to **`int`** or **`str`**: anything else is _E9052 NotImplemented: a map key of type … —
 > a key needs `Hash`, and this compiler has one for `int` and for `str`_. `derive(Hash)` and general keyed
 > types are not built.
 
@@ -85,7 +85,7 @@ first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
-> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both `E444`, so
+> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both `E9056`, so
 > the `m.get(id) ?? "anon"` line above does not compile and indexing — which aborts — is the only way into
 > a container. Expected absence is therefore not a question a program can ask; it is one it has to head off
 > with `k in m` before indexing.
@@ -102,7 +102,7 @@ alongside copy-elision and the move (Values & Memory), adding no visible sharing
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
 materializing a `str` only when it keeps a token.
 
-> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is `E444`. The
+> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is `E9056`. The
 > **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
 > `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
 > form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
@@ -116,10 +116,10 @@ Iterating reads each element **by value** (elidable to read-only by-ref); to edi
 equality).
 
 > **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is
-> _E445 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a
+> _E9057 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_. Only **`str ==`** compares. `for mut x` over a collection
 > is **[not yet]** for **every** element type, POD included:
-> `for mut x in ys` is `E242` whatever `ys` holds, so the second line of the example below is not a program.
+> `for mut x in ys` is `E9025` whatever `ys` holds, so the second line of the example below is not a program.
 
 ```text
 for x in xs { total = total + x }         # read
@@ -136,7 +136,7 @@ the collection it walks — so it needs no borrow checker and costs you nothing 
 **[not yet]** (see [Order & equality](#order--equality)).
 
 > **[deviation]** The freeze sees only a **bare name**. `for x in xs { xs.append(x) }` and
-> `for x in xs { xs = [9] }` are compile errors (`E393`), but the same structural change reached through a
+> `for x in xs { xs = [9] }` are compile errors (`E3089`), but the same structural change reached through a
 > **path** is not: `for x in p.xs { p.xs.append(v) }`, `for x in p.xs { p.xs = [9] }`,
 > `for x in xs[0] { xs[0].append(v) }`, and a function taking `mut &xs` and appending inside the loop all
 > compile today and really grow or rebind the collection being walked. No iterator is invalidated — the
@@ -148,7 +148,7 @@ To transform in place, use a single `mut` method whose internal walk is controll
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.
 
-> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both `E444`, so a
+> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both `E9056`, so a
 > transform is written as a `for` that appends into a second `list`, and a rebind after the loop.
 
 ## Fixed-size arrays — `[T; N]`
@@ -199,7 +199,7 @@ of the rules already stated for `list`:
 - **In a signature** — a function is generic over the length through a **value generic**,
   `fn sum[N: int](xs: [int; N])`, with `N` inferred from the argument and never written at the call site.
 
-  > **[not yet]** A value parameter is refused — _E266 NotImplemented: a value generic parameter `N: int`_ — so a
+  > **[not yet]** A value parameter is refused — _E9029 NotImplemented: a value generic parameter `N: int`_ — so a
   > function today takes one concrete length (`[int; 4]`) and nothing else, and a routine over arbitrary
   > lengths takes a `list[T]` instead.
 

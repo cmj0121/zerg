@@ -43,12 +43,12 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 ---
 
 > **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
-> `struct Node { value: int; next: Node? }` 會被拒絕、報 _E452 `Node` is part of a cycle of by-value declarations —
+> `struct Node { value: int; next: Node? }` 會被拒絕、報 _E4026 `Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
 > 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
 > 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
 > 觀察到共享變動之處——是規範中的形式,今天編不過。它同時還帶著第二個未建置的形式:那些**具名引數**
-> (`Node(value: 1, …)`)是 `E223`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
+> (`Node(value: 1, …)`)是 `E9010`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
 
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
@@ -70,7 +70,7 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 
 > **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
 > 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
-> _E326 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
+> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
 > safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
 > 接受這次呼叫,只有在索引真的相遇時才 abort。
 
@@ -241,8 +241,8 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
 > **狀態。** 上表最後一列正是 `zerg` 完全走不到的那一列。`del` 一個 `Ref` 值在兩半上都是 **[not yet]**：對
-> channel 做 `del ch` 會被具名拒絕（_E470 NotImplemented: `del ch` on a CHANNEL_，訊息要你改寫 `close(ch)`），
-> 而這裡根本沒有 `Ref[T]` 型別可 `del`——光是提到 `Ref` 就被拒絕（`E446`）。編譯器對 channel 做的事是在其 binding
+> channel 做 `del ch` 會被具名拒絕（_E9066 NotImplemented: `del ch` on a CHANNEL_，訊息要你改寫 `close(ch)`），
+> 而這裡根本沒有 `Ref[T]` 型別可 `del`——光是提到 `Ref` 就被拒絕（`E9058`）。編譯器對 channel 做的事是在其 binding
 > 的 scope 結束處歸還它，所以 holder 仍會被放掉、最後一個仍會跑 `drop`；缺的是**提早**具名說出這件事的能力。
 >
 > ---
@@ -263,7 +263,7 @@ flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可�
 一條 stream，用 channel 專屬的敘述 **`close(ch)`**；要靠 scope 結束它，就讓該 binding 的 scope 離開去歸還它所持有
 的東西。兩者都在 [Coroutines](../code/coroutine.zh-TW.md)。當你連**名字**也用完了，才用 `del ch`。
 
-> **[not yet]** 上一段是規格所訂的規則；`del ch` 本身會被拒絕（`E470`，見上方狀態註）。其中已經成立的那一半是那
+> **[not yet]** 上一段是規格所訂的規則；`del ch` 本身會被拒絕（`E9066`，見上方狀態註）。其中已經成立的那一半是那
 > 個建議：`close(ch)` 結束一條 stream、scope 離開歸還持有，那兩件才是今天的程式寫得出來的。
 
 ## `defer`——在 block 退出時清理

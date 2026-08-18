@@ -101,7 +101,7 @@ pub fn contains(s: str, sub: str) -> bool {
 # an empty separator raises ValueError — demote it with `guard { strings.split(s, x) }`.
 #
 # THE EXAMPLE GOES BACK THROUGH `join` because `print` cannot render a `list[str]` at all
-# (E449: a composite needs a structural `Display` this compiler does not generate). So an
+# (E9059: a composite needs a structural `Display` this compiler does not generate). So an
 # example of a list-answering function has to reduce it to something printable, and the
 # round trip is the honest reduction — it shows the pieces AND that join inverts split.
 #

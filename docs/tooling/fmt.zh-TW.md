@@ -327,7 +327,7 @@ y := sum(sum(1, 2), 3)
 
 > **[deviation]** 被這個 pass **放過**的群組會留著它的尾逗號,而之後也沒有別人反對。`x := sum( # before`
 > 底下接著 `1,` / `2,` 時,開頭那行帶著註解,於是 `F403` 讓群組保持斷開——而 `zerg fmt --check` 會說這個檔案
-> 是 canonical、exit 0,`zerg build` 卻用 _E289 a trailing comma before the closing `)` of an argument list_
+> 是 canonical、exit 0,`zerg build` 卻用 _E2046 a trailing comma before the closing `)` of an argument list_
 > 拒絕同一個檔案。一個為編譯器不收的檔案背書的 formatter,比一個把它重排掉的還糟,因為那張背書就是它的全部意義。
 
 兩條門檻都**不會下令**斷行，這是刻意的。這個 pass 一次只看到一個群組，而不是整行，所以跨過第
@@ -362,7 +362,7 @@ n := (
 
 **尾隨逗號一律拿掉**，併行或斷行都一樣，而且這是修好而不是偏好：`GRAMMAR` 把逗號寫在元素**之
 間**，任何地方都不推導出收尾括號前的那一個——呼叫沒有、tuple/list/map 字面值沒有、簽名也沒有
-——所以帶著它的檔案根本不是 Zerg 程式，編譯器會這樣說（`E289`）。格式化器讀的是 token 串而不是
+——所以帶著它的檔案根本不是 Zerg 程式，編譯器會這樣說（`E2046`）。格式化器讀的是 token 串而不是
 語法樹，這正是它能修好一個 parser 會拒絕的檔案的原因——而那正是人會去找格式化器的時候。
 
 `F405` 是 `F401` 的原則套用在字串上：只要語言為「已經寫下的東西」提供了更短的表面形式，標準形

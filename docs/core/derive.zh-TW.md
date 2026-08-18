@@ -35,7 +35,7 @@ provided method 是**寫在 `this` 上其他 method 之上的 default body**，�
 不變式）。它讓一個 spec 只靠很小的 required 核心，就導出許多 method；實作者可以**繼承**、也可以**覆寫**
 其中一個。每個使用者 spec 都能帶這種 default——這就是**可擴充**的那一層。
 
-> **[not yet]** 帶 **body** 的 `spec` 成員在宣告處就被拒絕——_E210 NotImplemented: a `spec` member with a
+> **[not yet]** 帶 **body** 的 `spec` 成員在宣告處就被拒絕——_E9002 NotImplemented: a `spec` member with a
 > BODY_——所以下面這段宣告的是一個今天沒有程式載得動的介面。把簽章宣告出來、body 寫在每個 `impl` 裡;見
 > [Spec 與 Generics](specs.zh-TW.md)。
 
@@ -70,7 +70,7 @@ compiler code generator**，與上面兩層都不同。
 - **compiler**——那就不是使用者撰寫的。
 
 所以使用者自定 structural derive 是**結構上不可能**，不是漏做。可 derive 的集合是**固定且 compiler
-擁有**的；使用者 spec 永遠不在其中——_E437 cannot derive `Show`: on a struct the derivable specs are
+擁有**的；使用者 spec 永遠不在其中——_E4024 cannot derive `Show`: on a struct the derivable specs are
 compiler-owned, and a `spec` you write is never one of them … write `impl Show for P` instead_。可擴充的
 一層是上面的 behavioral default；結構這一層是封閉的。
 
@@ -110,9 +110,9 @@ impl Show for Shape {
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
 **沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E436`。
+**`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
 
-> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E438 … it
+> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E9055 … it
 > carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants differ
 > exactly as their discriminants do; write `impl Eq for E` with a `match`_。它的規則需要同時比對兩側的 tag
 > **與** payload。

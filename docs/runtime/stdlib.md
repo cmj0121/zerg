@@ -323,10 +323,10 @@ own cell, so every field method, every level check and every writer exists once.
 
 **There is no `Logger.debug()`, and the reason is a language rule.** `display` and `debug` are the two
 renderings every value has ([Formatting](format.md)), so a method by either name must answer the `str` the
-value shows as — `E361` refuses a level method called `debug`. It is a rule about **methods**, so the free
+value shows as — `E3059` refuses a level method called `debug`. It is a rule about **methods**, so the free
 `log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
 `lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at`, and `parse_level` rather
-than `parse`, because a `pub` name has no package to be unique within: a free `pub at` is `E705` against the
+than `parse`, because a `pub` name has no package to be unique within: a free `pub at` is `E9081` against the
 compiler's own lexer, which has a module-private `at`, and a `pub parse` here would collide with a
 module-private `parse` in any program that imports `log`.
 
@@ -352,15 +352,15 @@ the default is `log.install(log.new())` — the cell is initialised at its decla
 constructor, so nothing needs to read it back, which is also how a test suite isolates itself.
 
 **`log.new()` is the only way to build a `Logger` from outside.** Every field carries a default, which a
-module-private field must (`E482`), so `Logger()` exists whatever the module wants — and its defaults name
-module-private consts, so a caller writing `log.Logger()` gets `E301` rather than a second constructor that
+module-private field must (`E4045`), so `Logger()` exists whatever the module wants — and its defaults name
+module-private consts, so a caller writing `log.Logger()` gets `E3001` rather than a second constructor that
 silently ignores the environment.
 
 ### Configuring is a startup act
 
 The global logger lives in the standard library's only module-level `unsafe { … }` group, and `log.zg` carries
 the full pattern above it — this is the summary. The language enforces the first of its four rules and only
-that one: a top-level `mut` outside such a group is `E358` and `pub` on one inside it is `E484`, which is two
+that one: a top-level `mut` outside such a group is `E3056` and `pub` on one inside it is `E4046`, which is two
 codes for one rule. So configuration-by-function is not the recommended way, it is the only way the language
 permits — and the rest of the shape is held by `scripts/log-check.sh`, which reads the module.
 
@@ -373,9 +373,9 @@ races with nobody. Installing twice is legal and the last one wins, silently.
 ### Levels
 
 `TRACE` `DEBUG` `INFO` `WARN` `ERROR` `FATAL`, and `OFF`, as the variants of an **enum** rather than the `int`
-constants they were: `E340` refuses an `int` where a `Level` belongs and a `Level` where an `int` does, `E347`
+constants they were: `E3038` refuses an `int` where a `Level` belongs and a `Level` where an `int` does, `E3045`
 refuses comparing a variant with a number, and every renderer being an **exhaustive `match`** means a level
-cannot be added without ranking it, naming it and colouring it — `E428` names the arm that was forgotten. The
+cannot be added without ranking it, naming it and colouring it — `E4019` names the arm that was forgotten. The
 `int` version accepted `log.new().level(99)`, printed a blank, and said nothing either time.
 
 **`OFF` is not in the ordering at all.** It is the threshold that accepts nothing: a logger set to it writes
@@ -437,7 +437,7 @@ first, in that order.
 ### The destination
 
 A `Sink` is a **value carrying a mode**, not a spec and not a closure: a spec would need `#[dyn]` (there is a
-deferred gap around non-`#[dyn]` provided methods) and a closure naming an imported module is `E735`. `to_chan`
+deferred gap around non-`#[dyn]` provided methods) and a closure naming an imported module is `E4069`. `to_chan`
 is what makes a logger testable — there is no reading a `write(2)` back, so this module's own suite asserts the
 bytes by receiving them. A channel sink needs capacity for what is written before it is drained, since a send
 to a full channel parks the sender.
@@ -561,7 +561,7 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 > **[not yet]** The module ships and **cannot be imported**, and it is the one of the fifteen that
 > does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
-> so `import "atomic"` is refused by name at the line that asked for it — _E511 the module `atomic`
+> so `import "atomic"` is refused by name at the line that asked for it — _E9104 the module `atomic`
 > ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
 > exist either, and the module carries a second, `Atomic[T]`-shaped surface (`new_atomic`) waiting on the
 > same thing. Share state across coroutines with a channel until this lands.
@@ -569,7 +569,7 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 > It stays in the table rather than being taken out of the shipped set, because this compiler resolves
 > the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
 > `zerg fmt --check` and the rest of the self-source set, and rots unread until generics arrive. What
-> would be left at the import is _E502 cannot resolve import `atomic`_ — a sentence about a module
+> would be left at the import is _E5002 cannot resolve import `atomic`_ — a sentence about a module
 > that is right there.
 
 | Function                                                       | Summary                                   |
@@ -616,7 +616,7 @@ assert e is ValueError
 ```
 
 > A **closure** — `assert_raises(fn () { strings.split("a,b", "") })` — reads better and does not compile:
-> a closure body naming an imported module is _E735 a closure captures `strings`_, a namespace being a
+> a closure body naming an imported module is _E4069 a closure captures `strings`_, a namespace being a
 > free name that a capture would have to give a type. Every test that reaches its module through `import`
 > is that shape, so the `guard` is the form that serves them.
 

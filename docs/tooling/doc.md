@@ -207,6 +207,52 @@ Under `--brief` it prints the signature and stops: a comment with no sentence in
 summary, and a blank line meaning "documented, but not in a sentence" is a distinction no
 reader can see.
 
+## The form of an example
+
+A worked example lives in the comment, as a pair of fenced blocks: **one expression per line** in a ` ```zerg `
+fence, and what those lines print in an ` ```output ` fence written directly beside it. Nothing declares the lines
+and nothing wraps them — the runner puts `print` in front of each one, in source order, and diffs what came out
+against the `output` block **line for line**.
+
+````text
+# ```zerg
+# strings.contains("hello world", "o w")
+# strings.contains("hello", "z")
+# ```
+# ```output
+# true
+# false
+# ```
+````
+
+Every example in one file becomes **one program**, so the lines run in source order in a single process and a later
+one sees what an earlier one did. Both fences are carried into the document exactly as they were written, like any
+other fenced block.
+
+Two kinds of function cannot have an example in that form, and both are in the standard library today rather than
+hypothetical:
+
+- **One answering a `list`, a `map` or a struct.** `print` renders no composite in this compiler (`E9059`), so the
+  example has to reduce the answer to something printable. `strings.split` detours through `join` for exactly that
+  reason — `strings.join(strings.split("a,b,c", ","), "|")` prints `a|b|c`, which shows the pieces **and** that
+  `join` inverts `split`. Issue [#16](https://github.com/cmj0121/zerg/issues/16) files it as `E449`, a composite
+  has no rendering.
+- **One answering nothing.** `print` of it needs a value and is handed nil (`E3086`), so `os.set_env` carries an
+  **indented illustration** instead of a fence — printed in the document exactly as written, and never run. #16
+  files that one as `E390`; the round trip is asserted in `src/stdlib/os_test.zg` instead, where a claim about a
+  write can be made in full.
+
+An illustration is the honest shape for either, and it is not an example: nothing executes it and nothing holds it
+to what it says. That is the whole distinction — an example is a claim that is checked, and everything else in a
+comment is a claim that is written down.
+
+**`zerg doc --check` is not built**, so the fences are executed by
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) instead, over the modules `mk/gates.mk` lists
+in `DOC_EXAMPLE_SRCS` — `json`, `log`, `os`, `strings` and `time` — on the gate board under `stdlib-test`. A module
+outside that list is not run at all: `cli.zg`'s one ` ```zerg ` fence has no `output` beside it and is a fragment of
+a method chain, which is an illustration that happens to be fenced. Moving the run into the command is the rest of
+[#17](https://github.com/cmj0121/zerg/issues/17).
+
 ## The shape of a document
 
 Four indents, and every nesting is the same pair four columns further in:
@@ -229,10 +275,30 @@ re-wrapped**: the text inside one is meant to be copied out and run. A word long
 budget stands on its own line and is never cut, because what is long is a URL, a path or a
 piece of inline code — text that looks right after a break in the middle and does not work.
 
-The fill is measured in **runes**, so an em-dash costs one column rather than three. The known
-approximation is the other direction: a full-width CJK glyph occupies two terminal columns and
-is counted as one, so a comment written in Chinese overruns the margin. No `wcwidth` table is
-carried for it.
+The fill is measured in **display columns**, which is neither of the two counts that are easy to reach for. A byte
+count reads the em-dash opening every stdlib header as three columns and stops the prose short of the margin for no
+reason a reader can see. A rune count errs the other way and worse: a comment written in Chinese fills to 80
+characters and prints at up to 160 columns, off the edge of the terminal the page was laid out for. So an East Asian
+**Wide** or **Fullwidth** code point counts two, block by contiguous block, each block named in
+[`doc_render.zg`](../../src/compiler/cmd/doc_render.zg) beside the range it covers.
+
+What is left at one column, knowing better, is everything a block cannot say: the scattered single code points the
+standard also calls Wide — the arrows, the dingbats, the emoji — a combining mark and a zero-width joiner, which
+take no columns at all, and a grapheme cluster spelled with several code points. Those are a table and a block is a
+comparison; the blocks are what text written in Chinese, Japanese or Korean is made of, and they are what the tool is
+held to.
+
+**A line may also end between two ideographs.** Chinese is written with no spaces in it, so a paragraph of it reaches
+the fill as one unbreakable word, and a word longer than the budget takes the rule above and stands on its own line,
+every line of it past the margin. A space is where a language that uses spaces allows a break; it is not the only
+place a line may end. The cut is taken between two Han or Hangul characters and never beside a mark — `。` may not
+open a line and `「` may not close one, and nothing here knows which side a mark belongs to, so a sentence with a
+comma in the middle of it breaks somewhere else instead. The author's own line break becomes a space between words
+and **nothing** between two ideographs, for the same reason.
+
+`make doc-check` §7 is that as a gate. It documents a module whose comments are in Chinese and measures the display
+width of every line that comes out: none over 80 columns, and the widest at least 70, or the paragraph was never
+filled and the first assertion measured nothing.
 
 **A directory module is documented one file at a time.** One section per file, headed by the
 path as a reader could type it back, each with that file's own header and that file's own
@@ -303,10 +369,9 @@ itself is the one failure it cannot recover from:
 
 `--check` is the second half of the issue this first version came from, deliberately left for
 its own commit. Until it lands, the examples go on being run by
-[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh): it compiles every
-`zerg` fence in the standard library's comments, runs it, and diffs what came out against the
-`output` fence written beside it. It is on the gate board under `stdlib-test`, and nothing in
-`zerg doc` overlaps it.
+[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh), over the modules
+`DOC_EXAMPLE_SRCS` names — the form of an example, and what that script does with it, is a
+section of its own above. Nothing in `zerg doc` overlaps it.
 
 `##` waits **deliberately**. This codebase's comments are long and largely addressed to
 maintainers, and separating the reader's half from the maintainer's half cannot be automated —

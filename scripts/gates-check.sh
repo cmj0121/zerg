@@ -23,6 +23,7 @@ MAKEFILE=${MAKEFILE:-Makefile}
 WORKFLOW=${WORKFLOW:-.github/workflows/ci.yml}
 
 fail=0
+MAKE_BIN=${MAKE_BIN:-make}
 
 note() {
 	printf 'gates: %s\n' "$1" >&2
@@ -111,6 +112,27 @@ done
 for t in $board; do
 	grep -qE "run: ([A-Z_]+=[^ ]+ )*make (-j[0-9]+ )?$t\$" "$WORKFLOW" ||
 		note "\`make $t\` is on the board and the workflow never runs it"
+done
+
+# CLAUSE 3 — a name on the board has a RECIPE behind it.
+#
+# Clauses 1 and 2 compare three lists of names against each other, and three lists can agree
+# perfectly about a gate that does not exist. Delete a target while its name stays on
+# LINUX_GATES and in the workflow: this script counted it, `make <gate>` answered `Nothing to
+# be done` and exited 0, and the board printed it OK. A gate that measures nothing looks
+# exactly like a gate that finds nothing, which is the failure this whole script is against.
+#
+# It only reads that way because the name is `.PHONY` — make has no file to look for, so it
+# has nothing to complain about. Without `.PHONY` the same deletion is a loud `No rule to
+# make target`, so for a while the three gates that had fallen off the `.PHONY` line were
+# the only ones protected here, by an omission.
+#
+# `make -n` prints the commands a target WOULD run; a target with no recipe prints none.
+for t in $board; do
+	# `make -n` prints the commands, but it also prints its OWN lines to stdout — `Nothing to
+	# be done for X` is the very case being caught here, so both `make: ` and `make[n]: ` go.
+	[ -n "$($MAKE_BIN -n "$t" 2>/dev/null | grep -vE '^make(\[[0-9]+\])?: ')" ] ||
+		note "\`make $t\` is on the board and has no recipe — the board would report it OK"
 done
 
 if [ "$fail" -ne 0 ]; then

@@ -53,11 +53,22 @@ import (
 # field, a variant, a method — repeats the pair four columns further in.
 const DOC_WIDTH := 80
 
-# The one modifier a signature may carry in front of its keyword — `unsafe fn` (GRAMMAR group
-# 12), which `doc_const_sig`'s comment explains no binding is spelled with. It is written down
-# because `doc_sig_line` steps over exactly this and nothing else, and a length counted from a
-# literal at the call site is a length nobody can find from the word.
+# The two modifiers a signature may carry in front of its keyword, in the order GRAMMAR#fn-decl
+# derives them. They are written down because `doc_sig_line` steps over exactly these and
+# nothing else, and a length counted from a literal at the call site is a length nobody can
+# find from the word.
 const DOC_UNSAFE := "unsafe "
+const DOC_MUT := "mut "
+
+# What a file's section says when the file says nothing: no header of its own and no exposed
+# declaration under it. `zerg doc examples` was twelve headings with nothing beneath them, and
+# a heading with nothing beneath it reads as a rendering that broke rather than as a file with
+# no surface — the same failure `(undocumented)` exists to keep a declaration out of.
+#
+# IT CARRIES NO COLOUR, unlike `(undocumented)`. Four spans take colour in this document and
+# the chapter counts them; a fifth would be a rendering decision made here and written down
+# nowhere.
+const DOC_NOTHING := "(nothing exposed)"
 
 # --- the device ---------------------------------------------------------------------------
 
@@ -164,6 +175,11 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 		for k in fns {
 			doc_entry(out, m.decls[k], 2, brief, col)
 		}
+	}
+
+	if f.ok and f.header.len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
+		doc_gap(out)
+		out.append(DOC_NOTHING)
 	}
 }
 
@@ -335,32 +351,49 @@ fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief
 	}
 }
 
-# doc_sig_line emphasises the two words a reader scans for — the keyword and the name — and
-# leaves the rest of the signature alone.
+# doc_sig_line emphasises the words a reader scans for — everything in front of the name, and
+# the name — and leaves the rest of the signature alone.
 #
 # The span is COUNTED AND THEN CHECKED, not parsed. `kind` and `name` are two strings this file
 # was handed beside the signature, so where they end is arithmetic; what the arithmetic cannot
-# know is whether they are really there, because a signature may lead with a modifier
-# (`unsafe fn null()`) or with no keyword at all (a module-level binding written `X := 1` is
-# filed under "const"). So the offset is measured, the text at it is compared with what was
-# expected, and a signature that does not match is printed plain. Reading the signature back to
-# find the name instead would be a small parser of a string `doc.zg` already spelled, and it
-# would disagree with `doc.zg` the first time a form gained a modifier — which is exactly the
-# day this went wrong before.
+# know is whether they are really there. So each word that MAY stand in front is stepped over
+# when the signature carries it there, the name is compared at the offset that leaves, and a
+# signature that does not match is printed plain. Reading the signature back to find the name
+# instead would be a small parser of a string `doc.zg` already spelled, and it would disagree
+# with `doc.zg` the first time a form gained a modifier — which is exactly the day this went
+# wrong before.
+#
+# EVERY WORD IN FRONT IS OPTIONAL, including the keyword. Only `unsafe` was stepped over, and
+# the keyword was required — so `mut fn bump()` was measured against `fn bump`, matched
+# nothing, and printed with no emphasis at all, as did the `mut COUNTER := 0` a module-level
+# binding is filed under "const" while spelling `mut` (doc.zg, `doc_const_sig`) and the bare
+# `X := 1` that spells no keyword whatever. `mut fn` is the worst one to lose: GRAMMAR#fn-decl
+# obliges the CALL SITE to hold the receiver in a `mut` binding, so it is the word the eye most
+# needs to catch, and it was the one word printed like the parameter list.
 fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 	return d.sig if not col
 
 	b := bytearray(d.sig)
-	head := f"{d.kind} {d.name}"
 	mut at := 0
-	if has_prefix(d.sig, DOC_UNSAFE) {
-		at = bytearray(DOC_UNSAFE).len()
-	}
+	at = doc_step(b, at, DOC_UNSAFE)
+	at = doc_step(b, at, DOC_MUT)
+	at = doc_step(b, at, d.kind + " ")
 
-	n := at + bytearray(head).len()
-	return d.sig if n > b.len() or line_slice(b, at, n) != head
+	n := at + bytearray(d.name).len()
+	return d.sig if n > b.len() or line_slice(b, at, n) != d.name
 
 	return doc_bold(line_slice(b, 0, n), col) + line_slice(b, n, b.len())
+}
+
+# doc_step is `at` moved past `word` when the signature carries it there, and `at` unchanged
+# when it does not. Every word in front of a name is optional, so every step is this one.
+fn doc_step(b: list[byte], at: int, word: str) -> int {
+	n := at + bytearray(word).len()
+
+	return at if n > b.len()
+	return n if line_slice(b, at, n) == word
+
+	return at
 }
 
 # --- the header, and what could not be read ---------------------------------------------------
@@ -400,12 +433,19 @@ fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 fn doc_note(mut &out: list[str], f: zerg.DocFile) {
 	return if f.ok
 
-	mut note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
-	if doc_is_stdlib(f.path) {
-		note = note + " (see docs/runtime/stdlib.md)"
-	}
 	doc_gap(out)
-	doc_wrap(out, note, 0)
+	doc_wrap(out, doc_note_text(f), 0)
+}
+
+# doc_note_text is that sentence on its own, for the refusals that have no `out` to fill into.
+# `doc_no_decl` is the caller: it answers "the module `atomic` declares nothing called `load`"
+# from a module whose declarations are missing rather than absent, and the two paths through
+# this tool have to say that in the same words.
+fn doc_note_text(f: zerg.DocFile) -> str {
+	note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
+	return note + " (see docs/runtime/stdlib.md)" if doc_is_stdlib(f.path)
+
+	return note
 }
 
 # --- naming a file to a reader ----------------------------------------------------------------
@@ -515,10 +555,18 @@ fn doc_wrap(mut &out: list[str], text: str, indent: int) {
 
 # doc_fill is the greedy fill itself, answering unindented lines of at most `width` columns.
 #
-# A PIECE LONGER THAN THE BUDGET STANDS ON ITS OWN LINE AND IS NEVER CUT. What is long is a
-# URL, a path, or a piece of inline code, and each of those is a thing a reader copies: a break
-# inserted in the middle of one produces text that looks right and does not work. Overrunning
-# the margin is the visible failure, and the visible one is the right one to have.
+# A PIECE LONGER THAN THE BUDGET IS NEVER CUT. What is long is a URL, a path, or a piece of
+# inline code, and each of those is a thing a reader copies: a break inserted in the middle of
+# one produces text that looks right and does not work. Overrunning the margin is the visible
+# failure, and the visible one is the right one to have.
+#
+# IT DOES NOT START A LINE EITHER. The break exists to bring a line inside the budget, and a
+# piece that overruns wherever it lands is a piece no break can bring inside — so breaking in
+# front of one buys nothing and costs a short line above it. `note: ` and a deep path is the
+# case that showed it: the path was three characters over on its own line and `note:` sat alone
+# above it, a lead with nothing after it and a document that looks broken where it is only
+# wide. The line it joins must not have overrun already, or a run of long pieces would collect
+# on one line without end.
 fn doc_fill(text: str, width: int) -> list[str] {
 	mut out: list[str] = []
 	mut line := ""
@@ -530,7 +578,7 @@ fn doc_fill(text: str, width: int) -> list[str] {
 			n = k
 			continue
 		}
-		if n + p.gap + k > width {
+		if n + p.gap + k > width and (k <= width or n > width) {
 			out.append(line)
 			line = p.text
 			n = k

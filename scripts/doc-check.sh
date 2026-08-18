@@ -44,6 +44,13 @@
 # library contains not one comment in Chinese, so the fixture is beside §5's for the same
 # reason.
 #
+# §8 is the last row of the chapter's four-question table — anything else is a refusal that
+# lists what it can see, exit 1 — asked of the three names that used to end somewhere else:
+# `.`, which resolved to the standard library's own directory; a directory with no `.zg` in
+# it, which printed nothing and exited 0; and a declaration asked of a module that did not
+# parse. A file with nothing to document is beside them, for being the same silence one level
+# down.
+#
 # FLOORS, like every other gate here. An extraction that stops matching finds nothing, and
 # nothing satisfies every claim above — the comparison passes, each fixture rule is vacuous,
 # and the gate reports success for having measured no declarations at all. So the module
@@ -65,13 +72,28 @@ cd "$ROOT" || exit 2
 
 ZERG="${ZERG:-./bin/zerg}"
 
-# The counts this gate would report success for having measured nothing. 183 exposed
-# declarations across the 14 stdlib modules that parse, 15 modules in the list, and 18
-# declarations that carry no comment.
+# The counts this gate would report success for having measured nothing, and each of them is
+# the number this tree MEASURES rather than a round one under it: 183 exposed declarations
+# across the 14 stdlib modules that parse, 16 modules in the list, 18 declarations that carry
+# no comment, 25 attachment and form rules, and 55 checks.
+#
+# THE FLOORS ARE THE MEASUREMENT AND NOT A MARGIN UNDER IT. `MIN_CHECKS` stood at 45 against a
+# run of 55, so ten checks could stop running with nothing said; a floor with slack in it
+# reports success for the checks that are left.
+#
+# `MIN_MODULES` is the one floor that guards something no loop below does. Every stdlib module
+# is asked for by name (§1, and the listing check at the end), and `local_modules` — the OTHER
+# half of what `zerg doc` can resolve — is guarded by this number alone: the 16th name is
+# `examples`, the modules standing beside the reader, and at 15 that half could empty out in
+# silence.
+#
+# 55 is the count on a host with no `script`, which is the smaller of the two runs: the
+# terminal half of §6 adds five more. A floor pinned to the larger one would turn every host
+# without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
-MIN_MODULES="${MIN_MODULES:-15}"
+MIN_MODULES="${MIN_MODULES:-16}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
-MIN_CHECKS="${MIN_CHECKS:-45}"
+MIN_CHECKS="${MIN_CHECKS:-55}"
 MIN_RULES="${MIN_RULES:-25}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
@@ -252,7 +274,6 @@ pub fn crowded() -> int {
 pub fn hashy() -> str {
 	return "# not a comment"
 }
-
 # tail_commented is documented by this comment and not by the one at the end of the line
 # above it.
 pub fn tail_commented() -> int {
@@ -291,6 +312,12 @@ ZG
 # It sits on the closing brace of `hashy`, which is the line immediately above the comment
 # that documents `tail_commented` — so a rule that sewed a trailing comment onto the run
 # below it would give `tail_commented` a sentence about braces.
+#
+# NO BLANK LINE MAY SEPARATE THE TWO, and one did. A blank line ends a run, so the trailing
+# comment formed a run of its own that the blank-line rule then dropped — it never reached the
+# run below it, and the case measured a rule other than the one it names. Deleting `continue if
+# prev == t.line` from zerg/doc.zg left every check here green, which is this script's own
+# standard turned on itself: a rule with no case is a rule that does not exist.
 sed -i.bak '/^	return "# not a comment"$/{n;s/^}$/}  # this trailing comment documents nothing/;}' \
 	"$tmp/proj/attach.zg" && rm -f "$tmp/proj/attach.zg.bak"
 
@@ -621,6 +648,68 @@ EOF
 else
 	note 'no `perl` on this host, so the width of the page was not measured — §7 is the one section that cannot be skipped, its whole subject being how wide a character is'
 fi
+
+# --- 8. a name that answers nothing is refused, and says what it can see -----------------
+#
+# docs/tooling/doc.md's four-question table ends with one row: anything else is a refusal that
+# lists what it can see, exit 1. Three commands a reader types by accident used to end
+# somewhere else, and each of them printed something a reader would read as an answer:
+#
+#   - `zerg doc .` printed two thousand lines of the standard library as one module.
+#     `module_at`'s directory arm asks whether `<root>/<name>` exists, and `<stdlib>/.` does.
+#   - `zerg doc docs/` printed zero bytes and exited 0. A trailing slash left by a shell's
+#     completion is the whole of how a reader gets there.
+#   - `zerg doc atomic.load` said the module declares nothing called `load` and listed
+#     nothing, of a module whose declarations are MISSING rather than absent.
+#
+# The exit code alone would pass a command that printed nothing and failed, so each case
+# asserts the sentence too — and for `.` the sentence is the proof it did not answer, a stdlib
+# document being the one thing that does not carry the index.
+mkdir -p "$tmp/empty" "$tmp/proj/sub"
+
+# refused <dir> <what> <name> <wanted-substring-of-the-refusal>
+#
+# The DIRECTORY is a parameter because `.` and `..` are answered relative to it. `..` is asked
+# from inside `$tmp/proj/sub`, so the directory above it is §4's own fixture directory and
+# holds sources — asked from anywhere whose parent happens to hold none, the case would pass
+# on the compiler that had the bug.
+refused() {
+	local dir=$1 what=$2 name=$3 want=$4 out rc
+	out="$(cd "$dir" && "$ZERG_ABS" doc "$name" 2>&1)"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		note "$what — \`zerg doc $name\` exited 0, and a name nothing answers is a refusal"
+		return
+	fi
+	case $out in
+	*"$want"*) checks=$((checks + 1)) ;;
+	*) note "$what — \`zerg doc $name\` was refused with \"$(printf '%s' "$out" | head -1)\", wanted \"$want\"" ;;
+	esac
+}
+
+refused "$ROOT" 'the current directory is not a module name' '.' 'the modules it can see:'
+refused "$tmp/proj/sub" 'the parent directory is not a module name' '..' 'the modules it can see:'
+refused "$ROOT" 'a directory with no source in it' "$tmp/empty/" 'holds no source'
+refused "$ROOT" 'a declaration of a module that did not parse' 'atomic.load' 'does not parse under this compiler'
+
+# and that refusal does not go on to head an empty list, which is the claim the note corrects
+"$ZERG" doc atomic.load >"$tmp/decl.out" 2>&1
+grep -q '^what it does declare:' "$tmp/decl.out" &&
+	note '`zerg doc atomic.load` heads a list of what the module declares and then lists nothing — the module did not parse, which the note above it has just said'
+checks=$((checks + 1))
+
+# A FILE WITH NOTHING TO DOCUMENT SAYS SO. `zerg doc examples` was twelve headings with
+# nothing under them: no header comment, no exposed declaration, and a blank line where the
+# document would be. A heading with nothing beneath it reads as a rendering that broke.
+cat >"$tmp/proj/quiet.zg" <<'ZG'
+fn main() {
+	print 1
+}
+ZG
+"$ZERG" doc "$tmp/proj/quiet.zg" >"$tmp/quiet.out" 2>&1
+grep -qx '(nothing exposed)' "$tmp/quiet.out" ||
+	note "a file with no header and nothing exposed renders as a heading and a blank line: $(cat "$tmp/quiet.out")"
+checks=$((checks + 1))
 
 # --- the module list, and the floors ----------------------------------------------------
 #

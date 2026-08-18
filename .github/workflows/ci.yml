@@ -221,6 +221,9 @@ jobs:
       - name: Every linter rule has a program that makes it fire
         run: make lint-check
 
+      - name: The document is every exposed declaration, and no more
+        run: make doc-check
+
       # The cache is keyed by the compiler that filled it. Two compilers, two keys —
       # otherwise a stale object outlives the compiler that produced it.
       - name: The build cache names the compiler that filled it

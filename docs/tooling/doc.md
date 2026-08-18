@@ -229,10 +229,30 @@ re-wrapped**: the text inside one is meant to be copied out and run. A word long
 budget stands on its own line and is never cut, because what is long is a URL, a path or a
 piece of inline code — text that looks right after a break in the middle and does not work.
 
-The fill is measured in **runes**, so an em-dash costs one column rather than three. The known
-approximation is the other direction: a full-width CJK glyph occupies two terminal columns and
-is counted as one, so a comment written in Chinese overruns the margin. No `wcwidth` table is
-carried for it.
+The fill is measured in **display columns**, which is neither of the two counts that are easy to reach for. A byte
+count reads the em-dash opening every stdlib header as three columns and stops the prose short of the margin for no
+reason a reader can see. A rune count errs the other way and worse: a comment written in Chinese fills to 80
+characters and prints at up to 160 columns, off the edge of the terminal the page was laid out for. So an East Asian
+**Wide** or **Fullwidth** code point counts two, block by contiguous block, each block named in
+[`doc_render.zg`](../../src/compiler/cmd/doc_render.zg) beside the range it covers.
+
+What is left at one column, knowing better, is everything a block cannot say: the scattered single code points the
+standard also calls Wide — the arrows, the dingbats, the emoji — a combining mark and a zero-width joiner, which
+take no columns at all, and a grapheme cluster spelled with several code points. Those are a table and a block is a
+comparison; the blocks are what text written in Chinese, Japanese or Korean is made of, and they are what the tool is
+held to.
+
+**A line may also end between two ideographs.** Chinese is written with no spaces in it, so a paragraph of it reaches
+the fill as one unbreakable word, and a word longer than the budget takes the rule above and stands on its own line,
+every line of it past the margin. A space is where a language that uses spaces allows a break; it is not the only
+place a line may end. The cut is taken between two Han or Hangul characters and never beside a mark — `。` may not
+open a line and `「` may not close one, and nothing here knows which side a mark belongs to, so a sentence with a
+comma in the middle of it breaks somewhere else instead. The author's own line break becomes a space between words
+and **nothing** between two ideographs, for the same reason.
+
+`make doc-check` §7 is that as a gate. It documents a module whose comments are in Chinese and measures the display
+width of every line that comes out: none over 80 columns, and the widest at least 70, or the paragraph was never
+filled and the first assertion measured nothing.
 
 **A directory module is documented one file at a time.** One section per file, headed by the
 path as a reader could type it back, each with that file's own header and that file's own

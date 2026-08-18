@@ -26,8 +26,8 @@
 # §5 is the other blind spot, and it is a blind spot of the CORPUS rather than of the tool:
 # the standard library declares no `pub const`, no `pub type` and no `spec` at all, so the
 # document's rendering of three of the six exposed forms is measured by nothing that reads
-# the stdlib. The fixture carries them, along with the two spellings a signature must not
-# silently drop — a `mut` binding and an `unsafe fn`.
+# the stdlib. The fixture carries them, along with the three spellings a signature must not
+# silently drop — a `mut` binding, an `unsafe fn` and a `mut fn`.
 #
 # §6 is `log`'s rule on this command's device: colour follows the terminal and the SHAPE does
 # not. It drives a pty the way scripts/log-check.sh does, because `os.isatty(1)` answers about
@@ -62,8 +62,8 @@ ZERG="${ZERG:-./bin/zerg}"
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
-MIN_CHECKS="${MIN_CHECKS:-40}"
-MIN_RULES="${MIN_RULES:-22}"
+MIN_CHECKS="${MIN_CHECKS:-42}"
+MIN_RULES="${MIN_RULES:-24}"
 
 [ -x "$ZERG" ] || {
 	printf 'doc-check: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -101,8 +101,8 @@ exposed_in_source() {
 # reflowed comment line beginning with the word `fn` cannot be counted as a declaration.
 named_in_document() {
 	sed -nE '
-		s/^  (unsafe )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\2/p
-		s/^      (unsafe )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\2/p
+		s/^  (unsafe )?(mut )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\3/p
+		s/^      (unsafe )?(mut )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\3/p
 		s/^  (struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*)$/\2/p
 		s/^  (const|mut) ([A-Za-z_][A-Za-z0-9_]*)[ :].*/\2/p
 		s/^  type ([A-Za-z_][A-Za-z0-9_]*) =.*/\1/p
@@ -359,9 +359,11 @@ esac
 # --- 5. the forms the stdlib does not contain ------------------------------------------
 #
 # `pub const`, `pub type` and `spec` are three of the six exposed forms and the standard
-# library declares none of them, so §1 above can say nothing about how they render. The two
+# library declares none of them, so §1 above can say nothing about how they render. The three
 # modifiers are here for the same reason and a sharper one: a signature that drops `mut` or
-# `unsafe` documents a declaration as something the language would not accept.
+# `unsafe` documents a declaration as something the language would not accept — and `mut fn`
+# is the one whose absence misdirects the CALL SITE, which GRAMMAR#fn-decl requires to hold
+# the receiver in a `mut` binding.
 cat >"$tmp/proj/forms.zg" <<'ZG'
 # forms — the exposed forms the standard library happens not to declare.
 
@@ -375,6 +377,18 @@ pub type Name = str
 pub spec Named {
 	# label is what a Named answers to.
 	fn label() -> str
+}
+
+# Counter is a struct whose method mutates it.
+pub struct Counter {
+	pub n: int
+}
+
+impl Counter {
+	# bump adds one to the receiver, in place.
+	pub mut fn bump() {
+		this.n = this.n + 1
+	}
 }
 
 unsafe {
@@ -407,12 +421,13 @@ form 'a public spec' '  spec Named'
 form 'a spec requirement' '      fn label() -> str'
 form 'a mutable global' '  mut COUNTER := 0'
 form 'an unsafe fn' '  unsafe fn peek(p: ptr) -> int'
+form 'a mutating method' '      mut fn bump()'
 
 # and each of them keeps its own comment, which is the §4 question asked of the forms §4's
 # fixture cannot declare
 for want in 'LIMIT is a public constant' 'Name is a public type' 'Named is a public spec' \
 	'label is what a Named answers to' 'COUNTER is the one mutable global' \
-	'peek reads a raw address'; do
+	'peek reads a raw address' 'bump adds one to the receiver'; do
 	if grep -qF "$want" "$tmp/forms.out"; then
 		checks=$((checks + 1))
 		rules=$((rules + 1))

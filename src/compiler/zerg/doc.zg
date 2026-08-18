@@ -58,10 +58,14 @@
 #   - an evaluator of examples. A ```zerg``` fence is carried through as written. Running one
 #     is `--check`'s job, and re-writing one for a reader is issue #18's.
 #   - silent about what it could not read. A file whose parse RAISES still yields its header —
-#     the header rule needs no AST — and the failure is recorded in `DocModule.broken` for the
-#     renderer to print. `src/stdlib/atomic.zg` is the live case: E9004 comes from the PARSER
-#     (a generic struct), so a doc tool that let the raise through would drop a whole module,
-#     and one that swallowed it would drop the module's declarations without saying so.
+#     the header rule needs no AST — and the failure is recorded as `DocFile.ok` for the
+#     renderer to speak about. `src/stdlib/atomic.zg` is the live case: E9004 comes from the
+#     PARSER (a generic struct), so a doc tool that let the raise through would drop a whole
+#     module, and one that swallowed it would drop the module's declarations without saying so.
+#   - the author of that sentence. What could not be read is a FACT and its wording is not: the
+#     path a file was reached by is one this compiler resolved (a stdlib file's is absolute and
+#     differs per installation), so how to name it to a reader, and where to send them, belong
+#     to whoever is writing for that reader. It is `hidden`'s argument, one struct up.
 
 # --- what a document is -------------------------------------------------------------------
 
@@ -71,20 +75,41 @@ pub struct DocModule {
 	# the name the reader asked for, which is the document's title
 	pub name: str
 
-	# the module header comment, stripped of its `#` markers; empty when the file opens with
-	# a declaration or with nothing at all
+	# the module's source files, in the order they were handed over — which is the order
+	# `__zrt_listdir` answers a directory in, and that is sorted. A module is ONE file far
+	# more often than it is several, and the several are what this list exists for: a
+	# directory module is a document with several chapters, and a chapter is a file.
+	pub files: list[DocFile]
+
+	# every exposed declaration, in SOURCE ORDER within each file and file order across them
+	# — the order the author put them in, which this tree treats as part of the document
+	# (`strings.zg` keeps the trim family together, and its header narrates the file in the
+	# order the file is written). Finding one declaration by name is `doc_find`'s job, and
+	# alphabetical order is that question's, not this list's.
+	#
+	# It is ONE FLAT LIST and not a list per file, because every question asked of it is
+	# asked across the module: a method is grouped under its type wherever that type was
+	# written, and `doc_find` reaches a name without being told which chapter holds it.
+	# Which file a declaration came from is `DocDecl.path`, which a renderer groups by.
+	pub decls: list[DocDecl]
+}
+
+# DocFile is one source file of a module: where it was read from, what it says about itself,
+# and whether it could be read at all.
+pub struct DocFile {
+	# the path it was read from, exactly as the caller resolved it. A stdlib file's is
+	# absolute, because `stdlib_dir()` resolves against the executable; making it a name a
+	# reader could type is a rendering decision and is made where the reader is known.
+	pub path: str
+
+	# the file header comment, stripped of its `#` markers; empty when the file opens with a
+	# declaration, with a section banner, or with nothing at all
 	pub header: list[str]
 
-	# every exposed declaration, in SOURCE ORDER — the order the author put them in, which
-	# this tree treats as part of the document (`strings.zg` keeps the trim family together,
-	# and its header narrates the file in the order the file is written). Finding one
-	# declaration by name is `doc_find`'s job, and alphabetical order is that question's,
-	# not this list's.
-	pub decls: list[DocDecl]
-
-	# one honest sentence per file whose parse raised. Empty is the normal case; when it is
-	# not, a renderer that dropped it would turn a missing chapter into a silence.
-	pub broken: list[str]
+	# whether the file parsed. False is the exceptional case — `atomic` is the whole list
+	# today — and it means the header above is all this file gave up: a renderer that said
+	# nothing would turn a missing chapter into a silence.
+	pub ok: bool
 }
 
 # DocDecl is one exposed declaration: what it is, what it is called, how it is called, and
@@ -151,48 +176,39 @@ pub struct DocMember {
 
 # doc_module extracts one module's document from its sources. `srcs` and `paths` are row for
 # row — the pairing `load_sources_at` already keeps — because attaching a comment is per-FILE
-# work and a file that will not parse has to be named in the sentence that says so.
+# work and a file that will not parse has to be named by whatever says so.
 #
 # EVERY FILE IS PARSED UNDER `guard`. A module that cannot be parsed must still yield its
 # header and an honest marker, never a silent absence; `atomic` is that module today. The
-# diagnostic's own text cannot come back through a `guard`, so the sentence is a general one
-# pointing at where the module's status is already written down.
+# diagnostic's own text cannot come back through a `guard`, so what is recorded is the fact —
+# this file did not parse — and not a sentence about it.
 pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 	# the two lists are ONE table, and a caller that hands over a short one would otherwise
 	# leave an `IndexError` to come out of a `pub` function with nothing said about whose
 	# mistake it was
 	raise p_impossible(f"doc_module was given {srcs.len()} sources and {paths.len()} paths — they are one table, a source and the file it was read from, and a document cannot name a file it was not told about") if srcs.len() != paths.len()
 
-	mut header: list[str] = []
+	mut files: list[DocFile] = []
 	mut decls: list[DocDecl] = []
-	mut broken: list[str] = []
 
 	mut i := 0
 	for i < srcs.len() {
 		path := paths[i]
 		mut tv := doc_trivia(srcs[i])
+		mut ok := false
 		parsed := guard {
 			parse_at(srcs[i], path)
 		}
 		if f := parsed {
 			doc_file_decls(f, tv, decls)
-		} else {
-			broken.append(f"{path} does not parse under this compiler; its declarations are not listed (see docs/runtime/stdlib.md)")
+			ok = true
 		}
 
 		# after the claim pass, never before it: a header is the run no declaration wanted
-		hd := doc_header(tv)
-		if hd.len() > 0 {
-			if header.len() > 0 {
-				header.append("")
-			}
-			for line in hd {
-				header.append(line)
-			}
-		}
+		files.append(DocFile(path, doc_header(tv), ok))
 		i = i + 1
 	}
-	return DocModule(name, header, decls, broken)
+	return DocModule(name, files, decls)
 }
 
 # doc_find answers WHERE in `m.decls` the named declaration is. `name` is `split` or

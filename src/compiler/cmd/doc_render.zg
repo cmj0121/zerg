@@ -69,25 +69,47 @@ fn doc_colour() -> bool {
 
 # --- the three documents --------------------------------------------------------------------
 
-# render_doc_module is the whole of one module: its header, whatever could not be read, and
-# then CONSTANTS, TYPES and FUNCTIONS — each section left out entirely when the module has
-# nothing in it.
+# render_doc_module is the whole of one module: ONE SECTION PER FILE, each of them the file's
+# own header, whatever could not be read in it, and then CONSTANTS, TYPES and FUNCTIONS over
+# what that file declares — every section left out entirely when there is nothing in it.
+#
+# THE FILE IS THE UNIT because that is the document a reader asked for. Concatenating every
+# file's header made `zerg doc src/compiler/zerg` open with four hundred lines of stacked
+# prose before the first declaration, which is not a document about anything: each of those
+# headers is one file arguing for itself, and read end to end they argue past each other. A
+# module of one file — every module in the standard library — has exactly one section, no
+# heading above it, and therefore exactly the document it had before.
+#
+# THE HEADING IS THE FILE'S PATH, as `doc_short_path` would let the reader type it. A file is
+# what they would open and what they would name to this command to get that one section on its
+# own, and a path is the only name in a document that is already both.
 #
 # `brief` renders the same walk with the comment replaced by its first sentence and the members
 # left out, which is what makes the two views one piece of code rather than two that drift. The
 # surface is the signatures; the whole document is the signatures with everything written above
 # them.
 #
-# A TYPE'S METHODS ARE PRINTED UNDER IT. The parser flattens `impl T { … }` into ordinary
-# functions carrying a receiver, so the extraction hands over a flat list; grouping is a
-# rendering decision, and this is where it is made. A method whose receiver names no type in
-# this module — which no source in this tree produces — is collected under a bare `impl T` at
-# the end of TYPES rather than dropped, because a document that silently omits a declaration is
-# the one failure this tool cannot recover from.
+# A TYPE'S METHODS ARE PRINTED UNDER IT, in the section its TYPE was declared in and not the
+# one they were written in. The parser flattens `impl T { … }` into ordinary functions carrying
+# a receiver, so the extraction hands over a flat list; grouping is a rendering decision, and
+# this is where it is made. A method whose receiver names no type in this module is collected
+# under a bare `impl T` at the end of the TYPES of its own file rather than dropped, because a
+# document that silently omits a declaration is the one failure this tool cannot recover from.
 fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
 	mut out: list[str] = []
-	doc_head(out, m, brief)
-	doc_notes(out, m)
+	for f in m.files {
+		if m.files.len() > 1 {
+			doc_heading(out, doc_short_path(f.path), col)
+		}
+		doc_file(out, m, f, brief, col)
+	}
+	return doc_join(out)
+}
+
+# doc_file is one file's section: what the file says about itself, then what it declares.
+fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool, col: bool) {
+	doc_head(out, m, f, brief)
+	doc_note(out, f)
 
 	mut consts: list[int] = []
 	mut types: list[int] = []
@@ -96,14 +118,16 @@ fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
 	mut i := 0
 	for i < m.decls.len() {
 		d := m.decls[i]
-		if d.kind == "const" {
-			consts.append(i)
-		} else if doc_is_type(d.kind) {
-			types.append(i)
-		} else if d.recv == "" {
-			fns.append(i)
-		} else if doc_index_of(m, d.recv) < 0 {
-			orphans.append(i)
+		if d.path == f.path {
+			if d.kind == "const" {
+				consts.append(i)
+			} else if doc_is_type(d.kind) {
+				types.append(i)
+			} else if d.recv == "" {
+				fns.append(i)
+			} else if doc_index_of(m, d.recv) < 0 {
+				orphans.append(i)
+			}
 		}
 		i = i + 1
 	}
@@ -132,7 +156,6 @@ fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
 			doc_entry(out, m.decls[k], 2, brief, col)
 		}
 	}
-	return doc_join(out)
 }
 
 # render_doc_decls is what one name answered with — the same entries the whole document holds,
@@ -162,7 +185,8 @@ fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
 }
 
 # render_doc_list is the index: every module that can be read, one row each, with the first
-# sentence of its header beside it.
+# sentence of its header beside it — and nothing beside it when no file of it speaks for the
+# module as a whole.
 #
 # The name column is padded to the longest name, so the descriptions line up and the eye can
 # run down either column. A description too long for what is left of the line is filled to the
@@ -182,10 +206,15 @@ fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 
 	at := 2 + w + 3
 	for m in mods {
-		mut rows := doc_fill(doc_tagline(m, col), DOC_WIDTH - at)
+		rows := doc_fill(doc_tagline(m), DOC_WIDTH - at)
+
+		# a module nothing describes is its name alone: padding it out to a description that
+		# is not there would write trailing whitespace, which this document does not do
 		if rows.len() == 0 {
-			rows.append("")
+			out.append(blanks(2) + doc_bold(m.name, col))
+			continue
 		}
+
 		out.append(blanks(2) + doc_bold(m.name, col) + blanks(at - 2 - doc_runes(m.name)) + rows[0])
 		mut k := 1
 		for k < rows.len() {
@@ -314,33 +343,72 @@ fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 
 # --- the header, and what could not be read ---------------------------------------------------
 
-# doc_head is the module's own comment, filled at column 0, or its name alone when it has none.
+# doc_head is one file's own comment, filled at column 0.
 #
-# The name is printed in that case rather than nothing, because a document that opens straight
-# into a section heading has lost its title: every stdlib module names itself in its first line
-# (`strings — text utilities …`), and a module that does not gets the same first line from the
-# only other place its name is known.
-fn doc_head(mut &out: list[str], m: zerg.DocModule, brief: bool) {
-	if m.header.len() == 0 {
-		out.append(m.name)
+# A FILE WITH NO HEADER FALLS BACK TO THE MODULE'S NAME, and only when the module is that one
+# file: a document that opens straight into a section heading has lost its title, and every
+# stdlib module names itself in its first line (`strings — text utilities …`), so a module that
+# does not gets the same first line from the only other place its name is known. In a module of
+# several files the heading above already names the file, and a module name repeated over every
+# chapter would be a title claimed six times by six different texts.
+fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool) {
+	if f.header.len() == 0 {
+		if m.files.len() == 1 {
+			out.append(m.name)
+		}
 		return
 	}
 
 	if brief {
-		doc_wrap(out, zerg.doc_first_sentence(m.header), 0)
+		doc_wrap(out, zerg.doc_first_sentence(f.header), 0)
 	} else {
-		doc_body(out, m.header, 0)
+		doc_body(out, f.header, 0)
 	}
 }
 
-# doc_notes prints one line for each file whose parse raised. `atomic` is the live case, and the
-# note is what keeps the module in the index and its header readable while saying plainly that
-# the declarations under it are missing rather than absent.
-fn doc_notes(mut &out: list[str], m: zerg.DocModule) {
-	for n in m.broken {
-		doc_gap(out)
-		doc_wrap(out, "note: " + n, 0)
+# doc_note says that a file did not parse, and nothing when it did. `atomic` is the live case,
+# and the note is what keeps the module in the index and its header readable while saying
+# plainly that the declarations under it are missing rather than absent.
+#
+# THE FILE IS NAMED AS THE READER COULD NAME IT, and the reader is only sent to the standard
+# library's chapter when the file is IN the standard library. Both used to be wrong in the one
+# sentence: it printed the absolute path `stdlib_dir()` resolved through the executable, and it
+# pointed everyone at `docs/runtime/stdlib.md` — so somebody whose own file was missing a `}`
+# was told to go and read about a library they had not touched.
+fn doc_note(mut &out: list[str], f: zerg.DocFile) {
+	return if f.ok
+
+	mut note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
+	if doc_is_stdlib(f.path) {
+		note = note + " (see docs/runtime/stdlib.md)"
 	}
+	doc_gap(out)
+	doc_wrap(out, note, 0)
+}
+
+# --- naming a file to a reader ----------------------------------------------------------------
+
+# doc_short_path is a source file named the way the reader could name it back.
+#
+# A STDLIB FILE LOSES ITS DIRECTORY. It was reached through `stdlib_dir()`, which resolves
+# against the executable, so its absolute path is a fact about this installation — different on
+# the next machine, different again once installed — and it is not a path the reader has, typed
+# or could type. What is left is the name inside the standard library, which is what `zerg doc`
+# takes. Every other path was reached from something the reader wrote, so it is printed as it
+# stands.
+fn doc_short_path(path: str) -> str {
+	return path if not doc_is_stdlib(path)
+
+	b := bytearray(path)
+	return line_slice(b, bytearray(doc_stdlib_lead()).len(), b.len())
+}
+
+fn doc_is_stdlib(path: str) -> bool {
+	return has_prefix(path, doc_stdlib_lead())
+}
+
+fn doc_stdlib_lead() -> str {
+	return stdlib_dir() + "/"
 }
 
 # --- a comment, as prose ------------------------------------------------------------------------
@@ -534,21 +602,39 @@ fn doc_mark(col: bool) -> str {
 
 # --- small answers about a module ---------------------------------------------------------
 
-# doc_tagline is a module's one line in the index: the first sentence of its header, with the
-# module's own name taken off the front.
+# doc_tagline is a module's one line in the index: the first sentence of the header of the file
+# THAT CARRIES THE MODULE'S NAME, with the module's own name taken off the front.
+#
+# WHICH FILE SPEAKS FOR A MODULE IS THE ONE NAMED AFTER IT — `strings.zg` for `strings`,
+# `cmd/cmd.zg` for `cmd` — which is the convention PLAN decision 5 settles and which `cmd.zg`
+# is already written to. A directory module without one has no module-level description, and
+# the index says nothing rather than something: `examples/` is twenty independent programs, and
+# the line it used to carry was whichever of them sorted first ("12 — The actor: mutable state
+# owned by one coroutine"), which describes the directory to nobody.
 #
 # Every header in the standard library opens `name — what it is`, and the name is already the
 # column to the left. Dropping it is a rendering decision and it is made here, not in the
 # extraction: the header is what the file says, and a listing is one arrangement of it.
-fn doc_tagline(m: zerg.DocModule, col: bool) -> str {
-	s := zerg.doc_first_sentence(m.header)
-	return doc_mark(col) if s == ""
+fn doc_tagline(m: zerg.DocModule) -> str {
+	s := zerg.doc_first_sentence(doc_module_header(m))
+	return "" if s == ""
 
 	lead := m.name + " — "
 	return s if not has_prefix(s, lead)
 
 	b := bytearray(s)
 	return line_slice(b, bytearray(lead).len(), b.len())
+}
+
+# doc_module_header is the header of the file a module is named after, and nothing when no file
+# in it is.
+fn doc_module_header(m: zerg.DocModule) -> list[str] {
+	mut none: list[str] = []
+	want := m.name + ".zg"
+	for f in m.files {
+		return f.header if path_tail(f.path) == want
+	}
+	return none
 }
 
 # doc_is_type reports whether a declaration belongs under TYPES. The four kinds that do are the

@@ -78,7 +78,7 @@ fn test_enabled_at_the_two_ends() {
 }
 
 # `parse_level` IS THE INVERSE OF THE NAME A JSON LINE CARRIES, and this is the only thing
-# holding the two 7-row tables together: `level_name` is an exhaustive `match` that `E428`
+# holding the two 7-row tables together: `level_name` is an exhaustive `match` that `E4019`
 # guards, and `parse_level` is a diverge chain that an eighth variant would silently fall
 # through. So the round trip is asserted for every level, by behaviour — a level parsed from
 # its own name must gate exactly as the level itself does.
@@ -102,8 +102,8 @@ fn test_parse_level_is_the_inverse_of_the_name(ctx: testing.Context) {
 
 # unknown reports that `parse_level` refused `s`, and it is a function because asking an
 # optional for its ABSENCE is three rules deep: `assert` renders what it compares and a
-# `Level?` has no structural `Display` (`E449`), an optional is not an operand of `==`
-# (`E341`), and a binding that exists only to be tested is `L103`/`L104`. So absence is asked
+# `Level?` has no structural `Display` (`E9059`), an optional is not an operand of `==`
+# (`E3039`), and a binding that exists only to be tested is `L103`/`L104`. So absence is asked
 # the way the language does offer — coalesce twice with DIFFERENT levels. Only `nil` takes the
 # fallback, so only `nil` gives two different answers.
 fn unknown(s: str) -> bool {
@@ -177,7 +177,7 @@ fn taken(ch: chan[str]) -> str {
 # an ended stream is `nil` — which for this suite means the same as nothing ready.
 #
 # IT IS `??` AND NOT `if s := v { return s }`, and that is not a style choice: `zerg fmt`
-# rewrites the second into `return s if s := v`, which does not parse (`E205`). The trailing
+# rewrites the second into `return s if s := v`, which does not parse (`E2005`). The trailing
 # `if` on a diverge takes a bare CONDITION and a binding head is not one, so the formatter
 # turns a valid program into an invalid one — reproduced on four lines, and reported. `??` is
 # the shorter answer here anyway.
@@ -761,7 +761,7 @@ fn test_restoring_the_default_needs_no_current() {
 
 # `at_level` is the general form, and on the global it is what a caller with a level in a
 # variable uses. `at` was not available: the compiler's own lexer has a module-private `at`,
-# and `E705` refuses two modules a shared name when either is `pub`.
+# and `E9081` refuses two modules a shared name when either is `pub`.
 #[test]
 fn test_at_level_on_both_surfaces() {
 	defer restored()

@@ -6,8 +6,8 @@
 # twelve files, one per GRAMMAR CHAPTER, and a file stops at its FIRST refusal — so every
 # form written below that line is never reached, while the gate reports green. Measured on
 # the day this was written: `g05_functions.zg` and `g07_types.zg` both contain `mut &` in a
-# function type and a standalone `unsafe fn`, and both were masked by an earlier `E223` /
-# `E216`. Neither form had EVER been put to the compiler by that gate. Twelve files against
+# function type and a standalone `unsafe fn`, and both were masked by an earlier `E9010` and
+# by a refusal that has since retired. Neither form had EVER been put to the compiler by that gate. Twelve files against
 # 171 productions is at most twelve forms measured, and in practice fewer.
 #
 # So the unit here is the PRODUCTION, not the chapter: one sample per production, one

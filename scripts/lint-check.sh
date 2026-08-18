@@ -265,7 +265,7 @@ EOF
 # The WARNING, in the spelling that matters: an `E` code. `#[allow]` must never suppress a
 # compiler diagnostic, so naming one is a suppression that can never apply.
 lint_warn L107 'an `E` code is a COMPILER diagnostic' <<'EOF'
-#[allow(E606)]
+#[allow(E9040)]
 fn main() {
 	print "hi"
 }
@@ -326,7 +326,7 @@ EOF
 # --- L4xx — resolution ------------------------------------------------------------
 #
 # `L401` stood here, over a variant name two enums declare. Its program is not ambiguous any
-# more: a bare `Red` is E383 in either enum, and a qualified `Color.Red` resolves inside the
+# more: a bare `Red` is E3079 in either enum, and a qualified `Color.Red` resolves inside the
 # enum it names — so the case went with the rule, the same way `L501`'s did below.
 
 lint L402 'never writes through `this`' <<'EOF'

@@ -6,16 +6,17 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 亦有 [English](ffi.md) 版本。
 
 > **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 外部呼叫所處的 `unsafe` 情境就是它
-> 停下來的地方：**block-expression** 形式被指名拒絕、帶位置（`E224`），獨立的 **`unsafe fn`** 也是（`E264`），
-> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E488`）——import 那條邊也就一起沒了。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗
-> ——_E502 cannot resolve import `ffi` under any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
+> 停下來的地方：**block-expression** 形式被指名拒絕、帶位置（`E9011`），獨立的 **`unsafe fn`** 也是（`E9027`），
+> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E9073`）——import 那條邊也就一起沒了。出貨的標準
+> 函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗——_E5002 cannot resolve import `ffi` under
+> any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
 > **分組**是有建的那一種形式，為的是它的 `mut` binding；它的 `fn` 在裡面能做什麼，仍是一項一項被拒絕。export
 > 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header
 > 之外。
 >
 > 本章已經沒有任何東西會漏到 `cc`。`handle` 是 `zerg` 程式裡沒有任何宣告帶有的名字，所以標註它的 binding
 > ——`mut h: handle = 0` 或 `mut h: handle? = nil`——會在寫下它的地方被拒絕，回報為
-> _E707 no type named `handle` (the binding `h`)_。
+> _E4056 no type named `handle` (the binding `h`)_。
 
 ## 兩條邊、一份契約
 
@@ -201,12 +202,12 @@ global 的。
 > 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。
 
 分組自己的規則**有**被強制：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是一個 unsafe fn，從安全程式碼指名
-它——呼叫它，或把裸名字綁成 function value——會以 `E387` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
+它——呼叫它，或把裸名字綁成 function value——會以 `E3083` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
 組存在的理由。在上面那個 block-expression 建起來之前，那也是一個程式僅有的呼叫者：進入點是安全的，所以分組的
 `fn` 只能被同一個分組的成員叫到，除此之外無處可及。
 
 > **[not yet]** `handle` 型別的 binding 會被具名拒絕。`mut h: handle? = nil` 是
-> _E707 no type named `handle` (the binding `h`)_，而且帶著位置：程式裡沒有任何宣告帶著這個名字，而這個編譯器
+> _E4056 no type named `handle` (the binding `h`)_，而且帶著位置：程式裡沒有任何宣告帶著這個名字，而這個編譯器
 > 也不出貨任何能帶著它的 `ffi` 模組。它以前會漏到 `cc`，變成 `error: unknown type name 'zg_handle'`——那是本章
 > 唯一一處形式打破標準契約的地方。
 
@@ -285,4 +286,4 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 - scheduler 對**阻塞外部呼叫**的策略（thread pool 擴張）——一個 runtime 細節。
 - 匯入設施未來是否會綁定 **`"C"` 以外的 ABI**；目前只定義 `"C"`。
 - 一個編譯期 **`sizeof` / `alignof`**——型別的佈局屬於 **built-in** 還是 **stdlib** 設施尚未決定,
-  而它兩邊都不存在。具名拒絕(`E414`)。
+  而它兩邊都不存在。具名拒絕(`E9046`)。

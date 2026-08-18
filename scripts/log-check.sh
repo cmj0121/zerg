@@ -441,7 +441,7 @@ fi
 #
 # `log` is this tree's REFERENCE for process-wide mutable state, so the shape is a claim it
 # makes and not merely how it happens to be written today. The compiler enforces RULE 1 and
-# only rule 1 — `E358` puts the cell inside the group and `E484` keeps it private, which is two
+# only rule 1 — `E3056` puts the cell inside the group and `E4046` keeps it private, which is two
 # codes for one rule rather than two rules. Rules 2 and 3 were properties of this source with
 # nothing but a reader checking them. This is that reader.
 #
@@ -470,7 +470,7 @@ n_cells=$(grep -cE '^	mut [a-z_]+ := ' "$WORK/log.cell")
 cell=$(sed -n 's/^	mut \([a-z_]*\) := .*/\1/p' "$WORK/log.cell")
 case "$cell" in
 log_*) ;;
-*) note "the cell is called \`$cell\`; name it after the module — two modules that both call theirs \`process\` are E706, private or not" ;;
+*) note "the cell is called \`$cell\`; name it after the module — two modules that both call theirs \`process\` are E9082, private or not" ;;
 esac
 
 # EVERY MENTION OF THE CELL IS ONE OF THREE THINGS: the declaration, the ONE assignment inside
@@ -493,7 +493,7 @@ n_setters=$(grep -cE '^pub fn set_' "$code")
 grep -qE '^pub fn rank\(' "$code" && note "\`rank\` is public — \`rank(OFF)\` is -1, and a caller comparing two of them reads OFF as the most verbose level there is"
 grep -qE '^pub fn current\(' "$code" && note "\`current()\` is back — deriving from the installed logger reads as mid-flight reconfiguration, which the cell is not safe for"
 
-# AND THE ONE CONSTRUCTOR IS `new`. `Logger()` exists whatever this module wants (`E482` makes
+# AND THE ONE CONSTRUCTOR IS `new`. `Logger()` exists whatever this module wants (`E4045` makes
 # every private field carry a default), and it is out of a caller's reach only for as long as
 # the consts its defaults name stay private. Publishing one would silently re-open a second
 # constructor, so the refusal is compiled here rather than described in a comment.
@@ -509,8 +509,8 @@ rm -f "$WORK/ctor"
 if "$ZERG" build "$WORK/ctor.zg" -o "$WORK/ctor" >"$WORK/ctor.log" 2>&1; then
 	note "log.Logger() built outside the module — it is a second constructor that skips \`new\`"
 else
-	grep -q 'E301' "$WORK/ctor.log" ||
-		note "log.Logger() was refused, but not by E301: $(head -2 "$WORK/ctor.log")"
+	grep -q 'E3001' "$WORK/ctor.log" ||
+		note "log.Logger() was refused, but not by E3001: $(head -2 "$WORK/ctor.log")"
 fi
 checks=$((checks + 1))
 

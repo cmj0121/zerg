@@ -194,7 +194,7 @@ carve-out,gate 一定會把它指名出來。
 **宣告出來的型別，名字以大寫字母開頭**（[GRAMMAR#type-ident](../../GRAMMAR)），而且這是規則、不是慣例：第一個
 字母的大小寫，就是這個語言分開它那兩個命名空間的全部依據。`Point(1, 2)` 是建構、`point(1, 2)` 是呼叫；
 `cli.Opt` 是模組限定、`It.Item` 是關聯型別投影。這些都在任何名字被解析之前就要判定，所以 `struct lower`——
-或者 `struct _Box`，因為 `_` 沒有大小寫、也就不屬於任何一個命名空間——會在宣告處被拒絕，回報為 `E610`。
+或者 `struct _Box`，因為 `_` 沒有大小寫、也就不屬於任何一個命名空間——會在宣告處被拒絕，回報為 `E2060`。
 **使用**的位置不受同一條限制：內建型別名稱（`int`、`str`、`list`、各個定寬成員）都是小寫，而且沒有任何宣告
 會引入它們。
 
@@ -215,9 +215,9 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
-> **[not yet]** 上面那一段的兩個宣告都編不過。遞迴 `struct` 是 `E452`(見下),而**泛型 `enum`** 是
-> _E212 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a variant's
-> payload names one_;泛型 `struct` 因同樣的理由是 `E215`。這段顯示的是規範中的形狀,兩者都在等泛型型別。
+> **[not yet]** 上面那一段的兩個宣告都編不過。遞迴 `struct` 是 `E4026`(見下),而**泛型 `enum`** 是
+> _E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a variant's
+> payload names one_;泛型 `struct` 因同樣的理由是 `E9004`。這段顯示的是規範中的形狀,兩者都在等泛型型別。
 
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
@@ -245,9 +245,9 @@ enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 
 那個命名空間是 **enum 自己的**,兩個 enum 各自宣告一個 `Red` 是可以的:有 `enum Colour { Red; Green }` 與
 `enum Signal { Amber; Red }` 時,`Colour.Red` 與 `Signal.Red` 是兩個剛好拼法相同的不同 variant,各有自己的
 discriminant。帶限定的名字是**在它指名的那個 enum 裡面**解析的,所以指到該 enum 沒有宣告的名字會是
-_E457 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
+_E4031 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
 
-> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E383 `Red` is a variant of
+> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E3079 `Red` is a variant of
 > `Colour`, and a variant is named through its enum_,而 [Grammar](../surface/grammar.zh-TW.md) 說裸名字只要
 > 解析得到一個 variant 就是那個 variant。當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個
 > ——它是兩種可行寫法之一,未必是你要的那一個。
@@ -272,10 +272,10 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 （見 [模式比對](../code/control-flow.zh-TW.md)）。
 
 > **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
-> _E445 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
+> _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
-> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E205 expected a newline or `;` to separate
-> statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E238`)。
+> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E2005 expected a newline or `;` to separate
+> statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E9021`)。
 > 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
@@ -290,7 +290,7 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
 > **[deviation]** `type X = Y` 只對**純量**底型 `Y` 實作,而新型別**不**繼承 `Y` 的算術或 `spec` impl——一個
-> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E304 NotImplemented:
+> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E9042 NotImplemented:
 > `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
 > name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
 > to follow the name_。意圖中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;建出來的只有純量、無 impl
@@ -301,7 +301,7 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
 自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好（**[not yet]**——associated function 會被指名
-拒絕,_E424 `User.from_id(…)` is an associated function_,所以本節推理所依據的那種「立 invariant 的 constructor」
+拒絕,_E9051 `User.from_id(…)` is an associated function_,所以本節推理所依據的那種「立 invariant 的 constructor」
 今天要寫成自由函式）。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
 decorator 的職責——**[not yet]**，所以今天只要型別可及，literal 就可及。
@@ -325,7 +325,7 @@ decorator 的職責——**[not yet]**，所以今天只要型別可及，litera
 
 兩半在可見性上會合：**非 `pub` 欄位是 module-private，而且必須帶預設值**。依欄位的 constructor 是公開的，所以
 「沒有預設值的欄位」就是每次建構都得供值的欄位——而外部無法為一個自己讀不到的欄位供值。沒有預設值的私有欄位會在
-該欄位自己的宣告處被拒絕（`E482`），並指名該欄位。
+該欄位自己的宣告處被拒絕（`E4045`），並指名該欄位。
 
 > **[not yet]** 讀取**另一個欄位**的預設值——`struct P { pub a: int; pub b: int = a * 2 }`——是唯一未實作的形狀，
 > 而它與[函式與 Closure](../code/functions.zh-TW.md) 裡「參數預設值讀取前一個參數」是同一個形狀、同一個理由：
@@ -388,7 +388,7 @@ spec Into[T] {
   那條規則的全部,而一個並列的 `.into()` 會需要 position 說出它指的是哪個目標,那是 [型別系統](type-system.zh-TW.md)
   在同一句話裡禁止的。而轉成文字則根本沒有東西可加入:`display` 是內建的值**渲染**、不是 spec
   (見 [Format](../runtime/format.zh-TW.md)),所以 `str(x)` 對每個型別都有答案——想要文字的泛型完全不需要 bound。
-  (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E449 NotImplemented: rendering a P as text — a
+  (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E9059 NotImplemented: rendering a P as text — a
   composite needs the structural `Display` this compiler does not generate_,而泛型在 monomorphize 之後撞到的
   是同一個拒絕。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染,對複合值尚未建置,一如
   [Spec 與 Generics](specs.zh-TW.md) 所標。)
@@ -421,19 +421,19 @@ spec Into[T] {
 | `int`   | `uint`                           | 是         | 負數 → `OverflowError`                       |
 | `uint`  | `int`                            | 是         | 超過有號數上限 → `OverflowError`             |
 | `str`   | `int` / `uint` / `float`         | 是         | **解析**文字——`ValueError` / `OverflowError` |
-| `float` | `int` / `byte` / `uint` / `rune` | **被拒絕** | `E394`——丟掉小數是一個決定;寫出動詞          |
+| `float` | `int` / `byte` / `uint` / `rune` | **被拒絕** | `E3090`——丟掉小數是一個決定;寫出動詞         |
 
 **這張表的形狀是一個中樞,而中樞是 `int`。** 每一組被接受的配對都有一側是 `int`,那正是「一步」規則畫成的圖。所
 以不在表上的配對就不是這個語言擁有的轉換,而不在表上只有兩種方式。
 
 **`byte → float` 不在**,因為那會是 `byte → int → float`,而一步就是一次轉換的定義:寫成兩步,`float(int(b))`。
 兩個數字之間每一組缺席的配對都是同一句話換上別的名字——`byte → rune`、`byte → uint`、`rune → uint`——每一組都是
-`E395`,而它會把它要的那兩步印出來。
+`E3091`,而它會把它要的那兩步印出來。
 
 **`float` 作為來源之所以不在,理由不同**,而且它是這裡唯一的不對稱:丟掉小數不是缺了一步,而是一個**決定**,並且
 有四個都說得通的答案。所以語言拒絕替程式做這個決定,由程式用一個動詞寫出來——`math.trunc`、`math.floor`、
 `math.ceil` 或 `math.round`,每一個都回答一個 `int`,因此它們是整個轉換而不是其中一半——或者用 `//`,那個本來就
-落在 `int` 的除法。`float` 上的 `int(x)` 是 `E394`,而它會指名該寫哪個動詞;目標更窄時就是動詞再加上轉換,
+落在 `int` 的除法。`float` 上的 `int(x)` 是 `E3090`,而它會指名該寫哪個動詞;目標更窄時就是動詞再加上轉換,
 `byte(math.trunc(x))`。一個 `int` 裝不下的量會 raise `OverflowError`,和其他每一個會失敗的轉換一樣(見
 [標準函式庫](../runtime/stdlib.zh-TW.md))。
 
@@ -457,13 +457,13 @@ spec Into[T] {
 以它在那裡持有的並不是它在這裡持有的。
 
 **這兩個位置的差別在於拿一個未知的值怎麼辦,而不在於什麼算未知。** 填充計數非要一個數不可,所以它被拒絕
-(`E475`);而轉換一個值本來就是一次普通的轉換,所以它在執行的地方被檢查。
+(`E4040`);而轉換一個值本來就是一次普通的轉換,所以它在執行的地方被檢查。
 
 **它穿得過 monomorphization。** 一個泛型的本體是以它的**特化**被檢查的——`fn hold[T](v: T)` 裡的 `y: T = 300`
 以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
 問得出口的東西,而到那時它已經是已知的。
 
-> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E461 NotImplemented: a second
+> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
 > `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
 > language allows several, and reaching that needs the method keyed by the spec and its arguments_。那正是
 > 上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。

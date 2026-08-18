@@ -12,10 +12,10 @@
 - **它領一個 statement**,而宣告也是 statement——所以 `struct` 上的 `#[derive(Eq)]` 與一個綁定上的
   `#[allow(L103)]` 是同一種形式（`statement`、`decorated-decl`,[`GRAMMAR`](../../GRAMMAR) group 1）。**哪一個**
   decorator 能用在哪裡是**語意**規則,而且很短:`#[derive]`、`#[obj]` 與 `#[test]` 講的是**宣告**,放在一般 statement
-  上會被指名拒絕——_E612 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows it, and a
+  上會被指名拒絕——_E2062 `#[derive(Eq)]` applies to the `struct`, `enum` or `spec` that follows it, and a
   statement is not one_。`#[allow(…)]` 才是屬於 statement 的那一個。
 - **一個項目一個 decorator。** 要掛好幾個就寫**逗號列表**——`#[allow(L601), test]`——把一個疊在另一個上是編譯錯誤:
-  _E613 a second decorator on one item — an item takes ONE decorator, so merge them into its comma list_。
+  _E2063 a second decorator on one item — an item takes ONE decorator, so merge them into its comma list_。
   一件事兩種寫法正是 `zerg fmt` 存在的理由,而兩種都合法之後它就無從移除。
 - **它自成一行。** decorator 和其他項目一樣是 statement list 的一個項目,所以有分隔符把它和它所領的項目分開;
   `#[derive(Eq)] struct P` 寫在同一行不是一種形式。
@@ -28,10 +28,10 @@
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`**——已建置,會在一個 `struct` 與一個無欄位 `enum` 上生成正確的 `==` / `!=`——以及 **`Ord`**、
   **`Hash`**、**`Encode`**、**`Decode`**,各自已規範、但 **[not yet]**:指名其中一個是一次乾淨的拒絕,
-  _E436 NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode`
+  _E9054 NotImplemented: `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode`
   are specified and unbuilt_。掛在**帶 payload 的** `enum` 上的 `Eq` 是 **[not yet]**,而且有自己的代碼,
-  _E438 … it carries a payload (`A`), and this compiler derives equality for a fieldless enum_。
-  **沒有自動 derive 的 `Object`**。使用者 spec 不可在 **struct** 上被 derive——`E437`——而在 **`enum`** 上則任何
+  _E9055 … it carries a payload (`A`), and this compiler derives equality for a fieldless enum_。
+  **沒有自動 derive 的 `Object`**。使用者 spec 不可在 **struct** 上被 derive——`E4024`——而在 **`enum`** 上則任何
   spec 都可以,因為生成的 impl 是委派給 payload、而不是讀取結構。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[obj]`** — 掛在 `spec`,不帶參數。生成一個由 function value 組成的**伴生 struct** 與一個**泛型 wrap**,這是
   在「spec 是 bound、從來不是型別」的語言裡寫出異質集合的方式。`mut fn`、收 `This` 的方法,以及任何不是 spec 的東西,
@@ -57,7 +57,7 @@
   它是編譯器**會讀、但從不使用**的那一個 decorator。parser 接受這個名字並且不賦予它任何意義——代碼目錄屬於 linter,
   在編譯器裡放一份副本就是同一個語言事實的第二個落點。因此關於「壓制」本身,由 linter 說兩件事:**L106**（**info**）
   代表它沒有東西可壓,**L107**（**warning**）代表它指名了沒有規則對應的代碼。完全沒點名代碼的 `#[allow]` 則直接被
-  拒絕——_E614_。
+  拒絕——_E2064_。
 
 ## 保留字，以及一個保留名實際上得到什麼
 
@@ -65,14 +65,14 @@
 
 - **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**，外部必須改走
   公開的自訂 constructor（具名關聯 `fn`），而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
-  **[not yet]**，而且有自己的代碼：`E496`。
+  **[not yet]**，而且有自己的代碼：`E9079`。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator，用於對接外部 ABI 時控制記憶體
   寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
 > **[not yet]** layout 那三個是**保留在本頁上、而不保留在編譯器裡**。`#[repr]` 沒有自己的規則：它落進未知
-> decorator 的分支，拿到 _E217 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and
+> decorator 的分支，拿到 _E9005 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and
 > `#[allow(…)]`, and no other_——與拼錯的 `#[frobnicate]` 同一句話。沒有任何東西被默默丟掉；失去的是「等待實作」
-> 與「打錯字」之間的區分，而那正是 `#[sealed]` 的 `E496` 買回來的東西。
+> 與「打錯字」之間的區分，而那正是 `#[sealed]` 的 `E9079` 買回來的東西。
 >
 > **[deviation]** `#[test]` 兩個編譯器都會讀，但**種子在它的檢查器跑之前就把 `#[test]` 函式剝掉**，所以那裡從來
 > 不曾對函式本體做型別檢查，而 `zerg` 與其他函式一視同仁。一個編不過的測試在 `zerg` 底下是編譯錯誤、在 `zerg0`

@@ -278,7 +278,7 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 #
 # `atomic` is the one exclusion and it is not a judgement about the module: it declares
 # `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
-# name (`E511`, chk_unbuilt_module) and there is no program for the linter to be handed. The
+# name (`E9104`, chk_unbuilt_module) and there is no program for the linter to be handed. The
 # entry deletes itself the day a generic struct is built — the same end state CORPUS_SKIP has.
 LINT_SKIP := src/stdlib/atomic.zg
 LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg))

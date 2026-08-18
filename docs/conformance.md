@@ -88,7 +88,7 @@ renderings** of one, because a diagnostic reaches standard error by two routes.
 A rule the **checker** collects reports through the diagnostic list, and that is the full form:
 
 ```text
-error: E335 cannot bind str to a int binding: `x`
+error: E3033 cannot bind str to a int binding: `x`
   --> demo.zg:2:5
    |
  2 |     x: int = "s"
@@ -100,7 +100,7 @@ sentence and — when the site had a place to hand — the trailer, with neither
 quoted line and caret under it:
 
 ```text
-E224 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
+E9011 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
 expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
   --> demo.zg:2:7
 ```
@@ -138,7 +138,7 @@ level in — a place nobody can open, and a name nobody can find. `scripts/rejec
 > the code as an argument and reads the place itself, so a site cannot carry one and forget the other. What
 > is left of this deviation is the **f-string scanner**, whose two raises carry neither — and that is
 > narrower than it was: the lexer's own refusals go through the channel and answer with a code and a
-> place (`E101 a string literal is not closed before the end of the line`, `E104 this character is not
+> place (`E1001 a string literal is not closed before the end of the line`, `E1004 this character is not
 part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc` unterminated and a
 > bare `}` inside an f-string, which answer with a bare sentence and no `error:` prefix at all.
 >
@@ -146,7 +146,7 @@ part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc`
 >
 > Measured today. **The parser is done.** Of its **103** raises, all but one report through its channel. Nine
 > rules that had no code at all — the catch-all _`X` is not an expression this compiler reads_ among them —
-> were given `E601`–`E609`, a gate case each and a catalogue row each. One raise is left with neither on
+> were given `E2054`–`E2059`, a gate case each and a catalogue row each. One raise is left with neither on
 > purpose: `p_impossible`, an arm no program reaches, where a code would be an identity no case could ever
 > assert. What the change was visible as: **31** `no-place` markers retired from `scripts/reject-check.sh`,
 > and `reject-fuzz`'s `write-immutable` ceiling, the parser's last place-less refusal, down to zero.
@@ -155,12 +155,12 @@ part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc`
 > appending a place; all **123** it has now go through `c_diag` / `c_diag_at`, and the three that went
 > stopped raising rather than moved — a struct and an enum record their own position, so a duplicate
 > declaration reaches the checking channel like the other four kinds, and the two rules about a variant a
-> subject cannot hold (`E456`, `E457`) became checked findings for the same reason. Forty-three rules that
-> had no code were given
-> `E701`–`E743`, a gate case each and a catalogue row each; `E4xx` closed at `E498` with `E499` retired
-> unspent, exactly as `E2xx` closed for the parser. **No raise here is exempt.** Two were briefly written
+> subject cannot hold (`E4030`, `E4031`) became checked findings for the same reason. Forty-three rules that
+> had no code were given one each, a gate case each and a catalogue row each; the emitter's range filled and
+> closed with its last number retired unspent, exactly as the parser's had — both of them under the
+> three-digit numbering this catalogue no longer uses. **No raise here is exempt.** Two were briefly written
 > as an ICE on the reasoning that the parser refuses the only shape that reaches them, and both reasonings
-> were wrong — `p_builtin_type_ctor` exempts six names from `E275` and four of them are not reserved, so
+> were wrong — `p_builtin_type_ctor` exempts six names from `E2035` and four of them are not reserved, so
 > `fn set[T](…)` and `set[int, str](1)` reach the arity rule; and `1..=nil` writes out by hand the shape a
 > bare `..=` used to leave behind. An unreachable rule has to be shown unreachable, and neither was.
 > What the change is visible as: **18** more `no-place` markers retired, and `scripts/refuse-check.sh`'s
@@ -181,15 +181,15 @@ part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc`
 > ---
 >
 > **Checked rules are not exempt**, which is the part of this the older text had backwards, and the two
-> that were named here have both moved. A constant cycle (`E732`) reported with no place and no code at
-> all; it opens with its code and points at the first constant that cannot be given a value. `E382`, a name
+> that were named here have both moved. A constant cycle (`E4068`) reported with no place and no code at
+> all; it opens with its code and points at the first constant that cannot be given a value. `E3078`, a name
 > declared twice, reported with a place for some declarations and not for others — a duplicate `type A = …`
 > carried one and a duplicate `struct` did not, because a struct and an enum were registered before
 > anything recorded a position to give it. Both now carry the declaration's own line, and the channel that
 > chose between raising and recording is gone with the reason for it.
 >
 > Two more used to be on that list and are not: `` `x` is used after del `` and its on-some-paths sibling,
-> now `E297` and `E298`. Nothing about the rules changed — they moved from `raise` to the checking channel,
+> now `E2052` and `E2053`. Nothing about the rules changed — they moved from `raise` to the checking channel,
 > which is the only thing that decides the question, and the move is the whole fix.
 >
 > The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
@@ -207,7 +207,7 @@ and never an error reported by the C compiler or the linker against generated co
 > **[deviation]** A form inside a **template nobody instantiates** is neither. Every rule this compiler
 > enforces is driven by the walk that LOWERS a body, and a template is removed before that walk — only the
 > specializations a call asks for are lowered — so `fn f[T](xs: list[T], v: T) { xs.append(v) }` that no call
-> reaches compiles in silence, and so does the same body assigning to an immutable binding, which is `E307`,
+> reaches compiles in silence, and so does the same body assigning to an immutable binding, which is `E3006`,
 > a rule enforced everywhere else. The seed diagnoses both, because its semantic pass walks a **declaration**
 > rather than a lowering. It is one gap owed once and not a property of any one rule. Closing it needs a body
 > checked against a type parameter's **bounds** rather than against a concrete type — `x.show()` on a
@@ -252,7 +252,7 @@ same source to an object file, which is what a module is for.
 > ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
 >
 > None of it is reachable yet. The only surface that asks for a width or a precision is a **format spec in
-> an f-string hole**, and that is `[not yet]` — every `{x:…}`, `{x:.2f}` included, reports _E225
+> an f-string hole**, and that is `[not yet]` — every `{x:…}`, `{x:.2f}` included, reports _E9012
 > NotImplemented: an f-string ':spec' format spec_. The three bounds are implemented in the runtime and the
 > shipping compiler emits no call that reaches them, so this paragraph documents a contract a program
 > cannot yet observe.

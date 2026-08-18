@@ -5,8 +5,8 @@
 # This file used to sit in a package of its own under `tests/`, because `zerg test`
 # compiled a DIRECTORY as one package and `src/stdlib` is a flat directory of eighteen
 # independent modules: a test file dropped beside strings.zg made every other one a source
-# of the same unit, which `atomic.zg` (E215, a generic struct) and the `pub` names two
-# modules share (E705 `is_digit`, in `ascii` and `strconv`) each refused before a single
+# of the same unit, which `atomic.zg` (E9004, a generic struct) and the `pub` names two
+# modules share (E9081 `is_digit`, in `ascii` and `strconv`) each refused before a single
 # test ran. A `*_test.zg` now resolves its package the way an IMPORT is resolved, most
 # specific first, so this file names `strings.zg` and compiles with that module alone.
 #
@@ -172,7 +172,7 @@ fn test_contains_multibyte() {
 
 # --- split ----------------------------------------------------------------------------
 #
-# TWO LISTS CANNOT BE COMPARED — `E445 NotImplemented: `==` on a list[str]`, structural
+# TWO LISTS CANNOT BE COMPARED — `E9057 NotImplemented: `==` on a list[str]`, structural
 # equality over a container being unbuilt — so no claim here can be made about a split's
 # result directly. Every one of them goes back through `join` with a separator the input does
 # not contain, which is the only shape available and which happily doubles as the split/join

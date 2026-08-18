@@ -62,7 +62,7 @@ offers precisely what dispatches through `this` alone — re-boxing a `This`-ret
 
 > **[not yet]** A `spec` cannot be used **as a type** at all, so the three paragraphs above — the heap-boxed
 > existential, its dynamic dispatch, and the member-by-member account of what a box does and does not offer —
-> describe a facility no program can reach. `fn go(g: Greet)` is _E416 NotImplemented: the `spec` `Greet`
+> describe a facility no program can reach. `fn go(g: Greet)` is _E9048 NotImplemented: the `spec` `Greet`
 > used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface here, not yet a value's type;
 > take the concrete type, or a generic parameter bounded by it_. A `spec` fills two of its three roles here
 > and not the third; the same
@@ -93,7 +93,7 @@ so an implementation can be neither hidden nor duplicated — it is in effect ex
 and its spec are visible. Implementations are written for a **concrete or generic type** — `list[T]` may
 implement `Iterator`.
 
-> **[not yet]** An `impl` whose **target carries type arguments** is _E292 NotImplemented: an `impl` on
+> **[not yet]** An `impl` whose **target carries type arguments** is _E9038 NotImplemented: an `impl` on
 > `list[int]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare
 > name, so every instantiation of `list` would share one_ — and it is both of the shapes
 > `GRAMMAR#impl-decl` derives, the parameterized `impl[T] Spec for list[T]` and the fully concrete
@@ -142,7 +142,7 @@ fn draw_obj[T: Draw](v: T) -> DrawObj {
 ```
 
 Two fences rather than one, because they are two spellings of the same declarations and not a program that
-holds both: writing them together is _E382 `DrawObj` is declared twice_.
+holds both: writing them together is _E3078 `DrawObj` is declared twice_.
 
 **The openness comes from the wrap point**, not from anything at run time: `draw_obj` is monomorphized
 per implementer, and what comes back has one type. So `list[DrawObj]` is heterogeneous with **no vtable,
@@ -158,7 +158,7 @@ Three shapes are **refused**, by the same test the delegating `derive` uses — 
 - anything that is **not a spec**: there are no methods to hold.
 
 > **[not yet]** A type cannot implement both. `impl A for P` and `impl B for P` where each spec declares
-> `go` is refused at the **second declaration** — _E451 `P` declares `go` twice — every method on a type
+> `go` is refused at the **second declaration** — _E4025 `P` declares `go` twice — every method on a type
 > shares one namespace, spec or inherent alike_ — so the narrowing remedy below has no program to apply to.
 > The refusal is the same one that keeps a derived and a hand-written `Eq` from coexisting, applied one
 > case too wide.
@@ -222,7 +222,7 @@ ambiguous** — only a bare use on a value with several impls is. For a choice m
 than by the argument's type, use an `enum` instead.
 
 > **[not yet]** A parameterized spec may be implemented at **one** argument, not several, which is the whole
-> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _E451 `C`
+> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _E4025 `C`
 > declares `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
 > canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
 > with the first instead of being told apart by the very argument that is supposed to distinguish them. The
@@ -243,7 +243,7 @@ never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `an
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
 [Null-safety & Errors](../code/errors.md)). This phase, **that is the only implemented use** — `is` works on the
 built-in error taxonomy, while the general existential test `x is T` for a
-**non-error** type is **[not yet]**: _E494 NotImplemented: `is P` — an `is` test names one of the built-in
+**non-error** type is **[not yet]**: _E9078 NotImplemented: `is P` — an `is` test names one of the built-in
 error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
 than the grammar writes_.
 
@@ -267,7 +267,7 @@ A spec's methods come in two kinds:
   `(type, spec)` implementation stays canonical either way.
 
 > **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
-> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
+> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
 > nothing in it is checked and it is not the method that runs; declare the signature and write the body in
 > each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
 > the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
@@ -276,11 +276,11 @@ A spec's methods come in two kinds:
 >
 > **[not yet]** A signature may be **`unsafe`** — `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so
 > `unsafe fn peek() -> int` inside a `spec` is a member — and this compiler does not build it. It is read to
-> the end of the signature and refused as itself: _E287 NotImplemented: the `unsafe` `spec` signature `peek`_,
-> with the place. The reason is the one a standalone `unsafe fn` gets (`E264`): the trust boundary the keyword
+> the end of the signature and refused as itself: _E9036 NotImplemented: the `unsafe` `spec` signature `peek`_,
+> with the place. The reason is the one a standalone `unsafe fn` gets (`E9027`): the trust boundary the keyword
 > marks is not enforced ([FFI](../runtime/ffi.md)), and reading the signature as a safe one would erase the
 > only thing `unsafe` says. Everything that starts **no** member at all — `unsafe { … }` in a spec body among
-> them — still gets `E276`.
+> them — still gets `E2036`.
 
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
@@ -336,7 +336,7 @@ which no spec demanded and **none can require** — a spec that wanted one would
 the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
 (`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** `NAME := 32` inside an `impl` reports _E218 NotImplemented: an associated value binding
+> **[not yet]** `NAME := 32` inside an `impl` reports _E9006 NotImplemented: an associated value binding
 > `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
 > fixed-array size that a type constant was to supply is written as a module-level constant instead.
 
@@ -352,16 +352,16 @@ else is a spec a type **opts into**, a generic bound gating on it:
 
 - **`Eq`** — structural equality, driving `==` / `!=`, gained by `#[derive(Eq)]` or a hand-written
   `impl Eq`; a channel or `fn` field compares by identity. It requires **both** `eq` and `ne` — an impl
-  supplying only one is _E318 `P` does not implement `ne`, which `Eq` requires_ — because `!=` is
+  supplying only one is _E3017 `P` does not implement `ne`, which `Eq` requires_ — because `!=` is
   dispatched, not derived by negating `==`. A type with **no `Eq` impl cannot be compared** — `==` on it
   is a compile error, never a silent structural default.
 
   > **[not yet]** A **container** cannot gain one at all, which is the rule met from a direction it has no
-  > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E445 NotImplemented: `==` on a
+  > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E9057 NotImplemented: `==` on a
   > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
   > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
   > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
-  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E449`,
+  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E9059`,
   > one operator over.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
@@ -374,9 +374,9 @@ tests) — "what concrete type is boxed here?", never "are these two the same va
 > **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Ord`, `Hash`, `Error`,
 > `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
-> `impl Ord for P` reports _error: E314 no spec named `Ord`_, the ordinary message for a spec nobody wrote,
+> `impl Ord for P` reports _error: E3013 no spec named `Ord`_, the ordinary message for a spec nobody wrote,
 > and `impl BitAnd for P` reports it too. The USE side is refused by the operator rather than by the spec:
-> `P(1) < P(2)` reports _E346 operator `<` orders two numbers or two strs, and these are P and P_, which
+> `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and these are P and P_, which
 > names the operand types and says nothing about the missing `Ord`. Several of the **behaviours** are built
 > in and reachable without their spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err`
 > names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted

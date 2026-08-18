@@ -46,7 +46,7 @@ op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可�
 
 > **[not yet]** `spec` 根本不能**當型別用**,所以上面那三段——heap-boxed 的 existential、它的動態 dispatch、以及逐個
 > 成員交代 box 提供什麼、不提供什麼——講的是一套沒有程式到得了的機制。`fn go(g: Greet)` 會被拒絕、報
-> _E416 NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
+> _E9048 NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
 > here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
 > 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
 > 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
@@ -70,7 +70,7 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 ——`list[T]` 可以實作 `Iterator`。
 
-> **[not yet]** 目標**帶著型別引數**的 `impl` 是 _E292 NotImplemented: an `impl` on `list[int]` — a type
+> **[not yet]** 目標**帶著型別引數**的 `impl` 是 _E9038 NotImplemented: an `impl` on `list[int]` — a type
 > ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every
 > instantiation of `list` would share one_,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
 > `impl[T] Spec for list[T]` 以及完全具體的
@@ -113,7 +113,7 @@ fn draw_obj[T: Draw](v: T) -> DrawObj {
 ```
 
 分成兩段 fence 而不是一段,因為它們是同一組宣告的兩種寫法、不是一支同時裝著兩者的程式:寫在一起是
-_E382 `DrawObj` is declared twice_。
+_E3078 `DrawObj` is declared twice_。
 
 **開放性來自包裝點**,不是來自執行期的任何東西:`draw_obj` 針對每個實作者 monomorphize,回來的東西只有一個
 型別。所以 `list[DrawObj]` 是異質的,而且**沒有 vtable、沒有任何值帶 header、也沒有 downcast**——你可以呼叫
@@ -126,7 +126,7 @@ spec 宣告的東西,不能問裡面裝的是什麼。需要問的時候,答案�
 - **不是 spec** 的東西:沒有方法可以持有。
 
 > **[not yet]** 型別同時實作兩者是做不到的。當兩個 spec 各自宣告 `go` 時,`impl A for P` 與 `impl B for P` 會在
-> **第二個宣告**處被拒絕——_E451 `P` declares `go` twice — every method on a type shares one namespace, spec or
+> **第二個宣告**處被拒絕——_E4025 `P` declares `go` twice — every method on a type shares one namespace, spec or
 > inherent alike_——所以下面那個「把靜態脈絡收窄到單一 spec」的解法沒有程式可以套用。這條拒絕就是讓 derived 與
 > 手寫 `Eq` 不能並存的同一條,只是多管了一格。
 
@@ -175,7 +175,7 @@ impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { 
 ——只有「對一個有多個實作的值做裸使用」才會。要在**執行期**、而非依引數型別做選擇，就改用 `enum`。
 
 > **[not yet]** 一個帶參數的 spec 只能在**一個**引數上被實作,不能同時在好幾個上——而那正是本節存在的全部意義。
-> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _E451 `C` declares `ix` twice — every method on a type
+> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _E4025 `C` declares `ix` twice — every method on a type
 > shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
 > **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
 > `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
@@ -192,7 +192,7 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
 (見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
 ——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
-存在性測試 `x is T` 是 **[not yet]**:_E494 NotImplemented: `is P` — an `is` test names one of the built-in
+存在性測試 `x is T` 是 **[not yet]**:_E9078 NotImplemented: `is P` — an `is` test names one of the built-in
 error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
 than the grammar writes_。
 
@@ -213,7 +213,7 @@ spec 的 method 分兩種：
   實作無論如何都保持 canonical。
 
 > **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
-> _E210 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
+> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
 > it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
 > 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
 > method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
@@ -221,10 +221,10 @@ spec 的 method 分兩種：
 >
 > **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
 > `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
-> 拒絕：_E287 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
-> （`E264`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
+> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
+> （`E9027`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
 > 來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
-> 在其中——仍然拿到 `E276`。
+> 在其中——仍然拿到 `E2036`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
@@ -267,7 +267,7 @@ shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型�
 spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
 impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E218 NotImplemented: an associated value binding `BITS := …` in
+> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E9006 NotImplemented: an associated value binding `BITS := …` in
 > an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
 > 改寫成 module 層的常數。
 
@@ -281,14 +281,14 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
 
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
   比較。它**同時要求** `eq` 與 `ne`——只給其中一個的 impl 會得到
-  _E318 `P` does not implement `ne`, which `Eq` requires_——因為 `!=` 是被分派的,不是靠對 `==` 取反導出的。
+  _E3017 `P` does not implement `ne`, which `Eq` requires_——因為 `!=` 是被分派的,不是靠對 `==` 取反導出的。
   一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
 
   > **[not yet]** 一個**容器**根本取得不到它,而這正是那條規則從一個它答不上來的方向被碰到:兩個 `list`、兩個
-  > `map` 或兩個 tuple 的 `xs == ys` 是 _E445 NotImplemented: `==` on a `list[int]` — structural equality over
+  > `map` 或兩個 tuple 的 `xs == ys` 是 _E9057 NotImplemented: `==` on a `list[int]` — structural equality over
   > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
   > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
-  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E449` 的是
+  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E9059` 的是
   > 同一個洞,只差一個運算子。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
@@ -299,9 +299,9 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 > **[not yet]** 本節所描述的內建 spec 裡,恰好只有兩個被宣告出來:上面的 **`Eq`**,以及 **`Into[T]`**
 > （見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Ord`、`Hash`、`Error`、`Iterator` / `Iterable`、
 > sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、`Not`、`Shl`、
-> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: E314 no spec named `Ord`_,也就是
+> `Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Ord for P` 報 _error: E3013 no spec named `Ord`_,也就是
 > 「沒有人寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。**使用**那一側則是被運算子、而不是被
-> spec 擋下:`P(1) < P(2)` 報的是 _E346 operator `<` orders two numbers or two strs, and these are P and P_,
+> spec 擋下:`P(1) < P(2)` 報的是 _E3044 operator `<` orders two numbers or two strs, and these are P and P_,
 > 它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個所描述的**行為**是內建的、不經那個
 > spec 也到得了——`int` 上的 `<`、`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
 > `chan` 的 refcounted 關閉——但它們由編譯器

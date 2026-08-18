@@ -239,7 +239,7 @@ unchanged.
 
 `v` and not `_`, which is the part a rule would have to get right: `GRAMMAR`'s `_ if _ in …` is
 notation for an arm that does not BIND, and the second `_` is not a name a guard can read
-(_E372 undefined name `_`\_). Writing the core form means inventing a binder the source never had,
+(_E3069 undefined name `_`\_). Writing the core form means inventing a binder the source never had,
 and one that must not collide with anything the arm's body already names.
 
 ## The gates

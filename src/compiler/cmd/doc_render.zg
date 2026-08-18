@@ -555,10 +555,18 @@ fn doc_wrap(mut &out: list[str], text: str, indent: int) {
 
 # doc_fill is the greedy fill itself, answering unindented lines of at most `width` columns.
 #
-# A PIECE LONGER THAN THE BUDGET STANDS ON ITS OWN LINE AND IS NEVER CUT. What is long is a
-# URL, a path, or a piece of inline code, and each of those is a thing a reader copies: a break
-# inserted in the middle of one produces text that looks right and does not work. Overrunning
-# the margin is the visible failure, and the visible one is the right one to have.
+# A PIECE LONGER THAN THE BUDGET IS NEVER CUT. What is long is a URL, a path, or a piece of
+# inline code, and each of those is a thing a reader copies: a break inserted in the middle of
+# one produces text that looks right and does not work. Overrunning the margin is the visible
+# failure, and the visible one is the right one to have.
+#
+# IT DOES NOT START A LINE EITHER. The break exists to bring a line inside the budget, and a
+# piece that overruns wherever it lands is a piece no break can bring inside — so breaking in
+# front of one buys nothing and costs a short line above it. `note: ` and a deep path is the
+# case that showed it: the path was three characters over on its own line and `note:` sat alone
+# above it, a lead with nothing after it and a document that looks broken where it is only
+# wide. The line it joins must not have overrun already, or a run of long pieces would collect
+# on one line without end.
 fn doc_fill(text: str, width: int) -> list[str] {
 	mut out: list[str] = []
 	mut line := ""
@@ -570,7 +578,7 @@ fn doc_fill(text: str, width: int) -> list[str] {
 			n = k
 			continue
 		}
-		if n + p.gap + k > width {
+		if n + p.gap + k > width and (k <= width or n > width) {
 			out.append(line)
 			line = p.text
 			n = k

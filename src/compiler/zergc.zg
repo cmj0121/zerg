@@ -1,9 +1,10 @@
 # zerg — the self-hosting Zerg compiler.
 #
-# Six commands — build, test, fmt, lint, desugar, lsp — and the flags every tool owes its
-# user: --help, --version, and --emit to stop after a stage. There are six because there
-# are six JOBS: compiling is one of them however far along the pipeline you stop it, so the
-# token stream, the tree, and the C are `--emit` values rather than commands of their own.
+# Seven commands — build, test, fmt, lint, desugar, doc, lsp — and the flags every tool owes
+# its user: --help, --version, and --emit to stop after a stage. There are seven because
+# there are seven JOBS: compiling is one of them however far along the pipeline you stop it,
+# so the token stream, the tree, and the C are `--emit` values rather than commands of their
+# own.
 #
 # `lsp` is the same compiler answering an editor rather than a shell. One binary and not
 # two: a sub-command makes version skew between the compiler and the server physically
@@ -20,6 +21,14 @@
 # picks `return x if c` over the block. `zerg desugar` writes the core form the sugar is
 # defined as, which is a source nobody commits: it exists so the two spellings can be
 # built and compared. A flag would have made one command mean both.
+#
+# `doc` is a command of this compiler rather than a generator standing beside it because a
+# module's documentation is READ OUT OF ITS SOURCE — the comments the file already carries,
+# found by the same lexer that compiles it and attached to the declarations the same parser
+# produced. A separate tool would be a second reader of the language, and on the day the two
+# disagreed the published document would be describing a program that does not exist. It is
+# also why `doc` builds nothing: reading a module is not importing one, so it can show the
+# module this compiler refuses to compile.
 #
 # The command line is DECLARED with the stdlib `cli` module — each command with its own
 # arguments and the function it runs — so the help text is generated from the same
@@ -74,6 +83,7 @@ fn root() -> cli.Command {
 		.sub(cmd.fmt_cmd())
 		.sub(cmd.lint_cmd())
 		.sub(cmd.desugar_cmd())
+		.sub(cmd.doc_cmd())
 		.sub(cmd.lsp_cmd())
 	)
 }

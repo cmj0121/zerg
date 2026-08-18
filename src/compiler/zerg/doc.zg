@@ -195,14 +195,23 @@ pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 	return DocModule(name, header, decls, broken)
 }
 
-# doc_find answers WHERE in `m.decls` the named declaration is, and -1 when it is not there.
-# `name` is `split` or `Logger.level` — a method is reached by the same key the renderer
-# groups it under, and the comparison is case sensitive because an identifier is.
+# doc_find answers WHERE in `m.decls` the named declaration is. `name` is `split` or
+# `Logger.level` — a method is reached by the same key the renderer groups it under, and the
+# comparison is case sensitive because an identifier is.
 #
-# It answers an INDEX rather than a `DocDecl?` so that the caller can render the hit together
+# It answers EVERY declaration with that key, not the first. One key can name two declarations:
+# a module may hold `pub struct Pair` and `pub fn Pair`, which `zerg lint` accepts and which
+# the language keeps apart by position, and a directory module is several files whose names
+# only have to be unique to the linker. Answering the first one in source order made the second
+# unreachable AND unmentioned — `zerg doc mod.Pair` printed the struct and said nothing about
+# the function — which is the silent omission this whole tool exists to prevent. What to do
+# with two answers is the command's; what there are is this.
+#
+# It answers INDICES rather than `DocDecl` rows so that the caller can render a hit together
 # with what belongs to it: a type's entry is the type plus the methods that follow it in the
 # same list, which needs the position and not just the row.
-pub fn doc_find(m: DocModule, name: str) -> int {
+pub fn doc_find(m: DocModule, name: str) -> list[int] {
+	mut out: list[int] = []
 	mut i := 0
 	for i < m.decls.len() {
 		d := m.decls[i]
@@ -210,10 +219,12 @@ pub fn doc_find(m: DocModule, name: str) -> int {
 		if d.recv != "" {
 			key = f"{d.recv}.{d.name}"
 		}
-		return i if key == name
+		if key == name {
+			out.append(i)
+		}
 		i = i + 1
 	}
-	return -1
+	return out
 }
 
 # doc_first_sentence is the one-line summary that a brief listing and a module index both

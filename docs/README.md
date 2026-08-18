@@ -87,7 +87,7 @@ and each becomes an object that one link puts together. That is what `-j` parall
 | `make oracle`   | the seed and `zerg` agree about a valid program                       |
 | `make corpus`   | every case in the corpus prints what it must                          |
 | `make refuse`   | a form `zerg` has not built is named by the compiler, not by `cc`     |
-| `make ci`       | the whole board, in order                                             |
+| `make test`     | the whole board, in order                                             |
 
 The **runtime** (`src/runtime/csrc`, C) and the **standard library** (`src/stdlib`, pure Zerg over
 that runtime) are built into whatever the compiler compiles, not into the compiler — see

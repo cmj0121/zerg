@@ -85,7 +85,7 @@ hello.zg → lex → parse → check → 產生 C（C17）→ cc → ./hello
 | `make oracle`   | 種子與 `zerg` 對一個合法程式的看法一致                  |
 | `make corpus`   | corpus 裡的每個案例都印出它該印的                       |
 | `make refuse`   | `zerg` 還沒實作的形式由編譯器具名拒絕，而不是由 `cc` 報 |
-| `make ci`       | 整塊看板，依序跑一遍                                    |
+| `make test`     | 整塊看板，依序跑一遍                                    |
 
 **runtime**（`src/runtime/csrc`，C）與**標準函式庫**（`src/stdlib`，架在該 runtime 上的純 Zerg）是被
 編進「編譯器所編譯的程式」裡，而不是編進編譯器裡——見[模組](runtime/package.zh-TW.md)與

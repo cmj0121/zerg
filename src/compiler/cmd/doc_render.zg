@@ -16,12 +16,21 @@
 # strings | less` would disagree about where the text is, and a gate over either says nothing
 # about the other.
 #
-# THE FILL IS MEASURED IN RUNES. A byte count reads the em-dash that opens every stdlib header
-# as three columns and wraps the line early, which is visible in the output as prose that
-# stops short of the margin for no reason a reader can see. The known approximation is the
-# other direction: a full-width CJK glyph occupies two terminal columns and is counted as one.
-# No wcwidth table is carried for it — the stdlib's comments are English, and a table that
-# large is a dependency this file would be the only caller of.
+# THE FILL IS MEASURED IN DISPLAY COLUMNS, which is neither of the two counts that are easy to
+# reach for. A byte count reads the em-dash that opens every stdlib header as three columns and
+# wraps the line early, which is visible in the output as prose that stops short of the margin
+# for no reason a reader can see. A rune count errs the other way and worse: a full-width CJK
+# glyph occupies two terminal columns, so a comment written in Chinese fills to 80 runes and
+# prints at up to 160 columns — off the edge of the terminal the document was laid out for. It
+# is not a hypothetical comment either, in a tree whose every `docs/*.md` has a zh-TW twin.
+#
+# WHAT `doc_rune_width` COVERS is East Asian Wide and Fullwidth, block by contiguous block,
+# each one named at the function. What it counts as one column, knowing better, is everything
+# that would need a table rather than a block: the scattered single code points the standard
+# also calls Wide (the arrows, the dingbats, the emoji), a combining mark and a zero-width
+# joiner, which take no columns at all, and a grapheme cluster spelled with several code points.
+# Those tables are the dependency this file would be the only caller of; the blocks are what
+# text written in Chinese, Japanese or Korean is made of, and they are what this file is held to.
 #
 # WHAT IT DELIBERATELY IS NOT:
 #
@@ -198,7 +207,7 @@ fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 
 	mut w := 0
 	for m in mods {
-		n := doc_runes(m.name)
+		n := doc_width(m.name)
 		if n > w {
 			w = n
 		}
@@ -215,7 +224,7 @@ fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 			continue
 		}
 
-		out.append(blanks(2) + doc_bold(m.name, col) + blanks(at - 2 - doc_runes(m.name)) + rows[0])
+		out.append(blanks(2) + doc_bold(m.name, col) + blanks(at - 2 - doc_width(m.name)) + rows[0])
 		mut k := 1
 		for k < rows.len() {
 			out.append(blanks(at) + rows[k])
@@ -495,7 +504,7 @@ fn doc_wrap(mut &out: list[str], text: str, indent: int) {
 	}
 }
 
-# doc_fill is the greedy fill itself, answering unindented lines of at most `width` runes.
+# doc_fill is the greedy fill itself, answering unindented lines of at most `width` columns.
 #
 # A WORD LONGER THAN THE BUDGET STANDS ON ITS OWN LINE AND IS NEVER CUT. What is long is a URL,
 # a path, or a piece of inline code, and each of those is a thing a reader copies: a break
@@ -506,7 +515,7 @@ fn doc_fill(text: str, width: int) -> list[str] {
 	mut line := ""
 	mut n := 0
 	for w in doc_words(text) {
-		k := doc_runes(w)
+		k := doc_width(w)
 		if line == "" {
 			line = w
 			n = k
@@ -681,8 +690,41 @@ fn doc_methods_of(m: zerg.DocModule, name: str) -> list[int] {
 	return out
 }
 
-# doc_runes is a string's width in terminal columns, as measured here — see the file header for
-# the one case where that measurement is an approximation.
-fn doc_runes(s: str) -> int {
-	return runearray(s).len()
+# doc_width is a string's width in terminal columns: every code point asked how wide it is, and
+# the answers added up. Neither the byte count nor the rune count is that number — see the file
+# header for what each of them gets wrong, and which way.
+fn doc_width(s: str) -> int {
+	mut n := 0
+	for r in runearray(s) {
+		n = n + doc_rune_width(r)
+	}
+	return n
+}
+
+# doc_rune_width is one code point's width, and it is the whole of what this file knows about
+# the shape of a character: two columns for East Asian Wide and Fullwidth, one for everything
+# else. The blocks are listed in code point order, and the comment beside each is the name the
+# standard gives it — so a reader can check the list against Unicode's East_Asian_Width without
+# reading the arithmetic, and adding a block is adding a line.
+#
+# The file header says what is deliberately left at one column and why. The short of it: a block
+# is a comparison and a scattered code point is a table.
+fn doc_rune_width(r: rune) -> int {
+	c := int(r)
+	return 2 if c >= 0x1100 and c <= 0x115F   # Hangul Jamo initial consonants
+	return 2 if c >= 0x2E80 and c <= 0x303E   # CJK radicals, Kangxi radicals, CJK punctuation
+	return 2 if c >= 0x3041 and c <= 0x33FF   # kana, Bopomofo, Hangul jamo, enclosed CJK
+	return 2 if c >= 0x3400 and c <= 0x4DBF   # CJK unified ideographs extension A
+	return 2 if c >= 0x4E00 and c <= 0x9FFF   # CJK unified ideographs
+	return 2 if c >= 0xA000 and c <= 0xA4CF   # Yi syllables and Yi radicals
+	return 2 if c >= 0xA960 and c <= 0xA97F   # Hangul Jamo extended-A
+	return 2 if c >= 0xAC00 and c <= 0xD7A3   # Hangul syllables
+	return 2 if c >= 0xF900 and c <= 0xFAFF   # CJK compatibility ideographs
+	return 2 if c >= 0xFE10 and c <= 0xFE19   # vertical forms
+	return 2 if c >= 0xFE30 and c <= 0xFE6F   # CJK compatibility forms, small form variants
+	return 2 if c >= 0xFF00 and c <= 0xFF60   # fullwidth ASCII forms
+	return 2 if c >= 0xFFE0 and c <= 0xFFE6   # fullwidth currency and other signs
+	return 2 if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
+
+	return 1
 }

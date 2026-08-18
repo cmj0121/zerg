@@ -60,6 +60,16 @@ const DOC_WIDTH := 80
 const DOC_UNSAFE := "unsafe "
 const DOC_MUT := "mut "
 
+# What a file's section says when the file says nothing: no header of its own and no exposed
+# declaration under it. `zerg doc examples` was twelve headings with nothing beneath them, and
+# a heading with nothing beneath it reads as a rendering that broke rather than as a file with
+# no surface — the same failure `(undocumented)` exists to keep a declaration out of.
+#
+# IT CARRIES NO COLOUR, unlike `(undocumented)`. Four spans take colour in this document and
+# the chapter counts them; a fifth would be a rendering decision made here and written down
+# nowhere.
+const DOC_NOTHING := "(nothing exposed)"
+
 # --- the device ---------------------------------------------------------------------------
 
 # doc_colour answers whether this run may use colour, which is `log.env_colour`'s convention
@@ -165,6 +175,11 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 		for k in fns {
 			doc_entry(out, m.decls[k], 2, brief, col)
 		}
+	}
+
+	if f.ok and f.header.len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
+		doc_gap(out)
+		out.append(DOC_NOTHING)
 	}
 }
 

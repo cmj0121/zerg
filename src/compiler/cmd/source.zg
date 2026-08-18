@@ -7,6 +7,7 @@
 # it kept in step by hand is the one thing this module exists to prevent.
 
 import (
+	"ascii"
 	"io"
 
 	"zerg"
@@ -223,19 +224,47 @@ fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
 # ways. It is an empty list rather than a raise because there is no place to raise at and the
 # caller's sentence is already written: no such module, and here is what I can see.
 #
-# AN EMPTY LAST SEGMENT IS NOT A NAME. `module_at`'s directory arm asks whether `<root>/<name>`
-# exists, and for an empty name that is the root — so `module_sources("", …)` used to answer
-# with the whole standard library as one module. `module_files` cannot reach this, a parser
-# guaranteeing an import path is non-empty; asking BY NAME is what opens it, and `zerg doc
-# strings/` is the same shape arriving through the last-segment alias.
+# A MODULE NAME IS AN IDENTIFIER, and a last segment that is not one names no module.
+# `module_at`'s directory arm asks whether `<root>/<name>` exists, and the filesystem answers
+# yes to more names than the language does: the empty one is the root, `.` is the root again,
+# and `..` is whatever stands above it. So `module_sources("", …)` used to answer with the
+# whole standard library as one module — and `zerg doc .`, which a reader types meaning
+# "document what is here", answered with the same two thousand lines through the same door,
+# while `zerg doc ..` read the parent directory. Refusing the empty segment alone closed one
+# spelling of one bug and left its family standing.
+#
+# `module_files` cannot reach any of them, a parser guaranteeing an import path is non-empty
+# and quoted; asking BY NAME is what opens it, and `zerg doc strings/` is the empty spelling
+# arriving through the last-segment alias.
 pub fn module_sources(name: str, from_dir: str) -> list[str] {
 	mut none: list[str] = []
 	seg := path_tail(name)
 
-	return none if seg == ""
+	return none if not is_module_name(seg)
 	return none if zerg.is_test_file(seg + ".zg")
 
 	return resolve_module(name, from_dir, from_dir)
+}
+
+# is_module_name reports whether one segment is a name the language would let a module have.
+# A module's name is the namespace an import binds, and a namespace is spelled `identifier`
+# (GRAMMAR#import-spec, whose `as` clause renames it with one) — a letter or `_` followed by
+# letters, digits and `_` (GRAMMAR#identifier). It is asked of the LAST segment because that is
+# the segment that is the name: the one the namespace is bound from, and the one the alias
+# above retries a whole path at.
+fn is_module_name(seg: str) -> bool {
+	b := bytearray(seg)
+
+	return false if b.len() == 0
+	return false if not ascii.is_alpha(b[0]) and b[0] != b'_'
+
+	mut i := 1
+	for i < b.len() {
+		return false if not ascii.is_alnum(b[i]) and b[i] != b'_'
+
+		i = i + 1
+	}
+	return true
 }
 
 # stdlib_modules is every module name the standard library holds, in the sorted order the

@@ -35,6 +35,15 @@
 # are escapes": the terminal's output with its colour taken back off has to be the piped
 # output, byte for byte, or redirecting `zerg doc` into a file has changed the document.
 #
+# §7 is the width of the page, which nothing above measures. The fill is laid out to 80
+# columns and was counted in RUNES, so a full-width CJK glyph — two terminal columns — was
+# counted as one and a paragraph in Chinese printed at up to 160 columns, off the right edge
+# of the terminal it was laid out for. §6 cannot see that: it compares the two devices to each
+# other and says nothing about how wide either one is. The tree makes the case an ordinary
+# one rather than a hypothetical — every `docs/*.md` here has a zh-TW twin — while the standard
+# library contains not one comment in Chinese, so the fixture is beside §5's for the same
+# reason.
+#
 # FLOORS, like every other gate here. An extraction that stops matching finds nothing, and
 # nothing satisfies every claim above — the comparison passes, each fixture rule is vacuous,
 # and the gate reports success for having measured no declarations at all. So the module
@@ -62,8 +71,16 @@ ZERG="${ZERG:-./bin/zerg}"
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
-MIN_CHECKS="${MIN_CHECKS:-42}"
-MIN_RULES="${MIN_RULES:-24}"
+MIN_CHECKS="${MIN_CHECKS:-45}"
+MIN_RULES="${MIN_RULES:-25}"
+
+# The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
+# again here because §7 is the second opinion about it and a second opinion that read the
+# number out of the source would be the same opinion. `MIN_FILLED` is that section's own
+# floor: a document laid out at one word per line satisfies "no line is too wide" by never
+# having filled a line at all.
+DOC_COLUMNS="${DOC_COLUMNS:-80}"
+MIN_FILLED="${MIN_FILLED:-70}"
 
 [ -x "$ZERG" ] || {
 	printf 'doc-check: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -506,6 +523,105 @@ else
 	printf 'doc-check: no `script` on this host, so the terminal half of §6 was not run\n' >&2
 fi
 
+# --- 7. a comment in Chinese lays out inside the page ------------------------------------
+#
+# The document is filled to a number of COLUMNS, and a column is not a character: a
+# full-width glyph takes two of them. Every assertion above is about which text is in the
+# document and none is about where the right edge of it falls, so a fill that counted
+# characters wrapped a Chinese paragraph at 80 of them and printed 160 columns of it.
+#
+# The width is counted in `perl`, which is on both platforms this repository builds on. It is
+# not counted in `awk` because `length` there counts BYTES in the awk macOS ships and
+# CHARACTERS in the gawk Linux ships, and neither of those is columns; and a host with no
+# perl is TOLD so rather than passed over, because a gate whose whole subject is the width of
+# a character cannot report success from a machine that could not measure one. The block list
+# below is the same list `doc_rune_width` carries, written out a second time on purpose: the
+# assertion is that the renderer applied it, and a check that asked the renderer what it
+# thought a column was would be the renderer agreeing with itself.
+cat >"$tmp/proj/width.zg" <<'ZG'
+# width — 一份用中文寫成的 module,它量的是文件的欄寬。
+#
+# 全形字在終端機上佔兩欄。一段以「字數」折行的文字會折到八十個字,印出來卻是一百六十欄,
+# 整份文件因此跑出終端機的右緣;以顯示欄寬折行的則每一行都落在八十欄以內。這一段刻意寫得
+# 夠長,長到只要折行是以字數計算就一定有一行超出,而 zerg doc 的排版正是這裡在量的東西。
+
+# LIMIT 是這份文件量出來的欄數。
+pub const LIMIT: int = 80
+
+# label 回答一個標籤。它的說明也是中文的,而且夠長:縮排六欄之後的內文仍然必須折行,折在
+# 哪一個字上才是這道 gate 真正在看的東西,而 terminal 與 column 這類西文詞夾在其中,讓貪
+# 心填字有得選。
+pub fn label() -> str {
+	return "寬"
+}
+ZG
+"$ZERG" doc "$tmp/proj/width.zg" >"$tmp/width.out" 2>&1
+grep -q '^note: ' "$tmp/width.out" &&
+	note "the width fixture does not parse, so the page below was measured on an empty document: $(grep -m1 '^note: ' "$tmp/width.out")"
+
+# THE FIXTURE'S OWN TEXT IS IN THE DOCUMENT. A header that failed to render leaves a file
+# whose every line is inside the budget for holding no Chinese at all.
+grep -q '^width — 一份用中文寫成的 module' "$tmp/width.out" ||
+	note 'the Chinese module header is not the first line of its document'
+checks=$((checks + 1))
+
+if command -v perl >/dev/null 2>&1; then
+	# widest <file> — the widest line in display columns, and how many lines are over the
+	# budget, as two numbers on one line.
+	widest() {
+		perl -CSD -e '
+			my $budget = shift;
+			my ($max, $over) = (0, 0);
+			while (<>) {
+				chomp;
+				my $w = 0;
+				for my $c (split //) {
+					my $o = ord $c;
+					$w += (($o >= 0x1100 && $o <= 0x115F)     # Hangul Jamo initial consonants
+						|| ($o >= 0x2E80 && $o <= 0x303E)     # CJK radicals, Kangxi, CJK punctuation
+						|| ($o >= 0x3041 && $o <= 0x33FF)     # kana, Bopomofo, Hangul jamo, enclosed CJK
+						|| ($o >= 0x3400 && $o <= 0x4DBF)     # CJK unified ideographs extension A
+						|| ($o >= 0x4E00 && $o <= 0x9FFF)     # CJK unified ideographs
+						|| ($o >= 0xA000 && $o <= 0xA4CF)     # Yi syllables and Yi radicals
+						|| ($o >= 0xA960 && $o <= 0xA97F)     # Hangul Jamo extended-A
+						|| ($o >= 0xAC00 && $o <= 0xD7A3)     # Hangul syllables
+						|| ($o >= 0xF900 && $o <= 0xFAFF)     # CJK compatibility ideographs
+						|| ($o >= 0xFE10 && $o <= 0xFE19)     # vertical forms
+						|| ($o >= 0xFE30 && $o <= 0xFE6F)     # CJK compatibility and small forms
+						|| ($o >= 0xFF00 && $o <= 0xFF60)     # fullwidth ASCII forms
+						|| ($o >= 0xFFE0 && $o <= 0xFFE6)     # fullwidth currency and other signs
+						|| ($o >= 0x20000 && $o <= 0x3FFFD))  # CJK ideographs, planes 2 and 3
+						? 2 : 1;
+				}
+				$max = $w if $w > $max;
+				$over++ if $w > $budget;
+			}
+			print "$max $over\n";
+		' "$1" "$2"
+	}
+
+	read -r wide_max wide_over <<EOF
+$(widest "$DOC_COLUMNS" "$tmp/width.out")
+EOF
+
+	if [ "${wide_over:-1}" -eq 0 ]; then
+		checks=$((checks + 1))
+		rules=$((rules + 1))
+	else
+		note "$wide_over lines of the Chinese document are wider than $DOC_COLUMNS columns, the widest at $wide_max — the fill is counting characters and a full-width glyph is two columns"
+	fi
+
+	# and the document did fill: the widest line has to come close to the budget, or the
+	# assertion above passed for having laid nothing out.
+	if [ "${wide_max:-0}" -ge "$MIN_FILLED" ]; then
+		checks=$((checks + 1))
+	else
+		note "the widest line of the Chinese document is $wide_max columns and the floor is $MIN_FILLED — the paragraph was not filled, so a width assertion over it says nothing"
+	fi
+else
+	note 'no `perl` on this host, so the width of the page was not measured — §7 is the one section that cannot be skipped, its whole subject being how wide a character is'
+fi
+
 # --- the module list, and the floors ----------------------------------------------------
 #
 # `zerg doc` with no argument is the first page a reader sees, and the only claim made about
@@ -536,5 +652,5 @@ fi
 	exit 1
 }
 
-printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, and colour follows the terminal while the shape does not — %s checks\n' \
-	"$decls" "$listed" "$undoc" "$rules" "$checks"
+printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, colour follows the terminal while the shape does not, and a comment in Chinese lays out inside %s columns — %s checks\n' \
+	"$decls" "$listed" "$undoc" "$rules" "$DOC_COLUMNS" "$checks"

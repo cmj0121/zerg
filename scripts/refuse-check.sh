@@ -955,6 +955,87 @@ EOF
 # The seed refused both all along and pointed at the call rather than the declaration, which
 # makes this a rule the shipping compiler LOST on the way to self-hosting — the shape
 # reject-check's header describes and the reason `$ZERG0` is an oracle at all.
+# --- import paths ------------------------------------------------------------------------
+#
+# An import path is a PREFIX and a PACKAGE PATH (GRAMMAR#import-path), and E5012 is the one
+# code for a string that is neither. Every shape below fails the same test — a segment that is
+# not a `[a-z][a-z0-9_]*` package name — so they are one rule wearing several sentences, and
+# the sentence is what each case pins.
+#
+# `..` FIRST, because it is the one a person actually types. It is also the one that got
+# classified wrong while this was being written: `..` holds two dots, a first segment holding a
+# dot is the test for a HOST, and `../shared` was answering _a remote package … names a host_.
+expect "$ZERG" an-import-reaching-above-the-project E5012 'is not part of an import path' <<'EOF'
+import "../shared"
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" an-import-path-at-the-filesystem-root E5012 'may not begin with `/`' <<'EOF'
+import "/abs/x"
+
+fn main() {
+	print 1
+}
+EOF
+
+# A SECOND SPELLING OF ONE PATH. Nothing is normalised here, and that is the decision rather
+# than an omission: cleaning `./x/` into `./x` makes two spellings one module, and a module's
+# identity goes back to being computed from whatever somebody happened to type.
+expect "$ZERG" an-import-path-spelled-twice E5012 'has an empty segment' <<'EOF'
+import "./x/"
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" an-import-naming-a-file E5012 'names a MODULE and not a file' <<'EOF'
+import "./x.zg"
+
+fn main() {
+	print 1
+}
+EOF
+
+# UPPER CASE IS OUTSIDE THE GRAMMAR, and that is what keeps the one difference between the two
+# filesystems this compiler ships for — macOS folds case, Linux does not — from deciding
+# whether a program builds.
+expect "$ZERG" an-import-path-in-upper-case E5012 'is not a package name' <<'EOF'
+import "./Http"
+
+fn main() {
+	print 1
+}
+EOF
+
+# A module's last segment is BOUND AS AN IDENTIFIER. All 45 reserved words are legal package
+# names by the character grammar, and this used to be reported at the USE — `match.hit()` read
+# as the keyword, answering _E9040 `.` is not an expression this compiler reads_, which is a
+# true sentence about a line that is not the mistake.
+expect "$ZERG" an-import-named-for-a-reserved-word E5012 'is a reserved word' <<'EOF'
+import "./match"
+
+fn main() {
+	print 1
+}
+EOF
+
+# THE REMOTE SHAPE IS RESERVED, which is why it is refused HERE and not as an unresolved
+# import: a package name may not hold a dot, so a first segment that holds one can only be a
+# host, and nothing else can ever take the shape. The sentence says the layer is not built and
+# says nothing further — how a remote package is fetched, named or versioned is undecided, and
+# a promise in a diagnostic is still a promise.
+expect "$ZERG" a-remote-package E9105 <<'EOF'
+import "github.com/a/b"
+
+fn main() {
+	print 1
+}
+EOF
+
 expect_lib "$ZERG" undefined-function-in-a-module-constant E4016 <<'EOF'
 const N := nope()
 EOF

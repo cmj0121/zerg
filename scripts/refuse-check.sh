@@ -190,6 +190,20 @@ fn main() {
 }
 EOF
 
+# INSIDE A BARE BLOCK, and the block is the whole case: `c_check_loop_jump` had no arm for
+# one, so the walk never looked in, the rule never fired, and the `break` was emitted. What
+# refused it was cc — _'break' statement not in loop or switch statement_, against generated
+# code — which is the third thing the standing contract forbids, reached by a rule this
+# compiler already had.
+expect "$ZERG" break-in-a-bare-block E4001 <<'EOF'
+fn main() {
+	{
+		break
+	}
+	print "a"
+}
+EOF
+
 expect "$ZERG" break-in-select-arm E4001 <<'EOF'
 fn gen(out: chan[int]<-) { out <- 1 }
 fn main() {
@@ -247,6 +261,26 @@ expect "$ZERG" jump-out-of-a-guard E9043 <<'EOF'
 fn f() -> int {
 	r := guard {
 		return 1
+	}
+	return r ?? -1
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+# And the same jump one bracket deeper. `c_guard_no_jump` had no bare-block arm either, so
+# the `return` left the guard unseen and E9043 never fired; what the reader got was
+# _E3032 this function's answer is int, and this gives Result[int]_ — true about a
+# consequence, and pointing nowhere near the `return` that caused it.
+expect "$ZERG" jump-out-of-a-guard-from-a-bare-block E9043 <<'EOF'
+fn f() -> int {
+	r := guard {
+		{
+			return 1
+		}
+		2
 	}
 	return r ?? -1
 }

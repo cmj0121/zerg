@@ -26,7 +26,7 @@ import (
 	"json"
 	"strconv"
 
-	"zerg"
+	"./zerg"
 )
 
 # Program is the whole program a buffer belongs to: every source in dependency order, and

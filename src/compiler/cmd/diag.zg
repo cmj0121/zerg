@@ -10,7 +10,7 @@ import (
 	"io"
 	"strconv"
 
-	"zerg"
+	"./zerg"
 )
 
 # lex_check ends the run when a source has a token the lexer could not read. It is called

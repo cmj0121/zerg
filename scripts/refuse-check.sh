@@ -37,6 +37,20 @@ fail=0
 #
 # The seed is exempt for the reason its wording is: it is the tool that builds the shipping
 # compiler, and its diagnostics are not part of the language's contract.
+# EXPECT_EMIT is the stage a case is built at, and `bin` is right for all but a handful: the
+# paragraph below says why linking for real is what makes the two cc assertions able to fire
+# at all. A case with NO `fn main` cannot be linked — `E5001 this entry file declares no fn
+# main` would be the refusal every time, and it would hide the one the case is about — so
+# expect_lib builds it as a MODULE, which is what `zerg build` does with such a file and is
+# the shape a defect at module level actually has.
+EXPECT_EMIT=bin
+
+expect_lib() {
+	EXPECT_EMIT=lib
+	expect "$@"
+	EXPECT_EMIT=bin
+}
+
 expect() {
 	local cc=$1 name=$2 want=$3
 	shift 3
@@ -77,7 +91,7 @@ expect() {
 	# beside it and had to answer the same question. Linking for real costs nothing while
 	# the gate is green: a program the compiler refuses never reaches cc at all.
 	local out status
-	out=$("$cc" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
+	out=$("$cc" build --emit "$EXPECT_EMIT" -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
 	status=$?
 
 	if [ $status -eq 0 ]; then
@@ -893,6 +907,26 @@ expect "$ZERG" undefined-function E4016 <<'EOF'
 fn main() {
 	print nope(1)
 }
+EOF
+
+# THE SAME CALL AT MODULE LEVEL, AND NEITHER FILE DECLARES A `main` — which is the whole of
+# what these two add, and it is the condition the defect actually had. A module-level
+# initializer is lowered inside the ENTRY's wrapper, and that wrapper is only written for a
+# unit that declares `main`; c_const_globals runs everywhere and infers each row's type, but
+# inference is silent about a callee nothing declares. So `zerg build` on a module — its
+# documented behaviour when the entry has no `main`, an object rather than an executable —
+# resolved NOTHING at module level: the second case below is the issue's own repro, and it
+# built, linked and exited 0 with no `nope` anywhere in the program.
+#
+# The seed refused both all along and pointed at the call rather than the declaration, which
+# makes this a rule the shipping compiler LOST on the way to self-hosting — the shape
+# reject-check's header describes and the reason `$ZERG0` is an oracle at all.
+expect_lib "$ZERG" undefined-function-in-a-module-constant E4016 <<'EOF'
+const N := nope()
+EOF
+
+expect_lib "$ZERG" undefined-function-in-a-top-level-binding E4016 <<'EOF'
+a := nope().run()
 EOF
 
 # THE BUILT-IN SET IS CLOSED (docs/runtime/builtins.md): a user cannot add to it, so a

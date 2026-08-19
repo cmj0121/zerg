@@ -3001,7 +3001,7 @@ EOF
 # GRAMMAR#impl-decl's target is a `type`, which derives a dotted name — but an implementation
 # is keyed here by the target's bare name, which a type reached through an import has not got.
 expect "$ZERG" an-impl-on-a-dotted-target E9074 <<'EOF'
-import "text"
+import "./text"
 
 impl text.Pair {
 	fn sum() -> int {
@@ -3017,7 +3017,7 @@ EOF
 # The other half, and not the same question: GRAMMAR writes an `impl`'s SPEC as a bare
 # `type-name`, so a dotted name there is a form the grammar does not derive at all.
 expect "$ZERG" an-impl-spec-reached-through-an-import E4049 <<'EOF'
-import "text"
+import "./text"
 
 struct Bot {
 	pub n: int

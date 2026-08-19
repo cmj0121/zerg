@@ -24,7 +24,7 @@
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
-	doc-check
+	doc-check stmt-walk
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
 # examples corpus. It answered to `test` until the board took that name, and `suites` is what
@@ -423,7 +423,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -478,6 +478,14 @@ sha256:                         # the pure-Zerg digest is the digest everyone el
 # until the day somebody formats a file with an undefined name in it.
 layering:                       # each stage knows only what it is allowed to know
 	./scripts/layering-check.sh
+
+# The block form with no keyword in front of it, and therefore the arm a hand-written match
+# forgets. Ten walks across three files had, and what fell out was a legal program refused
+# with an untrue reason, two rules that never fired, a linter finding about correct code, and
+# two escapes to cc. Every one was one arm; finding them was the work, so the rule is written
+# down here rather than left to the next reader to rediscover.
+stmt-walk:                      # a walk that reaches into a block reaches into a bare one
+	./scripts/stmt-walk-check.sh
 
 # test-data/conformance is one file per GRAMMAR chapter and NOTHING RAN IT: twelve files,
 # 375 lines, named in no runner and no test, and eleven of the twelve did not build the day

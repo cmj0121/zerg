@@ -4,7 +4,7 @@
 # Expected output:
 #   3
 #   9
-import "unit"
+import "./unit"
 
 fn main() {
 	print unit.SPAN.0 + unit.SPAN.1 # 3 — a cross-module tuple constant

@@ -3,7 +3,7 @@
 #   zerg build examples/1g/reexport/main.zg
 # Expected output:
 #   7
-import "mid"
+import "./mid"
 
 fn main() {
 	print mid.hello() # 7 — re-exported through mid from deep

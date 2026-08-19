@@ -1,3 +1,3 @@
 # mid — re-exports deep onto its own surface with `import pub`, so a module that
 # imports mid can reach deep's public members through the mid namespace.
-import pub "deep"
+import pub "./deep"

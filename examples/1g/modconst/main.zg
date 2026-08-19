@@ -3,7 +3,7 @@
 # Expected output:
 #   5
 #   7
-import "unit"
+import "./unit"
 
 fn main() {
 	print unit.SEED     # 5 — read across the module boundary

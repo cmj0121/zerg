@@ -7,7 +7,7 @@
 #   zerg build examples/1g/privconst/main.zg
 #   error: `FLOOR` is not a public member of module `lib`
 #     --> examples/1g/privconst/main.zg:14:12
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.span() # fine: `span` is pub, and it reads FLOOR from inside lib

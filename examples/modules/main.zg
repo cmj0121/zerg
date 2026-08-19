@@ -2,7 +2,7 @@
 # util/text and uses its cross-module type, function, and generic. Build it with
 #   zerg build examples/modules/main.zg
 # `import "util/text"` roots in this file's directory, so it locates ./util/text/.
-import "util/text"
+import "./util/text"
 
 # total names a cross-module type (text.Pair) in its own signature.
 fn total(p: text.Pair) -> int {

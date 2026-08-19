@@ -197,6 +197,41 @@ EOF
 # both rules at once, because a const initialiser is the one place that reaches both: `seed` is
 # called from there and `math` is reached from there. The exit-0 half of the assertion is what
 # covers the L101 side — no finding of any code may be printed.
+# A BARE BLOCK, which is the one block form with no keyword in front of it and therefore the
+# arm `walk_body` had not got. Both rules again, and for the same reason as the const case
+# below: a block is the only other place this walk was blind, so the import and the call are
+# put in one to prove the walk descends rather than that one arm was added.
+quiet L102 'l102-from-a-bare-block' 'a private function called only from inside a bare block' <<'EOF'
+import "math"
+
+fn seed() -> int {
+	return 7
+}
+
+fn main() {
+	mut n := 0
+	mut r := 0.0
+	{
+		n = seed()
+		r = math.sqrt(4.0)
+	}
+	print n
+	print r
+}
+EOF
+
+quiet L101 'l101-from-a-bare-block' 'an import reached only from inside a bare block' <<'EOF'
+import "math"
+
+fn main() {
+	mut r := 0.0
+	{
+		r = math.sqrt(9.0)
+	}
+	print r
+}
+EOF
+
 quiet L102 'l102-from-const' 'a private function called only from a module-level const' <<'EOF'
 import "math"
 

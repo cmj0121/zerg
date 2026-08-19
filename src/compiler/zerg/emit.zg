@@ -13976,20 +13976,35 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, check: bo
 		defs = defs + c_lowered(check, "static " + c_fn(em, inst))
 		done = done + 1
 	}
+
+	# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
+	# each once
+	#
+	# THE WHOLE PROGRAM'S, not this unit's. `own` is the entry file, so under separate
+	# compilation an imported module's `init()` was emitted, prototyped in every unit,
+	# and called by none: `import "m"` where m declares `init()` simply did not run it,
+	# and the program printed the rest of its output as if it had. The constants beside
+	# it were already taken from `f` for exactly this reason. It went unseen because the
+	# one example that owns this behaviour was built by the seed, whose single
+	# translation unit makes `own` and `f` the same file.
+	#
+	# OUTSIDE THE `c_has_main` GUARD, and the text is what the guard decides — not whether
+	# the walk happens. This lowering is the ONLY place a module-level initializer is
+	# resolved: c_const_globals runs in every unit and infers each row's type, but inference
+	# is silent about a callee nothing declares — c_undefined_fn is reached from c_call and
+	# not from c_infer_call, because a type is all inference was asked for. So while this
+	# sat inside the guard, a unit that declares no `main` — which is `zerg build`'s
+	# documented behaviour for a module, `--emit lib` — had NOTHING at module level
+	# resolved: `a := nope().run()` alone in a file built, linked, and exited 0, with no
+	# diagnostic and no `nope` anywhere in the program. The identical call one scope down
+	# was refused, because a function body is lowered whether or not the unit has an entry.
+	#
+	# Running the walk and discarding what it produced is the same shape `c_lowered` already
+	# gives the `check` stage: the findings are the point, the text is the by-product.
+	inits := c_const_assigns(em, f) + c_init_calls(em, f)
+
 	mut mainw := ""
 	if c_has_main(own) {
-		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
-		# each once
-		#
-		# THE WHOLE PROGRAM'S, not this unit's. `own` is the entry file, so under separate
-		# compilation an imported module's `init()` was emitted, prototyped in every unit,
-		# and called by none: `import "m"` where m declares `init()` simply did not run it,
-		# and the program printed the rest of its output as if it had. The constants beside
-		# it were already taken from `f` for exactly this reason. It went unseen because the
-		# one example that owns this behaviour was built by the seed, whose single
-		# translation unit makes `own` and `f` the same file.
-		inits := c_const_assigns(em, f) + c_init_calls(em, f)
-
 		mainw = c_lowered(check, c_main_entry(em, own, inits))
 	}
 

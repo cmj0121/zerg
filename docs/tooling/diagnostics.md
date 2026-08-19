@@ -9,17 +9,28 @@ An `F` or an `L` code is what a **tool** says about a program that already build
 These are not advisory. A program that hits one does not build, so each is a **compile
 error** the build stops on. They carry codes because a code is a **stable identity for a
 rule** where a sentence is not: prose gets better, and a gate that pins the sentence turns
-red when it does. The codes group by the **stage** that reports them, which is also the
+red when it does. The codes group by the **kind of question** a code answers, which is also the
 order a build meets them:
 
-| Range   | Reported by | What it reports                                                    |
-| ------- | ----------- | ------------------------------------------------------------------ |
-| `E1xxx` | lexical     | text that is not Zerg tokens                                       |
-| `E2xxx` | parser      | tokens that are not a Zerg form                                    |
-| `E3xxx` | checking    | a form whose meaning does not hold together                        |
-| `E4xxx` | emitting    | a form this compiler will not lower                                |
-| `E5xxx` | building    | the program as a set of files, which no single file's text answers |
-| `E9xxx` | unbuilt     | a form the language has and this compiler has not built            |
+| Range   | Stage    | The question it answers                                            |
+| ------- | -------- | ------------------------------------------------------------------ |
+| `E1xxx` | lexical  | text that is not Zerg tokens                                       |
+| `E2xxx` | parser   | tokens that are not a Zerg form                                    |
+| `E3xxx` | checking | a form whose meaning does not hold together                        |
+| `E4xxx` | emitting | a form this compiler will not lower                                |
+| `E5xxx` | building | the program as a set of files, which no single file's text answers |
+| `E9xxx` | unbuilt  | a form the language has and this compiler has not built            |
+
+**A range names the question, not the file.** The two are usually the same and the stage column
+says which, but where they differ the question decides. `emit.zg` is _AST -> C, with the minimal
+typecheck emit needs_, so twenty-two checking rules are reported from it and stay `E3xxx`: which
+file asks a question is an implementation fact, and a reader looking a code up wants to know what
+kind of thing went wrong. A source that is not UTF-8 is `E1xxx` for the same reason, though the
+driver is what opens the file.
+
+Twenty-five codes sat in a range that named a different question and were re-seated before the
+first release; they are listed under [Retired codes](#retired-codes), which is where a number that
+moved goes.
 
 `E5xxx` is the one range that is not a point in that order. A build resolves imports before
 it lexes what they name and looks for `fn main` after everything is emitted, so the driver's

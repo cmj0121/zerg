@@ -844,7 +844,7 @@ fn main() {
 EOF
 
 # `#[test]` gets the sentence about a `fn`, not the derive's about a type — the same split
-# E4048 makes one position up, and the reason is the same: advice for the other decorator is
+# E2066 makes one position up, and the reason is the same: advice for the other decorator is
 # advice the reader cannot act on.
 reject test-leading-a-statement E2062 '`#[test]`' at=2:2 <<'EOF'
 fn main() {
@@ -881,7 +881,7 @@ fn main() {
 EOF
 
 # `#[allow]` NAMES THE CODES IT SUPPRESSES. With none it suppresses nothing while reading as
-# though it did — E4051's argument for `#[derive]`, one decorator over.
+# though it did — E2069's argument for `#[derive]`, one decorator over.
 reject an-allow-with-no-codes E2064 at=2:4 <<'EOF'
 fn main() {
 	#[allow]
@@ -1145,7 +1145,7 @@ EOF
 # and an impl belongs with one of the two.
 #
 # It is the first case here that needs TWO FILES, which is why `reject` learned to split one.
-reject an-orphan-impl E2037 <<'EOF'
+reject an-orphan-impl E3096 <<'EOF'
 import "./far"
 
 impl Show for P {
@@ -1171,7 +1171,7 @@ EOF
 # THE REWRITE DOES NOT EXIST — which is the whole test a decorator has to pass here. A method
 # taking `This` would have to match the other argument too, and nothing says the two arms
 # agree; a variant with no payload has nothing to delegate to.
-reject derive-delegation-with-a-self-parameter E2038 <<'EOF'
+reject derive-delegation-with-a-self-parameter E3097 <<'EOF'
 spec Show {
 	fn show() -> str
 	fn same(o: This) -> bool
@@ -1201,7 +1201,7 @@ fn main() {
 }
 EOF
 
-reject derive-delegation-over-a-bare-variant E2039 <<'EOF'
+reject derive-delegation-over-a-bare-variant E3098 <<'EOF'
 spec Show {
 	fn show() -> str
 }
@@ -1248,7 +1248,7 @@ EOF
 # `mut fn` would write through a COPY, so the write reaches nothing anybody can read; a
 # method taking `This` needs the type an object has forgotten, which is what the enum
 # delegation is for; and a `spec` is the only thing with methods to hold as values.
-reject obj-on-a-mut-method E2041 <<'EOF'
+reject obj-on-a-mut-method E3100 <<'EOF'
 #[obj]
 spec Draw {
 	mut fn bump()
@@ -1259,7 +1259,7 @@ fn main() {
 }
 EOF
 
-reject obj-with-a-self-parameter E2042 <<'EOF'
+reject obj-with-a-self-parameter E3101 <<'EOF'
 #[obj]
 spec Draw {
 	fn same(o: This) -> bool
@@ -1270,7 +1270,7 @@ fn main() {
 }
 EOF
 
-reject obj-on-something-that-is-not-a-spec E2040 <<'EOF'
+reject obj-on-something-that-is-not-a-spec E3099 <<'EOF'
 #[obj]
 struct P {
 	pub x: int
@@ -1282,7 +1282,7 @@ fn main() {
 EOF
 
 # and its mirror: a `spec` has no structure for a derive to read.
-reject derive-on-a-spec E2043 seed-gap <<'EOF'
+reject derive-on-a-spec E3102 seed-gap <<'EOF'
 #[derive(Eq)]
 spec Draw {
 	fn draw() -> str
@@ -4058,14 +4058,14 @@ EOF
 # The one case that does not come through the parser is the last: a template's `chan[T]`
 # becomes a `chan[int?]` by SUBSTITUTION, with nothing written in the source to point at.
 
-reject a-channel-of-optionals-constructed E4003 <<'EOF'
+reject a-channel-of-optionals-constructed E3107 <<'EOF'
 fn main() {
 	ch := chan[int?](1)
 	print 1
 }
 EOF
 
-reject a-channel-of-optionals-as-a-parameter E4003 <<'EOF'
+reject a-channel-of-optionals-as-a-parameter E3107 <<'EOF'
 fn f(ch: <-chan[int?]) {
 	print 1
 }
@@ -4075,7 +4075,7 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-as-a-result E4003 <<'EOF'
+reject a-channel-of-optionals-as-a-result E3107 <<'EOF'
 fn f() -> chan[int?] {
 	return chan[int](1)
 }
@@ -4088,7 +4088,7 @@ EOF
 # the place is PINNED on this one, because a struct field is the position that carries no
 # statement and no declaration position of its own: the finding has to come from the type
 # as it is written, and nothing else here would notice it drifting to the file's first line.
-reject a-channel-of-optionals-as-a-field E4003 at=2:10 <<'EOF'
+reject a-channel-of-optionals-as-a-field E3107 at=2:10 <<'EOF'
 struct Box {
 	pub ch: chan[int?]
 }
@@ -4098,14 +4098,14 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-in-a-typed-binding E4003 <<'EOF'
+reject a-channel-of-optionals-in-a-typed-binding E3107 <<'EOF'
 fn main() {
 	ch: chan[int?] = chan[int](1)
 	print 1
 }
 EOF
 
-reject a-channel-of-optionals-under-a-typedef E4003 <<'EOF'
+reject a-channel-of-optionals-under-a-typedef E3107 <<'EOF'
 type C = chan[int?]
 
 fn main() {
@@ -4113,7 +4113,7 @@ fn main() {
 }
 EOF
 
-reject a-channel-of-optionals-inside-a-list E4003 <<'EOF'
+reject a-channel-of-optionals-inside-a-list E3107 <<'EOF'
 struct Box {
 	pub xs: list[chan[int?]]
 }
@@ -4127,7 +4127,7 @@ EOF
 # `mk` for `int?` is one. The parser never sees that type, so the rule has to be on the
 # substitution too — and there is no source position to report, because the type is not
 # written anywhere.
-reject a-channel-of-optionals-by-substitution E4003 no-place <<'EOF'
+reject a-channel-of-optionals-by-substitution E3107 no-place <<'EOF'
 fn mk[T](v: T) {
 	ch := chan[T](1)
 	ch <- v
@@ -4149,7 +4149,7 @@ EOF
 # which is the one door that cannot be walked around.
 #
 # No place, for the same reason as the case above: nothing in this source spells the type.
-reject a-channel-of-optionals-by-spec-substitution E4003 no-place <<'EOF'
+reject a-channel-of-optionals-by-spec-substitution E3107 no-place <<'EOF'
 spec Ix[K] {
 	fn c() -> chan[K]
 }
@@ -4206,10 +4206,10 @@ EOF
 # numbers a call's arguments from 1 the way `E3038` does; these numbered from 0, so a reader
 # following one of them looked at the wrong parameter.
 #
-# Two rules and not one: what a NAME MAY DO with an end (E5003-E5005) is a different question
-# from where an end MAY GO (E5006), which is why the narrowing rule has a code of its own.
+# Two rules and not one: what a NAME MAY DO with an end (E3109-E3111) is a different question
+# from where an end MAY GO (E3112), which is why the narrowing rule has a code of its own.
 
-reject receive-on-a-send-only-channel E5003 <<'EOF'
+reject receive-on-a-send-only-channel E3109 <<'EOF'
 fn take(ch: chan[int]<-) {
 	print <-ch!
 }
@@ -4220,7 +4220,7 @@ fn main() {
 }
 EOF
 
-reject send-on-a-receive-only-channel E5004 <<'EOF'
+reject send-on-a-receive-only-channel E3110 <<'EOF'
 fn take(ch: <-chan[int]) {
 	ch <- 1
 }
@@ -4231,7 +4231,7 @@ fn main() {
 }
 EOF
 
-reject close-a-receive-only-channel E5005 <<'EOF'
+reject close-a-receive-only-channel E3111 <<'EOF'
 fn take(ch: <-chan[int]) {
 	close(ch)
 }
@@ -4244,7 +4244,7 @@ EOF
 
 # THE ARGUMENT IS NUMBERED FROM 1, which is what the sentence is asserted for: `take` has
 # one parameter, and this used to call it argument 0.
-reject a-direction-that-does-not-narrow-at-an-argument E5006 'argument 1 of `take`' <<'EOF'
+reject a-direction-that-does-not-narrow-at-an-argument E3112 'argument 1 of `take`' <<'EOF'
 fn take(ch: chan[int]<-) {
 	ch <- 1
 }
@@ -4256,7 +4256,7 @@ fn main() {
 }
 EOF
 
-reject a-direction-that-does-not-narrow-at-a-binding E5006 'binding `s`' <<'EOF'
+reject a-direction-that-does-not-narrow-at-a-binding E3112 'binding `s`' <<'EOF'
 fn main() {
 	c := chan[int]()
 	r: <-chan[int] = c
@@ -4265,7 +4265,7 @@ fn main() {
 }
 EOF
 
-reject a-direction-that-does-not-narrow-at-a-return E5006 "this function's answer" <<'EOF'
+reject a-direction-that-does-not-narrow-at-a-return E3112 "this function's answer" <<'EOF'
 fn f(c: <-chan[int]) -> chan[int]<- {
 	return c
 }
@@ -5055,7 +5055,7 @@ EOF
 # `unsafe { … }` as an expression still E9011 no function body can open an unsafe context, so
 # a rule there would make the group unreachable from anything a program can write.
 
-reject a-pub-mutable-global E4046 at=2:2 <<'EOF'
+reject a-pub-mutable-global E3108 at=2:2 <<'EOF'
 unsafe {
 	pub mut shared := 5
 }
@@ -5108,7 +5108,7 @@ EOF
 # export is what made the uses possible, and the module that wrote `pub` is the one with a
 # line to change. It is here because the rule walks the unit being emitted, so an imported
 # module has to be spoken about while ITS unit is compiled, not the entry's.
-reject a-pub-mutable-global-in-an-imported-module E4046 'may not be `pub`' <<'EOF'
+reject a-pub-mutable-global-in-an-imported-module E3108 'may not be `pub`' <<'EOF'
 import "./glob"
 
 fn main() {
@@ -5501,7 +5501,7 @@ EOF
 # "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
 # one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
 # initialization order no chapter defines.
-reject an-import-cycle-between-two-modules E4047 no-place <<'EOF'
+reject an-import-cycle-between-two-modules E5014 no-place <<'EOF'
 import "./ca"
 
 fn main() {
@@ -5525,7 +5525,7 @@ EOF
 # detector written as "have I seen this on the way down" answers it by a different branch
 # than the two-node one — the `seen` list a loader already keeps for deduplication makes the
 # self-edge look exactly like a module two files import.
-reject a-module-that-imports-itself E4047 no-place <<'EOF'
+reject a-module-that-imports-itself E5014 no-place <<'EOF'
 import "./solo"
 
 fn main() {
@@ -6340,7 +6340,7 @@ EOF
 # THE MAP ENTRY WITHOUT A `:`. It used to be where the block/map ambiguity was
 # reported — `a block used as an expression`, which is what a match arm's block body got —
 # and with that ambiguity gone what reaches it is a genuine map literal missing a value.
-reject a-map-entry-with-no-colon E4044 'a map entry is `key: value`' at=2:30 <<'EOF'
+reject a-map-entry-with-no-colon E2065 'a map entry is `key: value`' at=2:30 <<'EOF'
 fn main() {
 	m: map[str, int] = {"a": 1, "b"}
 	print m.len()
@@ -6500,14 +6500,14 @@ EOF
 # asserting the sentence alone would have gone green against a message that says where
 # nothing.
 
-reject a-del-of-an-undefined-name E2050 <<'EOF'
+reject a-del-of-an-undefined-name E3103 <<'EOF'
 fn main() {
 	del totally_undefined
 	print "unreached"
 }
 EOF
 
-reject a-del-of-a-function-name E2051 <<'EOF'
+reject a-del-of-a-function-name E3104 <<'EOF'
 fn g() {
 	print "g"
 }
@@ -6517,7 +6517,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del E2052 '`x` is used after del' <<'EOF'
+reject a-read-after-del E3105 '`x` is used after del' <<'EOF'
 fn main() {
 	x := 1
 	del x
@@ -6525,7 +6525,7 @@ fn main() {
 }
 EOF
 
-reject a-write-after-del E2052 '`x` is used after del' <<'EOF'
+reject a-write-after-del E3105 '`x` is used after del' <<'EOF'
 fn main() {
 	mut x := 1
 	del x
@@ -6534,7 +6534,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del-on-a-mutable-reference E2052 '`x` is used after del' <<'EOF'
+reject a-read-after-del-on-a-mutable-reference E3105 '`x` is used after del' <<'EOF'
 fn f(mut &x: int) -> int {
 	del x
 	return x
@@ -6546,7 +6546,7 @@ fn main() {
 }
 EOF
 
-reject a-write-after-del-on-a-mutable-reference E2052 '`x` is used after del' <<'EOF'
+reject a-write-after-del-on-a-mutable-reference E3105 '`x` is used after del' <<'EOF'
 fn f(mut &x: int) {
 	del x
 	x = 9
@@ -6559,7 +6559,7 @@ fn main() {
 }
 EOF
 
-reject a-read-after-del-on-some-paths E2053 'used after del on some paths' <<'EOF'
+reject a-read-after-del-on-some-paths E3106 'used after del on some paths' <<'EOF'
 fn main() {
 	x := 1
 	if x == 1 {

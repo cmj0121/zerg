@@ -119,7 +119,6 @@ shipping compiler rather than a part of it (the line
 | `E2006` | `Either[…, …]` has the same type on both sides                                                          |
 | `E2007` | `#[derive(…)]` has no declaration under it                                                              |
 | `E2008` | an associated value is not a `spec` member                                                              |
-| `E2009` | an enum discriminant is distinct across variants, and `… = …` repeats one already given                 |
 | `E2010` | a discriminant `… = …` on an enum whose variants carry a payload — its tag is opaque                    |
 | `E2011` | an associated type is not a `spec` member                                                               |
 | `E2012` | this program nests more than … levels deep                                                              |
@@ -147,23 +146,12 @@ shipping compiler rather than a part of it (the line
 | `E2034` | `bytearray(…)` / `runearray(…)` converts one value, and this gives …                                    |
 | `E2035` | a call writes its type arguments, and a postfix `[ … ]` is an index                                     |
 | `E2036` | a `spec` member that is neither a signature nor a provided method                                       |
-| `E2037` | an `impl` in neither the spec's module nor the type's                                                   |
-| `E2038` | `#[derive(S)]` on an enum, and a method takes a `This`                                                  |
-| `E2039` | `#[derive(S)]` on an enum, and a variant carries no value                                               |
-| `E2040` | `#[obj]` on something that is not a `spec`                                                              |
-| `E2041` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                                     |
-| `E2042` | `#[obj]` and a method taking `This` — an object has forgotten its type                                  |
-| `E2043` | `#[derive(…)]` on something with no structure to read                                                   |
 | `E2044` | a `??` right-hand diverge with a trailing `if` guard                                                    |
 | `E2045` | a 1-tuple `( e, )` — a single `( expr )` is grouping                                                    |
 | `E2046` | a trailing comma before a closing `)`, `]` or `}`                                                       |
 | `E2047` | a `{`-opening expression at the start of an `if`/`for`/`with`/`match` head                              |
 | `E2048` | `…` is a reserved word and cannot name a field                                                          |
 | `E2049` | expected a field name (or a tuple index) after `.`, found `…`                                           |
-| `E2050` | `del …` names nothing this program declares                                                             |
-| `E2051` | `del …` names a function, struct, enum or variant — not a binding                                       |
-| `E2052` | `…` is used after del                                                                                   |
-| `E2053` | `…` is used after del on some paths                                                                     |
 | `E2054` | `…` needs a name, and `…` is not one                                                                    |
 | `E2055` | a `<-` prefix is a channel direction: only `<-chan[T]` is a type                                        |
 | `E2056` | `mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`                 |
@@ -175,6 +163,12 @@ shipping compiler rather than a part of it (the line
 | `E2062` | `…` applies to the … that follows it, and a statement is not one                                        |
 | `E2063` | a second decorator on one item — merge them into its comma list                                         |
 | `E2064` | an `#[allow]` names the lint codes it suppresses, and this one names none                               |
+| `E2065` | a map entry is `key: value`, and this one has no `:`                                                    |
+| `E2066` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`                  |
+| `E2067` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import                 |
+| `E2068` | a decorator holds at least one item, and `#[]` names nothing to apply                                   |
+| `E2069` | a `#[derive]` names the specs to generate                                                               |
+| `E2070` | a channel is bidirectional, receive-only or send-only                                                   |
 | `E3001` | `…` is not a public member of module `…`                                                                |
 | `E3002` | `…` is not a place, and an assignment needs one                                                         |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                           |
@@ -269,9 +263,26 @@ shipping compiler rather than a part of it (the line
 | `E3092` | `…` is not a compiler primitive — the `__zrt_…` set is closed                                           |
 | `E3093` | the compiler primitive `…` takes … and this gives …                                                     |
 | `E3094` | operand … of the compiler primitive `…` is …, and this gives …                                          |
+| `E3095` | an enum discriminant is distinct across variants, and `… = …` repeats one already given                 |
+| `E3096` | an `impl` in neither the spec's module nor the type's                                                   |
+| `E3097` | `#[derive(S)]` on an enum, and a method takes a `This`                                                  |
+| `E3098` | `#[derive(S)]` on an enum, and a variant carries no value                                               |
+| `E3099` | `#[obj]` on something that is not a `spec`                                                              |
+| `E3100` | `#[obj]` and a `mut fn` — a wrapped value is a copy                                                     |
+| `E3101` | `#[obj]` and a method taking `This` — an object has forgotten its type                                  |
+| `E3102` | `#[derive(…)]` on something with no structure to read                                                   |
+| `E3103` | `del …` names nothing this program declares                                                             |
+| `E3104` | `del …` names a function, struct, enum or variant — not a binding                                       |
+| `E3105` | `…` is used after del                                                                                   |
+| `E3106` | `…` is used after del on some paths                                                                     |
+| `E3107` | a channel of optionals is refused                                                                       |
+| `E3108` | the mutable global `…` may not be `pub`                                                                 |
+| `E3109` | cannot receive on a send-only `…`                                                                       |
+| `E3110` | cannot send on a receive-only `…`                                                                       |
+| `E3111` | cannot close a receive-only channel `…`                                                                 |
+| `E3112` | a channel direction only narrows: a `…` cannot fill a `…`                                               |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                             |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                            |
-| `E4003` | a channel of optionals is refused                                                                       |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                     |
 | `E4005` | `?.` reads through an optional, and … is not one                                                        |
 | `E4006` | `int(v)` reads the discriminant, and enum `…` carries a payload, so its tag is opaque                   |
@@ -312,15 +323,7 @@ shipping compiler rather than a part of it (the line
 | `E4041` | a fill count is how many copies to make, and `…` is negative                                            |
 | `E4042` | a range arm's bound is a compile-time constant, and `…` is not one                                      |
 | `E4043` | `…` needs a channel, and … is not one                                                                   |
-| `E4044` | a map entry is `key: value`, and this one has no `:`                                                    |
 | `E4045` | the field `…` of `…` is module-private, so it must carry a default                                      |
-| `E4046` | the mutable global `…` may not be `pub`                                                                 |
-| `E4047` | import cycle: `…` -> `…` -> `…`                                                                         |
-| `E4048` | `…` applies to the `struct`, `enum` or `spec` that follows it, and what follows is `…`                  |
-| `E4049` | an `impl`'s spec is named by a bare `type-name`, and `….…` is reached through an import                 |
-| `E4050` | a decorator holds at least one item, and `#[]` names nothing to apply                                   |
-| `E4051` | a `#[derive]` names the specs to generate                                                               |
-| `E4052` | a channel is bidirectional, receive-only or send-only                                                   |
 | `E4053` | a `…` takes a … or a …, and this bare value is neither side                                             |
 | `E4054` | no field `…` on … (optional chain `?.…`)                                                                |
 | `E4055` | `?` propagates a right the enclosing function does not answer                                           |
@@ -344,10 +347,6 @@ shipping compiler rather than a part of it (the line
 | `E4073` | `…` is declared twice in this file — one scope declares a name once                                     |
 | `E5001` | this entry file declares no `fn main`                                                                   |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                  |
-| `E5003` | cannot receive on a send-only `…`                                                                       |
-| `E5004` | cannot send on a receive-only `…`                                                                       |
-| `E5005` | cannot close a receive-only channel `…`                                                                 |
-| `E5006` | a channel direction only narrows: a `…` cannot fill a `…`                                               |
 | `E5007` | `…` is a module this build compiles and this module did not import                                      |
 | `E5008` | `…` is not a public type of module `…`                                                                  |
 | `E5009` | `…` is module-private, and … is on a `pub` declaration                                                  |
@@ -355,6 +354,7 @@ shipping compiler rather than a part of it (the line
 | `E5011` | `…` names a test file, and a normal build compiles none                                                 |
 | `E5012` | `…` is not an import path — the escape, the second spelling, the `.zg`, the name, the reserved word     |
 | `E5013` | `…` is both a file and a directory, and a module is one shape or the other                              |
+| `E5014` | import cycle: `…` -> `…` -> `…`                                                                         |
 | `E9001` | a parameterized `…[…]` as …                                                                             |
 | `E9002` | a `spec` member with a BODY                                                                             |
 | `E9003` | a generic enum `…[…]`                                                                                   |
@@ -496,6 +496,44 @@ reliable while every number below the mark is accounted for, so the gate holds e
 exactly that: a number that is neither listed above nor listed here is a **gap**, and a gap
 is a code somebody may reissue without knowing.
 
-**There are none.** The numbering that came before this one was retired whole rather than a
-code at a time, and nothing has been retired since — every number below every range's mark
-is in the catalogue above. The first code to retire is listed here, with the reason it left.
+**Twenty-five, and they are one event rather than twenty-five.** A range names the KIND OF
+QUESTION a code answers, and these twenty-five sat in a range that named a different one. They
+were re-seated in a single pass **before the first release**, which is the only time it is
+free: nothing has ever shipped under these numbers, so no report, no log and no bug filed
+last year carries one. They are listed here all the same, because the rule that a number is
+never reused is a rule about the NUMBER and not about who happens to have seen it.
+
+| Code    | Now     | Why it left                                                   |
+| ------- | ------- | ------------------------------------------------------------- |
+| `E2009` | `E3095` | a repeated discriminant is a meaning, not a form              |
+| `E2037` | `E3096` | an orphan `impl` is coherence, which is a meaning             |
+| `E2038` | `E3097` | what a `derive` can generate is a meaning                     |
+| `E2039` | `E3098` | as above                                                      |
+| `E2040` | `E3099` | what `#[obj]` may go on is a meaning                          |
+| `E2041` | `E3100` | as above                                                      |
+| `E2042` | `E3101` | as above                                                      |
+| `E2043` | `E3102` | what a `derive` reads is a meaning                            |
+| `E2050` | `E3103` | whether a name is declared is a meaning                       |
+| `E2051` | `E3104` | what kind of thing a name is, is a meaning                    |
+| `E2052` | `E3105` | whether a name still has storage is a meaning                 |
+| `E2053` | `E3106` | as above, over a branch                                       |
+| `E4003` | `E3107` | which element types a channel may carry is a type rule        |
+| `E4044` | `E2065` | `GRAMMAR#map-entry` — a form                                  |
+| `E4046` | `E3108` | what a declaration may be marked is a meaning                 |
+| `E4047` | `E5014` | an import cycle is the program as a set of files              |
+| `E4048` | `E2066` | where a decorator may go is a form                            |
+| `E4049` | `E2067` | `GRAMMAR#impl-decl` — a form                                  |
+| `E4050` | `E2068` | `GRAMMAR#decorator` — a form                                  |
+| `E4051` | `E2069` | `GRAMMAR#deco-item` — a form                                  |
+| `E4052` | `E2070` | `GRAMMAR#chan-type` — a form                                  |
+| `E5003` | `E3109` | a channel's direction is a type rule, not a whole-program one |
+| `E5004` | `E3110` | as above                                                      |
+| `E5005` | `E3111` | as above                                                      |
+| `E5006` | `E3112` | as above                                                      |
+
+Twenty-seven others were measured and are **not** findings, which is what deciding the
+question settled: the twenty-two checking rules `emit.zg` reports (it is _AST -> C, with the
+minimal typecheck emit needs_, so the file is an implementation fact), the four visibility
+rules that are about the program as a set of files, and `E1011` — a source that is not UTF-8
+is a question about TEXT, and the driver reports it only because the driver is what opens the
+file.

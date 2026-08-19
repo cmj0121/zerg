@@ -50,7 +50,6 @@ pub enum Rule {
 	EitherSameType = 2006
 	DeriveNoDeclaration = 2007
 	AssocValueNotSpecMember = 2008
-	EnumDiscriminantRepeated = 2009
 	DiscriminantOnPayloadEnum = 2010
 	AssocTypeNotSpecMember = 2011
 	NestingTooDeep = 2012
@@ -78,23 +77,12 @@ pub enum Rule {
 	ArrayConvManyValues = 2034
 	TypeArgsAsIndex = 2035
 	SpecMemberNeitherSigNorBody = 2036
-	ImplOrphan = 2037
-	DeriveSpecEnumThisParam = 2038
-	DeriveSpecEnumVariantNoValue = 2039
-	ObjNotOnSpec = 2040
-	ObjWithMutFn = 2041
-	ObjWithThisParam = 2042
-	DeriveOnStructureless = 2043
 	CoalesceDivergeGuard = 2044
 	TupleLitOneElement = 2045
 	TrailingComma = 2046
 	BraceOpeningHead = 2047
 	ReservedWordAsField = 2048
 	FieldNameExpected = 2049
-	DelUnknownName = 2050
-	DelNotABinding = 2051
-	UseAfterDel = 2052
-	UseAfterDelOnSomePaths = 2053
 	NameExpected = 2054
 	ChanDirectionPrefix = 2055
 	MutBeforeNonFn = 2056
@@ -106,6 +94,12 @@ pub enum Rule {
 	DecoratorOnStatement = 2062
 	SecondDecorator = 2063
 	AllowNamesNoCodes = 2064
+	MapEntryNoColon = 2065
+	DecoratorOnNonType = 2066
+	ImplSpecNotBare = 2067
+	DecoratorEmpty = 2068
+	DeriveNamesNoSpec = 2069
+	ChanDirectionForm = 2070
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -202,11 +196,28 @@ pub enum Rule {
 	PrimitiveUnknown = 3092
 	PrimitiveArgCount = 3093
 	PrimitiveOperandType = 3094
+	EnumDiscriminantRepeated = 3095
+	ImplOrphan = 3096
+	DeriveSpecEnumThisParam = 3097
+	DeriveSpecEnumVariantNoValue = 3098
+	ObjNotOnSpec = 3099
+	ObjWithMutFn = 3100
+	ObjWithThisParam = 3101
+	DeriveOnStructureless = 3102
+	DelUnknownName = 3103
+	DelNotABinding = 3104
+	UseAfterDel = 3105
+	UseAfterDelOnSomePaths = 3106
+	ChanOfOptional = 3107
+	PubMutGlobal = 3108
+	RecvOnSendOnly = 3109
+	SendOnRecvOnly = 3110
+	CloseRecvOnly = 3111
+	ChanDirectionNarrows = 3112
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
-	ChanOfOptional = 4003
 	EitherSideOneValue = 4004
 	OptionalChainOnNonOptional = 4005
 	IntOnPayloadEnum = 4006
@@ -247,15 +258,7 @@ pub enum Rule {
 	FillCountNegative = 4041
 	RangeArmBoundNotConstant = 4042
 	NotAChannel = 4043
-	MapEntryNoColon = 4044
 	PrivateFieldNeedsDefault = 4045
-	PubMutGlobal = 4046
-	ImportCycle = 4047
-	DecoratorOnNonType = 4048
-	ImplSpecNotBare = 4049
-	DecoratorEmpty = 4050
-	DeriveNamesNoSpec = 4051
-	ChanDirectionForm = 4052
 	EitherBareValue = 4053
 	NoSuchFieldInChain = 4054
 	TryRightUnanswered = 4055
@@ -282,10 +285,6 @@ pub enum Rule {
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001
 	ImportUnresolved = 5002
-	RecvOnSendOnly = 5003
-	SendOnRecvOnly = 5004
-	CloseRecvOnly = 5005
-	ChanDirectionNarrows = 5006
 	ModuleNotImported = 5007
 	NotPublicType = 5008
 	PrivateTypeOnPubDecl = 5009
@@ -305,6 +304,7 @@ pub enum Rule {
 	# rather than ranked, because any silent precedence is a question a reader eventually has to
 	# ask, and there should be nothing to ask.
 	ImportLayoutAmbiguous = 5013
+	ImportCycle = 5014
 
 	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
 	# range because it is its own class: each of these retires when the form is built, and

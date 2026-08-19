@@ -558,7 +558,7 @@ fn f() -> Result[int] {
 fn main() { print f() ?? 0 }
 EOF
 
-expect "$ZERG" repeated-discriminant E2009 <<'EOF'
+expect "$ZERG" repeated-discriminant E3095 <<'EOF'
 enum K {
 	A = 1
 	B = 1
@@ -814,7 +814,7 @@ EOF
 # and the `impl` one was not refused at all: the pending derive survived the block and landed
 # on whichever `struct` was declared next, which is a decorator silently changing a type the
 # reader never decorated.
-expect "$ZERG" derive-on-a-function E4048 '`#[derive(Eq)]`' <<'EOF'
+expect "$ZERG" derive-on-a-function E2066 '`#[derive(Eq)]`' <<'EOF'
 #[derive(Eq)]
 fn f() {
 	print 1
@@ -823,7 +823,7 @@ fn f() {
 fn main() { f() }
 EOF
 
-expect "$ZERG" derive-on-a-type-alias E4048 '`#[derive(Eq)]`' <<'EOF'
+expect "$ZERG" derive-on-a-type-alias E2066 '`#[derive(Eq)]`' <<'EOF'
 #[derive(Eq)]
 type X = int
 
@@ -833,7 +833,7 @@ EOF
 # `#[obj]` RIDES THE SAME PENDING LIST under a marker no spec name can be, and every sentence
 # about that list spelled it as a derive — so `#[obj] fn f()` reported `#[derive(#obj)]`,
 # quoting a decorator the program does not contain.
-expect "$ZERG" obj-on-a-function E4048 '`#[obj]`' <<'EOF'
+expect "$ZERG" obj-on-a-function E2066 '`#[obj]`' <<'EOF'
 #[obj]
 fn f() {
 	print 1
@@ -846,7 +846,7 @@ EOF
 # rule cannot be "a decorator leads a type" and the sentence cannot say so either. A reader who
 # writes `#[test]` on a struct and is told it belongs on a `struct` has been handed the other
 # decorator's advice, which is how `#[obj] fn f()` used to report `#[derive(#obj)]`.
-expect "$ZERG" test-on-a-struct E4048 '`#[test]`' <<'EOF'
+expect "$ZERG" test-on-a-struct E2066 '`#[test]`' <<'EOF'
 #[test]
 struct P {
 	pub x: int
@@ -855,7 +855,7 @@ struct P {
 fn main() { print P(1).x }
 EOF
 
-expect "$ZERG" derive-on-an-impl E4048 '`#[derive(Eq)]`' <<'EOF'
+expect "$ZERG" derive-on-an-impl E2066 '`#[derive(Eq)]`' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -3097,7 +3097,7 @@ EOF
 
 # The other half, and not the same question: GRAMMAR writes an `impl`'s SPEC as a bare
 # `type-name`, so a dotted name there is a form the grammar does not derive at all.
-expect "$ZERG" an-impl-spec-reached-through-an-import E4049 <<'EOF'
+expect "$ZERG" an-impl-spec-reached-through-an-import E2067 <<'EOF'
 import "./text"
 
 struct Bot {
@@ -3164,7 +3164,7 @@ EOF
 
 # GRAMMAR#decorator is one item or more. The loop that reads them never ran when the `]` was
 # already there, so `#[]` was read, dropped, and the declaration compiled unchanged.
-expect "$ZERG" an-empty-decorator E4050 <<'EOF'
+expect "$ZERG" an-empty-decorator E2068 <<'EOF'
 #[]
 fn work() {
 	nop
@@ -3191,7 +3191,7 @@ EOF
 
 # The arguments are what a derive IS. A bare `#[derive]` or `#[derive()]` was read and dropped,
 # so the type went on with no impls while the line above it said it had some.
-expect "$ZERG" a-derive-with-no-specs E4051 <<'EOF'
+expect "$ZERG" a-derive-with-no-specs E2069 <<'EOF'
 #[derive()]
 struct P {
 	pub x: int
@@ -3205,7 +3205,7 @@ EOF
 # GRAMMAR#chan-type has three alternatives and `<-chan[T]<-` is none of them. The trailing
 # arrow was read after the `]` with no regard for the leading one, so a send-only signature
 # was honoured as a receive-only one.
-expect "$ZERG" a-channel-facing-both-ways E4052 <<'EOF'
+expect "$ZERG" a-channel-facing-both-ways E2070 <<'EOF'
 fn take(c: <-chan[int]<-) {
 	nop
 }

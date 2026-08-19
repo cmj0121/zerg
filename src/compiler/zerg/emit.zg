@@ -2014,11 +2014,25 @@ fn c_mod_tag(mut &em: Emitter, mod: str) -> int {
 
 # c_sorted_names is an insertion sort over module names — a handful of them, once, and the
 # ORDER is what has to be reproducible rather than the sort fast.
+#
+# IT SORTS BY THE MODULE'S NAME AND NOT BY ITS PATH, and that is the whole of what makes the
+# order reproducible. A module's identity here is the DIRECTORY it was read from, so the same
+# program built as `zerg build src/compiler/zergc.zg` and as `zerg build /abs/…/zergc.zg`
+# named its modules two different ways — and sorting those strings put them in two different
+# ORDERS, because the standard library's directory is absolute either way while the project's
+# was not. The same private function came out `zg_m2_has_str` in one build and `zg_m4_has_str`
+# in the other: 450 KB of a 4.5 MB C file differing for a program nobody changed.
+#
+# The last segment is the name a reader writes and a reader's spelling of the ENTRY path
+# cannot reach it. Ties — two modules whose paths end in the same segment, `a/text` and
+# `b/text` — keep the order they were first seen in, which is the import walk's and is a
+# property of the program rather than of the filesystem: `<=` and not `<` is what makes the
+# insertion stable, and `<` here would reverse them instead.
 fn c_sorted_names(names: list[str]) -> list[str] {
 	mut out: list[str] = []
 	for n in names {
 		mut at := 0
-		for at < out.len() and out[at] < n {
+		for at < out.len() and last_segment(out[at]) <= last_segment(n) {
 			at = at + 1
 		}
 		mut next: list[str] = []

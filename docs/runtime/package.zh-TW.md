@@ -230,6 +230,15 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 > 邊界。所以就編譯器而言，上文的 **package-internal** 與 **package-public** 仍是同一層：一個 `pub` 宣告，凡是
 > import 它的 module 都指名得到，沒有任何東西把它收窄到某個 package 的 root 表面——因為還沒有 package 這個單位
 > 可以拿來量。re-export（`import pub`）建得出一個表面；但還沒有任何規則要求一個名字必須在某個表面上。
+>
+> ---
+>
+> **[deviation]** 而正因為它比較的是**目錄**，**同一個目錄裡的兩個單檔 module，對這條規則而言是同一個 module**。
+> 並排的 `./a` 與 `./b` 在其他每個地方都是兩個 module——兩個 import path、兩個命名空間——但 `b` 可以指名 `a` 的
+> module-private 宣告而不會被說一句話。標準函式庫就是一個扁平目錄裡的十五個這種 module，所以這條規則在它們任意
+> 兩者之間都不成立。module 在這裡需要的身分是「它被哪個 import path 抵達」；它拿到的卻是「它的檔案剛好放在哪」。
+> 同一個代換也出現在訊息裡：從外面讀 `strings` 的私有名字，會被拒收為 _not a public member of module `stdlib`_，
+> 指名的是目錄而不是 module。
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個

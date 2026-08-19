@@ -14,6 +14,7 @@
 package module
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -47,11 +48,15 @@ type OSProvider struct {
 	Root string
 }
 
-// Resolve reads the module directory's Zerg sources in a stable order. The user
-// tree resolves directory modules only (a module is a directory), so a bare
-// `<path>.zg` file is not itself a module here.
+// Resolve reads the module's Zerg sources in a stable order — a directory of them, or a single
+// `<path>.zg` file.
+//
+// IT USED TO BE DIRECTORY-ONLY, and that was this loader's defence against a file taking the
+// name of a standard-library module from every file beside it. The defence is the `./` prefix
+// now (GRAMMAR#import-path): a bare path cannot reach this root at all, so a single-file module
+// here can shadow nothing, and refusing one would refuse a shape the language has.
 func (p OSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
-	return resolveModule(os.DirFS(p.Root), importPath, false)
+	return resolveModule(os.DirFS(p.Root), importPath, true)
 }
 
 // FSProvider resolves a module under an arbitrary fs.FS — the embedded standard
@@ -81,15 +86,102 @@ func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, []Mod
 	if canonical == "." || canonical == ".." || strings.HasPrefix(canonical, "../") || strings.HasPrefix(canonical, "/") {
 		return "", nil, false
 	}
-	if files, ok := resolveDirModule(fsys, canonical); ok {
-		return canonical, files, true
+	dirFiles, dirOK := resolveDirModule(fsys, canonical)
+	fileFiles, fileOK := resolveFileModule(fsys, canonical)
+	if !allowFile {
+		fileOK = false
 	}
-	if allowFile {
-		if files, ok := resolveFileModule(fsys, canonical); ok {
-			return canonical, files, true
-		}
+	// BOTH SHAPES AT ONE NAME IS NO MODULE. A silent precedence — this used to read the
+	// directory and never the file, while the shipping compiler read the file and never the
+	// directory — is a question a reader eventually has to ask, and there should be nothing
+	// to ask. The import is then refused as unresolved, which is a rejection either way.
+	if dirOK && fileOK {
+		return "", nil, false
+	}
+	if dirOK {
+		return canonical, dirFiles, true
+	}
+	if fileOK {
+		return canonical, fileFiles, true
 	}
 	return "", nil, false
+}
+
+// LocalPath reports whether an import path names THIS PROJECT — the `./` prefix — and returns
+// the package path with that prefix taken off. A bare path names the standard library and a
+// path whose first segment holds a '.' names a host; a package name may not hold one, which is
+// what makes the three disjoint (GRAMMAR#import-path).
+func LocalPath(importPath string) (string, bool) {
+	if strings.HasPrefix(importPath, "./") {
+		return strings.TrimPrefix(importPath, "./"), true
+	}
+	return importPath, false
+}
+
+// RemotePath reports whether an import path names a remote package: a first segment that holds
+// a '.', which a package name never can.
+func RemotePath(importPath string) bool {
+	if _, local := LocalPath(importPath); local {
+		return false
+	}
+	first := importPath
+	if i := strings.IndexByte(first, '/'); i >= 0 {
+		first = first[:i]
+	}
+	return strings.Contains(first, ".")
+}
+
+// PathIllFormed answers why a string is not an import path, or "" when it is one. The seed
+// holds the same grammar the shipping compiler does; what it does not hold is that compiler's
+// sentences, which are the language's contract and not the seed's (docs/conformance.md).
+func PathIllFormed(importPath string) string {
+	if importPath == "" {
+		return "an import path may not be empty"
+	}
+	if strings.HasPrefix(importPath, "/") {
+		return "an import path may not begin with `/`"
+	}
+	body, local := LocalPath(importPath)
+	if local && body == "" {
+		return "`./` names no module on its own"
+	}
+	if strings.HasSuffix(importPath, ".zg") {
+		return "an import names a module, not a file"
+	}
+	segs := strings.Split(body, "/")
+	for _, seg := range segs {
+		if seg == "." || seg == ".." {
+			return "`..` is not part of an import path"
+		}
+	}
+	remote := RemotePath(importPath)
+	for i, seg := range segs {
+		if remote && i == 0 {
+			continue
+		}
+		if seg == "" {
+			return "an import path is written one way, and this one has an empty segment"
+		}
+		if !packageName(seg) {
+			return fmt.Sprintf("%q is not a package name", seg)
+		}
+	}
+	return ""
+}
+
+// packageName is `[a-z] [a-z0-9_]*`. Upper case is outside it so that a case-folding
+// filesystem cannot decide whether a program builds.
+func packageName(seg string) bool {
+	if seg == "" || seg[0] < 'a' || seg[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(seg); i++ {
+		c := seg[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // IsTestFile reports whether a source is a TEST FILE by the build tool's convention,

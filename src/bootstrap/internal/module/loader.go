@@ -160,6 +160,16 @@ func (l *Loader) resolveImports(
 			diags.Add(spec.Span(), "%q names a test file, and a normal build compiles none", spec.Path)
 			continue
 		}
+		// THE STRING FIRST, and the disk only after it, so a path that is not an import path
+		// is turned away for what it says rather than for what it failed to find.
+		if why := PathIllFormed(spec.Path); why != "" {
+			diags.Add(spec.Span(), "%q is not an import path: %s", spec.Path, why)
+			continue
+		}
+		if RemotePath(spec.Path) {
+			diags.Add(spec.Span(), "a remote package %q needs a package layer this compiler has not built", spec.Path)
+			continue
+		}
 		canonical, files, ok := l.resolve(spec.Path)
 		if !ok {
 			diags.Add(spec.Span(), "cannot resolve import %q under any source root", spec.Path)
@@ -181,9 +191,21 @@ func (l *Loader) resolveImports(
 }
 
 // resolve tries each source root in order for an import path, first match wins.
+// resolve picks the ONE root the path names rather than searching all of them. A bare path
+// names the standard library and a `./` path names this project (GRAMMAR#import-path), so the
+// prefix decides where to look and nothing on disk can change that — which is what stops a
+// file beside the importer from taking the name `io` away from the standard library.
+//
+// The roots are told apart by TYPE because that is what they are: OSProvider is the user tree
+// and every other provider is bundled.
 func (l *Loader) resolve(importPath string) (string, []ModuleFile, bool) {
+	body, local := LocalPath(importPath)
 	for _, root := range l.roots {
-		if canonical, files, ok := root.Resolve(importPath); ok {
+		_, isUser := root.(OSProvider)
+		if isUser != local {
+			continue
+		}
+		if canonical, files, ok := root.Resolve(body); ok {
 			return canonical, files, true
 		}
 	}

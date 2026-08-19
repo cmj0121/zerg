@@ -7,22 +7,13 @@ and the `Ref[T]` escape hatch. Part of the [Language Reference](../language.md).
 No garbage collector, no pointer syntax. Every value is **scope-owned** (freed at scope exit) and
 passed **by value**. Copy-by-value is the semantics; the compiler elides copies when safe:
 
-> **[deviation]** **What the release logic tracks is a BINDING**, so a heap value that is nobody's binding
-> is nobody's to end. Two shapes leak without bound in an ordinary loop, and they are one defect
-> ([issue #11](https://github.com/cmj0121/zerg/issues/11)):
->
-> - **a temporary handed straight from one call into another.** `strings.count(strings.join(…), "a")` in a
->   500 000-round loop peaks at **25.7 MB**; binding the middle result to a name first peaks at **1.7 MB**.
-> - **the old buffer of a field written over.** `b.xs = […]` in a loop peaks at **25.7 MB** over 300 000
->   rounds and **49.9 MB** over 600 000 — it doubles with the loop, so it is unbounded, not a fixed cost.
->
-> The two peaks agreeing at 25.7 MB is a coincidence of the round counts each repro chose, not one figure
-> written twice; they were measured separately and the 600 000-round doubling is what shows the second is
-> a rate rather than a ceiling.
->
-> Both are legal programs that run correctly and consume memory forever, which the standing contract —
-> _implemented, or refused by name_ — has no third state for. Neither has a case in `make mem-check`, and
-> the section on assignment below carries the same defect from the binding side.
+**Assignment gives the old value back.** Writing over a binding or a field releases what it held, and
+the new value is materialised **before** the release — `s = s + x` and `xs = [xs[0], xs[2]]` both read
+what they are about to replace, so the order is part of the rule and not an optimisation. A `for … in`
+copies the collection it walks and releases that copy on every way out, `break` and an abort included.
+
+`make mem-check` measures each of these: it runs the same program at 5 rounds and at 200 and requires
+the live-allocation counts to be equal, so a value kept per round shows as a difference that grows.
 
 - **Single flow** — an immutable value may pass by-ref invisibly; a mutable one falls back to a copy.
 - **Across coroutines** — always copied: no shared mutable state, no data races; propagating a change
@@ -197,17 +188,22 @@ order.
 **Assignment** is a drop too: writing over a binding that owns something frees what it held, and the new
 value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
 
-> **[deviation]** Only a recursive `enum` and a carrier do that. Assigning over a `str`, a `list`, a `map`,
-> a tuple, a struct or a **held function** binding **abandons** the old value, which leaks it — as does
-> writing over a **field** (the unbounded shape measured at the head of this chapter), the
-> collection a `for … in` over a **map** copies to walk, and the payload a **force-unwrap** copies out:
-> `q!` hands back a copy of what the carrier holds, and an expression that reads one field of it discards
-> the rest. Measured for the fn value: `mut cur := f` then `cur = g` in a loop leaks two allocations a
-> round, the closure's environment and the value it captured. Measured for the force-unwrap: `p: str? = s`
-> then `q!` in a loop leaks one a round. Each is the same missing half of one pair rather than a rule of
-> its own, and none of them has a case in `make mem-check` yet — which is what a gate not finding something
-> looks like.
->
+Every type that owns something does that, and the question is the one `c_drop_fn` answers rather than a
+second list of which types those are. It used to be only a recursive `enum` and a carrier: assigning over
+a `str`, a `list`, a `map`, a tuple, a struct or a **held function** binding abandoned the old value, as
+did writing over a **field** and the collection a `for … in` over a **map** copies to walk. Six shapes,
+one missing half of one pair, and `make mem-check` now carries a case for each — `assign_list_literal`,
+`assign_str`, `assign_list_value`, `assign_field`, `assign_fn_value`, `forin_map_copy`.
+
+A **list literal** had a path of its own, and it lost twice. It re-initialised the destination and then
+pushed the elements in, so the old buffer was abandoned AND a literal that reads what it replaces read
+the emptied list: `xs = [xs[0], xs[2]]` raised _IndexError: index out of range_ on a correct program. It
+is built beside the destination and moved in now, which is the same materialise-release-store every other
+owning type takes.
+
+The **force-unwrap's** copied payload was on that list too and measures clean: `p: str? = s` then `q!` in
+a loop keeps nothing per round (`force_unwrap_copy`).
+
 > A **tuple at scope exit** was on that list and no longer is. It had a copy helper and no drop at all, so
 > `t := (1, s)` retained the `str` and nothing gave it back; it has a `_drop` beside its `_copy` now, and
 > `make mem-check`'s `tuple_heap` counts it. That half was also why `(int, str)?` did not compile at all —

@@ -61,7 +61,7 @@ MANY="${MANY:-200}"
 # How many cases must actually be measured. Every assertion here is of the form "these two
 # numbers agree", which an empty list satisfies — so a typo in the case list would leave a
 # green gate that built nothing.
-MIN_CASES="${MIN_CASES:-11}"
+MIN_CASES="${MIN_CASES:-18}"
 
 [ -x "$ZERG" ] || {
 	printf 'mem-check: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -670,6 +670,146 @@ fn main() {
 	n := rounds()
 	for i < n {
 		lg.at_level(log.Level.DEBUG).str("k", "v").int("n", i).bool("b", true).dur("t", 5).msg("never")
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# --- assigning over a value that owns something -------------------------------------
+# `docs/core/memory.md` named this as the shape with no case here, which is what a gate not
+# finding something looks like. Three spellings of one rule, because the lowering had two
+# paths and only one of them is the general one.
+#
+# A LIST LITERAL had its own path: re-init the destination, then push. That abandoned the
+# old buffer AND evaluated the elements after the destination was emptied, so a literal
+# reading what it replaces read the emptied list. `strings.split` resets its accumulator
+# exactly this way once per separator, which is what made every caller of it look like a
+# leak of its own (#11).
+case_run assign_list_literal yes no <<'ZG'
+fn main() {
+	mut cur: list[int] = []
+	mut i := 0
+	n := rounds()
+	for i < n {
+		cur.append(i)
+		cur = [i, i + 1, i + 2]
+		i = i + 1
+	}
+	print cur.len()
+}
+ZG
+
+# AND EVERY OTHER OWNING TYPE, which went through the general path and was told not to drop:
+# `c_assign_drops` answered yes for a carrier and a recursive enum and no for the rest.
+case_run assign_str yes no <<'ZG'
+fn mk(n: int) -> str {
+	return "abcdefgh" + "ijklmnop"
+}
+
+fn main() {
+	mut s := "x"
+	mut i := 0
+	n := rounds()
+	for i < n {
+		s = mk(i)
+		i = i + 1
+	}
+	print s
+}
+ZG
+
+case_run assign_list_value yes no <<'ZG'
+fn mk() -> list[int] {
+	return [1, 2, 3, 4, 5, 6, 7, 8]
+}
+
+fn main() {
+	mut xs := [0]
+	mut i := 0
+	n := rounds()
+	for i < n {
+		xs = mk()
+		i = i + 1
+	}
+	print xs.len()
+}
+ZG
+
+# and a FIELD, which is the half issue #11 measured as its own shape and is the same rule
+# reached through a different lvalue
+case_run assign_field yes no <<'ZG'
+struct B {
+	pub xs: list[int]
+}
+
+fn main() {
+	mut b := B([0])
+	mut i := 0
+	n := rounds()
+	for i < n {
+		b.xs = [i, i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7]
+		i = i + 1
+	}
+	print b.xs.len()
+}
+ZG
+
+# --- the collection a `for … in` over a map copies to walk ---------------------------
+# The list loop marks the scope, registers the pending drop and unwinds to the mark, so its
+# copy is released on every way out — `break` and abort included. The map loop made the same
+# copy and dropped none of them: one per EXECUTION of the loop, so `for k in m` inside a
+# 1,000,000-round loop peaked at 108.8 MB against a 1.4 MB floor. Two loops, one rule.
+case_run forin_map_copy no no <<'ZG'
+fn main() {
+	mut m: map[str, int] = {"alpha": 1, "beta": 2, "gamma": 3}
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		for k in m {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# --- the two shapes the chapter also named, which measure clean -----------------------
+# `docs/core/memory.md` listed a held function reassigned and a force-unwrap's copied payload
+# beside the assignments above. Both pass here. A case that is green from the day it is
+# written is worth the same as one held red first only if it can still FAIL, which these can:
+# each allocates per round, so the floor below refuses them if they ever stop.
+case_run assign_fn_value no no <<'ZG'
+fn main() {
+	s := "abcdefghijklmnop"
+	mut cur := fn() -> int { return bytearray(s).len() }
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		# a CLOSURE, not a bare function name: the name allocates nothing, so a case built
+		# from one measures nothing and the floor says so. What the chapter named is the
+		# environment cell and the value it captured, and only a capture makes those.
+		cur = fn() -> int { return bytearray(s).len() + 1 }
+		n = n + cur()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+case_run force_unwrap_copy no no <<'ZG'
+fn main() {
+	s := "abcdefghijklmnop"
+	p: str? = s
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		q := p!
+		n = n + bytearray(q).len()
 		i = i + 1
 	}
 	print n

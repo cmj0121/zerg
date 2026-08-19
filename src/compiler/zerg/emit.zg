@@ -12175,11 +12175,22 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	cv := c_var_cname(em, var)
 
 	in2 := ind + "    "
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
 
 	# COPIED, for the reason c_forin gives: a bare header meant the loop pointed into a
 	# buffer it had taken no reference to, so an insert in the body reallocated `entries`
 	# and the loop read on from the free'd block
-	mut out := ind + "{\n" + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	#
+	# AND THE COPY IS GIVEN BACK, which is the half this had not got. `c_forin` marks the
+	# scope, registers the pending drop and unwinds to the mark — so its copy is released on
+	# every way out, `break` and abort included — while this one made a copy per execution
+	# and dropped none of them: `for k in m { … }` inside a 1,000,000-round loop peaked at
+	# 108.8 MB against a 1.4 MB floor. Two loops, one rule; the map's is spelled the same way
+	# the list's is rather than a second way.
+	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	out = out + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	out = out + c_pend_drop(em, c_infer(em, iter), "zgt_mit", in2)
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_map_len(&zgt_mit); zgt_i++) {\n"
 	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zgt_mit, zgt_i));\n"
 
@@ -12191,7 +12202,8 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	c_frz_pop(em, frz)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
-	return out + ind + "}\n"
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {

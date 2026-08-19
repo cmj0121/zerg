@@ -6,19 +6,12 @@
 無 garbage collector、無 pointer 語法。每個值都是 **scope-owned**（離開 scope 即釋放），且預設以**值傳遞**。
 copy-by-value 是語意；編譯器會在安全時省略複製：
 
-> **[deviation]** **釋放邏輯追蹤的是 BINDING**，所以一個不屬於任何 binding 的 heap 值，也就不屬於任何人去終結。
-> 有兩種形狀會在一個普通迴圈裡無上限地漏，而它們是同一個缺陷（[issue #11](https://github.com/cmj0121/zerg/issues/11)）：
->
-> - **一個從某次呼叫直接交給另一次呼叫的暫存值。** `strings.count(strings.join(…), "a")` 在 50 萬輪的迴圈裡
->   峰值 **25.7 MB**；先把中間結果綁到一個名字上，峰值 **1.7 MB**。
-> - **被寫過去的欄位所持有的舊 buffer。** `b.xs = […]` 在迴圈裡 30 萬輪峰值 **25.7 MB**、60 萬輪 **49.9 MB**
->   ——它隨迴圈加倍，所以是無上限，而不是一筆固定成本。
->
-> 兩個峰值都落在 25.7 MB，是各自重現程式所選輪數的巧合，不是同一個數字被寫了兩次；它們是分開量的，而 60 萬輪那次
-> 的加倍，正是第二種形狀屬於「速率」而非「天花板」的證據。
->
-> 兩者都是會正確執行、卻永遠吃記憶體的合法程式，而既有的約定——_做出來，或者具名拒絕_——沒有第三種狀態容納它。
-> 兩者在 `make mem-check` 裡都還沒有案例，而下面關於指派的段落是同一個缺陷從 binding 那一側看的樣子。
+**指派會把舊的值還回去。** 寫過一個 binding 或一個欄位，會釋放它原本持有的東西，而新值在釋放**之前**就先被
+建好——`s = s + x` 與 `xs = [xs[0], xs[2]]` 都會讀到它們正要取代的東西，所以順序是規則的一部分、不是最佳化。
+`for … in` 會複製它所走訪的集合，並在每一條離開路徑上釋放那份複本，`break` 與 abort 都算。
+
+`make mem-check` 逐一量這些：同一支程式跑 5 輪與 200 輪，存活的配置數必須相等，所以每輪留下的值會顯示為一個
+會成長的差值。
 
 - **單一執行流程**——immutable 的值可隱形地改以 by-ref 傳遞；mutable 的則 fallback 為複製。
 - **跨 coroutine**——一律複製：無共享可變狀態、無 data race；要把修改反映回去是呼叫端的責任（例如透過 channel）。
@@ -156,15 +149,20 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 **指派**也是一次釋放：寫過一個擁有東西的 binding 會釋放它原本持有的值，而新值一定在舊值被釋放**之前**就先建好
 ——`s = s + x` 要讀 `s` 才做得出自己的右手邊。
 
-> **[deviation]** 只有遞迴 `enum` 與 carrier 這麼做。指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或
-> **被持有的函式** binding 會**丟棄**舊值,也就是漏掉它;寫過去一個**欄位**也是(本章開頭實測的那個無上限形狀),
-> `for … in` 走訪一個 **map** 時複製出來的那份集合也是,
-> **force-unwrap** 抄出來的那份 payload 也是——`q!` 交回的是 carrier 所持有之物的一份複本,而只讀其中一個欄位
-> 的運算式會把其餘的丟掉。fn value 的部分實測過:迴圈裡 `mut cur := f` 之後 `cur = g`,每輪漏兩個配置——閉包
-> 的環境,以及它捕獲的那個值。force-unwrap 也實測過:迴圈裡 `p: str? = s` 之後 `q!`,每輪漏一個。每一個都是
-> 同一組配對缺了一半,而不是各自的規則;而且 `make mem-check` 裡目前一個案例都沒有——這正是「一道量不到東西
-> 的 gate」長的樣子。
->
+每一個擁有東西的型別都這麼做，而這個問題就是 `c_drop_fn` 回答的那一個,不是一份「哪些型別」的第二清單。
+它從前只有遞迴 `enum` 與 carrier:指派覆蓋一個 `str`、`list`、`map`、tuple、struct 或**被持有的函式** binding
+會**丟棄**舊值,寫過去一個**欄位**、以及 `for … in` 走訪一個 **map** 時複製出來的那份集合也一樣。六種形狀、
+同一組配對裡缺的同一半,而 `make mem-check` 現在每一種都有案例——`assign_list_literal`、`assign_str`、
+`assign_list_value`、`assign_field`、`assign_fn_value`、`forin_map_copy`。
+
+**list literal** 曾有自己的一條路徑,而它輸了兩次:它先把目的地重新初始化、再把元素推進去,於是舊 buffer 被
+丟棄,而且一個會讀到自己所取代之物的 literal 讀到的是被清空的 list——`xs = [xs[0], xs[2]]` 讓一支正確的程式
+raise _IndexError: index out of range_。它現在建在目的地旁邊再搬進去,就是其他每個擁有型別走的那條
+materialise-release-store。
+
+**force-unwrap** 抄出來的那份 payload 也曾在那份清單上,而它量起來是乾淨的:迴圈裡 `p: str? = s` 之後 `q!`,
+每輪不留下任何東西(`force_unwrap_copy`)。
+
 > **tuple 在 scope 結束時**本來也在那份名單上,現在不在了。它曾經有 copy helper 而完全沒有 drop,所以
 > `t := (1, s)` retain 了那個 `str`、卻沒有任何地方把它還回去;現在它的 `_copy` 旁邊有一份 `_drop`,而
 > `make mem-check` 的 `tuple_heap` 會把它數出來。缺的那一半也正是 `(int, str)?` 根本編不起來的原因——

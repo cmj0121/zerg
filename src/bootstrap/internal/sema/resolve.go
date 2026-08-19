@@ -74,6 +74,23 @@ type resolver struct {
 	// is typed and evaluated in dependency order.
 	curConst   *ast.BindStmt
 	constEdges map[*ast.BindStmt][]*ast.BindStmt
+
+	// curFn is the function whose body is currently being resolved, and the three maps
+	// below are the CALL GRAPH collected beside constEdges, for the half of a constant's
+	// dependencies that no ident in its initializer spells: `const EARLY := pick()` beside
+	// a `pick` whose body returns `LATER` depends on `LATER`, and stage 2 records nothing,
+	// because it only ever sees the idents written in the initializer itself. The sweep
+	// then placed EARLY first and it took the zero value — silently, exit 0.
+	//
+	// So each function's body records the module constants it names and the functions it
+	// names, each constant's initializer records the functions IT names, and linkConstCalls
+	// closes the second over the first once every body is resolved. It runs as a third
+	// stage rather than inline because a callee's body may not have been walked yet when
+	// the initializer that calls it is.
+	curFn      *ast.FuncDecl
+	fnConsts   map[*ast.FuncDecl][]*ast.BindStmt
+	fnFuncs    map[*ast.FuncDecl][]*ast.FuncDecl
+	constFuncs map[*ast.BindStmt][]*ast.FuncDecl
 }
 
 // addConstEdge records that module constant `from`'s initializer references module
@@ -90,6 +107,29 @@ func (r *resolver) addConstEdge(from, to *ast.BindStmt) {
 	r.constEdges[from] = append(r.constEdges[from], to)
 }
 
+// appendFnConst and appendFn are append-if-absent over a slice, which is what these lists
+// want: a body naming the same constant twice is one dependency, and the ORDER has to stay
+// the order the resolver saw them in. A map would dedup for free and iterate in a different
+// order every run, which would reorder the constants, which would change the emitted C —
+// `make fixpoint` compares that C against itself.
+func appendFnConst(xs []*ast.BindStmt, x *ast.BindStmt) []*ast.BindStmt {
+	for _, e := range xs {
+		if e == x {
+			return xs
+		}
+	}
+	return append(xs, x)
+}
+
+func appendFn(xs []*ast.FuncDecl, x *ast.FuncDecl) []*ast.FuncDecl {
+	for _, e := range xs {
+		if e == x {
+			return xs
+		}
+	}
+	return append(xs, x)
+}
+
 func (r *resolver) errorf(span token.Span, format string, args ...any) {
 	r.diags.Add(span, format, args...)
 }
@@ -99,8 +139,56 @@ func (r *resolver) errorf(span token.Span, format string, args ...any) {
 func (r *resolver) resolveFile(file *ast.File) {
 	r.module = newScope(ScopeModule, nil)
 	r.scope = r.module
+	r.fnConsts = map[*ast.FuncDecl][]*ast.BindStmt{}
+	r.fnFuncs = map[*ast.FuncDecl][]*ast.FuncDecl{}
+	r.constFuncs = map[*ast.BindStmt][]*ast.FuncDecl{}
 	r.collectSurface(file.Items)
 	r.resolveItems(file.Items)
+	r.linkConstCalls(file)
+}
+
+// --- stage 3: the constants a call reaches ------------------------------------
+
+// linkConstCalls widens the constant dependency graph to what an initializer READS rather
+// than what it MENTIONS. Stage 2 records an edge for an ident written in the initializer
+// itself, which is the whole of the dependency only while no call is involved; a call is
+// followed here, into the callee's body and through whatever that body calls in turn.
+//
+// It runs after every body, because the callee of a constant's initializer may be declared
+// below it and its own idents are not resolved until then.
+//
+// The walk starts from the constants in DECLARATION order and follows each call list in the
+// order it was recorded — never a map range — so the edges land in the same order on every
+// run. The constant order is the emission order, and the emission order is C that
+// `make fixpoint` compares against itself.
+//
+// It over-approximates: a constant read on a branch the call never takes is a dependency
+// all the same, because a static walk cannot know the branch. That can only make a constant
+// wait longer, and the one thing it can produce that is not merely conservative is a cycle
+// report for a path that is not truly circular — a loud, rare wrong answer standing in for
+// the silent, ordinary one this closes.
+func (r *resolver) linkConstCalls(file *ast.File) {
+	for _, c := range gatherModuleConsts(file.Items) {
+		seen := map[*ast.FuncDecl]bool{}
+		var follow func(fn *ast.FuncDecl)
+		follow = func(fn *ast.FuncDecl) {
+			// a function already being followed can add no name the walk does not have,
+			// and this is what makes a recursive or mutually recursive callee terminate
+			if seen[fn] {
+				return
+			}
+			seen[fn] = true
+			for _, dep := range r.fnConsts[fn] {
+				r.addConstEdge(c, dep)
+			}
+			for _, next := range r.fnFuncs[fn] {
+				follow(next)
+			}
+		}
+		for _, fn := range r.constFuncs[c] {
+			follow(fn)
+		}
+	}
 }
 
 // --- stage 1: module surface --------------------------------------------------
@@ -354,6 +442,12 @@ func (r *resolver) resolveItem(it ast.Stmt) {
 }
 
 func (r *resolver) resolveFunc(fn *ast.FuncDecl) {
+	// saved and restored rather than assigned, the way curConst is: a nested declaration
+	// would otherwise leave the outer body's records going to the inner one.
+	prevFn := r.curFn
+	r.curFn = fn
+	defer func() { r.curFn = prevFn }()
+
 	r.push(ScopeFunc)
 	for i := range fn.Params {
 		p := &fn.Params[i]
@@ -607,9 +701,32 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 			// module constant (its declaring node is a top-level BindStmt) is a dependency
 			// edge for the constant-initialization order. A self-reference is recorded too,
 			// so `x := x + 1` is caught as a cycle rather than reading its own zero value.
-			if r.curConst != nil {
-				if dep, ok := sym.Decl.(*ast.BindStmt); ok {
+			if dep, ok := sym.Decl.(*ast.BindStmt); ok {
+				if r.curConst != nil {
 					r.addConstEdge(r.curConst, dep)
+				}
+				// the same reference, seen inside a function body: that function READS
+				// this constant, which makes it a dependency of every constant whose
+				// initializer can reach the function.
+				if r.curFn != nil {
+					r.fnConsts[r.curFn] = appendFnConst(r.fnConsts[r.curFn], dep)
+				}
+			}
+			// A FUNCTION NAME, and Kind is what tells it from a parameter — resolveFunc
+			// declares each parameter with the FuncDecl as its Decl, so the type assertion
+			// alone would count every parameter as a call to the function holding it.
+			//
+			// A name is recorded whether or not it is being CALLED here. A function
+			// mentioned as a value can still be called through the binding that holds it,
+			// and following one that is never called only makes a constant wait longer.
+			if sym.Kind == SymFunc {
+				if callee, ok := sym.Decl.(*ast.FuncDecl); ok {
+					if r.curConst != nil {
+						r.constFuncs[r.curConst] = appendFn(r.constFuncs[r.curConst], callee)
+					}
+					if r.curFn != nil {
+						r.fnFuncs[r.curFn] = appendFn(r.fnFuncs[r.curFn], callee)
+					}
 				}
 			}
 		}

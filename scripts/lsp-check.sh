@@ -522,7 +522,7 @@ fi
 # says about any member is a finding — errors and lints alike.
 mkdir -p "$tmp/proj/widget"
 cat >"$tmp/proj/app.zg" <<'ZG'
-import "widget"
+import "./widget"
 
 fn main() {
 	widget.greet()
@@ -534,7 +534,7 @@ pub fn shout(s: str) -> str {
 }
 ZG
 cat >"$tmp/proj/widget/a.zg" <<'ZG'
-import "util"
+import "./util"
 
 pub fn greet() {
 	print util.shout(banner())

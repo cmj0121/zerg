@@ -71,7 +71,7 @@ is what does the damage. `make fmt-roundtrip` is the gate over both.
 
 `F105` is what gives a wrapped chain a visible end:
 
-```zerg
+```text
 a := (
     builder()
     .run()
@@ -85,7 +85,7 @@ a later line than its opener, so a wrapped argument list gets the same shape.
 `F103` counts brackets rather than statements, so a nested group steps in one level per
 open bracket and each closer lands under its own opener:
 
-```zerg
+```text
 x := sum(
     sum(
         1,
@@ -409,7 +409,7 @@ expression break where their author broke them — those breaks say where the st
 not that the line ran out of room. What they get is the opener ending its own line, so
 every step starts in the same column:
 
-```zerg
+```text
 n := (
     builder()
     .run()

@@ -137,9 +137,14 @@ iteration would be a loop that means something else, and `for i in f()..g()` is 
 of that show.
 
 The bindings are named for the **line and column** of the `for` they came from, so two loops in one
-function cannot collide and the name says where it came from. They are hoisted into the enclosing
-scope rather than wrapped in a block of their own because a bare `{ … }` statement is a form this
-compiler refuses.
+function cannot collide and the name says where it came from — and that naming is what makes it safe
+to hoist them into the enclosing scope rather than wrap them in a block of their own.
+
+> The reason given here used to be that _a bare `{ … }` statement is a form this compiler refuses_,
+> and it is not: `zerg build` accepts one, and `zerg desugar` prints one back unchanged. The sentence
+> was found while closing [#12](https://github.com/cmj0121/zerg/issues/12) — the ten statement walks
+> that had no arm for that form — which is the same shape one level up: a form nobody had looked at
+> being described by whoever needed a reason for something else.
 
 **The inclusive form is not `i <= hi`.** `for i in 0..=MAX` has no value to step to after its last
 one: the step overflows, and under this language's [checked arithmetic](../core/types.md) that

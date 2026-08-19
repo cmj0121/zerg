@@ -5355,6 +5355,12 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[Stmt], in_loop: bool) {
 			Stmt.SFor(is_cond, cond, body_b) => c_guard_no_jump(em, body_b, true)
 			Stmt.SForIn(nm, it, body_b) => c_guard_no_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_guard_no_jump_sel(em, arms, in_loop)
+
+			# and inside a bare block, where a `return` was leaving a `guard` unseen: the
+			# E9043 that names the form never fired, and what the reader got instead was
+			# _E3032 this function's answer is int, and this gives Result[int]_ — a true
+			# sentence about a consequence, pointing nowhere near the `return` that caused it
+			Stmt.SScope(body_b) => c_guard_no_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -9615,17 +9621,104 @@ fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
 	return out
 }
 
-# c_const_ready is whether every constant this initializer names has been assigned already. A
-# name that is not a constant is not this rule's business — a function call is ordinary code and
-# runs when the assignment does.
+# c_const_ready is whether every constant this initializer names has been assigned already —
+# NAMES DIRECTLY, or reaches through a call.
+#
+# It used to stop at the call: *a function call is ordinary code and runs when the assignment
+# does*, which is true about WHEN it runs and false about WHAT it reads. `const EARLY :=
+# pick()` beside a `pick` whose body returns `LATER` has a dependency on `LATER` that no bare
+# name in the initializer spells, so the sweep placed `EARLY` first and it took the zero value
+# — an empty string, silently, exit 0 (#14). In `src/stdlib/log.zg`, where three module
+# constants are filled by functions that read a sentinel, the same hole was a SIGSEGV.
+#
+# So a call is followed into the callee's body, and the constants that body names are this
+# initializer's too, transitively. `seen` is what stops a recursive or mutually recursive
+# callee from being followed for ever; a function already being followed can add no name the
+# walk does not already have.
+#
+# IT OVER-APPROXIMATES, in two ways that are worth naming because the refusal is what a reader
+# meets. A constant read on a branch the call never takes is still a dependency here — a
+# static walk cannot know the branch — and a METHOD is matched by NAME across every receiver,
+# because the type that would pick one is inferred by a walk this ordering decides the order
+# of. Both can only make a constant wait longer, and the one observable cost is a ConstCycle
+# naming a path that is not truly circular. That is a loud, rare wrong answer in place of a
+# silent, ordinary one.
 fn c_const_ready(f: File, e: Expr, done: list[bool]) -> bool {
+	mut seen: list[str] = []
+	return c_const_ready_at(f, e, done, seen)
+}
+
+fn c_const_ready_at(f: File, e: Expr, done: list[bool], mut &seen: list[str]) -> bool {
 	idx := c_const_idx(f, e)
+
 	return done[idx] if idx >= 0
 
+	return false if not c_const_ready_call(f, e, done, seen)
+
 	for p in expr_parts(e) {
-		return false if not c_const_ready(f, p, done)
+		return false if not c_const_ready_at(f, p, done, seen)
 	}
 	return true
+}
+
+# c_const_ready_call is the half above that reaches through a call: the callee's body, walked
+# for the constants it names. An expression that calls nothing answers yes and costs a string
+# compare.
+fn c_const_ready_call(f: File, e: Expr, done: list[bool], mut &seen: list[str]) -> bool {
+	nm := c_callee_name(e)
+
+	return true if nm == ""
+	return true if c_seen_fn(seen, nm)
+
+	seen.append(nm)
+
+	# EVERY row of that name, not the first: a free function's name is unique in this
+	# compiler's flat namespace, but a method's is not, and the receiver that would choose
+	# between them is not known here.
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == nm {
+			return false if not c_const_ready_stmts(f, f.fns[i].body, done, seen)
+		}
+		i = i + 1
+	}
+	return true
+}
+
+# c_const_ready_stmts walks a body the way stmt_exprs and stmt_kids divide it — what each
+# statement mentions, then what it holds. Both are exhaustive over Stmt with no catch-all, so
+# a form written inside a bare block or an `assert` is reached here rather than silently
+# contributing no dependency.
+fn c_const_ready_stmts(f: File, body: list[Stmt], done: list[bool], mut &seen: list[str]) -> bool {
+	mut i := 0
+	for i < body.len() {
+		s := body[i]
+		for e in stmt_exprs(s) {
+			return false if not c_const_ready_at(f, e, done, seen)
+		}
+		return false if not c_const_ready_stmts(f, stmt_kids(s), done, seen)
+		i = i + 1
+	}
+	return true
+}
+
+# c_callee_name is the function an expression CALLS, or "" for one that calls nothing. The
+# catch-all is right here and wrong in expr_parts next door, and the difference is what is
+# being asked: this is one question about one node, which a node that is not a call answers
+# no to; expr_parts must know every node's contents, so a `_` there is a hole.
+fn c_callee_name(e: Expr) -> str {
+	return match e {
+		Expr.ECall(nm, _, _) => nm
+		Expr.EMethod(_, nm, _) => nm
+		_ => ""
+	}
+}
+
+fn c_seen_fn(seen: list[str], nm: str) -> bool {
+	for s in seen {
+		return true if s == nm
+	}
+	return false
 }
 
 # c_const_idx is the row this expression names, or -1 when it names no constant. Only a bare
@@ -12995,6 +13088,13 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[Stmt], in_loop: bool) {
 			Stmt.SFor(is_cond, cond, body_b) => c_check_loop_jump(em, body_b, true)
 			Stmt.SForIn(nm, it, body_b) => c_check_loop_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_check_loop_jump_sel(em, arms, in_loop)
+
+			# A BARE BLOCK DOES NOT MAKE A LOOP, and without this arm the walk never looked
+			# inside one — so `{ break }` written outside any `for` was emitted, and the
+			# refusal a reader got was cc's: _'break' statement not in loop or switch
+			# statement_, against generated code, about a rule this compiler has and did not
+			# apply. `break` on its own at the same place has always been E4001.
+			Stmt.SScope(body_b) => c_check_loop_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -13164,9 +13264,14 @@ fn c_body_diverges(body: list[Stmt]) -> bool {
 
 fn c_stmt_diverges(s: Stmt) -> bool {
 	return match s {
-		Stmt.SReturn(_, _) => true
-		Stmt.SRaise(_, _, _) => true
+		Stmt.SReturn(_, _)          => true
+		Stmt.SRaise(_, _, _)        => true
 		Stmt.SIf(_, t, has_else, e) => has_else and c_body_diverges(t) and c_body_diverges(e)
+
+		# a bare block diverges when its body does, and nothing else about it matters here.
+		# Without this arm `fn f() -> int { { return 3 } }` was _E4023 its body falls off the
+		# end_ — a function whose only exit is a `return`, told it has none.
+		Stmt.SScope(b) => c_body_diverges(b)
 		_ => false
 	}
 }
@@ -13976,20 +14081,35 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, check: bo
 		defs = defs + c_lowered(check, "static " + c_fn(em, inst))
 		done = done + 1
 	}
+
+	# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
+	# each once
+	#
+	# THE WHOLE PROGRAM'S, not this unit's. `own` is the entry file, so under separate
+	# compilation an imported module's `init()` was emitted, prototyped in every unit,
+	# and called by none: `import "m"` where m declares `init()` simply did not run it,
+	# and the program printed the rest of its output as if it had. The constants beside
+	# it were already taken from `f` for exactly this reason. It went unseen because the
+	# one example that owns this behaviour was built by the seed, whose single
+	# translation unit makes `own` and `f` the same file.
+	#
+	# OUTSIDE THE `c_has_main` GUARD, and the text is what the guard decides — not whether
+	# the walk happens. This lowering is the ONLY place a module-level initializer is
+	# resolved: c_const_globals runs in every unit and infers each row's type, but inference
+	# is silent about a callee nothing declares — c_undefined_fn is reached from c_call and
+	# not from c_infer_call, because a type is all inference was asked for. So while this
+	# sat inside the guard, a unit that declares no `main` — which is `zerg build`'s
+	# documented behaviour for a module, `--emit lib` — had NOTHING at module level
+	# resolved: `a := nope().run()` alone in a file built, linked, and exited 0, with no
+	# diagnostic and no `nope` anywhere in the program. The identical call one scope down
+	# was refused, because a function body is lowered whether or not the unit has an entry.
+	#
+	# Running the walk and discarding what it produced is the same shape `c_lowered` already
+	# gives the `check` stage: the findings are the point, the text is the by-product.
+	inits := c_const_assigns(em, f) + c_init_calls(em, f)
+
 	mut mainw := ""
 	if c_has_main(own) {
-		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
-		# each once
-		#
-		# THE WHOLE PROGRAM'S, not this unit's. `own` is the entry file, so under separate
-		# compilation an imported module's `init()` was emitted, prototyped in every unit,
-		# and called by none: `import "m"` where m declares `init()` simply did not run it,
-		# and the program printed the rest of its output as if it had. The constants beside
-		# it were already taken from `f` for exactly this reason. It went unseen because the
-		# one example that owns this behaviour was built by the seed, whose single
-		# translation unit makes `own` and `f` the same file.
-		inits := c_const_assigns(em, f) + c_init_calls(em, f)
-
 		mainw = c_lowered(check, c_main_entry(em, own, inits))
 	}
 

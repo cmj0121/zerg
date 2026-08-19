@@ -1175,6 +1175,127 @@ fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
 	return out
 }
 
+# stmt_exprs and stmt_kids are `expr_parts` one level up: the expressions written DIRECTLY in
+# one statement, and the statements it HOLDS. They are the other half of the boundary
+# expr_parts draws above — *a block is not a part … descending here would need a second walk
+# over Stmt* — and this is that walk, spelled once so the next pass that needs it inherits it
+# rather than writing a third.
+#
+# NO CATCH-ALL, for exactly the reason expr_parts has none, and here the cost of one is
+# already on record: `Stmt.SScope` — a bare `{ … }` block — is missing an arm in walks that
+# do have a `_ =>`, and what falls out is a legal program refused with a reason that is not
+# true and a called function reported as never called (#12). A `_` answers "holds nothing"
+# for a node that holds a whole block, and nothing reports that it lied. A new Stmt variant
+# must say what it contains.
+#
+# The two are separate functions and not one, because a caller asking "what does this
+# statement mention" and a caller descending into blocks want different halves, and a walk
+# that got a flat list of both could not tell a condition from a body.
+fn stmt_exprs(s: Stmt) -> list[Expr] {
+	return match s {
+		Stmt.SLet(_, _, _, _, _, v) => [v]
+		Stmt.SAssign(l, r) => [l, r]
+		Stmt.SPrint(v) => [v]
+		Stmt.SReturn(_, v) => [v]
+		Stmt.SReturnIf(v, c) => [v, c]
+		Stmt.SExpr(v) => [v]
+		Stmt.SIf(c, _, _, _) => [c]
+		Stmt.SFor(_, c, _) => [c]
+		Stmt.SForIn(_, it, _) => [it]
+		Stmt.SForSelect(arms) => stmt_sel_exprs(arms)
+		Stmt.SRaise(v, _, cz) => [v, cz]
+		Stmt.SAssert(_) => stmt_exprs_none()
+		Stmt.SBreak => stmt_exprs_none()
+		Stmt.SContinue => stmt_exprs_none()
+		Stmt.SNop => stmt_exprs_none()
+		Stmt.SScope(_) => stmt_exprs_none()
+		Stmt.SDefer(v) => [v]
+		Stmt.SSpawn(v) => [v]
+		Stmt.SSend(ch, v) => [ch, v]
+		Stmt.SSelect(arms) => stmt_sel_exprs(arms)
+		Stmt.SDel(_) => stmt_exprs_none()
+		Stmt.SClose(ch, _) => [ch]
+		Stmt.SIfLet(_, v, _, _, _) => [v]
+		Stmt.SAt(_, _) => stmt_exprs_none()
+	}
+}
+
+fn stmt_kids(s: Stmt) -> list[Stmt] {
+	return match s {
+		Stmt.SLet(_, _, _, _, _, _) => stmt_kids_none()
+		Stmt.SAssign(_, _) => stmt_kids_none()
+		Stmt.SPrint(_) => stmt_kids_none()
+		Stmt.SReturn(_, _) => stmt_kids_none()
+		Stmt.SReturnIf(_, _) => stmt_kids_none()
+		Stmt.SExpr(_) => stmt_kids_none()
+		Stmt.SIf(_, tb, _, eb) => stmt_kids_cat(tb, eb)
+		Stmt.SFor(_, _, b) => b
+		Stmt.SForIn(_, _, b) => b
+		Stmt.SForSelect(arms) => stmt_sel_kids(arms)
+		Stmt.SRaise(_, _, _) => stmt_kids_none()
+
+		# an `assert` carries the statements its claim is DEFINED as, and the enum's own
+		# comment says every walk over a statement list owes it an arm
+		Stmt.SAssert(ss) => ss
+		Stmt.SBreak => stmt_kids_none()
+		Stmt.SContinue => stmt_kids_none()
+		Stmt.SNop => stmt_kids_none()
+		Stmt.SScope(ss) => ss
+		Stmt.SDefer(_) => stmt_kids_none()
+		Stmt.SSpawn(_) => stmt_kids_none()
+		Stmt.SSend(_, _) => stmt_kids_none()
+		Stmt.SSelect(arms) => stmt_sel_kids(arms)
+		Stmt.SDel(_) => stmt_kids_none()
+		Stmt.SClose(_, _) => stmt_kids_none()
+		Stmt.SIfLet(_, _, tb, _, eb) => stmt_kids_cat(tb, eb)
+		Stmt.SAt(_, _) => stmt_kids_none()
+	}
+}
+
+# the two empties are functions for the reason expr_parts_none is one: the seed that compiles
+# this compiler cannot infer an empty list literal's element type inside a match arm.
+fn stmt_exprs_none() -> list[Expr] {
+	mut out: list[Expr] = []
+	return out
+}
+
+fn stmt_kids_none() -> list[Stmt] {
+	mut out: list[Stmt] = []
+	return out
+}
+
+fn stmt_kids_cat(xs: list[Stmt], ys: list[Stmt]) -> list[Stmt] {
+	mut out: list[Stmt] = []
+	for k in xs {
+		out.append(k)
+	}
+	for k in ys {
+		out.append(k)
+	}
+	return out
+}
+
+# a select arm's CHANNEL and its sent value are expressions of the statement that holds it;
+# its body is a block, and goes to stmt_kids with every other block
+fn stmt_sel_exprs(arms: list[SelArm]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for a in arms {
+		out.append(a.ch)
+		out.append(a.val)
+	}
+	return out
+}
+
+fn stmt_sel_kids(arms: list[SelArm]) -> list[Stmt] {
+	mut out: list[Stmt] = []
+	for a in arms {
+		for k in a.body {
+			out.append(k)
+		}
+	}
+	return out
+}
+
 # ty_name spells a type the way the source does.
 # either_name spells an Either the way it is written: the one whose Right is `Err` is
 # `Result[T]`, which is the name the language gives that case.

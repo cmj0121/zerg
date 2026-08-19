@@ -84,6 +84,13 @@ jobs:
       - name: Each stage knows only what it is allowed to know
         run: make layering
 
+      # A bare `{ … }` is the block form with no keyword in front of it, and therefore the
+      # arm a hand-written match forgets. Ten walks had, and the answers ranged from a
+      # legal program refused to generated C reaching cc. Read out of the sources, like
+      # the step above, because what it asserts is which arms a match has.
+      - name: A walk that reaches into a block reaches into a bare one
+        run: make stmt-walk
+
       # A code is an identity, and an identity nothing checks is a number. This holds
       # the compiler's codes, the gates that assert them, and the catalogue a reader
       # looks them up in to being one set.

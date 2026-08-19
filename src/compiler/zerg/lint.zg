@@ -370,12 +370,17 @@ fn writes_this(body: list[Stmt], refs: list[str]) -> bool {
 
 fn writes_this_in(s: Stmt, refs: list[str]) -> bool {
 	return match s {
-		Stmt.SIf(c, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
+		Stmt.SIf(c, tb, he, eb)        => writes_this(tb, refs) or writes_this(eb, refs)
 		Stmt.SIfLet(nm, v, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
-		Stmt.SFor(hc, c, b) => writes_this(b, refs)
-		Stmt.SForIn(nm, it, b) => writes_this(b, refs)
-		Stmt.SSelect(arms) => writes_this_arms(arms, refs)
-		Stmt.SForSelect(arms) => writes_this_arms(arms, refs)
+		Stmt.SFor(hc, c, b)            => writes_this(b, refs)
+		Stmt.SForIn(nm, it, b)         => writes_this(b, refs)
+		Stmt.SSelect(arms)             => writes_this_arms(arms, refs)
+		Stmt.SForSelect(arms)          => writes_this_arms(arms, refs)
+
+		# the two blocks this had not got: a bare `{ … }`, and an `assert`, whose statements
+		# are the author's own condition. A write to `this` inside either is a write.
+		Stmt.SScope(b) => writes_this(b, refs)
+		Stmt.SAssert(b) => writes_this(b, refs)
 		_ => false
 	}
 }
@@ -457,6 +462,9 @@ fn lint_opt_body(body: list[Stmt], at: LWhere, ret_opt: bool, mut &out: list[Fin
 			Stmt.SAssert(b) => lint_opt_body(b, w, ret_opt, out)
 			Stmt.SSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
 			Stmt.SForSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
+
+			# a bare `{ … }` is a block this walk owes a descent, like every other one here
+			Stmt.SScope(b) => lint_opt_body(b, w, ret_opt, out)
 			_ => lint_skip()
 		}
 	}
@@ -586,8 +594,13 @@ fn lint_captures_body(body: list[Stmt], at: LWhere, refs: list[str], mut &muts: 
 			# a select arm's body is a block like any other, and it is where coroutines
 			# actually live — the other two walks in this file grew an `_arms` helper for
 			# the same reason, and this one was written without it
-			Stmt.SSelect(arms) => lint_captures_arms(arms, w, refs, muts, out)
+			Stmt.SSelect(arms)    => lint_captures_arms(arms, w, refs, muts, out)
 			Stmt.SForSelect(arms) => lint_captures_arms(arms, w, refs, muts, out)
+
+			# and a bare `{ … }`, which is where a `spawn` or a `defer` can just as well be
+			# written — the capture rules are about statements, not about which brackets
+			# happen to be around them
+			Stmt.SScope(b) => lint_captures_body(b, w, refs, muts, out)
 			_ => lint_skip()
 		}
 		i = i + 1
@@ -850,6 +863,10 @@ fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &at
 			Stmt.SExpr(x) => collect_binds_expr(x, w, names, ats)
 			Stmt.SSelect(arms) => collect_binds_arms(arms, w, names, ats)
 			Stmt.SForSelect(arms) => collect_binds_arms(arms, w, names, ats)
+
+			# a binding made in a bare block is a binding, the same way one made in a select
+			# arm is — which is the note the `_arms` helper below already carries
+			Stmt.SScope(body_b) => collect_binds_at(body_b, w, names, ats)
 			_ => skip()
 		}
 	}
@@ -981,15 +998,31 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			# an `assert` holds the author's own expressions, desugared: an import reached
 			# only from a condition is a used import, and a walk that skipped this reported
 			# it as dead
-			Stmt.SAssert(body_b) => walk_body(body_b, ids, calls, ns)
-			Stmt.SDefer(x) => walk_expr(x, ids, calls, ns)
-			Stmt.SSpawn(x) => walk_expr(x, ids, calls, ns)
-			Stmt.SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
-			Stmt.SSelect(arms) => walk_sel(arms, ids, calls, ns)
-			Stmt.SForSelect(arms) => walk_sel(arms, ids, calls, ns)
-			Stmt.SDel(n) => ids.append(n)
+			Stmt.SAssert(body_b)     => walk_body(body_b, ids, calls, ns)
+			Stmt.SDefer(x)           => walk_expr(x, ids, calls, ns)
+			Stmt.SSpawn(x)           => walk_expr(x, ids, calls, ns)
+			Stmt.SSend(ch, v)        => walk_pair(ch, v, ids, calls, ns)
+			Stmt.SSelect(arms)       => walk_sel(arms, ids, calls, ns)
+			Stmt.SForSelect(arms)    => walk_sel(arms, ids, calls, ns)
+			Stmt.SDel(n)             => ids.append(n)
 			Stmt.SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
-			_ => skip()
+
+			# A BARE BLOCK IS A BLOCK. Without this arm a name used ONLY inside `{ … }` was
+			# used nowhere as far as this walk could tell, and the two findings that reads
+			# from it both fired on correct code: `L102 private function never called` about
+			# a function called on the line above, and `L101` about an import the block is
+			# the only user of.
+			Stmt.SScope(b) => walk_body(b, ids, calls, ns)
+
+			# AND NO CATCH-ALL. This walk answers "is this name used anywhere", so a
+			# statement it does not descend into is a name it will call dead — the `assert`
+			# arm above and the block arm above that were each added after that happened.
+			# Naming every variant makes the next Stmt a type error rather than a third
+			# false finding.
+			Stmt.SBreak    => skip()
+			Stmt.SContinue => skip()
+			Stmt.SNop      => skip()
+			Stmt.SAt(_, _) => skip()
 		}
 	}
 }

@@ -28,12 +28,17 @@
 # source can see. A DECORATED FENCE IS A FAILURE HERE (clause 2 below) precisely so that
 # ` ```zerg ignore ` cannot be invented later without changing this file on purpose.
 #
-# WHAT IT CANNOT SEE: `--emit check` does not resolve the calls in a TOP-LEVEL binding's
-# initialiser, so `a := builder()` with no `builder` anywhere passes — three of fmt.md's
-# layout examples are green for that reason rather than for being complete. That is a gap in
-# the compiler and not in this gate; when it closes, those blocks fail here and get made whole
-# or retagged. Nor does it run anything: `doc-examples-check.sh` is the gate that DIFFS an
-# example's stated output, and it owns the module comments. This one owns the chapters.
+# THE BLIND SPOT THIS HAD IS CLOSED. `--emit check` used to resolve nothing in a TOP-LEVEL
+# binding's initialiser — a unit declaring no `main` never lowered one — so `a := builder()`
+# with no `builder` anywhere passed here, and three of fmt.md's layout examples were green for
+# that reason rather than for being complete. That was a gap in the compiler and not in this
+# gate, and closing it (#29) did here exactly what this paragraph said it would: the three
+# blocks failed, and each is now ` ```text `, because a bracket landing in a column is a
+# picture of layout and not a program anybody would write.
+#
+# WHAT IT STILL CANNOT SEE is that it does not RUN anything: `doc-examples-check.sh` is the
+# gate that DIFFS an example's stated output, and it owns the module comments. This one owns
+# the chapters.
 #
 #   usage: docs-zerg.sh [<file.md> …]        (default: every .md under docs/)
 #

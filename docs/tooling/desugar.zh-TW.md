@@ -119,7 +119,12 @@ for i in 0..3 {                  mut zgd_i7c2 := 0
 `for i in f()..g()` 就是這兩件事一起現形的地方。
 
 這些 binding 以它們來自的那個 `for` 的**行與欄**命名,所以同一個函式裡的兩個迴圈不可能撞名,而名字本身說明了它從哪
-來。它們被提到外層 scope 而不是包進自己的 block,因為裸的 `{ … }` statement 是這個編譯器拒絕的形式。
+來 —— 而正是這個命名方式,讓「提到外層 scope 而不是包進自己的 block」是安全的。
+
+> 這裡原本給的理由是「_裸的 `{ … }` statement 是這個編譯器拒絕的形式_」,而那不是真的:`zerg build`
+> 接受它,`zerg desugar` 也會原樣印回來。這句話是在收口
+> [#12](https://github.com/cmj0121/zerg/issues/12) —— 十個對該形式沒有 arm 的 statement walk ——
+> 時發現的,而它正是同一個形狀往上一層:一個沒人看過的形式,被需要理由的人順手描述了。
 
 **inclusive 形式不是 `i <= hi`。** `for i in 0..=MAX` 在最後一個值之後沒有值可以踏過去:那個 step 會溢位,而在本語
 言的[檢查式算術](../core/types.zh-TW.md)下它會 **raise** 而不是回繞。emitter 的答案是一個在最後一個值時變 false 的

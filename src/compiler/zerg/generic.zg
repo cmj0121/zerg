@@ -239,7 +239,25 @@ fn subst_stmt(names: list[str], args: list[Ty], s: Stmt) -> Stmt {
 		# fallback below left it, quietly: nothing downstream looks at those statements again,
 		# so the specialization carried a `fn(T) -> bool` into a position wanting `fn(int)`.
 		Stmt.SAssert(b) => Stmt.SAssert(subst_block(names, args, b))
-		_ => s
+
+		# A BARE BLOCK IS A BLOCK, and it was the fallback's second victim. `{ x: T = v }`
+		# inside a template kept its `T` and the specialization was refused with
+		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
+		# true, which sends the reader looking for a declaration they wrote in the signature.
+		Stmt.SScope(b) => Stmt.SScope(subst_block(names, args, b))
+
+		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
+		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each
+		# time the arm was added and the fallback kept, so the next one was already waiting.
+		# Naming every variant is what makes the next Stmt a type error here instead.
+		#
+		# These five carry nothing a type argument could reach: two jumps, a nop, a `del` of
+		# a name, and a position marker.
+		Stmt.SBreak    => s
+		Stmt.SContinue => s
+		Stmt.SNop      => s
+		Stmt.SDel(_)   => s
+		Stmt.SAt(_, _) => s
 	}
 }
 
@@ -277,7 +295,22 @@ fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
 		Expr.EBlock(b) => Expr.EBlock(subst_block(names, args, b))
 		Expr.EIs(x, nm) => Expr.EIs(subst_expr(names, args, x), nm)
 		Expr.EIn(x, s) => Expr.EIn(subst_expr(names, args, x), subst_expr(names, args, s))
-		_ => e
+
+		# THE FILL FORM CARRIES TWO EXPRESSIONS and the fallback left both. `[T(0); 3]` in a
+		# template kept its `T` and the specialization was refused with _E4064 no type named
+		# `T` to construct_ — the same shape as the bare block next door in subst_stmt, one
+		# node type along, and found the same way: by asking which variants this match does
+		# not name.
+		Expr.EFill(v, n) => Expr.EFill(subst_expr(names, args, v), subst_expr(names, args, n))
+
+		# and no catch-all, for subst_stmt's reason. What is left is the literals and a bare
+		# name, which hold no type for an argument to reach.
+		Expr.EInt(_, _, _) => e
+		Expr.EFloat(_)     => e
+		Expr.EStr(_)       => e
+		Expr.EBool(_)      => e
+		Expr.ENil          => e
+		Expr.EIdent(_)     => e
 	}
 }
 

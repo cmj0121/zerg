@@ -333,6 +333,13 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make check-equal
 
+      # And the same question one step out: does the OUTPUT depend on how the build was
+      # invoked. `zerg build src/…/zergc.zg` and the same file named absolutely are one
+      # program, and the C used to differ by 450 KB with the module tags shifted. It needs
+      # the toolchain, so it rides here rather than with the source-reading gates.
+      - name: The same program, however its entry was spelled
+        run: make entry-path
+
       # --- 7c'. every GRAMMAR chapter is read, or refused by name ---------------
       # test-data/conformance is one file per chapter of GRAMMAR — every form it derives,
       # written once — and no runner, no target and no test named it, so 375 lines of

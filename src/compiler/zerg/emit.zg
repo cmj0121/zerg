@@ -9217,12 +9217,33 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 
 		return f"{ind}{lv} = {cval};\n"
 	}
+
+	# A LIST LITERAL IS BUILT BESIDE THE DESTINATION AND MOVED IN, which is the same
+	# materialise-release-store `c_assign_dropping` writes for every other owning type, spelled
+	# out here because a literal is built by STATEMENTS (`c_pushes`) rather than produced as an
+	# expression this function could hand along.
+	#
+	# It used to re-init the destination and then push into it, and that lost twice. The old
+	# buffer was ABANDONED — `cur = [7]` in a 1,000,000-round loop peaked at 78.4 MB against a
+	# 1.4 MB floor, and `strings.split` resets its accumulator exactly that way once per
+	# separator, which is what made every caller of it look like a leak of its own (#11). And
+	# the elements were evaluated AFTER the destination had been emptied, so a literal that
+	# reads what it replaces read the emptied list: `xs = [xs[0], xs[2]]` raised
+	# _IndexError: index out of range_ on a program that is correct.
+	#
+	# The address is taken ONCE, for the reason c_assign_dropping takes it once: `lv` may be a
+	# list index whose subscript arithmetic must not be computed twice around a release.
 	if c_is_list(lt) and c_is_listlit(rhs) {
-		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
+
 		et := c_type(c_list_elem(lt))
-		mut out := f"{ind}zrt_list_init(&({lv}), sizeof({et}), &{c_elem_vt(em, c_list_elem(lt))});\n"
-		return out + c_pushes(em, f"({lv})", et, rhs, ind)
+		ct := c_type(lt)
+		lp := c_tmp(em, "zgt_lp")
+		nv := c_tmp(em, "zgt_nl")
+		mut out := ind + "{ " + ct + " *" + lp + " = &(" + lv + "); " + ct + " " + nv + "; "
+		out = out + f"zrt_list_init(&{nv}, sizeof({et}), &{c_elem_vt(em, c_list_elem(lt))});\n"
+		out = out + c_pushes(em, nv, et, rhs, ind)
+		return out + ind + c_drop_stmt(em, lt, f"(*{lp})") + " *" + lp + " = " + nv + "; }\n"
 	}
 
 	# Every other assignment copies through the one rule — including a list, which used to
@@ -9244,15 +9265,22 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 # shape along, and it joins for the same reason rather than by inheriting: the carrier arm
 # leaves c_assign early and never reaches the path the enum takes.
 #
-# Every other owning type still abandons its old value here, which is a real gap and a wider
-# cut: it reaches every `str`, `list`, `map` and struct assignment in the language, it needs
-# its own measurement, and it is not what any of the three markers is about.
-# docs/core/memory.md names it.
+# AND NOW EVERY OTHER OWNING TYPE, which is what this used to say was a real gap: it reaches
+# every `str`, `list`, `map`, tuple, struct and held-function assignment in the language, and
+# `docs/core/memory.md` named it as the shape that leaks without bound in an ordinary loop.
+#
+# Measured, because the gap said it needed its own measurement. `cur = [7]` in a 1,000,000-round
+# loop peaked at 78.4 MB against a 1.4 MB floor before this, and `strings.split` — whose inner
+# loop does exactly that to reset its accumulator — leaked 16 bytes a call, which is what made
+# every caller of it look like a leak of its own (issue #11 read one as a temporary that is never
+# released; a nested temporary measures clean once `split` does).
+#
+# THE QUESTION IS NOW THE ONE `c_drop_fn` ANSWERS, and that is the point: a type that has a drop
+# is a type whose old value is somebody's to end, so there is no second list of which types those
+# are. The two shapes that used to be here — the carrier and the recursive enum — are two rows of
+# that same answer rather than exceptions to it.
 fn c_assign_drops(mut &em: Emitter, t: Ty) -> bool {
-	return c_drop_fn(em, t) != "" if c_is_carrier(t)
-
-	nm := c_named_of(t)
-	return nm != "" and c_is_enum_name(em, nm) and c_needs_copy(em, t)
+	return c_drop_fn(em, t) != ""
 }
 
 # c_assign_dropping writes the assignment as materialise, release, store — IN THAT ORDER.
@@ -12147,11 +12175,22 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	cv := c_var_cname(em, var)
 
 	in2 := ind + "    "
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
 
 	# COPIED, for the reason c_forin gives: a bare header meant the loop pointed into a
 	# buffer it had taken no reference to, so an insert in the body reallocated `entries`
 	# and the loop read on from the free'd block
-	mut out := ind + "{\n" + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	#
+	# AND THE COPY IS GIVEN BACK, which is the half this had not got. `c_forin` marks the
+	# scope, registers the pending drop and unwinds to the mark — so its copy is released on
+	# every way out, `break` and abort included — while this one made a copy per execution
+	# and dropped none of them: `for k in m { … }` inside a 1,000,000-round loop peaked at
+	# 108.8 MB against a 1.4 MB floor. Two loops, one rule; the map's is spelled the same way
+	# the list's is rather than a second way.
+	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	out = out + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	out = out + c_pend_drop(em, c_infer(em, iter), "zgt_mit", in2)
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_map_len(&zgt_mit); zgt_i++) {\n"
 	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zgt_mit, zgt_i));\n"
 
@@ -12163,7 +12202,8 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	c_frz_pop(em, frz)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
-	return out + ind + "}\n"
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, is_const: bool, ival: Expr, ind: str) -> str {

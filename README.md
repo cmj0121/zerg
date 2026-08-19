@@ -123,7 +123,6 @@ ones, where a program gets an answer and no diagnostic:
 | Silent deviation                                                     | Chapter                                 |
 | -------------------------------------------------------------------- | --------------------------------------- |
 | `for x in p.xs { p.xs.append(v) }` compiles, and grows what it walks | [collections](docs/code/collections.md) |
-| a value assigned over is abandoned rather than freed — it leaks      | [values & memory](docs/core/memory.md)  |
 | an `init()` in a module the run never touches still runs             | [modules](docs/runtime/package.md)      |
 
 Two more are structural, and a running program feels them: the scheduler is **cooperative, not

@@ -9615,17 +9615,104 @@ fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
 	return out
 }
 
-# c_const_ready is whether every constant this initializer names has been assigned already. A
-# name that is not a constant is not this rule's business — a function call is ordinary code and
-# runs when the assignment does.
+# c_const_ready is whether every constant this initializer names has been assigned already —
+# NAMES DIRECTLY, or reaches through a call.
+#
+# It used to stop at the call: *a function call is ordinary code and runs when the assignment
+# does*, which is true about WHEN it runs and false about WHAT it reads. `const EARLY :=
+# pick()` beside a `pick` whose body returns `LATER` has a dependency on `LATER` that no bare
+# name in the initializer spells, so the sweep placed `EARLY` first and it took the zero value
+# — an empty string, silently, exit 0 (#14). In `src/stdlib/log.zg`, where three module
+# constants are filled by functions that read a sentinel, the same hole was a SIGSEGV.
+#
+# So a call is followed into the callee's body, and the constants that body names are this
+# initializer's too, transitively. `seen` is what stops a recursive or mutually recursive
+# callee from being followed for ever; a function already being followed can add no name the
+# walk does not already have.
+#
+# IT OVER-APPROXIMATES, in two ways that are worth naming because the refusal is what a reader
+# meets. A constant read on a branch the call never takes is still a dependency here — a
+# static walk cannot know the branch — and a METHOD is matched by NAME across every receiver,
+# because the type that would pick one is inferred by a walk this ordering decides the order
+# of. Both can only make a constant wait longer, and the one observable cost is a ConstCycle
+# naming a path that is not truly circular. That is a loud, rare wrong answer in place of a
+# silent, ordinary one.
 fn c_const_ready(f: File, e: Expr, done: list[bool]) -> bool {
+	mut seen: list[str] = []
+	return c_const_ready_at(f, e, done, seen)
+}
+
+fn c_const_ready_at(f: File, e: Expr, done: list[bool], mut &seen: list[str]) -> bool {
 	idx := c_const_idx(f, e)
+
 	return done[idx] if idx >= 0
 
+	return false if not c_const_ready_call(f, e, done, seen)
+
 	for p in expr_parts(e) {
-		return false if not c_const_ready(f, p, done)
+		return false if not c_const_ready_at(f, p, done, seen)
 	}
 	return true
+}
+
+# c_const_ready_call is the half above that reaches through a call: the callee's body, walked
+# for the constants it names. An expression that calls nothing answers yes and costs a string
+# compare.
+fn c_const_ready_call(f: File, e: Expr, done: list[bool], mut &seen: list[str]) -> bool {
+	nm := c_callee_name(e)
+
+	return true if nm == ""
+	return true if c_seen_fn(seen, nm)
+
+	seen.append(nm)
+
+	# EVERY row of that name, not the first: a free function's name is unique in this
+	# compiler's flat namespace, but a method's is not, and the receiver that would choose
+	# between them is not known here.
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == nm {
+			return false if not c_const_ready_stmts(f, f.fns[i].body, done, seen)
+		}
+		i = i + 1
+	}
+	return true
+}
+
+# c_const_ready_stmts walks a body the way stmt_exprs and stmt_kids divide it — what each
+# statement mentions, then what it holds. Both are exhaustive over Stmt with no catch-all, so
+# a form written inside a bare block or an `assert` is reached here rather than silently
+# contributing no dependency.
+fn c_const_ready_stmts(f: File, body: list[Stmt], done: list[bool], mut &seen: list[str]) -> bool {
+	mut i := 0
+	for i < body.len() {
+		s := body[i]
+		for e in stmt_exprs(s) {
+			return false if not c_const_ready_at(f, e, done, seen)
+		}
+		return false if not c_const_ready_stmts(f, stmt_kids(s), done, seen)
+		i = i + 1
+	}
+	return true
+}
+
+# c_callee_name is the function an expression CALLS, or "" for one that calls nothing. The
+# catch-all is right here and wrong in expr_parts next door, and the difference is what is
+# being asked: this is one question about one node, which a node that is not a call answers
+# no to; expr_parts must know every node's contents, so a `_` there is a hole.
+fn c_callee_name(e: Expr) -> str {
+	return match e {
+		Expr.ECall(nm, _, _) => nm
+		Expr.EMethod(_, nm, _) => nm
+		_ => ""
+	}
+}
+
+fn c_seen_fn(seen: list[str], nm: str) -> bool {
+	for s in seen {
+		return true if s == nm
+	}
+	return false
 }
 
 # c_const_idx is the row this expression names, or -1 when it names no constant. Only a bare

@@ -9244,15 +9244,22 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 # shape along, and it joins for the same reason rather than by inheriting: the carrier arm
 # leaves c_assign early and never reaches the path the enum takes.
 #
-# Every other owning type still abandons its old value here, which is a real gap and a wider
-# cut: it reaches every `str`, `list`, `map` and struct assignment in the language, it needs
-# its own measurement, and it is not what any of the three markers is about.
-# docs/core/memory.md names it.
+# AND NOW EVERY OTHER OWNING TYPE, which is what this used to say was a real gap: it reaches
+# every `str`, `list`, `map`, tuple, struct and held-function assignment in the language, and
+# `docs/core/memory.md` named it as the shape that leaks without bound in an ordinary loop.
+#
+# Measured, because the gap said it needed its own measurement. `cur = [7]` in a 1,000,000-round
+# loop peaked at 78.4 MB against a 1.4 MB floor before this, and `strings.split` — whose inner
+# loop does exactly that to reset its accumulator — leaked 16 bytes a call, which is what made
+# every caller of it look like a leak of its own (issue #11 read one as a temporary that is never
+# released; a nested temporary measures clean once `split` does).
+#
+# THE QUESTION IS NOW THE ONE `c_drop_fn` ANSWERS, and that is the point: a type that has a drop
+# is a type whose old value is somebody's to end, so there is no second list of which types those
+# are. The two shapes that used to be here — the carrier and the recursive enum — are two rows of
+# that same answer rather than exceptions to it.
 fn c_assign_drops(mut &em: Emitter, t: Ty) -> bool {
-	return c_drop_fn(em, t) != "" if c_is_carrier(t)
-
-	nm := c_named_of(t)
-	return nm != "" and c_is_enum_name(em, nm) and c_needs_copy(em, t)
+	return c_drop_fn(em, t) != ""
 }
 
 # c_assign_dropping writes the assignment as materialise, release, store — IN THAT ORDER.

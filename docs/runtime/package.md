@@ -294,6 +294,17 @@ collide — that refusal is about the name, not about the visibility.
 > nothing narrows that to a package's root surface, because no package exists yet to be the unit that
 > narrowing is measured against. Re-export (`import pub`) builds a surface; nothing yet requires a name to
 > be on one.
+>
+> ---
+>
+> **[deviation]** And because it compares the DIRECTORY, **two single-file modules in one directory are
+> one module to this rule**. `./a` and `./b` beside each other are two modules everywhere else — two
+> import paths, two namespaces — and `b` may name `a`'s module-private declarations without a word
+> said. The standard library is fifteen such modules in one flat directory, so the rule does not hold
+> between any two of them. The identity a module needs here is the import path it was reached by;
+> what it has is where its files happen to sit. The same substitution shows in a message: reading a
+> private name of `strings` from outside is refused as _not a public member of module `stdlib`_,
+> naming the directory rather than the module.
 
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`

@@ -6,8 +6,8 @@
 #     imports app   — a module with init() + a module constant, RE-EXPORTING geom
 #
 # Build and run it with:  zerg build main.zg && ./a.out
-import "geom"
-import "app"
+import "./geom"
+import "./app"
 
 # total names a cross-module TYPE (geom.Point) in its own signature.
 fn total(p: geom.Point) -> int {

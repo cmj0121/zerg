@@ -60,7 +60,7 @@ func TestVisibilityAllowsPublicMember(t *testing.T) {
 		t.Skip("no C compiler found")
 	}
 	// Build a tiny entry (in the same source root) that calls the public member.
-	src := "import \"lib\"\nfn main() {\n\tprint lib.public_fn()\n}\n"
+	src := "import \"./lib\"\nfn main() {\n\tprint lib.public_fn()\n}\n"
 	entryDir := filepath.Join(root, "examples", "1g", "private")
 	code := compileProgramFromString(t, entryDir, src)
 	if got := compileAndRun(t, cc, code); got != "1\n" {

@@ -4748,6 +4748,30 @@ fn main() {
 }
 EOF
 
+# BOTH SHAPES AT ONE NAME IS NO MODULE, and it is refused rather than ranked. `zerg` used to
+# read the file and never the directory, the seed reads the directory and never the file, and
+# `docs/runtime/package.md` wrote the first down as if it were a decision. Any silent
+# precedence is a question a reader eventually has to ask; there should be nothing to ask.
+#
+# It lives here rather than beside the other import-path cases because it is the one of them
+# that is not about the STRING: the path is well formed and the disk is ambiguous, so the case
+# needs two files on disk to be one.
+reject a-module-that-is-both-a-file-and-a-directory E5013 'is both a file and a directory' <<'EOF'
+import "./two"
+
+fn main() {
+	print two.hi()
+}
+--- two.zg
+pub fn hi() -> int {
+	return 1
+}
+--- two/two.zg
+pub fn hi() -> int {
+	return 2
+}
+EOF
+
 # --- bad paths, sweep four: what `raise` takes ------------------------------------------
 #
 # `raise e` carries an `Err`, and `raise "…"` is the shorthand that builds one from a message

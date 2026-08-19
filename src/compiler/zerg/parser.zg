@@ -387,7 +387,7 @@ fn p_names_here(mut &p: Parser, at: int) -> bool {
 # It was found by a migration. `enum Kind { … This … }` declared a variant with that name,
 # and once a variant had to be written through its enum there was no way to tell `Kind.This`
 # the value from `This` the type at all — which is what a reserved word is for.
-fn p_reserved_word(lx: str) -> bool {
+pub fn reserved_word(lx: str) -> bool {
 	return true if lx == "This"
 
 	return lookup_keyword(lx) != Kind.Ident
@@ -408,7 +408,7 @@ fn p_not_a_name(mut &p: Parser, what: str) -> str {
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
-	raise p_diag(p, Rule.ReservedWordAsName, f"`{lx}` is a reserved word and cannot name {what}") if p_reserved_word(lx)
+	raise p_diag(p, Rule.ReservedWordAsName, f"`{lx}` is a reserved word and cannot name {what}") if reserved_word(lx)
 	raise p_not_a_name(p, what) if not p_at(p, Kind.Ident)
 
 	p_advance(p)
@@ -3832,7 +3832,7 @@ fn p_field_name(mut &p: Parser, dot: str, tuple_ok: bool) -> str {
 	t := cur(p)
 	lx := t.lexeme
 
-	raise p_diag_at(p, t.line, t.col, Rule.ReservedWordAsField, f"`{lx}` is a reserved word and cannot name a field") if p_reserved_word(lx)
+	raise p_diag_at(p, t.line, t.col, Rule.ReservedWordAsField, f"`{lx}` is a reserved word and cannot name a field") if reserved_word(lx)
 
 	if not p_at(p, Kind.Ident) and not (tuple_ok and p_at(p, Kind.Int)) {
 		mut want := "a field name"
@@ -4414,7 +4414,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 					# take a rule off a case that already had one.
 					pt := cur(p)
 					nested := p_at(p, Kind.Ident) and peek_kind(p, 1) == Kind.Dot
-					if (nested or not p_at(p, Kind.Ident)) and not p_reserved_word(pt.lexeme) {
+					if (nested or not p_at(p, Kind.Ident)) and not reserved_word(pt.lexeme) {
 						raise p_diag_at(p, pt.line, pt.col, Rule.NotYetSubPatternInPayload, f"NotImplemented: a sub-pattern inside a variant payload, beginning at `{pt.lexeme}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn") if pt.lexeme != "_"
 					}
 					binds.append(p_name(p, "a pattern binding"))

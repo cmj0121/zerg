@@ -819,14 +819,28 @@ send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from 
 # keyword either, since a word this grammar never derives has no business being reserved.
 #
 # An 'import' binds a NAMESPACE. The path is a STRING and its LAST segment names the binding
-# ('import "util/text"' binds 'text'), reached with '.' — 'text.split(…)'. 'as' renames it
-# ('import "a/text" as at'), which is how two imports sharing a last segment coexist. A 'pub'
-# on the spec RE-EXPORTS it ('import pub "util/text"'). MANY imports group in a parenthesized
+# ('import "net/http"' binds 'http'), reached with '.' — 'http.get(…)'. 'as' renames it
+# ('import "./http" as h'), which is how two imports sharing a last segment coexist. A 'pub'
+# on the spec RE-EXPORTS it ('import pub "./util/text"'). MANY imports group in a parenthesized
 # list — 'import ( … )', one spec per line:
 #     import (
-#         pub "util/text"
-#         "util/text/abc" as cc
+#         pub "./util/text"
+#         "./util/text/abc" as cc
 #     )
+#
+# A PATH IS A PREFIX AND A PACKAGE PATH, and the prefix says which ROOT the package path is
+# expanded under. NOTHING ON DISK CHANGES WHICH ROOT: reading an import tells you which of the
+# three it names, and adding or renaming a file can change only whether it RESOLVES.
+#     "io", "net/http"        the STANDARD LIBRARY
+#     "./http", "./net/http"  THIS PROJECT, under the entry file's directory
+#     "github.com/a/b"        a REMOTE package
+# The classifier is a consequence of 'package-name' rather than a rule beside it: a package
+# name may not hold a '.', so a first segment that holds one cannot be a package name and can
+# only be a HOST. A '..' or a leading '/' is not an import path at all — an import may not
+# reach outside the project — and neither is a path spelled twice ('.//x', 'x/'), because
+# normalising two spellings into one module would make a module's identity computed rather
+# than written. Upper case is outside 'package-name' so that a case-folding filesystem cannot
+# decide whether a program builds.
 # each spec is SELF-DELIMITING ('pub'? then a string then an optional 'as name'), so no comma
 # or separator is needed and the '(' … ')' spans lines the usual way (line breaks inside an
 # open '(' are insignificant, group 2); the formatter writes one spec per line. The bound name
@@ -835,7 +849,10 @@ send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from 
 # unqualified, bind it locally — 'split := text.split' — since a function is a value.
 import-stmt  ::= 'import' ( import-spec | '(' import-spec* ')' )   # single spec, or a '('-grouped list
 import-spec  ::= 'pub'? import-path ( 'as' identifier )?          # 'pub' RE-EXPORTS; 'as' renames the namespace
-import-path  ::= str-lit                              # "util/text" — a '/'-separated module (directory) path
+import-path  ::= str-lit                              # a quoted 'package-path', optionally prefixed './'
+                 # "io" | "net/http" | "./http" | "github.com/a/b"
+package-path ::= package-name ( '/' package-name )*   # the directory path under whichever root
+package-name ::= [a-z] [a-z0-9_]*                     # no '.', no upper case; not a 'keyword'
 init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed, FIFO, each once
 
 # ==================================================================================

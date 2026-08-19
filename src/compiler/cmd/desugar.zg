@@ -6,7 +6,7 @@ import (
 	"cli"
 	"io"
 
-	"zerg"
+	"./zerg"
 )
 
 # desugar takes the same two flags `fmt` does, and they mean the same things: `--check`

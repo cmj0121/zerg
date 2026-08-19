@@ -1,7 +1,7 @@
 # app — a module that owns an init() block and a module constant, and re-exports
 # geom onto its own surface with `import pub`, so a module importing app reaches
 # geom's public members through the app namespace.
-import pub "geom"
+import pub "./geom"
 
 # base is a module-private constant (a top-level `:=`): immutable, evaluated once at
 # init time. Its initializer is a runtime call, so it is computed inside app's init

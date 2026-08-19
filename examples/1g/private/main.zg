@@ -6,7 +6,7 @@
 # `pub` is the one visibility marker: `lib.public_fn()` is reachable and `lib.helper()` is
 # not. A module is a DIRECTORY, so the boundary this crosses is the one between `lib/` and
 # the file importing it.
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.helper() # error: `helper` is not a public member of module `lib`

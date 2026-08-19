@@ -17,7 +17,7 @@
 # The other direction is refused rather than demonstrated, because there is nothing to
 # demonstrate: `lib.only_in_test()` is `E3084 module `lib` has no `only_in_test``, and
 # `import "lib/lib_test"` is `E5011`. Both live in scripts/reject-check.sh.
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.greeting()

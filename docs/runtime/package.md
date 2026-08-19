@@ -181,11 +181,40 @@ A **module is a directory**; the files inside it are physical slices that share 
 number of files is layout, not meaning. A module is the default privacy unit: a plain declaration is
 visible across the module's files but not outside it (see Visibility).
 
-An import path is resolved **beside the importer first** — the directory of the file that wrote the
-`import` — then beside the entry file, then in the standard library, first match winning. So a module
-carries its own dependencies with it: `api/` may hold the `api/util/` it imports, and moving the pair
-somewhere else moves both. (The seed compiler searches the entry file's directory only, and refuses a
-module reached this way.)
+An import path is a **prefix** and a **package path** (`GRAMMAR#import-path`). The package path is a
+directory path made of package names; the **prefix decides which root** it is expanded under, and
+**nothing on disk changes which root**:
+
+| Written                   | Root                     | On disk                                        |
+| ------------------------- | ------------------------ | ---------------------------------------------- |
+| `import "io"`             | the standard library     | `<stdlib>/io.zg` or `<stdlib>/io/`             |
+| `import "net/http"`       | the standard library     | `<stdlib>/net/http.zg` or `<stdlib>/net/http/` |
+| `import "./http"`         | this project (entry dir) | `<entry>/http.zg` or `<entry>/http/`           |
+| `import "github.com/a/b"` | a remote package         | **[not yet]** — reserved, refused by name      |
+
+The three roots expand a package path by the same rule, so there is one layout rule rather than three.
+The classifier is a **consequence of the name grammar** and not a rule beside it: a `package-name` is
+`[a-z][a-z0-9_]*` and cannot hold a `.`, so a first segment that holds one cannot be a package name and
+can only be a host.
+
+**Reading an import tells you which of the three it names.** Adding, removing or renaming a file can
+change only whether an import RESOLVES — never what kind of thing it names. That is what stops a file
+called `io.zg` from taking the standard library's `io` away from every file beside it.
+
+Two shapes are ill-formed rather than unresolved, and both refusals are about the string. A `..` or a
+leading `/` reaches outside the project. A path spelled twice — `.//x`, `x/`, `x/./y` — is refused
+rather than normalised, because normalising two spellings into one module would make a module's
+identity computed rather than written; upper case is outside `package-name` for the neighbouring
+reason, so that a case-folding filesystem cannot decide whether a program builds. A module's last
+segment is bound as an identifier, so it may not be a reserved word.
+
+A name that resolves to **both** a `<name>.zg` and a `<name>/` is **no module**: the pair is refused
+rather than ranked, because a silent precedence is a question a reader would eventually have to ask.
+
+`./` is rooted at the entry file's directory and not at the importing file, so one module has one
+spelling wherever it is written — `import "./zerg"` names the same module from the entry file and from
+two directories down. What that costs is relocation: a module tree that holds the modules it imports
+moves with its own imports needing an edit.
 
 Nesting is **flat**: a directory laid out under another only lengthens the import path — there is no
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
@@ -210,15 +239,13 @@ its own value.
 > **[deviation]** The **entry file's own directory** is not a module. A file beside the entry file is not
 > in its namespace and is not compiled into the build: naming a function declared there reports
 > _E4016 undefined function `beside`_. Files share one namespace in every module that is reached by an `import`; the
-> module rooted at the entry file is the exception.
->
-> ---
->
-> **[deviation]** A **single file** is importable as a module. `import "sib"` beside a `sib.zg` resolves
-> to that one file and its `pub` names, though a module is a directory here and `E5002`'s own sentence says
-> so — _a module is a directory of `.zg` files beside the importer or in the standard library_. So the
-> import path has a second, undocumented shape, and the diagnostic that would teach a reader the first one
-> denies the second exists.
+> module rooted at the entry file is the exception — and `import "./beside"` is how that file is reached,
+> which is the same spelling any other module of this project takes.
+
+A **single file is a module** wherever a directory would be one — `import "./sib"` beside a `sib.zg`
+resolves to that file and its `pub` names, and the standard library is fifteen of them in one flat
+directory. It used to be an undocumented second shape of the import path, reachable by a bare name and
+therefore able to shadow; asking for it by name is what makes it ordinary.
 
 ### Visibility — exposing a declaration
 

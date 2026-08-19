@@ -9,7 +9,7 @@
 # The SEED cannot build this — it answers `unknown spec "Tag"`, because its own spec
 # table is per-module too. That is the seed being the narrower compiler, and it is why
 # `make oracle` skips this file rather than comparing it.
-import "proto"
+import "./proto"
 
 struct A {
 	pub v: int

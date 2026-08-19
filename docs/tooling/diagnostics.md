@@ -332,7 +332,7 @@ shipping compiler rather than a part of it (the line
 | `E4072` | `…` has … type parameters and this gives …                                                              |
 | `E4073` | `…` is declared twice in this file — one scope declares a name once                                     |
 | `E5001` | this entry file declares no `fn main`                                                                   |
-| `E5002` | cannot resolve import `…` under any source root                                                         |
+| `E5002` | cannot resolve import `…`, and where it was looked for                                                  |
 | `E5003` | cannot receive on a send-only `…`                                                                       |
 | `E5004` | cannot send on a receive-only `…`                                                                       |
 | `E5005` | cannot close a receive-only channel `…`                                                                 |
@@ -342,6 +342,8 @@ shipping compiler rather than a part of it (the line
 | `E5009` | `…` is module-private, and … is on a `pub` declaration                                                  |
 | `E5010` | `…` is not a public field of `…`, which module `…` declared                                             |
 | `E5011` | `…` names a test file, and a normal build compiles none                                                 |
+| `E5012` | `…` is not an import path — the escape, the second spelling, the `.zg`, the name, the reserved word     |
+| `E5013` | `…` is both a file and a directory, and a module is one shape or the other                              |
 | `E9001` | a parameterized `…[…]` as …                                                                             |
 | `E9002` | a `spec` member with a BODY                                                                             |
 | `E9003` | a generic enum `…[…]`                                                                                   |
@@ -446,6 +448,7 @@ shipping compiler rather than a part of it (the line
 | `E9102` | `..=` with no upper bound is not a range                                                                |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                               |
 | `E9104` | the module `atomic` ships and cannot be imported                                                        |
+| `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

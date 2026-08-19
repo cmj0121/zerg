@@ -10,7 +10,7 @@ import (
 	"ascii"
 	"io"
 
-	"zerg"
+	"./zerg"
 )
 
 # --- import cycles ---------------------------------------------------------------------
@@ -127,50 +127,170 @@ fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 # module is either a single `<path>.zg` file or a DIRECTORY of them — the compiler's own
 # `zerg` module is the second kind, and its files are read in the sorted order the runtime
 # guarantees so the emitted C never depends on the filesystem.
+# --- what an import path names -------------------------------------------------------------
 #
-# `near` is the directory of the FILE that wrote this import, and it is searched first.
-# Every recursion used to hand the ENTRY program's directory down unchanged, so a module's
-# own imports were resolved against a directory that module knows nothing about: `api/api.zg`
-# importing `"util/text"` was refused with E5002 while `api/util/text/` sat right beside it,
-# and the same import resolved once the directory was moved next to the entry file instead.
-# E5002's own sentence — "a module is a directory of `.zg` files beside the importer" — was
-# describing the layout it turned away.
+# An import path is a PREFIX and a PACKAGE PATH. The package path is a directory path made of
+# package NAMES; the prefix decides which ROOT it is under, and NOTHING ON DISK CHANGES WHICH
+# ROOT. That is the property this whole section exists to have: reading an import tells you
+# which of the three it is, and adding, removing or renaming a file can change only whether it
+# RESOLVES — never what kind of thing it names.
 #
-# The entry directory STAYS as the second root rather than being replaced: a nested module
-# reaching a module beside the program resolved before this and still does. So the change
-# only ever adds a place to look.
-fn resolve_module(path: str, near: str, from_dir: str) -> list[str] {
-	mut roots: list[str] = []
-	roots.append(near)
+#     import "io"               ->  <stdlib>/io.zg        or  <stdlib>/io/
+#     import "net/http"         ->  <stdlib>/net/http.zg  or  <stdlib>/net/http/
+#     import "./http"           ->  <entry>/http.zg       or  <entry>/http/
+#     import "github.com/a/b"   ->  a remote repository — the shape is reserved and refused
+#
+# The three roots expand a package path by EXACTLY THE SAME RULE, which is what makes this
+# readable: there is one layout rule, not three.
+#
+# THE CLASSIFIER IS A CONSEQUENCE OF THE NAME GRAMMAR rather than a rule standing beside it. A
+# package name is `[a-z][a-z0-9_]*`, so it cannot hold a dot; so a first segment that holds one
+# cannot be a package name and can only be a HOST. Three branches, each a question about the
+# string and none of them a question about the filesystem:
+#
+#     starts with "./"           ->  this project
+#     first segment holds a '.'  ->  remote
+#     otherwise                  ->  the standard library
+#
+# Two things fall out for free. `"./Log"` is ILL FORMED rather than a filesystem question, so
+# the difference between a case-insensitive macOS and a case-sensitive Linux can no longer
+# reach an import path. And a dotted first segment can never be anything else, so reserving the
+# remote shape today costs nothing and stops it being used for something it is not.
+fn imp_is_local(path: str) -> bool {
+	return has_prefix(path, "./")
+}
 
-	# a plain `if` and not a trailing one: this file is compiled BY THE SEED, which does not
-	# read a postfix `if` on a call statement
-	if from_dir != near {
-		roots.append(from_dir)
-	}
-	roots.append(stdlib_dir())
-	for root in roots {
-		found := module_at(root, path)
-		return found if found.len() > 0
-	}
+# imp_body is the package path with the local prefix taken off — the part that is expanded
+# under whichever root the classifier picked, and the one string the two roots share.
+fn imp_body(path: str) -> str {
+	return cut_prefix(path, "./") if imp_is_local(path)
 
-	# The LAST-SEGMENT alias. A module is named by the last segment of its path — `import
-	# "std/time"` and `import "time"` are the same module (docs/tooling/fmt.md) — and the
-	# stdlib is one flat directory, so a path that resolves nowhere is retried at its last
-	# segment. The seed has done this since 1g; without it here the two compilers disagree
-	# about what a program imports, and the disagreement is SILENT until use: the namespace
-	# is bound from the path either way, so `import "std/time"` loaded no files at all and
-	# `time.now()` read as a method on nothing.
-	seg := path_tail(path)
-	if seg != path {
-		for root in roots {
-			found := module_at(root, seg)
-			return found if found.len() > 0
+	return path
+}
+
+fn imp_is_remote(path: str) -> bool {
+	return false if imp_is_local(path)
+
+	return seg_has_dot(imp_segs(path)[0]) if imp_segs(path).len() > 0
+
+	return false
+}
+
+# imp_segs splits a package path on `/`. It keeps empty segments rather than dropping them,
+# because an empty one is exactly what `//`, a leading `/` and a trailing `/` produce and each
+# is a second spelling of some other path — which imp_ill_formed turns away.
+fn imp_segs(body: str) -> list[str] {
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	for b in bytearray(body) {
+		if b == b'/' {
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(b)
 		}
 	}
+	out.append(str(cur))
+	return out
+}
 
-	mut none: list[str] = []
-	return none
+fn seg_has_dot(seg: str) -> bool {
+	for b in bytearray(seg) {
+		return true if b == b'.'
+	}
+	return false
+}
+
+# imp_name_ok is the package-name grammar, `[a-z] [a-z0-9_]*`, and it is deliberately NARROWER
+# than the identifier a namespace is bound as. Upper case is refused so that the one difference
+# between the two filesystems this compiler runs on — macOS folds case, Linux does not — cannot
+# decide whether a program builds.
+fn imp_name_ok(seg: str) -> bool {
+	b := bytearray(seg)
+
+	return false if b.len() == 0
+	return false if not ascii.is_lower(b[0])
+
+	mut i := 1
+	for i < b.len() {
+		return false if not ascii.is_lower(b[i]) and not ascii.is_digit(b[i]) and b[i] != b'_'
+
+		i = i + 1
+	}
+	return true
+}
+
+# imp_ill_formed answers WHY a string is not an import path, or "" when it is one. Every shape
+# it turns away fails the same test — a segment that is not a package name — so this is one
+# rule wearing several sentences rather than six rules, which is what E5012 is.
+#
+# NOTHING IS NORMALISED. `./log/`, `.//log` and `./a/../b` are refused rather than cleaned up,
+# because cleaning them makes two spellings into one module and puts module identity back to
+# being computed from a string somebody happened to type.
+fn imp_ill_formed(path: str) -> str {
+	return "an import path may not be empty" if path == ""
+	return "an import path may not begin with `/`: a module is named under a root, not at one — a module of this project is `./<name>`" if has_prefix(path, "/")
+
+	body := imp_body(path)
+
+	return "`./` names no module on its own — a module of this project is `./<name>`" if body == ""
+	return "an import names a MODULE and not a file — write `" + drop_suffix(path, ".zg") + "`" if has_suffix(path, ".zg")
+
+	segs := imp_segs(body)
+
+	# THE DOT SEGMENTS COME FIRST, before anything classifies. `..` holds two dots, so a path
+	# beginning with one has a first segment that is not a package name — which is the test for
+	# a HOST, and `../shared` was answering _a remote package `../shared` names a host_. The
+	# escape is checked over every segment before the host rule is allowed an opinion.
+	mut d := 0
+	for d < segs.len() {
+		return "`..` is not part of an import path: an import may not reach outside the project, and a module reached from above belongs beside the entry file as `./<name>`" if segs[d] == ".." or segs[d] == "."
+
+		d = d + 1
+	}
+
+	remote := imp_is_remote(path)
+	mut i := 0
+	for i < segs.len() {
+		seg := segs[i]
+
+		# the host of a remote path is not a package name and is not held to that grammar; the
+		# segments after it are
+		if remote and i == 0 {
+			i = i + 1
+			continue
+		}
+
+		return f"an import path is written one way: `{path}` has an empty segment" if seg == ""
+		return f"`{seg}` is not a package name — a package name is a lower-case letter followed by lower-case letters, digits and `_`" if not imp_name_ok(seg)
+
+		i = i + 1
+	}
+
+	last := segs[segs.len() - 1]
+	return f"`{last}` is a reserved word, and a module's name is bound as an identifier" if zerg.reserved_word(last)
+
+	return ""
+}
+
+# imp_root is the directory a well-formed, non-remote path is expanded under. The whole of the
+# difference between the two roots is this one answer; everything after it is shared.
+fn imp_root(path: str, entry_dir: str) -> str {
+	return entry_dir if imp_is_local(path)
+
+	return stdlib_dir()
+}
+
+# resolve_module is the files one import path names, or an empty list when nothing is there.
+#
+# ONE ROOT, NOT A SEARCH. It used to try the importing file'"'"'s directory, then the entry
+# directory, then the standard library, first match winning — so `import "io"` meant the
+# standard library or a neighbour'"'"'s file depending on what was on disk, adding a file changed
+# what every sibling'"'"'s imports resolved to, and a file in a module directory was silently
+# promoted to a module of its own (#13). The prefix decides the root now, and a search with one
+# place to look is not a search.
+fn resolve_module(path: str, entry_dir: str) -> list[str] {
+	return module_at(imp_root(path, entry_dir), imp_body(path))
 }
 
 # module_files resolves one import to the source files that make up the module it names.
@@ -192,12 +312,39 @@ fn resolve_module(path: str, near: str, from_dir: str) -> list[str] {
 # spell `place_line` from it, and this one was handed the path alone — a string that knows
 # what was written and not which line wrote it. A reader told an import resolves nowhere and
 # not which import is left grepping their own program for the quoted path.
-fn module_files(im: zerg.ImportDecl, near: str, from_dir: str) -> list[str] {
-	found := resolve_module(im.path, near, from_dir)
+fn module_files(im: zerg.ImportDecl, from_dir: str) -> list[str] {
+	place := zerg.place_line(im.at, im.line, im.col)
+
+	# THE STRING FIRST, and the disk only after it. A path that is not an import path is
+	# refused for what it says rather than for what it failed to find, which is the difference
+	# between `\`..\` is not part of an import path` and `cannot resolve import "../x"`.
+	why := imp_ill_formed(im.path)
+
+	raise zerg.rule_msg(zerg.Rule.ImportPathIllFormed, f"`{im.path}` is not an import path: {why}\n{place}") if why != ""
+
+	raise zerg.rule_msg(zerg.Rule.NotYetRemoteImport, f"NotImplemented: a remote package — `{im.path}` names a host, and resolving one needs a package layer this compiler has not built. It resolves the standard library (`import \"io\"`) and this project (`import \"./io\"`)\n{place}") if imp_is_remote(im.path)
+
+	raise zerg.rule_msg(zerg.Rule.ImportLayoutAmbiguous, f"`{im.path}` is both a file and a directory — a module is one shape or the other, and this compiler will not choose for you\n{place}") if module_ambiguous(imp_root(im.path, from_dir), imp_body(im.path))
+
+	found := resolve_module(im.path, from_dir)
+
 	return found if found.len() > 0
 
-	place := zerg.place_line(im.at, im.line, im.col)
-	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}` under any source root — a module is a directory of `.zg` files beside the importer or in the standard library, named by the last segment of its path\n{place}")
+	# The sentence names the ROOT that was looked in, because that is the half the reader
+	# cannot see — and when the other root holds it, saying so IS the fix.
+	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}`: {imp_missing_says(im.path, from_dir)}\n{place}")
+}
+
+# imp_missing_says is the second half of an unresolved import: where it was looked for, and —
+# when the OTHER root holds a module of that name — the one line that fixes it. A reader who
+# wrote `import "log"` beside their own `log/` is one character away and has no way to know it.
+fn imp_missing_says(path: str, from_dir: str) -> str {
+	body := imp_body(path)
+	return f"no module at `{path}` (looked in {join_path(from_dir, body)})" if imp_is_local(path)
+	other := module_at(from_dir, body)
+	return f"there is no standard-library module `{path}`, and `{body}` is beside your entry file — did you mean `./{body}`?" if other.len() > 0
+
+	return f"there is no standard-library module `{path}` (looked in {stdlib_dir()})"
 }
 
 # module_sources is the same resolution asked BY NAME rather than by import: the files that
@@ -243,7 +390,22 @@ pub fn module_sources(name: str, from_dir: str) -> list[str] {
 	return none if not is_module_name(seg)
 	return none if zerg.is_test_file(seg + ".zg")
 
-	return resolve_module(name, from_dir, from_dir)
+	return none if imp_ill_formed(name) != ""
+	return none if imp_is_remote(name)
+
+	found := resolve_module(name, from_dir)
+	return found if found.len() > 0
+
+	# AND THE READER'S OWN DIRECTORY, for a bare name — which is the one place this differs
+	# from an import, and it differs for the reason the paragraph above gives: reading a module
+	# is not importing one. An import is held to `bare means the standard library` because a
+	# name that could mean two things is a program that means two things; a person typing
+	# `zerg doc attach` is pointing at the module they can see, and there is no program for the
+	# ambiguity to reach. `zerg doc ./attach` says the same thing and is what a build would
+	# require.
+	return none if imp_is_local(name)
+
+	return module_at(from_dir, name)
 }
 
 # is_module_name reports whether one segment is a name the language would let a module have.
@@ -344,24 +506,100 @@ pub fn local_modules(from_dir: str) -> list[str] {
 # names one deliberately and dropping it would leave the module empty and the complaint about
 # some name much later.
 fn module_at(root: str, path: str) -> list[str] {
-	file := join_path(root, path + ".zg")
-	if __zrt_exists(file) {
-		mut one: list[str] = []
-		one.append(file)
-		return one
-	}
-	dir := join_path(root, path)
-	if __zrt_exists(dir) {
-		mut many: list[str] = []
-		for name in __zrt_listdir(dir) {
-			if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
-				many.append(join_path(dir, name))
-			}
-		}
-		return many
-	}
+	parent := imp_under(root, imp_parent(path))
+	base := path_tail(path)
+
+	# BOTH SHAPES ARE ASKED, and both being there is NO module rather than a ranked pair. Any
+	# silent precedence is a question a reader eventually has to ask — `zerg` used to read the
+	# file and never the directory, the seed reads the directory and never the file — and the
+	# import site turns the pair away by name (E5013) rather than choosing for them.
+	file := dir_has(parent, base + ".zg")
+	dir := dir_has(parent, base)
+
 	mut none: list[str] = []
+
+	return none if file and dir
+	return module_one(join_path(parent, base + ".zg")) if file
+	return module_many(join_path(parent, base)) if dir
+
 	return none
+}
+
+# module_ambiguous is the pair module_at answers nothing for, asked on its own so the import
+# site can say which of the two nothings it found.
+fn module_ambiguous(root: str, path: str) -> bool {
+	parent := imp_under(root, imp_parent(path))
+	base := path_tail(path)
+	return dir_has(parent, base + ".zg") and dir_has(parent, base)
+}
+
+# dir_has asks the LISTING rather than the path, and that is the whole point of it: macOS folds
+# case and Linux does not, so `__zrt_exists("<root>/log")` answers yes to a `Log/` on one of the
+# two platforms this compiler ships for. A name is present when the directory says that exact
+# name is present.
+fn dir_has(dir: str, name: str) -> bool {
+	# AN EMPTY ROOT IS THE CURRENT DIRECTORY. `dir_of` answers "" for an entry named with no
+	# directory at all — `zerg build main.zg` — and `__zrt_exists("")` is false, so every
+	# import of such a build resolved to nothing. The old shape reached the filesystem through
+	# `join_path(root, path)`, which produced a usable relative path from the same "".
+	# a plain `if`, not a trailing one: this file is compiled BY THE SEED, which does not read an
+	# if-expression in a binding
+	mut at := dir
+	if at == "" {
+		at = "."
+	}
+
+	return false if not __zrt_exists(at)
+
+	for e in __zrt_listdir(at) {
+		return true if e == name
+	}
+	return false
+}
+
+fn module_one(file: str) -> list[str] {
+	mut one: list[str] = []
+	one.append(file)
+	return one
+}
+
+# A `*_test.zg` IS NOT IN EITHER ANSWER. A normal build compiled them like every other file, so
+# a test's declarations reached the shipped artifact and its `pub` ones joined the module's
+# surface — `lib.only_in_test()` resolved and ran from a program that never asked for a test.
+fn module_many(dir: str) -> list[str] {
+	mut many: list[str] = []
+	for name in __zrt_listdir(dir) {
+		if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+			many.append(join_path(dir, name))
+		}
+	}
+	return many
+}
+
+# imp_under joins a root and a package path's parent, and it exists for the empty parent a
+# single-segment path has: `join_path` would answer `<root>/`, and the next join makes that
+# `<root>//<name>` — which works on every filesystem and appears in every diagnostic that
+# names the file.
+fn imp_under(root: str, parent: str) -> str {
+	return root if parent == ""
+
+	return join_path(root, parent)
+}
+
+# imp_parent is a package path without its last segment — "" for a single-segment path, which
+# join_path leaves as the root itself.
+fn imp_parent(path: str) -> str {
+	segs := imp_segs(path)
+	mut out := ""
+	mut i := 0
+	for i < segs.len() - 1 {
+		if out != "" {
+			out = out + "/"
+		}
+		out = out + segs[i]
+		i = i + 1
+	}
+	return out
 }
 
 # path_tail is the last '/'-separated segment of an import path, which is the module's
@@ -433,7 +671,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)
-		for dep in module_files(imd, dir_of(file), from_dir) {
+		for dep in module_files(imd, from_dir) {
 			load_with(dep, from_dir, seen, here, srcs, paths, buf)
 		}
 	}

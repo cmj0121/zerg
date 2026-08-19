@@ -446,7 +446,7 @@ fi
 #
 # `log` is this tree's REFERENCE for process-wide mutable state, so the shape is a claim it
 # makes and not merely how it happens to be written today. The compiler enforces RULE 1 and
-# only rule 1 — `E3056` puts the cell inside the group and `E4046` keeps it private, which is two
+# only rule 1 — `E3056` puts the cell inside the group and `E3108` keeps it private, which is two
 # codes for one rule rather than two rules. Rules 2 and 3 were properties of this source with
 # nothing but a reader checking them. This is that reader.
 #

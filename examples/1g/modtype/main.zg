@@ -10,7 +10,7 @@
 #   3
 #   0
 #   1
-import "shape"
+import "./shape"
 
 fn main() {
 	p: shape.Point = shape.Point(1, 2)

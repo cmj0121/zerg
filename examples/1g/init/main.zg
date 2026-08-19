@@ -5,7 +5,7 @@
 #   1     — m's init() ran once, before main's body
 #   40    — the module constant, evaluated at init
 #   40    — again; init ran only once
-import "m"
+import "./m"
 
 fn main() {
 	print m.get() # 40

@@ -18,7 +18,7 @@
 # beyond-the-seed: a directional channel end and the stdlib timers. The
 # bootstrap seed refuses both by name, so this example is built by `zerg`.
 
-import "std/time"
+import "time"
 
 fn gen(out: chan[int]<-, n: int) {
 	mut i := 0

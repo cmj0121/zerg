@@ -5,7 +5,7 @@
 import (
 	"sha256"
 
-	"zerg"
+	"./zerg"
 )
 
 # Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE
@@ -201,6 +201,22 @@ fn claimed(dir: str, name: str) -> bool {
 	return false if not __zrt_exists(join_path(dir, t))
 
 	return test_module(dir, t) != ""
+}
+
+# cut_prefix is drop_suffix from the other end, and it is spelled `cut_` because a module-private
+# name is program-global in this compiler: `cli` already has a `drop_prefix`, and two of them
+# would be one symbol.
+fn cut_prefix(s: str, prefix: str) -> str {
+	return s if not has_prefix(s, prefix)
+
+	b := bytearray(s)
+	mut out: list[byte] = []
+	mut i := bytearray(prefix).len()
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
 }
 
 # drop_suffix is `s` without `suffix`, or `""` when `s` does not end in one — and `""` also

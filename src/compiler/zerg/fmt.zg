@@ -2982,15 +2982,20 @@ fn fmt_sorted(paths: list[str]) -> list[str] {
 	return out
 }
 
-# fmt_is_stdlib reports whether a path names a bundled module. A module resolves by its
-# LAST path segment (`import "std/io"` and `import "io"` are the same module), which is
-# what the driver's resolver does, so the test is on that segment.
+# fmt_is_stdlib reports whether a path names a bundled module, and it is now a question about
+# the SYNTAX rather than a list.
+#
+# It used to hold the fifteen module names, written out here — a second copy of a language
+# fact, and a wrong one: a local module named `io` was grouped as standard library, because a
+# list cannot tell the two apart when the spelling is the same. It no longer can be the same.
+# A path that names this project begins `./` (GRAMMAR#import-path); everything else names the
+# standard library or a remote package, and both of those go in the first group.
 fn fmt_is_stdlib(path: str) -> bool {
-	name := last_segment(path)
-	for m in ["ascii", "atomic", "cli", "fs", "io", "json", "log", "math", "os", "rand", "sha256", "strconv", "strings", "testing", "time"] {
-		return true if m == name
-	}
-	return false
+	b := bytearray(path)
+
+	return true if b.len() < 2
+
+	return not (b[0] == b'.' and b[1] == b'/')
 }
 
 # fmt_first_import is the index of the first `import`, or -1 when the file has none.

@@ -292,6 +292,20 @@ pub enum Rule {
 	NotPublicField = 5010
 	TestFileImported = 5011
 
+	# An import path is a PREFIX and a PACKAGE PATH, and this is the one code for a string that
+	# is neither. Every shape it turns away fails the same test — a segment that is not a
+	# `[a-z][a-z0-9_]*` package name — so they are one rule wearing several sentences: `..` and a
+	# leading `/` (which reach outside the project), a `//` or a trailing `/` (which are a second
+	# spelling of one path, and normalising them would put module identity back to being computed),
+	# a `.zg` suffix (an import names a module, not a file), and a last segment that is a reserved
+	# word (it is bound as an identifier, and `match` cannot be one).
+	ImportPathIllFormed = 5012
+
+	# The path is well formed and the DISK is ambiguous: `x/` and `x.zg` both there. Refused
+	# rather than ranked, because any silent precedence is a question a reader eventually has to
+	# ask, and there should be nothing to ask.
+	ImportLayoutAmbiguous = 5013
+
 	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense
@@ -399,6 +413,13 @@ pub enum Rule {
 	NotYetOpenRangeInclusive = 9102
 	NotYetSpawnOfBinding = 9103
 	NotYetAtomicImport = 9104
+
+	# A REMOTE package — a path whose first segment is a host, which a package name can never be
+	# because it may not hold a dot. The syntax is reserved so nothing else takes the shape; what
+	# resolves it is a package layer this compiler has not built. The sentence says that and
+	# nothing else: how a remote package is fetched, named or versioned is undecided, and a
+	# promise in a diagnostic is still a promise.
+	NotYetRemoteImport = 9105
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

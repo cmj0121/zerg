@@ -13,7 +13,7 @@
 #   9
 #   3
 #   7
-import "lib"
+import "./lib"
 
 fn main() {
 	COUNT := 9      # a plain local may shadow the constant (no `const` keyword in sight)

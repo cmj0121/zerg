@@ -10,7 +10,7 @@ import (
 	"io"
 	"sha256"
 
-	"zerg"
+	"./zerg"
 )
 
 # unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
@@ -334,7 +334,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
 			chk_import_cycle(here, im)
-			load_unit(module_files(imd, dir_of(paths[si]), from_dir), im, from_dir, seen, here, units)
+			load_unit(module_files(imd, from_dir), im, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}

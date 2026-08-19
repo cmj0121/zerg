@@ -798,7 +798,7 @@ fn main() {
 EOF
 
 reject pub-on-an-import E2015 at=1:1 <<'EOF'
-pub import "std/io"
+pub import "io"
 
 fn main() {
 	print "ok"
@@ -917,7 +917,7 @@ EOF
 # reason reject-check makes it the oracle, said once more.
 
 reject an-invented-namespace-prefix E3069 'undefined name `bogus`' <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	print bogus.text.shout("x")
@@ -929,7 +929,7 @@ pub fn shout(s: str) -> str {
 EOF
 
 reject a-path-segment-is-not-a-namespace E3069 'undefined name `util`' <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	print util.shout("z")
@@ -945,13 +945,13 @@ EOF
 # prefix, reporting "`hidden` is not a public member of module `text`" about a module the
 # program never named here. The right answer is about `bogus`, and it is now the only one.
 reject an-invented-prefix-onto-a-private-member E3069 'undefined name `bogus`' <<'EOF'
-import "caller"
+import "./caller"
 
 fn main() {
 	print caller.go()
 }
 --- caller/caller.zg
-import "util/text"
+import "./util/text"
 
 pub fn go() -> str {
 	return bogus.hidden()
@@ -966,7 +966,7 @@ EOF
 # enforces is one they get only by asking the same question — which is why this asks it
 # once (c_ns_kind) and all three read the answer.
 reject an-invented-prefix-in-a-defer E3069 'undefined name `bogus`' <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	defer bogus.shout("a")
@@ -983,7 +983,7 @@ EOF
 # answers depending on which shape asked: a placeless raise from a member read, "the method
 # `nosuch` on a ?" from a call, and a not-built refusal from a `spawn`.
 reject a-namespace-without-that-member E3084 <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	print text.nosuch("a")
@@ -1013,8 +1013,8 @@ EOF
 # renaming them is an error.
 reject two-imports-sharing-a-last-segment E3085 'is already the namespace of' at=3:2 <<'EOF'
 import (
-	"alt/text"
-	"util/text"
+	"./alt/text"
+	"./util/text"
 )
 
 fn main() {
@@ -1034,7 +1034,7 @@ EOF
 # and `text.shout()` both worked, and which of the two a reader reached depended on whether
 # they wrote a `(` or a `.`.
 reject an-import-colliding-with-a-function E3085 'is already a function in this program' at=1:8 <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn text() -> str {
 	return "local"
@@ -1056,7 +1056,7 @@ EOF
 # was refused. It reads the table c_build_top_names records now, and that walk runs over the
 # whole program, templates and all, for exactly this reason.
 reject an-import-colliding-with-a-generic-function E3085 'is already a function in this program' at=1:8 <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn text[T](v: T) -> T {
 	return v
@@ -1146,7 +1146,7 @@ EOF
 #
 # It is the first case here that needs TWO FILES, which is why `reject` learned to split one.
 reject an-orphan-impl E2037 <<'EOF'
-import "far"
+import "./far"
 
 impl Show for P {
 	fn show() -> str {
@@ -4748,6 +4748,30 @@ fn main() {
 }
 EOF
 
+# BOTH SHAPES AT ONE NAME IS NO MODULE, and it is refused rather than ranked. `zerg` used to
+# read the file and never the directory, the seed reads the directory and never the file, and
+# `docs/runtime/package.md` wrote the first down as if it were a decision. Any silent
+# precedence is a question a reader eventually has to ask; there should be nothing to ask.
+#
+# It lives here rather than beside the other import-path cases because it is the one of them
+# that is not about the STRING: the path is well formed and the disk is ambiguous, so the case
+# needs two files on disk to be one.
+reject a-module-that-is-both-a-file-and-a-directory E5013 'is both a file and a directory' <<'EOF'
+import "./two"
+
+fn main() {
+	print two.hi()
+}
+--- two.zg
+pub fn hi() -> int {
+	return 1
+}
+--- two/two.zg
+pub fn hi() -> int {
+	return 2
+}
+EOF
+
 # --- bad paths, sweep four: what `raise` takes ------------------------------------------
 #
 # `raise e` carries an `Err`, and `raise "…"` is the shorthand that builds one from a message
@@ -4951,7 +4975,7 @@ fn main() {
 EOF
 
 reject a-module-private-name E3001 <<'EOF'
-import "std/strings"
+import "strings"
 
 fn main() {
 	print strings.pad_count("a", 3, " ")
@@ -4965,7 +4989,7 @@ EOF
 # refused without it. Three cases, because they are the two shapes the path resolves (a
 # plain name and a namespaced one) and the two rules it skipped.
 reject a-module-private-name-spawned E3001 <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	spawn text.hidden("a")
@@ -4982,7 +5006,7 @@ pub fn shout(s: str) -> str {
 EOF
 
 reject a-module-private-name-deferred E3001 <<'EOF'
-import "util/text"
+import "./util/text"
 
 fn main() {
 	defer text.hidden("a")
@@ -5005,7 +5029,7 @@ EOF
 # collapsed into the sentinel and every visibility question went quiet: this exact program,
 # spelled `./m.zg`, was refused, and spelled `m.zg`, printed 42.
 reject a-module-private-name-from-a-bare-entry-path E3001 bare-entry <<'EOF'
-import "text"
+import "./text"
 
 fn main() {
 	print text.helper()
@@ -5046,7 +5070,7 @@ EOF
 # and there is no second rule owed for a mutable global in particular. Both directions, since
 # a write is what the hole was really about.
 reject a-mutable-global-read-from-another-module E3001 'module `glob`' <<'EOF'
-import "glob"
+import "./glob"
 
 fn main() {
 	print glob.shared
@@ -5062,7 +5086,7 @@ pub fn read() -> int {
 EOF
 
 reject a-mutable-global-assigned-from-another-module E3001 'module `glob`' <<'EOF'
-import "glob"
+import "./glob"
 
 fn main() {
 	glob.shared = 11
@@ -5085,7 +5109,7 @@ EOF
 # line to change. It is here because the rule walks the unit being emitted, so an imported
 # module has to be spoken about while ITS unit is compiled, not the entry's.
 reject a-pub-mutable-global-in-an-imported-module E4046 'may not be `pub`' <<'EOF'
-import "glob"
+import "./glob"
 
 fn main() {
 	print glob.shared
@@ -5114,7 +5138,7 @@ EOF
 # src/bootstrap/README.md.
 
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	s: Secret = Secret("t")
@@ -5135,7 +5159,7 @@ EOF
 # have left the qualified one — which is the ONLY form the seed refuses — accepted by the
 # compiler the seed builds.
 reject a-module-private-type-named-through-its-namespace E5008 <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	s: lib.Secret = lib.Secret("t")
@@ -5158,7 +5182,7 @@ EOF
 # seed-gap: the seed lets a `pub fn` return a module-private struct, and a dependent then
 # obtains a value of a type it could never have named.
 reject a-pub-fn-that-returns-a-module-private-type E5009 'the result of `make`' seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.make().tag
@@ -5176,7 +5200,7 @@ EOF
 # THE PARAMETER SIDE OF THE SAME RULE, which is not the return side read backwards: a
 # dependent cannot CALL the function either, having no way to spell an argument for it.
 reject a-pub-fn-that-takes-a-module-private-type E5009 'parameter `s` of `use`' seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.tag()
@@ -5199,7 +5223,7 @@ EOF
 # not — the same leak one level in, and the case that says `decl_pub` is a fact about the pair
 # rather than about the struct.
 reject a-pub-field-whose-type-is-module-private E5009 'field `Box.it`' seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.tag()
@@ -5225,7 +5249,7 @@ EOF
 #
 # seed-gap: the seed prints the private field's value.
 reject a-module-private-field-read-outside-its-module E5010 at=5:2 seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	s := lib.make()
@@ -5246,7 +5270,7 @@ EOF
 # read (c_lvalue goes through c_expr), so one rule covers both — and a rule written on the
 # assignment path alone would have covered the half nobody tries first.
 reject a-module-private-field-written-outside-its-module E5010 at=5:2 seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	mut s := lib.make()
@@ -5273,7 +5297,7 @@ EOF
 # reached cc as `unknown type name 'zg_Nonexistent'`: an escape to cc, which is the class
 # this file exists to keep empty.
 reject a-pub-fn-leaking-a-private-type-under-emit-lib E5009 'the result of `make`' emit-lib seed-gap <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.make().tag
@@ -5322,14 +5346,14 @@ EOF
 #
 # seed-gap: the seed binds namespaces program-wide too, and builds this.
 reject a-namespace-this-module-did-not-import E5007 at=5:2 seed-gap <<'EOF'
-import "mid"
+import "./mid"
 
 fn main() {
 	print mid.relay()
 	print lib.make().tag
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return lib.make().tag
@@ -5364,7 +5388,7 @@ EOF
 # and a signature reach it as a TYPE, and a construction and a variant read reach it as an
 # EXPRESSION that names a type.
 reject a-namespace-this-module-did-not-import-in-an-annotation E5007 at=4:2 seed-gap <<'EOF'
-import "mid"
+import "./mid"
 
 fn main() {
 	c: lib.Counter = lib.Counter("a")
@@ -5372,7 +5396,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5384,7 +5408,7 @@ pub struct Counter {
 EOF
 
 reject a-namespace-this-module-did-not-import-in-a-signature E5007 seed-gap <<'EOF'
-import "mid"
+import "./mid"
 
 fn take(c: lib.Counter) -> str {
 	return c.tag
@@ -5395,7 +5419,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5407,7 +5431,7 @@ pub struct Counter {
 EOF
 
 reject a-namespace-this-module-did-not-import-constructing E5007 at=4:2 seed-gap <<'EOF'
-import "mid"
+import "./mid"
 
 fn main() {
 	c := lib.Counter("a")
@@ -5415,7 +5439,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5433,7 +5457,7 @@ EOF
 # an enum one module over), and reading it is what leaves the rule about WHO IMPORTED WHAT
 # unenforced, exactly as it is for every other member a namespace reaches.
 reject a-namespace-this-module-did-not-import-naming-a-variant E5007 at=4:2 seed-gap <<'EOF'
-import "mid"
+import "./mid"
 
 fn main() {
 	c := lib.Colour.Red
@@ -5441,7 +5465,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5454,14 +5478,14 @@ pub enum Colour {
 EOF
 
 reject a-namespace-this-module-did-not-import-spawned E5007 <<'EOF'
-import "mid"
+import "./mid"
 
 fn main() {
 	spawn lib.shout("a")
 	print mid.relay()
 }
 --- mid/mid.zg
-import "lib"
+import "./lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5478,19 +5502,19 @@ EOF
 # one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
 # initialization order no chapter defines.
 reject an-import-cycle-between-two-modules E4047 no-place <<'EOF'
-import "ca"
+import "./ca"
 
 fn main() {
 	print ca.a_one()
 }
 --- ca/ca.zg
-import "cb"
+import "./cb"
 
 pub fn a_one() -> int {
 	return cb.b_one() + 1
 }
 --- cb/cb.zg
-import "ca"
+import "./ca"
 
 pub fn b_one() -> int {
 	return 10
@@ -5502,13 +5526,13 @@ EOF
 # than the two-node one — the `seen` list a loader already keeps for deduplication makes the
 # self-edge look exactly like a module two files import.
 reject a-module-that-imports-itself E4047 no-place <<'EOF'
-import "solo"
+import "./solo"
 
 fn main() {
 	print solo.one()
 }
 --- solo/solo.zg
-import "solo"
+import "./solo"
 
 pub fn one() -> int {
 	return 1
@@ -6715,8 +6739,8 @@ EOF
 
 reject two-modules-defining-one-public-function E9081 seed-gap <<'EOF'
 import (
-	"ma"
-	"mb"
+	"./ma"
+	"./mb"
 )
 
 fn main() {
@@ -6738,7 +6762,7 @@ EOF
 # what E9082 has to say here is that there are two FILES, which is the thing this compiler
 # cannot tell from two modules and used to assert it could.
 reject two-files-of-one-module-declaring-a-function E9082 'both define `work`' <<'EOF'
-import "one"
+import "./one"
 
 fn main() {
 	print one.first()
@@ -7331,7 +7355,7 @@ EOF
 # without it — is examples/1g/testfile, because a program that must BUILD cannot be written
 # in this script.
 reject a-member-a-test-file-declares E3084 'has no `only_in_test`' <<'EOF'
-import "lib"
+import "./lib"
 
 fn main() {
 	print lib.only_in_test()
@@ -7347,7 +7371,7 @@ pub fn only_in_test() -> int {
 EOF
 
 reject an-import-that-names-a-test-file E5011 at=1:8 <<'EOF'
-import "lib/lib_test"
+import "./lib/lib_test"
 
 fn main() {
 	print lib_test.only_in_test()

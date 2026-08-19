@@ -18,7 +18,7 @@
 #
 # What does not cross is `seen`: it is module-private, so the count comes back through
 # `lib.seen_of`, a `pub fn` reading its own module's field.
-import "lib"
+import "./lib"
 
 fn main() {
 	c: lib.Counter = lib.bumped("hits")

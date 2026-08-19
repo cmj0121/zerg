@@ -5355,6 +5355,12 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[Stmt], in_loop: bool) {
 			Stmt.SFor(is_cond, cond, body_b) => c_guard_no_jump(em, body_b, true)
 			Stmt.SForIn(nm, it, body_b) => c_guard_no_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_guard_no_jump_sel(em, arms, in_loop)
+
+			# and inside a bare block, where a `return` was leaving a `guard` unseen: the
+			# E9043 that names the form never fired, and what the reader got instead was
+			# _E3032 this function's answer is int, and this gives Result[int]_ — a true
+			# sentence about a consequence, pointing nowhere near the `return` that caused it
+			Stmt.SScope(body_b) => c_guard_no_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -13082,6 +13088,13 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[Stmt], in_loop: bool) {
 			Stmt.SFor(is_cond, cond, body_b) => c_check_loop_jump(em, body_b, true)
 			Stmt.SForIn(nm, it, body_b) => c_check_loop_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_check_loop_jump_sel(em, arms, in_loop)
+
+			# A BARE BLOCK DOES NOT MAKE A LOOP, and without this arm the walk never looked
+			# inside one — so `{ break }` written outside any `for` was emitted, and the
+			# refusal a reader got was cc's: _'break' statement not in loop or switch
+			# statement_, against generated code, about a rule this compiler has and did not
+			# apply. `break` on its own at the same place has always been E4001.
+			Stmt.SScope(body_b) => c_check_loop_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -13251,9 +13264,14 @@ fn c_body_diverges(body: list[Stmt]) -> bool {
 
 fn c_stmt_diverges(s: Stmt) -> bool {
 	return match s {
-		Stmt.SReturn(_, _) => true
-		Stmt.SRaise(_, _, _) => true
+		Stmt.SReturn(_, _)          => true
+		Stmt.SRaise(_, _, _)        => true
 		Stmt.SIf(_, t, has_else, e) => has_else and c_body_diverges(t) and c_body_diverges(e)
+
+		# a bare block diverges when its body does, and nothing else about it matters here.
+		# Without this arm `fn f() -> int { { return 3 } }` was _E4023 its body falls off the
+		# end_ — a function whose only exit is a `return`, told it has none.
+		Stmt.SScope(b) => c_body_diverges(b)
 		_ => false
 	}
 }

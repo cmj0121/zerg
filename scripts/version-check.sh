@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# version-check — one version, four derivations, and they agree.
+# version-check — one version, five derivations, and they agree.
 #
 # The root VERSION file is the source of truth, and each thing downstream of it is derived
 # by a mechanism of its own: a generated Zerg source the shipping compiler compiles in, the
-# linker's -X into the seed, a hand-written badge URL in the READMEs, and the file itself
-# read back. Four mechanisms is four chances to drift, and the failure mode is silent by
-# construction — a stale `--version` is a string that prints happily and is simply not true.
+# linker's -X into the seed, a hand-written badge URL in the READMEs, the file itself read
+# back, and — at a release — the git TAG. Five mechanisms is five chances to drift, and the
+# failure mode is silent by construction — a stale `--version` is a string that prints
+# happily and is simply not true.
 # No build breaks, no test fails, and the number a user quotes in a bug report names the
 # wrong compiler.
 #
@@ -246,8 +247,41 @@ for readme in README.md README.zh-TW.md; do
 	agree "$readme badge" "${badge//--/-}" ""
 done
 
+# --- 5. the tag, when there is one -------------------------------------------------------
+#
+# A TAG IS THE ONE DERIVATION A HUMAN TYPES, and the only one that cannot be regenerated: the
+# other four come out of $VERSION_FILE by a mechanism, and a tag comes out of somebody's
+# fingers at the end of a long day. `v0.1.O` builds four perfectly consistent tarballs named
+# `0.1.0` and publishes them under a tag that is not the version, and nothing downstream has
+# any reason to notice.
+#
+# CHECKED FIRST BY THE RELEASE, and here rather than in the workflow because this file is
+# where "one version, and they agree" is written down — a second answer in YAML would be a
+# second place to keep in step, which is the drift this whole script exists against.
+#
+# ABSENT IS NOT A FAILURE. Every ordinary run of the board has no tag to compare, so `$TAG`
+# unset means the derivation is not in play; what is refused is a tag that is there and does
+# not match. The closing line says which of the two happened, because a check that quietly
+# measured nothing is the failure every gate here is written against.
+tag=${TAG:-${GITHUB_REF_NAME:-}}
+tagged=no
+case $tag in
+refs/tags/*) tag=${tag#refs/tags/} ;;
+esac
+if [ -n "$tag" ]; then
+	tagged=yes
+	if [ "$tag" != "v$want" ]; then
+		echo "TAG       $tag is not v$want — $VERSION_FILE reads $want, and a release is tagged v<version>"
+		fail=$((fail + 1))
+	fi
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "version-check: $fail finding(s) — the toolchain does not carry the version in $VERSION_FILE"
 	exit 1
 fi
-echo "version-check: the generated source, both compilers and both READMEs carry $want"
+if [ "$tagged" = yes ]; then
+	echo "version-check: the tag, the generated source, both compilers and both READMEs carry $want"
+else
+	echo "version-check: the generated source, both compilers and both READMEs carry $want (no tag to check)"
+fi

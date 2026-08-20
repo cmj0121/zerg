@@ -314,6 +314,15 @@ pub enum Rule {
 	# what the author of this one already did.
 	ImportOfOwnModule = 5015
 
+	# The C one unit would emit is larger than the budget, which is a REFUSAL rather than a
+	# crash: a program big enough to exhaust the machine was SIGKILLed — no code, no place,
+	# nothing to read — and that is the failure the standing contract exists to prevent.
+	#
+	# The budget is on EMITTED BYTES and not on RSS. A byte count is a number the compiler
+	# already owns, it is the same on every host and allocator, and a gate can reproduce it;
+	# RSS needs an OS call the runtime has not got and a number that moves under you.
+	EmitTooLarge = 5016
+
 	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense

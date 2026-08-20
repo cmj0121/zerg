@@ -19,8 +19,12 @@ its own. `zerg test src/stdlib` runs all of them; `zerg test src/stdlib/strings.
 A `pub` function's comment may carry an example, as a pair of fenced blocks in a plain `#` comment — the
 expressions in ` ```zerg `, and what they print in ` ```output `. `make stdlib-test` **compiles and runs**
 every pair and diffs the real output against the stated one, so an example is a claim that is checked
-rather than one that is written down. (`##` doc comments and `zerg doc` are **[not yet]**; the fences are
-the form they will take.)
+rather than one that is written down, and `zerg doc` reads the same comment back — `zerg doc strings`
+prints a module's whole document, `zerg doc strings.split` one declaration.
+
+> **[not yet]** `##` is not a doc comment. It lexes as an ordinary `#` comment whose text happens to begin
+> with a `#`, so `zerg doc` renders that `#` into the prose; a plain `#` comment is the form that works
+> today and is what all fifteen modules use.
 
 ````text
 # ```zerg

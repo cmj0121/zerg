@@ -22,9 +22,10 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E5002 cannot resolve
 > import `name` under any source root_——而且早在它被 lex 之前就報出來。
 >
-> **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間，
-> 而可見性只檢查了 module 所持有的一部分、不是全部——函式與 module 常數有檢查(_E3001 `helper` is not a public
-> member of module `lib`_,且帶位置),struct 的欄位沒有。見下方「可見性」。
+> **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間。
+> 那個代價已經不是可見性——函式、module 常數、型別與 struct 的欄位全都有檢查，各自帶位置（_E3001 `helper`
+> is not a public member of module `lib`_、_E5010 `secret` is not a public field of `P`_）——而是一個名字是
+> 全程式唯一的，所以兩個 module 不能宣告同一個公開名字。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module
@@ -83,10 +84,9 @@ opens a statement at the top level, and a compiled program has nowhere to run it
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
 _E4068 these constants depend on each other and none can be given a value first_。
 
-> **[deviation]** reads-from 圖是由初始化式**寫出來**的名字建的,所以一個**穿過呼叫**的讀取不是一條邊。
-> `const A: str = mk()` 寫在 `const B: str = "x"` 上面、而 `mk()` 讀 `B`,會讓 `A` 持有**零值**,而且完全沒有
-> 任何診斷——實測,`A` 印出來是空的。這是這條排序規則唯一的 silent-wrong,也是 `src/stdlib/log.zg` 把自己
-> 初始化式會碰到的常數宣告在**它們上面**、並由 `scripts/log-check.sh` 守住那個順序的原因:語言本身不守。
+一個**穿過呼叫**的讀取跟其他讀取一樣是一條邊：`const A: str = mk()` 寫在 `const B: str = "x"` 上面、而
+`mk()` 讀 `B`，`A` 會拿到 `B` 被宣告成的那個值。這曾是這條排序規則唯一的 silent-wrong——`A` 持有零值而且
+沒有任何診斷——已由 #14 關閉。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依

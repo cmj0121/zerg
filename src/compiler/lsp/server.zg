@@ -35,12 +35,22 @@ import (
 pub struct Program {
 	pub paths: list[str]
 	pub srcs: list[str]
+
+	# mods is the MODULE each of `paths` belongs to, in the same order — the identity table
+	# `zerg.Mods` carries into every rule that asks which module a declaration is in.
+	#
+	# IT IS FILLED BY THE CALLER and never computed here, which is the whole of why this
+	# server can hold it at all: resolving a module is `cmd`'s work, this file imports only
+	# `io`, `json`, `strconv` and `./zerg`, and the loader arrives as the function value
+	# `serve` is handed. So the answer rides in with the sources rather than being derived
+	# from them a second time, in a layer that has no business deriving it.
+	pub mods: list[str]
 }
 
 # program is the constructor the DRIVER calls. A struct declared here can be read anywhere,
 # but the driver is the one that builds it, so the way in is a function of this module's.
-pub fn program(paths: list[str], srcs: list[str]) -> Program {
-	return Program(paths, srcs)
+pub fn program(paths: list[str], srcs: list[str], mods: list[str]) -> Program {
+	return Program(paths, srcs, mods)
 }
 
 # Doc is an open buffer. The server holds the text because the disk has not seen it: that is
@@ -424,7 +434,7 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	}
 	prog := match res {
 		Either.Left(p)  => p
-		Either.Right(_) => program([], [])
+		Either.Right(_) => program([], [], [])
 	}
 	return out if prog.srcs.len() == 0
 
@@ -443,7 +453,7 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	# reached the end of it at all.
 	mut ds: list[zerg.Diag] = []
 	err := match guard {
-		zerg.check_files_diag(prog.srcs, prog.paths, ds)
+		zerg.check_files_diag(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods), ds)
 		ds.len()
 	} {
 		Either.Left(_)  => ""
@@ -475,7 +485,7 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	# GUARDED, because loading a program is the one thing here that can refuse, and a
 	# server that dies on a half-typed file is a server the editor stops talking to.
 	lints := match guard {
-		zerg.lint_program(prog.srcs, prog.paths)
+		zerg.lint_program(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods))
 	} {
 		Either.Left(ls) => ls
 		Either.Right(_) => []
@@ -687,12 +697,12 @@ fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg
 	}
 	prog := match res {
 		Either.Left(p)  => p
-		Either.Right(_) => program([], [])
+		Either.Right(_) => program([], [], [])
 	}
 	return out if prog.srcs.len() == 0
 
 	lints := match guard {
-		zerg.lint_conversions(prog.srcs, prog.paths)
+		zerg.lint_conversions(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods))
 	} {
 		Either.Left(ls) => ls
 		Either.Right(_) => []

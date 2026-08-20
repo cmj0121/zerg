@@ -287,24 +287,17 @@ can mark the type `pub` or stop returning it, where a dependent reading a privat
 Every module is still flattened into one namespace, which is why two modules that declare the same name
 collide — that refusal is about the name, not about the visibility.
 
-> **[deviation]** What the rule compares is the DIRECTORY a declaration was read from against the
-> directory doing the reading, which is the **module** boundary and not the package one. So
+What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
+where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
+and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat
+directory.
+
+> **[deviation]** The boundary it compares is the **module** one and not the package one. So
 > **package-internal** and **package-public** above are still one tier as far as the compiler is
 > concerned: a `pub` declaration is nameable by every other module of the build that imports it, and
 > nothing narrows that to a package's root surface, because no package exists yet to be the unit that
 > narrowing is measured against. Re-export (`import pub`) builds a surface; nothing yet requires a name to
 > be on one.
->
-> ---
->
-> **[deviation]** And because it compares the DIRECTORY, **two single-file modules in one directory are
-> one module to this rule**. `./a` and `./b` beside each other are two modules everywhere else — two
-> import paths, two namespaces — and `b` may name `a`'s module-private declarations without a word
-> said. The standard library is fifteen such modules in one flat directory, so the rule does not hold
-> between any two of them. The identity a module needs here is the import path it was reached by;
-> what it has is where its files happen to sit. The same substitution shows in a message: reading a
-> private name of `strings` from outside is refused as _not a public member of module `stdlib`_,
-> naming the directory rather than the module.
 
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`

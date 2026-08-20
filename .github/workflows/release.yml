@@ -1,0 +1,148 @@
+# The release flow for the Zerg toolchain.
+#
+# WHAT A TAG BUYS THAT CI DOES NOT. CI runs on `main` and on every pull request, so a tag can
+# still point at a commit CI never saw: a cherry-pick, an amend, a merge made locally. This
+# re-runs the board ON THE TAGGED COMMIT, and publishes nothing until it is green.
+#
+# THE SAME GATES AS CI, deliberately, and not a larger release-only set. A gate nobody sees
+# every day is a gate that speaks for the first time on the day it must not — so if something
+# here is worth checking, it belongs in `ci.yml` where it runs on every push. What this adds is
+# not more checks; it is the same checks on the commit the tag names.
+#
+# WHAT SHIPS is a per-platform tarball, because `bin/zerg` is not self-contained: a build ends
+# in `cc`, and the compiler reads the runtime's C sources and the standard library at run time.
+# `make install` decides what an installed toolchain is, and `scripts/release-tarball.sh` stages
+# one and tars it — so the contents are never a second list.
+#
+# THREE PLATFORMS, ALL NATIVE. The seed is Go and cross-compiles, but `bin/zerg` is produced by
+# compiling Zerg to C and handing it to `cc`, so each platform's compiler is built on that
+# platform. There is no Intel-Mac binary: Rosetta runs x86_64 on Apple Silicon and not the
+# reverse, so an Intel Mac builds from source.
+#
+# AND A TARBALL THAT FAILS ITS SMOKE TEST IS NOT PUBLISHED. `install-check` runs `make install`
+# from the repository, with a checkout and a Go toolchain standing behind it. Nothing had ever
+# tested the thing that gets DOWNLOADED, so `make release` is the pair — build the artifact,
+# then unpack it somewhere with nothing else and build a program with it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # --- 1. the board, on the tagged commit -------------------------------------------------
+  #
+  # The private corpus is fetched the way CI fetches it; the gates that need it are skipped
+  # without it, and `scripts/ci-fetch-testdata.sh` is where that line is drawn honestly.
+  board:
+    name: the board, on the tag (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      - name: Build the toolchain
+        run: make build
+
+      # THE TAG IS THE FIFTH DERIVATION OF VERSION, and the only one a human types. Asserted
+      # before anything is built for publication, so a mistyped tag costs a minute rather than
+      # a full board and three tarballs named after a version nobody asked for.
+      - name: The tag is the version
+        run: make version-check
+        env:
+          TAG: ${{ github.ref_name }}
+
+      - name: Fetch the private corpus
+        run: ./scripts/ci-fetch-testdata.sh corpus
+        continue-on-error: true
+
+      - name: Run the board
+        run: make test
+
+  # --- 2. the artifacts, one per platform -------------------------------------------------
+  artifact:
+    name: tarball (${{ matrix.os }})
+    needs: board
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      # `make release` is the tarball AND its smoke test, in that order, so there is no way to
+      # produce the first without passing the second.
+      - name: Build the tarball and smoke-test it
+        run: make release
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+
+  # --- 3. one release, with the checksums of everything in it -----------------------------
+  publish:
+    name: publish
+    needs: artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+
+      - name: Collect every platform's artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # EACH RUNNER KNOWS ONLY ITS OWN. `release-tarball.sh` appends one line per artifact to a
+      # SHA256SUMS beside it, so merging three of them gives three lines in one file — and
+      # `sha256sum -c SHA256SUMS` then verifies whichever ones a person downloaded.
+      - name: One SHA256SUMS for the release
+        run: |
+          cd dist
+          cat SHA256SUMS | sort -k2 > SHA256SUMS.all
+          mv SHA256SUMS.all SHA256SUMS
+          sha256sum -c SHA256SUMS
+          echo "--- publishing ---"
+          ls -l
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          body_path: CHANGELOG.md
+          fail_on_unmatched_files: true

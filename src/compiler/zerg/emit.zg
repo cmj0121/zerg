@@ -329,6 +329,23 @@ struct Emitter {
 	# drop one of them.
 	pub ns_at: list[str]
 
+	# ns_mods is WHICH MODULE each binding names, row for row beside ns_names — the import
+	# path as written, which is exactly what the loader records as that module's identity, so
+	# the two compare literally.
+	#
+	# A COLUMN OF THIS NAME STOOD HERE ONCE AND WAS DELETED AS UNREAD. The note that removed
+	# it said "a module flattens into the one program-wide space, so every reader of a
+	# qualified name goes on to look the MEMBER up rather than the module" — which was true,
+	# and was the bug: `b.helper()` answered a `helper` module `a` declared, and printed it.
+	# The prefix decided nothing. This is the column that lets it decide.
+	pub ns_mods: list[str]
+
+	# ns_pub is whether that import was a RE-EXPORT (`import pub "…"`), row for row. A module
+	# that re-exports another puts its public surface onto its own, which is the one answer to
+	# "is this member yours" that is neither yes nor a mistake — `examples/1g/reexport` is the
+	# program, and it is what turned red the first time the rule above was asked.
+	pub ns_pub: list[bool]
+
 	# lv_write is set while the ASSIGNMENT TARGET of a statement is being lowered, and it
 	# is what tells `xs[0] = 9` from `x := xs[0]`. A list's buffer is copy-on-write, so a
 	# read takes the slot as it is and a write must first make the buffer this list's
@@ -4296,6 +4313,8 @@ fn c_build_namespaces(mut &em: Emitter, f: File) {
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
 			em.ns_at.append(here)
+			em.ns_mods.append(im.path)
+			em.ns_pub.append(im.is_pub)
 		}
 	}
 }
@@ -4328,6 +4347,71 @@ fn c_ns_bound_in(mut &em: Emitter, n: str, here: str) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+# c_ns_names_mod is whether the prefix `n`, AS THIS MODULE READS IT, names the module a
+# declaration came from. It is the question `b.helper()` was never asked.
+#
+# THE COMPARISON IS LITERAL, and it is only possible since #36: a module's identity is the
+# import path it was reached by, so `ns_mods` (what the import wrote) and `c_mod_of` (what
+# the loader recorded) are the same string for the same module. While identity was a
+# DIRECTORY there was nothing here to compare against.
+#
+# QUIET WHEN THE READER IS UNKNOWN, and quiet when this module bound the name to nothing —
+# the first is the silence chk_visible keeps for code emitted before any statement, and the
+# second is `chk_ns_bound`'s finding rather than this one's. A rule that spoke in either case
+# would report a program twice for one mistake.
+fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
+	return true if decl_mod == ""
+
+	here := c_mod_of(em, em.at_path)
+	return true if here == ""
+
+	mut bound := false
+	mut i := 0
+	for i < em.ns_names.len() {
+		if em.ns_names[i] == n and em.ns_at[i] == here {
+			bound = true
+			return true if em.ns_mods[i] == decl_mod
+
+			# OR THE MODULE RE-EXPORTS IT. `mid` writing `import pub "./deep"` puts `deep`'s
+			# public names on `mid`'s surface, so `mid.hello()` is `deep`'s `hello` and is
+			# not a mistake (docs/runtime/package.md, and `examples/1g/reexport`).
+			return true if c_ns_reexports(em, em.ns_mods[i], decl_mod, 0)
+		}
+		i = i + 1
+	}
+	return not bound
+}
+
+# c_ns_reexports is whether module `mod` puts module `want`'s surface on its own — directly,
+# or through a chain of re-exports, since `import pub` is exactly the statement that another
+# module's public names are now this one's.
+#
+# BOUNDED, because a re-export chain is data and this walk is recursion. Eight is far past any
+# real surface and the import graph is a DAG anyway (E5014); the bound is here so that a bug in
+# the graph is a wrong answer rather than a dead compiler.
+fn c_ns_reexports(mut &em: Emitter, mod: str, want: str, depth: int) -> bool {
+	return false if depth > 8
+
+	mut i := 0
+	for i < em.ns_names.len() {
+		if em.ns_pub[i] and em.ns_at[i] == mod {
+			return true if em.ns_mods[i] == want
+			return true if c_ns_reexports(em, em.ns_mods[i], want, depth + 1)
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# c_ns_owns_fn is c_ns_names_mod for a FUNCTION, and it exists so the three shapes that can
+# write a namespaced call — an ordinary one, a `spawn`, a `defer` — ask it in one spelling.
+fn c_ns_owns_fn(mut &em: Emitter, ns: str, name: str) -> bool {
+	r := c_sig_row_of(em, name)
+	return true if r < 0
+
+	return c_ns_names_mod(em, ns, em.sig_mod[r])
 }
 
 # NsKind is WHAT THE PREFIX OF A QUALIFIED NAME TURNED OUT TO BE. Three answers and not
@@ -4464,8 +4548,13 @@ fn c_ns_unqualify_meth(mut &em: Emitter, t: Expr, m: str, args: list[Expr]) -> E
 # E3084 is for.
 fn c_ns_names_type(mut &em: Emitter, t: Expr, member: str) -> bool {
 	return false if c_ns_kind(em, t) != NsKind.NsModule
+	return false if not c_is_struct_name(em, member) and not c_is_enum_name(em, member) and not c_is_typedef(em, member)
 
-	return c_is_struct_name(em, member) or c_is_enum_name(em, member) or c_is_typedef(em, member)
+	# AND THE MODULE THAT DECLARES IT IS THE ONE THE PREFIX NAMES, which is the same rule the
+	# call and the constant paths ask — `b.Box(1)` resolved a `Box` module `a` declared and
+	# constructed it. Answering false here hands the pair back to the ordinary field path,
+	# which reports it as the member `b` has not got.
+	return c_ns_names_mod(em, c_ns_root(t), c_ty_mod(em, member))
 }
 
 # c_undefined_name is THE report of a name nothing in the program bound, and it is one
@@ -7287,6 +7376,15 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 		# method `x` on a ?", which describes the namespace as a value of no type rather
 		# than as the module it is.
 		if not c_name_in(em.sig_names, meth) {
+			chk_no_member(em, tn, meth)
+			return "0"
+		}
+
+		# AND THE MODULE THAT DECLARES IT IS THE ONE THE PREFIX NAMES. The flatten makes
+		# every module's names reachable from one space, which is what made `b.helper()`
+		# answer a `helper` module `a` declared — and print it. The member is `b`'s or it is
+		# not `b`'s, and the sentence for the second is the one already written.
+		if not c_ns_owns_fn(em, tn, meth) {
 			chk_no_member(em, tn, meth)
 			return "0"
 		}
@@ -11203,7 +11301,7 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 			# `mod.work()` — a module namespace flattens into the one program-wide function
 			# space, so a namespaced callee IS the free function of that name, exactly as an
 			# ordinary `mod.work()` call is lowered
-			if not c_name_in(em.sig_names, m) {
+			if not c_name_in(em.sig_names, m) or not c_ns_owns_fn(em, c_ns_root(tgt), m) {
 				chk_no_member(em, c_ns_root(tgt), m)
 				return Callee("0", [], "")
 			}
@@ -11850,7 +11948,7 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 		#
 		# Whether this module may read it is the same question a call asks
 		# (c_chk_visible_fn), against the rows c_const_globals recorded.
-		if c_k_idx(em, fld) >= 0 {
+		if c_k_idx(em, fld) >= 0 and c_ns_names_mod(em, ns, c_mod_of(em, em.k_decls[c_k_idx(em, fld)].path)) {
 			c_chk_visible_const(em, fld)
 			return "zg_" + fld
 		}
@@ -14118,7 +14216,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

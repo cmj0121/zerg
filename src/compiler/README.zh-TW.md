@@ -76,13 +76,21 @@ zerg --help             # 命令、旗標，以及下面那些環境變數
 編譯器自己解析 `import`，而且從任何目錄都能運作。它去哪裡找，先由環境變數回答，最後才是 repo
 內的佈局——所以一份 checkout 不需要任何設定，而一次安裝也不需要 checkout：
 
-| 變數           | 是什麼              | 預設值                        |
-| -------------- | ------------------- | ----------------------------- |
-| `ZERG_ROOT`    | 安裝的根目錄        | 目前的目錄                    |
-| `ZERG_RUNTIME` | runtime 的 C 原始碼 | `$ZERG_ROOT/src/runtime/csrc` |
-| `ZERG_STDLIB`  | 標準函式庫          | `$ZERG_ROOT/src/stdlib`       |
-| `ZERG_CACHE`   | build cache         | `$ZERG_ROOT/.zerg-cache`      |
-| `ZERG_CSTD`    | cc 用的 C 方言      | `c17`                         |
+| 變數           | 是什麼              | 預設值                           |
+| -------------- | ------------------- | -------------------------------- |
+| `ZERG_ROOT`    | 那兩棵樹在哪裡      | 從執行檔自己的路徑探測出來       |
+| `ZERG_RUNTIME` | runtime 的 C 原始碼 | 在 `$ZERG_ROOT` 底下，依佈局而定 |
+| `ZERG_STDLIB`  | 標準函式庫          | 在 `$ZERG_ROOT` 底下，依佈局而定 |
+| `ZERG_CACHE`   | build cache         | `$ZERG_ROOT/.zerg-cache`         |
+| `ZERG_CSTD`    | cc 用的 C 方言      | `c17`                            |
+
+`$ZERG_ROOT` 底下的那兩個，在**安裝**裡是 `lib/zerg/csrc` 與 `lib/zerg/stdlib`，在**原始碼樹**裡
+是 `src/runtime/csrc` 與 `src/stdlib`。
+
+`zerg_root()` 探測 `__zrt_exe_path()` 並往上走兩層，而 `root_layout()` 分辨真正存在的兩種佈局：
+**原始碼樹**——執行檔是 `<root>/bin/zerg`、與 `src/runtime/csrc` 並列；以及**安裝**——它是
+`<prefix>/bin/zerg`、與 `<prefix>/lib/zerg/csrc` 並列。所以一個 tarball 解開在任何地方都能用，
+不需要 export 任何東西。
 
 一個 import 先對進入點檔案自己的目錄解析，然後才是標準函式庫；而一個模組要嘛是 `<name>.zg`，
 要嘛是一個**目錄**——目錄裡的原始碼以排序後的順序讀取。之所以排序，是因為產生出來的 C 不可以

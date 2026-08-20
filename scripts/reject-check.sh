@@ -940,6 +940,38 @@ pub fn shout(s: str) -> str {
 }
 EOF
 
+# TWO SINGLE-FILE MODULES IN ONE DIRECTORY ARE TWO MODULES. `lib/a.zg` and `lib/b.zg` are
+# reached by `./lib/a` and `./lib/b` — independent modules that happen to share a directory,
+# which is exactly the shape `src/stdlib` has fifteen of — and `b` here calls `a`'s
+# module-private `secret()` with no import and no `pub`.
+#
+# It COMPILED AND PRINTED 42. The module a declaration belonged to was `dirname` of its path,
+# so every file of a directory was one module to every visibility rule, and the whole of
+# `io`'s private surface was reachable from `strings`. The seed refuses it — placelessly, as
+# "undefined function" — which is how the gap was measured. #36.
+reject two-single-file-modules-in-one-directory E3001 'is not a public member of module `a`' <<'EOF'
+import (
+	"./lib/a"
+	"./lib/b"
+)
+
+fn main() {
+	print b.peek()
+}
+--- lib/a.zg
+fn secret() -> int {
+	return 42
+}
+
+pub fn shown() -> int {
+	return secret()
+}
+--- lib/b.zg
+pub fn peek() -> int {
+	return secret()
+}
+EOF
+
 # THE NAMING HOLE IS NOT THE VISIBILITY HOLE, and this is the case that tells them apart.
 # `hidden` is module-private, and the visibility rule caught it — through the invented
 # prefix, reporting "`hidden` is not a public member of module `text`" about a module the

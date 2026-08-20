@@ -130,7 +130,7 @@ pub struct Finding {
 # lint_program reports every finding across a loaded program (the entry file plus the modules
 # it imports, as the driver resolved them), with the `#[allow(…)]` suppressions applied and
 # the two things worth saying about a suppression itself.
-pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
+pub fn lint_program(srcs: list[str], paths: list[str], ms: Mods) -> list[Finding] {
 	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
 	# declared by the language, so a program that implements it declares no spec by that name
 	# — and L102 read the resulting `into` as a private function nobody calls.
@@ -165,7 +165,7 @@ pub fn lint_program(srcs: list[str], paths: list[str]) -> list[Finding] {
 	# no conversions rather than no lint.
 	mut convs: list[Diag] = []
 	guard {
-		convs = lint_conversions(srcs, paths)
+		convs = lint_conversions(srcs, paths, ms)
 	}
 	for d in convs {
 		out.append(Finding("", d.path, d.line, d.col, d.code, d.msg))

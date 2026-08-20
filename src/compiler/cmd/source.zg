@@ -98,18 +98,19 @@ fn chk_unbuilt_module(im: zerg.ImportDecl) {
 # that several entries share.
 fn load_sources(files: list[str]) -> list[str] {
 	mut paths: list[str] = []
-	return load_sources_at(files, paths)
+	mut mods: list[str] = []
+	return load_sources_at(files, paths, mods)
 }
 
 # load_sources_at is load_sources with the PATH of each source collected beside it, in the
 # same order. A diagnostic names the file it is about, and by the time anything is emitted
 # the whole program is one merged tree — so the path has to travel with the source from
 # here, or nothing downstream can say where a statement came from.
-fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
+fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str]) -> list[str] {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	for f in files {
-		load_into(f, dir_of(f), seen, srcs, paths)
+		load_into(f, dir_of(f), seen, srcs, paths, mods)
 	}
 	return srcs
 }
@@ -625,9 +626,9 @@ fn path_tail(path: str) -> str {
 
 # --- reading a source ---------------------------------------------------------------------
 
-fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
+fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
 	mut root: list[str] = []
-	load_with(file, from_dir, seen, root, srcs, paths, Buffer("", ""))
+	load_with(file, file, from_dir, seen, root, srcs, paths, mods, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
@@ -650,7 +651,7 @@ struct Buffer {
 # module reached a second time is skipped and the loop never runs — which terminates the walk
 # without noticing what it walked. The two loaders ask ONE function, so the rule and its
 # sentence are in one place and cannot drift apart the way the walks themselves have to.
-fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], buf: Buffer) {
+fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -672,7 +673,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 		mut here := stack
 		here.append(im)
 		for dep in module_files(imd, from_dir) {
-			load_with(dep, from_dir, seen, here, srcs, paths, buf)
+			load_with(dep, im, from_dir, seen, here, srcs, paths, mods, buf)
 		}
 	}
 	srcs.append(src)
@@ -681,6 +682,12 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 	# in discovery order and `srcs` in dependency order, and only the second is the one a
 	# path has to line up with
 	paths.append(file)
+
+	# and the MODULE it belongs to, in the same row. It is what the import RESOLVED to —
+	# the written path for a dependency, the entry file itself for the program's own — and it
+	# is the only place that fact is still known: by the time the trees are merged there is
+	# nothing left to ask. `zerg/check.zg`'s `c_mod_of` is the reader.
+	mods.append(mod)
 }
 
 # --- the program an open buffer belongs to -------------------------------------------------
@@ -737,7 +744,7 @@ fn load_with(file: str, from_dir: str, mut &seen: list[str], stack: list[str], m
 # deliberately the one path here that is NOT guarded: a buffer that does not parse must
 # raise, because `ls_check` turns that raise into the diagnostic that says so, and a
 # swallowed one is a server showing a clean file the compiler will not build.
-fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]) {
+fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
 	buf := Buffer(path, text)
 	mut dir := dir_of(dir_of(path))
 	for dir != "" and dir != "." {
@@ -745,9 +752,11 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 		for entry in here {
 			mut s: list[str] = []
 			mut p: list[str] = []
-			if entry_reaches(entry, path, buf, s, p) {
+			mut m: list[str] = []
+			if entry_reaches(entry, path, buf, s, p, m) {
 				srcs = s
 				paths = p
+				mods = m
 				return
 			}
 		}
@@ -758,7 +767,7 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 
 	mut seen: list[str] = []
 	mut stack: list[str] = []
-	load_with(path, dir_of(path), seen, stack, srcs, paths, buf)
+	load_with(path, path, dir_of(path), seen, stack, srcs, paths, mods, buf)
 }
 
 # entry_files is the candidate entries directly in one directory: its `.zg` files, in the
@@ -789,12 +798,12 @@ fn entry_files(dir: str) -> list[str] {
 # import of its own. So a candidate that raises is simply not the answer, and the search
 # moves on to the next one and finally to the buffer alone, where a real refusal about the
 # real file raises where the server can see it.
-fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &paths: list[str]) -> bool {
+fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) -> bool {
 	mut seen: list[str] = []
 	mut stack: list[str] = []
 	mut ok := false
 	guard {
-		load_with(entry, dir_of(entry), seen, stack, srcs, paths, buf)
+		load_with(entry, entry, dir_of(entry), seen, stack, srcs, paths, mods, buf)
 		ok = true
 	}
 	return false if not ok

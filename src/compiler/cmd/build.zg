@@ -134,7 +134,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
 		mut diags: list[zerg.Diag] = []
-		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], diags)
+		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], unit_mods(units), diags)
 		report_diags(diags, unit_srcs(units), unit_paths(units))
 		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
 		return
@@ -155,11 +155,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	}
 	if emit == "c" {
 		mut paths: list[str] = []
-		srcs := load_sources_at(files, paths)
+		mut mods: list[str] = []
+		srcs := load_sources_at(files, paths, mods)
 		mut diags: list[zerg.Diag] = []
 		lex_diags_of(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
-		code := zerg.emit_files_diag(srcs, paths, diags)
+		code := zerg.emit_files_diag(srcs, paths, zerg.mods_of(paths, mods), diags)
 		report_diags(diags, srcs, paths)
 		guard {
 			write_result(code, out)
@@ -179,11 +180,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# exactly that question, on every save.
 	if emit == "check" {
 		mut paths: list[str] = []
-		srcs := load_sources_at(files, paths)
+		mut mods: list[str] = []
+		srcs := load_sources_at(files, paths, mods)
 		mut diags: list[zerg.Diag] = []
 		lex_diags_of(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
-		zerg.check_files_diag(srcs, paths, diags)
+		zerg.check_files_diag(srcs, paths, zerg.mods_of(paths, mods), diags)
 		report_diags(diags, srcs, paths)
 		return
 	}

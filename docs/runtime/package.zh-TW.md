@@ -278,16 +278,13 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 > 不指名任何東西，它仍然是**未定義的名字**——叫讀者去為一個根本不存在的 module 補一行 import，會比原本那個洞
 > 還糟。
 >
-> > **[deviation]** **型別位置會把解不掉的 qualifier 丟掉。** `c: bogus.Counter` 建得起來，而且讀作 `Counter`：
-> > 一個帶命名空間的型別名是取它的最後一段來解析的——也就是本章記載的那個壓平——而未知的 qualifier 在那裡被丟棄，
-> > 不是被回報。所以上面那個三分的答案只有在運算式位置才完整；型別位置分得出「本 module 沒有 import 它」與
-> > 「這是一個真的命名空間」，但這兩者都還分不出打錯字。
+> 這個三分的答案在**型別位置**同樣成立：`c: bogus.Counter` 得到的是 _undefined name `bogus`_，與運算式那一側
+> 同一個發現，而不是一個被默默丟掉、只留下最後一段的 qualifier。
 >
-> **[deviation]** **成員是在全程式範圍查的。** 前綴解出來之後，`.` 之後的名字是在那唯一一個壓平的命名空間裡找的，
-> 而不是在前綴所指的那個 module 裡找：於是同時 import 了 `a` 與 `b` 時，`b.helper()` 回答的是 module `a` 宣告的
-> `helper`。`pub` 仍然是對**宣告**該成員的 module 檢查的——這也是為什麼一個私有成員被拒絕時，訊息指名的是它真正
-> 的擁有者，而不是程式寫下的那個 module。seed 編譯器這一半是對的，它回報
-> `module "b" has no public member "helper"`。
+> 而且成員是**在前綴所指的那個 module 裡**查的。同時 import 了 `a` 與 `b` 時，`b.helper()` 是
+> _E3084 module `b` has no `helper`_，不管 `a` 宣告得多大聲——函式、module 常數、當作建構子用的型別，以及型別
+> 位置，四條路都問這一題。`pub` 是另一個問題，對**宣告**該成員的 module 檢查，這也是為什麼一個私有成員被拒絕
+> 時，訊息指名的是它真正的擁有者，而不是程式寫下的那個 module。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
 > 這個成員——本節承諾的一等值到 module 邊界就停住了。

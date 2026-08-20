@@ -25,6 +25,25 @@ fn unit_srcs(units: list[Unit]) -> list[str] {
 	return out
 }
 
+# unit_mods is THE MODULE IDENTITY TABLE this program was loaded with — every source path
+# beside the module it belongs to, in the same order `unit_paths` answers.
+#
+# It is READ OFF the units rather than derived: `Unit.name` is what the import resolved to and
+# `Unit.paths` is the files wearing it, so the loader has already decided this and nothing here
+# gets a second opinion. See `c_mod_of` in `zerg/check.zg` for what goes wrong when a rule
+# computes it from the path instead.
+fn unit_mods(units: list[Unit]) -> zerg.Mods {
+	mut ps: list[str] = []
+	mut ns: list[str] = []
+	for u in units {
+		for p in u.paths {
+			ps.append(p)
+			ns.append(u.name)
+		}
+	}
+	return zerg.mods_of(ps, ns)
+}
+
 fn unit_paths(units: list[Unit]) -> list[str] {
 	mut out: list[str] = []
 	for u in units {
@@ -67,13 +86,14 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	}
 
 	prog := zerg.merge_asts(trees)
+	ms := unit_mods(units)
 	mut diags: list[zerg.Diag] = []
 	mut objs: list[str] = []
 	mut todo_c: list[str] = []
 	mut todo_o: list[str] = []
 	mut ui := 0
 	for ui < units.len() {
-		code := zerg.emit_unit_at(prog, trees[ui], diags)
+		code := zerg.emit_unit_at(prog, trees[ui], ms, diags)
 		obj := cache_path(unit_key(code))
 		objs.append(obj)
 		if not __zrt_exists(obj) {

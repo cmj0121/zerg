@@ -37,6 +37,7 @@ fn do_lsp(c: cli.Ctx) -> int {
 fn lsp_program(path: str, text: str) -> lsp.Program {
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
-	load_buffer(path, text, srcs, paths)
-	return lsp.program(paths, srcs)
+	mut mods: list[str] = []
+	load_buffer(path, text, srcs, paths, mods)
+	return lsp.program(paths, srcs, mods)
 }

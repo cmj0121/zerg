@@ -5553,11 +5553,12 @@ pub fn b_one() -> int {
 }
 EOF
 
-# A MODULE THAT IMPORTS ITSELF is the one-node cycle, and it is worth its own case because a
-# detector written as "have I seen this on the way down" answers it by a different branch
-# than the two-node one — the `seen` list a loader already keeps for deduplication makes the
-# self-edge look exactly like a module two files import.
-reject a-module-that-imports-itself E5014 no-place <<'EOF'
+# A FILE THAT IMPORTS ITS OWN MODULE IS NOT A CYCLE, and it used to be reported as one. A
+# cycle is two modules with no order between them; this has a perfectly good order and is
+# simply meaningless — the file is IN the module it named, so the names are already in scope.
+# The advice E5014 gives ("put the mutually recursive declarations in ONE module") is exactly
+# what this author already did.
+reject a-file-that-imports-its-own-module E5015 'is the module this file is already part of' <<'EOF'
 import "./solo"
 
 fn main() {
@@ -5568,6 +5569,20 @@ import "./solo"
 
 pub fn one() -> int {
 	return 1
+}
+EOF
+
+# THE ENTRY FILE'S OWN NAME, and this half was SILENT under `--emit check`. The cycle rule
+# reads the stack of modules imported on the way down, and the flat loader never pushes the
+# file's OWN module — so `zerg build` refused this (it walks units, which do push it) and
+# `--emit check` passed it clean. One compiler, one program, two answers, and the silent one
+# is the question an editor asks on every keystroke.
+# The case NAME is the entry's file name here, so it has to be a package name itself.
+reject entry_imports_itself E5015 'is the module this file is already part of' at=1:8 <<'EOF'
+import "./entry_imports_itself"
+
+fn main() {
+	print 1
 }
 EOF
 

@@ -14003,6 +14003,40 @@ fn c_lowered(check: bool, s: str) -> str {
 	return s
 }
 
+# c_join is every part of a section, in order, as one string — written into one growing
+# buffer rather than into a fresh one per part.
+#
+# WHY IT IS NOT `strings.join`, which is this function. Importing `strings` here puts its
+# `pub has_suffix` into the one program-wide namespace beside `cmd/layout.zg`'s own, and the
+# build stops at _E9081 two modules both define `has_suffix`_ — a name collision in a file
+# neither the emitter nor the standard library was changing. The compiler's `zerg` module
+# reaches for a stdlib module only where the name space allows it (`ascii`, `strconv`).
+#
+# THE APPEND IS WHAT MATTERS, not the loop: a `list[byte]` grows amortized, so the bytes of
+# the finished section are written ONCE. `defs = defs + part` wrote them again per part —
+# quadratic in the total, which is #10's measurement.
+# c_join is every part of a section, in order, as one string — written into one growing
+# buffer rather than into a fresh one per part.
+#
+# WHY IT IS NOT `strings.join`, which is this function. Importing `strings` here puts its
+# `pub has_suffix` into the one program-wide namespace beside `cmd/layout.zg`'s own, and the
+# build stops at _E9081 two modules both define `has_suffix`_ — a name collision in a file
+# neither the emitter nor the standard library was changing. The compiler's `zerg` module
+# reaches for a stdlib module only where the name space allows it (`ascii`, `strconv`).
+#
+# THE APPEND IS WHAT MATTERS, not the loop: a `list[byte]` grows amortized, so the bytes of
+# the finished section are written ONCE. `defs = defs + part` wrote them again per part —
+# quadratic in the total, which is #10's measurement.
+fn c_join(parts: list[str]) -> str {
+	mut out: list[byte] = []
+	for p in parts {
+		for c in bytearray(p) {
+			out.append(c)
+		}
+	}
+	return str(out)
+}
+
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
@@ -14143,16 +14177,25 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 
 	# the constants are declared before the prototypes, so a body may name one
 	globals := c_lowered(check, c_const_globals(em, f, own, whole))
-	mut protos := ""
+
+	# COLLECTED AND JOINED ONCE, not rebound per function. `defs = defs + c_fn(…)` over ~1500
+	# functions allocates a fresh buffer holding everything emitted so far on every step: the
+	# copying is quadratic in total output size, and the finished C is 4.65 MB against a peak
+	# of 0.36 GB. `c_join` appends into one growing `list[byte]`, so the bytes are
+	# written once. #10.
+	#
+	# The parts are still `c_lowered`, which answers `""` under `check` — so a checking walk
+	# collects 1500 empty strings and joins them, which is the cheap end of cheap.
+	mut proto_parts: list[str] = []
 	i = 0
 	for i < f.fns.len() {
-		protos = protos + c_lowered(check, c_proto(em, f.fns[i]))
+		proto_parts.append(c_lowered(check, c_proto(em, f.fns[i])))
 		i = i + 1
 	}
-	mut defs := ""
+	mut def_parts: list[str] = []
 	i = 0
 	for i < own.fns.len() {
-		defs = defs + c_lowered(check, c_fn(em, own.fns[i]))
+		def_parts.append(c_lowered(check, c_fn(em, own.fns[i])))
 		i = i + 1
 	}
 
@@ -14161,9 +14204,9 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# same one at a different type — so this is a watermark loop and not a `for`: a `for`
 	# takes the length once, and the arrivals after that would be declared and never defined.
 	#
-	# `protos` is still a string here, so appending to it now still lands ABOVE every body in
-	# the finished file. That is what lets a specialization discovered while lowering `main`
-	# be called from `main`.
+	# `proto_parts` is still OPEN here, so a prototype appended now still lands ABOVE every
+	# body in the finished file — the two lists are joined below, after this loop. That is
+	# what lets a specialization discovered while lowering `main` be called from `main`.
 	mut done := 0
 	for done < em.inst_fns.len() {
 		# A SPECIALIZATION IS `static`, so each unit that needs one carries its own. The
@@ -14176,10 +14219,13 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 		# The cost is a copy per unit, which is what a C header carrying an inline function
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
-		protos = protos + c_lowered(check, "static " + c_proto(em, inst))
-		defs = defs + c_lowered(check, "static " + c_fn(em, inst))
+		proto_parts.append(c_lowered(check, "static " + c_proto(em, inst)))
+		def_parts.append(c_lowered(check, "static " + c_fn(em, inst)))
 		done = done + 1
 	}
+
+	protos := c_join(proto_parts)
+	defs := c_join(def_parts)
 
 	# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
 	# each once

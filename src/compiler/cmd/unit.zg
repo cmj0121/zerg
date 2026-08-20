@@ -300,10 +300,6 @@ fn load_units_of(files: list[str], name: str, from_dir: str, provides: list[str]
 fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
 	mut here := stack
 	here.append(name)
-
-	for s in seen {
-		return if s == name
-	}
 	seen.append(name)
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
@@ -334,9 +330,30 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
 			chk_import_cycle(here, im)
-			load_unit(module_files(imd, from_dir), im, from_dir, seen, here, units)
+			load_import(imd, from_dir, seen, here, units)
 		}
 		si = si + 1
 	}
 	units.append(Unit(name, srcs, paths))
+}
+
+# load_import loads what one import names, unless the program already holds it.
+#
+# THE "ALREADY HOLD IT" QUESTION BELONGS HERE AND NOT IN `load_unit`, and that is the whole of
+# this function. It used to be `load_unit`'s first act, which made it ask the question of the
+# ENTRY unit too — and an entry unit's name is a DIRECTORY, not an import path. `zerg test
+# greet` on a `greet/greet.zg` names the entry `greet` (the directory it builds in) and seeds
+# `seen` with `greet` (the one-file module it already is), and those two strings are equal for
+# every module whose file is named after its directory. The entry unit answered "already
+# loaded" to itself, `units` came back EMPTY, and the run died on an `IndexError` out of the
+# emitter — a crash, with no sentence, for a program that was perfectly well formed.
+#
+# An import path and a directory are different things that happen to be spelled alike, and the
+# fix is to stop asking one list about both: every caller of this is an import, by construction.
+fn load_import(imd: zerg.ImportDecl, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+	im := imd.path
+	for s in seen {
+		return if s == im
+	}
+	load_unit(module_files(imd, from_dir), im, from_dir, seen, stack, units)
 }

@@ -20,6 +20,24 @@
 # `zerg build --emit check` accepts. Not a fragment that would compile inside something else,
 # and not an excerpt of a real file — those are pictures of code, and a picture is ` ```text `.
 #
+# UNLESS IT IS ONE FILE OF A PROGRAM THAT HAS MORE THAN ONE. `getting-started.md` is the first
+# chapter to teach a second file, and a second file is the one shape the paragraph above cannot
+# express: `main.zg` importing `./greet` is a whole program, and it is not a whole FILE. Both of
+# its blocks were red here for being honest.
+#
+# So a block whose FIRST LINE names a path — `# greet/greet.zg` — is a file of a DIRECTORY
+# PROGRAM rather than a program on its own, and consecutive such blocks are assembled at the
+# paths they name and checked together. That comment is not a marker invented for this gate: it
+# is the line a reader needs anyway to know which file they are looking at, which is why it can
+# carry the meaning without becoming the opt-out that clause 2 exists to forbid. It cannot say
+# "skip me" — it says "I am a file", and a file still has to compile.
+#
+# A GROUP IS CHECKED THE WAY A READER WOULD CHECK IT, not file by file: `zerg build --emit
+# check` on the entry — the file declaring `fn main` — which compiles everything it imports;
+# and `zerg test` on each directory holding a `*_test.zg`, because a normal build leaves a test
+# file on the floor and it would otherwise be the one block written and never compiled. A group
+# with no entry, or with two, is a failure: nothing would say what to build.
+#
 # THERE IS NO SKIP LIST AND NO OPT-OUT, and that is deliberate rather than unfinished. The
 # alternative — a marker on the fence saying "do not compile this one" — was considered and
 # declined: after the retagging pass there was nothing left for it to mark, and a mechanism
@@ -36,9 +54,16 @@
 # blocks failed, and each is now ` ```text `, because a bracket landing in a column is a
 # picture of layout and not a program anybody would write.
 #
-# WHAT IT STILL CANNOT SEE is that it does not RUN anything: `doc-examples-check.sh` is the
-# gate that DIFFS an example's stated output, and it owns the module comments. This one owns
-# the chapters.
+# WHAT IT STILL CANNOT SEE. It does not DIFF anything: `doc-examples-check.sh` is the gate
+# that holds an example to its stated output, and it owns the module comments. This one owns
+# the chapters, and it asks only whether they compile — with the one exception above, where a
+# group's tests are run because filtering happens before building, so `zerg test -k <a name no
+# test has>` reports "no such test" and exits clean over a test file that does not compile.
+# That was measured, not assumed.
+#
+# And within a group, a file the entry never imports and no test reaches is WRITTEN AND NOT
+# COMPILED. The entry requirement is what keeps that from being the common case rather than
+# the corner one.
 #
 #   usage: docs-zerg.sh [<file.md> …]        (default: every .md under docs/)
 #
@@ -58,6 +83,10 @@ MIN_PAGES=${MIN_PAGES:-8}
 	exit 2
 }
 
+# A directory program is built from INSIDE its own directory, the way its reader would, so the
+# compiler cannot be reached by a path relative to the tree.
+ZERG=$(cd "$(dirname "$ZERG")" && pwd)/$(basename "$ZERG")
+
 # `git ls-files` and not a glob: an untracked scratch .md beside the chapters is not part of
 # the specification and must not be able to fail — or to pad — this gate.
 #
@@ -70,15 +99,48 @@ whole_tree=0
 	whole_tree=1
 }
 
-# The temp directory holds ONE .zg at a time and nothing else, because `import "log"` resolves
-# beside the importing file before it reaches the standard library. A directory with leftovers
-# in it would let one block's scaffolding satisfy the next block's import.
+# The temp directory holds ONE .zg at a time and nothing else, because a stale sibling would
+# let one block's scaffolding satisfy the next block's import. A directory program is assembled
+# under `prog/` and that whole subtree is removed when its group closes, for the same reason.
 tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT
 
 fail=0
 blocks=0
 seen=0
+
+# check_group <page> <the lines its blocks opened on> — check what the path-named blocks
+# collected so far amount to, and clear them. A no-op when no group is open.
+check_group() {
+	cg_page=$1
+	cg_lines=$2
+	[ -d "$tmp/prog" ] || return 0
+
+	cg_entries=$(cd "$tmp/prog" && grep -lE '^fn main\(' $(find . -name '*.zg' ! -name '*_test.zg') 2>/dev/null | sed 's|^\./||' | sort)
+	cg_n=$(printf '%s' "$cg_entries" | grep -c . || true)
+
+	if [ "$cg_n" != 1 ]; then
+		printf 'docs-zerg: %s: the blocks opening at%s are one program with %s files declaring `fn main` — nothing says what to build\n' \
+			"$cg_page" "$cg_lines" "$cg_n" >&2
+		fail=$((fail + 1))
+	elif ! (cd "$tmp/prog" && "$ZERG" build --emit check "$cg_entries") >"$tmp/build.log" 2>&1; then
+		printf 'docs-zerg: %s: the blocks opening at%s are one program rooted at `%s`, and the compiler does not agree\n' \
+			"$cg_page" "$cg_lines" "$cg_entries" >&2
+		sed 's/^/            /' "$tmp/build.log" >&2
+		fail=$((fail + 1))
+	fi
+
+	# A `*_test.zg` is on the floor of that build, so it gets the command that does compile it.
+	for cg_d in $(cd "$tmp/prog" && find . -name '*_test.zg' -exec dirname {} \; | sed 's|^\./||;s|^\.$|.|' | sort -u); do
+		if ! (cd "$tmp/prog" && "$ZERG" test "$cg_d") >"$tmp/build.log" 2>&1; then
+			printf 'docs-zerg: %s: the `*_test.zg` of `%s` does not build and pass\n' "$cg_page" "$cg_d" >&2
+			sed 's/^/            /' "$tmp/build.log" >&2
+			fail=$((fail + 1))
+		fi
+	done
+
+	rm -rf "$tmp/prog"
+}
 
 for page in $pages; do
 	[ -f "$page" ] || {
@@ -118,8 +180,35 @@ for page in $pages; do
 
 	[ -f "$tmp/INDEX" ] || continue
 
+	rm -rf "$tmp/prog"
+	group=
+
 	while IFS= read -r line; do
 		blocks=$((blocks + 1))
+
+		# 3. A FIRST LINE NAMING A PATH makes this block a file of a directory program.
+		#    The comment is what a reader needs anyway; here it is also what says this
+		#    block is not expected to stand alone.
+		path=$(sed -n '1{/^# [A-Za-z0-9_][A-Za-z0-9_./-]*\.zg$/s/^# //p;}' "$tmp/$line.zg")
+		case $path in
+		*..*)
+			printf 'docs-zerg: %s:%s — `%s` reaches outside the program it is a file of\n' \
+				"$page" "$line" "$path" >&2
+			fail=$((fail + 1))
+			path=
+			;;
+		esac
+		if [ -n "$path" ]; then
+			mkdir -p "$tmp/prog/$(dirname "$path")"
+			mv "$tmp/$line.zg" "$tmp/prog/$path"
+			group="$group $line"
+			continue
+		fi
+
+		# A block that stands alone ends whatever group was open before it.
+		check_group "$page" "$group"
+		group=
+
 		src="$tmp/block.zg"
 		mv "$tmp/$line.zg" "$src"
 		if ! "$ZERG" build --emit check "$src" >"$tmp/build.log" 2>&1; then
@@ -130,6 +219,8 @@ for page in $pages; do
 		fi
 		rm -f "$src"
 	done <"$tmp/INDEX"
+
+	check_group "$page" "$group"
 	rm -f "$tmp/INDEX"
 done
 

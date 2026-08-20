@@ -1005,6 +1005,111 @@ fn hidden() -> str {
 }
 EOF
 
+# A MEMBER OF ANOTHER MODULE, reached through a prefix that does not declare it. `a` declares
+# `helper`, `COUNT` and `Box`; `b` declares none of them, and all three printed `a`'s answer.
+#
+# THE PREFIX DECIDED NOTHING. Every module flattens into one program-wide space, so the member
+# was looked up there and the qualifier was never compared against where the declaration came
+# from — `emit.zg` had deleted the column that would have said (`ns_mods`, "deleted as
+# unread"). It is readable again only since #36: a module's identity is the import path it was
+# reached by, so what the import wrote and what the loader recorded are the same string.
+#
+# Four cases and not one, because four paths resolve a qualified name and they used to
+# disagree: a call, a module constant, a type used as its constructor, and a type POSITION.
+reject a-function-of-another-module E3084 'module `b` has no `helper`' <<'EOF'
+import (
+	"./a"
+	"./b"
+)
+
+fn main() {
+	print b.helper()
+}
+--- a/a.zg
+pub fn helper() -> str {
+	return "A"
+}
+--- b/b.zg
+pub fn other() -> int {
+	return 1
+}
+EOF
+
+reject a-constant-of-another-module E3084 'module `b` has no `COUNT`' <<'EOF'
+import (
+	"./a"
+	"./b"
+)
+
+fn main() {
+	print b.COUNT
+}
+--- a/a.zg
+pub COUNT := 7
+--- b/b.zg
+pub fn other() -> int {
+	return 1
+}
+EOF
+
+reject a-type-of-another-module E3084 'module `b` has no `Box`' <<'EOF'
+import (
+	"./a"
+	"./b"
+)
+
+fn main() {
+	print b.Box(1).v
+}
+--- a/a.zg
+pub struct Box {
+	pub v: int
+}
+--- b/b.zg
+pub fn other() -> int {
+	return 1
+}
+EOF
+
+# THE TYPE POSITION IS THE FOURTH, and it needed the parser to write down WHICH type a
+# qualifier stood in front of. It recorded that one was typed and where — enough for the
+# no-transitivity rule — and not what it qualified, so `p: b.Box` was a `b.` nobody could
+# compare against `Box`'s module.
+reject a-type-position-qualified-by-another-module E3084 'module `b` has no `Box`' <<'EOF'
+import (
+	"./a"
+	"./b"
+)
+
+fn main() {
+	p: b.Box = a.Box(4)
+	print p.v
+}
+--- a/a.zg
+pub struct Box {
+	pub v: int
+}
+--- b/b.zg
+pub fn other() -> int {
+	return 1
+}
+EOF
+
+# AN INVENTED QUALIFIER IN A TYPE POSITION was DISCARDED, and the program ran. The expression
+# side has always called `bogus` an undefined name; a type position asked a weaker question
+# about the same text, dropped the qualifier and resolved the last segment. Same rule, and now
+# the same sentence.
+reject an-invented-qualifier-in-a-type-position E3069 'undefined name `bogus`' <<'EOF'
+struct Counter {
+	pub n: int
+}
+
+fn main() {
+	c: bogus.Counter = Counter(3)
+	print c.n
+}
+EOF
+
 # `spawn` and `defer` resolve a callee down their own path, so a rule the ordinary call
 # enforces is one they get only by asking the same question — which is why this asks it
 # once (c_ns_kind) and all three read the answer.
@@ -2389,8 +2494,10 @@ EOF
 # valid UTF-8 for a str` — no code, no place, and not even the name of the file it was reading.
 #
 # `GRAMMAR#letter` says the source is UTF-8, so a file that is not is not a Zerg source file, and
-# WHICH FILE is the whole of the answer — there is no line to name, the thing that would read
-# one being what refused. Hence `no-place`.
+# WHICH FILE is the whole of the answer — there is no line to count to, the thing that would
+# read one being what refused. It carries `1:1` anyway, and that is not a pretence: an editor
+# handed a file lands in the right buffer, where before it landed at the top of whatever
+# happened to be open.
 #
 # The byte is spelled through the shell rather than written here, because a script holding an
 # invalid sequence is a script no editor, formatter or diff opens twice.
@@ -2398,7 +2505,7 @@ EOF
 # `seed-gap`: the seed is byte-oriented and has no str invariant to violate, so it emits
 # `"\377"` into the C and answers nothing at all — the one direction where zerg is the
 # stricter compiler on an encoding.
-reject a-source-file-that-is-not-utf8 E1011 no-place seed-gap <<EOF
+reject a-source-file-that-is-not-utf8 E1011 seed-gap <<EOF
 fn main() {
 	print "$(printf '\377')"
 }
@@ -5555,7 +5662,7 @@ EOF
 # "Import cycles between modules are rejected" (docs/runtime/package.md). Nothing detected
 # one, at either layer: `ca` importing `cb` importing `ca` compiled and ran, on an
 # initialization order no chapter defines.
-reject an-import-cycle-between-two-modules E5014 no-place <<'EOF'
+reject an-import-cycle-between-two-modules E5014 <<'EOF'
 import "./ca"
 
 fn main() {

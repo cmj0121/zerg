@@ -33,11 +33,12 @@ fn do_lint(c: cli.Ctx) -> int {
 # `make lint`, over this project's own source, is that caller. INFO never fails anything.
 fn run_lint(files: list[str], strict: bool) -> int {
 	mut paths: list[str] = []
-	srcs := load_sources_at(files, paths)
+	mut mods: list[str] = []
+	srcs := load_sources_at(files, paths, mods)
 
 	mut bad := 0
 	mut warned := 0
-	for f in zerg.lint_program(srcs, paths) {
+	for f in zerg.lint_program(srcs, paths, zerg.mods_of(paths, mods)) {
 		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
 		if f.sev == "" {
 			bad = bad + 1

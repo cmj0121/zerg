@@ -117,39 +117,36 @@ fn chk_seen(ds: list[Diag], path: str, line: int, col: int, msg: str) -> bool {
 # is not compiled into the build at all, so nothing in it can be referenced and there is
 # nothing for this rule to say about it.
 #
-# THE EMPTY STRING MEANS "NO PATH", AND NOTHING ELSE. This is `dirname`, and it used to answer
-# `""` for a path with no directory component — which every caller already reads as "there is
-# no module here, be quiet". So `zerg build m.zg` gave the ENTRY the sentinel, and every rule
-# that asks which module a reference is in went silent: `text.helper()` on a module-private
-# `helper` printed 42, while the identical program spelled `./m.zg`, `t9/m.zg` or with an
-# absolute path was refused with E3001 and a place. The module identity was a function of how
-# the entry path happened to be TYPED.
+# c_mod_of is WHICH MODULE a file belongs to, and it is a LOOKUP rather than a computation.
 #
-# A bare filename denotes a file in the current directory, so the dirname is `.` — which is
-# what POSIX `dirname` answers, and what `dir_of` in zergc.zg has always answered for the
-# path that goes on to resolve the imports. One spelling of the question, one answer to it.
-# `""` is left to what really has no module: a declaration NO FILE WROTE.
-fn c_mod_of(path: str) -> str {
+# IT USED TO BE `dirname`, and a directory is not a module. `src/stdlib` holds fifteen
+# independent one-file modules — `strings.zg`, `io.zg`, `json.zg` — and every one of them
+# answered `src/stdlib`, so they were ONE module to every visibility rule: `strings` could
+# call `io`'s module-private names with no import and no `pub`, and nothing said a word. The
+# seed refuses exactly that program, which is how the gap was measured. #36.
+#
+# THE LOADER IS THE ONLY THING THAT KNOWS. A module is what an import RESOLVED to — the
+# written import path for an imported module, the entry file for the program's own — and
+# `cmd/unit.zg` has both already: `Unit.name` is the identity and `Unit.paths` is the files
+# wearing it. Nothing here re-derives it, which is the point: an identity computed twice is
+# an identity two rules can disagree about, and this file computing it from a path was the
+# second copy.
+#
+# THE EMPTY STRING MEANS "NO PATH", AND NOTHING ELSE — a declaration NO FILE WROTE, which is
+# what `c_synthetic_path` answers for. It is read by every caller as "be quiet", so nothing
+# else may reach it: a path the table does not hold answers with ITSELF, a module that shares
+# its private names with nothing, so a file the loader failed to register is refused loudly
+# instead of quietly let through.
+fn c_mod_of(em: Emitter, path: str) -> str {
 	return "" if c_synthetic_path(path)
 
-	b := bytearray(path)
-	mut cut := -1
 	mut i := 0
-	for i < b.len() {
-		if b[i] == b'/' {
-			cut = i
-		}
+	for i < em.unit_paths.len() {
+		return em.unit_mods[i] if em.unit_paths[i] == path
+
 		i = i + 1
 	}
-	return "." if cut < 0
-
-	mut out: list[byte] = []
-	mut j := 0
-	for j < cut {
-		out.append(b[j])
-		j = j + 1
-	}
-	return str(out)
+	return path
 }
 
 # c_synthetic_path is whether a path names a tree the COMPILER wrote rather than a file it
@@ -191,10 +188,10 @@ fn c_synthetic_path(path: str) -> bool {
 #
 # A rule that guessed at either unknown would refuse programs for a reason the reader cannot
 # see, which is why both answer false rather than true.
-fn chk_across_modules(at_path: str, decl_mod: str) -> bool {
+fn chk_across_modules(em: Emitter, at_path: str, decl_mod: str) -> bool {
 	return false if decl_mod == ""
 
-	here := c_mod_of(at_path)
+	here := c_mod_of(em, at_path)
 
 	return false if here == decl_mod
 	return false if here == ""
@@ -206,7 +203,7 @@ fn chk_across_modules(at_path: str, decl_mod: str) -> bool {
 # and otherwise reported exactly where chk_across_modules says a reader is outside.
 fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	return if is_pub
-	return if not chk_across_modules(em.at_path, decl_mod)
+	return if not chk_across_modules(em, em.at_path, decl_mod)
 
 	chk_at(em, Rule.NotPublicMember, f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
 }
@@ -228,7 +225,7 @@ fn chk_ty_visible(mut &em: Emitter, nm: str) {
 	return if c_ty_pub(em, nm)
 
 	decl_mod := c_ty_mod(em, nm)
-	return if not chk_across_modules(em.at_path, decl_mod)
+	return if not chk_across_modules(em, em.at_path, decl_mod)
 
 	chk_at(em, Rule.NotPublicType, f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
 }
@@ -275,7 +272,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 	return if c_fld_pub(em, sname, fname)
 
 	decl_mod := c_ty_mod(em, sname)
-	return if not chk_across_modules(em.at_path, decl_mod)
+	return if not chk_across_modules(em, em.at_path, decl_mod)
 
 	chk_at(em, Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
 }
@@ -301,7 +298,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 # without a rule firing once per walk. That is the arrangement c_ns_kind was built with, and
 # a fourth NsKind would have moved the reporting into it.
 fn chk_ns_bound(mut &em: Emitter, ns: str) {
-	return if c_ns_bound_in(em, ns, c_mod_of(em.at_path))
+	return if c_ns_bound_in(em, ns, c_mod_of(em, em.at_path))
 
 	chk_at(em, Rule.ModuleNotImported, f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
 }
@@ -763,11 +760,11 @@ fn chk_store_path(mut &em: Emitter, e: Expr) {
 # A declaration with no module — the entry file, a generated impl — is quiet, for the reason
 # every other rule about modules is: there is no module a reader could have written.
 fn chk_impl_local(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl) {
-	here := c_mod_of(ip.path)
+	here := c_mod_of(em, ip.path)
 	return if here == ""
 
-	spec_mod := c_mod_of(sp.path)
-	type_mod := chk_type_mod(f, ip.target)
+	spec_mod := c_mod_of(em, sp.path)
+	type_mod := chk_type_mod(em, f, ip.target)
 	return if here == spec_mod or here == type_mod or spec_mod == "" or type_mod == ""
 
 	chk_at_place(em, ip.path, ip.line, ip.col, Rule.ImplOrphan, f"`impl {ip.on} for {ip.target}` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with one of the two (docs/core/specs.md)")
@@ -775,15 +772,15 @@ fn chk_impl_local(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl) {
 
 # chk_type_mod is the module a declared type was written in, or "" for one this program does
 # not declare — a built-in, or a name nothing here defines.
-fn chk_type_mod(f: File, name: str) -> str {
+fn chk_type_mod(em: Emitter, f: File, name: str) -> str {
 	for sd in f.structs {
-		return c_mod_of(sd.path) if sd.name == name
+		return c_mod_of(em, sd.path) if sd.name == name
 	}
 	for ed in f.enums {
-		return c_mod_of(ed.path) if ed.name == name
+		return c_mod_of(em, ed.path) if ed.name == name
 	}
 	for td in f.types {
-		return c_mod_of(td.path) if td.name == name
+		return c_mod_of(em, td.path) if td.name == name
 	}
 	return ""
 }

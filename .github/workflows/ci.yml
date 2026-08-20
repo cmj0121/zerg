@@ -91,6 +91,11 @@ jobs:
       - name: A walk that reaches into a block reaches into a bare one
         run: make stmt-walk
 
+      # The examples had no door for as long as they existed. This is the one direction the
+      # drift goes once they have one: an example the glob builds and the index never names.
+      - name: Every example is named in the index a reader opens
+        run: make examples-index
+
       # A code is an identity, and an identity nothing checks is a number. This holds
       # the compiler's codes, the gates that assert them, and the catalogue a reader
       # looks them up in to being one set.

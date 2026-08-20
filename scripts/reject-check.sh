@@ -157,9 +157,17 @@ reject() {
 
 	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
 	# whole claim is that the finding sits at the declaration, not at a use site.
-	local at="" fl
+	local at="" emit_max="" fl
 	for fl in $flags; do
-		case $fl in at=*) at=${fl#at=} ;; esac
+		case $fl in
+		at=*) at=${fl#at=} ;;
+		# `emit-max=N` runs the case with `$ZERG_EMIT_MAX` set, and it is the only way to
+		# write a case for a rule about a program's SIZE: the ceiling is an environment
+		# variable, and lowering it is cheaper than writing a program that reaches the real
+		# one. It belongs in this family — `bare-entry` and `emit-lib` are also "run the
+		# same case a different way".
+		emit-max=*) emit_max=${fl#emit-max=} ;;
+		esac
 	done
 
 	# `--emit bin`, not `--emit c`: the C stage stops BEFORE cc, so under it a program
@@ -183,7 +191,10 @@ reject() {
 	# declaration passes to `own` sent a dependency's bad return type to cc under this flag
 	# and nothing here noticed, because no case built a multi-module program this way.
 	local out status first
-	if has_flag "$flags" emit-lib; then
+	if [ -n "$emit_max" ]; then
+		out=$(ZERG_EMIT_MAX="$emit_max" "$ZERG" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
+		status=$?
+	elif has_flag "$flags" emit-lib; then
 		out=$("$ZERG" build --emit lib -o "$tmp/$name.o" "$src" 2>&1 >/dev/null)
 		status=$?
 	elif has_flag "$flags" bare-entry; then
@@ -5525,6 +5536,17 @@ pub fn relay() -> str {
 --- lib/lib.zg
 pub fn shout(s: str) {
 	print s
+}
+EOF
+
+# A PROGRAM TOO LARGE TO ASSEMBLE, which was a SIGKILL: no code, no place, nothing to read —
+# the one failure shape the standing contract exists to prevent, and the reason #10 is more
+# than a performance note. The ceiling is lowered to 200 bytes here rather than a program being
+# written that reaches the real one; what is asserted is that there IS a size at which this
+# compiler says so, by name.
+reject a-unit-larger-than-the-emit-budget E5016 'bytes of C, and that is the ceiling' emit-max=200 seed-gap <<'EOF'
+fn main() {
+	print "the C for this is more than two hundred bytes"
 }
 EOF
 

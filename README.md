@@ -96,6 +96,11 @@ binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`,
 
 ## Documentation
 
+**[Getting started](docs/getting-started.md)** takes `hello, world` to a program in more than one
+file — the toolchain, the one canonical style, a module, a test beside it — and **[Zerg by
+example](examples/README.md)** is thirty-three programs in a reading order, every one of them built
+and run by a gate.
+
 **[`docs/README.md`](docs/README.md)** is the entry point: which chapter to open first, what each
 directory holds, and how the specification is meant to be read. Syntax is normative in
 [`GRAMMAR`](GRAMMAR); semantics are normative in the chapters under [`docs/`](docs).

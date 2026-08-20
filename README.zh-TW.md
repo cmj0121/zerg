@@ -90,6 +90,10 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 
 ## 文件
 
+**[Getting started](docs/getting-started.zh-TW.md)** 把 `hello, world` 帶到一支多檔案的程式——工具鏈、
+唯一的正典風格、一個模組、一個並排的測試——而 **[Zerg by example](examples/README.zh-TW.md)** 是三十三支
+附閱讀順序的程式，每一支都由一道 gate 建起來並執行。
+
 **[`docs/README.zh-TW.md`](docs/README.zh-TW.md)** 是入口：先讀哪一章、每個目錄裝什麼、規格該怎麼讀。
 語法的權威在 [`GRAMMAR`](GRAMMAR)，語意的權威在 [`docs/`](docs) 底下的各章。
 

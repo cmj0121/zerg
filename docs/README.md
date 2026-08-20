@@ -8,6 +8,11 @@ is [below](#how-the-toolchain-is-built).
 
 ## Start here
 
+- **[Getting started](getting-started.md)** — from `hello, world` to a program in more than one
+  file. If you have not written any Zerg yet, this one first: everything below is a reference,
+  and a reference is a poor first page.
+- **[Zerg by example](../examples/README.md)** — thirty-three programs in a reading order, each
+  built and run by `make examples`.
 - **[Language Reference](language.md)** — the index. Every chapter, grouped, with a line
   on what each covers. If you do not yet know which chapter you want, start here.
 - **[Conformance](conformance.md)** — how to read the specification: the status markers

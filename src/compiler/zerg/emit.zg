@@ -14003,6 +14003,100 @@ fn c_lowered(check: bool, s: str) -> str {
 	return s
 }
 
+# c_join is every part of a section, in order, as one string — written into one growing
+# buffer rather than into a fresh one per part.
+#
+# WHY IT IS NOT `strings.join`, which is this function. Importing `strings` here puts its
+# `pub has_suffix` into the one program-wide namespace beside `cmd/layout.zg`'s own, and the
+# build stops at _E9081 two modules both define `has_suffix`_ — a name collision in a file
+# neither the emitter nor the standard library was changing. The compiler's `zerg` module
+# reaches for a stdlib module only where the name space allows it (`ascii`, `strconv`).
+#
+# THE APPEND IS WHAT MATTERS, not the loop: a `list[byte]` grows amortized, so the bytes of
+# the finished section are written ONCE. `defs = defs + part` wrote them again per part —
+# quadratic in the total, which is #10's measurement.
+# C_EMIT_MAX is the default ceiling on the C ONE UNIT may emit, in bytes — 64 MiB.
+#
+# WHY A CEILING AT ALL. A program large enough to exhaust the machine was SIGKILLed: no code,
+# no place, nothing to read, which is the one failure shape the standing contract exists to
+# prevent — *implemented or refused by name*. There was no size at which the compiler said so;
+# it simply died. #10.
+#
+# WHY THIS NUMBER. `src/compiler/zergc.zg` — the largest program this compiler is known to
+# build — emits 4.65 MB as one unit, so 64 MiB is fourteen times the biggest real input. A
+# build of the self-hosting compiler that this refusal can reach would mean the number is
+# wrong, and `mem-peak` is the gate that keeps it out of reach rather than asserting it is.
+const C_EMIT_MAX := 67108864
+
+# c_emit_max is that ceiling, or what `$ZERG_EMIT_MAX` says instead.
+#
+# IT IS OVERRIDABLE ON PURPOSE. A budget nobody can raise is a ceiling on the LANGUAGE rather
+# than a guard on the compiler, so the knob sits beside `ZERG_CSTD` and `ZERG_CACHE` in
+# `zerg --help`. `0` turns it off entirely, which is the honest escape for somebody who would
+# rather meet the OOM killer than be turned away.
+#
+# A VALUE THAT IS NOT A NUMBER IS THE DEFAULT, not a refusal: this is a knob on the compiler's
+# own appetite, and failing a build over the spelling of an environment variable would be a
+# second, worse failure than the one it guards.
+fn c_emit_max() -> int {
+	return C_EMIT_MAX if not __zrt_has_env("ZERG_EMIT_MAX")
+
+	mut n := C_EMIT_MAX
+	guard {
+		n = strconv.parse_int(__zrt_getenv("ZERG_EMIT_MAX"), 10)
+	}
+	return 0 if n < 0
+
+	return n
+}
+
+# c_section is c_join that also COUNTS, and refuses the moment the running total passes the
+# ceiling. The two are one function because the count is free exactly here: this loop already
+# walks every byte, so `out.len()` is the answer with nothing added.
+#
+# ASKING IN THE EMIT LOOP INSTEAD would stop earlier and was measured: `bytearray(part).len()`
+# per function COPIES the part to count it, and the self-build's user time went from 2.96 s to
+# 5.56 s for a number this loop was about to have anyway. There is no `len` on a `str` to ask
+# instead, and adding one is a change to the language rather than to the emitter.
+#
+# STOPPING HERE IS ENOUGH, now that #10's first half has landed: the parts hold one copy of the
+# section and the join was the second, so the peak this guards is about twice the ceiling
+# rather than the unbounded growth it was written against.
+#
+# THE PLACE IS THE UNIT, not the function the loop happened to be on. What is too large is the
+# unit — `own`, every function of one module — and pointing at whichever body crossed the line
+# would read as a claim about that body.
+#
+# `check` NEVER REACHES IT. `c_lowered` answers `""` in that mode, so a checking walk emits no
+# bytes and has no budget to cross — which is right: the ceiling is on the C, and a check
+# produces none.
+# c_unit_path is the file a UNIT is named by, for a finding that is about the unit rather than
+# about anything written in it. The first function's path, because a unit is a module and every
+# declaration of one module was read from the same directory; `em.at_path` is the fallback for
+# a unit that declares no function at all.
+fn c_unit_path(own: File, em: Emitter) -> str {
+	for fd in own.fns {
+		return fd.path
+	}
+	return em.at_path
+}
+
+fn c_section(parts: list[str], budget: int, at: str, mut &sofar: int) -> str {
+	mut out: list[byte] = []
+	for p in parts {
+		for c in bytearray(p) {
+			out.append(c)
+		}
+
+		# ASKED ONCE PER PART, not per byte. The overshoot is one function's C — bounded, and
+		# small beside a ceiling measured in tens of megabytes — while per byte is a
+		# comparison on every one of the 4.65 million this compiler emits for itself.
+		raise c_diag_at(at, 1, 1, Rule.EmitTooLarge, f"this unit emits more than {budget} bytes of C, and that is the ceiling this compiler will assemble in memory — raise it with $ZERG_EMIT_MAX (0 turns it off), or split the program into modules so each is built as a unit of its own") if budget > 0 and sofar + out.len() > budget
+	}
+	sofar = sofar + out.len()
+	return str(out)
+}
+
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
@@ -14143,16 +14237,25 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 
 	# the constants are declared before the prototypes, so a body may name one
 	globals := c_lowered(check, c_const_globals(em, f, own, whole))
-	mut protos := ""
+
+	# COLLECTED AND JOINED ONCE, not rebound per function. `defs = defs + c_fn(…)` over ~1500
+	# functions allocates a fresh buffer holding everything emitted so far on every step: the
+	# copying is quadratic in total output size, and the finished C is 4.65 MB against a peak
+	# of 0.36 GB. `c_join` appends into one growing `list[byte]`, so the bytes are
+	# written once. #10.
+	#
+	# The parts are still `c_lowered`, which answers `""` under `check` — so a checking walk
+	# collects 1500 empty strings and joins them, which is the cheap end of cheap.
+	mut proto_parts: list[str] = []
 	i = 0
 	for i < f.fns.len() {
-		protos = protos + c_lowered(check, c_proto(em, f.fns[i]))
+		proto_parts.append(c_lowered(check, c_proto(em, f.fns[i])))
 		i = i + 1
 	}
-	mut defs := ""
+	mut def_parts: list[str] = []
 	i = 0
 	for i < own.fns.len() {
-		defs = defs + c_lowered(check, c_fn(em, own.fns[i]))
+		def_parts.append(c_lowered(check, c_fn(em, own.fns[i])))
 		i = i + 1
 	}
 
@@ -14161,9 +14264,9 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# same one at a different type — so this is a watermark loop and not a `for`: a `for`
 	# takes the length once, and the arrivals after that would be declared and never defined.
 	#
-	# `protos` is still a string here, so appending to it now still lands ABOVE every body in
-	# the finished file. That is what lets a specialization discovered while lowering `main`
-	# be called from `main`.
+	# `proto_parts` is still OPEN here, so a prototype appended now still lands ABOVE every
+	# body in the finished file — the two lists are joined below, after this loop. That is
+	# what lets a specialization discovered while lowering `main` be called from `main`.
 	mut done := 0
 	for done < em.inst_fns.len() {
 		# A SPECIALIZATION IS `static`, so each unit that needs one carries its own. The
@@ -14176,10 +14279,17 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 		# The cost is a copy per unit, which is what a C header carrying an inline function
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
-		protos = protos + c_lowered(check, "static " + c_proto(em, inst))
-		defs = defs + c_lowered(check, "static " + c_fn(em, inst))
+		proto_parts.append(c_lowered(check, "static " + c_proto(em, inst)))
+		def_parts.append(c_lowered(check, "static " + c_fn(em, inst)))
 		done = done + 1
 	}
+
+	# THE BUDGET IS ON THE UNIT, so one running total crosses both sections.
+	budget := c_emit_max()
+	unit_at := c_unit_path(own, em)
+	mut nbytes := 0
+	protos := c_section(proto_parts, budget, unit_at, nbytes)
+	defs := c_section(def_parts, budget, unit_at, nbytes)
 
 	# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
 	# each once

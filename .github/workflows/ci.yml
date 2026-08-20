@@ -96,6 +96,11 @@ jobs:
       - name: Every example is named in the index a reader opens
         run: make examples-index
 
+      # 2.4 GB to produce 3.6 MB of C, rediscovered by hand twice. The ceiling is a regression
+      # alarm for the accumulation shape, not a target.
+      - name: The compiler emits its own C under a memory ceiling
+        run: make mem-peak
+
       # A code is an identity, and an identity nothing checks is a number. This holds
       # the compiler's codes, the gates that assert them, and the catalogue a reader
       # looks them up in to being one set.

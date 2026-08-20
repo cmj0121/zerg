@@ -910,6 +910,58 @@ grep -qF 'E9081' "$tmp/flat.out"
 [ $? -ne 0 ]
 say "a \`pub\` name in an unrelated module of the same directory collided with the one under test (E9081)" $?
 
+# --- a module whose file is named after its directory ----------------------------------------
+#
+# `greet/greet.zg` — the shape `docs/getting-started.md` teaches, and the shape every module in
+# a directory of its own has once its file is named for it. `zerg test greet` CRASHED on it:
+# `IndexError: index out of range`, no sentence, no place, on a program that is perfectly well
+# formed. From INSIDE the directory the same suite ran green, which is why nothing here had
+# caught it.
+#
+# The cause was one list asked two questions. The entry unit of a test build is named by the
+# DIRECTORY it is built in, and `seen` is seeded with the one-file module that unit already IS
+# — so for `greet/greet.zg` the entry answered "already loaded" to itself, no unit was loaded,
+# and the emitter indexed an empty program. `load_import` in `cmd/unit.zg` now asks the
+# question where it belongs, at the import.
+#
+# THE PATH IS RELATIVE AND THE RUN IS FROM ITS PARENT, both of which the failure needed: the
+# flat-directory case above passes an absolute path whose last segment names no file in it.
+
+mkdir -p "$tmp/named/greet"
+
+cat >"$tmp/named/greet/greet.zg" <<'EOF'
+fn punctuated(s: str) -> str {
+	return s + "!"
+}
+
+pub fn hello(name: str) -> str {
+	return punctuated("hello, " + name)
+}
+EOF
+
+cat >"$tmp/named/greet/greet_test.zg" <<'EOF'
+#[test]
+fn test_the_module_named_for_its_directory_runs() {
+	assert hello("a") == "hello, a!"
+}
+EOF
+
+# An absolute compiler, because this is the one case that runs from somewhere else.
+zabs=$(cd "$(dirname "$ZERG")" && pwd)/$(basename "$ZERG")
+named=$(cd "$tmp/named" && "$zabs" test greet 2>&1)
+status=$?
+printf '%s\n' "$named" >"$tmp/named.out"
+
+[ "$status" -eq 0 ]
+say "a module whose file is named after its directory did not exit 0 under \`zerg test <dir>\`" $?
+
+grep -qE '^  ok    test_the_module_named_for_its_directory_runs$' "$tmp/named.out"
+say "the test of a module named after its directory did not run" $?
+
+grep -qF 'IndexError' "$tmp/named.out"
+[ $? -ne 0 ]
+say "\`zerg test <dir>\` crashed on a module named after its directory instead of running it" $?
+
 # --- nothing is left behind on a path that FAILED --------------------------------------------
 #
 # The success path is asserted above (12, 24). This is the other one, and it is the one that
@@ -1288,9 +1340,9 @@ say "a source this gate holds up as the way to write a test or a fixture is not 
 
 # --- the floor -----------------------------------------------------------------------------
 #
-# 98 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 101 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-98}
+MIN_ASSERTS=${MIN_ASSERTS:-101}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \
@@ -1304,4 +1356,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"
+printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a module named after its own directory, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"

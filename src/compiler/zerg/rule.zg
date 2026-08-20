@@ -306,6 +306,14 @@ pub enum Rule {
 	ImportLayoutAmbiguous = 5013
 	ImportCycle = 5014
 
+	# An import that resolves to the module the importing FILE is already part of. It is NOT a
+	# cycle and was reported as one: a cycle is two modules with no order between them, and this
+	# has a perfectly good order — it is meaningless rather than unorderable, because a module's
+	# files share one namespace and the names are already in scope. Two different mistakes, and
+	# the advice for a cycle ("put the mutually recursive declarations in ONE module") is exactly
+	# what the author of this one already did.
+	ImportOfOwnModule = 5015
+
 	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense

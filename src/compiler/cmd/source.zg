@@ -68,7 +68,7 @@ fn chk_import_self(imd: zerg.ImportDecl, files: list[str], file: str) {
 	}
 }
 
-fn chk_import_cycle(stack: list[str], im: str) {
+fn chk_import_cycle(imd: zerg.ImportDecl, stack: list[str], im: str) {
 	mut at := -1
 	mut i := 0
 	for i < stack.len() {
@@ -85,7 +85,11 @@ fn chk_import_cycle(stack: list[str], im: str) {
 		chain = chain + path_tail(stack[j]) + " -> "
 		j = j + 1
 	}
-	raise zerg.rule_msg(zerg.Rule.ImportCycle, f"import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all")
+
+	# THE PLACE IS THE IMPORT THAT CLOSES THE LOOP, which is the one line a reader can act on:
+	# the chain names every module in the circle, and this says where to cut it. It had none,
+	# so an editor could only underline the top of the file.
+	raise zerg.rule_msg(zerg.Rule.ImportCycle, f"import cycle: {chain}{path_tail(im)} — modules form a DAG (docs/runtime/package.md), and a cycle has no order for its `init()` blocks and module constants to be readied in. Mutually recursive declarations belong in ONE module, which costs nothing: a module is a directory whose files share a namespace and import each other not at all\n{zerg.place_line(imd.at, imd.line, imd.col)}")
 }
 
 # chk_unbuilt_module turns away an import of a module that SHIPS AND CANNOT BE COMPILED, at
@@ -711,7 +715,7 @@ fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: li
 		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
 		# it is one file that is already in the module it named. The specific finding speaks.
 		chk_import_self(imd, deps, file)
-		chk_import_cycle(stack, im)
+		chk_import_cycle(imd, stack, im)
 		mut here := stack
 		here.append(im)
 		for dep in deps {
@@ -882,7 +886,12 @@ fn read_source(path: str) -> str {
 		src = str(b)
 		ok = true
 	}
-	raise zerg.rule_msg(zerg.Rule.SourceNotUtf8, f"`{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text") if not ok
+
+	# A PLACE OF `1:1`, and it is the honest one: the file is not text, so there is no line to
+	# count to and no column to point at — but WHICH FILE is exactly what a reader needs, and
+	# an editor that is handed a file lands in the right buffer instead of the top of whatever
+	# was open.
+	raise zerg.rule_msg(zerg.Rule.SourceNotUtf8, f"`{path}` is not UTF-8 text, and a Zerg source file is UTF-8 text\n{zerg.place_line(path, 1, 1)}") if not ok
 
 	return src
 }

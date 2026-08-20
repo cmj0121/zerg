@@ -791,6 +791,12 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	# the name. Reading it this way is what lets a program use a type another module
 	# declares — without it the qualifier parses as a type of its own and the emitter
 	# spells a name nothing declared.
+	# the qualifier segments, held HERE and not on the parser, until the chain ends on the type
+	# they qualify. A row cannot be written as it is read — the member is the LAST segment and
+	# the segments before it are what needs it — and patching the rows afterwards would mean
+	# reading that accumulator back, which `layering` refuses in one sentence: an accumulator
+	# the parser consults is a symbol table.
+	mut quals: list[str] = []
 	for p_at(p, Kind.Dot) {
 		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER, and dropping the qualifier made them the
 		# same thing: `I.Item` PROJECTS a type the implementer of `I` supplies (GRAMMAR#base-type,
@@ -807,11 +813,17 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		# only evidence of `lib.` in `c: lib.Counter` disappears, which is the evidence the
 		# no-transitivity rule reads. So the fact that one was typed, and where, is recorded
 		# before the name moves on.
-		p.ty_quals.append(TyQual(name, p.path, kw.line, kw.col))
+		quals.append(name)
 
 		p_advance(p)
 		name = cur(p).lexeme
 		p_advance(p)
+	}
+
+	# and now the chain has ended on the type, so each qualifier is written down with it. The
+	# place is the head token's for every one of them, which is where the whole type starts.
+	for q in quals {
+		p.ty_quals.append(TyQual(q, name, p.path, kw.line, kw.col))
 	}
 
 	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
@@ -2081,15 +2093,19 @@ fn parse_import(mut &p: Parser, mut &imports: list[ImportDecl]) {
 # a qualified name against it. Anything that is not a string literal is refused below, so
 # the only empty path it can answer is the empty literal.
 #
-# `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
-# module is part of the program — so the marker is consumed and the path read as usual.
+# `pub` re-exports what it imports, and the marker is CARRIED. The driver loads the module
+# either way — a re-exported module is part of the program — so this used to be consumed and
+# dropped; what reads it now is the rule that asks which module a qualified name's member came
+# from, for which a re-export is the one legitimate "not this module" answer.
 #
 # `as` RENAMES THE NAMESPACE, and the alias used to be read and thrown away: the binding was
 # recomputed downstream as the path's last segment, so `import "a/text" as at` bound `text`
 # and every `at.…` in the file was a name nothing declared. The alias is the binding when it
 # is there, which is a fact about the surface and so the parser's to record.
 fn parse_import_spec(mut &p: Parser) -> ImportDecl {
+	mut is_pub := false
 	if p_at(p, Kind.Pub) {
+		is_pub = true
 		p_advance(p)
 	}
 
@@ -2125,12 +2141,12 @@ fn parse_import_spec(mut &p: Parser) -> ImportDecl {
 		if p_at(p, Kind.Ident) {
 			alias := cur(p).lexeme
 			p_advance(p)
-			return ImportDecl(t.value, alias, true, p.path, t.line, t.col)
+			return ImportDecl(t.value, alias, true, is_pub, p.path, t.line, t.col)
 		}
 	}
 
 	# `t.value` is the decoded path, without its quotes
-	return ImportDecl(t.value, last_segment(t.value), false, p.path, t.line, t.col)
+	return ImportDecl(t.value, last_segment(t.value), false, is_pub, p.path, t.line, t.col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can

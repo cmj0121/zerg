@@ -355,6 +355,7 @@ shipping compiler rather than a part of it (the line
 | `E5012` | `…` is not an import path — the escape, the second spelling, the `.zg`, the name, the reserved word     |
 | `E5013` | `…` is both a file and a directory, and a module is one shape or the other                              |
 | `E5014` | import cycle: `…` -> `…` -> `…`                                                                         |
+| `E5015` | `…` is the module this file is already part of                                                          |
 | `E9001` | a parameterized `…[…]` as …                                                                             |
 | `E9002` | a `spec` member with a BODY                                                                             |
 | `E9003` | a generic enum `…[…]`                                                                                   |

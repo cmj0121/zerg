@@ -175,7 +175,12 @@ module 的樹，搬走時它自己的 import 需要改。
 巢狀是**扁平的**：把一個目錄放在另一個底下，只是讓 import path 變長——**沒有階層式私有**，內層 module 對外層並無
 特殊存取權。**module 之間的 import 循環會被拒絕**——一個在還走在下去的路上就又出現的 module，它的 `init()`
 區塊與 module 常數沒有任何順序可以被備妥，而那個拒絕指名的是這個環、不是走到它的那段路。被兩個 module 各自
-import 的同一個 module 不是環；一個 module import **它自己**，則是同一條規則的單節點情形。
+import 的同一個 module 也不是環——它只會被載入一次。
+
+一個檔案 import **它自己所屬的 module** 根本不是環，而是它自己的一條拒絕：_E5015 `./greet` is the module this
+file is already part of_。它有完全正常的順序；那個 import 只是沒有意義，因為一個 module 的檔案共享同一個命名
+空間，那些名字本來就在 scope 裡。環所帶的那句建議——把相互遞迴的宣告放進同一個 module——正是寫下這個 import
+的人已經做到的事。
 
 所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
 module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** 互相引用，編譯器 forward-declare、auto-boxing 讓遞迴有

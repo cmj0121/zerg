@@ -27,11 +27,47 @@ import (
 # THE QUESTION IS ASKED OF THE PATH DOWN, not of what has been loaded. A module that two
 # others import is the ordinary case — a diamond — and `seen` is what answers that one, by
 # loading it once. What has no order is a module that comes up again while it is still ON the
-# way down, and only a stack can tell the two apart. The self-import is the one-node case of
-# exactly the same test, which is why it needs no branch of its own.
+# way down, and only a stack can tell the two apart.
+#
+# A FILE IMPORTING ITS OWN MODULE IS NOT ONE, and this used to claim it as the one-node case.
+# See `chk_import_self` above: the test fires, and what it says is untrue of that program.
 #
 # The chain is reported from the first appearance, so what the reader is shown is the LOOP
 # and not the walk that reached it.
+# chk_import_self turns away an import that resolves to the module the importing FILE is
+# already part of: `greet/greet.zg` writing `import "./greet"`, or an entry `app.zg` writing
+# `import "./app"`.
+#
+# IT WAS THE CYCLE RULE'S JOB and the cycle rule was the wrong owner. `chk_import_cycle` used
+# to call this "the one-node case of exactly the same test, which is why it needs no branch of
+# its own" — and the test does fire, but the SENTENCE it fires with is about two modules that
+# have no order between them and advises putting the mutually recursive declarations in one
+# module. This author already did: the file is IN the module it imported. The order is fine and
+# the import is meaningless, which is a different mistake with different advice.
+#
+# THE HALF THAT WAS SILENT is why this is a rule rather than a better sentence. The stack the
+# cycle rule reads holds the modules IMPORTED on the way down, and `load_with` never pushes the
+# file's OWN module — so `app.zg` importing `./app` was caught by `zerg build`, which walks
+# units and does push it, and passed clean under `--emit check`, which walks files and does
+# not. One compiler, one program, two answers, and the silent one is what an editor asks.
+#
+# IT ASKS THE RESOLUTION, NOT THE SPELLING. The module a file belongs to and the path an import
+# writes are different strings for the same thing — the entry is `app.zg` and the import is
+# `./app` — so comparing them would answer no. What is asked instead is whether the importing
+# file is among the files the import RESOLVED to, which is the question the sentence states and
+# is spelling-independent. The resolution is the one the caller is about to walk anyway.
+#
+# A REAL CYCLE STILL BELONGS TO THE CYCLE RULE: `b/b.zg` importing `./a` resolves to `a/a.zg`,
+# which is not `b/b.zg`, so this is quiet and E5014 speaks.
+fn chk_import_self(imd: zerg.ImportDecl, files: list[str], file: str) {
+	for f in files {
+		if f == file {
+			place := zerg.place_line(imd.at, imd.line, imd.col)
+			raise zerg.rule_msg(zerg.Rule.ImportOfOwnModule, f"`{imd.path}` is the module this file is already part of — a module's files share one namespace (docs/runtime/package.md), so its names are in scope here already and the import would compile the file a second time\n{place}")
+		}
+	}
+}
+
 fn chk_import_cycle(stack: list[str], im: str) {
 	mut at := -1
 	mut i := 0
@@ -669,10 +705,16 @@ fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: li
 		im := imd.path
 		chk_test_import(imd)
 		chk_unbuilt_module(imd)
+		deps := module_files(imd, from_dir)
+
+		# ASKED BEFORE THE CYCLE RULE, because the cycle rule fires on the same program with a
+		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
+		# it is one file that is already in the module it named. The specific finding speaks.
+		chk_import_self(imd, deps, file)
 		chk_import_cycle(stack, im)
 		mut here := stack
 		here.append(im)
-		for dep in module_files(imd, from_dir) {
+		for dep in deps {
 			load_with(dep, im, from_dir, seen, here, srcs, paths, mods, buf)
 		}
 	}

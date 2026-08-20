@@ -220,8 +220,14 @@ Nesting is **flat**: a directory laid out under another only lengthens the impor
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
 between modules are rejected** — a module that comes up again while it is still on the way down has no
 order for its `init()` blocks and module constants to be readied in, and the refusal names the loop
-rather than the walk that reached it. A module two others import is not a cycle, and a module importing
-**itself** is the one-node case of the same rule.
+rather than the walk that reached it. A module two others import is not a cycle either — it is loaded
+once.
+
+A file that imports **its own module** is not a cycle at all, and is its own refusal: _E5015 `./greet`
+is the module this file is already part of_. There is a perfectly good order for it; the import is
+simply meaningless, because a module's files share one namespace and the names are in scope already.
+The advice a cycle carries — put the mutually recursive declarations in one module — is what the author
+of that import already did.
 
 So mutually recursive types and functions live in **one module** — which costs nothing, since a
 module is a directory of many files sharing a namespace: an `ast` module can spread `Expr` and `Stmt`

@@ -75,7 +75,14 @@ done
 #   install uninstall            — they CHANGE the machine; `install-check` is the gate
 #   fmt                          — it rewrites sources; `fmt-self` is the gate
 #   test linux-ci                — they ARE the board, and a board on the board recurses
-NOT_A_GATE="all clean run help upgrade install uninstall fmt test linux-ci"
+#   release release-tarball      — they BUILD an artifact, and the board builds nothing to keep
+#   release-smoke                — the board asks about this repository; `release-smoke` asks
+#                                  about a tarball on a machine that has no repository, which
+#                                  is a question only a release can put. It is the gate on the
+#                                  artifact and `make release` runs it, so a tarball cannot be
+#                                  produced without it — but it has no place on a board that
+#                                  runs on every commit, because there is no tarball then.
+NOT_A_GATE="all clean run help upgrade install uninstall fmt test linux-ci release release-tarball release-smoke"
 
 # shellcheck disable=SC2086 # $MAKEFILES is a list of paths and is meant to split
 targets=$(grep -hoE '^[a-z][a-z0-9-]*:' $MAKEFILES | tr -d ':' | sort -u)

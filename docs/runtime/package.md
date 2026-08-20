@@ -354,18 +354,15 @@ package **cycles be rejected**.
 > **undefined name**, because sending a reader to add an import for a module that does not exist would be
 > worse than the hole.
 >
-> > **[deviation]** **A type position discards a qualifier it cannot resolve.** `c: bogus.Counter` builds,
-> > and reads as `Counter`: a qualified type name resolves to its last segment — the flatten this chapter
-> > documents — and an unknown qualifier is dropped there rather than reported. So the three-way answer
-> > above is complete only at the expression positions; a type position tells "this module did not import
-> > it" from "this is a real namespace", and neither of those from a typo.
+> The three-way answer holds at a **type position** too: `c: bogus.Counter` is _undefined name `bogus`_,
+> the same finding the expression side gives, rather than a qualifier silently dropped in favour of its
+> last segment.
 >
-> **[deviation]** **The member is looked up program-wide.** Once the prefix resolves, the name after the
-> `.` is found in the one flattened namespace rather than in the module the prefix named, so with `a` and
-> `b` both imported, `b.helper()` answers a `helper` that module `a` declared. `pub` is still checked
-> against the module that DECLARED the member, which is why a private one is refused naming its real owner
-> rather than the module the program wrote. The seed compiler resolves this half correctly, and answers
-> `module "b" has no public member "helper"`.
+> And the member is looked up **in the module the prefix named**. With `a` and `b` both imported,
+> `b.helper()` is _E3084 module `b` has no `helper`_ however loudly `a` declares one — a function, a
+> module constant, a type used as its constructor, and a type position all ask it. `pub` is a separate
+> question, checked against the module that DECLARED the member, which is why a private one is refused
+> naming its real owner rather than the module the program wrote.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section

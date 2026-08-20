@@ -27,9 +27,10 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > a byte of it is lexed.
 >
 > **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
-> module is flattened into one namespace, and visibility is checked on some of what a module holds and not
-> all — a function and a module constant are (_E3001 `helper` is not a public member of module `lib`_, with
-> a place), a struct's fields are not. See Visibility below.
+> module is flattened into one namespace. What that costs is no longer visibility — a function, a module
+> constant, a type and a struct's fields are all checked, each with a place (_E3001 `helper` is not a
+> public member of module `lib`_, _E5010 `secret` is not a public field of `P`_) — it is that a name is
+> program-global, so two modules cannot declare the same public one. See Visibility below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
@@ -103,12 +104,9 @@ Both halves of it are built for a **direct** read. A constant whose initializer 
 `A == 11` — and a cycle is a named refusal: _E4068 these constants depend on each other and none can be
 given a value first_.
 
-> **[deviation]** The reads-from graph is built from the names an initializer **writes**, so a read that
-> goes **through a call** is not an edge. `const A: str = mk()` above `const B: str = "x"`, with `mk()`
-> reading `B`, leaves `A` holding the **zero value** with no diagnostic at all — measured, `A` prints
-> empty. It is the ordering rule's one silent-wrong, and the reason `src/stdlib/log.zg` declares the
-> constants its own initializers reach **above** them and has `scripts/log-check.sh` hold that order:
-> nothing in the language does.
+A read that goes **through a call** is an edge like any other: `const A: str = mk()` above
+`const B: str = "x"`, with `mk()` reading `B`, gives `A` the value `B` was declared with. It was the
+ordering rule's one silent-wrong — `A` held the zero value and nothing said so — and #14 closed it.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent

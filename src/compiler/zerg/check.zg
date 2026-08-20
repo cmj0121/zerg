@@ -318,24 +318,35 @@ fn chk_ns_bound(mut &em: Emitter, ns: str) {
 # its own path, so the module doing the writing is the entry's own — and an imported module's
 # qualifiers have to be judged even when only one unit is emitted, which is the `--emit lib`
 # lesson c_check_named_types carries in full.
-# THE INVENTED QUALIFIER IS NOT THIS RULE'S, and this is the one path where saying so takes
-# a guard. The three expression paths reach chk_ns_bound only once c_ns_kind has answered
-# NsModule, so by then the name is known to be a real namespace and the only open question
-# is whose. A qualifier written in a TYPE position has had no such question asked about it —
-# the parser wrote down every one it saw, `bogus` included — so asking c_is_ns first is what
-# keeps `bogus.Counter` from being told that `bogus` "is a module this build compiles",
-# which is false and would send the reader to add an import for a module that does not exist.
+# TWO RULES, TOLD APART BY WHETHER THE QUALIFIER NAMES A MODULE AT ALL, because they are
+# different findings and the wrong one sends the reader somewhere useless. A real module this
+# file did not import is _import it here_; a name nothing in the program bound is _undefined_,
+# and telling that reader that `bogus` "is a module this build compiles" would send them to
+# add an import for a module that does not exist.
 #
-# What a type position does with an unknown qualifier is unchanged: parse_base_type drops it
-# and the last segment is the name, which is the documented flatten. That is a deviation this
-# rule does not close, and pretending otherwise here would be worse than leaving it named.
+# THE SECOND ONE USED TO BE SILENT, and that was the deviation. `parse_base_type` resolves
+# `bogus.Counter` to `Counter` — correctly for a real qualifier, since every module flattens
+# into one scope — and an INVENTED one was dropped the same way, so `c: bogus.Counter`,
+# `fn take(c: bogus.Counter)` and `fn make() -> bogus.Counter` all built and ran. The
+# expression side has always called that an undefined name; a type position was asking a
+# weaker question about the same text. It is the same rule and now the same sentence.
 fn chk_ty_quals(mut &em: Emitter, f: File) {
 	for q in f.ty_quals {
-		if c_is_ns(em, q.ns) {
-			em.at_path = q.path
-			em.at_line = q.line
-			em.at_col = q.col
+		em.at_path = q.path
+		em.at_line = q.line
+		em.at_col = q.col
+		if not c_is_ns(em, q.ns) {
+			c_undefined_name(em, q.ns)
+		} else {
 			chk_ns_bound(em, q.ns)
+
+			# AND WHETHER THAT MODULE IS WHERE THE TYPE COMES FROM, which is the rule the
+			# three expression paths ask and this one could not: the qualifier was recorded
+			# without the name it qualified, so `p: b.Box = a.Box(4)` was a `b.` nobody
+			# compared against `Box`'s module.
+			if not c_ns_names_mod(em, q.ns, c_ty_mod(em, q.member)) {
+				chk_no_member(em, q.ns, q.member)
+			}
 		}
 	}
 }

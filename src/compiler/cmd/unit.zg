@@ -318,8 +318,6 @@ fn load_units_of(files: list[str], name: str, from_dir: str, provides: list[str]
 # answer different questions — see `chk_import_cycle` in source.zg. It arrives BY VALUE, which saves
 # a pop: each frame appends its own name to its own copy, so unwinding is the return.
 fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
-	mut here := stack
-	here.append(name)
 	seen.append(name)
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
@@ -348,7 +346,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
-			load_import(imd, paths[si], from_dir, seen, here, units)
+			load_import(imd, paths[si], from_dir, seen, stack, units)
 		}
 		si = si + 1
 	}
@@ -379,10 +377,20 @@ fn load_import(imd: zerg.ImportDecl, file: str, from_dir: str, mut &seen: list[s
 
 	# and the cycle rule after it, for the reason `chk_import_self` gives: both fire on a file
 	# that imports its own module, and only one of them is describing that program.
-	chk_import_cycle(stack, im)
+	chk_import_cycle(imd, stack, im)
 
 	for s in seen {
 		return if s == im
 	}
-	load_unit(files, im, from_dir, seen, stack, units)
+
+	# THE STACK GROWS AT THE IMPORT, and that is where the path down actually is. It used to
+	# grow inside `load_unit`, which put the ENTRY unit's own name on it — and the entry is
+	# not something anything imported, it is the root. For a normal build the name is a file
+	# path (`main.zg`) that no import can spell, so it never matched and never mattered; for a
+	# TEST build the entry unit is named by the module it is, and `zerg test src/stdlib` then
+	# read `json -> testing -> log -> json` as a cycle. It is not one: the last edge lands on
+	# the unit already being built, which `seen` answers, and `provides` is what says so.
+	mut deeper := stack
+	deeper.append(im)
+	load_unit(files, im, from_dir, seen, deeper, units)
 }

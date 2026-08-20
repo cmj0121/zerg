@@ -283,12 +283,26 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# and an import of it reached from anywhere else in this program must land on these sources
 	# rather than on a second copy of the same file.
 	mut provides: list[str] = []
+	mut uname := p.dir
 	if p.mod != "" {
 		provides.append(p.mod)
+
+		# AND THE UNIT IS NAMED BY THAT MODULE, because it IS that module. The name is what
+		# `c_mod_of` reads back as a declaration's module identity, and naming a one-file
+		# module's package after its DIRECTORY made `strings.zg` a declaration of
+		# `src/stdlib` — so `time.zg`, loaded as `time` and writing `import "strings"`, was
+		# reading a member of a module nothing was called. Every stdlib suite failed with
+		# `module `strings` has no `pad_start`` about a `pub fn` two lines long.
+		#
+		# It is only safe to name it this while the "already loaded" question is asked at the
+		# IMPORT (`load_import`) rather than at the unit: asked at the unit, seeding `seen`
+		# with the same string would make this unit answer that it was already loaded, and
+		# the program would come back empty.
+		uname = p.mod
 	}
 
 	res := guard {
-		load_units_of(files, p.dir, p.dir, provides)
+		load_units_of(files, uname, p.dir, provides)
 	}
 	rm_file(drv)
 	for c in copies {

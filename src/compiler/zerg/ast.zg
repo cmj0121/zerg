@@ -721,6 +721,13 @@ pub struct ImportDecl {
 	# `import "a/text" as text` binds exactly what the plain form does.
 	pub renamed: bool
 
+	# is_pub is `import pub "…"` — a RE-EXPORT, which puts the imported module's public
+	# surface onto the importing module's own. It used to be consumed and thrown away, and
+	# the form still worked, because every module flattened into one space and a qualified
+	# name never asked which module it came from. Once it does ask, a re-export is the one
+	# legitimate answer that is not "the same module", so it has to be written down.
+	pub is_pub: bool
+
 	pub at: str
 	pub line: int
 	pub col: int
@@ -782,6 +789,12 @@ pub struct File {
 # TyQual is one such occurrence: the qualifier as written, and where.
 pub struct TyQual {
 	pub ns: str
+
+	# member is the TYPE the qualifier was written in front of — the last segment, which is
+	# the name that survives the drop. Without it a rule here can ask whether the reader may
+	# write `b.`, and cannot ask whether `b` is where `Box` comes from; `p: b.Box = a.Box(4)`
+	# built for exactly that reason.
+	pub member: str
 	pub path: str
 	pub line: int
 	pub col: int

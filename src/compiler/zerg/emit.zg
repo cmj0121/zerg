@@ -18,6 +18,25 @@ import (
 
 # Emitter carries the per-function variable environment (name -> type) and the
 # whole-file function signature table (name -> return type).
+# Mods is THE MODULE IDENTITY TABLE as it travels: every source path a program was loaded
+# from, and the module each one belongs to, row for row.
+#
+# It is a struct rather than two arguments because it crosses five public entries and the
+# language-server boundary, and two lists that must stay the same length are one value. What
+# fills it is `cmd/unit.zg`, which is the only thing that knows: see `c_mod_of`.
+pub struct Mods {
+	pub paths: list[str]
+	pub names: list[str]
+}
+
+# mods_of is how a table is BUILT from outside this module, and it is a function rather than
+# the constructor because the seed cannot spell one: `zerg.Mods(ps, ns)` in `cmd` lowers to the
+# type name where the call should be, and cc says so. A call crosses the boundary in both
+# compilers.
+pub fn mods_of(paths: list[str], names: list[str]) -> Mods {
+	return Mods(paths, names)
+}
+
 struct Emitter {
 	pub env_names: list[str]
 	pub env_tys: list[Ty]
@@ -494,6 +513,25 @@ struct Emitter {
 	# Only a BARE name is pushed — an iterable that is a field path, a slice or a call
 	# result has no row to record, which is the [deviation] docs/code/collections.md carries.
 	pub frz_idxs: list[int]
+
+	# unit_paths / unit_mods are THE MODULE IDENTITY TABLE: every source path this program was
+	# loaded from, and the module each one belongs to. It is filled by the LOADER and read by
+	# `c_mod_of`, and it is the whole of what makes a module an identity rather than a string
+	# operation on a filename.
+	#
+	# The loader is the only thing that knows. A module is what an import RESOLVED to — the
+	# written path for an imported one, the entry file for the program's own — and `cmd/unit.zg`
+	# already has both: `Unit.name` is that identity and `Unit.paths` is which files wear it.
+	# Deriving it here instead, from the path alone, made `src/stdlib/strings.zg` and
+	# `src/stdlib/io.zg` ONE module because they share a directory, so every one of `io`'s
+	# module-private names was reachable from `strings` with no import and no `pub`.
+	#
+	# A PATH THIS TABLE DOES NOT HOLD IS ITS OWN MODULE, which is the conservative answer and
+	# deliberately not the quiet one: it shares its private names with nothing, so a file the
+	# loader failed to register is refused loudly rather than silently let through. `""` is
+	# still reserved for a declaration NO FILE WROTE, which `c_synthetic_path` answers for.
+	pub unit_paths: list[str]
+	pub unit_mods: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2418,7 +2456,7 @@ fn c_first_with_key(f: File, key: str, fallback: FnDecl) -> FnDecl {
 fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl, prev: FnDecl) {
 	raise c_same_file_twice(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.line) if prev.path == fn_i.path
 	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
-	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if c_mod_of(fn_i.path) == c_mod_of(prev.path)
+	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if c_mod_of(em, fn_i.path) == c_mod_of(em, prev.path)
 
 	if not c_name_in(em.mod_tagged, fn_i.name) {
 		em.mod_tagged.append(fn_i.name)
@@ -2432,7 +2470,7 @@ fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl, prev: FnDecl) {
 fn c_add_sig(mut &em: Emitter, fn_i: FnDecl) {
 	key := c_sig_key(fn_i.recv, fn_i.name)
 	em.sig_names.append(key)
-	em.sig_mod.append(c_mod_of(fn_i.path))
+	em.sig_mod.append(c_mod_of(em, fn_i.path))
 	em.sig_pub.append(fn_i.is_pub)
 	em.sig_unsafe.append(fn_i.in_unsafe)
 	em.sig_rets.append(fn_i.ret)
@@ -2478,7 +2516,7 @@ fn c_sig_row(mut &em: Emitter, key: str) -> int {
 	# modules both have is two rows, and the first is whichever file was read first — so
 	# every rule that reads a row by name alone would answer about the other module's
 	# function: its visibility, its arity, its parameter types.
-	here := c_mod_of(em.at_path)
+	here := c_mod_of(em, em.at_path)
 	if here != "" {
 		mut j := 0
 		for j < em.sig_names.len() {
@@ -3197,7 +3235,7 @@ fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: Ty, path: str, is_
 	em.tk_names.append(nm)
 	em.tk_kinds.append(kind)
 	em.tk_unders.append(under)
-	em.tk_mod.append(c_mod_of(path))
+	em.tk_mod.append(c_mod_of(em, path))
 	em.tk_pub.append(is_pub)
 }
 
@@ -4254,7 +4292,7 @@ fn c_build_namespaces(mut &em: Emitter, f: File) {
 		# binding — the fact the transitivity rule is entirely made of. A pair already
 		# recorded is dropped, which is the ordinary case of one module importing the same
 		# thing from two of its files.
-		here := c_mod_of(im.at)
+		here := c_mod_of(em, im.at)
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
 			em.ns_at.append(here)
@@ -7258,7 +7296,7 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 		# reading a module-private name is unambiguous rather than accidental.
 		c_chk_visible_fn(em, meth, c_sig_row_of(em, meth))
 
-		return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", meth)}({c_call_args(em, meth, args, sb)})"
+		return f"{c_fn_cname_in(em, c_mod_of(em, em.at_path), "", meth)}({c_call_args(em, meth, args, sb)})"
 	}
 
 	# AN INVENTED PREFIX. The finding is about the prefix and there is nothing further to
@@ -7563,9 +7601,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	c_chk_unsafe_fn(em, name, "this call is in safe code", sr)
 
 	rels := c_owned_args(em, name, 0, args)
-	return c_call_releasing(em, c_fn_cname_in(em, c_mod_of(em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
+	return c_call_releasing(em, c_fn_cname_in(em, c_mod_of(em, em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
 
-	return f"{c_fn_cname_in(em, c_mod_of(em.at_path), "", name)}({c_call_args(em, name, args, sb)})"
+	return f"{c_fn_cname_in(em, c_mod_of(em, em.at_path), "", name)}({c_call_args(em, name, args, sb)})"
 }
 
 # c_sig_row_of is a free function's signature row, or -1 when nothing registered one. It is
@@ -7609,7 +7647,7 @@ fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str, r: int) {
 fn c_chk_visible_const(mut &em: Emitter, name: str) {
 	i := c_k_idx(em, name)
 	return if i < 0
-	chk_visible(em, name, c_mod_of(em.k_decls[i].path), em.k_decls[i].is_pub)
+	chk_visible(em, name, c_mod_of(em, em.k_decls[i].path), em.k_decls[i].is_pub)
 }
 
 # c_k_idx is a name's row in the module-constant table (k_decls and the k_tys beside it),
@@ -9951,7 +9989,7 @@ fn c_init_calls(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for fd in f.fns {
 		if is_init_name(fd.name) {
-			out = out + "    " + c_fn_cname_in(em, c_mod_of(fd.path), "", fd.name) + "();\n"
+			out = out + "    " + c_fn_cname_in(em, c_mod_of(em, fd.path), "", fd.name) + "();\n"
 		}
 	}
 	return out
@@ -11053,7 +11091,7 @@ fn c_with_defaults(mut &em: Emitter, key: str, args: list[Expr]) -> list[Expr] {
 # (through c_fn_cname) and the signature key the argument rules read, which is what makes a
 # deferred generic call checked exactly as a direct one is.
 fn c_callee_gen(mut &em: Emitter, key: str, x: Expr) -> Callee {
-	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", key), c_callee_args_of(x), key)
+	return Callee(c_fn_cname_in(em, c_mod_of(em, em.at_path), "", key), c_callee_args_of(x), key)
 }
 
 # c_callee_args_of is the argument list of either call form, since c_callee_raw reaches this
@@ -11082,7 +11120,7 @@ fn c_callee_free(mut &em: Emitter, name: str, args: list[Expr], what: str) -> Ca
 	c_chk_visible_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code", sr)
 
-	return Callee(c_fn_cname_in(em, c_mod_of(em.at_path), "", name), args, name)
+	return Callee(c_fn_cname_in(em, c_mod_of(em, em.at_path), "", name), args, name)
 }
 
 # c_chk_callable is "is this name a function", and it was the question a `spawn` and a
@@ -13115,7 +13153,7 @@ fn c_param_types(fn_d: FnDecl) -> str {
 }
 
 fn c_proto(mut &em: Emitter, fn_d: FnDecl) -> str {
-	return f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(fn_d.path), fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
+	return f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(em, fn_d.path), fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
 }
 
 # c_check_loop_jump refuses a `break` or a `continue` that belongs to no loop. Without it
@@ -13228,7 +13266,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	em.fn_mark_used = false
 	mut pdefer := ""
 
-	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(fn_d.path), fn_d.recv, fn_d.name)}("
+	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, c_mod_of(em, fn_d.path), fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -13405,8 +13443,8 @@ pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
 }
 
 # emit_files_diag is emit_files_at that also reports what it found.
-pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) -> str {
-	return c_emit_file_at(merge_files_at(srcs, paths), diags)
+pub fn emit_files_diag(srcs: list[str], paths: list[str], ms: Mods, mut &diags: list[Diag]) -> str {
+	return c_emit_file_at(merge_files_at(srcs, paths), ms, diags)
 }
 
 # check_files_diag answers "is this a program" WITHOUT answering "what C does it become".
@@ -13424,17 +13462,17 @@ pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]
 # the finished C is 3.6 MB and the walk that builds it touches a thousand times that. The
 # language server asks this question on every keystroke-batch, and it was being SIGKILLed
 # for asking it three times.
-pub fn check_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) {
+pub fn check_files_diag(srcs: list[str], paths: list[str], ms: Mods, mut &diags: list[Diag]) {
 	mut lints: list[Diag] = []
 	f := merge_files_at(srcs, paths)
-	c_emit_unit(f, f, true, false, true, diags, lints)
+	c_emit_unit(f, f, ms, true, false, true, diags, lints)
 }
 
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
-pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
+pub fn emit_unit_at(prog: File, own: File, ms: Mods, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(prog, own, false, false, false, diags, lints)
+	return c_emit_unit(prog, own, ms, false, false, false, diags, lints)
 }
 
 # lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
@@ -13445,7 +13483,7 @@ pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
 #
 # It walks in CHECK mode. The C was always thrown away here — that is what this comment used
 # to say — and building it first cost the caller a gigabyte for a string nobody read.
-pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
+pub fn lint_conversions(srcs: list[str], paths: list[str], ms: Mods) -> list[Diag] {
 	mut diags: list[Diag] = []
 	mut lints: list[Diag] = []
 
@@ -13453,7 +13491,7 @@ pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
 	# whole program per unit "is where its time went", and two calls in one argument list is
 	# that mistake at its smallest.
 	f := merge_files_at(srcs, paths)
-	c_emit_unit(f, f, true, true, true, diags, lints)
+	c_emit_unit(f, f, ms, true, true, true, diags, lints)
 
 	return [] if diags.len() > 0
 
@@ -13518,9 +13556,9 @@ pub fn merge_asts(fs: list[File]) -> File {
 	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals)
 }
 
-fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
+fn c_emit_file_at(f: File, ms: Mods, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(f, f, true, false, false, diags, lints)
+	return c_emit_unit(f, f, ms, true, false, false, diags, lints)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -13968,7 +14006,7 @@ fn c_lowered(check: bool, s: str) -> str {
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
-fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, check: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool, check: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -13986,7 +14024,14 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, check: bo
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [])
+
+	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
+	# — it lines the call up with the fields by KIND, which only works while nothing in it
+	# carries a value. Two more that did would have widened the exception list instead of the
+	# table; the table is not constructor state, it is the first thing put INTO the Emitter.
+	em.unit_paths = ms.paths
+	em.unit_mods = ms.names
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

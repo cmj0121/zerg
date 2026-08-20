@@ -205,6 +205,10 @@ because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
 the program, which is what the assertion exists to catch.
 
+- **There is no ceiling on the C one unit may emit.** A program large enough to exhaust the
+  machine is SIGKILLed here — no code, no place, nothing to read. `zerg` refuses it with
+  `E5016` past `$ZERG_EMIT_MAX`, and this is a gap the seed will not close: the seed exists
+  to build one program, and that program is well under any ceiling worth having.
 - **A module this file did not import, named through a qualified enum variant, is
   accepted.** `lib.Colour.Red` where the file imports only `mid` (which imports `lib`) is a
   name the whole-program flatten makes reachable and the language refuses; the seed enforces

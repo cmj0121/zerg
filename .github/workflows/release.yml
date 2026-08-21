@@ -138,11 +138,20 @@ jobs:
           echo "--- publishing ---"
           ls -l
 
+      # NOT `body_path: CHANGELOG.md`. That publishes the whole file, and most of that file is
+      # ABOUT the file — where the number comes from, what belongs in `notes/`, that entries
+      # are newest first — none of which is about the release somebody just clicked on. After
+      # 0.2.0 it would carry every older entry along too. `release-notes.sh` extracts the
+      # section for the version in VERSION and adds what a downloader asks first: which file to
+      # take, how to check it arrived intact, and that `cc` is needed to build a PROGRAM.
+      - name: Render the release body
+        run: ./scripts/release-notes.sh > RELEASE_NOTES.md
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true

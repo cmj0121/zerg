@@ -2851,6 +2851,26 @@ fn main() {
 }
 EOF
 
+# The f-string scanner's two, which had no code to assert until now. `scan_fstring` answers
+# a Token and every other refusal in it goes out through `bad` — these two `raise`d a bare
+# sentence instead, so they arrived with no `error:` line, no code, and no place, and the
+# assertion below could not be written. It is the last of the diagnostics deviation in
+# docs/conformance.md, and it was the whole of it once the lexer's own refusals moved onto
+# the channel.
+expect "$ZERG" f-string-never-closed E1012 <<'EOF'
+fn main() {
+	x := f"abc
+	print x
+}
+EOF
+
+expect "$ZERG" f-string-with-a-bare-closing-brace E1013 <<'EOF'
+fn main() {
+	x := f"a } b"
+	print x
+}
+EOF
+
 # The two if-EXPRESSION shapes that need more than a parse. Both used to be reported as the
 # token that could not continue the condition — "expected `}`, found `:=`" and "expected
 # `{`, found `:=`" — for forms GRAMMAR#if-expr and GRAMMAR#if-head derive. The `else if`

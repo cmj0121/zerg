@@ -168,8 +168,41 @@ else
 	fi
 fi
 
+# --- 3. A SOURCE THAT DOES NOT LEX IS DECLINED, AND NOT REWRITTEN -------------------------
+#
+# The precondition above is about PARSING: fmt has to work on source this compiler cannot
+# read. LEXING is not the same question and cannot be given the same answer, because the
+# token stream is what fmt makes its promise out of — where the lexer could not read the
+# text, the stream is missing what it could not read, and the rewrite drops it in silence.
+# Measured before the gate: `f"abc` unterminated came back with the rest of the function
+# GONE, exit 0; an unterminated plain string came back with its indentation rewritten around
+# a literal that swallowed the next line. Neither file was one fmt was asked to change.
+#
+# It is asserted here rather than beside the refusals because it is this file's invariant —
+# fmt never subtracts — and not a statement about what `zerg build` turns away.
+for probe in unterminated-f-string bare-brace-in-f-string unterminated-string; do
+	case $probe in
+	unterminated-f-string) printf 'fn main() {\n\tx := f"abc\n\tprint x\n}\n' >"$tmp/$probe.zg" ;;
+	bare-brace-in-f-string) printf 'fn main() {\n\tx := f"a } b"\n\tprint x\n}\n' >"$tmp/$probe.zg" ;;
+	unterminated-string) printf 'fn main() {\n\tx := "abc\n\tprint x\n}\n' >"$tmp/$probe.zg" ;;
+	esac
+	cp "$tmp/$probe.zg" "$tmp/$probe.orig"
+
+	out=$("$ZERG" fmt "$tmp/$probe.zg" 2>&1)
+	if [ $? -eq 0 ]; then
+		printf 'LEX    %s — fmt formatted a file the lexer cannot read\n' "$probe"
+		fail=1
+	elif ! cmp -s "$tmp/$probe.zg" "$tmp/$probe.orig"; then
+		printf 'WROTE  %s — fmt declined it and wrote it anyway\n' "$probe"
+		fail=1
+	elif ! printf '%s\n' "$out" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'; then
+		printf 'PLACE  %s — the refusal does not say where: %s\n' "$probe" "$(echo "$out" | head -1)"
+		fail=1
+	fi
+done
+
 if [ $fail -ne 0 ]; then
 	echo "fmt-roundtrip: the formatter wrote something the parser cannot read"
 	exit 1
 fi
-echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted"
+echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted, and three that do not lex are declined"

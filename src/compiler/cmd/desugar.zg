@@ -39,6 +39,11 @@ fn do_desugar(c: cli.Ctx) -> int {
 fn run_desugar(files: list[str], off: list[str]) {
 	for f in files {
 		src := read_source(f)
+
+		# It lexes first, for the reason `zerg fmt` does: this rewrite is made out of the
+		# token stream too, so text the lexer could not read is text the output would not
+		# carry.
+		lex_check(src, f)
 		raise f"`{f}` has unbalanced brackets, so it cannot be desugared — the file is left as it is" if not zerg.fmt_balanced(src)
 
 		out := zerg.desugar_src_off(src, off, f)
@@ -59,6 +64,7 @@ fn run_desugar_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
 		src := read_source(f)
+		lex_check(src, f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be desugared\n")
 			bad = bad + 1

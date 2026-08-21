@@ -40,6 +40,8 @@ pub enum Rule {
 	EscapeInvalid = 1009
 	StrHoldsNul = 1010
 	SourceNotUtf8 = 1011
+	FStrUnterminated = 1012
+	FStrBareBrace = 1013
 
 	# parser — tokens that are not a Zerg form
 	SelectArmClose = 2001

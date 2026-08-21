@@ -4,10 +4,16 @@
 # still point at a commit CI never saw: a cherry-pick, an amend, a merge made locally. This
 # re-runs the board ON THE TAGGED COMMIT, and publishes nothing until it is green.
 #
-# THE SAME GATES AS CI, deliberately, and not a larger release-only set. A gate nobody sees
-# every day is a gate that speaks for the first time on the day it must not — so if something
-# here is worth checking, it belongs in `ci.yml` where it runs on every push. What this adds is
-# not more checks; it is the same checks on the commit the tag names.
+# THE SAME GATES AS CI, and this workflow CALLS `ci.yml` rather than restating it. That is the
+# difference between a claim and a mechanism, and the first tag proved it: the board job here
+# was written by hand, said in a comment that it ran the same gates, and ran `make test`
+# instead — the whole board, where `ci.yml` guards nine gates behind the private corpus being
+# fetchable. Nine failed, nothing was published, and the comment was the only thing that had
+# said otherwise.
+#
+# A gate nobody sees every day is a gate that speaks for the first time on the day it must not,
+# so anything worth checking belongs in `ci.yml` where it runs on every push. What a release
+# adds is not more checks; it is the same checks on the commit the tag names.
 #
 # WHAT SHIPS is a per-platform tarball, because `bin/zerg` is not self-contained: a build ends
 # in `cc`, and the compiler reads the runtime's C sources and the standard library at run time.
@@ -37,17 +43,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # --- 1. the board, on the tagged commit -------------------------------------------------
+  # --- 1. the tag is the version, before anything expensive ------------------------------
   #
-  # The private corpus is fetched the way CI fetches it; the gates that need it are skipped
-  # without it, and `scripts/ci-fetch-testdata.sh` is where that line is drawn honestly.
-  board:
-    name: the board, on the tag (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # THE FIFTH DERIVATION OF VERSION, and the only one a human types. Asserted in a job of its
+  # own so a mistyped tag costs two minutes rather than a full board on two runners and three
+  # tarballs named after a version nobody asked for.
+  tag:
+    name: the tag is the version
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout the tag
@@ -59,25 +62,33 @@ jobs:
           go-version-file: src/bootstrap/go.mod
           cache-dependency-path: src/bootstrap/go.sum
 
+      # `version-check` reads what is in bin/ rather than filling it, which is why it has to
+      # run after a build and why the Makefile and CI sequence it exactly there.
       - name: Build the toolchain
         run: make build
 
-      # THE TAG IS THE FIFTH DERIVATION OF VERSION, and the only one a human types. Asserted
-      # before anything is built for publication, so a mistyped tag costs a minute rather than
-      # a full board and three tarballs named after a version nobody asked for.
       - name: The tag is the version
         run: make version-check
         env:
           TAG: ${{ github.ref_name }}
 
-      - name: Fetch the private corpus
-        run: ./scripts/ci-fetch-testdata.sh corpus
-        continue-on-error: true
+  # --- 2. the board, on the tagged commit -------------------------------------------------
+  #
+  # BY CALLING CI, not by restating it. A tag can point at a commit CI never saw — a
+  # cherry-pick, an amend, a merge made locally — so the board has to run on the commit the tag
+  # names. What it must NOT be is a second definition of which gates those are: the first
+  # attempt wrote its own job, said in a comment that it ran "the same gates as CI", and ran
+  # `make test` instead — the whole board, where `ci.yml` guards nine gates behind the private
+  # corpus being fetchable. Nine failed on the first tag and nothing was published, which is the
+  # gate doing its job and the comment failing at its own.
+  #
+  # A reusable workflow makes the claim true by construction: there is one list, in one file.
+  board:
+    name: the board
+    needs: tag
+    uses: ./.github/workflows/ci.yml
 
-      - name: Run the board
-        run: make test
-
-  # --- 2. the artifacts, one per platform -------------------------------------------------
+  # --- 3. the artifacts, one per platform -------------------------------------------------
   artifact:
     name: tarball (${{ matrix.os }})
     needs: board
@@ -109,7 +120,7 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # --- 3. one release, with the checksums of everything in it -----------------------------
+  # --- 4. one release, with the checksums of everything in it -----------------------------
   publish:
     name: publish
     needs: artifact

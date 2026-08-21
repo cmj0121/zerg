@@ -31,12 +31,21 @@ on:
     branches: [main]
   pull_request:
 
+  # AND A RELEASE CALLS THIS ONE. `release.yml` used to define its own board job and say in a
+  # comment that it ran "the same gates as CI" — which was a sentence, not a mechanism, and it
+  # was wrong on the first tag: it ran `make test`, the whole board, where the steps below
+  # guard nine gates behind the private corpus being fetchable. Nine failed and nothing was
+  # published. Being callable is what makes the claim true by construction.
+  workflow_call:
+
 permissions:
   contents: read
 
 concurrency:
+  # A release must not be cancelled by a later push, so the group carries the ref that started
+  # it and in-progress cancellation is off for a tag.
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   # A stale `docs/…md` path has NO other signal: most of them are plain-text citations

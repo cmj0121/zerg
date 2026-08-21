@@ -80,13 +80,21 @@ The compiler resolves `import` itself and works from any directory. Where it loo
 answered by the environment first and the in-repo layout last, so a checkout needs no
 setup and an install needs no checkout:
 
-| Variable       | Is                    | Defaults to                   |
-| -------------- | --------------------- | ----------------------------- |
-| `ZERG_ROOT`    | the installation root | the current directory         |
-| `ZERG_RUNTIME` | the runtime C sources | `$ZERG_ROOT/src/runtime/csrc` |
-| `ZERG_STDLIB`  | the standard library  | `$ZERG_ROOT/src/stdlib`       |
-| `ZERG_CACHE`   | the build cache       | `$ZERG_ROOT/.zerg-cache`      |
-| `ZERG_CSTD`    | the C dialect for cc  | `c17`                         |
+| Variable       | Is                      | Defaults to                           |
+| -------------- | ----------------------- | ------------------------------------- |
+| `ZERG_ROOT`    | where the two trees are | probed from the executable's own path |
+| `ZERG_RUNTIME` | the runtime C sources   | under `$ZERG_ROOT`, per the layout    |
+| `ZERG_STDLIB`  | the standard library    | under `$ZERG_ROOT`, per the layout    |
+| `ZERG_CACHE`   | the build cache         | `$ZERG_ROOT/.zerg-cache`              |
+| `ZERG_CSTD`    | the C dialect for cc    | `c17`                                 |
+
+The two under `$ZERG_ROOT` are `lib/zerg/csrc` and `lib/zerg/stdlib` in an **install**, and
+`src/runtime/csrc` and `src/stdlib` in a **source tree**.
+
+`zerg_root()` probes `__zrt_exe_path()` and walks up two levels, and `root_layout()` tells the
+two real layouts apart: a **source tree**, where the binary is `<root>/bin/zerg` beside
+`src/runtime/csrc`, and an **install**, where it is `<prefix>/bin/zerg` beside
+`<prefix>/lib/zerg/csrc`. A tarball unpacked anywhere therefore works with nothing exported.
 
 An import resolves against the entry file's own directory first, then the standard
 library, and a module is either `<name>.zg` or a DIRECTORY of sources read in sorted

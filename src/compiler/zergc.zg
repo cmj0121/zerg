@@ -99,9 +99,12 @@ fn env_help() -> str {
 		"  lib                compile the C to an object file (default)\n" +
 		"  bin                link an executable\n" +
 		"\nEnvironment:\n" +
-		"  ZERG_ROOT          installation root (default: the current directory)\n" +
-		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
-		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n" +
+		"  ZERG_ROOT          where this compiler finds its runtime and standard library\n" +
+		"                     (default: probed from the executable's own path)\n" +
+		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/lib/zerg/csrc when installed,\n" +
+		"                     $ZERG_ROOT/src/runtime/csrc in a source tree)\n" +
+		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/lib/zerg/stdlib when\n" +
+		"                     installed, $ZERG_ROOT/src/stdlib in a source tree)\n" +
 		"  ZERG_CACHE         the build cache (default: $ZERG_ROOT/.zerg-cache)\n" +
 		"  ZERG_CSTD          the C dialect cc compiles the emitted code with (default: c17)\n" +
 		"  ZERG_EMIT_MAX      bytes of C one unit may emit before E5016 (default: 67108864, 0 is off)\n"

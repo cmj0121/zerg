@@ -263,7 +263,13 @@ done
 # unset means the derivation is not in play; what is refused is a tag that is there and does
 # not match. The closing line says which of the two happened, because a check that quietly
 # measured nothing is the failure every gate here is written against.
-tag=${TAG:-${GITHUB_REF_NAME:-}}
+#
+# `$TAG` AND NOTHING AMBIENT. This read `$GITHUB_REF_NAME` as a fallback, and on a pull request
+# that variable is `49/merge` — not a tag, and not something anybody meant as one — so every PR
+# turned this red on a derivation that was not in play. A tag is passed by whoever means it;
+# the release workflow sets `TAG: ${{ github.ref_name }}` at the one step where that name IS a
+# tag, and nothing else has to know the shape of a CI environment.
+tag=${TAG:-}
 tagged=no
 case $tag in
 refs/tags/*) tag=${tag#refs/tags/} ;;

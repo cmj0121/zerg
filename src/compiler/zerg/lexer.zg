@@ -509,12 +509,13 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	mut sb: list[byte] = []
 	mut depth := 0 # 0 = literal text, above it = inside a `{ … }` hole
 	for true {
-		# An f-string RAISES where a plain string yields an Illegal token, and the reason is
-		# that nothing downstream reads Illegal: parse_primary steps over it and answers
-		# ENil, so a malformed literal would compile to a program that silently lacks it.
-		# The forms below cannot be recovered from either — an unclosed hole has no end to
-		# guess at — so the lexer is where they stop.
-		raise "f-string: unterminated literal: " + lexeme_from(l, soff) if eof(l) or at(l, 0) == byte(10)
+		# An f-string answers through `bad` like every other literal here. It used to RAISE,
+		# because nothing downstream read an Illegal token — parse_primary stepped over one
+		# and answered ENil, so a malformed literal compiled to a program that silently
+		# lacked it. `lex_diags` is what retired that reason: it is a pass of its own, run
+		# before anything is parsed, and it reports every Illegal token with the code and the
+		# place the token recorded. A raise had neither.
+		return bad(l, Rule.FStrUnterminated, "an f-string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if depth > 0 {
 			if c == b'{' {
@@ -536,7 +537,25 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 			sb.append(advance(l))
 		} else if c == b'}' {
-			raise "f-string: a bare '}' is not text — write '}}' for one: " + lexeme_from(l, soff)
+			# THE PLACE IS THE BRACE, not the literal that holds it. Every other refusal here
+			# points at where the literal opened because that is the whole of what went wrong
+			# — an unterminated string has no more precise place to offer. This one does, and
+			# a caret under the opening quote would make a reader hunt along the line for a
+			# character the sentence has already named.
+			bline := l.line
+			bcol := l.col
+
+			# The rest of the literal is consumed before the refusal is answered. Left where
+			# it stands, the closing quote opens a string of its own and the reader is told
+			# about an unterminated literal they did not write — one mistake, two
+			# diagnostics, and the second one accusing a line that is not the problem.
+			for not eof(l) and at(l, 0) != byte(10) and at(l, 0) != b'"' {
+				advance(l)
+			}
+			if not eof(l) and at(l, 0) == b'"' {
+				advance(l)
+			}
+			return bad(l, Rule.FStrBareBrace, "a bare `}` in an f-string is not text — write `}}` for one", bline, bcol, lexeme_from(l, soff))
 		} else if c == b'{' {
 			depth = 1
 			sb.append(advance(l))

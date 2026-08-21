@@ -107,8 +107,9 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 
 Both are diagnostics and both are normative in the only sense the wording ever is: **which** programs are
 rejected. Neither rendering is. The difference is worth naming rather than hiding because it is what a
-reader actually meets, and because the second shape is the one a rule loses its place and its code in — see
-the deviation below.
+reader actually meets. The second shape carries the code and the place like the first; what it does not
+carry is the source line and the caret under it, because a refusal stops the run where it stands rather
+than joining a list something later renders.
 
 The **place is a trailer**, not a prefix: the sentence comes first, and `--> file:line:col` sits on the
 line under it, where `line` and `col` are 1-based. A failed compilation exits with a non-zero status.
@@ -132,15 +133,10 @@ handed a name and nowhere to take it. It is the standing rule below about genera
 level in — a place nobody can open, and a name nobody can find. `scripts/reject-check.sh` and
 `scripts/refuse-check.sh` assert it of every case they hold.
 
-> **[deviation]** A place and a code are owed on every diagnostic, and what decides whether one carries
-> them is the **channel**, not whether the rule checks or refuses. All three stages that answer about a
-> PROGRAM now have one — `chk_at` in check.zg, `p_diag` in parser.zg, `c_diag` in emit.zg — and each takes
-> the code as an argument and reads the place itself, so a site cannot carry one and forget the other. What
-> is left of this deviation is the **f-string scanner**, whose two raises carry neither — and that is
-> narrower than it was: the lexer's own refusals go through the channel and answer with a code and a
-> place (`E1001 a string literal is not closed before the end of the line`, `E1004 this character is not
-part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc` unterminated and a
-> bare `}` inside an f-string, which answer with a bare sentence and no `error:` prefix at all.
+> A place and a code are owed on every diagnostic, and what decides whether one carries them is the
+> **channel**, not whether the rule checks or refuses. Every stage that answers about a PROGRAM has one —
+> `bad` in lexer.zg, `p_diag` in parser.zg, `chk_at` in check.zg, `c_diag` in emit.zg — and each takes the
+> code as an argument and reads the place itself, so a site cannot carry one and forget the other.
 >
 > ---
 >
@@ -167,8 +163,14 @@ part of any Zerg token`, both with `--> file:line:col`). What is left is `f"abc`
 > `place` marker gone entirely — a place is asserted of every `zerg` case there now, because there is no
 > longer a case that may lack one.
 >
-> **The lexer is what is left**, and it is two: _f-string: unterminated literal_ and _f-string: a bare '}'
-> is not text_. Both are raised from the driver rather than from a stage with a channel.
+> **The lexer is done, and it was two.** _f-string: unterminated literal_ and _f-string: a bare '}' is not
+> text_ raised a bare sentence — no `error:` line, no code, no place — from inside `scan_fstring`, which
+> answers a Token and whose every other refusal already went out through `bad`. They are `E1012` and
+> `E1013` now, and the reason they raised retired before they did: an Illegal token was once read by
+> nobody, and `lex_diags` is a pass of its own that reports each one with the code and the place the token
+> recorded. `E1013` points at the **brace** rather than at the literal that holds it — every other refusal
+> here points at where the literal opened because that is the whole of what went wrong, and this one has a
+> character to name.
 >
 > `scripts/error-codes-check.sh` cannot see an uncoded rule by comparing its three sets: it compares codes
 > that exist against the gates and the catalogue, and a rule with no code is absent from all three. It sees

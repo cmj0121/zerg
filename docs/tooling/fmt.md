@@ -36,6 +36,14 @@ touching anything, non-zero when it is not. It exists because the gate that asks
 otherwise written in shell: copy each file, format the copy, `cmp`. A formatter that cannot
 be asked is one every CI reinvents.
 
+**It will not rewrite a file the lexer cannot read.** Everything below is about a token
+stream, and that is what makes this the first gate rather than one of the others: where the
+lexer could not read the text, the stream is missing what it could not read, so a rewrite
+SUBTRACTS. An unterminated `f"abc` came back with the rest of the function gone, exit 0. A
+source with a lexical error is reported with its code and its place, and the file is left
+exactly as it was found — and `zerg desugar` declines it for the same reason, rewriting out
+of the same stream.
+
 **It will not rewrite a file whose brackets do not close.** Reading tokens means fmt will
 reformat anything that lexes, and a file with a syntax error came back reformatted and
 exit 0 — the tokens intact, but the spacing decided by rules that had nothing true to work

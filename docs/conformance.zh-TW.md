@@ -88,8 +88,8 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 ```
 
 兩者都是診斷，也都在用字唯一 normative 的那個意義上是 normative 的：**哪些**程式被拒絕。算繪本身則否。這個差
-別值得說出來而不是藏起來，因為那正是讀者實際遇到的，也因為第二種形狀正是規則會弄丟位置與碼的那一種——見下方
-的 deviation。
+別值得說出來而不是藏起來，因為那正是讀者實際遇到的。第二種形狀和第一種一樣帶著碼與位置；它不帶的是原始碼行
+與底下的 caret，因為拒絕是在原地停止整趟執行，而不是加入某個稍後才被算繪的清單。
 
 **位置是後綴、不是前綴**:句子先出現,`--> file:line:col` 排在它底下那一行,其中 `line` 與 `col` 為 1-based。
 編譯失敗以非零狀態結束。診斷用字非 normative——兩個實作可以用不同措辭表達同一個
@@ -107,13 +107,9 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 再往裡一層——一個沒人打得開的位置，和一個沒人找得到的名字。`scripts/reject-check.sh` 與
 `scripts/refuse-check.sh` 對它們持有的每一個案例都斷言這一點。
 
-> **[deviation]** 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒
-> 絕。三個回答**程式**問題的階段如今都有通道了——check.zg 的 `chk_at`、parser.zg 的 `p_diag`、emit.zg 的
-> `c_diag`——每一條都把碼當成引數收下、位置自己讀，所以一處不可能帶了其中一個卻忘掉另一個。本 deviation 剩下的
-> 是 **f-string 掃描器**,它的兩處 raise 兩者皆無 —— 而這比原本窄:lexer 自己的拒絕走 channel,
-> 帶碼也帶位置(`E1001 a string literal is not closed before the end of the line`、
-> `E1004 this character is not part of any Zerg token`,皆附 `--> file:line:col`)。剩下的是未封閉的
-> `f"abc` 與 f-string 內的裸 `}`,它們回一句白話,連 `error:` 前綴都沒有。
+> 每一則診斷都欠一個位置與一個碼，而決定它有沒有帶著兩者的是**通道**，不是規則屬於檢查還是拒絕。每一個回答
+> **程式**問題的階段都有通道——lexer.zg 的 `bad`、parser.zg 的 `p_diag`、check.zg 的 `chk_at`、emit.zg 的
+> `c_diag`——每一條都把碼當成引數收下、位置自己讀，所以一處不可能帶了其中一個卻忘掉另一個。
 >
 > ---
 >
@@ -135,8 +131,12 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 > 標記，而 `scripts/refuse-check.sh` 的 `place` 標記整個消失了——那裡的每一個 `zerg` 案例現在都被斷言帶著位置，
 > 因為已經沒有可以不帶的案例了。
 >
-> **剩下的是 lexer**，共兩處：_f-string: unterminated literal_ 與 _f-string: a bare '}' is not text_。兩者都是
-> 從驅動器 raise 的，而不是從某個有通道的階段。
+> **lexer 這一半也做完了，它曾是兩處。** _f-string: unterminated literal_ 與 _f-string: a bare '}' is not
+> text_ 從 `scan_fstring` 裡 raise 一句白話——沒有 `error:` 行、沒有碼、沒有位置——而那個函式回的是 Token，它
+> 其他每一處拒絕早就走 `bad` 出去了。現在它們是 `E1012` 與 `E1013`，而它們當初 raise 的理由比它們更早退場：
+> Illegal token 曾經沒有人讀，而 `lex_diags` 是獨立的一個 pass，把每一個 Illegal token 連同它記下的碼與位置
+> 一起回報。`E1013` 指的是那個**大括號**，不是含著它的字面值——這裡其他拒絕都指向字面值的開頭，因為那就是出
+> 錯的全部，而這一條有一個字元可以指名。
 >
 > `scripts/error-codes-check.sh` 靠比對三個集合是看不見一條沒有碼的規則的：它比對的是已經存在的碼與 gate、
 > catalogue 三者，而一條沒有碼的規則在三者裡都不存在。它改用另一個問題同時看見 parser 與 emitter 這兩半——這兩

@@ -49,8 +49,8 @@
 `make error-codes-check` 會按號碼段回答下一個可用的代碼是什麼:
 
 ```text
-error-codes-check: next free code per range — lexical E1012, parser E2065, checking E3095,
-                                              emitting E4074, building E5012, unbuilt E9105
+error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3113,
+                                              emitting E4074, building E5017, unbuilt E9106
 ```
 
 號碼段是從上面那張表讀出來的,而不是在腳本裡另存一份,所以新增一段就是在這裡多一列,除此之外什麼都不必動。
@@ -89,6 +89,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E1009` | 字串／rune／byte 字面量裡有無效的跳脫序列                                                             |
 | `E1010` | 字串字面量裡不能有 NUL                                                                                |
 | `E1011` | `…` 不是 UTF-8 文字,而 Zerg 原始檔就是 UTF-8 文字                                                     |
+| `E1012` | f-string 字面值在行尾之前沒有結束                                                                     |
+| `E1013` | f-string 裡的裸 `}` 不是文字——要一個 `}` 請寫 `}}`                                                    |
 | `E2001` | `close` 是關鍵字,不是 select arm head                                                                 |
 | `E2002` | 沒有 arm 的 select——它等不到任何東西                                                                  |
 | `E2003` | 不是 send、receive 或 `_` 的 select arm head                                                          |

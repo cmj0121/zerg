@@ -62,8 +62,8 @@ list nobody can ever finish reading.
 `make error-codes-check` answers, per range, what the next free code is:
 
 ```text
-error-codes-check: next free code per range — lexical E1012, parser E2065, checking E3095,
-                                              emitting E4074, building E5012, unbuilt E9105
+error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3113,
+                                              emitting E4074, building E5017, unbuilt E9106
 ```
 
 It reads the ranges out of the table above rather than carrying its own copy, so adding one
@@ -111,6 +111,8 @@ shipping compiler rather than a part of it (the line
 | `E1009` | invalid escape in a … literal                                                                           |
 | `E1010` | a string literal may not contain a NUL                                                                  |
 | `E1011` | `…` is not UTF-8 text, and a Zerg source file is UTF-8 text                                             |
+| `E1012` | an f-string literal is not closed before the end of the line                                            |
+| `E1013` | a bare `}` in an f-string is not text — write `}}` for one                                              |
 | `E2001` | `close` is not a select arm head                                                                        |
 | `E2002` | a select needs at least one arm                                                                         |
 | `E2003` | `…` is not a select arm head                                                                            |

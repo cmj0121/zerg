@@ -24,7 +24,7 @@
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
-	doc-check stmt-walk entry-path examples-index mem-peak
+	doc-check stmt-walk entry-path examples-index mem-peak release-notes
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
 # examples corpus. It answered to `test` until the board took that name, and `suites` is what
@@ -423,7 +423,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check mem-peak sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -504,6 +504,15 @@ MEM_PEAK_MAX_MB ?= 320
 mem-peak:                       # the compiler emits its own C under a memory ceiling
 	$(MAKE) build
 	MEM_PEAK_MAX_MB=$(MEM_PEAK_MAX_MB) ./scripts/mem-peak-check.sh
+
+# The body of a GitHub release is rendered from CHANGELOG.md's section for the version in
+# VERSION, and a script that runs only on a tag is a script whose first run is the day it must
+# not fail. What this asserts is the invariant behind it: THE CHANGELOG HAS A SECTION FOR THE
+# VERSION THIS BUILD REPORTS. A heading that drifts, or a VERSION bumped without an entry
+# written, turns this red on the commit that did it rather than on release day.
+release-notes:                  # the changelog has a section for the version being built
+	@./scripts/release-notes.sh >/dev/null
+	@echo "release-notes: CHANGELOG.md has a section for $$(cat VERSION)"
 
 # `zerg build src/…/zergc.zg` and `zerg build /abs/…/zergc.zg` are one program, and nothing
 # about it changed between the two commands — only the string a person typed. The C used to

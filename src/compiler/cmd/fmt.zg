@@ -31,6 +31,14 @@ fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
 		src := read_source(f)
 
+		# THE FIRST GATE IS THAT IT LEXES. fmt's whole promise is that it never SUBTRACTS,
+		# and a token stream is what it makes that promise out of: where the lexer could not
+		# read the text, the stream is missing what it could not read, and the rewrite
+		# silently drops it. An unterminated `f"abc` came back with the rest of the function
+		# gone, exit 0. `lex_check` ends the run with the code and the place instead, and the
+		# file is left exactly as it was found.
+		lex_check(src, f)
+
 		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
 		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
 		# back as `fn main({` and `print("hi")` as `print ("hi")`: the tokens survive, but
@@ -115,6 +123,7 @@ fn run_fmt_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
 		src := read_source(f)
+		lex_check(src, f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
 			bad = bad + 1

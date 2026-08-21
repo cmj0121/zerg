@@ -60,7 +60,7 @@ $(HELP_TOPIC): help
 	@:
 endif
 
-.PHONY: all test clean run build install uninstall upgrade linux-ci lint fmt help $(SUBDIR)
+.PHONY: all test clean run build install uninstall upgrade linux-ci lint fmt help release release-tarball release-smoke $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -152,6 +152,26 @@ install: $(SUBDIR)              # install the toolchain and the editor integrati
 	@cp .cloc.def "$(PREFIX)/lib/zerg/cloc.def"
 	@./scripts/cloc-config.sh install "$(PREFIX)/lib/zerg/cloc.def" "$(CLOC_CONFIG)"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
+
+# --- the release artifact -----------------------------------------------------------------
+#
+# `release-tarball` stages an install and tars it, so what a person downloads is decided by
+# `install` above and never by a second list. `release-smoke` is the gate on that artifact and
+# it is deliberately NOT part of the board: the board tests a repository, and this tests a
+# tarball on a machine that has no repository — which is a question only a release can ask.
+#
+# A TARBALL THAT FAILS `release-smoke` IS NOT PUBLISHED. `release` is the pair, in that order,
+# so there is one command a person or a workflow runs and no way to do the first without the
+# second.
+DIST ?= dist
+
+release-tarball:                # stage an install and tar it, named by the compiler inside it
+	@DIST=$(DIST) ./scripts/release-tarball.sh
+
+release-smoke:                  # the artifact, on a machine with nothing else on it
+	@for t in $(DIST)/*.tar.gz; do ./scripts/release-smoke.sh "$$t" || exit 1; done
+
+release: release-tarball release-smoke
 
 uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
 	@# BEFORE the files go, and not after: the config line names a path under $(PREFIX), and

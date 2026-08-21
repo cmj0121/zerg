@@ -101,6 +101,12 @@ jobs:
       - name: The compiler emits its own C under a memory ceiling
         run: make mem-peak
 
+      # A release's body is rendered from the changelog on the day of the tag. This asks the
+      # invariant behind that every day instead: the changelog has a section for the version
+      # this build reports.
+      - name: The changelog has a section for the version being built
+        run: make release-notes
+
       # A code is an identity, and an identity nothing checks is a number. This holds
       # the compiler's codes, the gates that assert them, and the catalogue a reader
       # looks them up in to being one set.

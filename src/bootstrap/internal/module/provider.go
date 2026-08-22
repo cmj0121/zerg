@@ -115,7 +115,23 @@ func LocalPath(importPath string) (string, bool) {
 	if strings.HasPrefix(importPath, "./") {
 		return strings.TrimPrefix(importPath, "./"), true
 	}
+	if RootPath(importPath) {
+		return strings.TrimPrefix(importPath, "/"), true
+	}
 	return importPath, false
+}
+
+// RootPath reports whether an import path is anchored at the PACKAGE ROOT — a single leading
+// `/`. It is a second spelling of "this project" and not a fourth root: what differs from `./`
+// is where the path is anchored, and the seed anchors both at the entry file's directory.
+//
+// THE SHIPPING COMPILER DOES NOT. There, `./` is relative to the file that wrote it and `/` to
+// the package root, which are different directories for any file below the root. The seed's one
+// job is building that compiler, whose own `./` imports are all written beside the entry file,
+// so the two anchors coincide for every path it ever resolves. The difference is a seed gap
+// (src/bootstrap/README.md) rather than a thing this loader pretends to have.
+func RootPath(importPath string) bool {
+	return strings.HasPrefix(importPath, "/") && !strings.HasPrefix(importPath, "//")
 }
 
 // RemotePath reports whether an import path names a remote package: a first segment that holds
@@ -138,8 +154,11 @@ func PathIllFormed(importPath string) string {
 	if importPath == "" {
 		return "an import path may not be empty"
 	}
-	if strings.HasPrefix(importPath, "/") {
-		return "an import path may not begin with `/`"
+	if strings.HasPrefix(importPath, "//") {
+		return "`//` names no root"
+	}
+	if importPath == "/" {
+		return "`/` names no module on its own"
 	}
 	body, local := LocalPath(importPath)
 	if local && body == "" {

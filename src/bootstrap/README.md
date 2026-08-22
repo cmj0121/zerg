@@ -205,6 +205,13 @@ because the seed emitted C that **clang** rejected: `-Wint-conversion` and
 same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
 the program, which is what the assertion exists to catch.
 
+- **`./` is anchored at the entry file's directory, not at the file that wrote it.** `zerg`
+  resolves a `./` import relative to the importing FILE and `/` relative to the package root;
+  the seed treats both as the same root, so `sub/a.zg` writing `import "./b"` beside a
+  `sub/b.zg` resolves under `zerg` and does not here. The seed's one job is building the
+  compiler, whose own `./` imports are all written beside the entry file — the two anchors
+  coincide for every path it ever resolves, and closing this would thread an importer's
+  directory through a loader that has no other use for one.
 - **There is no ceiling on the C one unit may emit.** A program large enough to exhaust the
   machine is SIGKILLed here — no code, no place, nothing to read. `zerg` refuses it with
   `E5016` past `$ZERG_EMIT_MAX`, and this is a gap the seed will not close: the seed exists

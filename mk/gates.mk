@@ -240,8 +240,8 @@ fmt-roundtrip:                  # what the formatter writes, the parser reads
 # that deletion IS the gate for the feature.
 CORPUS_SKIP := \
 	derive_enum derive_ord \
-	dyn_witness spec_bound \
-	gen_enum gen_enum2 gen_identity gen_struct
+	dyn_witness \
+	gen_enum gen_enum2 gen_struct
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 
@@ -252,9 +252,12 @@ CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-d
 # gate reports `1/1 cases pass` and exits 0 — success for having measured almost nothing,
 # which is the one failure that still looks like a corpus.
 #
-# 60 against the 80 that pass today. The gap is room for cases to move into CORPUS_SKIP while
-# they wait for a feature, so that adding a case for something `zerg` cannot build yet is not
-# also a chore here; it is nowhere near the two or three a broken checkout leaves behind.
+# 60 against the 168 that pass today, and the sentence that number sat in was stale by half a
+# corpus: it said 80. The gap is room for cases to move into CORPUS_SKIP while they wait for a
+# feature, so that adding a case for something `zerg` cannot build yet is not also a chore
+# here; it is nowhere near the two or three a broken checkout leaves behind. A figure quoted in
+# a comment beside the thing it describes is a claim, and this one had drifted far enough that
+# a reader would have taken the floor for tight.
 CORPUS_MIN ?= 60
 
 # A `conc_` case is run more than once. Every other case is a function of its source, so

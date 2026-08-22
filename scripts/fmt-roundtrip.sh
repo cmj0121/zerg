@@ -201,8 +201,80 @@ for probe in unterminated-f-string bare-brace-in-f-string unterminated-string; d
 	fi
 done
 
+# --- 4. A PATH IS A TREE, AND WHAT THE WALK DOES NOT ENTER ---------------------------------
+#
+# `zerg test` gave a path its meaning for this toolchain before the other commands took one —
+# a `#[test]` two directories down is found with no flag — so a one-level reading here would
+# make one argument mean two things in two commands. Handed a directory, `fmt` used to reach
+# `read_source` as an unreadable file and answer `IOError: read failed`: no code, no place,
+# and no name for what went wrong.
+#
+# Each of the four claims below is a rule the walk is made of, and each is asserted by a file
+# that would come back CHANGED if the rule were dropped.
+mkdir -p "$tmp/tree/deep/.hidden" "$tmp/tree/empty"
+printf 'fn  main( ) {\n  print 1\n}\n' >"$tmp/tree/a.zg"
+printf 'fn  helper( ) -> int {\n  return 2\n}\n' >"$tmp/tree/deep/b.zg"
+printf '#[test]\nfn  test_x( ) {\n  assert 1 == 1\n}\n' >"$tmp/tree/deep/c_test.zg"
+printf 'fn  hidden( ) {\n}\n' >"$tmp/tree/deep/.hidden/h.zg"
+cp "$tmp/tree/deep/.hidden/h.zg" "$tmp/tree/hidden.orig"
+ln -sfn .. "$tmp/tree/deep/up"
+
+"$ZERG" fmt "$tmp/tree" >/dev/null 2>&1
+tstatus=$?
+
+if [ $tstatus -ne 0 ]; then
+	printf 'TREE   fmt on a directory exited %s\n' "$tstatus"
+	fail=1
+fi
+if head -1 "$tmp/tree/a.zg" | grep -q 'fn  main'; then
+	printf 'TREE   a source at the root of the path was not formatted\n'
+	fail=1
+fi
+if head -1 "$tmp/tree/deep/b.zg" | grep -q 'fn  helper'; then
+	printf 'TREE   the walk is not recursive — a source one directory down was not formatted\n'
+	fail=1
+fi
+if head -2 "$tmp/tree/deep/c_test.zg" | grep -q 'fn  test_x'; then
+	printf 'TREE   a `*_test.zg` was skipped — they are canonical today and dropping them is silent\n'
+	fail=1
+fi
+if ! cmp -s "$tmp/tree/deep/.hidden/h.zg" "$tmp/tree/hidden.orig"; then
+	printf 'TREE   the walk entered a dot-directory\n'
+	fail=1
+fi
+
+# THE SYMLINK IS THE ONE THAT HANGS RATHER THAN FAILS, so it carries its own bound — and its
+# own tree, because `fmt` names a file only when it CHANGES one and the tree above is canonical
+# by now. `inner/up` points at an ancestor: followed, the walk finds the source again one level
+# deeper, forever.
+mkdir -p "$tmp/link/inner"
+printf 'fn  once( ) {\n}\n' >"$tmp/link/inner/one.zg"
+ln -sfn .. "$tmp/link/inner/up"
+
+out=$(perl -e 'alarm 60; exec @ARGV' "$ZERG" fmt "$tmp/link" 2>&1)
+if [ $? -eq 142 ]; then
+	printf 'TREE   the walk followed a symlink into an ancestor and did not end\n'
+	fail=1
+elif [ "$(printf '%s\n' "$out" | grep -c 'one\.zg$')" -ne 1 ]; then
+	printf 'TREE   the source under a symlinked ancestor was reached %s times, not once\n' \
+		"$(printf '%s\n' "$out" | grep -c 'one\.zg$')"
+	fail=1
+fi
+
+# AND A PATH THAT NAMES NOTHING SAYS SO, in the status as well as the sentence: a walk that
+# matched nothing and exited 0 is indistinguishable from one that formatted everything.
+out=$("$ZERG" fmt "$tmp/tree/empty" 2>&1)
+estatus=$?
+if [ $estatus -eq 0 ]; then
+	printf 'EMPTY  a directory holding no source exited 0\n'
+	fail=1
+elif ! printf '%s\n' "$out" | grep -q 'no sources'; then
+	printf 'EMPTY  a directory holding no source did not say so: %s\n' "$(echo "$out" | head -1)"
+	fail=1
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "fmt-roundtrip: the formatter wrote something the parser cannot read"
 	exit 1
 fi
-echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted, and three that do not lex are declined"
+echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted, three that do not lex are declined, and a path is the tree under it"

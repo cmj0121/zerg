@@ -80,6 +80,11 @@ opens a statement at the top level, and a compiled program has nowhere to run it
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序成立。
 
+> **[deviation]** 平手是由 import **被寫下的順序**打破的,不是 canonical module 名稱。兩個互不讀取的 module,依
+> 它們 import 行出現的先後初始化 —— 所以在一個 import 區塊裡移動一行,就會重排兩個互不相干的初始化。它對同一份
+> 原始碼是穩定的(同樣的輸入給同樣的輸出),所以不是可重現性的缺陷;它是上面那句話指名的規則,並不是實際在跑的
+> 那條(#70)。
+
 對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
 _E4068 these constants depend on each other and none can be given a value first_。
@@ -283,9 +288,14 @@ package 根底下的 `x`,不是 `/usr/x`。
 > `bogus.f()`、或把路徑片段當成名字用（`import "util/text"` 之下寫 `util.f()`）都會被當成未定義的名字拒絕，並附
 > 位置；兩個綁定相撞的 import，以及被某個頂層宣告先佔走的綁定，同樣被拒絕，而 `as` 就是這兩者的解法。
 >
-> **「無遞迴傳遞」已被強制。** 一個綁定屬於**寫下該 `import` 的那個檔案所屬的 module**——粒度是 module 而不是
-> 檔案，因為同一個 module 的檔案共用一個命名空間——所以一個 module 叫得出來的命名空間，就是它自己的檔案綁過的
-> 那些，包含它自己的 `as` 別名，不含別的 module 的。指名一個本 module 從未 import 的 module 是帶位置的編譯錯誤，
+> **「無遞迴傳遞」已被強制。** 一個綁定屬於**寫下該 `import` 的那個檔案**——所以一個檔案叫得出來的命名空間,
+> 就是**它自己**綁過的那些,包含它自己的 `as` 別名,既不含鄰居的、也不含別的 module 的。綁定不與同目錄的兄弟
+> 共享:一個檔案寫了 `import "strings"`,不會讓它旁邊那個檔案的作用域裡多出 `strings`。
+>
+> **surface 則是 module 的**,而這是兩個不同的問題:`import pub` 寫在一個 module 的**任何一個檔案**裡,都會把
+> 被指名的 module 放上**那個 module** 的 surface —— 那是依賴者看得見的東西。
+>
+> 指名一個本檔案從未 import 的 module 是帶位置的編譯錯誤，
 > 而且在每一個寫得出 module 名的位置都擋：呼叫、成員讀取、`spawn` / `defer` 的 callee、建構、variant 讀取，以及
 > **型別**位置——註記 `c: lib.Counter` 與簽章 `fn take(c: lib.Counter)` 一樣擋。import graph 決定的既是什麼被編進
 > 建置、也是建置內部什麼名字叫得出來；而這兩個答案還要跟第三種分開：一個憑空的前綴（`bogus.f()`）在任何地方都
@@ -301,7 +311,9 @@ package 根底下的 `x`,不是 `/usr/x`。
 > 時，訊息指名的是它真正的擁有者，而不是程式寫下的那個 module。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
-> 這個成員——本節承諾的一等值到 module 邊界就停住了。
+> 這個成員——本節承諾的一等值到 module 邊界就停住了。那句話對該 module 也**不是真的** —— 它有那個名字,而且同一支
+> 程式裡 module **常數**讀得出值 —— 所以不論那個能力何時落地,這個拒絕都欠一句關於「值形式」而不是關於「成員」的
+> 話(#69)。
 
 ### Prelude 與 std（The prelude & std）
 

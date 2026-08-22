@@ -1,0 +1,16 @@
+# A BARE NAME IS THE STANDARD LIBRARY, ALWAYS. `io.zg` sits beside this file and is a module of
+# this project, and `import "io"` still names the standard library's — the prefix decides the
+# root and nothing on disk can change that (docs/runtime/package.md).
+#
+# Both are here, under the two spellings that tell them apart. If the bare name had picked the
+# neighbour up, `io.println` would not exist and this would not build.
+import (
+	"io"
+
+	"./io" as mine
+)
+
+fn main() {
+	io.println("the standard library")
+	io.println(mine.mark())
+}

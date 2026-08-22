@@ -20,7 +20,10 @@ hello.zg → lexer → parser → type check → C codegen → C17 → cc → ./
 
 ## Quickstart
 
-A build needs Go ≥ 1.26 and a C compiler.
+`brew tap cmj0121/zerg https://github.com/cmj0121/zerg && brew install zerg` installs a
+toolchain, and the [release page](https://github.com/cmj0121/zerg/releases) has a tarball for
+Linux and Apple Silicon. To build it yourself — which is what the rest of this page is about —
+you need Go ≥ 1.26 and a C compiler.
 
 ```sh
 make                       # ./bin/zerg0, the Go seed → ./bin/zerg, the compiler you use

@@ -8,6 +8,30 @@ type; nothing is described that has not been run.
 This is not the specification. It is the shortest honest path through what the toolchain already
 does, and it hands you to the [Language Reference](language.md) at the end.
 
+## Getting the toolchain
+
+Three ways in, and the one you want depends on whether you intend to change the compiler.
+
+```sh
+brew tap cmj0121/zerg https://github.com/cmj0121/zerg
+brew install zerg
+```
+
+Homebrew **builds from source**, which is why there is one formula rather than a bottle per
+platform — and why it is the answer on an Intel Mac, which the release's three native tarballs
+do not reach.
+
+Or take a tarball from the [release page](https://github.com/cmj0121/zerg/releases) —
+`linux-x86_64`, `linux-arm64`, `darwin-arm64` — and unpack it anywhere. Nothing needs to be
+exported: `zerg` finds its runtime and standard library beside itself.
+
+```sh
+tar -xzf zerg-0.1.0-darwin-arm64.tar.gz
+./zerg-0.1.0-darwin-arm64/bin/zerg --version
+```
+
+Or build it, which is what the rest of this page assumes.
+
 ## The toolchain
 
 A build needs **Go ≥ 1.26** and a **C compiler**. `zerg` translates your source to C17 and hands

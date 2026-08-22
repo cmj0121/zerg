@@ -534,7 +534,7 @@ pub fn shout(s: str) -> str {
 }
 ZG
 cat >"$tmp/proj/widget/a.zg" <<'ZG'
-import "./util"
+import "/util"
 
 pub fn greet() {
 	print util.shout(banner())

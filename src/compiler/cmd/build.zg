@@ -12,7 +12,7 @@ import (
 	"io"
 	"strconv"
 
-	"./zerg"
+	"/zerg"
 )
 
 # build is the only command that compiles; how FAR it goes is `--emit`, not a command of

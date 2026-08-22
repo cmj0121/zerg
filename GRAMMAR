@@ -849,8 +849,12 @@ send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from 
 # unqualified, bind it locally — 'split := text.split' — since a function is a value.
 import-stmt  ::= 'import' ( import-spec | '(' import-spec* ')' )   # single spec, or a '('-grouped list
 import-spec  ::= 'pub'? import-path ( 'as' identifier )?          # 'pub' RE-EXPORTS; 'as' renames the namespace
-import-path  ::= str-lit                              # a quoted 'package-path', optionally prefixed './'
-                 # "io" | "net/http" | "./http" | "github.com/a/b"
+import-path  ::= str-lit                              # a quoted 'package-path' under one of four roots
+                 # "io"          the standard library — a bare name, and never anything else
+                 # "/http"       this package's ROOT, wherever the entry file sits
+                 # "./http"      beside the FILE that wrote the import
+                 # "github.com/a/b"  a remote package — a first segment holding a '.'
+                 # The prefix decides the root and nothing on disk can change that.
 package-path ::= package-name ( '/' package-name )*   # the directory path under whichever root
 package-name ::= [a-z] [a-z0-9_]*                     # no '.', no upper case; not a 'keyword'
 init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed, FIFO, each once

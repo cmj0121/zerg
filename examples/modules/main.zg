@@ -1,8 +1,16 @@
-# A two-module program: this entry file imports the sibling directory module
-# util/text and uses its cross-module type, function, and generic. Build it with
+# A four-module program, and the shapes an import path can take. Build it with
 #   zerg build examples/modules/main.zg
-# `import "util/text"` roots in this file's directory, so it locates ./util/text/.
-import "./util/text"
+#
+#   ./util/text   a DIRECTORY module, beside this file
+#   ./tools/tally a ONE-FILE module — `tools/` holds two of them rather than being one
+#
+# and inside those, the two spellings that differ once a file is not at the root:
+# `util/text/text.zg` names `/shared` at the package root, and `tools/tally.zg` names its
+# neighbour as `./count`.
+import (
+	"./tools/tally"
+	"./util/text"
+)
 
 # total names a cross-module type (text.Pair) in its own signature.
 fn total(p: text.Pair) -> int {
@@ -14,4 +22,6 @@ fn main() {
 	print total(p)       # 7
 	print text.id(100)   # 100 — a cross-module generic at T = int
 	print text.id(7)     # 7   — same generic at a second call site
+	print text.offset()  # 11  — util/text named `/shared` from two directories down
+	print tally.of(5)    # 11  — tally.zg named its neighbour count.zg as `./count`
 }

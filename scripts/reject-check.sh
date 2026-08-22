@@ -994,7 +994,7 @@ fn main() {
 	print caller.go()
 }
 --- caller/caller.zg
-import "./util/text"
+import "/util/text"
 
 pub fn go() -> str {
 	return bogus.hidden()
@@ -5527,7 +5527,7 @@ fn main() {
 	print lib.make().tag
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return lib.make().tag
@@ -5570,7 +5570,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5593,7 +5593,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5613,7 +5613,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5639,7 +5639,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5659,7 +5659,7 @@ fn main() {
 	print mid.relay()
 }
 --- mid/mid.zg
-import "./lib"
+import "/lib"
 
 pub fn relay() -> str {
 	return "r"
@@ -5693,13 +5693,13 @@ fn main() {
 	print ca.a_one()
 }
 --- ca/ca.zg
-import "./cb"
+import "/cb"
 
 pub fn a_one() -> int {
 	return cb.b_one() + 1
 }
 --- cb/cb.zg
-import "./ca"
+import "/ca"
 
 pub fn b_one() -> int {
 	return 10
@@ -5718,7 +5718,7 @@ fn main() {
 	print solo.one()
 }
 --- solo/solo.zg
-import "./solo"
+import "/solo"
 
 pub fn one() -> int {
 	return 1

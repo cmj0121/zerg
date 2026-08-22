@@ -26,7 +26,7 @@ import (
 	"cli"
 	"io"
 
-	"./zerg"
+	"/zerg"
 )
 
 pub fn doc_cmd() -> cli.Command {
@@ -69,7 +69,7 @@ fn run_doc(args: list[str], brief: bool) -> int {
 		return 0
 	}
 
-	whole := module_sources(name, ".")
+	whole := module_sources(name, ".", ".")
 	if whole.len() > 0 {
 		io.write(render_doc_module(doc_read(path_tail(name), whole), brief, col))
 		return 0
@@ -103,7 +103,7 @@ fn run_doc_decl(name: str, col: bool) -> int {
 	mod := line_slice(b, 0, at)
 	key := line_slice(b, at + 1, b.len())
 
-	files := module_sources(mod, ".")
+	files := module_sources(mod, ".", ".")
 	raise doc_no_such(name) if files.len() == 0
 
 	m := doc_read(path_tail(mod), files)
@@ -188,7 +188,7 @@ fn doc_read(name: str, files: list[str]) -> zerg.DocModule {
 fn doc_index() -> list[zerg.DocModule] {
 	mut out: list[zerg.DocModule] = []
 	for n in doc_module_names() {
-		files := module_sources(n, ".")
+		files := module_sources(n, ".", ".")
 		if files.len() > 0 {
 			out.append(doc_read(n, files))
 		}

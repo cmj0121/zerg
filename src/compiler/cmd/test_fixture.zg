@@ -5,7 +5,7 @@
 # when that closure has a cycle or names a fixture nothing declares. HOW it is written out
 # is `test_driver.zg`.
 
-import "./zerg"
+import "/zerg"
 
 # A TEST DECLARES WHAT IT NEEDS AND THE FRAMEWORK BUILDS IT. A `#[fixture]` is a function
 # that takes its tests as a CONTINUATION:

@@ -1,0 +1,4 @@
+# A module at the PACKAGE ROOT, named from a file two directories below with `/shared`.
+pub fn base() -> int {
+	return 10
+}

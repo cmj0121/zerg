@@ -1,0 +1,7 @@
+# `./count` is beside THIS FILE. It is the spelling that survives the folder being moved, and
+# the one a file uses for its neighbours.
+import "./count"
+
+pub fn of(n: int) -> int {
+	return count.twice(n) + 1
+}

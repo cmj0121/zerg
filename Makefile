@@ -344,10 +344,14 @@ lint:                           # lint the compiler, the stdlib and the suites w
 # question it can be handed. So `strings_test.zg` is held to the rule `strings.zg` is held
 # to, and the glob that used to reach the suites under `tests/` is GONE rather than
 # rewritten: the set is the same set, named once instead of twice.
+# THE TREES, not a glob per directory. `zerg fmt` takes a path and a path is the tree under it,
+# so the scope is two names and adding a directory under either changes nothing here — which is
+# what this list existed to get wrong. It is still a list for `treesitter`, and the comment
+# there says why.
+SELF_TREES := src/compiler src/stdlib
+
 SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
 
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build
-	@for f in $(SELF_SRCS); do \
-		./bin/zerg fmt $$f || { echo "fmt: failed on $$f"; exit 1; }; \
-	done
+	@./bin/zerg fmt $(SELF_TREES)

@@ -1,0 +1,135 @@
+# walk — what a PATH names, and the sources under it.
+#
+# One walk, for every command that takes a path. `zerg test` had its own and it was the only
+# one, because it was the only command a directory meant anything to: `fmt`, `lint` and
+# `desugar` took files, and a directory reached `read_source` as an unreadable file and came
+# back `IOError: read failed` — no code, no place, no name for what went wrong.
+#
+# THE KIND IS ASKED WITH `lstat`, NOT `stat`, and that is the whole reason `__zrt_path_kind`
+# exists. A walk has to know it is looking at a SYMLINK before it descends, because `stat`
+# answers about the target: a link pointing at an ancestor reads as an ordinary directory, and
+# the walk steps into a cycle it cannot see. `zerg test` did exactly that — it found the same
+# test again under `up/`, and again under `up/up/`, rebuilding and re-running it every round.
+
+# The four answers `__zrt_path_kind` gives. They are named here rather than compared as numbers
+# at each site, because `k == 2` at a call site is a fact about the runtime that a reader of
+# this compiler has no way to look up.
+const KIND_MISSING := 0
+const KIND_FILE := 1
+const KIND_DIR := 2
+const KIND_LINK := 3
+
+# is_dir reports whether a path is a REAL directory — a symlink to one answers false, which is
+# what keeps a walk finite.
+pub fn is_dir(path: str) -> bool {
+	return __zrt_path_kind(path) == KIND_DIR
+}
+
+# is_file reports whether a path is a real file. A symlink to one answers false for the same
+# reason: what a walk may read is what it can see, and a link is somewhere else.
+pub fn is_file(path: str) -> bool {
+	return __zrt_path_kind(path) == KIND_FILE
+}
+
+# exists reports whether anything is there at all, link included.
+pub fn exists(path: str) -> bool {
+	return __zrt_path_kind(path) != KIND_MISSING
+}
+
+# is_hidden is a NAME rule and not a path one: the walk asks it of the entry, so a hidden
+# directory is not entered and a hidden file is not read, wherever the walk happens to be.
+fn is_hidden(name: str) -> bool {
+	b := bytearray(name)
+	return false if b.len() == 0
+
+	return b[0] == b'.'
+}
+
+# walk_sources answers every `.zg` file under a path, in a deterministic order.
+#
+# A PATH MEANS THE TREE UNDER IT. `zerg test` decided that for this toolchain before the other
+# commands took a path at all — a `#[test]` two directories down is found by `zerg test .` with
+# no flag — so a one-level reading in `fmt` would make one argument mean two things in two
+# commands.
+#
+# WHAT IT DOES NOT ENTER, and each is a rule rather than a list:
+#
+#   a name beginning with `.` — `.git` is in no ignore file and is nobody's source. The build
+#   cache is skipped by the same rule, for free, and holds no `.zg` anyway.
+#
+#   a symlink — it is by definition somewhere else, which is the same rule as a directory that
+#   is its own repository not being yours to rewrite. To walk what a link points at, name that
+#   path: it is one word, and it is the caller saying so.
+#
+# A `*_test.zg` IS INCLUDED. They are canonical today and `fmt --check` holds them, so
+# excluding them would be a silent regression: no error, no message, just a class of file no
+# gate looks at any more.
+#
+# The order is `__zrt_listdir`'s, which is sorted, so the answer never depends on the
+# filesystem — the property the emitted C already needs and the reason that call sorts.
+pub fn walk_sources(root: str) -> list[str] {
+	mut out: list[str] = []
+	walk_into(root, out)
+	return out
+}
+
+fn walk_into(dir: str, mut &out: list[str]) {
+	for name in __zrt_listdir(dir) {
+		continue if is_hidden(name)
+
+		path := join_path(dir, name)
+		if is_dir(path) {
+			walk_into(path, out)
+		} else if is_file(path) and has_suffix(name, ".zg") {
+			out.append(path)
+		}
+	}
+}
+
+# NOTHING_FOUND is what a command answers when the search succeeded and turned up nothing —
+# the third rung of the status ladder `zerg test` writes down (cmd/test.zg), and it is here
+# because three commands walk now and the ladder is the toolchain's, not one command's:
+#
+#   0  it worked
+#   1  the tool said no about the sources
+#   2  the COMMAND was wrong — no such path
+#   3  the command was right, the search ran, and there was nothing in what it searched
+#
+# A walk that matched nothing and exited 0 is indistinguishable from one that formatted
+# everything, which is the failure this repository keeps rediscovering under another name: a
+# gate measuring nothing looks exactly like a gate finding nothing. A CI line's reader is a
+# shell, so the sentence alone is not enough.
+pub const NOTHING_FOUND := 3
+
+# sources_from expands what a command was given into the files it will read, and REPORTS an
+# argument that named nothing rather than passing over it.
+pub fn sources_from(args: list[str]) -> list[str] {
+	mut out: list[str] = []
+	for a in args {
+		found := sources_of(a)
+		if found.len() == 0 {
+			io.ewrite(f"zerg: no sources: nothing under `{a}` is a `.zg` file\n")
+			mut none: list[str] = []
+			return none
+		}
+
+		for f in found {
+			out.append(f)
+		}
+	}
+	return out
+}
+
+# sources_of answers the sources a command was pointed at: a file is itself, a directory is the
+# tree under it, and anything else is the caller's mistake reported by name.
+#
+# THE EMPTY ANSWER IS THE CALLER'S TO JUDGE. A directory holding no `.zg` is not an error here —
+# `zerg fmt` on an empty tree has nothing to do and did it — but a GATE that walks and formats
+# nothing has measured nothing, so the floor belongs where the count is used.
+pub fn sources_of(path: str) -> list[str] {
+	return walk_sources(path) if is_dir(path)
+
+	mut one: list[str] = []
+	one.append(path)
+	return one
+}

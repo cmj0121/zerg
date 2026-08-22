@@ -368,6 +368,7 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 # fix is to stop asking one list about both: every caller of this is an import, by construction.
 fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
 	im := imd.path
+
 	# The importer's own directory for `./`, the package root for `/` — the same pair the
 	# other loader threads, and for the same reason.
 	files := module_files(imd, dir_of(file), root_dir)

@@ -399,6 +399,7 @@ fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] 
 # wrote `import "log"` beside their own `log/` is one character away and has no way to know it.
 fn imp_missing_says(path: str, from_dir: str, root_dir: str) -> str {
 	body := imp_body(path)
+
 	return f"no module at `{path}` (looked in {join_path(from_dir, body)})" if imp_is_local(path)
 	return f"no module at `{path}` (looked in {join_path(root_dir, body)})" if imp_is_root(path)
 
@@ -735,6 +736,7 @@ fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: li
 		im := imd.path
 		chk_test_import(imd)
 		chk_unbuilt_module(imd)
+
 		# THE IMPORTER'S OWN DIRECTORY, not the one threaded through: `./` is relative to the
 		# file that wrote it, and the root travels beside it for `/`. Threading one directory
 		# for both is what made `./b` in `sub/a.zg` look for `<root>/b`.

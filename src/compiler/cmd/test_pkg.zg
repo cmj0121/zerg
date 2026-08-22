@@ -44,13 +44,19 @@ struct Pkg {
 #
 # A DOT-NAME IS NOT DESCENDED INTO. `.git` alone is more files than the tree it sits in, and
 # `.zerg-cache` is where this command writes; a walk that read either would spend the run
-# looking at things nobody wrote. A `.zg` name is not descended into either, which costs one
-# `opendir` per source file otherwise.
+# looking at things nobody wrote.
+#
+# AND ONLY A REAL DIRECTORY IS ENTERED. It used to skip `.zg` names and try the rest, which
+# cost one `opendir` per source file and — the part that mattered — could not tell a directory
+# from a SYMLINK to one. A link pointing at an ancestor was descended into as if it were a
+# directory: the same test was found under `up/`, and again under `up/up/`, rebuilt and re-run
+# every round, and the run did not end. `is_dir` is `lstat`, so a link answers false (walk.zg).
 fn test_pkgs(root: str, mut &out: list[Pkg]) {
 	dir_pkgs(root, out)
 	for name in __zrt_listdir(root) {
-		if not is_hidden(name) and not has_suffix(name, ".zg") {
-			test_pkgs(join_path(root, name), out)
+		path := join_path(root, name)
+		if not is_hidden(name) and is_dir(path) {
+			test_pkgs(path, out)
 		}
 	}
 }
@@ -240,13 +246,6 @@ fn drop_suffix(s: str, suffix: str) -> str {
 # a leftover from an interrupted run would otherwise be discovered as a test file of its own.
 fn is_own_file(name: str) -> bool {
 	return has_prefix(name, DRIVER_PREFIX) or has_prefix(name, INHERITED_PREFIX)
-}
-
-fn is_hidden(name: str) -> bool {
-	b := bytearray(name)
-	return false if b.len() == 0
-
-	return b[0] == b'.'
 }
 
 # pkg_sources is every file one package is compiled from, the `*_test.zg` files INCLUDED — and

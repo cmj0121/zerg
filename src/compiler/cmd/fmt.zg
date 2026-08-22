@@ -14,14 +14,23 @@ pub fn fmt_cmd() -> cli.Command {
 		cli.command("fmt", "rewrite sources in the canonical style")
 		.flag("c", "check", "report what is not canonical and change nothing")
 		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. F401; repeatable").repeated())
-		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
+		.add(cli.positional("path", "a `.zg` file, or a directory whose tree is rewritten").required().repeated())
 		.run(do_fmt)
 	)
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
-	return run_fmt_check(c.args(), c.all("off")) if c.has("check")
-	run_fmt(c.args(), c.all("off"))
+	# A PATH, NOT ONLY A FILE. A directory is the tree under it — the meaning `zerg test` gave
+	# a path before the other commands took one — and a `.zg` file is itself. Handed a
+	# directory, this used to reach `read_source` as an unreadable file and answer
+	# `IOError: read failed`: no code, no place, and no name for what went wrong.
+	files := sources_from(c.args())
+
+	return NOTHING_FOUND if files.len() == 0
+
+	return run_fmt_check(files, c.all("off")) if c.has("check")
+
+	run_fmt(files, c.all("off"))
 	return 0
 }
 

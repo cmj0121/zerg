@@ -572,6 +572,30 @@ bool zrt_exists(const char *path) {
 	return access(path, F_OK) == 0;
 }
 
+/* zrt_path_kind answers WHAT a path is: 0 missing, 1 file, 2 directory, 3 symlink.
+ *
+ * LSTAT, NOT STAT, and that is the whole reason this exists. A walk has to ask "is this a
+ * link" BEFORE it descends, and `stat` answers about the target — so a link pointing at an
+ * ancestor reads as an ordinary directory and the walk steps into a cycle it cannot see.
+ * `zerg test` did exactly that: it re-found the same test under
+ * inner/up/inner/up/inner/… and never stopped.
+ *
+ * A missing path is an ANSWER, not an abort, for the reason zrt_listdir's empty list is
+ * one: the caller is probing. */
+int64_t zrt_path_kind(const char *path) {
+	struct stat st;
+	if (lstat(path, &st) != 0) {
+		return 0;
+	}
+	if (S_ISLNK(st.st_mode)) {
+		return 3;
+	}
+	if (S_ISDIR(st.st_mode)) {
+		return 2;
+	}
+	return 1;
+}
+
 /* zrt_listdir returns the entry NAMES directly under path (no "." or "..", no recursion,
  * not path-prefixed) as a list[str], or an empty list when path is not a readable
  * directory — a missing directory is an answer here, not an abort, since the caller is

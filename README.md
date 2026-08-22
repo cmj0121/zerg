@@ -41,9 +41,9 @@ down to a single job: building the compiler. `zerg` is that compiler — written
 | --------------------- | ------------------------------------------------------------------- |
 | `zerg build <file>`   | compile — an executable when the entry declares `main`, else object |
 | `zerg test [path]`    | run the `#[test]` functions under a path, or in one file's package  |
-| `zerg fmt <file>`     | rewrite source in the one canonical style                           |
-| `zerg lint <file>`    | report unused imports and dead private declarations                 |
-| `zerg desugar <file>` | rewrite source into the core forms its sugar stands for             |
+| `zerg fmt <path>`     | rewrite source in the one canonical style                           |
+| `zerg lint <path>`    | report unused imports and dead private declarations                 |
+| `zerg desugar <path>` | rewrite source into the core forms its sugar stands for             |
 | `zerg doc [name]`     | read what a module exposes and the comments that document it        |
 | `zerg lsp`            | the language server, over stdio (JSON-RPC)                          |
 

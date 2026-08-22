@@ -4,8 +4,13 @@ Every rule `zerg lint` applies, each with the code that names it. Part of the
 [Language Reference](../language.md). Also in [繁體中文](lint.zh-TW.md).
 
 ```sh
-zerg lint <file.zg>...   # prints findings; exits nonzero when there is one
+zerg lint <path>...   # prints findings; exits nonzero when there is one
 ```
+
+**A path is the tree under it** — a file is itself, a directory is every `.zg` beneath it, and
+a dot-name or a symlink is not entered. The rule is written once, in
+[the formatter](fmt.md#a-path-is-the-tree-under-it), and is the same for every command that
+takes sources.
 
 A rule has a **code** so it can be named — in a finding, in a review, in the `#[allow(…)]`
 that suppresses it. The prefix groups them the way a Python linter's does, and the grouping

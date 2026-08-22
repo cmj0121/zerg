@@ -8,10 +8,15 @@ direction from [`zerg fmt`](fmt.md), which prefers the shorter surface wherever 
 one: `F401` turns `if c { return x }` into `return x if c`, and `D101` turns it back.
 
 ```sh
-zerg desugar <file.zg>...              # rewrite in place; prints the files it changed
-zerg desugar --check <file.zg>...      # report what is not already core, change nothing
-zerg desugar --off D103 <file.zg>...   # leave one rule alone (repeatable)
+zerg desugar <path>...              # rewrite in place; prints the files it changed
+zerg desugar --check <path>...      # report what is not already core, change nothing
+zerg desugar --off D103 <path>...   # leave one rule alone (repeatable)
 ```
+
+**A path is the tree under it** — a file is itself, a directory is every `.zg` beneath it, and
+a dot-name or a symlink is not entered. The rule is written once, in
+[the formatter](fmt.md#a-path-is-the-tree-under-it), and is the same for every command that
+takes sources.
 
 > **[deviation]** `--check` answers a wider question than it asks. It compares the file against what
 > `zerg desugar` would **write**, and what that writes is canonical-formatted core — so a file holding no

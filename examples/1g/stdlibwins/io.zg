@@ -1,0 +1,10 @@
+# A module of this project named `io` — the same name the standard library uses. It exists to
+# be NOT chosen: `import "io"` is the standard library and nothing else, whatever sits beside
+# the entry file. Reaching this one takes `./io`, which says which root it means.
+#
+# Its function is named `mark` rather than `println` because two modules of one build may not
+# both declare a public name yet (E9081) — and the different name makes the case sharper: if
+# this module were the one `import "io"` chose, `io.println` below would not exist at all.
+pub fn mark() -> str {
+	return "this project's io"
+}

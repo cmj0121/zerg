@@ -27,6 +27,43 @@ A path that holds no `.zg` file is **not** silently nothing done: it says so and
 the status a search that ran and found nothing answers with. A walk that matched nothing and
 exited 0 would be indistinguishable from one that rewrote everything.
 
+### The ignore file
+
+A walk reads **one** ignore file, at the root it was given:
+
+| At the walk root | What is read                           |
+| ---------------- | -------------------------------------- |
+| a `.zergignore`  | it — and `.gitignore` is not consulted |
+| no `.zergignore` | `.gitignore`                           |
+
+**Replace, not layer.** Two files that both apply need an order between them, and that order is
+the half of `.gitignore` which makes an ignore file unreadable. A repository that adds a
+`.zergignore` for one more pattern loses what `.gitignore` was excluding unless it repeats it.
+
+The file is read at the **walk root only**, never one per directory: per-directory files bring
+`!` negation and layer-by-layer override with them, which is a matcher with a history rather
+than a lookup.
+
+**The syntax is a defined subset, and the rest is refused by name** — reading half of
+`.gitignore`'s language and treating the other half as literal text is a rule that silently
+means something other than what it says.
+
+| Form                | Means                                             |
+| ------------------- | ------------------------------------------------- |
+| `name`              | that name, at any depth                           |
+| `name/`             | a directory only                                  |
+| `/name`             | anchored at the walk root, and may hold `/`       |
+| `*`                 | any run of characters **within one path segment** |
+| `# …`, a blank line | nothing                                           |
+
+Two forms are **refused by name**. A `!` pattern re-includes what an earlier line excluded, and
+the last-match-wins ordering that needs is the half which makes an ignore file unreadable. A
+`**` is refused because a bare name already matches at any depth, and an anchored one names the
+place it means.
+
+A refusal names the file, the line and the pattern. It carries no error code: a code is
+asserted by the gates that hold **programs**, and an ignore file is not one.
+
 A rule has a **code** so it can be named — in a diagnostic, in a review, on the command line
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.

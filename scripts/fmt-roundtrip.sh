@@ -211,34 +211,34 @@ done
 #
 # Each of the four claims below is a rule the walk is made of, and each is asserted by a file
 # that would come back CHANGED if the rule were dropped.
-mkdir -p "$tmp/tree/deep/.hidden" "$tmp/tree/empty"
-printf 'fn  main( ) {\n  print 1\n}\n' >"$tmp/tree/a.zg"
-printf 'fn  helper( ) -> int {\n  return 2\n}\n' >"$tmp/tree/deep/b.zg"
-printf '#[test]\nfn  test_x( ) {\n  assert 1 == 1\n}\n' >"$tmp/tree/deep/c_test.zg"
-printf 'fn  hidden( ) {\n}\n' >"$tmp/tree/deep/.hidden/h.zg"
-cp "$tmp/tree/deep/.hidden/h.zg" "$tmp/tree/hidden.orig"
-ln -sfn .. "$tmp/tree/deep/up"
+mkdir -p "$tmp/walk/deep/.hidden" "$tmp/walk/empty"
+printf 'fn  main( ) {\n  print 1\n}\n' >"$tmp/walk/a.zg"
+printf 'fn  helper( ) -> int {\n  return 2\n}\n' >"$tmp/walk/deep/b.zg"
+printf '#[test]\nfn  test_x( ) {\n  assert 1 == 1\n}\n' >"$tmp/walk/deep/c_test.zg"
+printf 'fn  hidden( ) {\n}\n' >"$tmp/walk/deep/.hidden/h.zg"
+cp "$tmp/walk/deep/.hidden/h.zg" "$tmp/walk/hidden.orig"
+ln -sfn .. "$tmp/walk/deep/up"
 
-"$ZERG" fmt "$tmp/tree" >/dev/null 2>&1
+"$ZERG" fmt "$tmp/walk" >/dev/null 2>&1
 tstatus=$?
 
 if [ $tstatus -ne 0 ]; then
 	printf 'TREE   fmt on a directory exited %s\n' "$tstatus"
 	fail=1
 fi
-if head -1 "$tmp/tree/a.zg" | grep -q 'fn  main'; then
+if head -1 "$tmp/walk/a.zg" | grep -q 'fn  main'; then
 	printf 'TREE   a source at the root of the path was not formatted\n'
 	fail=1
 fi
-if head -1 "$tmp/tree/deep/b.zg" | grep -q 'fn  helper'; then
+if head -1 "$tmp/walk/deep/b.zg" | grep -q 'fn  helper'; then
 	printf 'TREE   the walk is not recursive — a source one directory down was not formatted\n'
 	fail=1
 fi
-if head -2 "$tmp/tree/deep/c_test.zg" | grep -q 'fn  test_x'; then
+if head -2 "$tmp/walk/deep/c_test.zg" | grep -q 'fn  test_x'; then
 	printf 'TREE   a `*_test.zg` was skipped — they are canonical today and dropping them is silent\n'
 	fail=1
 fi
-if ! cmp -s "$tmp/tree/deep/.hidden/h.zg" "$tmp/tree/hidden.orig"; then
+if ! cmp -s "$tmp/walk/deep/.hidden/h.zg" "$tmp/walk/hidden.orig"; then
 	printf 'TREE   the walk entered a dot-directory\n'
 	fail=1
 fi
@@ -263,7 +263,7 @@ fi
 
 # AND A PATH THAT NAMES NOTHING SAYS SO, in the status as well as the sentence: a walk that
 # matched nothing and exited 0 is indistinguishable from one that formatted everything.
-out=$("$ZERG" fmt "$tmp/tree/empty" 2>&1)
+out=$("$ZERG" fmt "$tmp/walk/empty" 2>&1)
 estatus=$?
 if [ $estatus -eq 0 ]; then
 	printf 'EMPTY  a directory holding no source exited 0\n'
@@ -273,8 +273,77 @@ elif ! printf '%s\n' "$out" | grep -q 'no sources'; then
 	fail=1
 fi
 
+# --- 5. AN IGNORE FILE, AND THE ONE OF THE TWO THAT IS READ -------------------------------
+#
+# `.zergignore` REPLACES `.gitignore` rather than layering over it, so the second half of this
+# is not a detail: a repository that adds one loses what the other was excluding, and a gate
+# that only proved the first half would let the two silently both apply.
+mkdir -p "$tmp/ig/keep" "$tmp/ig/skipme" "$tmp/ig/deep/build"
+for f in keep/a.zg skipme/b.zg deep/build/c.zg deep/d.zg gen_x.zg; do
+	printf 'fn  f( ) {\n}\n' >"$tmp/ig/$f"
+done
+cat >"$tmp/ig/.zergignore" <<'IGN'
+# a comment, and a blank line under it
+
+skipme/
+build
+/gen_*.zg
+IGN
+
+"$ZERG" fmt "$tmp/ig" >/dev/null 2>&1
+for f in skipme/b.zg deep/build/c.zg gen_x.zg; do
+	if ! head -1 "$tmp/ig/$f" | grep -q 'fn  f'; then
+		printf 'IGNORE %s was formatted, and the ignore file said not to\n' "$f"
+		fail=1
+	fi
+done
+for f in keep/a.zg deep/d.zg; do
+	if head -1 "$tmp/ig/$f" | grep -q 'fn  f'; then
+		printf 'IGNORE %s was skipped, and nothing said to skip it\n' "$f"
+		fail=1
+	fi
+done
+
+# WITH NO `.zergignore` THE OTHER FILE IS READ — and the patterns only the first one had stop
+# applying, which is what REPLACE means and the half a layering implementation would pass.
+rm "$tmp/ig/.zergignore"
+printf 'skipme/\n' >"$tmp/ig/.gitignore"
+printf 'fn  f( ) {\n}\n' >"$tmp/ig/skipme/b.zg"
+"$ZERG" fmt "$tmp/ig" >/dev/null 2>&1
+if ! head -1 "$tmp/ig/skipme/b.zg" | grep -q 'fn  f'; then
+	printf 'IGNORE .gitignore was not read when there is no .zergignore\n'
+	fail=1
+fi
+if head -1 "$tmp/ig/deep/build/c.zg" | grep -q 'fn  f'; then
+	printf 'IGNORE a .zergignore pattern still applied after the file was removed\n'
+	fail=1
+fi
+
+# THE TWO FORMS THIS WILL NOT PRETEND TO UNDERSTAND. Reading half of `.gitignore`'s language and
+# treating the rest as literal text is a rule that silently means something else — so each is
+# refused, and the refusal names the file, the line and the pattern.
+for bad in '!keep' 'a/**/b'; do
+	printf '%s\n' "$bad" >"$tmp/ig/.zergignore"
+	out=$("$ZERG" fmt "$tmp/ig" 2>&1)
+	if [ $? -eq 0 ]; then
+		printf 'IGNORE `%s` was accepted by the ignore reader\n' "$bad"
+		fail=1
+	elif ! printf '%s\n' "$out" | grep -q '\.zergignore:1:'; then
+		printf 'IGNORE `%s` was refused without naming the line: %s\n' "$bad" "$(echo "$out" | head -1)"
+		fail=1
+	fi
+done
+rm -f "$tmp/ig/.zergignore"
+
+# AND THIS REPOSITORY'S OWN, because the corpus is what it protects: 488 sources that are
+# deliberately not canonical, which `git check-ignore` cannot see — it is a tracked submodule.
+if ! grep -qE '^test-data/$' ".zergignore" 2>/dev/null; then
+	printf 'IGNORE the repository .zergignore no longer excludes test-data/ — a walk from the root would rewrite the corpus\n'
+	fail=1
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "fmt-roundtrip: the formatter wrote something the parser cannot read"
 	exit 1
 fi
-echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted, three that do not lex are declined, and a path is the tree under it"
+echo "fmt-roundtrip: $n standalone sources and the compiler itself survive being formatted, three that do not lex are declined, a path is the tree under it, and an ignore file is read"

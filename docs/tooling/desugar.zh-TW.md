@@ -7,10 +7,14 @@
 formatter 只要語言提供更短的寫法就採用它——`F401` 把 `if c { return x }` 變成 `return x if c`,而 `D101` 把它變回去。
 
 ```sh
-zerg desugar <file.zg>...              # 就地改寫;印出它改過的檔案
-zerg desugar --check <file.zg>...      # 回報哪些還不是 core 形式,不動任何東西
-zerg desugar --off D103 <file.zg>...   # 放過某一條規則(可重複)
+zerg desugar <path>...              # 就地改寫;印出它改過的檔案
+zerg desugar --check <path>...      # 回報哪些還不是 core 形式,不動任何東西
+zerg desugar --off D103 <path>...   # 放過某一條規則(可重複)
 ```
+
+**一個路徑就是它底下那棵樹** —— 檔案是它自己,目錄是它底下的每一個 `.zg`,而以 `.` 開頭的名字與符號連結不會被進
+入。這條規則只寫一次,在[格式化工具那一章](fmt.zh-TW.md#一個路徑就是它底下那棵樹),而且對每一個吃原始碼的指令都
+一樣。
 
 > **[deviation]** `--check` 回答的問題比它問的更寬。它拿檔案去比對 `zerg desugar` **會寫出來**的東西,而那個東西
 > 是 canonical 格式化過的 core——所以一個完全沒有糖的檔案,只要空白不是 `zerg fmt` 會產出的樣子,照樣會失敗,而且

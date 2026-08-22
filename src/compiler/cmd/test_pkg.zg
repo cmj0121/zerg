@@ -5,7 +5,7 @@
 import (
 	"sha256"
 
-	"./zerg"
+	"/zerg"
 )
 
 # Pkg is one test binary: the directory it is built in, and — when the package is a ONE-FILE

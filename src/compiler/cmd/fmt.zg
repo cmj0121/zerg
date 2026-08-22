@@ -6,7 +6,7 @@ import (
 	"cli"
 	"io"
 
-	"./zerg"
+	"/zerg"
 )
 
 pub fn fmt_cmd() -> cli.Command {

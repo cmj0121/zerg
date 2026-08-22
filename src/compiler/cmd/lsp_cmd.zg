@@ -10,7 +10,7 @@
 
 import (
 	"cli"
-	"./lsp"
+	"/lsp"
 )
 
 # lsp takes no arguments and no flags. The protocol is the interface: an editor starts the

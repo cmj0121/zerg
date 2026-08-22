@@ -13,12 +13,14 @@ type memProvider struct {
 	mods map[string]string // canonical import path -> single-file source
 }
 
-func (p memProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
+func (p memProvider) Resolve(importPath string) (string, string, []ModuleFile, bool) {
 	src, ok := p.mods[importPath]
 	if !ok {
-		return "", nil, false
+		return "", "", nil, false
 	}
-	return importPath, []ModuleFile{{Name: "mod.zg", Src: src}}, true
+	// The map is keyed by module path, so every module here is a directory module and its
+	// directory is that path — which is what a `./` import inside it would be relative to.
+	return importPath, importPath, []ModuleFile{{Name: "mod.zg", Src: src}}, true
 }
 
 // topNames returns every top-level declaration name of a flattened file, so a test

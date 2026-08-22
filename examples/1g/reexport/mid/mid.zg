@@ -1,3 +1,6 @@
 # mid — re-exports deep onto its own surface with `import pub`, so a module that
 # imports mid can reach deep's public members through the mid namespace.
-import pub "./deep"
+#
+# `/deep` and not `./deep`: `./` is relative to the file that wrote it, and this file is a
+# directory down. The package root is where the entry sits, which is where `deep/` is.
+import pub "/deep"

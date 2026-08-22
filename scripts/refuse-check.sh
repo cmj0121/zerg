@@ -973,8 +973,19 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" an-import-path-at-the-filesystem-root E5012 'may not begin with `/`' <<'EOF'
-import "/abs/x"
+# A LEADING `/` IS A PREFIX NOW — this package's root — so what is left to refuse are the two
+# strings that name no root at all. An import path is never a filesystem path: `/x` is `x` under
+# the package root, not `/usr/x`.
+expect "$ZERG" an-import-path-with-a-doubled-root E5012 '`//` names no root' <<'EOF'
+import "//abs/x"
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" an-import-path-that-is-only-the-root E5012 'names no module on its own' <<'EOF'
+import "/"
 
 fn main() {
 	print 1

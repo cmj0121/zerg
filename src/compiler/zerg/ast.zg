@@ -19,6 +19,8 @@
 # the language says a function type is. It exists so a function can be held: bound to a
 # name, stored in a field, passed as an argument. Only a NAMED top-level function can be
 # held that way here; a closure literal captures, and capture is not in the subset.
+
+import "strconv"
 pub enum Ty {
 	TInt
 	TFloat

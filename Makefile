@@ -60,7 +60,7 @@ $(HELP_TOPIC): help
 	@:
 endif
 
-.PHONY: all test clean run build install uninstall upgrade linux-ci lint fmt help release release-tarball release-smoke $(SUBDIR)
+.PHONY: all test clean run build install install-editors uninstall uninstall-editors upgrade linux-ci lint fmt help release release-tarball release-smoke $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -115,7 +115,17 @@ CLOC_CONFIG ?= $(HOME)/.config/cloc
 
 # `build` runs as a recipe line, not a prerequisite: as a prerequisite it would race the
 # submodule work under `make -j`, and what is installed must be the binary this run built.
-install: $(SUBDIR)              # install the toolchain and the editor integrations into PREFIX
+# INSTALL WRITES UNDER $(PREFIX) AND NOWHERE ELSE. It used to reach into the user's home as
+# well — `$(SUBDIR)` pulled in `editors`, which links into `$(NVIM_CONFIG)`, and the cloc
+# definition was registered in `$(CLOC_CONFIG)` — and that makes the target UNPACKAGEABLE: a
+# package manager builds into a staging prefix and a formula that rewrites somebody's editor
+# configuration is not one anybody would run twice. Measured on the 0.1.0 source tarball, where
+# it also exits nonzero when the home directory is not writable, having already installed the
+# toolchain correctly.
+#
+# Wiring an editor up is a USER'S action and now has a verb of its own, `install-editors`.
+# `PREFIX` means where the toolchain goes, and it is the only thing this target answers.
+install: src/bootstrap src/runtime  # install the toolchain into PREFIX
 	$(MAKE) build
 	@# `mkdir -p` and NOT `install -d`. BSD install(1) chmods the directory even when it
 	@# already exists, so `install -d /usr/local/bin` fails with
@@ -150,8 +160,21 @@ install: $(SUBDIR)              # install the toolchain and the editor integrati
 	@# `$(CLOC_CONFIG)/options.txt` before every run, so installing it there is what makes
 	@# plain `cloc .` count Zerg — no flag, and no target here to run instead of cloc.
 	@cp .cloc.def "$(PREFIX)/lib/zerg/cloc.def"
-	@./scripts/cloc-config.sh install "$(PREFIX)/lib/zerg/cloc.def" "$(CLOC_CONFIG)"
 	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
+	@echo "           \`make install-editors\` wires up nvim and cloc for you"
+
+# The half that belongs to a PERSON rather than to a prefix: the nvim syntax and LSP client,
+# and the cloc definition registered where cloc reads it. Both write under the user's home, and
+# that is exactly why they are not in `install`.
+install-editors:                # wire nvim and cloc up for the current user
+	@# THE SUBDIRECTORY IS CALLED BY NAME, not through $(SUBDIR): that rule forwards
+	@# $(MAKECMDGOALS), so depending on it here would look for an `install-editors` in
+	@# editors/Makefile, which has `install`.
+	@$(MAKE) -C editors install VERSION=$(VERSION)
+	@# AFTER the toolchain, because the cloc line names a path under $(PREFIX): registering a
+	@# definition that is not there yet leaves every `cloc` run on the machine answering
+	@# `Unable to read`.
+	@./scripts/cloc-config.sh install "$(PREFIX)/lib/zerg/cloc.def" "$(CLOC_CONFIG)"
 
 # --- the release artifact -----------------------------------------------------------------
 #
@@ -173,14 +196,17 @@ release-smoke:                  # the artifact, on a machine with nothing else o
 
 release: release-tarball release-smoke
 
-uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
+uninstall: src/bootstrap src/runtime  # remove what `make install` put in $(PREFIX)
+	rm -f "$(PREFIX)/bin/zerg"
+	rm -rf "$(PREFIX)/lib/zerg"
+
+uninstall-editors:              # remove what `make install-editors` wired up
+	@$(MAKE) -C editors uninstall VERSION=$(VERSION)
 	@# BEFORE the files go, and not after: the config line names a path under $(PREFIX), and
 	@# a cloc pointed at a deleted definition answers `Unable to read` and counts nothing —
 	@# in every project on the machine, not only this one. An uninstall that stopped halfway
 	@# would leave the machine worse than not having run it.
 	@./scripts/cloc-config.sh uninstall "$(CLOC_CONFIG)"
-	rm -f "$(PREFIX)/bin/zerg"
-	rm -rf "$(PREFIX)/lib/zerg"
 
 upgrade:			            # upgrade all the necessary packages
 	pre-commit autoupdate

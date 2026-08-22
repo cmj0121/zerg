@@ -80,6 +80,11 @@ opens a statement at the top level, and a compiled program has nowhere to run it
 當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
 **原始碼順序**。這整套排序成立。
 
+> **[deviation]** 平手是由 import **被寫下的順序**打破的,不是 canonical module 名稱。兩個互不讀取的 module,依
+> 它們 import 行出現的先後初始化 —— 所以在一個 import 區塊裡移動一行,就會重排兩個互不相干的初始化。它對同一份
+> 原始碼是穩定的(同樣的輸入給同樣的輸出),所以不是可重現性的缺陷;它是上面那句話指名的規則,並不是實際在跑的
+> 那條(#70)。
+
 對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
 _E4068 these constants depend on each other and none can be given a value first_。
@@ -306,7 +311,9 @@ package 根底下的 `x`,不是 `/usr/x`。
 > 時，訊息指名的是它真正的擁有者，而不是程式寫下的那個 module。
 >
 > **[not yet]** 跨 module 的函式只是**呼叫目標**：`other.helper(x)` 可用，而 `f := other.helper` 會回報該 module 沒有
-> 這個成員——本節承諾的一等值到 module 邊界就停住了。
+> 這個成員——本節承諾的一等值到 module 邊界就停住了。那句話對該 module 也**不是真的** —— 它有那個名字,而且同一支
+> 程式裡 module **常數**讀得出值 —— 所以不論那個能力何時落地,這個拒絕都欠一句關於「值形式」而不是關於「成員」的
+> 話(#69)。
 
 ### Prelude 與 std（The prelude & std）
 

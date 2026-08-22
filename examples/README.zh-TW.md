@@ -59,6 +59,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                      |
 | [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                 |
 | [`1g/init/`](1g/init)               | 被 import 的模組，它的 `init()` 在 `main` 第一行之前跑一次 |
+| [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組      |
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上   |
 | [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                  |
 | [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                     |

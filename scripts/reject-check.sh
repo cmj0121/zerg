@@ -1781,7 +1781,7 @@ fn main() {
 }
 EOF
 
-reject typedef-declared-twice E3078 seed-gap <<'EOF'
+reject typedef-declared-twice E4073 'the first is at line 1' seed-gap <<'EOF'
 type Celsius = int
 type Celsius = float
 
@@ -3741,7 +3741,31 @@ EOF
 # The follow-on is deliberate and c_dup_say's comment says why, so this case does not pin a
 # count — a later change that suppressed it would be a decision, and one this file should be
 # made to state rather than absorb.
-reject a-struct-declared-twice E3078 <<'EOF'
+# TWO FILES of one module declaring a type, which is what E3078's sentence is about: the
+# module flattening it names is a thing the reader can only have done across files. The
+# same-file half is E4073 below, and the pair mirrors E9082 / E4073 for functions — a rule
+# whose two halves have different LIFETIMES is two rules, and types had one.
+reject two-files-of-one-module-declaring-a-struct E3078 'flattens into one namespace' <<'EOF'
+import "./one"
+
+fn main() {
+	print(f"{one.make().v}")
+}
+--- one/a.zg
+pub struct A {
+	pub v: int
+}
+
+pub fn make() -> A {
+	return A(1)
+}
+--- one/b.zg
+pub struct A {
+	pub w: str
+}
+EOF
+
+reject a-struct-declared-twice E4073 'the first is at line 1' <<'EOF'
 struct A {
 	pub v: int
 }
@@ -3755,7 +3779,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-declared-twice E3078 seed-gap <<'EOF'
+reject an-enum-declared-twice E4073 'the first is at line 1' seed-gap <<'EOF'
 enum E {
 	X
 }
@@ -3769,7 +3793,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-declared-twice E3078 seed-gap <<'EOF'
+reject a-spec-declared-twice E4073 'the first is at line 1' seed-gap <<'EOF'
 spec Tag {
 	fn tag() -> int
 }

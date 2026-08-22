@@ -12,13 +12,18 @@ pub fn lint_cmd() -> cli.Command {
 	return (
 		cli.command("lint", "report unused imports and dead private code")
 		.flag("s", "strict", "fail on a warning too, not only on a finding")
-		.add(cli.positional("file.zg", "the sources to check").required().repeated())
+		.add(cli.positional("path", "a `.zg` file, or a directory whose tree is checked").required().repeated())
 		.run(do_lint)
 	)
 }
 
 fn do_lint(c: cli.Ctx) -> int {
-	return run_lint(c.args(), c.has("strict"))
+	# A PATH, NOT ONLY A FILE — see `do_fmt`. The walk is one function for all three commands
+	# that take sources, so a directory means the same thing in each.
+	files := sources_from(c.args())
+	return NOTHING_FOUND if files.len() == 0
+
+	return run_lint(files, c.has("strict"))
 }
 
 # run_lint reports every finding in the loaded program and RETURNS a nonzero status when

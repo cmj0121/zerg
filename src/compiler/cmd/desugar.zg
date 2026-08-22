@@ -16,14 +16,20 @@ pub fn desugar_cmd() -> cli.Command {
 		cli.command("desugar", "rewrite sources into the core forms their sugar is defined as")
 		.flag("c", "check", "report what is not already core and change nothing")
 		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. D103; repeatable").repeated())
-		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
+		.add(cli.positional("path", "a `.zg` file, or a directory whose tree is rewritten").required().repeated())
 		.run(do_desugar)
 	)
 }
 
 fn do_desugar(c: cli.Ctx) -> int {
-	return run_desugar_check(c.args(), c.all("off")) if c.has("check")
-	run_desugar(c.args(), c.all("off"))
+	# A PATH, NOT ONLY A FILE — see `do_fmt`.
+	files := sources_from(c.args())
+
+	return NOTHING_FOUND if files.len() == 0
+
+	return run_desugar_check(files, c.all("off")) if c.has("check")
+
+	run_desugar(files, c.all("off"))
 	return 0
 }
 

@@ -38,9 +38,9 @@ ZG
 | --------------------- | ------------------------------------------------------ |
 | `zerg build <file>`   | 編譯——entry 宣告 `main` 時產生執行檔，否則產生 object  |
 | `zerg test [path]`    | 執行一條路徑、或單一檔案所屬 package 的 `#[test]` 函式 |
-| `zerg fmt <file>`     | 把原始碼改寫成唯一的正規風格                           |
-| `zerg lint <file>`    | 回報未使用的 import 與死掉的私有宣告                   |
-| `zerg desugar <file>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
+| `zerg fmt <path>`     | 把原始碼改寫成唯一的正規風格                           |
+| `zerg lint <path>`    | 回報未使用的 import 與死掉的私有宣告                   |
+| `zerg desugar <path>` | 把原始碼改寫成它的 sugar 所代表的 core 形式            |
 | `zerg doc [name]`     | 讀一個 module 露出什麼，以及記錄它們的那些註解         |
 | `zerg lsp`            | language server，走 stdio（JSON-RPC）                  |
 

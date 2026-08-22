@@ -8,6 +8,28 @@
 這不是規格。它是穿過「這套工具鏈已經會做的事」最短而誠實的一條路，並在結尾把你交給
 [語言參考](language.zh-TW.md)。
 
+## 取得工具鏈
+
+三條路,選哪一條取決於你打不打算改編譯器。
+
+```sh
+brew tap cmj0121/zerg https://github.com/cmj0121/zerg
+brew install zerg
+```
+
+Homebrew **從原始碼建**,這也是為什麼只有一份 formula 而不是每個平台一個 bottle —— 而且它正是 Intel Mac 的答
+案:發布的三個原生 tarball 沒有涵蓋那個平台。
+
+或者從[發布頁](https://github.com/cmj0121/zerg/releases)拿一個 tarball —— `linux-x86_64`、`linux-arm64`、
+`darwin-arm64` —— 解壓到任何地方。不需要 export 任何東西:`zerg` 會在自己旁邊找到 runtime 與標準函式庫。
+
+```sh
+tar -xzf zerg-0.1.0-darwin-arm64.tar.gz
+./zerg-0.1.0-darwin-arm64/bin/zerg --version
+```
+
+或者自己建,而這一頁接下來假設的就是這條路。
+
 ## 工具鏈
 
 建置需要 **Go ≥ 1.26** 與一個 **C 編譯器**。`zerg` 把你的原始碼翻成 C17 再交給 `cc`，所以那個 C

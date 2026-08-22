@@ -18,7 +18,9 @@ hello.zg → lexer → parser → type check → C codegen → C17 → cc → ./
 
 ## 快速上手（Quickstart）
 
-建置需要 Go ≥ 1.26 與一個 C 編譯器。
+`brew tap cmj0121/zerg https://github.com/cmj0121/zerg && brew install zerg` 會裝好一套工具鏈,而
+[發布頁](https://github.com/cmj0121/zerg/releases)有 Linux 與 Apple Silicon 的 tarball。若要自己建 —— 也就是
+這一頁接下來在講的事 —— 需要 Go ≥ 1.26 與一個 C 編譯器。
 
 ```sh
 make                       # ./bin/zerg0（Go 種子）→ ./bin/zerg，你實際使用的編譯器

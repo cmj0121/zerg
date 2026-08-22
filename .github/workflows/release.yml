@@ -22,8 +22,13 @@
 #
 # THREE PLATFORMS, ALL NATIVE. The seed is Go and cross-compiles, but `bin/zerg` is produced by
 # compiling Zerg to C and handing it to `cc`, so each platform's compiler is built on that
-# platform. There is no Intel-Mac binary: Rosetta runs x86_64 on Apple Silicon and not the
-# reverse, so an Intel Mac builds from source.
+# platform.
+#
+# THERE IS NO INTEL-MAC TARBALL, and the answer for that platform is the Homebrew formula rather
+# than a fourth runner. `Formula/zerg.rb` builds from source, so it works wherever Go and a C
+# compiler do — and a runner label is a thing that gets retired, while building from source is
+# not. #33 decided four platforms and three shipped; this is that decision, corrected and
+# written down where the matrix is.
 #
 # AND A TARBALL THAT FAILS ITS SMOKE TEST IS NOT PUBLISHED. `install-check` runs `make install`
 # from the repository, with a checkout and a Go toolchain standing behind it. Nothing had ever

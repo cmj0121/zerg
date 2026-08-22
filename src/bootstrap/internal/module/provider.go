@@ -35,8 +35,10 @@ type ModuleFile struct {
 type FileProvider interface {
 	// Resolve locates the module named by importPath (a '/'-separated path relative
 	// to this root). It returns the module's CANONICAL identity (the dedup key and
-	// mangling base), the module's source files, and whether it was found here.
-	Resolve(importPath string) (canonical string, files []ModuleFile, ok bool)
+	// mangling base), the DIRECTORY its files live in — which is what a `./` import
+	// written in one of them is relative to — the module's source files, and whether
+	// it was found here.
+	Resolve(importPath string) (canonical string, dir string, files []ModuleFile, ok bool)
 }
 
 // OSProvider resolves a module to a directory under Root: `import "util/text"`
@@ -55,7 +57,7 @@ type OSProvider struct {
 // name of a standard-library module from every file beside it. The defence is the `./` prefix
 // now (GRAMMAR#import-path): a bare path cannot reach this root at all, so a single-file module
 // here can shadow nothing, and refusing one would refuse a shape the language has.
-func (p OSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
+func (p OSProvider) Resolve(importPath string) (string, string, []ModuleFile, bool) {
 	return resolveModule(os.DirFS(p.Root), importPath, true)
 }
 
@@ -71,7 +73,7 @@ type FSProvider struct {
 }
 
 // Resolve reads the module (directory or single file) under the embedded root.
-func (p FSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
+func (p FSProvider) Resolve(importPath string) (string, string, []ModuleFile, bool) {
 	return resolveModule(p.FS, importPath, true)
 }
 
@@ -81,10 +83,10 @@ func (p FSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
 // sources in a stable order, and whether it was found. OSProvider and FSProvider
 // share this one code path, so the user tree and the embedded stdlib resolve
 // identically.
-func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, []ModuleFile, bool) {
+func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, string, []ModuleFile, bool) {
 	canonical := path.Clean(importPath)
 	if canonical == "." || canonical == ".." || strings.HasPrefix(canonical, "../") || strings.HasPrefix(canonical, "/") {
-		return "", nil, false
+		return "", "", nil, false
 	}
 	dirFiles, dirOK := resolveDirModule(fsys, canonical)
 	fileFiles, fileOK := resolveFileModule(fsys, canonical)
@@ -96,15 +98,18 @@ func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, []Mod
 	// directory — is a question a reader eventually has to ask, and there should be nothing
 	// to ask. The import is then refused as unresolved, which is a rejection either way.
 	if dirOK && fileOK {
-		return "", nil, false
+		return "", "", nil, false
 	}
+	// THE DIRECTORY IS THE MODULE PATH for a directory module and its PARENT for a one-file
+	// one, and it is returned rather than derived later because only this function knows which
+	// shape answered. It is what a `./` import written inside the module is relative to.
 	if dirOK {
-		return canonical, dirFiles, true
+		return canonical, canonical, dirFiles, true
 	}
 	if fileOK {
-		return canonical, fileFiles, true
+		return canonical, path.Dir(canonical), fileFiles, true
 	}
-	return "", nil, false
+	return "", "", nil, false
 }
 
 // LocalPath reports whether an import path names THIS PROJECT — the `./` prefix — and returns
@@ -115,7 +120,23 @@ func LocalPath(importPath string) (string, bool) {
 	if strings.HasPrefix(importPath, "./") {
 		return strings.TrimPrefix(importPath, "./"), true
 	}
+	if RootPath(importPath) {
+		return strings.TrimPrefix(importPath, "/"), true
+	}
 	return importPath, false
+}
+
+// RootPath reports whether an import path is anchored at the PACKAGE ROOT — a single leading
+// `/`. It is a second spelling of "this project" and not a fourth root: what differs from `./`
+// is where the path is anchored, and the seed anchors both at the entry file's directory.
+//
+// THE SHIPPING COMPILER DOES NOT. There, `./` is relative to the file that wrote it and `/` to
+// the package root, which are different directories for any file below the root. The seed's one
+// job is building that compiler, whose own `./` imports are all written beside the entry file,
+// so the two anchors coincide for every path it ever resolves. The difference is a seed gap
+// (src/bootstrap/README.md) rather than a thing this loader pretends to have.
+func RootPath(importPath string) bool {
+	return strings.HasPrefix(importPath, "/") && !strings.HasPrefix(importPath, "//")
 }
 
 // RemotePath reports whether an import path names a remote package: a first segment that holds
@@ -138,8 +159,11 @@ func PathIllFormed(importPath string) string {
 	if importPath == "" {
 		return "an import path may not be empty"
 	}
-	if strings.HasPrefix(importPath, "/") {
-		return "an import path may not begin with `/`"
+	if strings.HasPrefix(importPath, "//") {
+		return "`//` names no root"
+	}
+	if importPath == "/" {
+		return "`/` names no module on its own"
 	}
 	body, local := LocalPath(importPath)
 	if local && body == "" {

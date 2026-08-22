@@ -29,9 +29,12 @@ func NewLoader(roots ...FileProvider) *Loader { return &Loader{roots: roots} }
 // loadedModule is one resolved non-entry module in the graph.
 type loadedModule struct {
 	canonical string
-	tag       string
-	files     []*ast.File
-	deps      []string // canonical names of the modules it imports (graph edges)
+	// dir is where the module's files live — the module path itself for a directory module and
+	// its parent for a one-file one. A `./` import written inside the module is relative to it.
+	dir   string
+	tag   string
+	files []*ast.File
+	deps  []string // canonical names of the modules it imports (graph edges)
 }
 
 // LoadSource parses src as the entry module, resolves its import graph against the
@@ -60,14 +63,14 @@ func (l *Loader) LoadProgram(src string) (*ast.File, *InitPlan, []diag.Diagnosti
 
 	// Expand the graph to a fixpoint from the entry module's imports, resolving any
 	// newly discovered module's own imports on the next pass; each spec is tagged.
-	l.resolveImports(entryCanonical, importSpecs([]*ast.File{entry}), reg, edges, &diags)
+	l.resolveImports(entryCanonical, "", importSpecs([]*ast.File{entry}), reg, edges, &diags)
 	for changed := true; changed; {
 		changed = false
 		for _, m := range snapshot(reg) {
 			if m.deps != nil {
 				continue // its imports were already expanded
 			}
-			m.deps = l.resolveImports(m.canonical, importSpecs(m.files), reg, edges, &diags)
+			m.deps = l.resolveImports(m.canonical, m.dir, importSpecs(m.files), reg, edges, &diags)
 			if m.deps == nil {
 				m.deps = []string{} // mark expanded even when it imports nothing
 			}
@@ -149,7 +152,7 @@ func (l *Loader) initPlan(entry *ast.File, reg map[string]*loadedModule, edges m
 // module in reg (parsing it on first sight), assigning the spec its canonical tag,
 // and returning the importer's dependency edges.
 func (l *Loader) resolveImports(
-	importer string, specs []*ast.ImportSpec, reg map[string]*loadedModule, edges map[string][]string, diags *diag.List,
+	importer string, importerDir string, specs []*ast.ImportSpec, reg map[string]*loadedModule, edges map[string][]string, diags *diag.List,
 ) []string {
 	deps := []string{}
 	for _, spec := range specs {
@@ -170,7 +173,7 @@ func (l *Loader) resolveImports(
 			diags.Add(spec.Span(), "a remote package %q needs a package layer this compiler has not built", spec.Path)
 			continue
 		}
-		canonical, files, ok := l.resolve(spec.Path)
+		canonical, dir, files, ok := l.resolve(spec.Path, importerDir)
 		if !ok {
 			diags.Add(spec.Span(), "cannot resolve import %q under any source root", spec.Path)
 			continue
@@ -184,7 +187,7 @@ func (l *Loader) resolveImports(
 		if perr {
 			continue
 		}
-		reg[canonical] = &loadedModule{canonical: canonical, tag: mangleTag(canonical), files: parsed}
+		reg[canonical] = &loadedModule{canonical: canonical, dir: dir, tag: mangleTag(canonical), files: parsed}
 	}
 	edges[importer] = deps
 	return deps
@@ -198,18 +201,25 @@ func (l *Loader) resolveImports(
 //
 // The roots are told apart by TYPE because that is what they are: OSProvider is the user tree
 // and every other provider is bundled.
-func (l *Loader) resolve(importPath string) (string, []ModuleFile, bool) {
+func (l *Loader) resolve(importPath, importerDir string) (string, string, []ModuleFile, bool) {
 	body, local := LocalPath(importPath)
+
+	// `./` IS RELATIVE TO THE FILE THAT WROTE IT and `/` to the package root, which is this
+	// provider's Root. The two coincide for a file at the root and differ for every file below
+	// it, which is why the importer's directory travels here rather than being assumed.
+	if local && !RootPath(importPath) && importerDir != "" && importerDir != "." {
+		body = path.Join(importerDir, body)
+	}
 	for _, root := range l.roots {
 		_, isUser := root.(OSProvider)
 		if isUser != local {
 			continue
 		}
-		if canonical, files, ok := root.Resolve(body); ok {
-			return canonical, files, true
+		if canonical, dir, files, ok := root.Resolve(body); ok {
+			return canonical, dir, files, true
 		}
 	}
-	return "", nil, false
+	return "", "", nil, false
 }
 
 // flatten appends every resolved module's mangled items to the entry file, in a

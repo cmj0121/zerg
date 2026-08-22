@@ -128,13 +128,20 @@ Two things are doing work in that `import`.
 on `hello`, `greet.hello` is refused by name — and that is [`1g/private/`](../examples/1g/private),
 one of the two examples that exist to be turned away.
 
-**`./` says which root.** A bare name is the **standard library** and nothing else, so
-`import "io"` is always the standard library's `io` even if you have an `io.zg` of your own. A
-path that starts `./` is **this project**, resolved under the entry file's directory. A path whose
-first segment holds a dot — `github.com/you/thing` — is a remote package, which this compiler
-reserves and does not yet build.
+**The prefix says which root**, and there are four:
 
-Reading an import tells you which of the three it is. Adding or renaming a file can change whether
+| Written                         | Found under                                                                |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `import "io"`                   | the **standard library**, always — even if you have an `io.zg` of your own |
+| `import "/http"`                | **this package's root**, wherever the entry file sits                      |
+| `import "./http"`               | **beside the file that wrote it**                                          |
+| `import "github.com/you/thing"` | a **remote package** — reserved, and not built                             |
+
+The last two differ as soon as a file is not at the root: a module two directories down names one
+up there as `/shared`, and its own neighbour as `./count`. That is what lets a folder be moved
+whole — the imports inside it still point at each other.
+
+Reading an import tells you which of the four it is. Adding or renaming a file can change whether
 an import resolves, never what kind of thing it names.
 
 ## A test beside it

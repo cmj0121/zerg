@@ -1,0 +1,6 @@
+# A ONE-FILE MODULE, and the sibling of tally.zg. Neither is a directory module: the entry
+# names `./tools/tally`, a FILE, so `tools/` is a directory holding two modules rather than one
+# module holding two files.
+pub fn twice(n: int) -> int {
+	return n * 2
+}

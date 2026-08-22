@@ -120,15 +120,15 @@ type stdlibProvider struct{}
 
 // Resolve locates a stdlib module through the shared FSProvider, then falls back to
 // the last-segment alias for the flat layout.
-func (stdlibProvider) Resolve(importPath string) (string, []module.ModuleFile, bool) {
+func (stdlibProvider) Resolve(importPath string) (string, string, []module.ModuleFile, bool) {
 	fsp := module.FSProvider{FS: stdlib.FS()}
-	if canonical, files, ok := fsp.Resolve(importPath); ok {
-		return canonical, files, true
+	if canonical, dir, files, ok := fsp.Resolve(importPath); ok {
+		return canonical, dir, files, true
 	}
 	if seg := lastSegment(importPath); seg != importPath {
 		return fsp.Resolve(seg)
 	}
-	return "", nil, false
+	return "", "", nil, false
 }
 
 // lastSegment returns the final '/'-separated segment of a module path.

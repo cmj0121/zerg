@@ -1,6 +1,11 @@
-# util/text — a sibling module reached as `import "util/text"` (the namespace is
+# util/text — a sibling module reached as `import "./util/text"` (the namespace is
 # the last path segment, `text`). It exports a type, a function that returns that
 # type, and a generic — the three cross-module shapes Phase 1g resolves.
+#
+# AND IT NAMES A MODULE AT THE PACKAGE ROOT from two directories down. `/shared` is the root
+# the entry file sits at, which is how a file this deep reaches one up there without spelling
+# `./../..` — and without the folder's own imports changing if the folder moves.
+import "/shared"
 
 # Pair is a cross-module TYPE: nameable in another module's signature as text.Pair.
 pub struct Pair {
@@ -16,6 +21,12 @@ pub struct Pair {
 # example off the compiler that ships.
 pub fn make(a: int, b: int) -> Pair {
 	return Pair(a, b)
+}
+
+# offset is what the import is FOR: `shared` sits at the package root, two directories above
+# this file, and `/shared` is the only spelling that reaches it.
+pub fn offset() -> int {
+	return shared.base() + 1
 }
 
 # id is a cross-module GENERIC, monomorphized across the module boundary at each

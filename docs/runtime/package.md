@@ -325,6 +325,21 @@ and the prelude (see The prelude & std). What you import depends on the distance
 - **Another package** — import the package and see only its root public surface; a dependency's inner
   modules are **not** reachable, so the root's public surface is all a dependent gets.
 
+**Four prefixes, four roots, and no search order.** Reading an import says where it comes from, and
+nothing on disk changes that — a file appearing or moving can change only whether it RESOLVES.
+
+| Written                   | Found under                                      |
+| ------------------------- | ------------------------------------------------ |
+| `import "io"`             | the standard library                             |
+| `import "/http"`          | this package's root — where the entry file sits  |
+| `import "./http"`         | beside the file that wrote the import            |
+| `import "github.com/a/b"` | a remote package — reserved, and refused by name |
+
+The two local prefixes differ as soon as a file is not at the root, and that is what they are for:
+`/` reaches a module up the tree without spelling `./../..`, and `./` names a neighbour in a way that
+survives the folder being moved. An import path is never a filesystem path — `/x` is `x` under the
+package root, not `/usr/x`.
+
 Because every dependency is written down, the import graph is explicit — which is what lets module and
 package **cycles be rejected**.
 

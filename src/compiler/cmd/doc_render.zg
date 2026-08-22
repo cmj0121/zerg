@@ -44,7 +44,7 @@
 #     brief listing and the module index alike, and #20 will ask the same function.
 
 import (
-	"./zerg"
+	"/zerg"
 )
 
 # The column budget every filled paragraph is measured against, and the only number in this

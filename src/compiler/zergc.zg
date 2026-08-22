@@ -43,9 +43,9 @@
 # file that says what `zerg` accepts.
 import (
 	"cli"
-	"./cmd"
+	"/cmd"
 
-	"./zerg"
+	"/zerg"
 )
 
 # banner is the one line `--version` prints. It cannot be called `version`: a program and

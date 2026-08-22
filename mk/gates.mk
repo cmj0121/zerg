@@ -191,9 +191,9 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # defined beside `fmt` in the root Makefile because that verb writes what this one reads.
 fmt-self:                       # the compiler and the stdlib are canonical too
 	$(MAKE) build
-	@./bin/zerg fmt --check $(SELF_SRCS) \
+	@./bin/zerg fmt --check $(SELF_TREES) \
 		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
-	@echo "fmt-self: $$(ls $(SELF_SRCS) | wc -l | tr -d ' ') sources are fmt's fixpoint"
+	@echo "fmt-self: the compiler and the standard library are fmt's fixpoint"
 
 # A target of its own, and it stays one now that CI runs both: they ask different questions
 # of the same cases. `fmt-corpus` asks whether a case is already canonical — a rule that is
@@ -408,6 +408,9 @@ editor-align:                   # no editor file states a language fact the comp
 # parser to build, and a gate that goes red over a missing editor tool teaches people to stop
 # reading the board.
 treesitter:                     # the tree-sitter grammar reads every Zerg file in the tree
+	# SELF_SRCS AND NOT SELF_TREES, because this hands a FILE LIST to a script that reads each
+	# one — the walk lives in `zerg`, and a shell script is not it. The two scopes are the
+	# hazard named above, and this is the one place that still has to carry the second copy.
 	@./scripts/treesitter-check.sh $(SELF_SRCS) $(EXAMPLE_SRCS) $$(ls test-data/codegen/*.zg test-data/fmt/*.zg 2>/dev/null)
 
 desugar:                        # a program and the same program desugared do the same thing

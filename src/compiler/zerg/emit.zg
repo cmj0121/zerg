@@ -322,7 +322,7 @@ struct Emitter {
 	# answers to this name" and a misspelling answers to nothing either.
 	pub ns_names: list[str]
 
-	# ns_at is the MODULE THAT WROTE each binding, row for row beside ns_names — the directory
+	# ns_at is the FILE THAT WROTE each binding, row for row beside ns_names — the path
 	# of the importing file, which is what `ImportDecl.at` carries and `c_mod_of` reduces. A
 	# name imported by two modules gets two rows: the set is a set of PAIRS now, since the
 	# same namespace legitimately belongs to several modules and dropping the duplicate would
@@ -4333,11 +4333,15 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 # the ordinary case, and it costs nothing to keep the set a set.
 fn c_build_namespaces(mut &em: Emitter, f: File) {
 	for im in f.imports {
-		# `im.at` is the IMPORTING FILE, so its directory is the module that wrote the
-		# binding — the fact the transitivity rule is entirely made of. A pair already
-		# recorded is dropped, which is the ordinary case of one module importing the same
-		# thing from two of its files.
-		here := c_mod_of(em, im.at)
+		# `im.at` IS THE BINDING'S SCOPE, and it used to be reduced to that file's directory.
+		# A binding belongs to the FILE that wrote it: a module's files sharing one namespace
+		# meant an `import "strings"` in one of them put `strings` in every sibling's scope,
+		# so a file could name something it never asked for and a sibling's private helper
+		# could collide with a stdlib name it had no idea was in the room.
+		#
+		# A pair already recorded is still dropped — a file may write the same import twice
+		# only by writing it twice, and the parser already refuses that.
+		here := im.at
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
 			em.ns_at.append(here)
@@ -4392,7 +4396,7 @@ fn c_ns_bound_in(mut &em: Emitter, n: str, here: str) -> bool {
 fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
 	return true if decl_mod == ""
 
-	here := c_mod_of(em, em.at_path)
+	here := em.at_path
 	return true if here == ""
 
 	mut bound := false
@@ -4422,9 +4426,13 @@ fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
 fn c_ns_reexports(mut &em: Emitter, mod: str, want: str, depth: int) -> bool {
 	return false if depth > 8
 
+	# THE ROW'S SCOPE IS A FILE and the question is about a MODULE, so the two are compared
+	# through `c_mod_of`. A binding belongs to the file that wrote it; a SURFACE belongs to the
+	# module — `import pub` in any one of a module's files puts the named module on that
+	# module's surface, which is what a dependent sees.
 	mut i := 0
 	for i < em.ns_names.len() {
-		if em.ns_pub[i] and em.ns_at[i] == mod {
+		if em.ns_pub[i] and c_mod_of(em, em.ns_at[i]) == mod {
 			return true if em.ns_mods[i] == want
 			return true if c_ns_reexports(em, em.ns_mods[i], want, depth + 1)
 		}

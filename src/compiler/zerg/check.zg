@@ -63,6 +63,8 @@
 # A refusal that `raise`s still spells its code into the message, because a raise has no
 # structure to put it in. That half is held by the gates, which assert the code opens the
 # line either way.
+
+import "strconv"
 fn chk_at(mut &em: Emitter, code: Rule, msg: str) {
 	chk_at_place(em, em.at_path, em.at_line, em.at_col, code, msg)
 }
@@ -298,9 +300,9 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 # without a rule firing once per walk. That is the arrangement c_ns_kind was built with, and
 # a fourth NsKind would have moved the reporting into it.
 fn chk_ns_bound(mut &em: Emitter, ns: str) {
-	return if c_ns_bound_in(em, ns, c_mod_of(em, em.at_path))
+	return if c_ns_bound_in(em, ns, em.at_path)
 
-	chk_at(em, Rule.ModuleNotImported, f"`{ns}` is a module this build compiles and this module did not import — an import binds a namespace in the module that writes it, and it is not transitive; `import` it in this module to name it")
+	chk_at(em, Rule.ModuleNotImported, f"`{ns}` is a module this build compiles and this FILE did not import — an import binds a namespace in the file that writes it, and it is neither transitive nor shared with the file's neighbours; `import` it here to name it")
 }
 
 # chk_ty_quals is the SAME RULE AT A TYPE POSITION, and it is a separate pass for one reason:
@@ -3246,11 +3248,21 @@ fn chk_import_here(own: File, im: ImportDecl) -> bool {
 #
 # Only the rows BEFORE it are consulted, so the first spelling of a name is the one that
 # keeps it and one collision is one finding rather than two mirror images of it.
+#
+# AND ONLY THE ROWS FROM THIS FILE. A binding belongs to the file that wrote it, so two files
+# naming two different modules `text` is two bindings and not a collision — and neither is one
+# module reached by two spellings from two files, which is what this reported before.
 fn chk_import_name(mut &em: Emitter, f: File, i: int) {
 	im := f.imports[i]
 	mut j := 0
 	for j < i {
 		other := f.imports[j]
+		continue_at := other.at != im.at
+		if continue_at {
+			j = j + 1
+			continue
+		}
+
 		if other.name == im.name and other.path != im.path {
 			chk_import_taken(em, im, f"the namespace of `{other.path}`")
 			return

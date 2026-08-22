@@ -99,6 +99,13 @@ graph; if they form a cycle, that's a compile error. Where the graph leaves two 
 (neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
 **source order** within a module. That whole ordering holds.
 
+> **[deviation]** The tie is broken by the order the imports were WRITTEN, not by canonical module
+> name. Two modules that read nothing of each other initialize in the order their import lines
+> appear, so moving a line inside an import block reorders two independent initializers. It is
+> stable for a given source — the same input gives the same output — so it is not a
+> reproducibility defect; it is the rule the sentence above names not being the rule that runs
+> (#70).
+
 Both halves of it are built for a **direct** read. A constant whose initializer names one declared
 **after** it gets the value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields
 `A == 11` — and a cycle is a named refusal: _E4068 these constants depend on each other and none can be
@@ -356,10 +363,15 @@ package **cycles be rejected**.
 > whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
 > is how both are resolved.
 >
-> **The "no transitivity" rule is enforced.** A binding belongs to the MODULE of the file that wrote the
-> `import` — module-grained and not file-grained, because a module's files share one namespace — so the
-> namespaces a module may name are the ones its own files bound, its `as` aliases included and another
-> module's excluded. Naming a module this one never imported is a compile error with a place, at every
+> **The "no transitivity" rule is enforced.** A binding belongs to the FILE that wrote the `import` — so
+> the namespaces a file may name are the ones IT bound, its `as` aliases included, and neither a
+> neighbour's nor another module's. A binding is not shared with the file's siblings: an
+> `import "strings"` in one file of a module does not put `strings` in the scope of the file beside it.
+>
+> A **surface** is the module's, though, and the two are different questions: `import pub` written in any
+> one of a module's files puts the named module on that module's surface, which is what a dependent sees.
+>
+> Naming a module this file never imported is a compile error with a place, at every
 > position that can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant
 > read, and a TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The
 > import graph decides what is compiled into the build AND what is nameable inside it, and the two answers
@@ -379,7 +391,9 @@ package **cycles be rejected**.
 >
 > **[not yet]** A cross-module function is a **call target only**: `other.helper(x)` works and
 > `f := other.helper` reports that the module has no such member, so the first-class value this section
-> promises stops at the module boundary.
+> promises stops at the module boundary. The sentence is also untrue of the module — it HAS the name,
+> and a module CONSTANT reads as a value in the same program — so whatever happens to the capability,
+> the refusal owes a sentence about the value form rather than about the member (#69).
 
 ### The prelude & std
 

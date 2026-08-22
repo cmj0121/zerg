@@ -98,8 +98,34 @@ fi
 # It is the only tool this gate needs that the toolchain does not build, which is a real cost
 # — a developer without cloc cannot run `make install-check` — and it is paid because the
 # alternative is an assertion that quietly is not one. CI installs it in the same job.
+# AND IT WROTE NOTHING OUTSIDE $(PREFIX). This is the half that makes the target packageable:
+# a formula, a port or a distribution builds into a staging prefix, and one that rewrote the
+# builder's editor configuration on the way is not one anybody would run twice. `make install`
+# used to do exactly that — the nvim links and the cloc registration — and it also exited
+# nonzero on a machine whose home it could not write, having installed the toolchain correctly.
+for stray in "$CLOC_CONFIG/options.txt" "$CLOC_HOME/.config/nvim"; do
+	if [ -e "$stray" ]; then
+		echo "HOME      make install wrote $stray — install writes under PREFIX and nowhere else"
+		fail=$((fail + 1))
+	fi
+done
+
+# THEN THE HALF THAT BELONGS TO A PERSON, which is a verb of its own and asserted as one. HOME
+# and XDG_CONFIG_HOME are redirected so this gate wires up a sandbox rather than the editor
+# configuration of whoever is running the board.
+if ! out=$(HOME="$CLOC_HOME" XDG_CONFIG_HOME="$CLOC_HOME/.config" make install-editors PREFIX="$PREFIX" CLOC_CONFIG="$CLOC_CONFIG" 2>&1); then
+	echo "EDITORS   make install-editors failed"
+	echo "$out" | tail -5 | sed 's/^/  /'
+	fail=$((fail + 1))
+fi
+
+if [ ! -e "$CLOC_HOME/.config/nvim/syntax/zerg.vim" ]; then
+	echo "EDITORS   make install-editors did not link nvim's syntax file"
+	fail=$((fail + 1))
+fi
+
 if [ ! -f "$CLOC_CONFIG/options.txt" ]; then
-	echo "MISSING   $CLOC_CONFIG/options.txt — the install did not tell cloc about Zerg"
+	echo "MISSING   $CLOC_CONFIG/options.txt — install-editors did not tell cloc about Zerg"
 	fail=$((fail + 1))
 elif ! command -v cloc >/dev/null 2>&1; then
 	echo "CLOC      cloc is not installed, so nothing here reads the definition just written"
@@ -113,6 +139,12 @@ fi
 
 if ! out=$(make uninstall PREFIX="$PREFIX" CLOC_CONFIG="$CLOC_CONFIG" 2>&1); then
 	echo "UNINSTALL make uninstall failed"
+	echo "$out" | tail -5 | sed 's/^/  /'
+	fail=$((fail + 1))
+fi
+
+if ! out=$(HOME="$CLOC_HOME" XDG_CONFIG_HOME="$CLOC_HOME/.config" make uninstall-editors PREFIX="$PREFIX" CLOC_CONFIG="$CLOC_CONFIG" 2>&1); then
+	echo "UNINSTALL make uninstall-editors failed"
 	echo "$out" | tail -5 | sed 's/^/  /'
 	fail=$((fail + 1))
 fi
@@ -137,4 +169,4 @@ if [ $fail -ne 0 ]; then
 	echo "install-check: $fail problem(s) with the install round trip"
 	exit 1
 fi
-echo "install-check: installs, compiles and runs from its own path, and uninstalls clean"
+echo "install-check: installs under PREFIX and nowhere else, compiles and runs from its own path, wires an editor up on request, and uninstalls both clean"

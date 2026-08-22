@@ -82,7 +82,14 @@ done
 #                                  artifact and `make release` runs it, so a tarball cannot be
 #                                  produced without it — but it has no place on a board that
 #                                  runs on every commit, because there is no tarball then.
-NOT_A_GATE="all clean run help upgrade install uninstall fmt test linux-ci release release-tarball release-smoke"
+#   install-editors, uninstall-editors
+#                                — the half of an install that belongs to a PERSON rather than
+#                                  to a prefix: nvim's syntax and LSP client, and the cloc
+#                                  definition registered where cloc reads it. Both write under
+#                                  the user's home, which is why they are not `install` — and
+#                                  a board that ran them would rewrite the editor configuration
+#                                  of whoever is running the board.
+NOT_A_GATE="all clean run help upgrade install install-editors uninstall uninstall-editors fmt test linux-ci release release-tarball release-smoke"
 
 # shellcheck disable=SC2086 # $MAKEFILES is a list of paths and is meant to split
 targets=$(grep -hoE '^[a-z][a-z0-9-]*:' $MAKEFILES | tr -d ':' | sort -u)

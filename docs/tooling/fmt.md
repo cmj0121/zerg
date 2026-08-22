@@ -4,10 +4,28 @@ Every rule `zerg fmt` applies, each with the code that names it. Part of the
 [Language Reference](../language.md). Also in [繁體中文](fmt.zh-TW.md).
 
 ```sh
-zerg fmt <file.zg>...              # rewrite in place; prints the files it changed
-zerg fmt --check <file.zg>...      # report what is not canonical, change nothing
-zerg fmt --off F401 <file.zg>...   # leave one rule alone (repeatable)
+zerg fmt <path>...              # rewrite in place; prints the files it changed
+zerg fmt --check <path>...      # report what is not canonical, change nothing
+zerg fmt --off F401 <path>...   # leave one rule alone (repeatable)
 ```
+
+## A path is the tree under it
+
+A `.zg` file is itself; a directory is every `.zg` file
+beneath it, however deep. It is the meaning `zerg test` already gave a path, so one argument
+means one thing across the toolchain.
+
+Three rules say what a walk does not reach, and each is a rule rather than a list:
+
+|                           |                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| a name beginning with `.` | `.git` is nobody's source, and the build cache is skipped by the same rule for free |
+| a symlink                 | it is by definition somewhere else. To walk what one points at, name that path      |
+| nothing else              | a `*_test.zg` is walked like any other source — it is canonical too                 |
+
+A path that holds no `.zg` file is **not** silently nothing done: it says so and exits **3**,
+the status a search that ran and found nothing answers with. A walk that matched nothing and
+exited 0 would be indistinguishable from one that rewrote everything.
 
 A rule has a **code** so it can be named — in a diagnostic, in a review, on the command line
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping

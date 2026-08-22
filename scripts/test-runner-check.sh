@@ -1338,11 +1338,39 @@ find "$tmp" -name '*.zg' -print0 | xargs -0 "$ZERG" fmt --check >/dev/null 2>&1
 say "a source this gate holds up as the way to write a test or a fixture is not in canonical form" $?
 
 
+# --- a symlink that points back up ----------------------------------------------------------
+#
+# THE WALK MUST END. Discovery descends into every directory it can list, and until it could
+# ask what a path IS, a symlink to an ancestor read as an ordinary directory: the same test was
+# found again under `up/`, and again under `up/up/`, and the run rebuilt and re-ran it every
+# round without ever stopping.
+#
+# The alarm is the assertion. A regression here does not fail, it HANGS — and a gate that hangs
+# takes the board with it rather than reporting anything, so the bound is part of the case and
+# not a convenience. Exit 142 is the alarm firing.
+mkdir -p "$tmp/link/inner"
+cat >"$tmp/link/inner/lib_test.zg" <<'EOF'
+#[test]
+fn test_reached_once() {
+	assert 1 == 1
+}
+EOF
+ln -sfn .. "$tmp/link/inner/up"
+
+link=$(perl -e 'alarm 60; exec @ARGV' "$ZERG" test "$tmp/link" 2>&1)
+lstatus=$?
+
+[ "$lstatus" -ne 142 ]
+say "a run under a symlink pointing at an ancestor did not end" $?
+
+[ "$(printf '%s\n' "$link" | grep -c '^  ok    test_reached_once$')" -eq 1 ]
+say "the test under a symlinked ancestor was reached more than once" $?
+
 # --- the floor -----------------------------------------------------------------------------
 #
-# 101 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 103 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-101}
+MIN_ASSERTS=${MIN_ASSERTS:-103}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

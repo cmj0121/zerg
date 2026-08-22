@@ -820,6 +820,11 @@ bool zrt_mkdir(const char *path);
  * directory module through it must emit the same C on every machine. */
 zrt_list zrt_listdir(const char *path);
 
+/* zrt_path_kind answers what a path is without following a link: 0 missing, 1 file,
+ * 2 directory, 3 symlink. It is `lstat`, so a symlink answers 3 whatever it points at —
+ * which is the question a walk must ask before it descends. */
+int64_t zrt_path_kind(const char *path);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes one diagnostic line to stderr: `kind: msg`, or `msg` alone when kind

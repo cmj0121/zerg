@@ -406,6 +406,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_remove":     true,
 	"__zrt_exec":       true,
 	"__zrt_listdir":    true,
+	"__zrt_path_kind":  true,
 	"__zrt_mkdir":      true,
 	"__zrt_proc_spawn": true,
 	"__zrt_proc_wait":  true,
@@ -773,6 +774,8 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("((int64_t)zrt_exec(%s))", arg), true
 	case "__zrt_listdir":
 		return fmt.Sprintf("zrt_listdir(%s)", arg), true
+	case "__zrt_path_kind":
+		return fmt.Sprintf("zrt_path_kind(%s)", arg), true
 	case "__zrt_mkdir":
 		return fmt.Sprintf("zrt_mkdir(%s)", arg), true
 	case "__zrt_proc_spawn":

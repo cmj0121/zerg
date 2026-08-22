@@ -10,7 +10,7 @@ import (
 	"ascii"
 	"io"
 
-	"./zerg"
+	"/zerg"
 )
 
 # --- import cycles ---------------------------------------------------------------------
@@ -201,16 +201,32 @@ fn imp_is_local(path: str) -> bool {
 	return has_prefix(path, "./")
 }
 
+# imp_is_root is the PACKAGE ROOT prefix. It exists because `./` became relative to the file
+# that wrote it: without an absolute spelling, a module three directories down would name one at
+# the root as `./../../..`, and a folder that moved would rewrite every import inside it.
+#
+# A LEADING `/` AND NOT A KEYWORD. `crate/x` would make `crate` a reserved first segment — a
+# keyword disguised as a path, arguing with the name grammar that says a package name is
+# `[a-z][a-z0-9_]*`. One more question about the first character is the shape the other three
+# branches already have. An import path is never a filesystem path: `/x` is `x` under the
+# package root, not `/usr/x`.
+fn imp_is_root(path: str) -> bool {
+	return false if not has_prefix(path, "/")
+
+	return not has_prefix(path, "//")
+}
+
 # imp_body is the package path with the local prefix taken off — the part that is expanded
 # under whichever root the classifier picked, and the one string the two roots share.
 fn imp_body(path: str) -> str {
 	return cut_prefix(path, "./") if imp_is_local(path)
+	return cut_prefix(path, "/") if imp_is_root(path)
 
 	return path
 }
 
 fn imp_is_remote(path: str) -> bool {
-	return false if imp_is_local(path)
+	return false if imp_is_local(path) or imp_is_root(path)
 
 	return seg_has_dot(imp_segs(path)[0]) if imp_segs(path).len() > 0
 
@@ -270,7 +286,8 @@ fn imp_name_ok(seg: str) -> bool {
 # being computed from a string somebody happened to type.
 fn imp_ill_formed(path: str) -> str {
 	return "an import path may not be empty" if path == ""
-	return "an import path may not begin with `/`: a module is named under a root, not at one — a module of this project is `./<name>`" if has_prefix(path, "/")
+	return "`//` names no root: `/` is this package's root and `./` is beside the file that wrote the import" if has_prefix(path, "//")
+	return "`/` names no module on its own — a module at this package's root is `/<name>`" if path == "/"
 
 	body := imp_body(path)
 
@@ -316,8 +333,9 @@ fn imp_ill_formed(path: str) -> str {
 
 # imp_root is the directory a well-formed, non-remote path is expanded under. The whole of the
 # difference between the two roots is this one answer; everything after it is shared.
-fn imp_root(path: str, entry_dir: str) -> str {
-	return entry_dir if imp_is_local(path)
+fn imp_root(path: str, from_dir: str, root_dir: str) -> str {
+	return from_dir if imp_is_local(path)
+	return root_dir if imp_is_root(path)
 
 	return stdlib_dir()
 }
@@ -330,8 +348,8 @@ fn imp_root(path: str, entry_dir: str) -> str {
 # what every sibling'"'"'s imports resolved to, and a file in a module directory was silently
 # promoted to a module of its own (#13). The prefix decides the root now, and a search with one
 # place to look is not a search.
-fn resolve_module(path: str, entry_dir: str) -> list[str] {
-	return module_at(imp_root(path, entry_dir), imp_body(path))
+fn resolve_module(path: str, from_dir: str, root_dir: str) -> list[str] {
+	return module_at(imp_root(path, from_dir, root_dir), imp_body(path))
 }
 
 # module_files resolves one import to the source files that make up the module it names.
@@ -353,7 +371,7 @@ fn resolve_module(path: str, entry_dir: str) -> list[str] {
 # spell `place_line` from it, and this one was handed the path alone — a string that knows
 # what was written and not which line wrote it. A reader told an import resolves nowhere and
 # not which import is left grepping their own program for the quoted path.
-fn module_files(im: zerg.ImportDecl, from_dir: str) -> list[str] {
+fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] {
 	place := zerg.place_line(im.at, im.line, im.col)
 
 	# THE STRING FIRST, and the disk only after it. A path that is not an import path is
@@ -365,25 +383,33 @@ fn module_files(im: zerg.ImportDecl, from_dir: str) -> list[str] {
 
 	raise zerg.rule_msg(zerg.Rule.NotYetRemoteImport, f"NotImplemented: a remote package — `{im.path}` names a host, and resolving one needs a package layer this compiler has not built. It resolves the standard library (`import \"io\"`) and this project (`import \"./io\"`)\n{place}") if imp_is_remote(im.path)
 
-	raise zerg.rule_msg(zerg.Rule.ImportLayoutAmbiguous, f"`{im.path}` is both a file and a directory — a module is one shape or the other, and this compiler will not choose for you\n{place}") if module_ambiguous(imp_root(im.path, from_dir), imp_body(im.path))
+	raise zerg.rule_msg(zerg.Rule.ImportLayoutAmbiguous, f"`{im.path}` is both a file and a directory — a module is one shape or the other, and this compiler will not choose for you\n{place}") if module_ambiguous(imp_root(im.path, from_dir, root_dir), imp_body(im.path))
 
-	found := resolve_module(im.path, from_dir)
+	found := resolve_module(im.path, from_dir, root_dir)
 
 	return found if found.len() > 0
 
 	# The sentence names the ROOT that was looked in, because that is the half the reader
 	# cannot see — and when the other root holds it, saying so IS the fix.
-	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}`: {imp_missing_says(im.path, from_dir)}\n{place}")
+	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}`: {imp_missing_says(im.path, from_dir, root_dir)}\n{place}")
 }
 
 # imp_missing_says is the second half of an unresolved import: where it was looked for, and —
 # when the OTHER root holds a module of that name — the one line that fixes it. A reader who
 # wrote `import "log"` beside their own `log/` is one character away and has no way to know it.
-fn imp_missing_says(path: str, from_dir: str) -> str {
+fn imp_missing_says(path: str, from_dir: str, root_dir: str) -> str {
 	body := imp_body(path)
 	return f"no module at `{path}` (looked in {join_path(from_dir, body)})" if imp_is_local(path)
-	other := module_at(from_dir, body)
-	return f"there is no standard-library module `{path}`, and `{body}` is beside your entry file — did you mean `./{body}`?" if other.len() > 0
+	return f"no module at `{path}` (looked in {join_path(root_dir, body)})" if imp_is_root(path)
+
+	# THE OTHER TWO ROOTS ARE BOTH WORTH NAMING, because a bare name is neither of them and the
+	# reader is one character from either: `log` beside the importing file is `./log`, and `log`
+	# at the package root is `/log`.
+	beside := module_at(from_dir, body)
+	return f"there is no standard-library module `{path}`, and `{body}` is beside the file that imported it — did you mean `./{body}`?" if beside.len() > 0
+
+	at_root := module_at(root_dir, body)
+	return f"there is no standard-library module `{path}`, and `{body}` is at this package's root — did you mean `/{body}`?" if at_root.len() > 0
 
 	return f"there is no standard-library module `{path}` (looked in {stdlib_dir()})"
 }
@@ -424,7 +450,7 @@ fn imp_missing_says(path: str, from_dir: str) -> str {
 # `module_files` cannot reach any of them, a parser guaranteeing an import path is non-empty
 # and quoted; asking BY NAME is what opens it, and `zerg doc strings/` is the empty spelling
 # arriving through the last-segment alias.
-pub fn module_sources(name: str, from_dir: str) -> list[str] {
+pub fn module_sources(name: str, from_dir: str, root_dir: str) -> list[str] {
 	mut none: list[str] = []
 	seg := path_tail(name)
 
@@ -434,7 +460,7 @@ pub fn module_sources(name: str, from_dir: str) -> list[str] {
 	return none if imp_ill_formed(name) != ""
 	return none if imp_is_remote(name)
 
-	found := resolve_module(name, from_dir)
+	found := resolve_module(name, from_dir, root_dir)
 	return found if found.len() > 0
 
 	# AND THE READER'S OWN DIRECTORY, for a bare name — which is the one place this differs
@@ -666,9 +692,9 @@ fn path_tail(path: str) -> str {
 
 # --- reading a source ---------------------------------------------------------------------
 
-fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
+fn load_into(file: str, root_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
 	mut root: list[str] = []
-	load_with(file, file, from_dir, seen, root, srcs, paths, mods, Buffer("", ""))
+	load_with(file, file, root_dir, seen, root, srcs, paths, mods, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
@@ -691,7 +717,7 @@ struct Buffer {
 # module reached a second time is skipped and the loop never runs — which terminates the walk
 # without noticing what it walked. The two loaders ask ONE function, so the rule and its
 # sentence are in one place and cannot drift apart the way the walks themselves have to.
-fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], buf: Buffer) {
+fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -709,7 +735,10 @@ fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: li
 		im := imd.path
 		chk_test_import(imd)
 		chk_unbuilt_module(imd)
-		deps := module_files(imd, from_dir)
+		# THE IMPORTER'S OWN DIRECTORY, not the one threaded through: `./` is relative to the
+		# file that wrote it, and the root travels beside it for `/`. Threading one directory
+		# for both is what made `./b` in `sub/a.zg` look for `<root>/b`.
+		deps := module_files(imd, dir_of(file), root_dir)
 
 		# ASKED BEFORE THE CYCLE RULE, because the cycle rule fires on the same program with a
 		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
@@ -719,7 +748,7 @@ fn load_with(file: str, mod: str, from_dir: str, mut &seen: list[str], stack: li
 		mut here := stack
 		here.append(im)
 		for dep in deps {
-			load_with(dep, im, from_dir, seen, here, srcs, paths, mods, buf)
+			load_with(dep, im, root_dir, seen, here, srcs, paths, mods, buf)
 		}
 	}
 	srcs.append(src)

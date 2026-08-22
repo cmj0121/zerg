@@ -10,7 +10,7 @@ import (
 	"io"
 	"sha256"
 
-	"./zerg"
+	"/zerg"
 )
 
 # unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
@@ -306,18 +306,18 @@ fn load_units(entry: str) -> list[Unit] {
 # suite CREATES by existing: `json_test.zg` imports `testing`, `testing` renders a note through
 # `log`, and `log` encodes with `json`. Refusing that is refusing the arrangement
 # docs/runtime/package.md asks for, for a module the program compiles exactly once.
-fn load_units_of(files: list[str], name: str, from_dir: str, provides: list[str]) -> list[Unit] {
+fn load_units_of(files: list[str], name: str, root_dir: str, provides: list[str]) -> list[Unit] {
 	mut seen: list[str] = provides
 	mut units: list[Unit] = []
 	mut root: list[str] = []
-	load_unit(files, name, from_dir, seen, root, units)
+	load_unit(files, name, root_dir, seen, root, units)
 	return units
 }
 
 # `stack` is the path DOWN to this unit, and it is a separate list from `seen` because the two
 # answer different questions — see `chk_import_cycle` in source.zg. It arrives BY VALUE, which saves
 # a pop: each frame appends its own name to its own copy, so unwinding is the return.
-fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
 	seen.append(name)
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
@@ -346,7 +346,7 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
-			load_import(imd, paths[si], from_dir, seen, stack, units)
+			load_import(imd, paths[si], root_dir, seen, stack, units)
 		}
 		si = si + 1
 	}
@@ -366,9 +366,11 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], s
 #
 # An import path and a directory are different things that happen to be spelled alike, and the
 # fix is to stop asking one list about both: every caller of this is an import, by construction.
-fn load_import(imd: zerg.ImportDecl, file: str, from_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
 	im := imd.path
-	files := module_files(imd, from_dir)
+	# The importer's own directory for `./`, the package root for `/` — the same pair the
+	# other loader threads, and for the same reason.
+	files := module_files(imd, dir_of(file), root_dir)
 
 	# BEFORE the `seen` return, not after: a module already loaded is skipped, and an import of
 	# THIS FILE'S own module names one that always is — the unit being built. Asked second, the
@@ -392,5 +394,5 @@ fn load_import(imd: zerg.ImportDecl, file: str, from_dir: str, mut &seen: list[s
 	# the unit already being built, which `seen` answers, and `provides` is what says so.
 	mut deeper := stack
 	deeper.append(im)
-	load_unit(files, im, from_dir, seen, deeper, units)
+	load_unit(files, im, root_dir, seen, deeper, units)
 }

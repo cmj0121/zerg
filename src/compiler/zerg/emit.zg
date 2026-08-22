@@ -2471,7 +2471,12 @@ fn c_first_with_key(f: File, key: str, fallback: FnDecl) -> FnDecl {
 # layer retires, and a name declared twice in one file is refused by every compiler there will
 # ever be.
 fn c_mod_collide(mut &em: Emitter, fn_i: FnDecl, prev: FnDecl) {
-	raise c_same_file_twice(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.line) if prev.path == fn_i.path
+	# ONE FILE IS NOT THIS WALK'S TO ANSWER. c_build_top_names RECORDS it as E4073, and a
+	# record is rendered at the end of the run while every rule here RAISES — so answering it
+	# here as well would not be a second wording, it would be the only one the reader ever
+	# sees, and it would be the wrong one.
+	return if prev.path == fn_i.path
+
 	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
 	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if c_mod_of(em, fn_i.path) == c_mod_of(em, prev.path)
 
@@ -3389,21 +3394,28 @@ fn c_scan_fnptr(mut &em: Emitter, sites: list[Site]) {
 fn c_build_top_names(mut &em: Emitter, f: File) {
 	mut seen: list[str] = []
 	mut kind: list[str] = []
+
+	# WHERE THE FIRST ONE WAS, because the two halves of this collision are two rules. A
+	# `File` here is the whole program's declarations, each carrying the path it was written
+	# in, so one file declaring a name twice and two files of one module declaring it are
+	# both in this walk — and only the second is about module flattening.
+	mut wpath: list[str] = []
+	mut wline: list[int] = []
 	for sd in f.structs {
-		c_check_type_dup(em, seen, kind, sd.name, "a struct", sd.path, sd.line, sd.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, sd.name, "a struct", sd.path, sd.line, sd.col)
 	}
 	for ed in f.enums {
-		c_check_type_dup(em, seen, kind, ed.name, "an enum", ed.path, ed.line, ed.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, ed.name, "an enum", ed.path, ed.line, ed.col)
 	}
 	for td in f.types {
-		c_check_type_dup(em, seen, kind, td.name, "a type declaration", td.path, td.line, td.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, td.name, "a type declaration", td.path, td.line, td.col)
 	}
 	for sp in f.specs {
 		# ALL SIX KINDS KNOW WHERE THEY WERE WRITTEN, so all six report the same way: they say
 		# where, and they accumulate rather than ending the run at the first finding. A
 		# StructDecl and an EnumDecl carried no place once and those two raised instead, which
 		# is the split c_dup_report's comment records as gone.
-		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, sp.name, "a spec", sp.path, sp.line, sp.col)
 	}
 
 	# THE FUNCTIONS AFTER THE TYPES, so the finding lands on the `fn` in EITHER source order.
@@ -3417,7 +3429,7 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 	# with a type and nothing is ambiguous about it.
 	for fn_i in f.fns {
 		if fn_i.recv == "" {
-			c_check_type_dup(em, seen, kind, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col)
+			c_check_type_dup(em, seen, kind, wpath, wline, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col)
 		}
 	}
 
@@ -3425,7 +3437,7 @@ fn c_build_top_names(mut &em: Emitter, f: File) {
 	# constant-versus-function half from, so the place a reader is pointed at does not move:
 	# the collision is reported at the constant's own declaration in both orders.
 	for c in f.consts {
-		c_check_type_dup(em, seen, kind, c.name, "a module constant", c.path, c.line, c.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, c.name, "a module constant", c.path, c.line, c.col)
 	}
 
 	# AND THE TABLE IS KEPT. What the six loops above have in hand is "what the top level
@@ -3546,17 +3558,19 @@ fn c_check_names_distinct(names: list[str], what: str, whose: str, path: str, li
 	}
 }
 
-fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], name: str, what: str, path: str, line: int, col: int) {
+fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], mut &wpath: list[str], mut &wline: list[int], name: str, what: str, path: str, line: int, col: int) {
 	mut i := 0
 	for i < seen.len() {
 		if seen[i] == name {
-			c_dup_report(em, name, kind[i], what, path, line, col)
+			c_dup_report(em, name, kind[i], what, path, line, col, wpath[i], wline[i])
 			return
 		}
 		i = i + 1
 	}
 	seen.append(name)
 	kind.append(what)
+	wpath.append(path)
+	wline.append(line)
 }
 
 # c_dup_report is the one place a duplicate declaration is worded, so all six kinds of
@@ -3579,7 +3593,7 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 # later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
 # is a rule going quiet about a real mistake. Reporting every finding in one run is what the
 # specification asks for (docs/conformance.md), and a cascade is what "every" costs.
-fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int) {
+fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int, wpath: str, wline: int) {
 	if prev != what {
 		chk_at_place(em, path, line, col, Rule.DeclaredTwiceDifferentKind, f"`{name}` is declared twice — once as {prev}, once as {what}")
 		return
@@ -3592,8 +3606,22 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	# c_const_globals', which says which of the two it means. Both are recorded here all
 	# the same, because a CONSTANT colliding with a FUNCTION is this walk's rule and it
 	# needs the first of each on the list to see it.
+	# ONE FILE IS THE OTHER RULE, and it is asked before the two kinds below are handed back:
+	# a second free function may be two MODULES each declaring a private one, which is legal,
+	# but two of them in ONE FILE never is. Asking it here is what keeps this rule's extent to
+	# one walk — the property the head of c_build_top_names claims and the reason a code may
+	# be reported from exactly one place.
+	if wpath == path {
+		chk_at_place(em, path, line, col, Rule.DeclaredTwiceInFile, c_twice_in_file_says(name, wline))
+		return
+	}
+
 	return if what == "a function" or what == "a module constant"
 
+	# THE OTHER HALF is what module flattening is actually about: a thing the reader can only
+	# have done across files. Said about two declarations in one file it hands them an
+	# explanation for something they did not do, and loses the one fact no caret can carry —
+	# where the first declaration is.
 	chk_at_place(em, path, line, col, Rule.DeclaredTwiceSameKind, f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here")
 }
 
@@ -4980,20 +5008,21 @@ fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
 	return c_diag(em, Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`")
 }
 
-# c_same_file_twice and c_mod_flat_collide are the two shapes a top-level name declared twice
-# arrives in, and they are two rules rather than two wordings of one because they have
-# different LIFETIMES — which is what a code is for. Both are asked by two walks over two
-# tables: a signature and a module constant.
+# c_twice_in_file_says is the sentence for a name declared twice IN ONE FILE, which is one of
+# the two shapes the collision arrives in and is a rule of its own because the two have
+# different LIFETIMES — this one is ill-formed in every compiler there will ever be, while the
+# other is a limit the package layer retires.
 #
-# ONE FILE DECLARING IT TWICE is permanently ill-formed, in this compiler and in every one
-# there will ever be, so it is a plain sentence and no package layer retires it. It used to be
-# answered by the rule below, which told the reader about a second MODULE — two `#[test]`
-# functions of one name in one `*_test.zg` were refused as "two modules both define
-# `test_same`", and a reader following that sentence goes looking for a module that is not
-# there. The first declaration's LINE is what the place cannot carry: the marker points at the
-# second one, and both halves of a duplicate are worth having.
-fn c_same_file_twice(path: str, line: int, col: int, name: str, first: int) -> str {
-	return c_diag_at(path, line, col, Rule.DeclaredTwiceInFile, f"`{name}` is declared twice in this file — the first is at line {strconv.to_string(first, 10)}, and one scope declares a name once")
+# It is a function and not a literal at the site because the site moved: the signature and
+# constant walks each used to raise it, so the same code was reported from three places and
+# `error-codes-check` says a code is reported from exactly one. c_dup_report is that one now —
+# it is the single walk over every top-level declaration, which is where a rule about a name
+# being declared twice belongs.
+#
+# The first declaration's LINE is what the place cannot carry: the marker points at the second
+# one, and both halves of a duplicate are worth having.
+fn c_twice_in_file_says(name: str, first: int) -> str {
+	return f"`{name}` is declared twice in this file — the first is at line {strconv.to_string(first, 10)}, and one scope declares a name once"
 }
 
 # TWO FILES UNDER ONE DIRECTORY is this compiler's limit and not the language's, so it keeps
@@ -9628,9 +9657,10 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 		# under one directory is the flat namespace this compiler still has.
 		ki := c_k_idx(em, c.name)
 		if ki >= 0 {
-			raise c_same_file_twice(c.path, c.line, c.col, c.name, em.k_decls[ki].line) if em.k_decls[ki].path == c.path
-
-			raise c_mod_flat_collide(c.path, c.line, c.col, c.name, em.k_decls[ki].path)
+			# ONE FILE IS NOT THIS WALK'S TO ANSWER, for the reason c_mod_collide states: it
+			# is recorded as E4073 there and rendered at the end, while this raises and would
+			# be the only sentence the reader ever saw.
+			raise c_mod_flat_collide(c.path, c.line, c.col, c.name, em.k_decls[ki].path) if em.k_decls[ki].path != c.path
 		}
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check

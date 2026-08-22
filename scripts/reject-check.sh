@@ -5519,6 +5519,33 @@ EOF
 # still write `lib.make()`, a module it never named.
 #
 # seed-gap: the seed binds namespaces program-wide too, and builds this.
+# THE NEIGHBOUR'S IMPORT IS NOT THIS FILE'S. The six cases below are about one MODULE naming
+# what another module imported, and they held while a binding was module-grained — a file
+# reaching a sibling's import was the ordinary case then, and this program built.
+#
+# A binding belongs to the FILE that wrote it, so `two.zg` names a namespace nothing in it
+# bound. It is the half of the rule the other six cannot see: they would all still pass if the
+# binding went back to being shared with the file's neighbours.
+#
+# seed-gap: the seed binds namespaces program-wide, so it builds this.
+reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+import "strings"
+
+pub fn both() -> str {
+	return strings.trim(" a ") + tail()
+}
+--- pair/two.zg
+fn tail() -> str {
+	return strings.trim(" b ")
+}
+EOF
+
 reject a-namespace-this-module-did-not-import E5007 at=5:2 seed-gap <<'EOF'
 import "./mid"
 

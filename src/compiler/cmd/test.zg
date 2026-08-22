@@ -87,8 +87,9 @@ fn do_test(c: cli.Ctx) -> int {
 # failure a test runner must not have — every gate in this repository is written against it —
 # and a sentence alone is not enough, because the reader of a CI line is a shell.
 
-# NOTHING_FOUND is what `zerg test` answers when the search succeeded and turned up no test,
-# and it is a status of its own because that is a DIFFERENT ANSWER from the three already
+# NOTHING_FOUND is declared in walk.zg, because three commands walk a path now and the status
+# a search-that-found-nothing answers is the toolchain's rather than this command's. The ladder
+# below is why it is a status of its own — a DIFFERENT ANSWER from the three already
 # spoken here. Rename a directory, move a suite, edit a glob or mistype a path into a CI line,
 # and a runner that answers 0 leaves the board green forever while running nothing — the shape
 # this repository has already been bitten by and written down: a gate measuring nothing looks
@@ -107,7 +108,6 @@ fn do_test(c: cli.Ctx) -> int {
 # editing the command line; a 3 is fixed by looking at the tree. pytest's own number for this
 # is 5, which is an artifact of its history (2 interrupted, 3 internal error, 4 usage) and not
 # a thing to copy — this ladder is dense, and 3 is the next rung.
-const NOTHING_FOUND := 3
 
 fn run_tests(root: str, only: str, secs: int) -> int {
 	# A PATH THAT IS NOT THERE IS NOT AN EMPTY TREE. The walk (test_pkg.zg) reads a missing directory as

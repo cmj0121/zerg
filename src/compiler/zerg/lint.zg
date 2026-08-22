@@ -114,6 +114,8 @@
 # `Diag`: a Diag is what a COMPILER stage produces and every one of those fails the build,
 # which is the one property a lint finding does not have. The severity is the difference and
 # it is the only field Diag has no room for.
+
+import "strconv"
 pub struct Finding {
 	# sev is the word printed before the code — "warning", "info", or "" for a finding. It is
 	# the printed spelling rather than a tag mapped to one, so there is no second table

@@ -14,6 +14,8 @@
 # The four answers `__zrt_path_kind` gives. They are named here rather than compared as numbers
 # at each site, because `k == 2` at a call site is a fact about the runtime that a reader of
 # this compiler has no way to look up.
+
+import "io"
 const KIND_MISSING := 0
 const KIND_FILE := 1
 const KIND_DIR := 2

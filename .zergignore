@@ -1,0 +1,15 @@
+# What a `zerg` walk does not enter in this repository.
+#
+# This file REPLACES `.gitignore` for `zerg fmt`, `zerg lint` and `zerg desugar` — one source
+# of truth at a time, because two that both apply need an ordering between them and an ordering
+# is what makes an ignore file unreadable. What `.gitignore` excludes and this does not —
+# `/bin/`, `/.zerg-cache/`, `/dist/` — holds no `.zg` at all, so nothing is lost by the swap.
+
+# THE CORPUS IS DELIBERATELY NOT CANONICAL. `test-data/` holds 488 sources, and the fmt corpus's
+# inputs are non-canonical ON PURPOSE: that is what the gate compares against. Formatting them
+# would not merely rewrite somebody's fixtures, it would leave `fmt-corpus` passing forever while
+# measuring nothing.
+#
+# `.gitignore` cannot protect it — `git check-ignore test-data` answers nothing, because it is a
+# tracked submodule rather than an ignored path.
+test-data/

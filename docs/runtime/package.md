@@ -356,10 +356,15 @@ package **cycles be rejected**.
 > whose bindings collide, and a binding a top-level declaration already took, are rejected too, and `as`
 > is how both are resolved.
 >
-> **The "no transitivity" rule is enforced.** A binding belongs to the MODULE of the file that wrote the
-> `import` — module-grained and not file-grained, because a module's files share one namespace — so the
-> namespaces a module may name are the ones its own files bound, its `as` aliases included and another
-> module's excluded. Naming a module this one never imported is a compile error with a place, at every
+> **The "no transitivity" rule is enforced.** A binding belongs to the FILE that wrote the `import` — so
+> the namespaces a file may name are the ones IT bound, its `as` aliases included, and neither a
+> neighbour's nor another module's. A binding is not shared with the file's siblings: an
+> `import "strings"` in one file of a module does not put `strings` in the scope of the file beside it.
+>
+> A **surface** is the module's, though, and the two are different questions: `import pub` written in any
+> one of a module's files puts the named module on that module's surface, which is what a dependent sees.
+>
+> Naming a module this file never imported is a compile error with a place, at every
 > position that can spell one: a call, a member read, a `spawn` / `defer` callee, a construction, a variant
 > read, and a TYPE — the annotation `c: lib.Counter` and the signature `fn take(c: lib.Counter)` alike. The
 > import graph decides what is compiled into the build AND what is nameable inside it, and the two answers

@@ -111,31 +111,29 @@ A read that goes **through a call** is an edge like any other: `const A: str = m
 `const B: str = "x"`, with `mk()` reading `B`, gives `A` the value `B` was declared with. It was the
 ordering rule's one silent-wrong — `A` held the zero value and nothing said so — and #14 closed it.
 
-A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
-They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
-first-uses still run them once), in **declaration (FIFO) order** within a module and in **dependency
-order** across modules (a module's imports initialize first), before any of that module's own code and
-before `main`. `init()` carries multi-step or effectful startup (open a resource, register, seed) rather
-than hiding it in a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
-shared mutable state travels by value or through channels, never a module-level variable — a top-level
-binding may not be `mut` outside a module-level `unsafe { … }` group, and one that is inside a group is
-**module-private**, never `pub` (see [Visibility](#visibility--exposing-a-declaration)).
+A module may also define **`init()`** functions (**multiple allowed**) — its one-time setup. They run
+**exactly once**, **before `main`'s first statement**, in **dependency order** across modules (a module's
+imports are readied before it is) and in **declaration (FIFO) order** within a module. `init()` carries
+multi-step or effectful startup — opening a resource, registering, seeding — rather than hiding it inside a
+constant's initializer, and readies that module's immutable state.
 
-If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
-there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
-only itself). The module is then **poisoned**: `init()` is **not re-run** (exactly-once holds even on
-failure, so no side effect repeats), and every later use **re-aborts with the same cached error**. A
-half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
+**Eagerly, and not at first use.** Every `init()` the build reaches runs, including one in a module the run
+never otherwise touches. That is Go's model and it is the one this language takes: making it lazy costs a
+guard on every use of every module, and buys back only the startup of a module somebody imported and did not
+call — which a build that resolved the import has already paid for in every other way. What eagerness does
+cost is that startup work is not free to be arbitrarily expensive, and the answer to that is not a lazier
+`init()` but less work in it.
 
-> **[deviation]** Initialization is **eager, not lazy**. Every `init()` in the program runs before
-> `main`'s first statement, rather than at the first use of the module that owns it. Exactly-once holds,
-> and so does the order: a module's imports are readied before it is, and its own blocks run FIFO. What
-> does not hold is "the first time the module is used" — an `init()` in a module a run never touches
-> still runs.
->
-> **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
-> cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
-> a use site.
+There is still **no mutable global**: shared mutable state travels by value or through channels, never a
+module-level variable — a top-level binding may not be `mut` outside a module-level `unsafe { … }` group,
+and one that is inside a group is **module-private**, never `pub` (see
+[Visibility](#visibility--exposing-a-declaration)).
+
+If an `init()` **aborts**, the program ends. The abort is on the main stack before `main`'s body, so there is
+no use site it could have been guarded at and no later use to re-abort at: exactly-once holds trivially
+because nothing runs twice, and no half-initialized module is ever reachable because nothing is. A module
+that must fail recoverably returns a `Result` from a function the program calls, which is the ordinary error
+model and not a second one.
 
 ### Packages
 

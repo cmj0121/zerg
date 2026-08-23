@@ -7,7 +7,6 @@
 # is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
 # The release closes when nothing but this header is left.
 docs/conformance.md	a form inside a template nobody instantiates
-docs/core/memory.md	freeing a chain recurses one c stack
 docs/core/types.md	a bare variant name is not a
 docs/runtime/package.md	the boundary it compares is the module
 docs/runtime/package.md	the entry file s own directory is

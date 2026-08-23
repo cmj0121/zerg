@@ -135,3 +135,27 @@ the stack maps.
 **Threshold: a spinner that a back-edge safepoint would not catch**, in a program somebody actually wrote.
 Until then the discipline is the one every cooperative runtime asks for: put a channel operation in the
 loop.
+
+## An iterative chain teardown
+
+**Status: open, with a measured bound.** Named by 0.2.0, which put the bound in the specification instead
+of a deviation.
+
+Freeing a recursive value recurses one C stack frame per node, so how long a chain can be freed is bounded
+by the stack the free runs on — about 60 000 nodes on a default 8 MiB main stack
+([Memory](docs/core/memory.md)). Past that the process dies with its name and cannot be caught: the free
+runs on the scope-exit and abort-unwind paths, where raising is not safe.
+
+The fix is not subtle — walk the chain into an explicit worklist and release node by node, instead of
+letting the C stack be the worklist. What makes it work rather than a rewrite is that the drop is
+GENERATED: every recursive type's teardown comes out of one place in the emitter, so the shape changes once
+rather than per type.
+
+**If it were done**, the thing to be careful of is the ORDER. A recursive drop releases a node's payload
+before its tail, and a worklist that pushed tails first would reverse that — observable through any drop a
+program can write, once user drops exist.
+
+**Threshold: a program that needs a chain deeper than the bound**, rather than a benchmark. Every recursive
+structure this toolchain has built stays far under it, and a structure that genuinely goes that deep is
+better served by a `list` indexed by position — which is a shape the language already has, and which frees
+in one loop.

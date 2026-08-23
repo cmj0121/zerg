@@ -106,6 +106,11 @@ materializing a `str` only when it keeps a token.
 > **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
 > `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
 > form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
+>
+> **[not yet]** An **open-ended** slice is not among them. `GRAMMAR#range-expr` derives `a..` and a `Range`
+> indexes a list, but `xs[2..]` is _E9050 NotImplemented: an open-ended range has no upper bound here — a
+> slice needs an upper bound — `xs[a..xs.len()]`_, which is the spelling to write meanwhile. Found by the
+> 0.2.0 re-measurement (#74).
 
 ## Order & equality
 

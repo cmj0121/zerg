@@ -27,7 +27,9 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > by two codes at the two doors — _E9059 NotImplemented: rendering a `P` as text — a composite needs the
 > structural `Display` this compiler does not generate; render its fields_ from `print`, a hole and
 > `str(x)` alike, and _E4011 `str(…)` over a list bridges bytes or code points_ where the argument is a
-> `list` of something else. So the intended "every value renders" holds for scalars, strings, errors and
+> `list` of something else. An **`enum`** is a third door with a third code — _E9085 NotImplemented:
+> rendering an `E` as text — an enum has no name for it_ — which the 0.2.0 re-measurement found unnamed
+> here (#74). So the intended "every value renders" holds for scalars, strings, errors and
 > overridden types now, and for the rest once structural `debug` lands. The exact spelling of a structural
 > `debug` string is therefore **not pinned** ([not yet]).
 >

@@ -97,6 +97,10 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 是 `E9056`。**`x[a..b]`** slice-index 語法糖
 > 已建置且正確——`xs[1..3]` 產出一個全新的兩元素 `list`、`xs[0..=2]` 產出三元素的，各自都是獨立的值——所以在
 > method 落地前，子區間就用中括號那個形式寫。上面那個唯讀、copy-on-write 的設計是兩者共同的預期語意。
+>
+> **[not yet]** **開放結尾**的切片不在其中。`GRAMMAR#range-expr` 推導得出 `a..`,而 `Range` 也能索引一個 list,
+> 但 `xs[2..]` 會得到 _E9050 NotImplemented: an open-ended range has no upper bound here — a slice needs an
+> upper bound — `xs[a..xs.len()]`_,那也就是目前該寫的拼法。由 0.2.0 的重新量測掃出(#74)。
 
 ## 順序與相等性
 

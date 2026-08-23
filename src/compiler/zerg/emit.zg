@@ -27,14 +27,22 @@ import (
 pub struct Mods {
 	pub paths: list[str]
 	pub names: list[str]
+
+	# What each IMPORT of the build resolved to, row for row: the file that wrote one, the path
+	# as written, and the module identity it named. The first two are what the emitter sees in
+	# the tree; the third is what it cannot work out, because it does not know the roots a
+	# prefix expands under — and `c_mod_of`'s comment says why it must not guess.
+	pub imp_at: list[str]
+	pub imp_path: list[str]
+	pub imp_mod: list[str]
 }
 
 # mods_of is how a table is BUILT from outside this module, and it is a function rather than
 # the constructor because the seed cannot spell one: `zerg.Mods(ps, ns)` in `cmd` lowers to the
 # type name where the call should be, and cc says so. A call crosses the boundary in both
 # compilers.
-pub fn mods_of(paths: list[str], names: list[str]) -> Mods {
-	return Mods(paths, names)
+pub fn mods_of(paths: list[str], names: list[str], imp_at: list[str], imp_path: list[str], imp_mod: list[str]) -> Mods {
+	return Mods(paths, names, imp_at, imp_path, imp_mod)
 }
 
 struct Emitter {
@@ -549,6 +557,13 @@ struct Emitter {
 	# still reserved for a declaration NO FILE WROTE, which `c_synthetic_path` answers for.
 	pub unit_paths: list[str]
 	pub unit_mods: list[str]
+
+	# The loader's answer to "what did this import resolve to", row for row. A binding records
+	# the module IDENTITY it named rather than the path somebody typed, so `./lib` and `/lib`
+	# are one module here — which is what they are on disk (#67).
+	pub imp_at: list[str]
+	pub imp_path: list[str]
+	pub imp_mod: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -4345,10 +4360,24 @@ fn c_build_namespaces(mut &em: Emitter, f: File) {
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
 			em.ns_at.append(here)
-			em.ns_mods.append(im.path)
+			em.ns_mods.append(c_imp_canon(em, im.at, im.path))
 			em.ns_pub.append(im.is_pub)
 		}
 	}
+}
+
+# c_imp_canon is the module identity an import named, looked up in the loader's answer rather
+# than computed here. It falls back to the written path for an import the table does not hold —
+# a synthetic tree, or a build that handed no resolutions — which is the behaviour every rule
+# had before the table existed.
+fn c_imp_canon(mut &em: Emitter, at: str, path: str) -> str {
+	mut i := 0
+	for i < em.imp_at.len() {
+		return em.imp_mod[i] if em.imp_at[i] == at and em.imp_path[i] == path
+
+		i = i + 1
+	}
+	return path
 }
 
 # c_is_ns is whether an import ANYWHERE IN THE BUILD bound this name as a namespace. It is
@@ -14255,7 +14284,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -14263,6 +14292,9 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# table; the table is not constructor state, it is the first thing put INTO the Emitter.
 	em.unit_paths = ms.paths
 	em.unit_mods = ms.names
+	em.imp_at = ms.imp_at
+	em.imp_path = ms.imp_path
+	em.imp_mod = ms.imp_mod
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —

@@ -44,6 +44,7 @@ make                            # ./bin/zerg
 | [`17_arithmetic.zg`](17_arithmetic.zg)   | 整數運算是**受檢的**：溢位會 raise，不會回捲             |
 | [`18_scoped.zg`](18_scoped.zg)           | 什麼會釋放一個值，以及誰決定何時                         |
 | [`19_environment.zg`](19_environment.zg) | 環境變數：到處可讀，只在啟動時可寫                       |
+| [`20_typedefs.zg`](20_typedefs.zg)       | `type X = Y`:一個誰都遇不到的身分,加上 Y 的運算子        |
 
 ## 模組這一層
 

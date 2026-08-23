@@ -68,6 +68,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/spec/`](1g/spec)               | a `spec` declared in one module and implemented in another                   |
 | [`1g/strings/`](1g/strings)         | the standard library's `strings`, exercised end to end                       |
 | [`1g/outputorder/`](1g/outputorder) | `print` and `io.println` reach stdout in the order they were written         |
+| [`1g/evalorder/`](1g/evalorder)     | two operands that can both run code run in the order they were written       |
 | [`1g/testfile/`](1g/testfile)       | what a normal build compiles, and what it leaves on the floor                |
 
 ### The two that must be refused

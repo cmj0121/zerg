@@ -1,0 +1,40 @@
+# Where two operands can both run code, they run in the order they were written.
+#   zerg build examples/1g/evalorder/main.zg
+# Expected output:
+#   1
+#   2
+#   3
+#   4
+#   5
+#   9
+#
+# C leaves the order of a call's arguments, and of a compound literal's initialisers, to the
+# backend. Zerg does not: an operand after the first that can run code makes the whole list
+# evaluate into temporaries, in source order (docs/core/memory.md). The two forms below were
+# the last that still inherited C's answer — an enum variant's PAYLOAD and a call through a
+# FUNCTION VALUE — and each needs two effectful operands before the order is observable at
+# all, which is why it took this long to be noticed.
+enum Pair {
+	Both(int, int)
+}
+
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn f(n: int) -> int {
+	print n
+	return n
+}
+
+fn main() {
+	p := Pair.Both(f(1), f(2)) # 1 then 2, never 2 then 1
+	match p {
+		Pair.Both(a, b) => {
+			print a + b
+		}
+	}
+
+	g := add
+	print g(f(4), f(5)) # 4 then 5, through a value holding a function
+}

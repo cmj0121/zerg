@@ -147,13 +147,10 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
   visible via every holder** of that tail.
 
-> **[deviation]** A carrier owns its **Left** and not its **Right**. Whether a carrier owns anything at all
-> is asked of the Left's type alone, so an `Either[int, str]` is judged to own nothing and gets **no copy
-> helper and no drop at all** — while the wrap that BUILDS a Right retains its payload. One reference is
-> therefore leaked per Right constructed, and copying such a carrier is a bit copy that counts nothing: a
-> leak, never a double free, which is why it is invisible under ASan. A `Result[T]` is unaffected — its
-> Right is an `Err`, whose storage is the runtime's. What is owed is the same pair over the other side.
->
+A carrier owns **whichever side it holds**, and its drop and copy each carry one arm per owning side: the
+Left's when the tag says Left, the Right's when it says Right. An optional has no Right and gets the Left
+arm alone. A `Result[T]`'s Right is an `Err`, whose storage is the runtime's, so it needs neither.
+
 > The **Left** half of this paragraph is closed. A carrier now has a copy helper, so a binding can register
 > the drop the way every other owning type does: `got := <-c` releases its payload at scope exit, and so do
 > a carrier passed as an argument, returned, held in a struct field or a `list[T?]` element, and the value

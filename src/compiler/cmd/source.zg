@@ -139,18 +139,19 @@ fn chk_unbuilt_module(im: zerg.ImportDecl) {
 fn load_sources(files: list[str]) -> list[str] {
 	mut paths: list[str] = []
 	mut mods: list[str] = []
-	return load_sources_at(files, paths, mods)
+	mut res := res_new()
+	return load_sources_at(files, paths, mods, res)
 }
 
 # load_sources_at is load_sources with the PATH of each source collected beside it, in the
 # same order. A diagnostic names the file it is about, and by the time anything is emitted
 # the whole program is one merged tree — so the path has to travel with the source from
 # here, or nothing downstream can say where a statement came from.
-fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str]) -> list[str] {
+fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) -> list[str] {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	for f in files {
-		load_into(f, dir_of(f), seen, srcs, paths, mods)
+		load_into(f, dir_of(f), seen, srcs, paths, mods, res)
 	}
 	return srcs
 }
@@ -371,6 +372,51 @@ fn resolve_module(path: str, from_dir: str, root_dir: str) -> list[str] {
 # spell `place_line` from it, and this one was handed the path alone — a string that knows
 # what was written and not which line wrote it. A reader told an import resolves nowhere and
 # not which import is left grepping their own program for the quoted path.
+# module_where is module_files' companion: the identity of what that import named.
+#
+# IT IS A LOGICAL NAME AND NOT A PATH — `stdlib:json`, `project:util/text` — and that is what
+# makes it canonical. A path is not: the same file is `src/stdlib/json.zg` when a test package
+# names it and `<zerg_root>/src/stdlib/json.zg` when an import resolves it, so two spellings of
+# one FILE would have been the same bug one level down as two spellings of one IMPORT (#67).
+#
+# The root is what the prefix chose and the body is the path under it, so `./lib` written at the
+# root and `/lib` written anywhere are one string, and neither depends on where the tree sits.
+fn module_where(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> str {
+	return mod_id("stdlib", imp_body(im.path)) if not imp_is_local(im.path) and not imp_is_root(im.path)
+
+	base := imp_body(im.path)
+	return mod_id("project", base) if imp_is_root(im.path)
+
+	# `./` is relative to the importing file, so the body is joined with that file's directory
+	# and then read back RELATIVE TO THE ROOT — otherwise the identity carries wherever the
+	# project happens to sit, and the same module named from two trees would be two.
+	return mod_id("project", strip_root(root_dir, imp_under(from_dir, base)))
+}
+
+# strip_root turns a path under the project root into the name the root knows it by. A path
+# that is not under it answers with itself, which is the conservative reading: a module nothing
+# can name shares an identity with nothing.
+fn strip_root(root: str, full: str) -> str {
+	return full if root == "" or root == "."
+
+	pre := root + "/"
+	return full if not has_prefix(full, pre)
+
+	b := bytearray(full)
+	mut out: list[byte] = []
+	mut i := bytearray(pre).len()
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# mod_id is the one spelling of an identity, so nothing builds one by hand.
+fn mod_id(root: str, body: str) -> str {
+	return f"{root}:{body}"
+}
+
 fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] {
 	place := zerg.place_line(im.at, im.line, im.col)
 
@@ -593,6 +639,31 @@ fn module_at(root: str, path: str) -> list[str] {
 	return none
 }
 
+# Res is WHAT THE IMPORTS OF A BUILD RESOLVED TO, row for row: the file that wrote one, the path
+# as written, and the module identity it named.
+#
+# IT IS THE LOADER'S ANSWER AND NOT A SECOND OPINION. The emitter cannot work the third column
+# out — it does not know the roots a prefix expands under — and `c_mod_of`'s own comment says why
+# it must not try: an identity computed twice is an identity two rules can disagree about.
+struct Res {
+	pub at: list[str]
+	pub path: list[str]
+	pub mod: list[str]
+}
+
+fn res_new() -> Res {
+	mut a: list[str] = []
+	mut b: list[str] = []
+	mut c: list[str] = []
+	return Res(a, b, c)
+}
+
+fn res_add(mut &r: Res, at: str, path: str, mod: str) {
+	r.at.append(at)
+	r.path.append(path)
+	r.mod.append(mod)
+}
+
 # module_ambiguous is the pair module_at answers nothing for, asked on its own so the import
 # site can say which of the two nothings it found.
 fn module_ambiguous(root: str, path: str) -> bool {
@@ -693,9 +764,9 @@ fn path_tail(path: str) -> str {
 
 # --- reading a source ---------------------------------------------------------------------
 
-fn load_into(file: str, root_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
+fn load_into(file: str, root_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
 	mut root: list[str] = []
-	load_with(file, file, root_dir, seen, root, srcs, paths, mods, Buffer("", ""))
+	load_with(file, file, root_dir, seen, root, srcs, paths, mods, res, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
@@ -718,7 +789,7 @@ struct Buffer {
 # module reached a second time is skipped and the loop never runs — which terminates the walk
 # without noticing what it walked. The two loaders ask ONE function, so the rule and its
 # sentence are in one place and cannot drift apart the way the walks themselves have to.
-fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], buf: Buffer) {
+fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res, buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -733,7 +804,6 @@ fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: li
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
 	# no file — the loader is the first parse a source meets
 	for imd in zerg.import_decls_at(src, file) {
-		im := imd.path
 		chk_test_import(imd)
 		chk_unbuilt_module(imd)
 
@@ -741,16 +811,20 @@ fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: li
 		# file that wrote it, and the root travels beside it for `/`. Threading one directory
 		# for both is what made `./b` in `sub/a.zg` look for `<root>/b`.
 		deps := module_files(imd, dir_of(file), root_dir)
+		res_add(res, file, imd.path, module_where(imd, dir_of(file), root_dir))
 
 		# ASKED BEFORE THE CYCLE RULE, because the cycle rule fires on the same program with a
 		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
 		# it is one file that is already in the module it named. The specific finding speaks.
 		chk_import_self(imd, deps, file)
-		chk_import_cycle(imd, stack, im)
+
+		# MATCHED ON THE LOCATION, not on the spelling — see cmd/unit.zg's load_import.
+		loc := module_where(imd, dir_of(file), root_dir)
+		chk_import_cycle(imd, stack, loc)
 		mut here := stack
-		here.append(im)
+		here.append(loc)
 		for dep in deps {
-			load_with(dep, im, root_dir, seen, here, srcs, paths, mods, buf)
+			load_with(dep, loc, root_dir, seen, here, srcs, paths, mods, res, buf)
 		}
 	}
 	srcs.append(src)
@@ -821,7 +895,7 @@ fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: li
 # deliberately the one path here that is NOT guarded: a buffer that does not parse must
 # raise, because `ls_check` turns that raise into the diagnostic that says so, and a
 # swallowed one is a server showing a clean file the compiler will not build.
-fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) {
+fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
 	buf := Buffer(path, text)
 	mut dir := dir_of(dir_of(path))
 	for dir != "" and dir != "." {
@@ -830,10 +904,12 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 			mut s: list[str] = []
 			mut p: list[str] = []
 			mut m: list[str] = []
-			if entry_reaches(entry, path, buf, s, p, m) {
+			mut r := res_new()
+			if entry_reaches(entry, path, buf, s, p, m, r) {
 				srcs = s
 				paths = p
 				mods = m
+				res = r
 				return
 			}
 		}
@@ -844,7 +920,7 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 
 	mut seen: list[str] = []
 	mut stack: list[str] = []
-	load_with(path, path, dir_of(path), seen, stack, srcs, paths, mods, buf)
+	load_with(path, path, dir_of(path), seen, stack, srcs, paths, mods, res, buf)
 }
 
 # entry_files is the candidate entries directly in one directory: its `.zg` files, in the
@@ -875,12 +951,12 @@ fn entry_files(dir: str) -> list[str] {
 # import of its own. So a candidate that raises is simply not the answer, and the search
 # moves on to the next one and finally to the buffer alone, where a real refusal about the
 # real file raises where the server can see it.
-fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str]) -> bool {
+fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) -> bool {
 	mut seen: list[str] = []
 	mut stack: list[str] = []
 	mut ok := false
 	guard {
-		load_with(entry, entry, dir_of(entry), seen, stack, srcs, paths, mods, buf)
+		load_with(entry, entry, dir_of(entry), seen, stack, srcs, paths, mods, res, buf)
 		ok = true
 	}
 	return false if not ok

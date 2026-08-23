@@ -35,13 +35,24 @@ fn unit_srcs(units: list[Unit]) -> list[str] {
 fn unit_mods(units: list[Unit]) -> zerg.Mods {
 	mut ps: list[str] = []
 	mut ns: list[str] = []
+	mut ia: list[str] = []
+	mut ip: list[str] = []
+	mut im: list[str] = []
 	for u in units {
 		for p in u.paths {
 			ps.append(p)
 			ns.append(u.name)
 		}
+
+		mut k := 0
+		for k < u.imp_at.len() {
+			ia.append(u.imp_at[k])
+			ip.append(u.imp_path[k])
+			im.append(u.imp_mod[k])
+			k = k + 1
+		}
 	}
-	return zerg.mods_of(ps, ns)
+	return zerg.mods_of(ps, ns, ia, ip, im)
 }
 
 fn unit_paths(units: list[Unit]) -> list[str] {
@@ -270,6 +281,15 @@ fn unit_key(code: str) -> str {
 # and the sources that make it up.
 struct Unit {
 	pub name: str
+
+	# imp_at / imp_path / imp_mod are WHAT THIS UNIT'S IMPORTS RESOLVED TO, row for row: the
+	# file that wrote one, the path as written, and the module identity it named. The emitter
+	# cannot work the third out — it does not know the roots an import is expanded under — and
+	# comparing a written path against an identity is what made two spellings two modules (#67).
+	pub imp_at: list[str]
+	pub imp_path: list[str]
+	pub imp_mod: list[str]
+
 	pub srcs: list[str]
 
 	# paths is where each of `srcs` was read from, in the same order. A unit is what a
@@ -341,16 +361,25 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 	# indexed, because the import scan is a full parse and so the FIRST one a source
 	# meets: a refusal raised in it must already carry the file the place names, and
 	# `paths` rides beside `srcs` row for row
+	mut imp_at: list[str] = []
+	mut imp_path: list[str] = []
+	mut imp_mod: list[str] = []
 	mut si := 0
 	for si < srcs.len() {
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
 			load_import(imd, paths[si], root_dir, seen, stack, units)
+
+			# recorded AFTER the load, so an import that could not resolve has already been
+			# refused by name and nothing here has to answer for it.
+			imp_at.append(paths[si])
+			imp_path.append(imd.path)
+			imp_mod.append(module_where(imd, dir_of(paths[si]), root_dir))
 		}
 		si = si + 1
 	}
-	units.append(Unit(name, srcs, paths))
+	units.append(Unit(name, imp_at, imp_path, imp_mod, srcs, paths))
 }
 
 # load_import loads what one import names, unless the program already holds it.
@@ -367,7 +396,6 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 # An import path and a directory are different things that happen to be spelled alike, and the
 # fix is to stop asking one list about both: every caller of this is an import, by construction.
 fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
-	im := imd.path
 
 	# The importer's own directory for `./`, the package root for `/` — the same pair the
 	# other loader threads, and for the same reason.
@@ -378,12 +406,17 @@ fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[s
 	# rule would be silent for exactly the program it is about.
 	chk_import_self(imd, files, file)
 
-	# and the cycle rule after it, for the reason `chk_import_self` gives: both fire on a file
-	# that imports its own module, and only one of them is describing that program.
-	chk_import_cycle(imd, stack, im)
+	# DEDUPED BY WHERE THE MODULE IS, not by how the import spelled it. `./lib` from one file
+	# and `/lib` from another are one module, and keying this on the string compiled its source
+	# into two units — `E4073 declared twice`, about a file the reader wrote once (#67).
+	loc := module_where(imd, dir_of(file), root_dir)
 
+	# AND THE CYCLE IS MATCHED ON THE LOCATION for the same reason: `a -> b -> a` written with
+	# two spellings of `a` is still a cycle, and comparing the strings somebody typed missed it
+	# the moment a module could be spelled twice.
+	chk_import_cycle(imd, stack, loc)
 	for s in seen {
-		return if s == im
+		return if s == loc
 	}
 
 	# THE STACK GROWS AT THE IMPORT, and that is where the path down actually is. It used to
@@ -393,7 +426,10 @@ fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[s
 	# TEST build the entry unit is named by the module it is, and `zerg test src/stdlib` then
 	# read `json -> testing -> log -> json` as a cycle. It is not one: the last edge lands on
 	# the unit already being built, which `seen` answers, and `provides` is what says so.
+	# THE STACK CARRIES THE SPELLING and the unit carries the LOCATION. A cycle's message is
+	# read by a person, and `./lib -> /lib -> ./lib` is what they wrote; a unit's name is what
+	# every rule downstream compares, and that may not depend on which of the two was typed.
 	mut deeper := stack
-	deeper.append(im)
-	load_unit(files, im, root_dir, seen, deeper, units)
+	deeper.append(loc)
+	load_unit(files, loc, root_dir, seen, deeper, units)
 }

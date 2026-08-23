@@ -207,7 +207,7 @@ fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
 	return if is_pub
 	return if not chk_across_modules(em, em.at_path, decl_mod)
 
-	chk_at(em, Rule.NotPublicMember, f"`{name}` is not a public member of module `{last_segment(decl_mod)}`")
+	chk_at(em, Rule.NotPublicMember, f"`{name}` is not a public member of module `{mod_name(decl_mod)}`")
 }
 
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
@@ -229,7 +229,7 @@ fn chk_ty_visible(mut &em: Emitter, nm: str) {
 	decl_mod := c_ty_mod(em, nm)
 	return if not chk_across_modules(em, em.at_path, decl_mod)
 
-	chk_at(em, Rule.NotPublicType, f"`{nm}` is not a public type of module `{last_segment(decl_mod)}`")
+	chk_at(em, Rule.NotPublicType, f"`{nm}` is not a public type of module `{mod_name(decl_mod)}`")
 }
 
 # chk_ty_exported is the OTHER sentence, and it is not the same rule read backwards: "a
@@ -276,7 +276,7 @@ fn chk_fld_visible(mut &em: Emitter, sname: str, fname: str) {
 	decl_mod := c_ty_mod(em, sname)
 	return if not chk_across_modules(em, em.at_path, decl_mod)
 
-	chk_at(em, Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which module `{last_segment(decl_mod)}` declared")
+	chk_at(em, Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which module `{mod_name(decl_mod)}` declared")
 }
 
 # chk_ns_bound is NO TRANSITIVITY (docs/runtime/package.md): "importing a package gives you

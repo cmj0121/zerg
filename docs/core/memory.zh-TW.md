@@ -22,24 +22,24 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
 深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。
 
-> **[deviation]** 釋放一條鏈會**每個節點吃掉一個 C stack frame**,所以長度超過原生 stack 的鏈根本釋放不掉。
-> 在預設 8 MiB 主 stack 上實測:**6 萬個節點跑得完,7 萬個不行**,約每個節點 128 bytes 的 stack。它是帶著名字
-> 死的——`StackOverflowError: stack overflow`、狀態碼 1,來自 runtime 的 fault handler——而不是一個裸的
-> SIGSEGV;但那是一份診斷,不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,在那裡 raise 並不安全,
-> 所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。這裡欠的是**迭代式**的鏈拆解,而它還沒有被建出來。
->
-> **釋放**這一半已經關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在
-> **具現化新值之後**才把舊值還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
-> 配置數與 5 輪完全相同(`make mem-check`)。上面那句 stack 溢位就是這個修正的代價:在沒有東西被釋放的時候,
-> 它根本到不了。
+釋放是精確的。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在**具現化新值之後**才把舊值
+還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的配置數
+與 5 輪完全相同(`make mem-check`)。
+
+> **[implementation-defined]** **一條鏈能被釋放到多長。** 拆解每個節點吃掉一個 C stack frame,所以深度由它跑在
+> 哪條 stack 上決定:在預設 8 MiB 主 stack 上實測,**6 萬個節點跑得完,7 萬個不行** —— 約每個節點 128 bytes。超過
+> 之後行程帶著名字死去(`StackOverflowError: stack overflow`、狀態碼 1),而不是一個裸的 SIGSEGV;但那是一份診斷、
+> 不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。
+> 深到那個程度的**結構**,該用語言為它準備的形狀 —— 一個依位置索引的 `list` 的節點,而不是一條鏈 —— 直到那扇
+> [門](../../FUTURE.zh-TW.md#一次迭代式的鏈拆解)打開為止。
 
 ---
 
-> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
+> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條界限不可能經由它到達。
 > `struct Node { value: int; next: Node? }` 會被拒絕、報 _E4026 `Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
 > 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
-> 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
+> 所述。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
 > 觀察到共享變動之處——是規範中的形式,今天編不過。它同時還帶著第二個未建置的形式:那些**具名引數**
 > (`Node(value: 1, …)`)是 `E9010`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
 
@@ -76,10 +76,10 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 或單純的名稱讀取——留在原處，所以常見的 `f(g())` 與 `x + 1` 完全未變。**短路**運算子——`and`、`or`、`??`、`?.`,
 以及 `?` unwrap——是更強意義的左到右：當左邊已決定結果時，右邊被**跳過**。
 
-> **[deviation]** 仍有兩種合併形式把運算元交給單一 C 構造、沿用 C 的 unspecified 順序:**enum variant 的
-> payload**(`E.V(f(1), g(2))`)以及透過**函式值**的呼叫。兩者都要有兩個以上帶副作用的運算元，順序才可觀察。
-> 內建的 **`list`／`map` 方法**曾以第三種身分列在這裡,而它到不了:會收兩個帶副作用運算元的那幾個——`insert`、
-> `set`、`get`——自己就被指名拒絕,所以那樣的呼叫寫不出來。上面點名的其餘位置皆已排序。
+**enum variant 的 payload**(`E.V(f(1), g(2))`)以及透過**函式值**的呼叫,適用同一條規則 —— 它們是最後兩種把運算
+元交給單一 C 構造、沿用 C 答案的形式,而 [`1g/evalorder`](../../examples/1g/evalorder) 就是釘住它們的案例。有兩個
+位置**刻意不**排序,兩個編譯器皆然:內建的 intrinsic 與內建的錯誤建構式。它們都無法被「不知道自己是由哪個 C 編譯器
+建出來」的程式分辨,而這條界線在兩邊畫在同一個位置,因為 `make oracle` 會比對它們。
 
 把某個運算元讀**不只一次**的形式，適用同一條規則，只有觸發條件不同。`v in lo..hi` 就是那一個：成員測試是界限比較，
 所以它在每個界都指名 `v`——而上面那種 run 之所以能豁免第一個運算元，是因為沒有東西排在它前面，這一個不能，因為 `v`
@@ -113,16 +113,13 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
-> **[deviation]** carrier 擁有它的 **Left**,不擁有它的 **Right**。「這個 carrier 到底有沒有擁有東西」這個問題
-> 只問 Left 的型別,所以 `Either[int, str]` 被判定為什麼都不擁有,於是**完全不會產生 copy helper、也完全沒有
-> drop**——而建構 Right 的那個 wrap 卻會 retain 它的 payload。因此每建構一個 Right 就漏掉一個 reference;而複製
-> 這種 carrier 是一次什麼都不計數的 bit copy:是洩漏,不是 double free,這也是它在 ASan 底下看不見的原因。
-> `Result[T]` 不受影響:它的 Right 是一個 `Err`,那份儲存屬於 runtime。這裡欠的是同一組配對套到另一側。
->
-> 本段的 **Left** 那一半已經關掉了。carrier 現在有 copy helper,所以 binding 可以像其他每一個擁有型別那樣登記
-> drop:`got := <-c` 在 scope 結束時釋放它的 payload;被當成引數傳遞、被 return 出去、放在 struct 欄位或
-> `list[T?]` 元素裡的 carrier 也一樣;還有 `if v := <-c { … }` retain 進 binding 的那個值——那是第二個漏,而且
-> 根本不需要 carrier 被命名就會發生。以計數 allocator、200 輪對 5 輪實測(`make mem-check`)。
+carrier 擁有**它當下持有的那一側**,而它的 drop 與 copy 各自為每個擁有東西的側邊帶一條 arm:tag 說 Left 就走
+Left 的、說 Right 就走 Right 的。optional 沒有 Right,只拿到 Left 那一條。`Result[T]` 的 Right 是一個 `Err`,那份
+儲存屬於 runtime,所以兩條都不需要。
+
+binding 因此可以像其他每一個擁有型別那樣登記 drop:`got := <-c` 在 scope 結束時釋放它的 payload;被當成引數傳遞、
+被 return 出去、放在 struct 欄位或 `list[T?]` 元素裡的 carrier 也一樣;還有 `if v := <-c { … }` retain 進 binding
+的那個值。以計數 allocator、200 輪對 5 輪實測(`make mem-check`)。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
@@ -173,10 +170,14 @@ materialise-release-store。
 **交給** coroutine,由後者的 by-value 參數在函式體返回時還回去。那是每個捕獲值、在每一條退出路徑上各還一次,
 包含 abort-unwind 那條。
 
-> **[deviation]** 一個從來沒跑過的 coroutine 就從來不會還。環境在 `spawn` 當下就填好,而只有函式體會釋放它,
-> 所以一個 scheduler 始終沒輪到的 spawn——例如程式先結束了——會漏掉每個捕獲值各一個 reference,連同那塊環境。
-> 這是這一帶唯一一個哪裡都沒有案例的洩漏類別:`make sanitize-conc` 跑的程式,它們的 coroutine 全都會跑完,
-> 而 `make mem-check` 除了一個被排空的 channel 之外沒有任何併發案例。
+**一個從來沒跑過的 coroutine 也會還**,而且還的是另一份清單。`main` 一 return 程式就結束,還排在隊上的東西就留在
+原地——所以一個 scheduler 始終沒輪到的 `spawn`,沒有任何傳值參數可以把東西交還給它:那塊環境連同一份屬於它自己的
+teardown 一起交給 runtime,而 scheduler 在每個 worker 都停下之後跑它一次。兩份 teardown 互斥:函式體的 `defer` 從
+它的 trampoline 開始的那一瞬間就擁有那塊環境,而 runtime 在同一瞬間放掉它的指標,所以兩者恰好只有一個會跑。
+`make mem-check` 的 `spawn_unstarted` 守著它。
+
+一個**已經開始、而且停泊著**的 coroutine 不屬於這個情形,也不會被釋放:要把它的捕獲值還回去,就得展開一條語言明說
+「就地放生」的 stack。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 

@@ -107,19 +107,23 @@ A **blanket implementation** conditioned on a bound — one covering every type 
 not offered, keeping resolution decidable; and there is **no "every type" implementation** either, the
 per-type opt-in `Eq` above included.
 
-> **[deviation]** The intended coherence rule is **one impl per `(spec, type)` program-wide**, keyed by
-> each concrete instantiation — so `impl X for list[int]` and `impl X for list[str]` would be
-> **distinct**, each resolvable — with the orphan rule enforced across packages. Two halves of that fall
-> short, and a third turns out not to be a deviation at all.
+> **[not yet]** **A method is keyed by its NAME**, and that one fact is what the three parts of the rule
+> above are waiting on. A type's methods share a single namespace — spec-declared and inherent alike — so
+> what makes a second `impl X for A` an error is not the `(spec, type)` key but the collision, and two
+> DIFFERENT specs that happen to declare the same method name collide too: `impl Show for P` beside
+> `impl Tag for P`, each with a `label`, is _E4025 `P` declares `label` twice_. Nothing here is silently
+> wrong — every case is refused by name, with a place — and nothing here is resolvable that should not be.
+> What is missing is the key: until a method is keyed by the spec that declared it and by that spec's
+> arguments, `(spec, type)` has nothing finer to be keyed on. The same key is what
+> [Types](types.md#into--an-ordinary-conversion-spec) needs for a second `Into`, and it is one piece of
+> work rather than two.
 >
-> The ORPHAN half is enforced one scope in: an `impl` belongs in the spec's module or the type's, because
-> a module is the only scope this implementation has and there is no package layer for the rule to reach.
-> UNIQUENESS is not keyed on the `(spec, type)` pair at all — what makes a second `impl X for A` an error
-> is that its methods collide in the one namespace a type's methods share, which is a narrower question
-> than the one the rule asks. And the INSTANTIATION half of the key is a **[not yet]** rather than a
-> deviation: a target carrying type arguments is refused above, so no instantiation ever reaches a key
-> for a key to be imprecise about. Measured, the FIRST of `impl X for list[int]` / `impl X for list[str]`
-> is refused and neither is ever keyed — so the key does not over-approximate, it is never consulted.
+> Two neighbours of the rule are not waiting on it. The ORPHAN half is enforced one scope in — an `impl`
+> belongs in the spec's module or the type's, because a module is the only scope this implementation has
+> and there is no package layer for the rule to reach. And the INSTANTIATION half of the key is not
+> reached at all: a target carrying type arguments is refused above, so the FIRST of
+> `impl X for list[int]` / `impl X for list[str]` is turned away and neither is ever keyed. The key does
+> not over-approximate; it is never consulted.
 
 ## `#[obj]` — a spec's methods, held as values
 

@@ -63,8 +63,9 @@ carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md
   無號,所以 `-1 < 1u` 是 false。顯式 cast 一側:`int(u) + i`。
 - **除法與餘數**——`/` 與 `%` 採 **Euclidean** 定義：餘數**恆為非負**（`0 ≤ a % b < |b|`），且
   `a == (a / b) * b + a % b` 對任何正負號都成立，所以 `a % n`（n>0）對任何 `b` 都是合法的 index/bucket。這是數學上
-  canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation；compiler 只在**運算元可能為負**時補小修正，**兩者
-  皆非負時完全 elide**（最常見、零成本）。`a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
+  canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation。那要付多少代價是實作的事,不是本頁作出的承諾:那個修
+  正是幾個指令,一個實作在**能證明兩個運算元都非負**時**可以**把它省掉,而今天的參考編譯器是無條件產生它的。
+  `a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
   （`OverflowError`）；truncating 與 flooring 變體屬 stdlib（延後）。
 - **`//` 的結果恆為 `int`**——`a // b` 就是同一個 Euclidean 除法，只是換一種寫法讓讀者一眼看出結果是整數、
   不必先看運算元。兩個整數時它**就是** `/`：語言只有**一條**整數除法規則，再加一條對負除數行為不同的
@@ -78,9 +79,6 @@ carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md
 > 與 `Shr` 這些 spec 在任何地方都沒有被宣告,所以指名其中一個會報 _error: no spec named `BitAnd`_——那是「沒有人寫
 > 過這個 spec」的普通訊息——而複合值上的 `&` 沒有任何路徑通往使用者寫的 body。運算子本身在 `int` / `uint` / `byte`
 > 上是內建的、如規範般運作;缺的是這道 desugar 存在的目的:多載（見 [Spec 與 Generics](specs.zh-TW.md)）。
->
-> **[deviation]** 讓 `/` 與 `%` 成為 Euclidean 的那個修正是**無條件**產生的,並未在兩個運算元都可證明非負時
-> elide——上面說的「最常見情況零成本」是意圖中的 codegen、不是今天的。語意不受影響:那是成本、不是錯的答案。
 
 ### 有型別的位置（Typed positions）
 
@@ -247,10 +245,12 @@ enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 
 discriminant。帶限定的名字是**在它指名的那個 enum 裡面**解析的,所以指到該 enum 沒有宣告的名字會是
 _E4031 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
 
-> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E3079 `Red` is a variant of
-> `Colour`, and a variant is named through its enum_,而 [Grammar](../surface/grammar.zh-TW.md) 說裸名字只要
-> 解析得到一個 variant 就是那個 variant。當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個
-> ——它是兩種可行寫法之一,未必是你要的那一個。
+**裸的 variant 名字不是一個值**,而理由就是上面那一段:`c := Red` 會是 _E3079 `Red` is a variant of `Colour`, and
+a variant is named through its enum_。要是由「當下 scope 裡剛好有什麼」來決定,那麼在一個檔案裡宣告一個 variant,就
+會改變另一個檔案裡某個名字的意思 —— 那正是 [Grammar](../surface/grammar.zh-TW.md) 為 pattern 位置給出的論證,而它
+在這裡一字不改地成立。一個 variant **就是**那一對,所以那一對就是它的寫法,在每一個位置都是。
+
+當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個:它是兩種可行寫法之一,而知道要哪一個的是讀者。
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是
@@ -280,8 +280,14 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
-兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。有一項繼承是刻意不給的:
-`X` **不**承接 `Y` 的 `Into` impl——`X` 能轉換成什麼,是 `X` 自己的宣告。一個**單型**的 `type X = Y`
+兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。
+
+**`Y` 有的運算子,`X` 在兩個 `X` 之間就有**,而且結果是 `X`:兩個 `Celsius` 的 `c + d` 是一個 `Celsius`,`c < d` 是
+`bool`,`type Flag = bool` 上的 `not f` 是 `bool`。這與 identity 並不衝突——identity 決定一個值可以**遇到**什麼,運算子
+決定可以對它**做**什麼——而這正是 strong-typedef 這個工具存在的理由。一個 `X` 旁邊放別的東西則被拒絕:`c + 1` 要寫成
+`Celsius(1)`、`c + i` 要寫成 `int(c)`,因為一個沒有型別的字面值**不會**像採用 `Y` 那樣去採用一個具名型別。
+
+有一項繼承是刻意不給的:`X` **不**承接 `Y` 的 `Into` impl——`X` 能轉換成什麼,是 `X` 自己的宣告。一個**單型**的 `type X = Y`
 在 runtime **降低成 `Y`**——區別**只在編譯期**,所以 `Celsius = int` 不花任何成本(無 box、無包裝),而一個 `Celsius`
 沒有明確的 `int(c)` / `Celsius(x)` 就永遠不是 `int`。一個**泛型** alias `type X[T] = …` 這個階段**尚未支援**(會被
 解析、但被拒絕)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作一個裸 `int` 或
@@ -289,12 +295,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
-> **[deviation]** `type X = Y` 只對**純量**底型 `Y` 實作,而新型別**不**繼承 `Y` 的算術或 `spec` impl——一個
-> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E9042 NotImplemented:
+> **[not yet]** 底型 `Y` 必須是**純量**。其餘一律帶著位置具名拒絕:_E9042 NotImplemented:
 > `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
 > name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
-> to follow the name_。意圖中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;建出來的只有純量、無 impl
-> 的情形。
+> to follow the name_。缺的正是那句話說的:一個讓所有權規則跟著走的名字,而那是關於 `drop` 與 copy helper 的問題,
+> 不是型別層的問題。上面那個運算子的部分**已經**建好,涵蓋語言所有的純量;寫在 `X` 自己身上的 `spec` impl 也一樣;
+> `X` 不做的,是承接寫在 `Y` 身上的 impl。
 
 ## 建構與封裝（Construction & encapsulation）
 
@@ -463,10 +469,11 @@ spec Into[T] {
 以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
 問得出口的東西,而到那時它已經是已知的。
 
-> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
+> **[not yet]** 一個型別只帶**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
 > `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
-> language allows several, and reaching that needs the method keyed by the spec and its arguments_。那正是
-> 上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_。這與
+> coherence 規則缺的是同一把鍵,在 [Spec 與 Generics](specs.zh-TW.md) 裡說過一次:一個以「宣告它的 spec」為鍵的
+> 方法——那也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
 
 一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是

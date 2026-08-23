@@ -86,3 +86,76 @@ not a plan.
 
 **Threshold: an inference failure a typed position cannot fix.** None has been found; the one that looked
 like it — a type parameter appearing only in the return — is answered by the binding's type.
+
+## A depth-checked stack overflow
+
+**Status: closed as a fault.** Opened as a door by 0.2.0, which moved the specification onto it.
+
+A stack overflow is a **fault, not an abort**: the runtime names it and the process exits `1`, but the
+pending `defer`s are skipped, no `guard` can catch it, and it ends the whole process rather than the one
+coroutine ([Errors](docs/code/errors.md), [Conformance](docs/conformance.md)). The reason is not an
+omission — it is arithmetic. The stack that would run those `defer`s is the one that is exhausted, and a
+signal handler standing on it cannot unwind what it is standing on.
+
+The specification asked for the other thing until this release: a runtime that **owns every stack** and
+**checks call depth itself**, so the overflow is caught one frame before the fault and unwinds cleanly.
+That is Go's model and it is a real design; what it is not is a property a runtime can add to a native
+stack after the fact. It needs the runtime to allocate and grow the stacks it runs on, and a check on
+every call that could exceed one — which is a cost every call pays for a case almost none reaches.
+
+**If it were reopened**, the check belongs where the frame size is known — the prologue the compiler
+emits — and not in the runtime, so it can be elided for a leaf that provably fits. The two halves have to
+land together: a depth check with no owned stack has nothing to compare against, and an owned stack with
+no check merely moves where the fault happens.
+
+**Threshold: the runtime owning and growing its own stacks**, which is not on any list here. Until then
+an unbounded recursion is a named death rather than a catchable one, and `for` is the loop.
+
+## Preemptive scheduling
+
+**Status: closed as cooperative.** Opened as a door by 0.2.0, which moved the specification onto it.
+
+The scheduler is **cooperative**: a coroutine yields at a channel operation, a `select`, or a sleep, and
+nothing takes it off its worker until it does ([Coroutines & Channels](docs/code/coroutine.md)). A
+CPU-bound coroutine that never parks therefore occupies one worker for as long as it runs, and `M` of them
+leave nothing to run anything else — including `main`.
+
+The specification asked for the property rather than the mechanism until this release: _no coroutine can
+indefinitely starve others, not even a CPU-bound one that never touches a channel_. That is a real
+guarantee and Go bought it in 1.14 with asynchronous preemption. What it costs is not the signal handling
+— it is that **every** coroutine's stack must be interruptible at a safepoint the runtime can identify,
+which reaches the emitter, the stack maps, and every place a value lives across a call.
+
+**If it were reopened**, the cheap half comes first and is worth having on its own: **compiler-inserted
+safepoints** at back-edges, which turn a `for` loop with no channel operation into a yielding one and cost
+a load and a branch per iteration. That covers the loop-shaped spinner, which is the shape almost every
+real one has. True asynchronous preemption — a signal into arbitrary code — is the other half and needs
+the stack maps.
+
+**Threshold: a spinner that a back-edge safepoint would not catch**, in a program somebody actually wrote.
+Until then the discipline is the one every cooperative runtime asks for: put a channel operation in the
+loop.
+
+## An iterative chain teardown
+
+**Status: open, with a measured bound.** Named by 0.2.0, which put the bound in the specification instead
+of a deviation.
+
+Freeing a recursive value recurses one C stack frame per node, so how long a chain can be freed is bounded
+by the stack the free runs on — about 60 000 nodes on a default 8 MiB main stack
+([Memory](docs/core/memory.md)). Past that the process dies with its name and cannot be caught: the free
+runs on the scope-exit and abort-unwind paths, where raising is not safe.
+
+The fix is not subtle — walk the chain into an explicit worklist and release node by node, instead of
+letting the C stack be the worklist. What makes it work rather than a rewrite is that the drop is
+GENERATED: every recursive type's teardown comes out of one place in the emitter, so the shape changes once
+rather than per type.
+
+**If it were done**, the thing to be careful of is the ORDER. A recursive drop releases a node's payload
+before its tail, and a worklist that pushed tails first would reverse that — observable through any drop a
+program can write, once user drops exist.
+
+**Threshold: a program that needs a chain deeper than the bound**, rather than a benchmark. Every recursive
+structure this toolchain has built stays far under it, and a structure that genuinely goes that deep is
+better served by a `list` indexed by position — which is a shape the language already has, and which frees
+in one loop.

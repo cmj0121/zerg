@@ -1,0 +1,36 @@
+# A strong typedef: `type X = Y` makes a new type that behaves like `Y` and can never be
+# passed where a `Y` is wanted.
+#   zerg build examples/20_typedefs.zg
+# Expected output:
+#   42
+#   true
+#   false
+#   2
+#
+# THE TWO HALVES ARE NOT IN TENSION, and this file is the demonstration. The IDENTITY decides
+# what a value may MEET — a `Celsius` never meets an `int` without `int(c)` written down — and
+# the OPERATOR decides what may be DONE with it, so two `Celsius` add, compare and print like
+# the `int` they lower to. A `Celsius` costs nothing at runtime; the distinctness is the
+# compiler's alone.
+type Celsius = int
+type Flag = bool
+type Mask = int
+
+# The identity is what makes this signature mean something: nothing but a Celsius reaches it,
+# and no Celsius reaches a function wanting a plain int.
+fn warmer(a: Celsius, b: Celsius) -> Celsius {
+	return a + b # a Celsius, because both operands were
+}
+
+fn main() {
+	c := Celsius(20)
+	d := Celsius(22)
+	print int(warmer(c, d)) # 42 — `int(…)` is the explicit step out of the type
+
+	print c < d          # true  — the ordering `int` has, between two Celsius
+	print not Flag(true) # false — and the same for a bool underneath
+	print int(Mask(6) & Mask(3))
+
+	# `c + 1` is refused: the literal is an `int` and an `int` is not a `Celsius`. Write
+	# `c + Celsius(1)`, which is the step a reader of the other line wanted written down.
+}

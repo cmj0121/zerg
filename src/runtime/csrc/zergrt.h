@@ -1112,7 +1112,14 @@ typedef struct zrt_coro {
 	size_t           stack_size; /* total mapped size, incl. the guard page */
 	zrt_coro_state   state;
 	void           (*thunk)(void *env); /* the marshalled call (spawn trampoline body) */
-	void            *env;               /* heap-owned argument environment; thunk frees it */
+	void            *env;               /* heap-owned argument environment */
+	/* envdrop gives the environment back when this coroutine NEVER RUNS. The thunk's own
+	 * `zrt_defer` owns the teardown once the body starts, so the trampoline clears this on
+	 * the way in and only the end-of-run sweep can reach it. Without it a `spawn` the
+	 * scheduler never got to — a program that ends first — leaked a reference per captured
+	 * value and the environment block with them. NULL when nothing was captured. */
+	void           (*envdrop)(void *env);
+	bool             started;           /* the trampoline has run: envdrop is the body's now */
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
 	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
 	bool             woken;              /* a wake arrived while PARKING; see sched.c */
@@ -1315,7 +1322,7 @@ bool zrt_atomic_claim(bool *flag);
 /* zrt_spawn allocates a coroutine (stack + guard page), arms it to run thunk(env) on
  * its own stack, and enqueues it on the run queue. Fire-and-forget: no handle, no
  * join. env is heap-owned and the thunk frees it. */
-void zrt_spawn(void (*thunk)(void *env), void *env);
+void zrt_spawn(void (*thunk)(void *env), void *env, void (*envdrop)(void *env));
 
 /* zrt_yield voluntarily returns to the scheduler, leaving the current coroutine
  * RUNNABLE so it resumes later. The only cooperative yield point this iteration

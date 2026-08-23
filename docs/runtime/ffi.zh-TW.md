@@ -164,14 +164,18 @@ struct by value、`mut &this` 變成指向它的指標（就地）——所以�
 一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於 header 之外，而非靜默丟棄：一個 package 大可對 Zerg
 依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映真正跨界的東西。一個不回傳值的 Zerg 函式對映到 C `void`。
 
-**符號名穩定且不 mangle。** C 的符號空間是扁平的，穩定 ABI 又不容 mangle，所以匯出名是決定性且不衝突的——概念上
-是把 package 名前綴到宣告名上（method 再帶上它的型別，例如 `zg_<pkg>_<name>`／`zg_<pkg>_<Type>_<method>`）。
-扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。（確切方案，以及是否提供逐宣告的 link-name 覆寫，是待決問題
-——見下。）
+**符號名穩定且不 mangle。** C 的符號空間是扁平的,穩定 ABI 又不容 mangle,所以匯出名是決定性的:它是固定前綴底下的
+宣告名,method 再帶上它的型別。扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。(確切方案,以及是否提供逐宣告的
+link-name 覆寫,是待決問題——見下。)
 
-> **[deviation]** 前綴是 `zg_`，而且**沒有 package 那一段**，因為沒有 package 層可以命名（見
-> [package.md](package.zh-TW.md) 的〈四層〉）：一次 `--emit lib` 建置裡的 `pub fn add` 匯出的是 `zg_add`，以 `nm`
-> 實測。所以名稱如規範所述地穩定且不 mangle，而讓它們跨 package 不衝突的那一部分，正是還不存在的那一部分。
+**前綴是 `zg_`,而且不帶 package 那一段** —— 一次 `--emit lib` 建置裡的 `pub fn add` 匯出的是 `zg_add`,`nm` 看得到。
+那不是 `zg_<pkg>_add` 的暫代品:沒有 package 層可以讓那一段去命名(見 [package.md](package.zh-TW.md) 的〈四層〉),
+而一個預先安排它的方案,會是一個今天沒有東西算得出來的名字。那一段買到的是**跨** package 不衝突,而它會跟著它所屬
+的那一層一起到來。
+
+> **[not yet]** package 那一段,以及隨之而來的「跨 package 不可能衝突」的名字。它屬於
+> [package.md](package.zh-TW.md) 裡 package 層自己的那個標記,而不是這裡的第二個:在一次建置知道一個宣告屬於哪個
+> package 之前,`zg_<pkg>_<name>` 沒有 `<pkg>` 可寫。
 
 ## 匯入 C——一個 stdlib 設施
 

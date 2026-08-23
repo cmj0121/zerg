@@ -89,14 +89,15 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 > example above writes it in. What is wired this phase is free functions
 > ([Standard Library](stdlib.md#io)); each writer returns `Result[nil]` but writes best-effort, never
 > yielding an `Err` yet.
->
-> **[deviation] / [implementation-defined] buffering.** `print` writes through **buffered libc stdio**
-> while `io.*` writes go **unbuffered** through `write(2)`, so their output **interleaves out of source
-> order**. Measured: a program alternating `print` and `io.println` four times emits both `io` lines first
-> and both `print` lines after, at a terminal and through a pipe alike — so this is not a rare race but
-> what the two paths do. The spec does not fix a buffering discipline across them; to get source order,
-> keep a run of output on one path. (See [Conformance](../conformance.md) on implementation-defined
-> behavior.)
+
+**Standard output is unbuffered**, and that is what makes the two spellings one stream: `print` lowers to
+libc `printf` and `io.*` to `write(2)`, so a buffer on either would put them in the order their buffers
+flushed rather than the order the program wrote them. It does not, so a program alternating `print` and
+`io.println` prints them alternating, at a terminal and through a pipe alike, and an abort's line on
+standard error lands after the output written before it. Go's stdout is unbuffered for the same reason.
+
+The cost is a write syscall per line, which is the price of the guarantee. A program that wants it
+amortized **builds its line and writes it once** — a thing it can do, and a buffer is not.
 
 ## Blocking — at the coroutine, not the thread
 

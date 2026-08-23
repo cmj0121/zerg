@@ -437,12 +437,11 @@ y := sum(sum(1, 2), 3)
 Width is the real judgement and the count is the backstop for what width cannot see: six
 arguments read as a list to scan rather than a line to read, however short each one is.
 
-> **[deviation]** A group the pass **declines** keeps its trailing comma, and nothing else
-> then objects. `x := sum( # before` with `1,` / `2,` under it holds a comment on the open
-> line, so `F403` leaves the group broken — and `zerg fmt --check` calls the file canonical,
-> exit 0, while `zerg build` refuses the same file with _E2046 a trailing comma before the
-> closing `)` of an argument list_. A formatter that certifies a file the compiler will not
-> take is worse than one that reformats it, because the certificate is the whole point.
+**A group the pass declines still loses its trailing comma.** Declining is about where the
+LINES go, and the comma is not a line — it is a token the grammar does not derive
+(_E2046 a trailing comma before the closing `)` of an argument list_). Leaving it made
+`zerg fmt --check` certify a file `zerg build` refuses by name, which is worse than a
+formatter that reformats: the certificate is the whole point.
 
 Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
 time rather than the whole line, so the group that crosses column 120 is the last one on

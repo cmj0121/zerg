@@ -347,6 +347,14 @@ func cycleLabel(canonical string) string {
 // is already known acyclic (detectCycle ran), so a post-order DFS is a valid
 // topological sort; it starts at the entry node, then sweeps any node the entry
 // does not reach, for determinism.
+//
+// A NODE'S DEPS ARE VISITED BY CANONICAL NAME, not in the order their imports were
+// written, and that is the whole of the tie-break docs/runtime/package.md names: what
+// the dependency graph leaves unordered is decided by the module NAME. Visiting
+// edges[n] as recorded made two independent modules initialize in the order their
+// import lines appear, so moving a line inside an import block reordered two
+// initializers — deterministic for a given source, but not the rule the chapter
+// states (#70).
 func topoOrder(edges map[string][]string) []string {
 	visited := map[string]bool{}
 	var order []string
@@ -356,7 +364,9 @@ func topoOrder(edges map[string][]string) []string {
 			return
 		}
 		visited[n] = true
-		for _, dep := range edges[n] {
+		deps := append([]string(nil), edges[n]...)
+		sort.Strings(deps)
+		for _, dep := range deps {
 			visit(dep)
 		}
 		order = append(order, n)

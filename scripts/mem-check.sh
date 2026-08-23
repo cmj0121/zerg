@@ -412,6 +412,84 @@ fn main() {
 }
 ZG
 
+# --- a spawn the scheduler never gets to ----------------------------------------------
+# THE ONE LEAK CLASS THIS FILE COULD NOT SEE, and the reason is in its own header: every
+# concurrent case here runs its coroutines to completion. A `spawn`'s environment is filled
+# at the spawn site — a reference taken per captured value — and released by the BODY, so a
+# coroutine the scheduler never reaches gave none of it back. `main` returning ends the
+# program and whatever is queued stays where it is, which is the language's rule and not the
+# defect; the defect was that what stayed was never freed.
+#
+# `main` never touches the channel, so with one worker it runs to its `print` without ever
+# yielding and not one of the spawned coroutines starts. That is the case, exactly.
+#
+# It captures a `str` AND a channel, because the two are given back by different halves of
+# the same teardown, and a sweep that ran only one of them would still balance the count on
+# a case that captured only the other.
+case_run spawn_unstarted no yes <<'ZG'
+fn sink(s: str, ch: chan[int]) {
+	ch <- bytearray(s).len()
+}
+
+fn main() {
+	ch := chan[int](1)
+	mut i := 0
+	r := rounds()
+	for i < r {
+		s := str(i) + "-never-scheduled"
+		spawn sink(s, ch)
+		i = i + 1
+	}
+	print 1
+}
+ZG
+
+# --- an Either whose RIGHT owns something ---------------------------------------------
+# THE OTHER SIDE, and every carrier case above holds its payload on the LEFT. Whether a
+# carrier owned anything at all used to be asked of the Left's type alone, so an
+# `Either[int, str]` was judged to own nothing and got no copy helper and NO DROP AT ALL —
+# while the wrap that builds a Right hands it a reference. One allocation leaked per Right
+# constructed, which is exactly the shape this gate reads, and no case here could see it
+# because none of them put anything on the right-hand side.
+#
+# A `Result[T]` would not have found it either: its Right is an `Err`, whose storage is the
+# runtime's, so the widened question answers the same for it as the narrow one did.
+#
+# The list element is here for the same reason it is in the tuple case: a
+# `list[Either[int, str]]` reaches the pair through an element vtable rather than by name,
+# and the ownership question is asked a second time to build that vtable. Both asks were
+# wrong, so both are measured.
+#
+# The seed does not build it — it has no `Either.Right` — so this one is `zerg` alone.
+case_run either_right no no <<'ZG'
+fn mk(i: int) -> Either[int, str] {
+	return Either.Right(str(i) + "!") if i % 2 == 0
+	return Either.Left(i)
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		e := mk(i)
+		f := e
+		if g := f {
+			n = n + g
+		}
+
+		mut rows: list[Either[int, str]] = []
+		rows.append(e)
+		more := rows
+		if h := more[0] {
+			n = n + h
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 # --- a carrier whose payload is a recursive enum --------------------------------------
 # The two units meet here. An `L?` is a carrier whose copy and drop are the ENUM's, reached
 # through the carrier's own pair, and a `list[L?]` reaches both through an element vtable —

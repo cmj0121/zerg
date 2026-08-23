@@ -131,6 +131,29 @@ for src in "$@"; do
 	samec=$((samec + 1))
 done
 
+# --- what `--check` is a question ABOUT ----------------------------------------------
+#
+# It answers "does this file still hold sugar", and for a long time it answered "would
+# `zerg desugar` write something else" — which is wider, because what that writes is
+# canonical-formatted core. So a file with no sugar in it at all FAILED when its whitespace
+# was not what `zerg fmt` would produce, and failed saying `still holds sugar`, sending the
+# reader after something that is not there.
+#
+# The loop above cannot see it: every file it checks has just been written by `zerg desugar`,
+# so every one of them is already canonical. This pair is written by hand for that reason —
+# one sugar-free file that is formatted the wrong way, and one canonical file that does hold
+# sugar, so the assertion is not merely that `--check` says yes to everything.
+printf 'fn main() {\n    x := 1\n    print x\n}\n' >"$tmp/plainly-formatted.zg"
+if ! "$ZERG" desugar --check "$tmp/plainly-formatted.zg" >/dev/null 2>&1; then
+	echo "CHECK     a file holding no sugar was reported as holding sugar because of its whitespace"
+	fail=$((fail + 1))
+fi
+printf 'fn main() {\n\tx := 1\n\treturn if x > 0\n\tprint x\n}\n' >"$tmp/canonical-sugar.zg"
+if "$ZERG" desugar --check "$tmp/canonical-sugar.zg" >/dev/null 2>&1; then
+	echo "CHECK     a canonically-formatted file that DOES hold sugar was reported clean"
+	fail=$((fail + 1))
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "desugar-check: $fail program(s) do not survive having their sugar undone"
 	exit 1

@@ -172,6 +172,14 @@ level in — a place nobody can open, and a name nobody can find. `scripts/rejec
 > here points at where the literal opened because that is the whole of what went wrong, and this one has a
 > character to name.
 >
+> **And the substituter was the last two.** `E3107` — a channel of optionals — was refused at seven
+> written positions with a place and at two more with none, because a `chan[T]` specialized at `T = int?`
+> is a type NOBODY WROTE: there is no position on it to point at, and an underline in the wrong place is
+> worse than none. The answer was that the place was never the type's. It is whatever CHOSE the type
+> argument — the call that instantiated the template, or the `impl` that bound the spec's parameter — and
+> both of those are lines a reader wrote. `scripts/reject-check.sh` has no `no-place` marker left and no
+> branch that would honour one: every rule reached from that gate says where.
+>
 > `scripts/error-codes-check.sh` cannot see an uncoded rule by comparing its three sets: it compares codes
 > that exist against the gates and the catalogue, and a rule with no code is absent from all three. It sees
 > the parser's and the emitter's by a different question — a `raise` in either file that writes its own
@@ -276,17 +284,20 @@ raised taxonomy `Err` — a `raise ValueError("bad input")` a program wrote and 
 report the same shape. An error carrying **no** kind (what a bare `raise "…"` builds) writes its message alone.
 See [Errors](code/errors.md) for the built-in error kinds and which operations raise them.
 
-> **[deviation]** A stack overflow — a coroutine running past its guard page, or `main` past its native
-> stack — now dies with its name: the runtime's fault handler writes `StackOverflowError: stack overflow`
-> to standard error and terminates with exit status **1**, steps 1 and 3 of the contract above. What
-> still deviates is step 2: the faulting stack is exhausted and cannot be unwound from a signal handler,
-> so the pending `defer`s are **skipped**, not run — and unlike an ordinary abort, which a coroutine
-> contains to itself, an overflow ends the whole process wherever it happens. A fault the handler does
-> not recognise is handed back to whatever held the signal before the runtime did (a sanitizer's handler,
-> or the default disposition), so it dies as the signal it is with that handler's diagnostic intact. The
-> two windows it does claim are **one page each** — a coroutine's guard page exactly, and the single page
-> below `main`'s stack bound — which is also the whole of what it can misname: an access into that one
-> page under `main` reads as an overflow. See [Errors](code/errors.md).
+**A stack overflow is a fault and not an abort**, and it is the one end this contract does not cover. The
+runtime names it — `StackOverflowError: stack overflow` on standard error, exit status **1**, steps 1 and 3
+— but step 2 cannot hold: the stack that would run the pending `defer`s is the one that is exhausted, and
+nothing can unwind it from a signal handler. So the `defer`s are **skipped**, no `guard` can catch it, and
+unlike an ordinary abort — which a coroutine contains to itself — an overflow ends the **whole process**
+wherever it happens. A fault the handler does not recognise is handed back to whatever held the signal
+before the runtime did (a sanitizer's handler, or the default disposition), so it dies as the signal it is
+with that handler's diagnostic intact. The two windows the handler claims are **one page each** — a
+coroutine's guard page exactly, and the single page below `main`'s stack bound — which is also the whole of
+what it can misname: an access into that one page under `main` reads as an overflow.
+
+That is the language's rule rather than a shortfall against it. A runtime that owned and grew its own
+stacks could check call depth before the fault and unwind cleanly instead; that is a
+[door](../FUTURE.md#a-depth-checked-stack-overflow), not a promise this page makes.
 
 ## The C the reference implementation emits
 

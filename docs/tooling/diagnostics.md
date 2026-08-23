@@ -217,7 +217,6 @@ shipping compiler rather than a part of it (the line
 | `E3044` | operator `…` orders two numbers or two strs, and these are … and …                                      |
 | `E3045` | cannot compare a variant with a number — a variant is a value of ITS enum                               |
 | `E3046` | cannot compare … and … — they are different kinds of value                                              |
-| `E3047` | operator `…` has no meaning on …                                                                        |
 | `E3048` | operator `not` takes a bool operand, and this one is …                                                  |
 | `E3049` | operator `-` takes a numeric operand, and this one is …                                                 |
 | `E3050` | operator `~` takes an int operand, and this one is …                                                    |
@@ -535,6 +534,15 @@ never reused is a rule about the NUMBER and not about who happens to have seen i
 | `E5004` | `E3110` | as above                                                      |
 | `E5005` | `E3111` | as above                                                      |
 | `E5006` | `E3112` | as above                                                      |
+| `E3047` | —       | a strong typedef takes its underlying type's prefix operators |
+
+**One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
+reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on
+the reading that a typedef takes none of its underlying type's operators. 0.2.0 decided the
+other way: an identity governs what a value may MEET and an operator governs what may be DONE
+with it, so `not f` on a `type Flag = bool` is `E3048`'s question asked of `bool`, and there
+is nothing left for a rule of its own to say. Its number is listed here for the reason every
+other number is: so that it is never reissued.
 
 Twenty-seven others were measured and are **not** findings, which is what deciding the
 question settled: the twenty-two checking rules `emit.zg` reports (it is _AST -> C, with the

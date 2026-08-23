@@ -539,6 +539,11 @@ struct Emitter {
 	# result has no row to record, which is the [deviation] docs/code/collections.md carries.
 	pub frz_idxs: list[int]
 
+	# frz_paths are the same freeze for an iterable that has no environment row: a field
+	# path, or an index by an integer literal. What says two of them are the same collection
+	# is that they are spelled the same way — see chk_path_text (check.zg).
+	pub frz_paths: list[str]
+
 	# unit_paths / unit_mods are THE MODULE IDENTITY TABLE: every source path this program was
 	# loaded from, and the module each one belongs to. It is filled by the LOADER and read by
 	# `c_mod_of`, and it is the whole of what makes a module an identity rather than a string
@@ -1311,11 +1316,28 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: Ty, e: Expr) -> str {
 	return c_carrier_drop_fn(em, t)
 }
 
+# c_carrier_owns is whether a carrier holds anything that has to be given back, and it asks
+# about BOTH SIDES.
+#
+# It used to ask only the Left, in both of the places that ask — so an `Either[int, str]` was
+# judged to own nothing, got no drop and no copy at all, and every `Either.Right(f"…")` leaked
+# the string it was built from. The wrap that builds a Right hands the carrier a
+# reference; nothing took it back. A leak and never a double free, which is why nothing
+# crashed and why macOS ASan, having no LeakSanitizer, never said a word.
+#
+# A `Result[T]` is unaffected either way: its Right is an `Err`, whose storage belongs to the
+# runtime, so `c_needs_copy` answers no for it exactly as it did.
+fn c_carrier_owns(mut &em: Emitter, t: Ty) -> bool {
+	return c_needs_copy(em, c_carrier_elem(t)) if ty_is_opt(t)
+
+	return c_needs_copy(em, c_either_left(t)) or c_needs_copy(em, c_either_right(t))
+}
+
 # c_carrier_drop_fn names the drop c_carrier_decl generated for this carrier, or "" when
-# the payload owns nothing and none was generated. The test is c_carrier_decl's own, in the
+# neither side owns anything and none was generated. The test is c_carrier_decl's own, in the
 # same words, because the two are one question asked from either side.
 fn c_carrier_drop_fn(mut &em: Emitter, t: Ty) -> str {
-	return "" if not c_needs_copy(em, c_carrier_elem(t))
+	return "" if not c_carrier_owns(em, t)
 	return "zg_drop_" + c_carrier_of(em, t)
 }
 
@@ -1458,15 +1480,30 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# c_copy_of, c_elem_kind and c_drop_thunk each decided to name these helpers from
 	# c_needs_copy — so a payload the two dispatches disagreed about got no helpers and was
 	# named anyway. `(int, str)?` was that payload, and cc reported the undefined symbol.
-	return d if not c_needs_copy(em, left)
+	return d if not c_carrier_owns(em, c)
 
-	df := c_drop_stmt(em, left, "r->ok")
-	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
-	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
-	d = d + "}\n"
-	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n"
-	d = d + "    if (" + c_res_is_left("v") + ") { " + c_res_ok("v") + " = " + c_copy_of(em, left, c_res_ok("v")) + "; }\n"
-	d = d + "    return v;\n}\n"
+	# EACH SIDE IS GIVEN BACK BY THE ARM THAT HOLDS IT. The Left arm is written whenever the
+	# Left owns something and the Right arm whenever the Right does, so a carrier where only
+	# one of them does gets exactly one arm — and an optional, which has no Right, gets the
+	# Left arm alone as it always did.
+	mut df := ""
+	if c_needs_copy(em, left) {
+		df = "    if (" + c_res_is_left("(*r)") + ") { " + c_drop_stmt(em, left, "r->ok") + " }\n"
+	}
+	mut cf := ""
+	if c_needs_copy(em, left) {
+		cf = "    if (" + c_res_is_left("v") + ") { " + c_res_ok("v") + " = " + c_copy_of(em, left, c_res_ok("v")) + "; }\n"
+	}
+	if not ty_is_opt(c) {
+		right := c_either_right(c)
+		if c_needs_copy(em, right) {
+			df = df + "    if (" + c_res_is_right("(*r)") + ") { " + c_drop_stmt(em, right, "r->err") + " }\n"
+			cf = cf + "    if (" + c_res_is_right("v") + ") { " + c_res_err("v") + " = " + c_copy_of(em, right, c_res_err("v")) + "; }\n"
+		}
+	}
+
+	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n" + df + "}\n"
+	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n" + cf + "    return v;\n}\n"
 
 	# and the ELEMENT VTABLE, because a `list[str?]`, a map value and a struct field of
 	# carrier type all reach the pair through a thunk rather than by name — and so does
@@ -1582,7 +1619,16 @@ fn c_fn_ret(t: Ty) -> Ty {
 fn c_args_after(mut &em: Emitter, fty: Ty, args: list[Expr], sb: Subst) -> str {
 	chk_fnval_arity(em, fty, args.len())
 
-	rendered := c_args_typed(em, c_fn_params(fty), args, sb)
+	# A CALL THROUGH A FUNCTION VALUE SEQUENCES ITS ARGUMENTS, exactly as a direct call
+	# does. This was the last combining form in either compiler still handing its operands
+	# to one C construct and inheriting C's unspecified order (docs/core/memory.md).
+	#
+	# It is asked HERE and not in `c_args_typed`, which this shares with the intrinsics and
+	# the built-in error constructors: those two stay unsequenced, and they stay unsequenced
+	# in the seed too. The two compilers must agree about which operands are sequenced or
+	# `make oracle` becomes a tripwire waiting for a program that can tell — so the boundary
+	# is drawn in the same place on both sides, and moving it is a change to both.
+	rendered := c_args_typed(em, c_fn_params(fty), args, sb, c_needs_order(args, 0))
 	return "" if rendered == ""
 
 	return ", " + rendered
@@ -1687,6 +1733,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_const = []
 	em.env_cval = []
 	em.frz_idxs = []
+	em.frz_paths = []
 
 	# scope 0 is the module: the constants below live there and it is open in every
 	# function. c_fn opens one more for the parameters, and the body block one after that.
@@ -2324,7 +2371,7 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
 	c_check_solved(em, tpl, sol)
 	c_check_bounds(em, tpl, sol)
 	c_check_inst_budget(em, name)
-	inst := subst_fn(tpl, sol)
+	inst := subst_fn(tpl, sol, c_place(em))
 	em.inst_names.append(key)
 	em.inst_fns.append(inst)
 	c_add_sig(em, inst)
@@ -3345,6 +3392,28 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 	return em.tk_unders[r]
 }
 
+# c_scalar_repr is what a `type X = Y` COMPUTES IN, and the one place the strong typedef is
+# looked through for an operator rather than for a representation.
+#
+# The two are not in tension, which is the whole of the rule: an identity decides what may
+# MEET what — a `Celsius` is never an `int` at a typed position, and never will be — while an
+# operator decides what may be DONE with it. `docs/core/types.md` says `X` takes on `Y`'s
+# implementation, and a `UserId` that behaves like an `int` but cannot be added to another
+# `UserId` is not the tool that sentence describes.
+#
+# It recurses, because a typedef's underlying type may be one: `type A = B` over `type B =
+# int` computes in `int`. A type that is not a typedef answers ITSELF, so every other caller's
+# type passes through untouched.
+fn c_scalar_repr(mut &em: Emitter, t: Ty) -> Ty {
+	nm := c_named_of(t)
+	return t if nm == ""
+
+	u := c_typedef_of(em, nm)
+	return t if c_is_unknown(u)
+
+	return c_scalar_repr(em, u)
+}
+
 # c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
 # disjunction written out in three places — the typedef registry, the typedef's own check,
 # and c_check_type_name — so a fifth kind of type name would have been three edits with two
@@ -3772,12 +3841,13 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	# nothing but literals behaves exactly as it did.
 	return true if c_is_str(t)
 
-	# A CARRIER owns its payload — that is what `if v := c { … }` retaining what it binds
-	# already says — so it owes a copy exactly when the payload does. Answering `false` here
-	# is what made `got := <-c` a second name for one reference: the value was bit-copied in
-	# and nothing was registered, because a type that needs no copy is a type that owes
-	# nothing back.
-	return c_needs_copy(em, c_carrier_elem(t)) if c_is_carrier(t)
+	# A CARRIER owns WHICHEVER SIDE IT HOLDS — that is what `if v := c { … }` retaining what
+	# it binds already says — so it owes a copy exactly when either side does. Answering
+	# `false` here is what made `got := <-c` a second name for one reference: the value was
+	# bit-copied in and nothing was registered, because a type that needs no copy is a type
+	# that owes nothing back. Asking only the LEFT was the same miss one level along: a
+	# `list[Either[int, str]]` was a list of things needing no copy.
+	return c_carrier_owns(em, t) if c_is_carrier(t)
 
 	# A HELD FUNCTION owns its environment, whatever it captured — the question cannot be
 	# asked of what is in there, because a `fn(int) -> int` is the type of every lambda with
@@ -5103,6 +5173,16 @@ fn c_diag(mut &em: Emitter, code: Rule, msg: str) -> str {
 	return c_diag_at(em.at_path, em.at_line, em.at_col, code, msg)
 }
 
+# c_place is the place trailer ALONE, for a rule that is raised somewhere else entirely and
+# needs to be told where the reader was. `c_diag` builds a whole message; this hands over
+# only the "--> path:line:col" half, which is what a rule living in `ast.zg` takes.
+#
+# It exists for ONE caller and the caller says why: specializing a template can reach a type
+# the source does not spell, and the place worth reporting is the instantiation (#55).
+fn c_place(mut &em: Emitter) -> str {
+	return "\n" + place_line(em.at_path, em.at_line, em.at_col)
+}
+
 # c_diag_at is for a rule that KNOWS its place rather than standing on it, and the emitter has
 # two kinds. One runs over a DECLARATION before any statement is emitted — a field's default,
 # a duplicate variant name — where the marker still holds the previous statement's position
@@ -5875,8 +5955,16 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# slot), and then this line rendered it with c_expr, which divides two integers. Silent,
 	# and in every mixed expression — the same shape of miss c_into's comment describes at the
 	# six slots it serves, at the seventh nobody had told.
+	# THE OPERATION HAPPENS AT THE UNDERLYING TYPE when either side is a `type X = Y`. The
+	# checker has already decided that the pair is legal — two of the same X, or nothing to do
+	# with a typedef at all — so what is left here is picking the C the operator lowers to,
+	# and a TNamed is not a scalar class: without this a `Celsius + Celsius` fell past every
+	# width rule to a bare C `+`, which is the one arithmetic in this compiler that does not
+	# check for overflow.
 	tb := c_infer(em, b)
-	pair_is_float := c_is_float(ta) or c_is_float(tb)
+	ra := c_scalar_repr(em, ta)
+	rb := c_scalar_repr(em, tb)
+	pair_is_float := c_is_float(ra) or c_is_float(rb)
 
 	# THE TWO OPERANDS ARE A RUN. Every arithmetic operator this compiler emits is a checked
 	# runtime CALL (`zrt_add_i64(a, b)`), so its two operands are two arguments and C leaves
@@ -5885,14 +5973,14 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	seq := c_needs_order([a, b], 1) and not c_is_shortcircuit(oper)
 	ca := c_ordered(em, seq, c_operand(em, pair_is_float, a, sb))
 	cb := c_ordered(em, seq, c_operand(em, pair_is_float, b, sb))
-	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
+	return c_floordiv(em, ra, rb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
 	# adopting the context (docs/core/types.md); handing `c_arith` the left type sent it
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
-	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+	return c_arith(em, oper, c_scalar_repr(em, c_infer_binary(em, oper, a, b)), ca, cb)
 }
 
 # c_operand renders one side of a binary expression. It is c_expr, plus the one thing c_expr
@@ -8265,6 +8353,14 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Su
 	# against generated C
 	chk_variant_arity(em, en, name, args.len(), "gives")
 
+	# THE PAYLOAD IS A RUN, like a call's arguments and a struct's fields. A compound literal
+	# is one C construct and C leaves the order of its initialisers to the backend, so
+	# `E.V(f(1), g(2))` ran whichever of the two the compiler felt like running first — the
+	# one combining form left inheriting that, after every other one in this file had been
+	# sequenced. It is asked from 0 because a variant has no receiver for the answer to be
+	# about (docs/core/memory.md).
+	seq := c_needs_order(args, 0)
+
 	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, name), 10)
 	if args.len() > 0 {
 		out = out + ", .u." + name + " = {"
@@ -8278,7 +8374,10 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Su
 				# box a self-recursive payload into a refcounted cell that releases it
 				val = f"zg_refnew_{en}({val})"
 			}
-			out = out + ".f" + strconv.to_string(i, 10) + " = " + val
+
+			# the BOX is inside the temporary, not outside it: hoisting the unboxed value
+			# would leave the allocation where the literal is and put it back out of order.
+			out = f"{out}.f{i} = {c_ordered(em, seq, val)}"
 			i = i + 1
 		}
 		out = out + "}"
@@ -8455,24 +8554,29 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 # A call with no declared type to read — an intrinsic, an err constructor — passes an empty
 # list and every argument goes through unchanged, which is what those want.
 #
-# It renders NO ordering temporaries, and that is a deliberate limit rather than an
-# oversight: its callers are the intrinsics, the built-in error constructors and the calls
-# through a function VALUE, and the Go seed leaves all three alone. The two compilers have
-# to agree about which operands are sequenced or `make oracle` becomes a tripwire waiting
-# for a program that can tell — so the boundary is drawn in the same place on both sides,
-# and moving it is a change to both.
-fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
+# WHETHER IT SEQUENCES is the caller's to say, and the two callers answer differently. A
+# call through a function VALUE does — its arguments are a run like any other call's — and
+# the intrinsics and the built-in error constructors do not. The Go seed draws the boundary
+# in the same place, and it has to: the two compilers must agree about which operands are
+# sequenced or `make oracle` becomes a tripwire waiting for a program that can tell, so
+# moving the line is a change to both.
+fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst, seq: bool) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
+		mut val := ""
 		if i < ftys.len() {
-			out = out + c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
+			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
-			out = out + c_expr(em, args[i], sb)
+			val = c_expr(em, args[i], sb)
 		}
+
+		# the COPY is inside the temporary: hoisting the uncopied value would move the
+		# retain out of the run and leave the copy where the argument list is.
+		out = out + c_ordered(em, seq, val)
 		i = i + 1
 	}
 	return out
@@ -8490,7 +8594,7 @@ fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: li
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 	mut none: list[Ty] = []
-	return c_args_typed(em, none, args, sb)
+	return c_args_typed(em, none, args, sb, false)
 }
 
 # c_fn_params reads a function TYPE's parameter list, or an empty one from anything else.
@@ -9861,19 +9965,66 @@ fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
 		i = i + 1
 	}
 
+	seq := c_const_seq(em, f)
 	mut out: list[int] = []
 	for out.len() < n {
 		mut placed := 0
-		mut j := 0
-		for j < n {
+		for j in seq {
 			if not done[j] and c_const_ready(f, f.consts[j].value, done) {
 				done[j] = true
 				out.append(j)
 				placed = placed + 1
 			}
-			j = j + 1
 		}
 		raise c_const_cycle_says(f, done) if placed == 0
+	}
+	return out
+}
+
+# c_const_seq is the order the sweep VISITS the table in, and with it the whole of the
+# tie-break rule: dependency order is decided by `c_const_ready`, and everything the graph
+# leaves unordered is decided HERE.
+#
+# BY CANONICAL MODULE NAME, which is what `docs/runtime/package.md` says decides it. The
+# sweep used to visit in table order, so the tie went to whichever module was loaded first
+# — the order the IMPORTS WERE WRITTEN. That is stable for a given source, so it was never
+# a reproducibility defect; it made a program's side-effect order depend on the arrangement
+# of its import block, which is a thing a reader moves for readability (#70).
+#
+# The module NAME and not its path, and after `mod_id` that is no longer the same decision:
+# an identity is `stdlib:io` or `project:util/text` — a root and a path under it — so the
+# same program built from a relative and an absolute entry sorts one way. Within a module
+# the table's own order stands, which is the source order the loader read the files in.
+fn c_const_seq(em: Emitter, f: File) -> list[int] {
+	mut keys: list[str] = []
+	for c in f.consts {
+		keys.append(c_mod_of(em, c.path))
+	}
+
+	mut out: list[int] = []
+	mut j := 0
+	for j < keys.len() {
+		# `<=` and not `<`: the first row of a STRICTLY greater key is where this one goes,
+		# so equal keys keep the order they came in and the sort stays stable.
+		mut at := 0
+		for at < out.len() and keys[out[at]] <= keys[j] {
+			at = at + 1
+		}
+
+		mut next: list[int] = []
+		mut i := 0
+		for i < out.len() {
+			if i == at {
+				next.append(j)
+			}
+			next.append(out[i])
+			i = i + 1
+		}
+		if at >= out.len() {
+			next.append(j)
+		}
+		out = next
+		j = j + 1
 	}
 	return out
 }
@@ -10444,7 +10595,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
 		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL);\n"
+		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL, NULL);\n"
 	}
 
 	# ONE pass over the arguments for everything the env struct needs to know: each one's
@@ -10463,9 +10614,22 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	# not hold the channel open; before this every spawned argument took a sender, and a
 	# consumer you spawned counted as a producer that never finished. `dirs` carries that
 	# direction per argument, or -1 for an argument that is not a channel at all.
+	# TWO TEARDOWNS, because the two ways this environment can end are not the same list.
+	#
+	# `drops` is what the BODY owes: the channel handles, and nothing else. Every other
+	# capture is handed over to the coroutine and given back by the body's own BY-VALUE
+	# PARAMETER when it returns — that is what makes a capture the coroutine's rather than
+	# the spawning scope's.
+	#
+	# `abandons` is what nobody owes when there is no body. A coroutine the scheduler never
+	# reaches has no parameters to give anything back, so this list is the channels PLUS
+	# every capture the by-value parameter would have released. It is the runtime's, handed
+	# to `zrt_spawn`, and the scheduler drops its copy of the pointer the instant the
+	# trampoline starts — so exactly one of the two runs, never both.
 	mut fields := ""
 	mut call := ""
 	mut drops := ""
+	mut abandons := ""
 	mut dirs: list[int] = []
 	mut i := 0
 	for i < args.len() {
@@ -10480,6 +10644,9 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		if ty_is_chan(at) {
 			dir = c_chan_dir(c_param_ty(em, cal.key, i))
 			drops = drops + " " + c_chan_release_fn(dir) + "(e->" + fi + ");"
+			abandons = abandons + " " + c_chan_release_fn(dir) + "(e->" + fi + ");"
+		} else if c_needs_copy(em, at) {
+			abandons = abandons + " " + c_drop_stmt(em, at, "e->" + fi)
 		}
 		dirs.append(dir)
 		i = i + 1
@@ -10499,6 +10666,10 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut dd := "static void " + dropfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
 	dd = dd + drops + " zrt_free(p); }\n"
 	em.dfn_decls.append(dd)
+	abandonfn := "zg_spawnabandon_" + tag
+	mut ad := "static void " + abandonfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	ad = ad + abandons + " zrt_free(p); }\n"
+	em.dfn_decls.append(ad)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
@@ -10513,7 +10684,13 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
 	}
-	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zgt_se{tag});\n"
+
+	# THE ABANDON GOES WITH THE ENVIRONMENT, and it is the OTHER teardown: the thunk's own
+	# `zrt_defer` of `drops` covers both of the ways a coroutine that RUNS can leave, and
+	# this one covers the third, which is a coroutine that never runs at all — where there
+	# are no by-value parameters to give the captures back. The scheduler drops its copy of
+	# the pointer the moment the trampoline starts, so exactly one of the two runs.
+	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zgt_se{tag}, {abandonfn});\n"
 }
 
 # c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
@@ -10901,6 +11078,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	# lambda was written in gets its freeze back on the way out. The rows it holds belong to
 	# the enclosing function's environment, which is saved and restored with it.
 	saved_frz := em.frz_idxs
+	saved_frz_paths := em.frz_paths
 
 	# and the active substitution with them. It belongs to the block expression that opened
 	# it, and inside a function lifted OUT of that block its names mean nothing — the values
@@ -10917,6 +11095,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.rel_fns = saved_rel_fns
 	em.ref_names = saved_refs
 	em.frz_idxs = saved_frz
+	em.frz_paths = saved_frz_paths
 	em.used_fnptr = true
 
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
@@ -12220,19 +12399,36 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 # docs/code/collections.md is exactly that set.
 fn c_frz_push(mut &em: Emitter, iter: Expr) -> bool {
 	name := c_ident_name(iter)
-	return false if name == ""
+	if name != "" {
+		idx := c_live_idx(em, name)
+		return false if idx < 0
 
-	idx := c_live_idx(em, name)
-	return false if idx < 0
+		em.frz_idxs.append(idx)
+		return true
+	}
 
-	em.frz_idxs.append(idx)
+	# AND A PATH, which has no row to record. `for x in p.xs` is walking one collection just
+	# as `for x in xs` is, and the local rule says so: the freeze holds the written path and
+	# refuses a structural change spelled the same way. A slice or a call result is still
+	# nothing — those name a value with no place behind it, so there is nothing to freeze.
+	path := chk_path_text(iter)
+	return false if path == ""
+
+	em.frz_paths.append(path)
 	return true
 }
 
-# c_frz_pop ends the freeze c_frz_push started, given what it answered.
-fn c_frz_pop(mut &em: Emitter, pushed: bool) {
+# c_frz_pop ends the freeze c_frz_push started, given what it answered. WHICH stack it pops
+# is read from the iterable rather than remembered, for the reason c_frz_push answers a bool
+# at all: the two are one decision and a second flag would be a second chance to get it wrong.
+fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: Expr) {
 	return if not pushed
-	c_ints_drop_last(em.frz_idxs)
+
+	if c_ident_name(iter) != "" {
+		c_ints_drop_last(em.frz_idxs)
+		return
+	}
+	c_strs_drop_last(em.frz_paths)
 }
 
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
@@ -12382,7 +12578,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# than everything the body spells with the same name
 	frz := c_frz_push(em, iter)
 	out = out + c_loop_block(em, body, in2 + "    ")
-	c_frz_pop(em, frz)
+	c_frz_pop(em, frz, iter)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
 	c_scope_forget(em, keep)
@@ -12426,7 +12622,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	# same stack to refuse it
 	frz := c_frz_push(em, iter)
 	out = out + c_loop_block(em, body, in2 + "    ")
-	c_frz_pop(em, frz)
+	c_frz_pop(em, frz, iter)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
 	c_scope_forget(em, keep)
@@ -12638,6 +12834,16 @@ fn c_scope_forget(mut &em: Emitter, keep: int) {
 
 # c_ints_drop_last removes the last element IN PLACE. Taking the list by value and
 # answering a fresh one would copy the stack twice to lose one element, on every block.
+fn c_strs_drop_last(mut &xs: list[str]) {
+	mut out: list[str] = []
+	mut i := 0
+	for i < xs.len() - 1 {
+		out.append(xs[i])
+		i = i + 1
+	}
+	xs = out
+}
+
 fn c_ints_drop_last(mut &xs: list[int]) {
 	mut out: list[int] = []
 	mut i := 0
@@ -14307,7 +14513,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

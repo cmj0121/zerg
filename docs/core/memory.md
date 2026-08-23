@@ -27,29 +27,28 @@ refcounted cell**. A recursive value therefore copies **by reference** (refcount
 copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
 holder's scope exit.
 
-> **[deviation]** Freeing a chain **recurses one C stack frame per node**, so a chain longer than the
-> native stack cannot be freed at all. Measured on a default 8 MiB main stack: **60 000 nodes complete and
-> 70 000 do not**, which is about 128 bytes of stack per node. It dies with its name —
-> `StackOverflowError: stack overflow`, status 1, from the runtime's fault handler — rather than as a bare
-> SIGSEGV, but that is a diagnosis and not a recovery: the free runs on the scope-exit and abort-unwind
-> paths, where raising is not safe, so no `guard` can catch it and no `defer` after it runs. An
-> **iterative** chain teardown is what this owes, and it is not built.
->
-> The **freeing** half of this is closed. The cell's drop is the enum's own,
-> a binding registers it where it is declared, and an assignment gives the old value back after
-> materialising the new one. Measured over a counting allocator: 200 rounds that each build and drop a
-> 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many live allocations as five rounds do
-> (`make mem-check`). The stack-overflow sentence above is the price of that fix: it was unreachable while
-> nothing recursed, because nothing was freed.
+The freeing is exact. The cell's drop is the enum's own, a binding registers it where it is declared, and
+an assignment gives the old value back after materialising the new one. Measured over a counting allocator:
+200 rounds that each build and drop a 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many
+live allocations as five rounds do (`make mem-check`).
+
+> **[implementation-defined]** **How long a chain can be freed.** The teardown recurses one C stack frame
+> per node, so the depth is bounded by the stack it runs on: measured on a default 8 MiB main stack, **60
+> 000 nodes complete and 70 000 do not** — about 128 bytes per node. Past that the process dies with its
+> name (`StackOverflowError: stack overflow`, status 1) and not as a bare SIGSEGV, but that is a diagnosis
+> and not a recovery: the free runs on the scope-exit and abort-unwind paths, so no `guard` catches it and
+> no later `defer` runs. A **structure** that deep needs a shape the language has for it — a `list` of
+> nodes indexed by position, rather than a chain — until the
+> [door](../../FUTURE.md#an-iterative-chain-teardown) opens.
 
 ---
 
-> **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
+> **[not yet]** A recursive **`struct`** cannot be declared at all, so the bound above is not reachable
 > through one. `struct Node { value: int; next: Node? }` is rejected with _E4026 `Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
 > that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
-> refcount-sharing as described — what it does not do is free, which is the deviation above. The `Node`
+> refcount-sharing as described. The `Node`
 > used below — in Copy vs reference semantics, where it is the one place a shared mutation is observable —
 > is the specified form and does not compile today. It
 > carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E9010`, since
@@ -97,12 +96,12 @@ literal, or a plain name read — is left where it stands, so the common `f(g())
 The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — are left-to-right in the
 stronger sense that the right side is **skipped** when the left decides the result.
 
-> **[deviation]** Two combining forms still hand their operands to one C construct and inherit C's
-> unspecified order: an **enum variant's payload** (`E.V(f(1), g(2))`) and a call through a **function
-> value**. Each needs two or more effectful operands before the order is observable at all. The built-in
-> **`list` / `map` methods** stood here as a third and cannot: the ones that would take two effectful
-> operands — `insert`, `set`, `get` — are themselves refused by name, so no such call can be written.
-> Everything else named above is ordered.
+An **enum variant's payload** (`E.V(f(1), g(2))`) and a call through a **function value** are sequenced by
+the same rule — they were the last two forms that handed their operands to one C construct and inherited
+C's answer, and [`1g/evalorder`](../../examples/1g/evalorder) is the case that pins them. Two positions are
+deliberately NOT sequenced, in both compilers: the built-in intrinsics and the built-in error
+constructors. Neither can be told apart by a program that does not already know which C compiler built it,
+and the boundary is drawn in the same place on both sides because `make oracle` compares them.
 
 A form that reads an operand **more than once** is ordered by the same rule, and the trigger is the only
 thing that differs. `v in lo..hi` is the one: the membership test is a bounds comparison, so it names `v`
@@ -147,13 +146,10 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
   visible via every holder** of that tail.
 
-> **[deviation]** A carrier owns its **Left** and not its **Right**. Whether a carrier owns anything at all
-> is asked of the Left's type alone, so an `Either[int, str]` is judged to own nothing and gets **no copy
-> helper and no drop at all** — while the wrap that BUILDS a Right retains its payload. One reference is
-> therefore leaked per Right constructed, and copying such a carrier is a bit copy that counts nothing: a
-> leak, never a double free, which is why it is invisible under ASan. A `Result[T]` is unaffected — its
-> Right is an `Err`, whose storage is the runtime's. What is owed is the same pair over the other side.
->
+A carrier owns **whichever side it holds**, and its drop and copy each carry one arm per owning side: the
+Left's when the tag says Left, the Right's when it says Right. An optional has no Right and gets the Left
+arm alone. A `Result[T]`'s Right is an `Err`, whose storage is the runtime's, so it needs neither.
+
 > The **Left** half of this paragraph is closed. A carrier now has a copy helper, so a binding can register
 > the drop the way every other owning type does: `got := <-c` releases its payload at scope exit, and so do
 > a carrier passed as an argument, returned, held in a struct field or a `list[T?]` element, and the value
@@ -214,11 +210,15 @@ A **`spawn`'s captured values are the coroutine's**, not the spawning scope's: t
 reference of its own for each one and HANDS IT OVER to the coroutine, whose by-value parameters give it
 back when the body returns. That is one give-back per capture on every exit, the abort-unwind one included.
 
-> **[deviation]** A coroutine that never runs never gives them back. The environment is filled at the
-> `spawn` and released only by the body, so a spawn whose coroutine the scheduler never gets to — a program
-> that ends first — leaks a reference per captured value and the environment block with them. It is the one
-> leak class in this neighbourhood that has no case anywhere: `make sanitize-conc` runs programs whose
-> coroutines all complete, and `make mem-check` has no concurrency case beyond a drained channel.
+**A coroutine that never runs gives them back too**, and it is a different list. `main` returning ends the
+program and whatever is still queued stays where it is, so a `spawn` the scheduler never reached has no
+by-value parameter to hand anything to — the environment is handed to the runtime with a teardown of its
+own, and the scheduler runs it once every worker has stopped. The two teardowns are exclusive: the body's
+`defer` owns the environment from the instant its trampoline starts, and the runtime drops its pointer at
+the same instant, so exactly one of them runs. `make mem-check`'s `spawn_unstarted` counts it.
+
+A coroutine that started and is **parked** at the end is not this case and is not freed: giving its
+captures back would mean unwinding a stack the language says is abandoned where it stands.
 
 ## `Ref[T]` — a resource that outlives its scope
 

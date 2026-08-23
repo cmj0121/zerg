@@ -16,11 +16,6 @@ zerg desugar --off D103 <path>...   # 放過某一條規則(可重複)
 入。這條規則只寫一次,在[格式化工具那一章](fmt.zh-TW.md#一個路徑就是它底下那棵樹),而且對每一個吃原始碼的指令都
 一樣。
 
-> **[deviation]** `--check` 回答的問題比它問的更寬。它拿檔案去比對 `zerg desugar` **會寫出來**的東西,而那個東西
-> 是 canonical 格式化過的 core——所以一個完全沒有糖的檔案,只要空白不是 `zerg fmt` 會產出的樣子,照樣會失敗,而且
-> 失敗時說的是 _still holds sugar (run `zerg desugar`)_。四格縮排的 `fn main() { x := 1; print x }` 就是整份重現。
-> exit status 對「這個檔案會被改動」而言是對的,那句話對「為什麼」而言是錯的。
-
 ## 為什麼需要它
 
 [`GRAMMAR`](../../GRAMMAR) 把好幾個 surface form **定義成**別的東西。`return x if c` 就是
@@ -57,6 +52,12 @@ postfix guard 有四種是在 **parser** 裡就 desugar 掉的,第五種(`c_retu
 **編號不是執行順序。** `D104` 跑在**最前面**,因為它產出的是 `raise … if c`——那正是 `D101` 的 sugar。放到最後跑,
 這個 pass 就會留下自己下一輪還要再改寫的輸出,而「答案取決於跑了幾次」正是 gate 的 fixpoint 那一半要抓的東西。
 之後才依編號順序執行,而 `D101` 跑在 `D103` 前面是關鍵——見 `D103`。
+
+**`zerg fmt` 在其中一個形狀上不同意,而那不是任何一邊的缺陷。** `D101` 寫出的是 `if not (c) { raise x }`,那是 core
+形式;而 formatter 的 `F401` 寫出的是 `raise x if not (c)`,那是正典的**原始碼**形式(見[格式化工具](fmt.zh-TW.md))。
+兩者各自對自己的問題是對的——一個問的是一個形式**是什麼意思**,另一個問的是讀者**應該怎麼看到它**——所以拿
+`zerg fmt` 走過一個已經脫糖的檔案,會把糖放回去,而那是刻意的。由此推出的是:`--check` 比對的是**這個 pass 自己的
+印表機、規則全部關掉**,而絕不是 `zerg fmt`:拿 formatter 去比,會讓一個正確脫糖的檔案因為「它被脫糖過」而失敗。
 
 ### `D101`——postfix guard 變回它的 block
 

@@ -24,6 +24,7 @@
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
+	deviation-check \
 	doc-check stmt-walk entry-path examples-index mem-peak release-notes
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
@@ -137,6 +138,13 @@ EXAMPLE_MIN ?= 20
 EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg
 EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 
+# An example that ships a `.out` beside it is held to WHAT IT PRINTS and not merely to
+# running. Almost every example already states its expected output in a comment — "Expected
+# output: 40" — and nothing read those comments, so an example could print something else
+# for a year and this gate would call it green. The file is OPT-IN because the concurrent
+# ones have no single right output: `11_coroutines` interleaves, and pinning one interleaving
+# would be a gate that fails on a correct program.
+
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
@@ -144,7 +152,9 @@ examples:                       # build every example with zerg itself, and run 
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
-		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \
+		got=$$($$out 2>/dev/null) || { echo "RUN    $$src"; fail=1; continue; }; \
+		want=$${src%.zg}.out; \
+		if [ -f $$want ] && [ "$$got" != "$$(cat $$want)" ]; then echo "OUTPUT $$src"; fail=1; continue; fi; \
 		n=$$((n+1)); \
 	done; \
 	for src in $(EXAMPLE_REFUSED); do \
@@ -429,7 +439,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -579,6 +589,14 @@ cache-key-check:                # the build cache names the compiler that filled
 
 error-codes-check:              # every error code is reported once, asserted, and listed
 	./scripts/error-codes-check.sh
+
+# What the 0.2.0 criterion is, as a gate rather than a promise (#52). A `[deviation]` is the
+# specification saying the compiler does something else and we know — and the failure mode
+# this guards is not the marker, it is the SILENCE: "no deviations" met by deleting markers
+# rather than by fixing compilers. So a marker that is not on the inherited list must name an
+# issue, and an inherited entry whose marker is gone must come off the list.
+deviation-check:                # every deviation names a ticket, and the inherited list is honest
+	./scripts/deviation-check.sh
 
 seed-gaps:                      # the seed's gap list says the same thing in both languages
 	./scripts/seed-gaps-check.sh

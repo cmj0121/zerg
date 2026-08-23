@@ -61,9 +61,11 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 
 ### Program 生命週期與頂層初始化
 
-`main` 的 body 是**整個 program 的根 scope**：它一回傳，底下所有 scope-owned 的東西就會被釋放，任何還在跑的 coroutine
-就地被拋棄（沒有 join——要是某個 coroutine 必須先跑完，就用 channel 觀察到它完成、再讓 main 退；見
-[Coroutines 與 Channels](../code/coroutine.zh-TW.md)）。
+`main` 的 body 是**整個 program 的根 scope**:它一回傳,底下所有 scope-owned 的東西就會被釋放,而且不再有任何
+coroutine 被排程——park 住的不會被恢復,排隊中的不會被啟動。一條已經在別的 worker 上**跑著**的 coroutine 不會被停
+下,因為沒有東西會搶佔它,所以行程活得比 `main` 久,久到那條 coroutine 自己 park 或 return 為止(沒有 join——要是某個
+coroutine 必須先跑完,就用 channel 觀察到它完成、再讓 main 退;見
+[Coroutines 與 Channels](../code/coroutine.zh-TW.md))。
 
 `main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。
 
@@ -75,15 +77,10 @@ parse 拒絕——跟一個沒有 `fn main` 的程式走同一條分界（[Confo
 opens a statement at the top level, and a compiled program has nowhere to run it_。`nop` 是唯一的例外，而且其實
 不算例外：它什麼都不做、也不產出值，所以「什麼都不跑」就是跑完了它。
 
-頂層常數以**依賴序**
-初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，就是 compile error。
-當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module 名稱**、再依 module 內的
-**原始碼順序**。這整套排序成立。
-
-> **[deviation]** 平手是由 import **被寫下的順序**打破的,不是 canonical module 名稱。兩個互不讀取的 module,依
-> 它們 import 行出現的先後初始化 —— 所以在一個 import 區塊裡移動一行,就會重排兩個互不相干的初始化。它對同一份
-> 原始碼是穩定的(同樣的輸入給同樣的輸出),所以不是可重現性的缺陷;它是上面那句話指名的規則,並不是實際在跑的
-> 那條(#70)。
+頂層常數以**依賴序**初始化——一個常數在任何讀它的常數之前就緒——即 reads-from 圖的拓撲序；它們之間要是形成循環，
+就是 compile error。當該圖使兩個常數彼此無序（互不讀取）時，平手以**決定性**方式打破：先依**canonical module
+名稱**、再依 module 內的**原始碼順序**。這整套排序成立——所以移動一行 import 不會重排任何東西，而
+[`1g/initorder`](../../examples/1g/initorder) 正是那個把兩行 import 寫成反序來說明這件事的範例。
 
 對**直接**的讀取而言,這兩件事都已經實作。初始化式指名一個宣告在它**後面**的常數時,拿到的是那個值、不是零
 ——`const A: int = B + 1` 寫在 `const B: int = 10` 上面,得到 `A == 11`——而循環是一個具名拒絕:
@@ -93,26 +90,23 @@ _E4068 these constants depend on each other and none can be given a value first_
 `mk()` 讀 `B`，`A` 會拿到 `B` 被宣告成的那個值。這曾是這條排序規則唯一的 silent-wrong——`A` 持有零值而且
 沒有任何診斷——已由 #14 關閉。
 
-一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
-**首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依
-序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。
-`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
-藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
-channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
-**裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
+一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。它們**恰好跑一次**,在 **`main` 的第一個敘述
+之前**,跨 module 依**相依序**(一個 module 的 imports 先備妥,然後才輪到它自己),module 內依**宣告(FIFO)順序**。
+`init()` 承載多步或有副作用的啟動——開資源、註冊、seed——而不是把它藏進 constant 的 initializer,並備妥該 module 的
+immutable 狀態。
 
-若某個 `init()` **abort**,該 abort 從觸發它的**首次使用點**往外傳——可在那裡用 `guard` 接住,否則就像任何未接的
-abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自己)。該 module 於是**中毒(poisoned)**:`init()`
-**不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
-半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
+**是及早的,不是首次使用時。** 這次建置搆得到的每一個 `init()` 都會跑,包含一個執行從未碰到的 module 裡的那個。那是
+Go 的模型,也是這個語言採用的那一個:把它做成惰性的,代價是每一個 module 的每一次使用都要一道 guard,換回來的只有
+「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,在其他每一個意義上都已經付過了。
+及早真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是讓 `init()` 更惰性,是在裡面少做一點。
 
-> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，而不是
-> 在擁有它的那個 module 首次被使用時。「恰好一次」成立，順序也成立：一個 module 的 imports 先備妥，然後才輪到它
-> 自己，而它自己的各個區塊依 FIFO 執行。不成立的是「首次被使用時」——一個執行從未碰到的 module，它的 `init()`
-> 照樣會跑。
->
-> **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
-> 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
+仍**沒有可變全域**:共享的可變狀態以值傳遞或走 channel,絕不透過 module 層級的變數——頂層 binding 在 module 層級
+`unsafe { … }` 分組外不得為 `mut`,而在分組**裡面**的那個是 **module-private** 的,永遠不是 `pub`(見可見性)。
+
+若某個 `init()` **abort**,程式就結束。那次 abort 發生在主 stack 上、在 `main` 的 body 之前,所以沒有任何使用點可以
+把它 `guard` 起來,也沒有後續的使用可以再度 abort:「恰好一次」自明地成立,因為沒有東西跑了兩次;而半初始化的 module
+永遠搆不到,因為什麼都還搆不到。一個必須可回復地失敗的 module,應該從一個由程式呼叫的函式回傳 `Result`——那是既有的
+錯誤模型,不是第二個。
 
 ### Package
 
@@ -323,8 +317,25 @@ package 根底下的 `x`,不是 `/usr/x`。
 [Spec 與 Generics](../core/specs.zh-TW.md)），外加少數泛用型別——`list`、`map`、`set` 容器
 （見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。`display` / `debug` 根本不在裡面：它們是內建的
 值渲染、不是 spec method（見 [格式化](format.zh-TW.md)）。primitives——`bool`、`int`、`str`……——與 `chan`、以及
-`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。這些名字是**保留字**：宣告不得 shadow 或
-重宣告它們，所以那些 desugar 到它們的運算子永遠不會被從語言底下抽走。
+`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。
+
+prelude 名字是**保留字**——宣告不得 shadow 或重宣告它——所以那些 desugar 到它的運算子永遠不會被從語言底下抽走。
+**一個名字在工具鏈綁定它的那一天才被保留**，在那之前不是:在沒有任何東西宣告 `Ord` 的時候,就用 `Ord` 去擋住程式
+自己的 `spec Ord`,等於為一個不存在的功能佔住名字——這讓讀者付出代價,而語言什麼也沒買到。所以保留集合是隨著
+prelude 成長,而不是描述它:今天被綁定的是 `int`、`byte`、`bytearray`、`runearray`、`list`、`map`、`Either`、
+`Result`、`Err`、`Left`、`Right`、`Eq` 與 `Into`,每一個都在宣告處帶著位置被拒絕——_E2061 `list` is a prelude
+name — a built-in container type — and cannot name a struct_——而本頁承諾、但還沒有任何東西宣告的那些名字
+(`Ord`、`Hash`、`Error`、`Iterator`、`Iterable`、`Ref`、`set`)會在被綁定的那天加入。
+
+有兩個位置取的是這個集合的不同一半,而分開它們的是**呼叫**。型別宣告的名字落在所有 prelude 名字被綁定的那個命名
+空間裡,所以它們都不能命名 `struct`、`enum`、`spec` 或 `type`。函式的名字則落在只有**呼叫叫得出來**的那些名字所在
+之處——callee 寫成 `int`、`byte`、`bytearray` 或 `list` 會被讀成轉換,寫成 `Either`、`Result`、`Err`、`Eq`、
+`Into`、`Left` 或 `Right` 會被讀成建構,兩者都發生在去找使用者符號之前——而 `map` 不在其中,因為 `map[…](…)` 不是
+建構式,這個名字沒有可被取走的值形式。因此 `fn map(xs, f)` 合法,函式位置上其他每一個 prelude 名字都不合法。
+
+有兩個位置完全在規則之外。**方法**名字屬於它的型別、不屬於程式,所以 `impl P { fn set(v: int) }` 合法。而
+**binding**——區域的,或 module 常數,在 parser 裡是同一個形式——可以取 prelude 名字:在一個 scope 內遮蔽它,第一次
+使用就是一個大聲的錯誤,而那正是宣告所不是的。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的
@@ -335,23 +346,6 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > **[not yet]** prelude 承諾的 built-in spec 中，只有 **`Eq`** 與 **`Into[T]`** 存在。`Ord`、`Hash`、`Error`、
 > `Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Ord for P` 會回報程式中沒有任何東西以那個名字
 > 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
->
-> **[deviation]** 被保留的是**工具鏈真正綁定的名字**，比本頁所述的 prelude 窄。`struct list`、`fn int`、
-> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E2061 `list` is a prelude name — a built-in container type —
-> and cannot name a struct_，並附位置——`map`、`bytearray`、`runearray`、`Either`、`Result`、`Err`、`Right`
-> 與 `Into` 亦然。同一段承諾、但**這裡沒有任何東西宣告**的那些名字——`Ord`、`Hash`、`Error`、`Iterator`、
-> `Iterable`、`Ref` 與 `set`——沒有被保留：程式自己的 `spec Ord` 就是唯一的 `Ord`，拒絕它等於為一個不存在的
-> 功能佔住名字。每一個在被綁定的那天才加入這個集合。
->
-> **函式那個位置取的集合比型別位置窄**，而 `map` 就是全部的差別：`fn map(xs, f)` 合法，集合裡其他名字都不合法。
-> 型別宣告的名字落在所有這些名字被綁定的那個命名空間裡；函式的名字則落在只有**呼叫叫得出來的**那些名字所在之處
-> ——而 `map[…](…)` 當建構式在兩個 compiler 裡都沒有建，所以這個名字沒有可被取走的值形式。其餘的都有：callee
-> 寫成 `int`、`byte`、`bytearray` 或 `list` 會被讀成轉換，寫成 `Either`、`Result`、`Err`、`Eq`、`Into`、`Left`
-> 或 `Right` 會被讀成建構，兩者都發生在去找使用者符號之前。
->
-> 有兩個位置在規則之外，而且不算偏離。**方法**名字屬於它的型別、不屬於程式，所以 `impl P { fn set(v: int) }`
-> 合法。**binding**——區域的，或 module 常數，在 parser 裡是同一個形式——仍然可以取 prelude 名字：在一個 scope
-> 內遮蔽它，第一次使用就是一個大聲的錯誤，而那正是宣告所不是的。
 
 ### 測試與可見性（Testing & visibility）
 

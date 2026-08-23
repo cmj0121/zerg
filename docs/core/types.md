@@ -75,8 +75,9 @@ are storage too, one level down. The position that **does** take an absence is a
 - **Division & remainder** — `/` and `%` follow the **Euclidean** definition: the remainder is **always
   non-negative** (`0 ≤ a % b < |b|`) and `a == (a / b) * b + a % b` holds for every sign, so `a % n` is a
   valid index or bucket for any `b`. This is the canonical mathematical `div`/`mod`, not C's
-  sign-of-dividend truncation; the compiler emits the small correction only when an operand may be
-  negative and **elides it when both are non-negative** (the common case, zero overhead). `a / 0` and
+  sign-of-dividend truncation. What that costs is an implementation matter and not a promise this page
+  makes: the correction is a couple of instructions, an implementation **may** elide it where it can prove
+  both operands non-negative, and the reference compiler emits it unconditionally today. `a / 0` and
   `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
   flooring variants are stdlib (deferred).
 - **`//` always yields an `int`** — `a // b` is that same Euclidean division, spelled so the reader
@@ -94,10 +95,6 @@ are storage too, one level down. The position that **does** take an absence is a
 > _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
 > no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
 > specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
->
-> **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
-> elided when both operands are provably non-negative — the "zero overhead in the common case" above is
-> the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
 
 ### Typed positions
 
@@ -289,11 +286,14 @@ alike, each with its own discriminant. A qualified name is resolved **inside the
 one the enum does not declare is _E4031 `Apple` is a variant of `Fruit`, not of `Colour`_ — a sentence about
 the enum on the line, with a place.
 
-> **[deviation]** A **bare** variant name is not a value in this compiler: `c := Red` is _E3079 `Red` is a
-> variant of `Colour`, and a variant is named through its enum_, where [Grammar](../surface/grammar.md)
-> makes a bare name a variant when it resolves to one. Where two enums declare the name, the suggestion in
-> that sentence names the first of them — it is one of the two spellings that would work, not necessarily
-> the one meant.
+**A bare variant name is not a value**, and the paragraph above is the reason: `c := Red` is _E3079 `Red` is
+a variant of `Colour`, and a variant is named through its enum_. Deciding it by what happens to be in scope
+would mean that declaring a variant in one file changes what a name in another file means — the argument
+[Grammar](../surface/grammar.md) makes for pattern position, which holds identically here. A variant IS the
+pair, so the pair is how it is written, in every position.
+
+Where two enums declare the name, the suggestion in that sentence names the first of them: it is one of the
+two spellings that would work, and the reader is the one who knows which.
 
 A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
 reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
@@ -332,6 +332,13 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
 is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
 is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion.
+**An operator `Y` has, `X` has between two `X`s**, and the result is an `X`: `c + d` on two
+`Celsius` is a `Celsius`, `c < d` is a `bool`, `not f` on a `type Flag = bool` is a `bool`. That
+is not in tension with the identity — the identity decides what a value may **meet** and an
+operator decides what may be **done** with it — and it is what the strong-typedef tool is for.
+One `X` beside anything else is refused: `c + 1` needs `Celsius(1)` and `c + i` needs `int(c)`,
+because an untyped literal does **not** adopt a named type the way it adopts `Y` itself.
+
 One inheritance is withheld on purpose: `X` does **not** take `Y`'s `Into` impls — what `X` is
 convertible to is `X`'s own declaration to make. A
 **monomorphic** `type X = Y` **lowers to `Y`** at runtime — the distinctness is **compile-time only**, so a
@@ -344,13 +351,13 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
 
-> **[deviation]** `type X = Y` is implemented only for a **scalar** underlying `Y`, and the new type does
-> **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+` without an
-> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E9042
-> NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
+> **[not yet]** The underlying `Y` must be a **scalar**. Anything else is refused by name, with a place:
+> _E9042 NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
 > scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
-> the copy and drop rules to follow the name_. The intended semantics (a fresh identity reusing `Y`'s whole
-> representation and impls) stand; only the scalar, impl-less case is built.
+> the copy and drop rules to follow the name_. What is missing is exactly that: a name the ownership rules
+> follow, which is a question about `drop` and the copy helper rather than about the type layer. The
+> operator half above **is** built, over every scalar the language has, and so is a `spec` impl written on
+> `X` itself; what `X` does not do is inherit an impl written on `Y`.
 
 ## Construction & encapsulation
 
@@ -555,11 +562,12 @@ it is checked where it runs.
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
 
-> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E9060 NotImplemented: a
-> second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;
-> the language allows several, and reaching that needs the method keyed by the spec and its arguments_.
-> That is the same thing the bound above needs, and what would let a written `x.into()` say which one it
-> means.
+> **[not yet]** A type carries **one** `Into`, not several — _E9060 NotImplemented: a second
+> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_. It is
+> the same missing key as the coherence rule's, stated once in
+> [Specs & Generics](specs.md): a method keyed by the spec that declared
+> it, which is also what would let a written `x.into()` say which one it means.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

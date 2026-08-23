@@ -89,11 +89,6 @@ Four names are **specified and unbuilt**, and only one of them is a name the com
 > `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other_ — the same sentence a
 > misspelled `#[frobnicate]` gets. Nothing is silently dropped; what is lost is the distinction between a
 > name awaiting implementation and a typo, which is exactly what `#[sealed]`'s `E9079` bought back.
->
-> **[deviation]** `#[test]` is read by both compilers, but the **seed strips a `#[test]` function before
-> its checker runs**, so the body is never type-checked there while `zerg` checks it like any other. A test
-> that does not compile is a compile error under `zerg` and silence under `zerg0` — recorded in
-> `src/bootstrap/README.md`.
 
 The set grows only as the compiler gains directives; **logging** / instrumentation and **FFI** are the
 likely next entries. Any name **not** listed on this page is not a reserved decorator at all — it is a

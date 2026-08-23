@@ -5,8 +5,8 @@ Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒
 
 ## `spawn`
 
-`spawn f(args)` 在 runtime scheduler 上啟動一個 coroutine（Go 的 `go`；**M:N** 模型、以及「它不是搶佔式」這條
-**[deviation]** 見「排程與公平性」）。它**不回傳任何東西**——沒有 handle、沒有
+`spawn f(args)` 在 runtime scheduler 上啟動一個 coroutine（Go 的 `go`;**M:N** 模型、以及它為何是合作式而非搶佔式,
+見「排程」）。它**不回傳任何東西**——沒有 handle、沒有
 join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是任何呼叫——一個普通函式、一個**方法**(`spawn
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
@@ -475,7 +475,7 @@ refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**
 崩潰的 `Err`，並在 **consumer 下一次 receive 時 raise 出來**（乾淨結束則給 `nil`——見上面的「接收」）。實測:
 producer 送出一個值後 abort，consumer 第二次 `<-ch` 會 re-raise `IOError: disk went away`，而不是回答一次缺席。
 coroutine 邊界包不住的**唯一**一種 abort 是 `StackOverflowError`,它從任何一條 stack 都會結束整個行程——見
-[錯誤處理](errors.zh-TW.md) 的 deviation。
+[錯誤處理](errors.zh-TW.md)。
 
 runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
 消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
@@ -488,27 +488,23 @@ runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如
 要回報*結構化*的結果——部分結果、特定錯誤、或不會關掉受監看 channel 的失敗——coroutine 仍會 `guard` 並送進
 channel。讓一個死亡變得*致命*是觀察者的職責（對那個被 raise 出來的 `Err` 反應並 abort），絕不是 `spawn` 的事。
 
-## 排程與公平性
+## 排程
 
-**預期。** `spawn` 讓 coroutine 跑在**搶佔式 M:N scheduler** 上（多條 coroutine 多工於數條 OS thread），而該
-scheduler 是**公平的**：每個 **ready** 的 coroutine 終究會被排到，且**沒有任何 coroutine 能無限期餓死其他
-人**——即使是一個從不碰 channel 的 CPU-bound 迴圈也不行。你可以放心 `spawn`；一個忙碌的 worker 凍不住無關的
-coroutine。這是對**可觀察性質、而非機制**的保證：公平**如何**達成——搶佔、compiler 插入的 safepoint、reduction
-計數——是語言不固定的實作細節；只承諾那個性質。
+`spawn` 讓 coroutine 跑在**合作式 M:N scheduler** 上——多條 coroutine 多工於數條 OS thread——而「合作式」是承重的
+那個詞。一條 coroutine **只在** channel 操作、`select` 或 sleep 讓出,在它自己讓出之前沒有東西能把它從 worker 上拿
+下來。因此每一條會 park 的 coroutine 都被公平地服務:在會讓出的那些 coroutine 之間,沒有任何一條能無限期餓死另一
+條,而機制不被固定——round-robin rotor 是這個實作採用的做法,一個 conforming 的實作可以選別的。
 
-**今日。** scheduler **確實是 M:N**——`M` 條 worker OS thread（每顆 CPU 一條，上限 16）抽同一條共享的 FIFO run
-queue，coroutine 在 worker 之間自由遷移，因此可能在一條它從未啟動於其上的 thread 恢復。**`main` 是 coroutine 0**:
-它在任何 worker 存在之前就已經排進那條 run queue,而呼叫它的那條 thread 自己也成為一個 worker、不是 supervisor。
-所以 pool 是在 `main` 的第一個敘述前後就已經起來,而不是等第一次 `spawn` 才啟動;`M` 就是全部的預算——沒有一條
-thread 是替程式自己的 coroutine 留著的。它**不是**的，是搶佔式。
+**一條從不 park 的 coroutine 會佔住一條 worker,直到它跑完為止**,而這是規則本身、不是對規則的虧欠。這個失敗的形狀
+是「數量」而不是「開關」:一個空轉者吃掉一顆核心,`M` 個空轉者就沒有東西能跑其他任何事——包含 `main`——而在單 CPU
+主機(`M` = 1)上,第一個空轉者就已經等於整個程式。所以一個無界的計算迴圈裡需要一個 channel 操作,這正是每一個合作
+式 runtime 都要求的紀律。搶佔會取消這項要求;那是一扇[門](../../FUTURE.zh-TW.md#搶佔式排程),不是本頁作出的承諾。
 
-> **[deviation]** 規格要求沒有任何 coroutine 能無限期餓死其他人；而 scheduler 是**合作式**的：coroutine **只在**
-> channel 操作、`select` 或 sleep 讓出，在它自己讓出之前沒有東西能把它從 worker 上拿下來。因此一個**從不 park
-> 的 CPU-bound coroutine 會佔住一條 worker**，直到它跑完為止。這個失敗的形狀是「數量」而不是「開關」：一個空轉
-> 者吃掉一顆核心，`M` 個空轉者就沒有東西能跑其他任何事——包含 `main`——而在單 CPU 主機（`M` = 1）上，第一個空
-> 轉者就已經等於整個程式。搶佔與 compiler 插入的 safepoint 是**延後**、不是放棄；在其中之一落地前，讓每條
-> coroutine 皆由 channel 驅動，使它會 park 並讓別人跑，並把任何無界的計算迴圈都當成「裡面需要一個 channel
-> 操作」。
+`M` 是 worker 的數量——每顆 CPU 一條 OS thread,上限 16——它們抽同一條共享的 FIFO run queue,coroutine 在 worker 之
+間自由遷移,因此可能在一條它從未啟動於其上的 thread 恢復。**`main` 是 coroutine 0**:它在任何 worker 存在之前就已經
+排進那條 run queue,而呼叫它的那條 thread 自己也成為一個 worker、不是 supervisor。所以 pool 是在 `main` 的第一個敘
+述前後就已經起來,而不是等第一次 `spawn` 才啟動;`M` 就是全部的預算——沒有一條 thread 是替程式自己的 coroutine 留
+著的。
 
 兩條界限框住這個模型：
 
@@ -528,11 +524,8 @@ thread 是替程式自己的 coroutine 留著的。它**不是**的，是搶佔�
   **不會**停下一條**已經在跑**的 coroutine，因為沒有東西能搶佔它（見排程與公平性）——一條在別的 worker 上正算到一
   半的 coroutine 會一路跑到它自己 park 或 return 為止，而行程就活得比 `main` 久那麼久。兩半都是可觀察的：只有一條
   worker 時，一個空轉的 coroutine 佔住它，`main` 在那條 coroutine 讓出之前根本無法恢復、更談不上 return；有數條
-  worker 時，`main` 在空轉者仍在跑的情況下 return，而行程在空轉者結束時才結束。
-
-  > **[deviation]** 規格寫的「仍在跑的 coroutine 就地停止」是搶佔式的讀法，而 scheduler 並非搶佔式。請把 `main`
-  > return 理解成*不再排程*、而不是一次 kill；任何工作必須被中途切斷的 coroutine，請給它一條 cancel channel 去
-  > 觀察。
+  worker 時，`main` 在空轉者仍在跑的情況下 return，而行程在空轉者結束時才結束。所以請把 `main` return 理解成
+  _不再排程_、而不是一次 kill;任何工作必須被中途切斷的 coroutine,請給它一條 cancel channel 去觀察。
 
 - **對無 receiver 的 channel send 只是 block**——就算 receive 側可以證明永遠是空的，Zerg 也不會 abort 它；要等還是要放棄
   是**呼叫端**的決定（例如帶 cancel 或 timeout arm 的 `select`）。

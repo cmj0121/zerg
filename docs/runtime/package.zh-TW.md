@@ -61,9 +61,11 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 
 ### Program 生命週期與頂層初始化
 
-`main` 的 body 是**整個 program 的根 scope**：它一回傳，底下所有 scope-owned 的東西就會被釋放，任何還在跑的 coroutine
-就地被拋棄（沒有 join——要是某個 coroutine 必須先跑完，就用 channel 觀察到它完成、再讓 main 退；見
-[Coroutines 與 Channels](../code/coroutine.zh-TW.md)）。
+`main` 的 body 是**整個 program 的根 scope**:它一回傳,底下所有 scope-owned 的東西就會被釋放,而且不再有任何
+coroutine 被排程——park 住的不會被恢復,排隊中的不會被啟動。一條已經在別的 worker 上**跑著**的 coroutine 不會被停
+下,因為沒有東西會搶佔它,所以行程活得比 `main` 久,久到那條 coroutine 自己 park 或 return 為止(沒有 join——要是某個
+coroutine 必須先跑完,就用 channel 觀察到它完成、再讓 main 退;見
+[Coroutines 與 Channels](../code/coroutine.zh-TW.md))。
 
 `main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。
 
@@ -318,8 +320,25 @@ package 根底下的 `x`,不是 `/usr/x`。
 [Spec 與 Generics](../core/specs.zh-TW.md)），外加少數泛用型別——`list`、`map`、`set` 容器
 （見 [Collection](../code/collections.zh-TW.md)）與 `Ref[T]` 資源盒。`display` / `debug` 根本不在裡面：它們是內建的
 值渲染、不是 spec method（見 [格式化](format.zh-TW.md)）。primitives——`bool`、`int`、`str`……——與 `chan`、以及
-`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。這些名字是**保留字**：宣告不得 shadow 或
-重宣告它們，所以那些 desugar 到它們的運算子永遠不會被從語言底下抽走。
+`defer`／`print` 構造同樣是 grammar 與 runtime，不是被 import 的名字。
+
+prelude 名字是**保留字**——宣告不得 shadow 或重宣告它——所以那些 desugar 到它的運算子永遠不會被從語言底下抽走。
+**一個名字在工具鏈綁定它的那一天才被保留**，在那之前不是:在沒有任何東西宣告 `Ord` 的時候,就用 `Ord` 去擋住程式
+自己的 `spec Ord`,等於為一個不存在的功能佔住名字——這讓讀者付出代價,而語言什麼也沒買到。所以保留集合是隨著
+prelude 成長,而不是描述它:今天被綁定的是 `int`、`byte`、`bytearray`、`runearray`、`list`、`map`、`Either`、
+`Result`、`Err`、`Left`、`Right`、`Eq` 與 `Into`,每一個都在宣告處帶著位置被拒絕——_E2061 `list` is a prelude
+name — a built-in container type — and cannot name a struct_——而本頁承諾、但還沒有任何東西宣告的那些名字
+(`Ord`、`Hash`、`Error`、`Iterator`、`Iterable`、`Ref`、`set`)會在被綁定的那天加入。
+
+有兩個位置取的是這個集合的不同一半,而分開它們的是**呼叫**。型別宣告的名字落在所有 prelude 名字被綁定的那個命名
+空間裡,所以它們都不能命名 `struct`、`enum`、`spec` 或 `type`。函式的名字則落在只有**呼叫叫得出來**的那些名字所在
+之處——callee 寫成 `int`、`byte`、`bytearray` 或 `list` 會被讀成轉換,寫成 `Either`、`Result`、`Err`、`Eq`、
+`Into`、`Left` 或 `Right` 會被讀成建構,兩者都發生在去找使用者符號之前——而 `map` 不在其中,因為 `map[…](…)` 不是
+建構式,這個名字沒有可被取走的值形式。因此 `fn map(xs, f)` 合法,函式位置上其他每一個 prelude 名字都不合法。
+
+有兩個位置完全在規則之外。**方法**名字屬於它的型別、不屬於程式,所以 `impl P { fn set(v: int) }` 合法。而
+**binding**——區域的,或 module 常數,在 parser 裡是同一個形式——可以取 prelude 名字:在一個 scope 內遮蔽它,第一次
+使用就是一個大聲的錯誤,而那正是宣告所不是的。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的
@@ -330,23 +349,6 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 > **[not yet]** prelude 承諾的 built-in spec 中，只有 **`Eq`** 與 **`Into[T]`** 存在。`Ord`、`Hash`、`Error`、
 > `Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Ord for P` 會回報程式中沒有任何東西以那個名字
 > 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
->
-> **[deviation]** 被保留的是**工具鏈真正綁定的名字**，比本頁所述的 prelude 窄。`struct list`、`fn int`、
-> `enum Left` 與 `spec Eq` 都在宣告處被拒絕——_E2061 `list` is a prelude name — a built-in container type —
-> and cannot name a struct_，並附位置——`map`、`bytearray`、`runearray`、`Either`、`Result`、`Err`、`Right`
-> 與 `Into` 亦然。同一段承諾、但**這裡沒有任何東西宣告**的那些名字——`Ord`、`Hash`、`Error`、`Iterator`、
-> `Iterable`、`Ref` 與 `set`——沒有被保留：程式自己的 `spec Ord` 就是唯一的 `Ord`，拒絕它等於為一個不存在的
-> 功能佔住名字。每一個在被綁定的那天才加入這個集合。
->
-> **函式那個位置取的集合比型別位置窄**，而 `map` 就是全部的差別：`fn map(xs, f)` 合法，集合裡其他名字都不合法。
-> 型別宣告的名字落在所有這些名字被綁定的那個命名空間裡；函式的名字則落在只有**呼叫叫得出來的**那些名字所在之處
-> ——而 `map[…](…)` 當建構式在兩個 compiler 裡都沒有建，所以這個名字沒有可被取走的值形式。其餘的都有：callee
-> 寫成 `int`、`byte`、`bytearray` 或 `list` 會被讀成轉換，寫成 `Either`、`Result`、`Err`、`Eq`、`Into`、`Left`
-> 或 `Right` 會被讀成建構，兩者都發生在去找使用者符號之前。
->
-> 有兩個位置在規則之外，而且不算偏離。**方法**名字屬於它的型別、不屬於程式，所以 `impl P { fn set(v: int) }`
-> 合法。**binding**——區域的，或 module 常數，在 parser 裡是同一個形式——仍然可以取 prelude 名字：在一個 scope
-> 內遮蔽它，第一次使用就是一個大聲的錯誤，而那正是宣告所不是的。
 
 ### 測試與可見性（Testing & visibility）
 

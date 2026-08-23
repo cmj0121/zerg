@@ -76,7 +76,9 @@ dependency DAG.
 ### Program lifetime & top-level initialization
 
 `main`'s body is the **root scope of the program**: when it returns, everything scope-owned beneath it
-is freed and any still-running coroutine is abandoned where it stands (there's no join — drive a
+is freed and no coroutine is scheduled again — nothing parked is resumed and nothing queued is started.
+A coroutine already **running** on another worker is not stopped, because nothing preempts one, so the
+process outlives `main` for exactly as long as that coroutine takes to park or return (there's no join — drive a
 coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](../code/coroutine.md)).
 
@@ -399,8 +401,31 @@ and a few pervasive types — the `list`, `map`, and `set` containers (see
 [Collections](../code/collections.md)) and the `Ref[T]` resource box. `display` / `debug` are not in it at
 all: they are built-in value renderings rather than spec methods (see [Format](format.md)). Primitives —
 `bool`, `int`, `str`, … — and `chan`, plus the `defer` and `print` constructs, are likewise grammar and
-runtime, not imported names. These names are **reserved**: a declaration may not shadow or redeclare them,
-so the operators that desugar to them can never be knocked out from under the language.
+runtime, not imported names.
+
+A prelude name is **reserved** — a declaration may not shadow or redeclare it — so the operators that
+desugar to it can never be knocked out from under the language. **A name is reserved on the day the
+toolchain binds it**, and not before: holding `Ord` against a program's own `spec Ord` while nothing
+declares an `Ord` would reserve a name for a feature that does not exist, which costs a reader something
+and buys the language nothing. So the reserved set grows with the prelude rather than describing it: what
+is bound today is `int`, `byte`, `bytearray`, `runearray`, `list`, `map`, `Either`, `Result`, `Err`,
+`Left`, `Right`, `Eq` and `Into`, each refused at a declaration with a place — _E2061 `list` is a prelude
+name — a built-in container type — and cannot name a struct_ — and the names this page promises that
+nothing declares yet (`Ord`, `Hash`, `Error`, `Iterator`, `Iterable`, `Ref`, `set`) join it on the day
+they are bound.
+
+Two slots take different halves of that set, and a **call** is what separates them. A type declaration's
+name lands in the namespace every prelude name is bound in, so none of them may name a `struct`, an
+`enum`, a `spec` or a `type`. A function's name lands where only the names a call can SPELL are — a
+callee spelling `int`, `byte`, `bytearray` or `list` is read as a conversion, and one spelling `Either`,
+`Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a construction, before any user symbol is looked for —
+and `map` is not among them, because `map[…](…)` is not a constructor and the name has no value form to
+take. `fn map(xs, f)` is therefore legal and every other prelude name in the function slot is not.
+
+Two positions are outside the rule altogether. A **method** name is its type's rather than the program's,
+so `impl P { fn set(v: int) }` is legal. And a **binding** — a local one or a module constant, which are
+one form in the parser — may take a prelude name; shadowing one inside a scope is a loud error at its
+first use, which is the thing a declaration was not.
 
 Everything else is the **standard library** — an ordinary package with one difference: **std ships with
 the toolchain**, so its version is the compiler's and you never declare it as a dependency. It is
@@ -414,28 +439,6 @@ exception.
 > `Ord`, `Hash`, `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
 > `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
->
-> **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
-> this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
-> — _E2061 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
-> — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
-> the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
-> `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
-> there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
-> the day it is bound.
->
-> The **function slot takes a narrower set than the type slots**, and `map` is the whole of the
-> difference: `fn map(xs, f)` is legal, every other name in the set is not. A type declaration's name
-> lands in the namespace all of them are bound in, while a function's lands where only the ones a
-> **call can spell** are — and `map[…](…)` as a constructor is built by neither compiler, so the name
-> has no value form to take. The rest do: a callee spelling `int`, `byte`, `bytearray` or `list` is read
-> as a conversion, and one spelling `Either`, `Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a
-> construction, before any user symbol is looked for.
->
-> Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
-> not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
-> constant, which are one form in the parser — may still take a prelude name; shadowing one inside a
-> scope is a loud error at its first use, which is the thing a declaration was not.
 
 ### Testing & visibility
 

@@ -152,7 +152,7 @@ no distinct reified kind for them, only a generic message.
 of `is` and may **not** call: `raise StopIteration("…")` is _E4063 `StopIteration` is testable but not
 constructible_ in **both** compilers, because it is the marker a channel's clean close already wears —
 see [Concurrency](coroutine.md) for what a sender able to raise it would cost its consumer.
-`StackOverflowError` is a **[deviation]** (see below). An abort is **not
+`StackOverflowError` is the one that is not an abort (see below). An abort is **not
 catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
@@ -167,22 +167,18 @@ two errors combine by the **same nesting as `raise e from cause`** — the later
 already in flight recorded as its `unwrap()` cause — so neither is lost and the consumer reads the whole
 chain. No error silently wins, and there is no separate _suppressed_ slot to consult.
 
-A **`StackOverflowError`** is Zerg's own safety net, not the OS's: the runtime **owns every stack** — the
-main one and each coroutine's — and **checks call depth itself**, raising this abort (a clean unwind that
-runs `defer`s) the instant a call would exceed the stack, so runaway recursion **never** becomes a C
-stack smash. Zerg does **not** optimize tail calls — `for` is the loop, so a bounded stack is enough —
-which makes an unbounded recursion a definite `StackOverflowError`, never a silent hang.
+A **`StackOverflowError`** is the one end that is **not an abort**. Zerg does not optimize tail calls —
+`for` is the loop, so a bounded stack is enough — which makes an unbounded recursion a definite overflow
+rather than a silent hang, and the runtime gives that overflow its name: its fault handler writes
+`StackOverflowError: stack overflow` to standard error and the process exits with status **1**, on both
+stacks a program can overflow, a coroutine's guard page and `main`'s native stack.
 
-> **[deviation]** The bootstrap does **not** yet own or depth-check the stack; the overflow is still the
-> hardware fault the guard page turns it into. The fault now carries its name: the runtime's signal
-> handler reports `StackOverflowError: stack overflow` on stderr and the process exits with status **1**,
-> like every other abort — on both stacks a program can overflow today, a coroutine's guard page and
-> `main`'s native stack. But the faulting stack is exhausted and cannot be unwound from a signal handler,
-> so the pending `defer`s are **skipped**, no `guard` can demote it, and `err is StackOverflowError` stays
-> unwritable. It is also the one abort a coroutine does **not** contain: an ordinary abort with no handler
-> ends only that coroutine, while an overflow ends the process (see [Conformance](../conformance.md), the
-> runtime-abort deviation). The intended depth-checked safety net — a clean unwind that runs `defer`s —
-> stands; it is not built this phase.
+What it cannot do is unwind. The stack that would run the pending `defer`s is the exhausted one, so they
+are **skipped**, no `guard` can demote it, and `err is StackOverflowError` is unwritable — there is no
+value to ask about. It is also the one end a coroutine does **not** contain: an ordinary abort with no
+handler ends only that coroutine, while an overflow ends the process. See
+[Conformance](../conformance.md) for the contract this sits outside of, and
+[the door](../../FUTURE.md#a-depth-checked-stack-overflow) for what a depth-checked safety net would take.
 
 A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
 asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s

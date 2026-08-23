@@ -451,11 +451,27 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		chk_frozen(em, nm, "rebind")
 		return
 	}
+
+	# A PATH is rebound the same way a name is — `for x in p.xs { p.xs = [9] }` replaces the
+	# very buffer the cursor walks — and it is asked here rather than folded into the name
+	# case above because the two resolve differently: a name goes to an environment row so a
+	# shadowing declaration binds a different collection, and a path has no row.
+	lp := chk_path_text(lhs)
+	if lp != "" and nm == "" and chk_frozen_path(em, lp) {
+		chk_frozen(em, lp, "rebind")
+		return
+	}
+
 	if c_is_index(lhs) {
 		tgt := chk_store_target(lhs)
 		tn := c_ident_name(tgt)
 		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, tgt)) {
 			chk_frozen(em, tn, "assign into")
+			return
+		}
+		tp := chk_path_text(tgt)
+		if tp != "" and tn == "" and chk_frozen_path(em, tp) and c_is_map(c_infer(em, tgt)) {
+			chk_frozen(em, tp, "assign into")
 			return
 		}
 	}
@@ -553,6 +569,55 @@ fn chk_frozen_name(mut &em: Emitter, name: str) -> bool {
 	return false
 }
 
+# chk_path_text is a PLACE's written spelling, and "" for an expression that is not one.
+#
+# It is what lets the freeze see a structural change reached through a PATH rather than only
+# through a bare name: `for x in p.xs { p.xs.append(v) }` walks and grows the same collection,
+# and what says they are the same collection is that they are spelled the same way. That is
+# the spec's LOCAL rule read one step further out — not an aliasing analysis, which value
+# semantics makes unnecessary anyway, but the observation that one written path names one
+# place.
+#
+# An INDEX is part of the spelling only when it is an integer literal. `xs[i]` would compare
+# equal to another `xs[i]` whose `i` had moved on, and refusing on that would be a rule about
+# a spelling rather than about a place — the one thing this file must not do quietly.
+fn chk_path_text(e: Expr) -> str {
+	return match e {
+		Expr.EIdent(n) => n
+		Expr.EField(x, f) => chk_path_under(chk_path_text(x), "." + f)
+		Expr.EIndex(x, i) => chk_path_under(chk_path_text(x), chk_index_text(i))
+		_ => ""
+	}
+}
+
+# chk_path_under joins a path with one more step, and answers "" when either half is not a
+# path: `f().xs` has no spelling this rule may compare, and neither has `xs[g()]`.
+fn chk_path_under(base: str, step: str) -> str {
+	return "" if base == "" or step == ""
+
+	return base + step
+}
+
+fn chk_index_text(i: Expr) -> str {
+	return match i {
+		Expr.EInt(lex, _, _) => f"[{lex}]"
+		_ => ""
+	}
+}
+
+# chk_frozen_path is whether an enclosing `for … in` walks this exact path. A bare name is
+# NOT answered here — it goes through chk_frozen_name, which resolves to an environment row
+# so that a shadowing declaration in the body binds a different collection. A path has no row
+# to resolve to, and no way to be shadowed either.
+fn chk_frozen_path(mut &em: Emitter, path: str) -> bool {
+	return false if path == ""
+
+	for f in em.frz_paths {
+		return true if f == path
+	}
+	return false
+}
+
 # chk_frozen records the one finding every spelling of a structural change shares; `action`
 # names the spelling ("rebind", "`append` to", "assign into"), and the sentence is the rule.
 fn chk_frozen(mut &em: Emitter, name: str, action: str) {
@@ -568,6 +633,14 @@ fn chk_recv_mut(mut &em: Emitter, target: Expr, meth: str) {
 	nm := c_ident_name(target)
 	if nm != "" and chk_frozen_name(em, nm) {
 		chk_frozen(em, nm, f"`{meth}` to")
+		return
+	}
+
+	# and the same question of a PATH, which is the other half of the freeze:
+	# `for x in p.xs { p.xs.append(v) }` grows the collection being walked.
+	tp := chk_path_text(target)
+	if tp != "" and nm == "" and chk_frozen_path(em, tp) {
+		chk_frozen(em, tp, f"`{meth}` to")
 		return
 	}
 
@@ -1091,6 +1164,26 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	if not c_is_place(em, a) {
 		chk_at(em, Rule.BorrowOfValue, f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
+		return
+	}
+
+	# HANDING OVER A FROZEN COLLECTION IS A STRUCTURAL CHANGE, because a `mut &` is a
+	# writable name for the caller's own storage and the callee may grow it. It is the
+	# fourth spelling of the freeze and the one that leaves the loop's body: `for x in xs {
+	# grow(xs, x) }` really did grow the collection being walked, and neither the assignment
+	# rule nor the receiver rule could see it — the argument is neither.
+	#
+	# The rule stays LOCAL all the same. What is refused is the borrow, at the call, where
+	# the frozen name is written; nothing here reads the callee, which is what would make
+	# this an analysis rather than a rule.
+	nm := c_ident_name(a)
+	if nm != "" and chk_frozen_name(em, nm) {
+		chk_frozen(em, nm, "hand over a `mut &` to")
+		return
+	}
+	ap := chk_path_text(a)
+	if ap != "" and nm == "" and chk_frozen_path(em, ap) {
+		chk_frozen(em, ap, "hand over a `mut &` to")
 		return
 	}
 

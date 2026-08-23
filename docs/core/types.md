@@ -332,6 +332,13 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
 is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
 is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion.
+**An operator `Y` has, `X` has between two `X`s**, and the result is an `X`: `c + d` on two
+`Celsius` is a `Celsius`, `c < d` is a `bool`, `not f` on a `type Flag = bool` is a `bool`. That
+is not in tension with the identity — the identity decides what a value may **meet** and an
+operator decides what may be **done** with it — and it is what the strong-typedef tool is for.
+One `X` beside anything else is refused: `c + 1` needs `Celsius(1)` and `c + i` needs `int(c)`,
+because an untyped literal does **not** adopt a named type the way it adopts `Y` itself.
+
 One inheritance is withheld on purpose: `X` does **not** take `Y`'s `Into` impls — what `X` is
 convertible to is `X`'s own declaration to make. A
 **monomorphic** `type X = Y` **lowers to `Y`** at runtime — the distinctness is **compile-time only**, so a
@@ -344,13 +351,13 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
 
-> **[deviation]** `type X = Y` is implemented only for a **scalar** underlying `Y`, and the new type does
-> **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+` without an
-> explicit `int(c)`, contrary to the inheritance rule above. Anything else is refused by name: _E9042
-> NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
+> **[not yet]** The underlying `Y` must be a **scalar**. Anything else is refused by name, with a place:
+> _E9042 NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
 > scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
-> the copy and drop rules to follow the name_. The intended semantics (a fresh identity reusing `Y`'s whole
-> representation and impls) stand; only the scalar, impl-less case is built.
+> the copy and drop rules to follow the name_. What is missing is exactly that: a name the ownership rules
+> follow, which is a question about `drop` and the copy helper rather than about the type layer. The
+> operator half above **is** built, over every scalar the language has, and so is a `spec` impl written on
+> `X` itself; what `X` does not do is inherit an impl written on `Y`.
 
 ## Construction & encapsulation
 

@@ -280,8 +280,14 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
-兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。有一項繼承是刻意不給的:
-`X` **不**承接 `Y` 的 `Into` impl——`X` 能轉換成什麼,是 `X` 自己的宣告。一個**單型**的 `type X = Y`
+兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。
+
+**`Y` 有的運算子,`X` 在兩個 `X` 之間就有**,而且結果是 `X`:兩個 `Celsius` 的 `c + d` 是一個 `Celsius`,`c < d` 是
+`bool`,`type Flag = bool` 上的 `not f` 是 `bool`。這與 identity 並不衝突——identity 決定一個值可以**遇到**什麼,運算子
+決定可以對它**做**什麼——而這正是 strong-typedef 這個工具存在的理由。一個 `X` 旁邊放別的東西則被拒絕:`c + 1` 要寫成
+`Celsius(1)`、`c + i` 要寫成 `int(c)`,因為一個沒有型別的字面值**不會**像採用 `Y` 那樣去採用一個具名型別。
+
+有一項繼承是刻意不給的:`X` **不**承接 `Y` 的 `Into` impl——`X` 能轉換成什麼,是 `X` 自己的宣告。一個**單型**的 `type X = Y`
 在 runtime **降低成 `Y`**——區別**只在編譯期**,所以 `Celsius = int` 不花任何成本(無 box、無包裝),而一個 `Celsius`
 沒有明確的 `int(c)` / `Celsius(x)` 就永遠不是 `int`。一個**泛型** alias `type X[T] = …` 這個階段**尚未支援**(會被
 解析、但被拒絕)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作一個裸 `int` 或
@@ -289,12 +295,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
-> **[deviation]** `type X = Y` 只對**純量**底型 `Y` 實作,而新型別**不**繼承 `Y` 的算術或 `spec` impl——一個
-> `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反。其餘一律具名拒絕:_E9042 NotImplemented:
+> **[not yet]** 底型 `Y` 必須是**純量**。其餘一律帶著位置具名拒絕:_E9042 NotImplemented:
 > `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
 > name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
-> to follow the name_。意圖中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;建出來的只有純量、無 impl
-> 的情形。
+> to follow the name_。缺的正是那句話說的:一個讓所有權規則跟著走的名字,而那是關於 `drop` 與 copy helper 的問題,
+> 不是型別層的問題。上面那個運算子的部分**已經**建好,涵蓋語言所有的純量;寫在 `X` 自己身上的 `spec` impl 也一樣;
+> `X` 不做的,是承接寫在 `Y` 身上的 impl。
 
 ## 建構與封裝（Construction & encapsulation）
 

@@ -27,29 +27,28 @@ refcounted cell**. A recursive value therefore copies **by reference** (refcount
 copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
 holder's scope exit.
 
-> **[deviation]** Freeing a chain **recurses one C stack frame per node**, so a chain longer than the
-> native stack cannot be freed at all. Measured on a default 8 MiB main stack: **60 000 nodes complete and
-> 70 000 do not**, which is about 128 bytes of stack per node. It dies with its name —
-> `StackOverflowError: stack overflow`, status 1, from the runtime's fault handler — rather than as a bare
-> SIGSEGV, but that is a diagnosis and not a recovery: the free runs on the scope-exit and abort-unwind
-> paths, where raising is not safe, so no `guard` can catch it and no `defer` after it runs. An
-> **iterative** chain teardown is what this owes, and it is not built.
->
-> The **freeing** half of this is closed. The cell's drop is the enum's own,
-> a binding registers it where it is declared, and an assignment gives the old value back after
-> materialising the new one. Measured over a counting allocator: 200 rounds that each build and drop a
-> 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many live allocations as five rounds do
-> (`make mem-check`). The stack-overflow sentence above is the price of that fix: it was unreachable while
-> nothing recursed, because nothing was freed.
+The freeing is exact. The cell's drop is the enum's own, a binding registers it where it is declared, and
+an assignment gives the old value back after materialising the new one. Measured over a counting allocator:
+200 rounds that each build and drop a 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many
+live allocations as five rounds do (`make mem-check`).
+
+> **[implementation-defined]** **How long a chain can be freed.** The teardown recurses one C stack frame
+> per node, so the depth is bounded by the stack it runs on: measured on a default 8 MiB main stack, **60
+> 000 nodes complete and 70 000 do not** — about 128 bytes per node. Past that the process dies with its
+> name (`StackOverflowError: stack overflow`, status 1) and not as a bare SIGSEGV, but that is a diagnosis
+> and not a recovery: the free runs on the scope-exit and abort-unwind paths, so no `guard` catches it and
+> no later `defer` runs. A **structure** that deep needs a shape the language has for it — a `list` of
+> nodes indexed by position, rather than a chain — until the
+> [door](../../FUTURE.md#an-iterative-chain-teardown) opens.
 
 ---
 
-> **[not yet]** A recursive **`struct`** cannot be declared at all, so the deviation above is not reachable
+> **[not yet]** A recursive **`struct`** cannot be declared at all, so the bound above is not reachable
 > through one. `struct Node { value: int; next: Node? }` is rejected with _E4026 `Node` is part of a cycle of
 > by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
 > declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
 > that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
-> refcount-sharing as described — what it does not do is free, which is the deviation above. The `Node`
+> refcount-sharing as described. The `Node`
 > used below — in Copy vs reference semantics, where it is the one place a shared mutation is observable —
 > is the specified form and does not compile today. It
 > carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E9010`, since

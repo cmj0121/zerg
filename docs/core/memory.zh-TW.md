@@ -22,24 +22,24 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
 深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。
 
-> **[deviation]** 釋放一條鏈會**每個節點吃掉一個 C stack frame**,所以長度超過原生 stack 的鏈根本釋放不掉。
-> 在預設 8 MiB 主 stack 上實測:**6 萬個節點跑得完,7 萬個不行**,約每個節點 128 bytes 的 stack。它是帶著名字
-> 死的——`StackOverflowError: stack overflow`、狀態碼 1,來自 runtime 的 fault handler——而不是一個裸的
-> SIGSEGV;但那是一份診斷,不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,在那裡 raise 並不安全,
-> 所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。這裡欠的是**迭代式**的鏈拆解,而它還沒有被建出來。
->
-> **釋放**這一半已經關掉了。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在
-> **具現化新值之後**才把舊值還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的
-> 配置數與 5 輪完全相同(`make mem-check`)。上面那句 stack 溢位就是這個修正的代價:在沒有東西被釋放的時候,
-> 它根本到不了。
+釋放是精確的。cell 的 drop 就是那個 enum 自己的 drop,binding 在宣告處登記它,而指派會在**具現化新值之後**才把舊值
+還回去。以計數 allocator 實測:200 輪各建一條 2000 節點的 `enum L { Nil; Cons(int, L) }` 再丟掉,結束時存活的配置數
+與 5 輪完全相同(`make mem-check`)。
+
+> **[implementation-defined]** **一條鏈能被釋放到多長。** 拆解每個節點吃掉一個 C stack frame,所以深度由它跑在
+> 哪條 stack 上決定:在預設 8 MiB 主 stack 上實測,**6 萬個節點跑得完,7 萬個不行** —— 約每個節點 128 bytes。超過
+> 之後行程帶著名字死去(`StackOverflowError: stack overflow`、狀態碼 1),而不是一個裸的 SIGSEGV;但那是一份診斷、
+> 不是一次復原:釋放跑在 scope 結束與 abort unwind 的路徑上,所以沒有 `guard` 抓得到它,它之後的 `defer` 也不會跑。
+> 深到那個程度的**結構**,該用語言為它準備的形狀 —— 一個依位置索引的 `list` 的節點,而不是一條鏈 —— 直到那扇
+> [門](../../FUTURE.zh-TW.md#一次迭代式的鏈拆解)打開為止。
 
 ---
 
-> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條 deviation 不可能經由它到達。
+> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條界限不可能經由它到達。
 > `struct Node { value: int; next: Node? }` 會被拒絕、報 _E4026 `Node` is part of a cycle of by-value declarations —
 > a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
 > 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
-> 所述——它不做的是釋放,也就是上面那條 deviation。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
+> 所述。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
 > 觀察到共享變動之處——是規範中的形式,今天編不過。它同時還帶著第二個未建置的形式:那些**具名引數**
 > (`Node(value: 1, …)`)是 `E9010`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
 

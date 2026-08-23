@@ -282,6 +282,7 @@ pub enum Rule {
 	HasTakesOneKey = 4071
 	TypeParamCount = 4072
 	DeclaredTwiceInFile = 4073
+	VariantPatternWrongQualifier = 4074
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted

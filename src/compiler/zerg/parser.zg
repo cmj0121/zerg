@@ -4382,17 +4382,20 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	mut lit := Expr.ENil
 	mut bind := ""
 	mut ctor := ""
+	mut qual := ""
 	mut binds: list[str] = []
 	if p_at(p, Kind.Ident) and not at_named_range_arm(p) {
 		mut name := cur(p).lexeme
 		p_advance(p)
 
 		# `Color.Green =>` — a variant NAMED BY ITS ENUM, the pattern half of the qualified
-		# form. The arm matches on the variant, so the enum name is dropped once it has been
-		# read; whether it is the right enum is the emitter's question, which it already asks
-		# of a bare pattern against the scrutinee's type.
+		# form. The arm matches on the VARIANT, and the enum name is carried alongside rather
+		# than dropped: GRAMMAR#variant-pat says *the qualification must be true*, and a name
+		# that is read and thrown away cannot be held to that. Which enum it belongs to is
+		# still the emitter's question — this only makes the question askable.
 		mut qualified := false
 		if p_at(p, Kind.Dot) and peek_kind(p, 1) == Kind.Ident {
+			qual = name
 			p_advance(p)
 			name = p_name(p, "a variant pattern")
 			qualified = true
@@ -4504,7 +4507,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
 	raise p_diag(p, Rule.MatchGuardPlacement, "a match arm's guard goes before the `=>` — write `pattern if cond => body`") if p_at(p, Kind.If)
 
-	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
+	return Arm(pat, lit, bind, ctor, qual, binds, has_guard, grd, body)
 }
 
 # --- f-strings ---------------------------------------------------------------------------

@@ -461,6 +461,68 @@ fn main() {
 }
 EOF
 
+# AND THROUGH A PATH, which is the same collection reached by a longer name. What says two
+# of them are one collection is that they are spelled the same way — not an aliasing
+# analysis, which value semantics makes unnecessary, but the observation that one written
+# path names one place. The three shapes are the three the chapter used to carry as its
+# deviation: a mutating method, a rebind, and an index by a literal.
+reject append-through-a-path-inside-its-own-for E3089 'cannot `append` to `p.xs`' seed-gap <<'EOF'
+struct P {
+	pub xs: list[int]
+}
+
+fn main() {
+	mut p := P([1, 2, 3])
+	for x in p.xs {
+		p.xs.append(x)
+	}
+	print(f"{p.xs.len()}")
+}
+EOF
+
+reject rebind-a-path-inside-its-own-for E3089 'cannot rebind `p.xs`' seed-gap <<'EOF'
+struct P {
+	pub xs: list[int]
+}
+
+fn main() {
+	mut p := P([1, 2, 3])
+	for x in p.xs {
+		p.xs = [9]
+		print x
+	}
+	print(f"{p.xs.len()}")
+}
+EOF
+
+reject append-through-a-literal-index-inside-its-own-for E3089 'cannot `append` to `xs[0]`' seed-gap <<'EOF'
+fn main() {
+	mut xs: list[list[int]] = [[1, 2]]
+	for x in xs[0] {
+		xs[0].append(x)
+	}
+	print(f"{xs[0].len()}")
+}
+EOF
+
+# AND HANDING IT OVER, which is the one spelling that leaves the loop's body. A `mut &` is a
+# writable name for the caller's own storage, so passing the walked collection as one is a
+# structural change whatever the callee does with it — and the rule stays local by refusing
+# the BORROW, at the call, rather than by reading the callee.
+reject borrow-the-walked-collection E3089 'cannot hand over a `mut &` to `xs`' seed-gap <<'EOF'
+fn grow(mut &ys: list[int], v: int) {
+	ys.append(v)
+}
+
+fn main() {
+	mut xs := [1, 2, 3]
+	for x in xs {
+		grow(xs, x)
+	}
+	print(f"{xs.len()}")
+}
+EOF
+
 # The freeze is the loop's OWN collection and nothing wider: appending to a DIFFERENT
 # collection while reading `xs` is the accumulation idiom the spec itself recommends, so
 # it is asserted to stay accepted right beside the rules that could over-reach into it.

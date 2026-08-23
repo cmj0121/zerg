@@ -539,6 +539,11 @@ struct Emitter {
 	# result has no row to record, which is the [deviation] docs/code/collections.md carries.
 	pub frz_idxs: list[int]
 
+	# frz_paths are the same freeze for an iterable that has no environment row: a field
+	# path, or an index by an integer literal. What says two of them are the same collection
+	# is that they are spelled the same way — see chk_path_text (check.zg).
+	pub frz_paths: list[str]
+
 	# unit_paths / unit_mods are THE MODULE IDENTITY TABLE: every source path this program was
 	# loaded from, and the module each one belongs to. It is filled by the LOADER and read by
 	# `c_mod_of`, and it is the whole of what makes a module an identity rather than a string
@@ -1728,6 +1733,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_const = []
 	em.env_cval = []
 	em.frz_idxs = []
+	em.frz_paths = []
 
 	# scope 0 is the module: the constants below live there and it is open in every
 	# function. c_fn opens one more for the parameters, and the body block one after that.
@@ -11072,6 +11078,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	# lambda was written in gets its freeze back on the way out. The rows it holds belong to
 	# the enclosing function's environment, which is saved and restored with it.
 	saved_frz := em.frz_idxs
+	saved_frz_paths := em.frz_paths
 
 	# and the active substitution with them. It belongs to the block expression that opened
 	# it, and inside a function lifted OUT of that block its names mean nothing — the values
@@ -11088,6 +11095,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.rel_fns = saved_rel_fns
 	em.ref_names = saved_refs
 	em.frz_idxs = saved_frz
+	em.frz_paths = saved_frz_paths
 	em.used_fnptr = true
 
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
@@ -12391,19 +12399,36 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 # docs/code/collections.md is exactly that set.
 fn c_frz_push(mut &em: Emitter, iter: Expr) -> bool {
 	name := c_ident_name(iter)
-	return false if name == ""
+	if name != "" {
+		idx := c_live_idx(em, name)
+		return false if idx < 0
 
-	idx := c_live_idx(em, name)
-	return false if idx < 0
+		em.frz_idxs.append(idx)
+		return true
+	}
 
-	em.frz_idxs.append(idx)
+	# AND A PATH, which has no row to record. `for x in p.xs` is walking one collection just
+	# as `for x in xs` is, and the local rule says so: the freeze holds the written path and
+	# refuses a structural change spelled the same way. A slice or a call result is still
+	# nothing — those name a value with no place behind it, so there is nothing to freeze.
+	path := chk_path_text(iter)
+	return false if path == ""
+
+	em.frz_paths.append(path)
 	return true
 }
 
-# c_frz_pop ends the freeze c_frz_push started, given what it answered.
-fn c_frz_pop(mut &em: Emitter, pushed: bool) {
+# c_frz_pop ends the freeze c_frz_push started, given what it answered. WHICH stack it pops
+# is read from the iterable rather than remembered, for the reason c_frz_push answers a bool
+# at all: the two are one decision and a second flag would be a second chance to get it wrong.
+fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: Expr) {
 	return if not pushed
-	c_ints_drop_last(em.frz_idxs)
+
+	if c_ident_name(iter) != "" {
+		c_ints_drop_last(em.frz_idxs)
+		return
+	}
+	c_strs_drop_last(em.frz_paths)
 }
 
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
@@ -12553,7 +12578,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# than everything the body spells with the same name
 	frz := c_frz_push(em, iter)
 	out = out + c_loop_block(em, body, in2 + "    ")
-	c_frz_pop(em, frz)
+	c_frz_pop(em, frz, iter)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
 	c_scope_forget(em, keep)
@@ -12597,7 +12622,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	# same stack to refuse it
 	frz := c_frz_push(em, iter)
 	out = out + c_loop_block(em, body, in2 + "    ")
-	c_frz_pop(em, frz)
+	c_frz_pop(em, frz, iter)
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
 	c_scope_forget(em, keep)
@@ -12809,6 +12834,16 @@ fn c_scope_forget(mut &em: Emitter, keep: int) {
 
 # c_ints_drop_last removes the last element IN PLACE. Taking the list by value and
 # answering a fresh one would copy the stack twice to lose one element, on every block.
+fn c_strs_drop_last(mut &xs: list[str]) {
+	mut out: list[str] = []
+	mut i := 0
+	for i < xs.len() - 1 {
+		out.append(xs[i])
+		i = i + 1
+	}
+	xs = out
+}
+
 fn c_ints_drop_last(mut &xs: list[int]) {
 	mut out: list[int] = []
 	mut i := 0
@@ -14478,7 +14513,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

@@ -563,6 +563,23 @@ func (c *checker) inferUnary(n *ast.Unary) Type {
 	if bad(t) {
 		return t
 	}
+	// A 'type X = Y' takes Y's prefix operators for the reason it takes Y's binary ones
+	// (inferBinary): '-c' and 'not f' are operations on the value, and the identity is about
+	// what the value may MEET. The family is asked about the representation and a non-bool
+	// answer keeps the name.
+	if t.Kind() == types.KNamed {
+		res := c.inferUnaryOp(n, types.Underlying(t))
+		if bad(res) || res == Bool {
+			return res
+		}
+		return t
+	}
+	return c.inferUnaryOp(n, t)
+}
+
+// inferUnaryOp types a prefix operator over an operand type already reduced to the one the
+// families judge - which for a strong typedef is its underlying representation.
+func (c *checker) inferUnaryOp(n *ast.Unary, t Type) Type {
 	switch n.Op {
 	case token.Minus, token.MinusMod:
 		if !isNumeric(t) {
@@ -604,6 +621,25 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	if isCompareOp(n.Op) && (isNominal(lt) || isNominal(rt)) {
 		return c.inferNominalCompare(n, lt, rt)
 	}
+	// A 'type X = Y' TAKES Y'S OPERATORS, BETWEEN TWO X'S (docs/core/types.md). The identity
+	// decides what may MEET what and the operator decides what may be DONE with the value, so
+	// the families below are asked about the REPRESENTATION and a non-bool answer is dressed
+	// back in the name: 'c + d' on two Celsius is a Celsius. One X beside anything else keeps
+	// its own diagnostic - 'c + 1' needs 'Celsius(1)' - which is the identity doing its job.
+	if lt.Kind() == types.KNamed && types.Identical(lt, rt) {
+		u := types.Underlying(lt)
+		res := c.inferBinaryOp(n, u, u)
+		if bad(res) || res == Bool {
+			return res
+		}
+		return lt
+	}
+	return c.inferBinaryOp(n, lt, rt)
+}
+
+// inferBinaryOp types a binary operator over operand types already reduced to the ones
+// the families judge - which for a strong typedef is its underlying representation.
+func (c *checker) inferBinaryOp(n *ast.Binary, lt, rt Type) Type {
 	switch {
 	case n.Op == token.SlashDiv:
 		return c.floorDivResult(n, lt, rt)

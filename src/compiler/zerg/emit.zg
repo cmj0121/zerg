@@ -3345,6 +3345,28 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 	return em.tk_unders[r]
 }
 
+# c_scalar_repr is what a `type X = Y` COMPUTES IN, and the one place the strong typedef is
+# looked through for an operator rather than for a representation.
+#
+# The two are not in tension, which is the whole of the rule: an identity decides what may
+# MEET what — a `Celsius` is never an `int` at a typed position, and never will be — while an
+# operator decides what may be DONE with it. `docs/core/types.md` says `X` takes on `Y`'s
+# implementation, and a `UserId` that behaves like an `int` but cannot be added to another
+# `UserId` is not the tool that sentence describes.
+#
+# It recurses, because a typedef's underlying type may be one: `type A = B` over `type B =
+# int` computes in `int`. A type that is not a typedef answers ITSELF, so every other caller's
+# type passes through untouched.
+fn c_scalar_repr(mut &em: Emitter, t: Ty) -> Ty {
+	nm := c_named_of(t)
+	return t if nm == ""
+
+	u := c_typedef_of(em, nm)
+	return t if c_is_unknown(u)
+
+	return c_scalar_repr(em, u)
+}
+
 # c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
 # disjunction written out in three places — the typedef registry, the typedef's own check,
 # and c_check_type_name — so a fifth kind of type name would have been three edits with two
@@ -5885,8 +5907,16 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# slot), and then this line rendered it with c_expr, which divides two integers. Silent,
 	# and in every mixed expression — the same shape of miss c_into's comment describes at the
 	# six slots it serves, at the seventh nobody had told.
+	# THE OPERATION HAPPENS AT THE UNDERLYING TYPE when either side is a `type X = Y`. The
+	# checker has already decided that the pair is legal — two of the same X, or nothing to do
+	# with a typedef at all — so what is left here is picking the C the operator lowers to,
+	# and a TNamed is not a scalar class: without this a `Celsius + Celsius` fell past every
+	# width rule to a bare C `+`, which is the one arithmetic in this compiler that does not
+	# check for overflow.
 	tb := c_infer(em, b)
-	pair_is_float := c_is_float(ta) or c_is_float(tb)
+	ra := c_scalar_repr(em, ta)
+	rb := c_scalar_repr(em, tb)
+	pair_is_float := c_is_float(ra) or c_is_float(rb)
 
 	# THE TWO OPERANDS ARE A RUN. Every arithmetic operator this compiler emits is a checked
 	# runtime CALL (`zrt_add_i64(a, b)`), so its two operands are two arguments and C leaves
@@ -5895,14 +5925,14 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	seq := c_needs_order([a, b], 1) and not c_is_shortcircuit(oper)
 	ca := c_ordered(em, seq, c_operand(em, pair_is_float, a, sb))
 	cb := c_ordered(em, seq, c_operand(em, pair_is_float, b, sb))
-	return c_floordiv(em, ta, tb, ca, cb) if oper == "//"
+	return c_floordiv(em, ra, rb, ca, cb) if oper == "//"
 
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
 	# adopting the context (docs/core/types.md); handing `c_arith` the left type sent it
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
-	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+	return c_arith(em, oper, c_scalar_repr(em, c_infer_binary(em, oper, a, b)), ca, cb)
 }
 
 # c_operand renders one side of a binary expression. It is c_expr, plus the one thing c_expr

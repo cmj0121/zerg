@@ -150,7 +150,6 @@ pub enum Rule {
 	OpWantsOrdered = 3044
 	CompareVariantWithNumber = 3045
 	CompareDifferentKinds = 3046
-	UnaryOpNoMeaning = 3047
 	NotWantsBool = 3048
 	NegWantsNumeric = 3049
 	BitNotWantsInt = 3050

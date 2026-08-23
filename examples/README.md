@@ -46,6 +46,7 @@ each adds one idea to the one before it.
 | [`17_arithmetic.zg`](17_arithmetic.zg)   | integer arithmetic is **checked**: overflow raises, it does not wrap |
 | [`18_scoped.zg`](18_scoped.zg)           | what frees a value, and who decides when                             |
 | [`19_environment.zg`](19_environment.zg) | the environment: read anywhere, written only at startup              |
+| [`20_typedefs.zg`](20_typedefs.zg)       | `type X = Y`: an identity that meets nothing else, and Y's operators |
 
 ## The module layer
 

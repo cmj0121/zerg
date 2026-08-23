@@ -1738,12 +1738,19 @@ fn main() {
 }
 EOF
 
-reject logical-operator-on-a-typedef E3040 'has no meaning on Flag and Flag' <<'EOF'
+# WHAT A TYPEDEF REFUSES IS A MIXED PAIR, and no longer an operator. `type X = Y` takes Y's
+# operators between two X's — `f and f`, `c + c`, `not f` all work and `examples/20_typedefs.zg`
+# is the case that says so — because an identity governs what a value may MEET and an operator
+# governs what may be DONE with it. So each case below writes TWO different types, which is
+# the half that is still an error; the ones that wrote one type twice were the rule's own
+# counterexamples and went with it, and `E3047` retired for want of anything left to report.
+reject logical-operator-across-two-typedefs E3040 'has no meaning on Flag and Guard' <<'EOF'
 type Flag = bool
+type Guard = bool
 
 fn main() {
 	f := Flag(true)
-	g := Flag(false)
+	g := Guard(false)
 	print(f"{f and g}")
 }
 EOF
@@ -1754,15 +1761,6 @@ type Mask = int
 fn main() {
 	m := Mask(3)
 	print(f"{m & 1}")
-}
-EOF
-
-reject prefix-operator-on-a-typedef E3047 <<'EOF'
-type Flag = bool
-
-fn main() {
-	f := Flag(true)
-	print(f"{not f}")
 }
 EOF
 

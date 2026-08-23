@@ -93,18 +93,12 @@ takes ([Conformance](../conformance.md)) — as _E3087 `print` opens a statement
 compiled program has nowhere to run it_. `nop` is the one exception, and not really an exception: it does
 nothing and yields nothing, so running nothing for it is running it.
 
-Top-level constants are initialized in **dependency order** — a
-constant is ready before any constant whose initializer reads it — a topological order of the reads-from
-graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
-(neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
-**source order** within a module. That whole ordering holds.
-
-> **[deviation]** The tie is broken by the order the imports were WRITTEN, not by canonical module
-> name. Two modules that read nothing of each other initialize in the order their import lines
-> appear, so moving a line inside an import block reorders two independent initializers. It is
-> stable for a given source — the same input gives the same output — so it is not a
-> reproducibility defect; it is the rule the sentence above names not being the rule that runs
-> (#70).
+Top-level constants are initialized in **dependency order** — a constant is ready before any constant whose
+initializer reads it — a topological order of the reads-from graph; if they form a cycle, that's a compile error.
+Where the graph leaves two constants unordered (neither reads the other), the tie is broken **deterministically**:
+by **canonical module name**, then by **source order** within a module. That whole ordering holds — so moving an
+import line does not reorder anything, and [`1g/initorder`](../../examples/1g/initorder) is the example that
+writes its two imports in the other order to say so.
 
 Both halves of it are built for a **direct** read. A constant whose initializer names one declared
 **after** it gets the value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields

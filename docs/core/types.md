@@ -75,8 +75,9 @@ are storage too, one level down. The position that **does** take an absence is a
 - **Division & remainder** — `/` and `%` follow the **Euclidean** definition: the remainder is **always
   non-negative** (`0 ≤ a % b < |b|`) and `a == (a / b) * b + a % b` holds for every sign, so `a % n` is a
   valid index or bucket for any `b`. This is the canonical mathematical `div`/`mod`, not C's
-  sign-of-dividend truncation; the compiler emits the small correction only when an operand may be
-  negative and **elides it when both are non-negative** (the common case, zero overhead). `a / 0` and
+  sign-of-dividend truncation. What that costs is an implementation matter and not a promise this page
+  makes: the correction is a couple of instructions, an implementation **may** elide it where it can prove
+  both operands non-negative, and the reference compiler emits it unconditionally today. `a / 0` and
   `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
   flooring variants are stdlib (deferred).
 - **`//` always yields an `int`** — `a // b` is that same Euclidean division, spelled so the reader
@@ -94,10 +95,6 @@ are storage too, one level down. The position that **does** take an absence is a
 > _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
 > no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
 > specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
->
-> **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
-> elided when both operands are provably non-negative — the "zero overhead in the common case" above is
-> the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
 
 ### Typed positions
 

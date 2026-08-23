@@ -63,8 +63,9 @@ carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md
   無號,所以 `-1 < 1u` 是 false。顯式 cast 一側:`int(u) + i`。
 - **除法與餘數**——`/` 與 `%` 採 **Euclidean** 定義：餘數**恆為非負**（`0 ≤ a % b < |b|`），且
   `a == (a / b) * b + a % b` 對任何正負號都成立，所以 `a % n`（n>0）對任何 `b` 都是合法的 index/bucket。這是數學上
-  canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation；compiler 只在**運算元可能為負**時補小修正，**兩者
-  皆非負時完全 elide**（最常見、零成本）。`a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
+  canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation。那要付多少代價是實作的事,不是本頁作出的承諾:那個修
+  正是幾個指令,一個實作在**能證明兩個運算元都非負**時**可以**把它省掉,而今天的參考編譯器是無條件產生它的。
+  `a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
   （`OverflowError`）；truncating 與 flooring 變體屬 stdlib（延後）。
 - **`//` 的結果恆為 `int`**——`a // b` 就是同一個 Euclidean 除法，只是換一種寫法讓讀者一眼看出結果是整數、
   不必先看運算元。兩個整數時它**就是** `/`：語言只有**一條**整數除法規則，再加一條對負除數行為不同的
@@ -78,9 +79,6 @@ carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md
 > 與 `Shr` 這些 spec 在任何地方都沒有被宣告,所以指名其中一個會報 _error: no spec named `BitAnd`_——那是「沒有人寫
 > 過這個 spec」的普通訊息——而複合值上的 `&` 沒有任何路徑通往使用者寫的 body。運算子本身在 `int` / `uint` / `byte`
 > 上是內建的、如規範般運作;缺的是這道 desugar 存在的目的:多載（見 [Spec 與 Generics](specs.zh-TW.md)）。
->
-> **[deviation]** 讓 `/` 與 `%` 成為 Euclidean 的那個修正是**無條件**產生的,並未在兩個運算元都可證明非負時
-> elide——上面說的「最常見情況零成本」是意圖中的 codegen、不是今天的。語意不受影響:那是成本、不是錯的答案。
 
 ### 有型別的位置（Typed positions）
 

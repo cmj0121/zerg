@@ -5528,6 +5528,25 @@ EOF
 # binding went back to being shared with the file's neighbours.
 #
 # seed-gap: the seed binds namespaces program-wide, so it builds this.
+# A MODULE'S FUNCTION IS NOT A VALUE, and the sentence has to say that rather than that the
+# module has no such member. It used to answer _E3084 module `other` has no `helper`_ — false in
+# this very program, where `other.helper(4)` runs and a module CONSTANT reads as a value — and a
+# reader following it checks a spelling that is correct or adds a `pub` that is already there.
+#
+# seed-gap: the seed builds it.
+reject a-module-function-read-as-a-value E9106 'is not a value here' seed-gap <<'EOF'
+import "./other"
+
+fn main() {
+	f := other.helper
+	print 1
+}
+--- other/other.zg
+pub fn helper(n: int) -> int {
+	return n * 3
+}
+EOF
+
 reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
 import "./pair"
 

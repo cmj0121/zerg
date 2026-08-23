@@ -469,10 +469,11 @@ spec Into[T] {
 以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
 問得出口的東西,而到那時它已經是已知的。
 
-> **[deviation]** 在這個編譯器裡,一個型別只能有**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
+> **[not yet]** 一個型別只帶**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
 > `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
-> language allows several, and reaching that needs the method keyed by the spec and its arguments_。那正是
-> 上面那個 bound 也需要的同一件事,也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_。這與
+> coherence 規則缺的是同一把鍵,在 [Spec 與 Generics](specs.zh-TW.md) 裡說過一次:一個以「宣告它的 spec」為鍵的
+> 方法——那也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
 
 一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是

@@ -1,0 +1,32 @@
+# The `[deviation]` markers 0.2.0 INHERITED, and the whole of what "no deviations it
+# inherited" means as a criterion (#52). One `path<TAB>slug` per line, where the slug is
+# the marker's first six significant words — see scripts/deviation-check.sh for why the
+# key is a slug and not a line number.
+#
+# A line comes off when its marker is DISPOSED OF, three ways and no others: the compiler
+# is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
+# The release closes when nothing but this header is left.
+docs/code/collections.md	the freeze sees only a bare name
+docs/code/coroutine.md	the spec requires that no coroutine can
+docs/code/errors.md	the bootstrap does not yet own or
+docs/conformance.md	a form inside a template nobody instantiates
+docs/conformance.md	a stack overflow a coroutine running past
+docs/core/decorators.md	test is read by both compilers but
+docs/core/memory.md	a carrier owns its left and not
+docs/core/memory.md	a coroutine that never runs never gives
+docs/core/memory.md	freeing a chain recurses one c stack
+docs/core/memory.md	two combining forms still hand their operands
+docs/core/specs.md	the intended coherence rule is one impl
+docs/core/types.md	a bare variant name is not a
+docs/core/types.md	a type may have one into in
+docs/core/types.md	the correction that makes and euclidean is
+docs/core/types.md	type x y is implemented only for
+docs/runtime/ffi.md	the prefix is zg and there is
+docs/runtime/io.md	buffering print writes through buffered libc stdio
+docs/runtime/package.md	initialization is eager not lazy every init
+docs/runtime/package.md	the boundary it compares is the module
+docs/runtime/package.md	the entry file s own directory is
+docs/runtime/package.md	the module layer is built and is
+docs/runtime/package.md	the reserved set is what the toolchain
+docs/tooling/desugar.md	check answers a wider question than it
+docs/tooling/fmt.md	a group the pass declines keeps its

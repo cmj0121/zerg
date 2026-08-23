@@ -1,0 +1,8 @@
+# A file of a module, naming its sibling THROUGH AN IMPORT. `text.zg` is beside this one and
+# both are files of the module `lib`, so the import binds a namespace onto a file that is
+# already here — it loads nothing, and it is not an edge in the module graph.
+import "./text"
+
+pub fn width(s: str) -> int {
+	return text.bytes(s).len()
+}

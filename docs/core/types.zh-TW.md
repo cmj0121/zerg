@@ -245,10 +245,12 @@ enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 
 discriminant。帶限定的名字是**在它指名的那個 enum 裡面**解析的,所以指到該 enum 沒有宣告的名字會是
 _E4031 `Apple` is a variant of `Fruit`, not of `Colour`_——一句關於那一行上的 enum 的話,並且帶位置。
 
-> **[deviation]** 在這個編譯器裡,**裸的** variant 名字不是一個值:`c := Red` 會是 _E3079 `Red` is a variant of
-> `Colour`, and a variant is named through its enum_,而 [Grammar](../surface/grammar.zh-TW.md) 說裸名字只要
-> 解析得到一個 variant 就是那個 variant。當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個
-> ——它是兩種可行寫法之一,未必是你要的那一個。
+**裸的 variant 名字不是一個值**,而理由就是上面那一段:`c := Red` 會是 _E3079 `Red` is a variant of `Colour`, and
+a variant is named through its enum_。要是由「當下 scope 裡剛好有什麼」來決定,那麼在一個檔案裡宣告一個 variant,就
+會改變另一個檔案裡某個名字的意思 —— 那正是 [Grammar](../surface/grammar.zh-TW.md) 為 pattern 位置給出的論證,而它
+在這裡一字不改地成立。一個 variant **就是**那一對,所以那一對就是它的寫法,在每一個位置都是。
+
+當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個:它是兩種可行寫法之一,而知道要哪一個的是讀者。
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是

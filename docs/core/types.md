@@ -286,11 +286,14 @@ alike, each with its own discriminant. A qualified name is resolved **inside the
 one the enum does not declare is _E4031 `Apple` is a variant of `Fruit`, not of `Colour`_ — a sentence about
 the enum on the line, with a place.
 
-> **[deviation]** A **bare** variant name is not a value in this compiler: `c := Red` is _E3079 `Red` is a
-> variant of `Colour`, and a variant is named through its enum_, where [Grammar](../surface/grammar.md)
-> makes a bare name a variant when it resolves to one. Where two enums declare the name, the suggestion in
-> that sentence names the first of them — it is one of the two spellings that would work, not necessarily
-> the one meant.
+**A bare variant name is not a value**, and the paragraph above is the reason: `c := Red` is _E3079 `Red` is
+a variant of `Colour`, and a variant is named through its enum_. Deciding it by what happens to be in scope
+would mean that declaring a variant in one file changes what a name in another file means — the argument
+[Grammar](../surface/grammar.md) makes for pattern position, which holds identically here. A variant IS the
+pair, so the pair is how it is written, in every position.
+
+Where two enums declare the name, the suggestion in that sentence names the first of them: it is one of the
+two spellings that would work, and the reader is the one who knows which.
 
 A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
 reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the

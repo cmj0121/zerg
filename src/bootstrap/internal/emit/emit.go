@@ -2976,6 +2976,13 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 			tag, payload, boxed = v.Tag, v.Payload, v.Boxed
 		}
 	}
+	// A PAYLOAD IS A RUN, like a call's arguments and a struct's fields. A compound literal
+	// is one C construct and C leaves the order of its initialisers to the backend, so
+	// `E.V(f(1), g(2))` ran whichever of the two the backend felt like running first. It was
+	// the last combining form left inheriting that, in both compilers, and the two have to
+	// move together: `make oracle` compares them on a program that can tell.
+	pre, undo := e.orderOperands(argExprs(nil, args), nil)
+	defer undo()
 	var b strings.Builder
 	fmt.Fprintf(&b, "((%s){.tag = %d", cname, tag)
 	if len(args) > 0 {
@@ -2989,7 +2996,7 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 		b.WriteString("}")
 	}
 	b.WriteString("})")
-	return b.String()
+	return orderedForm(pre, b.String())
 }
 
 // enumOfEmit lowers the discriminant reverse `E.of(n) -> E?` (GRAMMAR group 7): given

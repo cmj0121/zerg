@@ -1614,7 +1614,16 @@ fn c_fn_ret(t: Ty) -> Ty {
 fn c_args_after(mut &em: Emitter, fty: Ty, args: list[Expr], sb: Subst) -> str {
 	chk_fnval_arity(em, fty, args.len())
 
-	rendered := c_args_typed(em, c_fn_params(fty), args, sb)
+	# A CALL THROUGH A FUNCTION VALUE SEQUENCES ITS ARGUMENTS, exactly as a direct call
+	# does. This was the last combining form in either compiler still handing its operands
+	# to one C construct and inheriting C's unspecified order (docs/core/memory.md).
+	#
+	# It is asked HERE and not in `c_args_typed`, which this shares with the intrinsics and
+	# the built-in error constructors: those two stay unsequenced, and they stay unsequenced
+	# in the seed too. The two compilers must agree about which operands are sequenced or
+	# `make oracle` becomes a tripwire waiting for a program that can tell — so the boundary
+	# is drawn in the same place on both sides, and moving it is a change to both.
+	rendered := c_args_typed(em, c_fn_params(fty), args, sb, c_needs_order(args, 0))
 	return "" if rendered == ""
 
 	return ", " + rendered
@@ -8338,6 +8347,14 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Su
 	# against generated C
 	chk_variant_arity(em, en, name, args.len(), "gives")
 
+	# THE PAYLOAD IS A RUN, like a call's arguments and a struct's fields. A compound literal
+	# is one C construct and C leaves the order of its initialisers to the backend, so
+	# `E.V(f(1), g(2))` ran whichever of the two the compiler felt like running first — the
+	# one combining form left inheriting that, after every other one in this file had been
+	# sequenced. It is asked from 0 because a variant has no receiver for the answer to be
+	# about (docs/core/memory.md).
+	seq := c_needs_order(args, 0)
+
 	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, name), 10)
 	if args.len() > 0 {
 		out = out + ", .u." + name + " = {"
@@ -8351,7 +8368,10 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[Expr], sb: Su
 				# box a self-recursive payload into a refcounted cell that releases it
 				val = f"zg_refnew_{en}({val})"
 			}
-			out = out + ".f" + strconv.to_string(i, 10) + " = " + val
+
+			# the BOX is inside the temporary, not outside it: hoisting the unboxed value
+			# would leave the allocation where the literal is and put it back out of order.
+			out = f"{out}.f{i} = {c_ordered(em, seq, val)}"
 			i = i + 1
 		}
 		out = out + "}"
@@ -8528,24 +8548,29 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 # A call with no declared type to read — an intrinsic, an err constructor — passes an empty
 # list and every argument goes through unchanged, which is what those want.
 #
-# It renders NO ordering temporaries, and that is a deliberate limit rather than an
-# oversight: its callers are the intrinsics, the built-in error constructors and the calls
-# through a function VALUE, and the Go seed leaves all three alone. The two compilers have
-# to agree about which operands are sequenced or `make oracle` becomes a tripwire waiting
-# for a program that can tell — so the boundary is drawn in the same place on both sides,
-# and moving it is a change to both.
-fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
+# WHETHER IT SEQUENCES is the caller's to say, and the two callers answer differently. A
+# call through a function VALUE does — its arguments are a run like any other call's — and
+# the intrinsics and the built-in error constructors do not. The Go seed draws the boundary
+# in the same place, and it has to: the two compilers must agree about which operands are
+# sequenced or `make oracle` becomes a tripwire waiting for a program that can tell, so
+# moving the line is a change to both.
+fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst, seq: bool) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
+		mut val := ""
 		if i < ftys.len() {
-			out = out + c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
+			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
-			out = out + c_expr(em, args[i], sb)
+			val = c_expr(em, args[i], sb)
 		}
+
+		# the COPY is inside the temporary: hoisting the uncopied value would move the
+		# retain out of the run and leave the copy where the argument list is.
+		out = out + c_ordered(em, seq, val)
 		i = i + 1
 	}
 	return out
@@ -8563,7 +8588,7 @@ fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: li
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 	mut none: list[Ty] = []
-	return c_args_typed(em, none, args, sb)
+	return c_args_typed(em, none, args, sb, false)
 }
 
 # c_fn_params reads a function TYPE's parameter list, or an empty one from anything else.

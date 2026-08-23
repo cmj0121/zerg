@@ -1,0 +1,18 @@
+# Two files of one module naming each other through imports.
+#   zerg build examples/1g/siblings/main.zg
+# Expected output:
+#   3
+#   8
+#   8
+#
+# THE IMPORT ADDS A SPELLING AND TAKES NONE AWAY. Files of one module share a namespace, so
+# `count.width(a)` and a bare `width(a)` are the same call — the import binds a name onto a
+# file that is already in this unit rather than loading a second copy of it. Writing it out
+# is how a reader of `text.zg` alone can tell where `width` comes from.
+import "./lib"
+
+fn main() {
+	print lib.width(" abc ")
+	print lib.both("ab", " cdef ")
+	print lib.plain("ab", " cdef ")
+}

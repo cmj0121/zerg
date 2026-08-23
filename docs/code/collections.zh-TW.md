@@ -123,12 +123,15 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 某個 **元素**（`for mut x`）還是可以：它不會移動 cursor——不過那個綁定本身是 **[not yet]**（見
 [順序與相等性](#順序與相等性)）。
 
-> **[deviation]** 這道凍結只看得見**裸名**。`for x in xs { xs.append(x) }` 與 `for x in xs { xs = [9] }` 是
-> compile error（`E3089`），但同一個結構性改動只要透過**路徑**抵達就不是：`for x in p.xs { p.xs.append(v) }`、
-> `for x in p.xs { p.xs = [9] }`、`for x in xs[0] { xs[0].append(v) }`，以及一個收 `mut &xs` 並在迴圈裡 append
-> 的 function，今天全都編得過，而且真的把正在被走訪的 collection 長大或重指掉。沒有任何 iterator 失效——迴圈走的
-> 是它在開頭取的那份 copy-on-write 複本，所以程式仍然是記憶體安全的——但**本節承諾的那個 compile error 沒有出
-> 現**：迴圈只是安靜地走訪那個當初的 collection，而不是把話說出來。只有裸名那個拼法被強制。
+這道凍結除了裸名之外也看得見**路徑**,而說「這兩個是同一個 collection」的依據,是它們**被寫成同一個樣子**:
+`for x in p.xs { p.xs.append(v) }` 與 `for x in xs[0] { xs[0].append(v) }` 都是 `E3089`。那是把本地規則往外多讀一
+步,而不是別名分析 —— 值語意讓後者沒有必要:一條寫出來的路徑指名一個位置。索引只有在它是**整數字面值**時才算進拼
+法裡:`xs[i]` 會跟另一個 `i` 已經前進過的 `xs[i]` 比對成相等,而拿那個去拒絕,就變成一條關於拼法、而不是關於位置的
+規則。
+
+**把被走訪的 collection 交給一個 `mut &` 參數也會被拒絕**,而那是唯一一種離開迴圈本體的寫法:`mut &` 就是呼叫端自
+己那塊儲存的一個可寫名字,所以 `for x in xs { grow(xs, x) }` 不管 `grow` 拿它做什麼,都是一次結構性改動。這條規則
+仍然是本地的 —— 它拒絕的是那次**借用**、在呼叫處,而不是去讀被呼叫者。
 
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。

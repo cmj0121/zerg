@@ -355,7 +355,7 @@ fn subst_exprs(su: TySubst, xs: list[Expr]) -> list[Expr] {
 fn subst_arms(su: TySubst, arms: list[Arm]) -> list[Arm] {
 	mut out: list[Arm] = []
 	for a in arms {
-		out.append(Arm(a.pat, subst_expr(su, a.lit), a.bind, a.ctor, a.binds, a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body)))
+		out.append(Arm(a.pat, subst_expr(su, a.lit), a.bind, a.ctor, a.qual, a.binds, a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body)))
 	}
 	return out
 }

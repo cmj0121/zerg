@@ -374,6 +374,13 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   不會被 `make oracle` 拿去比對 —— 它只跑種子建得起來的東西。`scripts/reject-check.sh` 裡那四個 case 各帶一個
   `seed-gap` 標記,所以種子學會這條規則的那一天,gate 會說出來,而這一條也就跟著移除。
 
+- **`fn main(mut &args: …)` 不會被拒絕。** 種子檢查 `main` 參數的**型別**,而 `zerg` 還檢查它是不是以值傳遞 ——
+  引數清單是 runtime 交過來的,所以借用它不是 entry 有的形狀。在種子底下,那個宣告會走到 cc,得到
+  _passing 'zrt_list' to parameter of incompatible type 'zrt_list \*'_。
+
+  種子會編譯的東西裡沒有一份這樣宣告,而「種子接受、`zerg` 拒絕」的程式永遠不會被 `make oracle` 拿去比對。
+  `scripts/reject-check.sh` 的 `main-borrows-its-arguments` 帶著 `seed-gap` 標記,種子問出第二半的那天它會自己退場。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

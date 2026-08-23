@@ -260,6 +260,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3110` | 不能在 receive-only 的 `…` 上送出                                                                     |
 | `E3111` | 不能關閉 receive-only 的 channel `…`                                                                  |
 | `E3112` | channel 方向只能收窄：`…` 不能填進 `…`                                                                |
+| `E3113` | `fn main` 取的不是命令列引數                                                                          |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -324,6 +325,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4071` | `has` 問的是一個 key,而這裡給了 …                                                                     |
 | `E4072` | `…` 有 … 個型別參數,而這裡給了 …                                                                      |
 | `E4073` | `…` 在這個檔案裡被宣告了兩次 — 一個 scope 只宣告一次同名的東西                                        |
+| `E4074` | variant pattern 的限定符不是 subject 的 enum                                                          |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |

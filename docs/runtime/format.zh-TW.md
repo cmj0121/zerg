@@ -23,7 +23,9 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日這樣的複合值會在**編譯期被拒絕**，而且
 > 是兩個門口兩個代碼——_E9059 NotImplemented: rendering a `P` as text — a composite needs the structural
 > `Display` this compiler does not generate; render its fields_ 用於 `print`、格式洞與 `str(x)`，而
-> _E4011 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。所以「每個值都能渲染」
+> _E4011 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。**`enum`** 是第三道門、
+> 第三個碼 —— _E9085 NotImplemented: rendering an `E` as text — an enum has no name for it_ —— 那是 0.2.0 的重新
+> 量測發現這裡沒有指名的(#74)。所以「每個值都能渲染」
 > 對純量、字串、錯誤與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切
 > 拼法**尚未被釘定**（[not yet]）。
 >

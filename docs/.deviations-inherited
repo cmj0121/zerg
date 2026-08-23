@@ -16,7 +16,6 @@ docs/core/specs.md	the intended coherence rule is one impl
 docs/core/types.md	a bare variant name is not a
 docs/core/types.md	a type may have one into in
 docs/core/types.md	the correction that makes and euclidean is
-docs/core/types.md	type x y is implemented only for
 docs/runtime/io.md	buffering print writes through buffered libc stdio
 docs/runtime/package.md	initialization is eager not lazy every init
 docs/runtime/package.md	the boundary it compares is the module

@@ -1745,6 +1745,46 @@ fn main() {
 }
 EOF
 
+# --- the entry's own shape ---------------------------------------------------------
+#
+# `main`'s parameter is the command-line arguments and there is nothing else it could be
+# (docs/runtime/package.md). Nothing asked what the DECLARATION wanted, so four bad shapes
+# were emitted anyway and cc reported the mismatch against generated code nobody wrote — and
+# a fifth, `fn main(args: list[int])`, matched by shape at the C level and printed argv's
+# pointers back as integers. Found by the 0.2.0 re-measurement sweep (#52).
+#
+# Each case pins the half of the declaration that is wrong, because that is what the sentence
+# differs on; the code is one, because the rule is one.
+reject main-takes-an-int E3113 'takes `n: int`' <<'EOF'
+fn main(n: int) {
+	print(f"{n}")
+}
+EOF
+
+reject main-takes-a-str E3113 'takes `s: str`' <<'EOF'
+fn main(s: str) {
+	print s
+}
+EOF
+
+reject main-takes-a-list-of-the-wrong-element E3113 'takes `args: list[int]`' <<'EOF'
+fn main(args: list[int]) {
+	print(f"{args.len()}")
+}
+EOF
+
+reject main-takes-two-parameters E3113 'takes 2 parameters' <<'EOF'
+fn main(args: list[str], n: int) {
+	print(f"{n}")
+}
+EOF
+
+reject main-borrows-its-arguments E3113 'borrows `args` with `mut &`' seed-gap <<'EOF'
+fn main(mut &args: list[str]) {
+	print(f"{args.len()}")
+}
+EOF
+
 # --- declared type versus value ---------------------------------------------------
 #
 # `b: bool = 1` is the one that reached nothing at all: a bool and an int are both

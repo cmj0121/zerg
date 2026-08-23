@@ -484,6 +484,15 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   the seed builds. The four cases in `scripts/reject-check.sh` carry a `seed-gap` marker each,
   so the day the seed learns the rule the gate says so and this entry comes out.
 
+- **`fn main(mut &args: …)` IS NOT REFUSED.** The seed checks `main`'s parameter TYPE, and
+  `zerg` also checks that it is taken by value — the runtime hands the argument list over, so
+  borrowing it is not a shape the entry has. Under the seed that declaration reaches cc as
+  _passing 'zrt_list' to parameter of incompatible type 'zrt_list \*'_.
+
+  Nothing the seed compiles declares it, and a program the seed accepts and `zerg` rejects is
+  never compared by `make oracle`. `scripts/reject-check.sh`'s `main-borrows-its-arguments`
+  carries the `seed-gap` marker, which retires itself the day the seed asks the second half.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

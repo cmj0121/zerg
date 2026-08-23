@@ -1,0 +1,21 @@
+# Two modules that read nothing of each other, and what decides which one initializes
+# first.
+#   zerg build examples/1g/initorder/main.zg
+# Expected output:
+#   ada-const     — `project:ada` sorts before `project:zebra`
+#   zebra-const
+#   3
+#
+# THE IMPORTS BELOW ARE IN THE OTHER ORDER on purpose. Top-level constants initialize in
+# dependency order, and neither of these reads the other, so the graph leaves them
+# unordered — and what breaks that tie is the CANONICAL MODULE NAME, not the order the
+# import lines were written (docs/runtime/package.md). Swap the two lines and the output
+# does not move; that is the whole of this example.
+import (
+	"./zebra"
+	"./ada"
+)
+
+fn main() {
+	print zebra.Z + ada.A
+}

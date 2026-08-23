@@ -1,0 +1,8 @@
+# The same shape as `ada`, and it reads nothing of it — which is what leaves the two
+# unordered for the tie-break to decide.
+fn zebra_mark(s: str) -> int {
+	print s
+	return 2
+}
+
+pub const Z: int = zebra_mark("zebra-const")

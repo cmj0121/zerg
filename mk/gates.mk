@@ -137,6 +137,13 @@ EXAMPLE_MIN ?= 20
 EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg
 EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 
+# An example that ships a `.out` beside it is held to WHAT IT PRINTS and not merely to
+# running. Almost every example already states its expected output in a comment — "Expected
+# output: 40" — and nothing read those comments, so an example could print something else
+# for a year and this gate would call it green. The file is OPT-IN because the concurrent
+# ones have no single right output: `11_coroutines` interleaves, and pinning one interleaving
+# would be a gate that fails on a correct program.
+
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
@@ -144,7 +151,9 @@ examples:                       # build every example with zerg itself, and run 
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
-		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \
+		got=$$($$out 2>/dev/null) || { echo "RUN    $$src"; fail=1; continue; }; \
+		want=$${src%.zg}.out; \
+		if [ -f $$want ] && [ "$$got" != "$$(cat $$want)" ]; then echo "OUTPUT $$src"; fail=1; continue; fi; \
 		n=$$((n+1)); \
 	done; \
 	for src in $(EXAMPLE_REFUSED); do \

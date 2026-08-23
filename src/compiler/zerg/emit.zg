@@ -9861,19 +9861,66 @@ fn c_const_order(mut &em: Emitter, f: File) -> list[int] {
 		i = i + 1
 	}
 
+	seq := c_const_seq(em, f)
 	mut out: list[int] = []
 	for out.len() < n {
 		mut placed := 0
-		mut j := 0
-		for j < n {
+		for j in seq {
 			if not done[j] and c_const_ready(f, f.consts[j].value, done) {
 				done[j] = true
 				out.append(j)
 				placed = placed + 1
 			}
-			j = j + 1
 		}
 		raise c_const_cycle_says(f, done) if placed == 0
+	}
+	return out
+}
+
+# c_const_seq is the order the sweep VISITS the table in, and with it the whole of the
+# tie-break rule: dependency order is decided by `c_const_ready`, and everything the graph
+# leaves unordered is decided HERE.
+#
+# BY CANONICAL MODULE NAME, which is what `docs/runtime/package.md` says decides it. The
+# sweep used to visit in table order, so the tie went to whichever module was loaded first
+# — the order the IMPORTS WERE WRITTEN. That is stable for a given source, so it was never
+# a reproducibility defect; it made a program's side-effect order depend on the arrangement
+# of its import block, which is a thing a reader moves for readability (#70).
+#
+# The module NAME and not its path, and after `mod_id` that is no longer the same decision:
+# an identity is `stdlib:io` or `project:util/text` — a root and a path under it — so the
+# same program built from a relative and an absolute entry sorts one way. Within a module
+# the table's own order stands, which is the source order the loader read the files in.
+fn c_const_seq(em: Emitter, f: File) -> list[int] {
+	mut keys: list[str] = []
+	for c in f.consts {
+		keys.append(c_mod_of(em, c.path))
+	}
+
+	mut out: list[int] = []
+	mut j := 0
+	for j < keys.len() {
+		# `<=` and not `<`: the first row of a STRICTLY greater key is where this one goes,
+		# so equal keys keep the order they came in and the sort stays stable.
+		mut at := 0
+		for at < out.len() and keys[out[at]] <= keys[j] {
+			at = at + 1
+		}
+
+		mut next: list[int] = []
+		mut i := 0
+		for i < out.len() {
+			if i == at {
+				next.append(j)
+			}
+			next.append(out[i])
+			i = i + 1
+		}
+		if at >= out.len() {
+			next.append(j)
+		}
+		out = next
+		j = j + 1
 	}
 	return out
 }

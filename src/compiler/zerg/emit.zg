@@ -4472,6 +4472,17 @@ fn c_ns_reexports(mut &em: Emitter, mod: str, want: str, depth: int) -> bool {
 
 # c_ns_owns_fn is c_ns_names_mod for a FUNCTION, and it exists so the three shapes that can
 # write a namespaced call — an ordinary one, a `spawn`, a `defer` — ask it in one spelling.
+# c_ns_declares_fn is the POSITIVE question `c_ns_owns_fn` is not: does module `ns` declare a
+# FUNCTION of this name. The one below answers true when no signature row exists at all — it is
+# asked of a name already known to be a function — and asking it about a name that might be
+# anything reported a module constant, and a member that is not there, as functions.
+fn c_ns_declares_fn(mut &em: Emitter, ns: str, name: str) -> bool {
+	r := c_sig_row_of(em, name)
+	return false if r < 0
+
+	return c_ns_names_mod(em, ns, em.sig_mod[r])
+}
+
 fn c_ns_owns_fn(mut &em: Emitter, ns: str, name: str) -> bool {
 	r := c_sig_row_of(em, name)
 	return true if r < 0
@@ -12025,6 +12036,18 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 		# a value and said `undefined name lib` — about the qualifier, which is the part
 		# that is right. A LOCAL of the asked-for name must not soften this into an
 		# answer: the question was the module's, and the module has no such member.
+		#
+		# UNLESS THE MODULE HAS IT AS A FUNCTION, and then the sentence above is FALSE:
+		# `f := other.helper` is refused in a program where `other.helper(4)` runs and
+		# `other.STEP` reads, so telling the reader the module has no `helper` sends them to
+		# check a spelling that is correct. What it has no VALUE FORM for is the function
+		# (docs/runtime/package.md marks the capability `[not yet]`), and that is what this
+		# says instead.
+		if c_ns_declares_fn(em, ns, fld) {
+			chk_at(em, Rule.NotYetCrossModuleFnValue, f"module `{ns}` declares the function `{fld}`, and a module's function is not a value here — call it (`{ns}.{fld}(…)`) or wrap it in one of this module's own functions. A first-class cross-module function is a form this compiler has not built (docs/runtime/package.md)")
+			return "0"
+		}
+
 		chk_no_member(em, ns, fld)
 		return "0"
 	}

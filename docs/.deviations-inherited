@@ -8,7 +8,6 @@
 # The release closes when nothing but this header is left.
 docs/code/collections.md	the freeze sees only a bare name
 docs/conformance.md	a form inside a template nobody instantiates
-docs/core/memory.md	a carrier owns its left and not
 docs/core/memory.md	a coroutine that never runs never gives
 docs/core/memory.md	freeing a chain recurses one c stack
 docs/core/memory.md	two combining forms still hand their operands

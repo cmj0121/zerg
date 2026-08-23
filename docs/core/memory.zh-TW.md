@@ -113,16 +113,13 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
 
-> **[deviation]** carrier 擁有它的 **Left**,不擁有它的 **Right**。「這個 carrier 到底有沒有擁有東西」這個問題
-> 只問 Left 的型別,所以 `Either[int, str]` 被判定為什麼都不擁有,於是**完全不會產生 copy helper、也完全沒有
-> drop**——而建構 Right 的那個 wrap 卻會 retain 它的 payload。因此每建構一個 Right 就漏掉一個 reference;而複製
-> 這種 carrier 是一次什麼都不計數的 bit copy:是洩漏,不是 double free,這也是它在 ASan 底下看不見的原因。
-> `Result[T]` 不受影響:它的 Right 是一個 `Err`,那份儲存屬於 runtime。這裡欠的是同一組配對套到另一側。
->
-> 本段的 **Left** 那一半已經關掉了。carrier 現在有 copy helper,所以 binding 可以像其他每一個擁有型別那樣登記
-> drop:`got := <-c` 在 scope 結束時釋放它的 payload;被當成引數傳遞、被 return 出去、放在 struct 欄位或
-> `list[T?]` 元素裡的 carrier 也一樣;還有 `if v := <-c { … }` retain 進 binding 的那個值——那是第二個漏,而且
-> 根本不需要 carrier 被命名就會發生。以計數 allocator、200 輪對 5 輪實測(`make mem-check`)。
+carrier 擁有**它當下持有的那一側**,而它的 drop 與 copy 各自為每個擁有東西的側邊帶一條 arm:tag 說 Left 就走
+Left 的、說 Right 就走 Right 的。optional 沒有 Right,只拿到 Left 那一條。`Result[T]` 的 Right 是一個 `Err`,那份
+儲存屬於 runtime,所以兩條都不需要。
+
+binding 因此可以像其他每一個擁有型別那樣登記 drop:`got := <-c` 在 scope 結束時釋放它的 payload;被當成引數傳遞、
+被 return 出去、放在 struct 欄位或 `list[T?]` 元素裡的 carrier 也一樣;還有 `if v := <-c { … }` retain 進 binding
+的那個值。以計數 allocator、200 輪對 5 輪實測(`make mem-check`)。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`

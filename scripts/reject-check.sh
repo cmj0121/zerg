@@ -1745,6 +1745,33 @@ fn main() {
 }
 EOF
 
+# --- the qualification must be true ------------------------------------------------
+#
+# GRAMMAR#variant-pat says a variant is named by its enum and that the qualification must be
+# TRUE. It was not asked: the parser read the enum name and threw it away, so the only check
+# was on the VARIANT — which caught a qualifier naming a DIFFERENT enum (its variant is
+# elsewhere) and ignored one naming NOTHING AT ALL. `Nope.Red` on a `Colour` built, ran and
+# took the arm, so renaming an enum left every pattern of it still matching and said nothing.
+#
+# The enum written in a pattern is an ASSERTION and not a reference: the subject's type
+# decides which enum this is, and the name is there to be checked against it. Found by the
+# 0.2.0 re-measurement (#74).
+reject pattern-qualifier-names-nothing E4074 'names the enum `Nope`' seed-gap <<'EOF'
+enum Colour {
+	Red
+	Green
+}
+
+fn main() {
+	c := Colour.Red
+	n := match c {
+		Nope.Red => 1
+		Nope.Green => 2
+	}
+	print(f"{n}")
+}
+EOF
+
 # --- the entry's own shape ---------------------------------------------------------
 #
 # `main`'s parameter is the command-line arguments and there is nothing else it could be

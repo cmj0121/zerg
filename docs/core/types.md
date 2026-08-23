@@ -562,11 +562,12 @@ it is checked where it runs.
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
 
-> **[deviation]** A type may have **one** `Into` in this compiler, not several — _E9060 NotImplemented: a
-> second `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`;
-> the language allows several, and reaching that needs the method keyed by the spec and its arguments_.
-> That is the same thing the bound above needs, and what would let a written `x.into()` say which one it
-> means.
+> **[not yet]** A type carries **one** `Into`, not several — _E9060 NotImplemented: a second
+> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
+> language allows several, and reaching that needs the method keyed by the spec and its arguments_. It is
+> the same missing key as the coherence rule's, stated once in
+> [Specs & Generics](specs.md): a method keyed by the spec that declared
+> it, which is also what would let a written `x.into()` say which one it means.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

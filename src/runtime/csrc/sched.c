@@ -374,6 +374,11 @@ static void coro_trampoline(void *arg) {
 	 * fake stack to restore — this stack has never run — and the answer is the stack of
 	 * the worker that started us, which is where the end of this function goes back to. */
 	ZRT_ASAN_SWITCH_DONE(NULL, &co->asan_sched_stack, &co->asan_sched_stack_size);
+	/* THE BODY OWNS THE ENVIRONMENT FROM HERE. Its first act is a `zrt_defer` of the same
+	 * teardown, which runs on both exits, so the end-of-run sweep must not reach it as
+	 * well. Clearing the pointer is what says the hand-over happened. */
+	co->started = true;
+	co->envdrop = NULL;
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		co->thunk(co->env);
@@ -393,7 +398,7 @@ static void coro_trampoline(void *arg) {
 /* spawn_coro is the body of zrt_spawn, with the one thing a `spawn` may not ask for:
  * whether this is coroutine 0. Only the program-entry shims below pass true, and they
  * do it before any worker exists, so the flag is set long before it can be read. */
-static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
+static void spawn_coro(void (*thunk)(void *env), void *env, void (*envdrop)(void *env), bool is_main) {
 	zrt_coro *co = (zrt_coro *)zrt_alloc(sizeof(*co));
 	size_t total = 0;
 	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
@@ -416,6 +421,8 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	co->asan_sched_stack_size = 0;
 	co->thunk = thunk;
 	co->env = env;
+	co->envdrop = envdrop;
+	co->started = false;
 	/* the WHOLE bundle, not four of its fields. Initialising it member by member left
 	 * `taken` uninitialised from the day it was added, and adding `crashing` beside it
 	 * made that visible: UBSan reported a `_Bool` holding 190 on the first sender release
@@ -433,8 +440,8 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	zrt_mutex_unlock(&g_lock);
 }
 
-void zrt_spawn(void (*thunk)(void *env), void *env) {
-	spawn_coro(thunk, env, false);
+void zrt_spawn(void (*thunk)(void *env), void *env, void (*envdrop)(void *env)) {
+	spawn_coro(thunk, env, envdrop, false);
 }
 
 void zrt_yield(void) {
@@ -715,6 +722,42 @@ static void worker_main(void *arg) {
  * past a point that costs more than it buys. */
 #define ZRT_MAX_WORKERS ((size_t)16)
 
+/* sweep_unstarted gives back what a coroutine that NEVER RAN is still holding.
+ *
+ * `main` returning ends the program and whatever is queued stays where it is (the language's
+ * `spawn` lifetime — this file's header says why). What that left behind was not only the
+ * coroutine: its environment was filled at the `spawn`, with a reference taken for each
+ * captured value, and released only by the body — so a `spawn` the scheduler never got to
+ * leaked a reference per capture and the environment block with them.
+ *
+ * It runs AFTER every worker has joined, so the queue is nobody's any more and no lock is
+ * needed to walk it. Only coroutines that never started are reachable here: one that ran and
+ * parked is on a channel's waiter list rather than this queue, and giving ITS environment
+ * back would mean unwinding a stack the language says is abandoned.
+ *
+ * `envdrop` is NULL once the trampoline has run — the body's own `zrt_defer` owns the
+ * teardown from that moment — so this cannot double-free a coroutine that started and
+ * yielded back onto the queue. */
+static void sweep_unstarted(void) {
+	zrt_coro *co = g_runq_head;
+	while (co != NULL) {
+		zrt_coro *next = co->qnext;
+		if (!co->started) {
+			if (co->envdrop != NULL) {
+				co->envdrop(co->env);
+			}
+			zrt_tls_free(&co->tls);
+			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
+			ZRT_LSAN_ROOT_DEL(co->stack, co->stack_size);
+			munmap(co->stack, co->stack_size);
+			zrt_free(co);
+		}
+		co = next;
+	}
+	g_runq_head = NULL;
+	g_runq_tail = NULL;
+}
+
 /* sched_drain runs the program: it starts the extra workers, joins the loop itself,
  * and waits for them. With no thread support, or one CPU, g_workers is 1 and this is
  * exactly the old single-threaded drain — the same queue in the same order.
@@ -763,6 +806,7 @@ static void sched_drain(void) {
 	for (size_t i = 0; i < started; i++) {
 		zrt_thread_join(&workers[i]);
 	}
+	sweep_unstarted();
 	zrt_mutex_destroy(&g_lock);
 	zrt_cond_destroy(&g_cond);
 }
@@ -795,7 +839,7 @@ static void main_thunk_int(void *env) {
 int zrt_sched_main(zrt_main_fn fn) {
 	sched_init();
 	g_main_result = fn;
-	spawn_coro(main_thunk_result, NULL, true);
+	spawn_coro(main_thunk_result, NULL, NULL, true);
 	sched_drain();
 	return g_exit_code;
 }
@@ -803,7 +847,7 @@ int zrt_sched_main(zrt_main_fn fn) {
 int zrt_sched_main_nil(void (*fn)(void)) {
 	sched_init();
 	g_main_nil = fn;
-	spawn_coro(main_thunk_nil, NULL, true);
+	spawn_coro(main_thunk_nil, NULL, NULL, true);
 	sched_drain();
 	return g_exit_code;
 }
@@ -811,7 +855,7 @@ int zrt_sched_main_nil(void (*fn)(void)) {
 int zrt_sched_main_int(int64_t (*fn)(void)) {
 	sched_init();
 	g_main_int = fn;
-	spawn_coro(main_thunk_int, NULL, true);
+	spawn_coro(main_thunk_int, NULL, NULL, true);
 	sched_drain();
 	return g_exit_code;
 }
@@ -827,6 +871,6 @@ static void run_body_thunk(void *env) {
 void zrt_sched_run(void (*fn)(void)) {
 	sched_init();
 	g_run_body = fn;
-	spawn_coro(run_body_thunk, NULL, true);
+	spawn_coro(run_body_thunk, NULL, NULL, true);
 	sched_drain();
 }

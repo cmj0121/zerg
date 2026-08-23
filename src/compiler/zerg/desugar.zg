@@ -68,6 +68,22 @@ pub fn desugar_src_off(src: str, off: list[str], path: str) -> str {
 	return fmt_toks(toks, false)
 }
 
+# desugar_print_only is this pass with every D rule declined: the tokens go straight to the
+# same printer the rules' output goes through. It exists for `--check`, whose question is
+# "did the RULES change anything" — and asking that needs both sides printed the same way,
+# because a difference in WHITESPACE is not a difference in sugar.
+#
+# NOT `fmt_src_off`, which was the first answer to that and the wrong one. `zerg fmt` runs
+# F401, which rewrites `if not (c) { raise x }` back into `raise x if not (c)` — the exact
+# form D104 produces core FROM — so comparing against it asked whether the file was FMT's
+# fixpoint, and a correctly desugared source failed for having been desugared. The two tools
+# have different normal forms on that one shape, and `--check` is desugar's question.
+pub fn desugar_print_only(src: str) -> str {
+	mut toks := tokenize_trivia(src)
+	toks = fmt_wrap(toks)
+	return fmt_toks(toks, false)
+}
+
 # --- rule D101: a postfix guard becomes the `if` block it is sugar for ----------------------
 #
 # GRAMMAR defines `return x if c`, `return if c`, `break if c`, `continue if c` and

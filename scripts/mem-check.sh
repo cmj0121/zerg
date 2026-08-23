@@ -412,6 +412,38 @@ fn main() {
 }
 ZG
 
+# --- a spawn the scheduler never gets to ----------------------------------------------
+# THE ONE LEAK CLASS THIS FILE COULD NOT SEE, and the reason is in its own header: every
+# concurrent case here runs its coroutines to completion. A `spawn`'s environment is filled
+# at the spawn site — a reference taken per captured value — and released by the BODY, so a
+# coroutine the scheduler never reaches gave none of it back. `main` returning ends the
+# program and whatever is queued stays where it is, which is the language's rule and not the
+# defect; the defect was that what stayed was never freed.
+#
+# `main` never touches the channel, so with one worker it runs to its `print` without ever
+# yielding and not one of the spawned coroutines starts. That is the case, exactly.
+#
+# It captures a `str` AND a channel, because the two are given back by different halves of
+# the same teardown, and a sweep that ran only one of them would still balance the count on
+# a case that captured only the other.
+case_run spawn_unstarted no yes <<'ZG'
+fn sink(s: str, ch: chan[int]) {
+	ch <- bytearray(s).len()
+}
+
+fn main() {
+	ch := chan[int](1)
+	mut i := 0
+	r := rounds()
+	for i < r {
+		s := str(i) + "-never-scheduled"
+		spawn sink(s, ch)
+		i = i + 1
+	}
+	print 1
+}
+ZG
+
 # --- an Either whose RIGHT owns something ---------------------------------------------
 # THE OTHER SIDE, and every carrier case above holds its payload on the LEFT. Whether a
 # carrier owned anything at all used to be asked of the Left's type alone, so an

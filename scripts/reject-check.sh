@@ -90,11 +90,11 @@ fail=0
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
 # has_flag <flags> <marker> — one BOOLEAN marker is present. The flags arrive as a
-# space-padded list, so a marker is matched as a whole word: `no-place` must not answer
-# true for a hypothetical `no-place-yet`. It exists because the three boolean markers there
-# were then were each asked for in a different way — a `case`, and two spellings of
-# `${flags#* … }` — and the fourth would have picked a fourth. There are five now, and all
-# five ask through here, which is the whole of what this bought.
+# space-padded list, so a marker is matched as a whole word: `one-finding` must not answer
+# true for a hypothetical `one-finding-only`. It exists because the three boolean markers
+# there were then were each asked for in a different way — a `case`, and two spellings of
+# `${flags#* … }` — and the fourth would have picked a fourth. All of them ask through here,
+# which is the whole of what this bought.
 has_flag() {
 	case $1 in *" $2 "*) return 0 ;; esac
 	return 1
@@ -261,20 +261,14 @@ reject() {
 	# the marker is for — it retires itself, because a case that gains a place while still
 	# carrying one is a failure by name rather than a quiet pass.
 	#
-	# WHAT IS LEFT CARRIES THE MARKER, and it is no longer one class: the DRIVER refuses
-	# before a source is a tree at all — an unreadable file, an import that resolves to
-	# nothing, a cycle between modules (zergc.zg) — and ast.zg refuses a `chan[T?]` that a
-	# substitution built, where the type is written nowhere for a place to point at. Each of
-	# those cases says so at itself. Marking them keeps a permanent LANGUAGE rule in this file,
-	# where its lifetime says it belongs, instead of filing it with the not-yet-built forms
-	# next door to dodge one assertion.
-	if has_flag "$flags" no-place; then
-		if has_place "$out"; then
-			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
-			fail=$((fail + 1))
-			return
-		fi
-	elif ! has_place "$out"; then
+	# AND NOTHING IS LEFT: the marker retired itself, which is what it was for. The last two
+	# were a `chan[T?]` that a SUBSTITUTION built — a type written nowhere in the source, so
+	# there was no position on it to point at. The answer was that the place worth reporting
+	# was never the type: it is whatever CHOSE the type argument, the call that instantiated
+	# the template or the `impl` that bound the spec's parameter (#55). So the `no-place`
+	# branch is gone with its cases, and every rule reached from here says where — which is
+	# a stronger contract than the one this file could state while the exception existed.
+	if ! has_place "$out"; then
 		echo "NO PLACE  $name — the message does not say where: $first"
 		fail=$((fail + 1))
 		return
@@ -4299,9 +4293,9 @@ EOF
 
 # by SUBSTITUTION: nothing in this source spells `chan[int?]`, and the specialization of
 # `mk` for `int?` is one. The parser never sees that type, so the rule has to be on the
-# substitution too — and there is no source position to report, because the type is not
-# written anywhere.
-reject a-channel-of-optionals-by-substitution E3107 no-place <<'EOF'
+# substitution too — and the place it reports is not the type, which is written nowhere, but
+# the CALL that chose the argument: `mk(x)` on line 9 is what makes `chan[T]` a `chan[int?]`.
+reject a-channel-of-optionals-by-substitution E3107 at=9:2 <<'EOF'
 fn mk[T](v: T) {
 	ch := chan[T](1)
 	ch <- v
@@ -4322,8 +4316,9 @@ EOF
 # mismatch message as though it were a type. The rule sits on CONSTRUCTION now (ty_chan),
 # which is the one door that cannot be walked around.
 #
-# No place, for the same reason as the case above: nothing in this source spells the type.
-reject a-channel-of-optionals-by-spec-substitution E3107 no-place <<'EOF'
+# The place is the `impl` line, for the reason the case above gives: nothing here spells the
+# type, and what chose it is `impl Ix[int?]` binding the spec's `K`.
+reject a-channel-of-optionals-by-spec-substitution E3107 at=9:1 <<'EOF'
 spec Ix[K] {
 	fn c() -> chan[K]
 }

@@ -35,10 +35,11 @@ func TestTwoModuleProgramRuns(t *testing.T) {
 	if !strings.Contains(code, "zg_util_text__make") || !strings.Contains(code, "zg_util_text__Pair") {
 		t.Fatalf("imported items must be canonical-path mangled in the C:\n%s", code)
 	}
-	// Five lines now: the example gained the two shapes a local import path can take once a
-	// file is not at the root — `util/text` naming `/shared` two directories up, and
-	// `tools/tally` naming its neighbour `./count`.
-	const want = "7\n100\n7\n11\n11\n"
+	// Six lines: the example carries the two shapes a local import path can take once a file is
+	// not at the root — `util/text` naming `/shared` two directories up, and `tools/tally`
+	// naming its neighbour `./count` — and then names `shared` a SECOND way, from the entry as
+	// `./shared`. One module under two spellings is one module, and the seed agrees.
+	const want = "7\n100\n7\n11\n11\n10\n"
 	if got := compileAndRun(t, cc, code); got != want {
 		t.Fatalf("two-module run: got %q, want %q", got, want)
 	}

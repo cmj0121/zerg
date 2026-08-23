@@ -26,6 +26,11 @@
 # significant words, which survives everything except rewriting the marker — and a marker
 # that is about to be deleted does not get rewritten.
 #
+# A MARKER MAY BE INDENTED. One is: a `> **[deviation]**` nested inside a list item carries two
+# spaces before the `>`, and an anchored `^>` counted it as no marker at all — which is the
+# shape of hole this gate exists to close, found by `docs-mirror` disagreeing about a count
+# this one said was zero.
+#
 # ONLY THE ENGLISH DOCUMENTS ARE SCANNED. `docs-mirror` already holds each zh-TW page to
 # its English original, so counting both would make an inventory of 24 read as 48.
 set -eu
@@ -47,7 +52,7 @@ slug() {
 # --- every marker in the tree, as `path<TAB>slug` -------------------------------------
 found=$(
 	for f in $(find docs -name '*.md' ! -name '*.zh-TW.md' | sort); do
-		grep -n '^> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
+		grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
 			printf '%s\t%s\n' "$f" "$(slug "$rest")"
 		done
 	done
@@ -55,7 +60,7 @@ found=$(
 
 # --- clause 1: a marker that is not inherited must name an issue -----------------------
 for f in $(find docs -name '*.md' ! -name '*.zh-TW.md' | sort); do
-	grep -n '^> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
+	grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
 		s=$(slug "$rest")
 		if grep -qF "$(printf '%s\t%s' "$f" "$s")" "$LIST" 2>/dev/null; then
 			continue

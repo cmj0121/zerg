@@ -8651,6 +8651,19 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 			raise c_diag(em, Rule.NoSuchVariantInPattern, f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, a.ctor)
 			raise c_diag(em, Rule.VariantPatternWrongEnum, f"variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}") if not c_is_variant_in(em, en, a.ctor)
 
+			# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
+			# asked at all. The two rules above look up the VARIANT and compare THAT to the
+			# subject, so a qualifier naming a different enum was caught only because its
+			# variant was elsewhere — and a qualifier naming NOTHING was ignored outright:
+			# `match c { Nope.Red => … }` on a `Colour` built, ran, and took the arm, so
+			# renaming an enum left every pattern of it still matching and said nothing.
+			#
+			# The enum written in a pattern is an ASSERTION and not a reference: the subject's
+			# type is what decides which enum this is, and the name is here to be checked
+			# against it. That is why it never names a module — a module qualifier would be
+			# answering "which one", which the subject has already answered.
+			raise c_diag(em, Rule.VariantPatternWrongQualifier, f"variant pattern `{a.qual}.{a.ctor}` names the enum `{a.qual}`, and the subject is a {ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if a.qual != "" and a.qual != en
+
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 			# arm but the last — the count of a diagnostic depended on where the arm sat.

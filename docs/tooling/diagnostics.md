@@ -347,6 +347,7 @@ shipping compiler rather than a part of it (the line
 | `E4071` | `has` asks about one key, and this gives …                                                              |
 | `E4072` | `…` has … type parameters and this gives …                                                              |
 | `E4073` | `…` is declared twice in this file — one scope declares a name once                                     |
+| `E4074` | a variant pattern's qualifier is not the subject's enum                                                 |
 | `E5001` | this entry file declares no `fn main`                                                                   |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                  |
 | `E5007` | `…` is a module this build compiles and this module did not import                                      |

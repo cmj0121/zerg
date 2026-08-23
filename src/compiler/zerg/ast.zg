@@ -208,6 +208,13 @@ pub struct Arm {
 	pub lit: Expr
 	pub bind: str
 	pub ctor: str
+
+	# qual is the ENUM the pattern was written with — the `Colour` of `Colour.Red` — and ""
+	# for an arm that names none. It is kept because GRAMMAR#variant-pat says *the
+	# qualification must be true*, and dropping it at the parse made that unaskable: a
+	# qualifier naming nothing at all was ignored, so `Nope.Red` matched a `Colour` exactly
+	# as `Colour.Red` does and renaming an enum left every pattern of it still matching.
+	pub qual: str
 	pub binds: list[str]
 	pub has_guard: bool
 	pub guard_expr: Expr

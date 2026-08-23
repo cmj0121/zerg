@@ -211,11 +211,15 @@ A **`spawn`'s captured values are the coroutine's**, not the spawning scope's: t
 reference of its own for each one and HANDS IT OVER to the coroutine, whose by-value parameters give it
 back when the body returns. That is one give-back per capture on every exit, the abort-unwind one included.
 
-> **[deviation]** A coroutine that never runs never gives them back. The environment is filled at the
-> `spawn` and released only by the body, so a spawn whose coroutine the scheduler never gets to — a program
-> that ends first — leaks a reference per captured value and the environment block with them. It is the one
-> leak class in this neighbourhood that has no case anywhere: `make sanitize-conc` runs programs whose
-> coroutines all complete, and `make mem-check` has no concurrency case beyond a drained channel.
+**A coroutine that never runs gives them back too**, and it is a different list. `main` returning ends the
+program and whatever is still queued stays where it is, so a `spawn` the scheduler never reached has no
+by-value parameter to hand anything to — the environment is handed to the runtime with a teardown of its
+own, and the scheduler runs it once every worker has stopped. The two teardowns are exclusive: the body's
+`defer` owns the environment from the instant its trampoline starts, and the runtime drops its pointer at
+the same instant, so exactly one of them runs. `make mem-check`'s `spawn_unstarted` counts it.
+
+A coroutine that started and is **parked** at the end is not this case and is not freed: giving its
+captures back would mean unwinding a stack the language says is abandoned where it stands.
 
 ## `Ref[T]` — a resource that outlives its scope
 

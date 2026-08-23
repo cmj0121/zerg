@@ -462,7 +462,16 @@ list-pat-elem ::= pattern | '..' identifier?
   in one file could silently change what a pattern in another file matched. Names are **case-free**, and
   capitalization was never what decided this. The pattern grammar therefore parses without a symbol table.
 - **The qualification must be true.** `Color.Apple` names a variant of another enum and is an error — and now
-  it can only be an error, never a fresh binding.
+  it can only be an error, never a fresh binding. So is `Nope.Red`, whose qualifier names no enum at all:
+  the first is _E4018_ and the second _E4074_, because what is checked is the NAME that was written and
+  not merely the variant it precedes. (Until 0.2.0 the second was not — the parser read the enum name and
+  dropped it, so renaming an enum left every pattern of it still matching and said nothing.)
+- **A variant pattern never names a module**, and that is not an omission. Everywhere else an enum is a
+  REFERENCE and takes the namespace it came through — `t: ast.Ty`, `ast.Ty.TList(e)` — because those
+  positions are answering _which enum_. A pattern is not: the subject's type has already answered it, so the
+  enum written here is an **assertion**, checked against the subject. `match t { Ty.TList(e) => … }` on an
+  `ast.Ty` is the spelling in every module, the one it was declared in included. Nothing is hidden by it: to
+  hold a value of `ast.Ty` a file has named `ast` somewhere already.
 - **`as` binding.** `pattern as name` also binds the **whole** matched value to `name` while the pattern keeps
   destructuring — `Move{x, y} as m`, `[first, ..] as all`, nested `Some(inner as v)`. It reads like `with` /
   `import`: `<thing> as <name>`. On an or-pattern `as` binds the nearest alternative (`A | B as m` is

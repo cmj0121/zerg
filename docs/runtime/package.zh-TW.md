@@ -90,26 +90,23 @@ _E4068 these constants depend on each other and none can be given a value first_
 `mk()` 讀 `B`，`A` 會拿到 `B` 被宣告成的那個值。這曾是這條排序規則唯一的 silent-wrong——`A` 持有零值而且
 沒有任何診斷——已由 #14 關閉。
 
-一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
-**首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），module 內依**宣告（FIFO）順序**、跨 module 依**相依
-序**（module 的 imports 先 init），在它任何自己的程式碼之前、也在 `main` 之前。
-`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它
-藏進 constant 的 initializer，並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走
-channel，絕不透過 module 層級的變數——頂層 binding 在 module 層級 `unsafe { … }` 分組外不得為 `mut`，而在分組
-**裡面**的那個是 **module-private** 的，永遠不是 `pub`（見可見性）。
+一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。它們**恰好跑一次**,在 **`main` 的第一個敘述
+之前**,跨 module 依**相依序**(一個 module 的 imports 先備妥,然後才輪到它自己),module 內依**宣告(FIFO)順序**。
+`init()` 承載多步或有副作用的啟動——開資源、註冊、seed——而不是把它藏進 constant 的 initializer,並備妥該 module 的
+immutable 狀態。
 
-若某個 `init()` **abort**,該 abort 從觸發它的**首次使用點**往外傳——可在那裡用 `guard` 接住,否則就像任何未接的
-abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自己)。該 module 於是**中毒(poisoned)**:`init()`
-**不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
-半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
+**是及早的,不是首次使用時。** 這次建置搆得到的每一個 `init()` 都會跑,包含一個執行從未碰到的 module 裡的那個。那是
+Go 的模型,也是這個語言採用的那一個:把它做成惰性的,代價是每一個 module 的每一次使用都要一道 guard,換回來的只有
+「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,在其他每一個意義上都已經付過了。
+及早真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是讓 `init()` 更惰性,是在裡面少做一點。
 
-> **[deviation]** 初始化是**及早的，不是惰性的**。程式中每一個 `init()` 都在 `main` 的第一個敘述之前執行，而不是
-> 在擁有它的那個 module 首次被使用時。「恰好一次」成立，順序也成立：一個 module 的 imports 先備妥，然後才輪到它
-> 自己，而它自己的各個區塊依 FIFO 執行。不成立的是「首次被使用時」——一個執行從未碰到的 module，它的 `init()`
-> 照樣會跑。
->
-> **[not yet]** **中毒（poisoning）。** abort 的 `init()` 在主 stack 上直接結束程式；沒有快取的錯誤、沒有後續使用
-> 時的再度 abort，也沒有可供 `guard` 的首次使用點——因為那個呼叫根本不在使用點上。
+仍**沒有可變全域**:共享的可變狀態以值傳遞或走 channel,絕不透過 module 層級的變數——頂層 binding 在 module 層級
+`unsafe { … }` 分組外不得為 `mut`,而在分組**裡面**的那個是 **module-private** 的,永遠不是 `pub`(見可見性)。
+
+若某個 `init()` **abort**,程式就結束。那次 abort 發生在主 stack 上、在 `main` 的 body 之前,所以沒有任何使用點可以
+把它 `guard` 起來,也沒有後續的使用可以再度 abort:「恰好一次」自明地成立,因為沒有東西跑了兩次;而半初始化的 module
+永遠搆不到,因為什麼都還搆不到。一個必須可回復地失敗的 module,應該從一個由程式呼叫的函式回傳 `Result`——那是既有的
+錯誤模型,不是第二個。
 
 ### Package
 

@@ -7,7 +7,12 @@
 # and inside those, the two spellings that differ once a file is not at the root:
 # `util/text/text.zg` names `/shared` at the package root, and `tools/tally.zg` names its
 # neighbour as `./count`.
+#
+# `shared` IS NAMED TWICE, and that is the case: this file says `./shared` and `util/text` says
+# `/shared`. One module, two spellings — a module's identity is what an import RESOLVES to and
+# not the string somebody typed, so it is compiled once and both files see the same names.
 import (
+	"./shared"
 	"./tools/tally"
 	"./util/text"
 )
@@ -24,4 +29,5 @@ fn main() {
 	print text.id(7)     # 7   — same generic at a second call site
 	print text.offset()  # 11  — util/text named `/shared` from two directories down
 	print tally.of(5)    # 11  — tally.zg named its neighbour count.zg as `./count`
+	print shared.base()  # 10  — the same module `util/text` reached as `/shared`
 }

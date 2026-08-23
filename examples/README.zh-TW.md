@@ -65,6 +65,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |
 | [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                        |
 | [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                           |
+| [`1g/outputorder/`](1g/outputorder) | `print` 與 `io.println` 依寫下的順序抵達 stdout                  |
 | [`1g/testfile/`](1g/testfile)       | 一次正常建置會編什麼，又把什麼留在地上                           |
 
 ### 那兩支必須被拒收的

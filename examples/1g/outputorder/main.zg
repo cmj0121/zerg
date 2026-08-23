@@ -1,0 +1,21 @@
+# Two ways to write a line, and one order.
+#   zerg build examples/1g/outputorder/main.zg
+# Expected output:
+#   a-print
+#   b-io
+#   c-print
+#   d-io
+#
+# `print` is a KEYWORD that lowers to libc `printf`; `io.println` is a stdlib function that
+# lowers to `write(2)`. Two different paths to the same file descriptor — and with stdout
+# buffered they arrived in the order their BUFFERS flushed, which put both `io` lines ahead
+# of both `print` lines however the program was written. The runtime makes stdout
+# unbuffered, so what a program printed is what a reader sees, in that order.
+import "io"
+
+fn main() {
+	print "a-print"
+	io.println("b-io")
+	print "c-print"
+	io.println("d-io")
+}

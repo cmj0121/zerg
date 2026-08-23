@@ -130,7 +130,7 @@ _E9078 NotImplemented: `is AliasError` — an `is` test names one of the built-i
 `raise StopIteration("…")` 在**兩個編譯器**裡都是
 _E4063 `StopIteration` is testable but not constructible_,因為它正是 channel 乾淨關閉早已戴上的那個標記——一個能
 raise 它的 sender 會讓 consumer 付出什麼代價,見 [Concurrency](coroutine.zh-TW.md)。
-`StackOverflowError` 則是 **[deviation]**（見下）。
+`StackOverflowError` 則是唯一不是 abort 的那一個(見下)。
 abort **不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到出錯處續算。語意上它是一次
 **會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
@@ -143,18 +143,16 @@ fire-and-forget——見 [Concurrency](coroutine.zh-TW.md)）。
 合併——較晚的 abort 往外傳、把還在飛的那個記成它的 `unwrap()` cause——所以兩者皆不遺失、consumer 讀得到整條鏈。
 沒有哪個錯誤會無聲勝出,也沒有另一個 _suppressed_ 槽要去查。
 
-一個 **`StackOverflowError`** 是 Zerg 自己的安全網、不是 OS 的：runtime **擁有每一條 stack**——主 stack 與每條
-coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 stack 的當下就 raise 這個 abort（一次會跑 `defer` 的乾淨
-unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack
-就夠——因此無界遞迴是一個確定的 `StackOverflowError`、絕不是無聲的卡死。
+一個 **`StackOverflowError`** 是唯一**不是 abort** 的結束方式。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界
+stack 就夠——因此無界遞迴是一個確定的溢位、而不是無聲的卡死,而 runtime 會給那次溢位名字:它的 fault handler 把
+`StackOverflowError: stack overflow` 寫到標準錯誤、行程以狀態 **1** 結束,今天程式能溢出的兩條 stack(coroutine 的
+guard page 與 `main` 的原生 stack)皆然。
 
-> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;溢位仍是 guard page 使它成為的那次硬體 fault。但這個
-> fault 如今帶著它的名字：runtime 的 signal handler 在 stderr 回報 `StackOverflowError: stack overflow`、
-> 行程以狀態 **1** 結束,與其他每個 abort 相同——今天程式能溢出的兩條 stack（coroutine 的 guard page 與
-> `main` 的原生 stack）皆然。但出錯的 stack 已耗盡、無法從 signal handler 展開,所以待決的 `defer` 被**跳過**、
-> 沒有 `guard` 能把它降級,`err is StackOverflowError` 也仍不可寫。它也是 coroutine **無法**包住的那一個 abort:
-> 一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程（見 [Conformance](../conformance.zh-TW.md)
-> 的 runtime-abort deviation）。意圖中的深度檢查安全網——一次會跑 `defer` 的乾淨 unwind——成立;這個階段尚未建置。
+它做不到的是展開。那條會去跑待決 `defer` 的 stack 正是已經耗盡的那一條,所以 `defer` 被**跳過**、沒有 `guard` 能
+把它降級,`err is StackOverflowError` 也不可寫——根本沒有一個值可以拿去問。它也是 coroutine **無法**包住的那一個
+結束:一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程。它落在哪一份契約之外見
+[Conformance](../conformance.zh-TW.md),而一張深度檢查的安全網要付什麼代價,見
+[那扇門](../../FUTURE.zh-TW.md#一次深度檢查的-stack-溢位)。
 
 一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
 pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有

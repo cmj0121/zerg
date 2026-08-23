@@ -138,6 +138,12 @@ expression takes, and this compiler builds only the module-level `unsafe { … }
 > 一起回報。`E1013` 指的是那個**大括號**，不是含著它的字面值——這裡其他拒絕都指向字面值的開頭，因為那就是出
 > 錯的全部，而這一條有一個字元可以指名。
 >
+> **而 substituter 是最後兩個。** `E3107`——一個裝 optional 的 channel——在七個**寫出來的**位置上帶著位置被
+> 拒絕，另外兩個則沒有：因為 `chan[T]` 在 `T = int?` 上特化出來的型別是**沒有人寫過的**——它身上沒有位置可
+> 指，而指錯地方比不指更糟。答案是:那個位置從來就不是型別的。它是**選擇了型別引數的那個東西**——實例化該
+> template 的呼叫，或是綁定了 spec 參數的那個 `impl`——而這兩者都是讀者親手寫下的行。`scripts/reject-check.sh`
+> 已經沒有任何 `no-place` 標記,也沒有任何會認得它的分支:從那道 gate 走到的每一條規則都說得出位置。
+>
 > `scripts/error-codes-check.sh` 靠比對三個集合是看不見一條沒有碼的規則的：它比對的是已經存在的碼與 gate、
 > catalogue 三者，而一條沒有碼的規則在三者裡都不存在。它改用另一個問題同時看見 parser 與 emitter 這兩半——這兩
 > 個檔案裡若有一個 `raise` 自己寫訊息、而不是向通道要一則，就會被指名報出來——這個斷言正是讓通道不會被一處一處
@@ -223,14 +229,17 @@ module 的用途。
 `raise ValueError("bad input")` 與 runtime 自己引發的 fault 報出同一種形狀。**不帶**種類的錯誤（一個裸的
 `raise "…"` 建出來的那種）則只寫它的訊息。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
-> **[deviation]** stack 溢位——coroutine 越過其 guard page，或 `main` 越過其原生 stack——如今會帶著名字死去：
-> runtime 的 fault handler 將 `StackOverflowError: stack overflow` 寫到標準錯誤、並以 exit 狀態 **1** 終止，
-> 即上述契約的第 1、3 步。仍偏離的是第 2 步：出錯的 stack 已耗盡、無法從 signal handler 展開，所以待決的
-> `defer` 被**跳過**、不執行；而且與一般 abort（coroutine 會把它包住）不同，溢位無論發生在哪裡都結束整個行程。
-> handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action（sanitizer 的 handler，或預設處置），
-> 因此它仍以其本來的 signal 死去、該 handler 的診斷完整保留。它真正宣稱的兩個窗口**各為一頁**——coroutine 的
-> guard page 恰好一頁，以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍：落在 `main`
-> 下方那一頁的存取會被讀成溢位。見 [Errors](code/errors.zh-TW.md)。
+**stack 溢位是一次 fault、不是一次 abort**,而它是這份契約唯一沒有涵蓋的結束方式。runtime 會給它名字——
+`StackOverflowError: stack overflow` 寫到標準錯誤、exit 狀態 **1**,即第 1 與第 3 步——但第 2 步不可能成立:那條會
+去跑待決 `defer` 的 stack,正是已經耗盡的那一條,而站在它上面的 signal handler 展不開自己腳下的東西。所以 `defer`
+被**跳過**、沒有 `guard` 攔得住;而且與一般 abort(coroutine 會把它包住)不同,溢位無論發生在哪裡都結束**整個行程**。
+handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action(sanitizer 的 handler,或預設處置),因此它
+仍以其本來的 signal 死去、該 handler 的診斷完整保留。handler 宣稱的兩個窗口**各為一頁**——coroutine 的 guard page
+恰好一頁,以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍:落在 `main` 下方那一頁的存取會被讀
+成溢位。
+
+這是語言的規則,而不是對規則的虧欠。一個擁有並自行成長 stack 的 runtime,可以在 fault 之前就檢查呼叫深度、乾淨地
+展開;那是一扇[門](../FUTURE.zh-TW.md#一次深度檢查的-stack-溢位),不是本頁作出的承諾。
 
 ## 參考實作 emit 出來的 C
 

@@ -378,10 +378,10 @@ y := sum(sum(1, 2), 3)
 寬度才是真正的判準，而數量是給寬度看不見的情況留的保險：六個引數不論多短，都是一份要用掃的
 清單，而不是一行要用讀的程式。
 
-> **[deviation]** 被這個 pass **放過**的群組會留著它的尾逗號,而之後也沒有別人反對。`x := sum( # before`
-> 底下接著 `1,` / `2,` 時,開頭那行帶著註解,於是 `F403` 讓群組保持斷開——而 `zerg fmt --check` 會說這個檔案
-> 是 canonical、exit 0,`zerg build` 卻用 _E2046 a trailing comma before the closing `)` of an argument list_
-> 拒絕同一個檔案。一個為編譯器不收的檔案背書的 formatter,比一個把它重排掉的還糟,因為那張背書就是它的全部意義。
+**被這個 pass 放過的群組,仍然會失去它的尾逗號。** 放過講的是**行**要放在哪裡,而逗號不是一行——它是一個 grammar
+根本不推導出來的 token(_E2046 a trailing comma before the closing `)` of an argument list_)。留著它,會讓
+`zerg fmt --check` 為一個 `zerg build` 具名拒收的檔案背書,而那比一個把它重排掉的 formatter 更糟:那張背書就是它的
+全部意義。
 
 兩條門檻都**不會下令**斷行，這是刻意的。這個 pass 一次只看到一個群組，而不是整行，所以跨過第
 120 欄的是那行**最後**一個群組，而不是值得斷開的那個——在 `return 0 if a or b or c(x, y)` 裡

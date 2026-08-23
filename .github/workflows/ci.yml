@@ -129,6 +129,12 @@ jobs:
       - name: The seed's gap list says the same thing in both languages
         run: make seed-gaps
 
+      # A `[deviation]` is the specification saying the compiler does something else and we
+      # know. The failure mode this guards is not the marker, it is the silence: a release
+      # that meets "no deviations" by deleting markers rather than by fixing compilers.
+      - name: Every deviation names a ticket, and the inherited list is honest
+        run: make deviation-check
+
       # And the board itself: a gate the workflow never runs is a gate that finds
       # nothing. This is the check that would have caught the nine that were green
       # only when somebody thought to type them.

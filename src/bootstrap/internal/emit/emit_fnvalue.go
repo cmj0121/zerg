@@ -116,17 +116,30 @@ func (e *emitter) fnValueCall(n *ast.Call) (string, bool) {
 			return "", false
 		}
 	}
+	// THE ARGUMENTS ARE A RUN, exactly as a direct call's are. This was the last combining
+	// form in either compiler still handing its operands to one C construct and inheriting
+	// C's unspecified order (docs/core/memory.md), and the two move together: `make oracle`
+	// compares them on a program that can tell.
+	//
+	// A `mut &` argument is skipped, for the same reason a direct call skips it — an address
+	// is not an operand the order can be told apart by.
+	byref := make([]bool, len(n.Args))
+	for i := range n.Args {
+		byref[i] = i < len(ft.Params) && ft.Params[i].ByRef
+	}
+	pre, undo := e.orderOperands(argExprs(nil, n.Args), byref)
+	defer undo()
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
 			args.WriteString(", ")
 		}
 		argT := e.cur.ExprType(e.info, a.Value)
-		if i < len(ft.Params) && ft.Params[i].ByRef {
+		if byref[i] {
 			args.WriteString(e.addressOf(a.Value))
 			continue
 		}
 		args.WriteString(e.copyValue(argT, a.Value))
 	}
-	return "(" + e.fnPtrCast(ft) + e.expr(n.Callee) + ")(" + args.String() + ")", true
+	return orderedForm(pre, "("+e.fnPtrCast(ft)+e.expr(n.Callee)+")("+args.String()+")"), true
 }

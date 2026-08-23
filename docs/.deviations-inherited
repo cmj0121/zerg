@@ -1,0 +1,12 @@
+# The `[deviation]` markers 0.2.0 INHERITED, and the whole of what "no deviations it
+# inherited" means as a criterion (#52). One `path<TAB>slug` per line, where the slug is
+# the marker's first six significant words — see scripts/deviation-check.sh for why the
+# key is a slug and not a line number.
+#
+# A line comes off when its marker is DISPOSED OF, three ways and no others: the compiler
+# is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
+# The release closes when nothing but this header is left.
+docs/conformance.md	a form inside a template nobody instantiates
+docs/runtime/package.md	the boundary it compares is the module
+docs/runtime/package.md	the entry file s own directory is
+docs/runtime/package.md	the module layer is built and is

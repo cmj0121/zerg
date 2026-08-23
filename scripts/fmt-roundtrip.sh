@@ -342,6 +342,25 @@ if ! grep -qE '^test-data/$' ".zergignore" 2>/dev/null; then
 	fail=1
 fi
 
+# AND A GROUP F403 DECLINES STILL LOSES ITS TRAILING COMMA, which is the one shape where
+# `zerg fmt` certified a file `zerg build` refuses. F403 declines to rejoin a group holding a
+# comment, because a comment is something a person put there and joining has nowhere to put it
+# back — and it used to leave the comma with it. So `zerg fmt --check` said canonical, exit 0,
+# while `zerg build` said _E2046 a trailing comma before the closing `)`_ about the same file.
+# A formatter that certifies a file the compiler will not take is worse than one that
+# reformats it: the certificate is the whole point.
+#
+# The corpora cannot see this: every source in them is already canonical, so the input shape
+# never occurs. It is written by hand for that reason, and the assertion is on the OUTPUT
+# building rather than on the input, because the input deliberately does not.
+mkdir -p "$tmp/comma"
+printf 'fn sum(a: int, b: int) -> int {\n\treturn a + b\n}\n\nfn main() {\n\tx := sum( # a comment F403 declines to move\n\t\t1,\n\t\t2,\n\t)\n\tprint x\n}\n' >"$tmp/comma/m.zg"
+"$ZERG" fmt "$tmp/comma/m.zg" >/dev/null 2>&1
+if ! "$ZERG" build --emit check "$tmp/comma/m.zg" >/dev/null 2>&1; then
+	printf 'COMMA   a group F403 declined kept its trailing comma, so the formatted file does not build\n'
+	fail=1
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "fmt-roundtrip: the formatter wrote something the parser cannot read"
 	exit 1

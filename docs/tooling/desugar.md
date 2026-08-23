@@ -18,13 +18,6 @@ a dot-name or a symlink is not entered. The rule is written once, in
 [the formatter](fmt.md#a-path-is-the-tree-under-it), and is the same for every command that
 takes sources.
 
-> **[deviation]** `--check` answers a wider question than it asks. It compares the file against what
-> `zerg desugar` would **write**, and what that writes is canonical-formatted core — so a file holding no
-> sugar at all still fails when its whitespace is not what `zerg fmt` would produce, and it fails saying
-> _still holds sugar (run `zerg desugar`)_. A four-space-indented `fn main() { x := 1; print x }` is the
-> whole reproduction. The exit status is right for "this file would change" and the sentence is wrong
-> about why.
-
 ## Why it exists
 
 [`GRAMMAR`](../../GRAMMAR) defines several surface forms **as** something else. `return x if c` is
@@ -69,6 +62,14 @@ asserts is **behavioural**, and the stronger claim is asserted only for the file
 and a rule whose answer depends on how many times it was run is exactly what the fixpoint half of
 the gate exists to catch. After that the rules run in numbered order, and `D101` running before
 `D103` is load-bearing — see `D103`.
+
+**`zerg fmt` does not agree, on one shape, and that is not a defect in either.** `D101` writes
+`if not (c) { raise x }`, which is the core form; the formatter's `F401` writes `raise x if not (c)`,
+which is the canonical SOURCE form ([the formatter](fmt.md)). Each is right about its own question —
+one asks what a form means, the other asks how a reader should see it — so running `zerg fmt` over a
+desugared file puts the sugar back, deliberately. What follows is that `--check` compares against
+**this pass's own printer with every rule declined**, and never against `zerg fmt`: comparing against
+the formatter would fail a correctly desugared file for having been desugared.
 
 ### `D101` — a postfix guard becomes its block
 

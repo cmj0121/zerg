@@ -1490,7 +1490,18 @@ fn fmt_wrap_group(
 	shut := fmt_wrap_end(toks, open)
 
 	return Wrap(open + 1, col) if shut == 0
-	return Wrap(shut + 1, col) if fmt_wrap_has_comment(toks, open, shut)
+
+	# A GROUP THIS RULE DECLINES STILL LOSES ITS TRAILING COMMA. Declining is about where the
+	# LINES go — a comment inside is something a person put there and joining has nowhere to
+	# put it back — and the comma is not a line, it is a token the grammar does not derive
+	# (E2046). Leaving it made `zerg fmt --check` certify a file `zerg build` refuses by name,
+	# which is worse than a formatter that reformats: the certificate is the whole point.
+	if fmt_wrap_has_comment(toks, open, shut) {
+		if shut > open + 1 and is_comma(toks[shut - 1].kind) {
+			drop[shut - 1] = true
+		}
+		return Wrap(shut + 1, col)
+	}
 
 	flat := fmt_wrap_flat_width(wid, open + 1, shut)
 	elems := fmt_wrap_elem_count(toks, open, shut)

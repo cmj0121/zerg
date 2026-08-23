@@ -192,6 +192,28 @@ void zrt_fault_thread_init(void) {
 #endif
 }
 
+/* STDOUT IS UNBUFFERED, and that is a language rule rather than a tuning choice.
+ *
+ * `print` lowers to libc `printf` and `io.*` lowers to `write(2)` below, so with stdout
+ * line- or block-buffered the two paths reach the terminal in the order their BUFFERS
+ * flush rather than the order the program wrote them: a program alternating `print` and
+ * `io.println` four times emitted both io lines first and both print lines after, at a
+ * terminal and through a pipe alike. That is not a rare race, it is what the two paths do.
+ * The same gap put an abort's stderr line ahead of output that was written before it.
+ *
+ * Go's stdout is unbuffered and `fmt.Println` writes straight to it, which is the model
+ * this language takes: the cost is a syscall per write, and the thing bought is that what
+ * a program printed is what a reader sees, in that order, without knowing which of two
+ * spellings produced each line. A program that wants the syscalls amortized builds its
+ * line and writes it once, which is a thing it can do and a buffer is not.
+ *
+ * A constructor rather than a line in each entry shim: there are six of those (entry.c),
+ * and a rule that has to be repeated six times is a rule that will be five places the next
+ * time an entry shape is added. */
+__attribute__((constructor)) static void zrt_stdio_init(void) {
+	setvbuf(stdout, NULL, _IONBF, 0);
+}
+
 void zrt_fault_init(void) {
 	long pg = sysconf(_SC_PAGESIZE);
 	g_page = (pg > 0) ? (uintptr_t)pg : 4096;

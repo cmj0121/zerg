@@ -135,14 +135,17 @@ the collection it walks — so it needs no borrow checker and costs you nothing 
 **element** in place (`for mut x`) stays fine: it never moves the cursor — though that binding is itself
 **[not yet]** (see [Order & equality](#order--equality)).
 
-> **[deviation]** The freeze sees only a **bare name**. `for x in xs { xs.append(x) }` and
-> `for x in xs { xs = [9] }` are compile errors (`E3089`), but the same structural change reached through a
-> **path** is not: `for x in p.xs { p.xs.append(v) }`, `for x in p.xs { p.xs = [9] }`,
-> `for x in xs[0] { xs[0].append(v) }`, and a function taking `mut &xs` and appending inside the loop all
-> compile today and really grow or rebind the collection being walked. No iterator is invalidated — the
-> loop walks a copy-on-write copy taken at its head, so the program stays memory-safe — but the **compile
-> error this section promises does not arrive**: the loop silently walks the collection as it was, rather
-> than saying so. Only the bare-name spelling is enforced.
+The freeze sees a **path** as well as a bare name, and what says two of them are the same collection is
+that they are **spelled the same way**: `for x in p.xs { p.xs.append(v) }` and `for x in xs[0] {
+xs[0].append(v) }` are both `E3089`. That is the local rule read one step further out rather than an
+aliasing analysis, which value semantics makes unnecessary — one written path names one place. An index is
+part of the spelling only when it is an **integer literal**: `xs[i]` would compare equal to another `xs[i]`
+whose `i` had moved on, and refusing on that would be a rule about a spelling rather than about a place.
+
+**Handing the walked collection to a `mut &` parameter is refused too**, and it is the one spelling that
+leaves the loop's body: a `mut &` is a writable name for the caller's own storage, so `for x in xs {
+grow(xs, x) }` is a structural change whatever `grow` does with it. The rule stays local by refusing the
+**borrow**, at the call, rather than by reading the callee.
 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a

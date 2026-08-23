@@ -76,7 +76,9 @@ dependency DAG.
 ### Program lifetime & top-level initialization
 
 `main`'s body is the **root scope of the program**: when it returns, everything scope-owned beneath it
-is freed and any still-running coroutine is abandoned where it stands (there's no join — drive a
+is freed and no coroutine is scheduled again — nothing parked is resumed and nothing queued is started.
+A coroutine already **running** on another worker is not stopped, because nothing preempts one, so the
+process outlives `main` for exactly as long as that coroutine takes to park or return (there's no join — drive a
 coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](../code/coroutine.md)).
 
@@ -93,18 +95,12 @@ takes ([Conformance](../conformance.md)) — as _E3087 `print` opens a statement
 compiled program has nowhere to run it_. `nop` is the one exception, and not really an exception: it does
 nothing and yields nothing, so running nothing for it is running it.
 
-Top-level constants are initialized in **dependency order** — a
-constant is ready before any constant whose initializer reads it — a topological order of the reads-from
-graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
-(neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
-**source order** within a module. That whole ordering holds.
-
-> **[deviation]** The tie is broken by the order the imports were WRITTEN, not by canonical module
-> name. Two modules that read nothing of each other initialize in the order their import lines
-> appear, so moving a line inside an import block reorders two independent initializers. It is
-> stable for a given source — the same input gives the same output — so it is not a
-> reproducibility defect; it is the rule the sentence above names not being the rule that runs
-> (#70).
+Top-level constants are initialized in **dependency order** — a constant is ready before any constant whose
+initializer reads it — a topological order of the reads-from graph; if they form a cycle, that's a compile error.
+Where the graph leaves two constants unordered (neither reads the other), the tie is broken **deterministically**:
+by **canonical module name**, then by **source order** within a module. That whole ordering holds — so moving an
+import line does not reorder anything, and [`1g/initorder`](../../examples/1g/initorder) is the example that
+writes its two imports in the other order to say so.
 
 Both halves of it are built for a **direct** read. A constant whose initializer names one declared
 **after** it gets the value, not a zero — `const A: int = B + 1` above `const B: int = 10` yields
@@ -115,31 +111,29 @@ A read that goes **through a call** is an edge like any other: `const A: str = m
 `const B: str = "x"`, with `mk()` reading `B`, gives `A` the value `B` was declared with. It was the
 ordering rule's one silent-wrong — `A` held the zero value and nothing said so — and #14 closed it.
 
-A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
-They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
-first-uses still run them once), in **declaration (FIFO) order** within a module and in **dependency
-order** across modules (a module's imports initialize first), before any of that module's own code and
-before `main`. `init()` carries multi-step or effectful startup (open a resource, register, seed) rather
-than hiding it in a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
-shared mutable state travels by value or through channels, never a module-level variable — a top-level
-binding may not be `mut` outside a module-level `unsafe { … }` group, and one that is inside a group is
-**module-private**, never `pub` (see [Visibility](#visibility--exposing-a-declaration)).
+A module may also define **`init()`** functions (**multiple allowed**) — its one-time setup. They run
+**exactly once**, **before `main`'s first statement**, in **dependency order** across modules (a module's
+imports are readied before it is) and in **declaration (FIFO) order** within a module. `init()` carries
+multi-step or effectful startup — opening a resource, registering, seeding — rather than hiding it inside a
+constant's initializer, and readies that module's immutable state.
 
-If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
-there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
-only itself). The module is then **poisoned**: `init()` is **not re-run** (exactly-once holds even on
-failure, so no side effect repeats), and every later use **re-aborts with the same cached error**. A
-half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
+**Eagerly, and not at first use.** Every `init()` the build reaches runs, including one in a module the run
+never otherwise touches. That is Go's model and it is the one this language takes: making it lazy costs a
+guard on every use of every module, and buys back only the startup of a module somebody imported and did not
+call — which a build that resolved the import has already paid for in every other way. What eagerness does
+cost is that startup work is not free to be arbitrarily expensive, and the answer to that is not a lazier
+`init()` but less work in it.
 
-> **[deviation]** Initialization is **eager, not lazy**. Every `init()` in the program runs before
-> `main`'s first statement, rather than at the first use of the module that owns it. Exactly-once holds,
-> and so does the order: a module's imports are readied before it is, and its own blocks run FIFO. What
-> does not hold is "the first time the module is used" — an `init()` in a module a run never touches
-> still runs.
->
-> **[not yet]** **Poisoning.** An aborting `init()` ends the program on the main stack; there is no
-> cached error, no re-abort at a later use, and no first-use site to guard at, because the call is not at
-> a use site.
+There is still **no mutable global**: shared mutable state travels by value or through channels, never a
+module-level variable — a top-level binding may not be `mut` outside a module-level `unsafe { … }` group,
+and one that is inside a group is **module-private**, never `pub` (see
+[Visibility](#visibility--exposing-a-declaration)).
+
+If an `init()` **aborts**, the program ends. The abort is on the main stack before `main`'s body, so there is
+no use site it could have been guarded at and no later use to re-abort at: exactly-once holds trivially
+because nothing runs twice, and no half-initialized module is ever reachable because nothing is. A module
+that must fail recoverably returns a `Result` from a function the program calls, which is the ordinary error
+model and not a second one.
 
 ### Packages
 
@@ -405,8 +399,31 @@ and a few pervasive types — the `list`, `map`, and `set` containers (see
 [Collections](../code/collections.md)) and the `Ref[T]` resource box. `display` / `debug` are not in it at
 all: they are built-in value renderings rather than spec methods (see [Format](format.md)). Primitives —
 `bool`, `int`, `str`, … — and `chan`, plus the `defer` and `print` constructs, are likewise grammar and
-runtime, not imported names. These names are **reserved**: a declaration may not shadow or redeclare them,
-so the operators that desugar to them can never be knocked out from under the language.
+runtime, not imported names.
+
+A prelude name is **reserved** — a declaration may not shadow or redeclare it — so the operators that
+desugar to it can never be knocked out from under the language. **A name is reserved on the day the
+toolchain binds it**, and not before: holding `Ord` against a program's own `spec Ord` while nothing
+declares an `Ord` would reserve a name for a feature that does not exist, which costs a reader something
+and buys the language nothing. So the reserved set grows with the prelude rather than describing it: what
+is bound today is `int`, `byte`, `bytearray`, `runearray`, `list`, `map`, `Either`, `Result`, `Err`,
+`Left`, `Right`, `Eq` and `Into`, each refused at a declaration with a place — _E2061 `list` is a prelude
+name — a built-in container type — and cannot name a struct_ — and the names this page promises that
+nothing declares yet (`Ord`, `Hash`, `Error`, `Iterator`, `Iterable`, `Ref`, `set`) join it on the day
+they are bound.
+
+Two slots take different halves of that set, and a **call** is what separates them. A type declaration's
+name lands in the namespace every prelude name is bound in, so none of them may name a `struct`, an
+`enum`, a `spec` or a `type`. A function's name lands where only the names a call can SPELL are — a
+callee spelling `int`, `byte`, `bytearray` or `list` is read as a conversion, and one spelling `Either`,
+`Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a construction, before any user symbol is looked for —
+and `map` is not among them, because `map[…](…)` is not a constructor and the name has no value form to
+take. `fn map(xs, f)` is therefore legal and every other prelude name in the function slot is not.
+
+Two positions are outside the rule altogether. A **method** name is its type's rather than the program's,
+so `impl P { fn set(v: int) }` is legal. And a **binding** — a local one or a module constant, which are
+one form in the parser — may take a prelude name; shadowing one inside a scope is a loud error at its
+first use, which is the thing a declaration was not.
 
 Everything else is the **standard library** — an ordinary package with one difference: **std ships with
 the toolchain**, so its version is the compiler's and you never declare it as a dependency. It is
@@ -420,28 +437,6 @@ exception.
 > `Ord`, `Hash`, `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
 > `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
->
-> **[deviation]** The reserved set is **what the toolchain binds**, which is narrower than the prelude
-> this page describes. `struct list`, `fn int`, `enum Left` and `spec Eq` are refused at the declaration
-> — _E2061 `list` is a prelude name — a built-in container type — and cannot name a struct_, with a place
-> — and so are `map`, `bytearray`, `runearray`, `Either`, `Result`, `Err`, `Right` and `Into`. The names
-> the same paragraph promises and **nothing here declares** — `Ord`, `Hash`, `Error`, `Iterator`,
-> `Iterable`, `Ref` and `set` — are not reserved, because a program's own `spec Ord` is the only `Ord`
-> there is and refusing it would hold a name for a feature that does not exist. Each joins the set on
-> the day it is bound.
->
-> The **function slot takes a narrower set than the type slots**, and `map` is the whole of the
-> difference: `fn map(xs, f)` is legal, every other name in the set is not. A type declaration's name
-> lands in the namespace all of them are bound in, while a function's lands where only the ones a
-> **call can spell** are — and `map[…](…)` as a constructor is built by neither compiler, so the name
-> has no value form to take. The rest do: a callee spelling `int`, `byte`, `bytearray` or `list` is read
-> as a conversion, and one spelling `Either`, `Result`, `Err`, `Eq`, `Into`, `Left` or `Right` as a
-> construction, before any user symbol is looked for.
->
-> Two positions are outside the rule and are not deviations from it. A **method** name is its type's,
-> not the program's, so `impl P { fn set(v: int) }` is legal. A **binding** — a local one or a module
-> constant, which are one form in the parser — may still take a prelude name; shadowing one inside a
-> scope is a loud error at its first use, which is the thing a declaration was not.
 
 ### Testing & visibility
 

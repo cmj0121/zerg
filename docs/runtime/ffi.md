@@ -188,16 +188,20 @@ recommended handle-wrapper methods reach C as ordinary functions. A `pub` root d
 legitimately offer a richer API to Zerg dependents than it can to C, and the diagnostic keeps the C ABI
 honest about what actually crosses. A Zerg function that returns nothing maps to C `void`.
 
-**Symbol names are stable and unmangled.** C's symbol space is flat and a stable ABI forbids mangling,
-so an exported name is deterministic and collision-free — conceptually the package name prefixed onto the
-declaration name (a method also carrying its type, e.g. `zg_<pkg>_<name>` / `zg_<pkg>_<Type>_<method>`).
-A clash on the flat exported surface is a compile error in library mode. (The exact scheme, and any
-per-declaration link-name override, are open questions — see below.)
+**Symbol names are stable and unmangled.** C's symbol space is flat and a stable ABI forbids mangling, so
+an exported name is deterministic: it is the declaration name under a fixed prefix, and a method also
+carries its type. A clash on the flat exported surface is a compile error in library mode. (The exact
+scheme, and any per-declaration link-name override, are open questions — see below.)
 
-> **[deviation]** The prefix is `zg_` and there is **no package segment**, because there is no package
-> layer to name (Four layers, [package.md](package.md)): `pub fn add` in a `--emit lib` build exports
-> `zg_add`, measured with `nm`. So the names are stable and unmangled as specified, and the part that
-> makes them collision-free across packages is the part that does not exist yet.
+**The prefix is `zg_`, and it carries no package segment** — `pub fn add` in a `--emit lib` build exports
+`zg_add`, which `nm` will show you. That is not a placeholder for `zg_<pkg>_add`: there is no package
+layer for a segment to name (Four layers, [package.md](package.md)), and a scheme that anticipates one
+would be a name nothing can compute today. What the segment would buy is collision-freedom **across**
+packages, and that arrives with the layer it belongs to.
+
+> **[not yet]** A package segment, and with it a name that cannot collide across packages. It is part of
+> the package layer's own marker in [package.md](package.md) rather than a second one here: until a build
+> knows what package a declaration belongs to, `zg_<pkg>_<name>` has no `<pkg>` to write.
 
 ## Importing C — a stdlib facility
 

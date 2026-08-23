@@ -1568,9 +1568,11 @@ fn ty_chan_elem(t: Ty) -> Ty {
 # than that ambiguity; a value that may be absent travels in a struct, or as a sentinel the
 # receiver agrees on.
 #
-# `at` is a place trailer (p_place), from a caller that knows where the type was written.
-# It is "" for the one caller that cannot know: a `chan[T]` whose element arrives by
-# SUBSTITUTION is written nowhere in the source, so there is no position to point at.
+# `at` is a place trailer (p_place), and EVERY caller has one. A `chan[T]` whose element
+# arrives by SUBSTITUTION is written nowhere in the source, so for a long time those two
+# callers passed "" and the refusal said only what was wrong. The place they hand over now
+# is not the type — there is none — it is the thing that CHOSE the type argument: the call
+# that instantiated the template, or the `impl` that bound the spec's parameter (#55).
 fn ty_chan_elem_check(elem: Ty, at: str) {
 	raise rule_msg(Rule.ChanOfOptional, f"`chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel") + at if ty_is_opt(elem)
 }
@@ -1585,9 +1587,8 @@ fn ty_chan_elem_check(elem: Ty, at: str) {
 # existence any other way. It is the same place the Go seed hangs its rule (typeref.go's
 # `chanType`), which is why the seed never had a hole of this shape.
 #
-# `at` is a place trailer (p_place) when the caller knows where the type was written, and ""
-# when there is nothing to point at — a channel type reached by SUBSTITUTION is spelled
-# nowhere in the source.
+# `at` is a place trailer (p_place), from a caller that knows where the type was written or,
+# for a type reached by SUBSTITUTION, from the one that chose the argument.
 fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
 	ty_chan_elem_check(elem, at)
 	return Ty.TChan(elem, dir)

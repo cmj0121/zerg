@@ -451,11 +451,27 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		chk_frozen(em, nm, "rebind")
 		return
 	}
+
+	# A PATH is rebound the same way a name is — `for x in p.xs { p.xs = [9] }` replaces the
+	# very buffer the cursor walks — and it is asked here rather than folded into the name
+	# case above because the two resolve differently: a name goes to an environment row so a
+	# shadowing declaration binds a different collection, and a path has no row.
+	lp := chk_path_text(lhs)
+	if lp != "" and nm == "" and chk_frozen_path(em, lp) {
+		chk_frozen(em, lp, "rebind")
+		return
+	}
+
 	if c_is_index(lhs) {
 		tgt := chk_store_target(lhs)
 		tn := c_ident_name(tgt)
 		if tn != "" and chk_frozen_name(em, tn) and c_is_map(c_infer(em, tgt)) {
 			chk_frozen(em, tn, "assign into")
+			return
+		}
+		tp := chk_path_text(tgt)
+		if tp != "" and tn == "" and chk_frozen_path(em, tp) and c_is_map(c_infer(em, tgt)) {
+			chk_frozen(em, tp, "assign into")
 			return
 		}
 	}
@@ -553,6 +569,55 @@ fn chk_frozen_name(mut &em: Emitter, name: str) -> bool {
 	return false
 }
 
+# chk_path_text is a PLACE's written spelling, and "" for an expression that is not one.
+#
+# It is what lets the freeze see a structural change reached through a PATH rather than only
+# through a bare name: `for x in p.xs { p.xs.append(v) }` walks and grows the same collection,
+# and what says they are the same collection is that they are spelled the same way. That is
+# the spec's LOCAL rule read one step further out — not an aliasing analysis, which value
+# semantics makes unnecessary anyway, but the observation that one written path names one
+# place.
+#
+# An INDEX is part of the spelling only when it is an integer literal. `xs[i]` would compare
+# equal to another `xs[i]` whose `i` had moved on, and refusing on that would be a rule about
+# a spelling rather than about a place — the one thing this file must not do quietly.
+fn chk_path_text(e: Expr) -> str {
+	return match e {
+		Expr.EIdent(n) => n
+		Expr.EField(x, f) => chk_path_under(chk_path_text(x), "." + f)
+		Expr.EIndex(x, i) => chk_path_under(chk_path_text(x), chk_index_text(i))
+		_ => ""
+	}
+}
+
+# chk_path_under joins a path with one more step, and answers "" when either half is not a
+# path: `f().xs` has no spelling this rule may compare, and neither has `xs[g()]`.
+fn chk_path_under(base: str, step: str) -> str {
+	return "" if base == "" or step == ""
+
+	return base + step
+}
+
+fn chk_index_text(i: Expr) -> str {
+	return match i {
+		Expr.EInt(lex, _, _) => f"[{lex}]"
+		_ => ""
+	}
+}
+
+# chk_frozen_path is whether an enclosing `for … in` walks this exact path. A bare name is
+# NOT answered here — it goes through chk_frozen_name, which resolves to an environment row
+# so that a shadowing declaration in the body binds a different collection. A path has no row
+# to resolve to, and no way to be shadowed either.
+fn chk_frozen_path(mut &em: Emitter, path: str) -> bool {
+	return false if path == ""
+
+	for f in em.frz_paths {
+		return true if f == path
+	}
+	return false
+}
+
 # chk_frozen records the one finding every spelling of a structural change shares; `action`
 # names the spelling ("rebind", "`append` to", "assign into"), and the sentence is the rule.
 fn chk_frozen(mut &em: Emitter, name: str, action: str) {
@@ -568,6 +633,14 @@ fn chk_recv_mut(mut &em: Emitter, target: Expr, meth: str) {
 	nm := c_ident_name(target)
 	if nm != "" and chk_frozen_name(em, nm) {
 		chk_frozen(em, nm, f"`{meth}` to")
+		return
+	}
+
+	# and the same question of a PATH, which is the other half of the freeze:
+	# `for x in p.xs { p.xs.append(v) }` grows the collection being walked.
+	tp := chk_path_text(target)
+	if tp != "" and nm == "" and chk_frozen_path(em, tp) {
+		chk_frozen(em, tp, f"`{meth}` to")
 		return
 	}
 
@@ -963,7 +1036,7 @@ fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
 		Ty.TList(e) => Ty.TList(chk_spec_subst(e, sp, ip))
 		Ty.TOpt(e) => Ty.TOpt(chk_spec_subst(e, sp, ip))
 		Ty.TMap(k, v) => Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => ty_chan(chk_spec_subst(e, sp, ip), d, "")
+		Ty.TChan(e, d) => ty_chan(chk_spec_subst(e, sp, ip), d, "\n" + place_line(ip.path, ip.line, ip.col))
 		Ty.TEither(l, r) => Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
 		Ty.TTuple(es) => Ty.TTuple(chk_subst_all(es, sp, ip))
 		Ty.TFn(ps, r) => Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
@@ -1091,6 +1164,26 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	if not c_is_place(em, a) {
 		chk_at(em, Rule.BorrowOfValue, f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
+		return
+	}
+
+	# HANDING OVER A FROZEN COLLECTION IS A STRUCTURAL CHANGE, because a `mut &` is a
+	# writable name for the caller's own storage and the callee may grow it. It is the
+	# fourth spelling of the freeze and the one that leaves the loop's body: `for x in xs {
+	# grow(xs, x) }` really did grow the collection being walked, and neither the assignment
+	# rule nor the receiver rule could see it — the argument is neither.
+	#
+	# The rule stays LOCAL all the same. What is refused is the borrow, at the call, where
+	# the frozen name is written; nothing here reads the callee, which is what would make
+	# this an analysis rather than a rule.
+	nm := c_ident_name(a)
+	if nm != "" and chk_frozen_name(em, nm) {
+		chk_frozen(em, nm, "hand over a `mut &` to")
+		return
+	}
+	ap := chk_path_text(a)
+	if ap != "" and nm == "" and chk_frozen_path(em, ap) {
+		chk_frozen(em, ap, "hand over a `mut &` to")
 		return
 	}
 
@@ -2756,27 +2849,36 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		return
 	}
 
-	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
-	# keeps an identity of its own, and this compiler does not carry Y's arithmetic or spec
-	# impls across — so a `Celsius` has no `+` until somebody writes `int(c)`, which is the
-	# explicit step the whole feature is for.
+	# A `type X = Y` TAKES Y'S OPERATORS, BETWEEN TWO X'S. docs/core/types.md: X takes on Y's
+	# representation and implementation and keeps an identity of its own, and those two are
+	# not in tension — the identity decides what may MEET what, and the operator decides what
+	# may be DONE with it. A `UserId` that behaves like an `int` and can never be passed where
+	# an `int` is wanted is the whole of what the feature is for; one that cannot be added to
+	# another `UserId` is not that tool.
+	#
+	# ONE X AND SOMETHING ELSE IS STILL REFUSED, and that is the identity doing its job:
+	# `c + 1` needs `Celsius(1)`, `c + i` needs `int(c)`. Zerg is stricter than Go here, where
+	# an untyped constant would adopt the named type — the explicit step is cheap and it is
+	# the step the reader of the other line wanted written down.
 	#
 	# AHEAD of every family, and that is not a detail: it sat between them once, after the
-	# logical and bitwise blocks, which return unconditionally — so `f1 and f2` on a
-	# `type Flag = bool` and `m & 1` on a `type Mask = int` were accepted and lowered to
-	# working C, which is the underlying type's operators being inherited by exactly the
-	# rule that says they are not.
+	# logical and bitwise blocks, which return unconditionally — so a mismatched pair reached
+	# working C through exactly the rule that refuses it.
 	#
-	# EQUALITY IS THE EXCEPTION, between two values of the SAME one. The deviation the doc
-	# records is about arithmetic and spec impls, and `==` is neither; an enum is nominal and
-	# inherits nothing either, and gets same-enum `==` twelve lines below. Refusing
-	# `uid1 == uid2` would take away the one operation a `UserId` exists to support — and
-	# would leave `if flag` on a `type Flag = bool` told to "compare it (`x != 0`)" by a rule
-	# that then refuses the comparison.
+	# The families are re-entered with the UNDERLYING type on both sides rather than
+	# re-checked here, so `Flag and Flag` meets the bool rule and `Mask & Mask` the int one,
+	# from the one place that states each. An equality returns before that: two of the same X
+	# compare, whatever X is underneath, and an aggregate underneath is the emitter's question
+	# (c_eq_refuse) exactly as it is for a plain one.
 	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
-		return if chk_is_equality(oper) and ty_eq(ta, tb)
+		if not ty_eq(ta, tb) {
+			chk_at(em, Rule.OpNoMeaning, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity, so an operand of one is not an operand of the other; convert first")
+			return
+		}
+		return if chk_is_equality(oper)
 
-		chk_at(em, Rule.OpNoMeaning, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		u := c_scalar_repr(em, ta)
+		chk_binary(em, oper, u, u, ea, eb)
 		return
 	}
 
@@ -2850,14 +2952,17 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 
 	return if c_is_unknown(t)
 
-	# the same rule the binary families get, and for the same reason: `not f` on a
-	# `type Flag = bool` and `-c` on a `Celsius` are the underlying type's operators, which a
-	# typedef does not take on. The scalar predicates below all answer no for a TNamed, so
-	# without this the prefix operators were the one family that let a typedef through.
-	if chk_is_typedef_operand(em, t) {
-		chk_at(em, Rule.UnaryOpNoMeaning, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
-		return
-	}
+	# A `type X = Y` takes Y's prefix operators for the same reason it takes Y's binary ones
+	# (chk_binary): `not f` on a `type Flag = bool` and `-c` on a `Celsius` are operations on
+	# the value, and the identity is about what the value may MEET. The scalar predicates
+	# below all answer no for a TNamed, so the underlying type is what they have to be asked
+	# about — which is the whole of why this branch is here rather than gone.
+	chk_unary_ty(em, oper, c_scalar_repr(em, t))
+}
+
+# chk_unary_ty is the three rules, asked of a TYPE rather than of an expression, so that a
+# typedef can be sent through them at what it computes in.
+fn chk_unary_ty(mut &em: Emitter, oper: str, t: Ty) {
 	if oper == "not" and chk_wrong_bool(t) {
 		chk_at(em, Rule.NotWantsBool, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}

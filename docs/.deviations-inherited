@@ -7,11 +7,7 @@
 # is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
 # The release closes when nothing but this header is left.
 docs/code/collections.md	the freeze sees only a bare name
-docs/code/coroutine.md	the spec requires that no coroutine can
-docs/code/errors.md	the bootstrap does not yet own or
 docs/conformance.md	a form inside a template nobody instantiates
-docs/conformance.md	a stack overflow a coroutine running past
-docs/core/decorators.md	test is read by both compilers but
 docs/core/memory.md	a carrier owns its left and not
 docs/core/memory.md	a coroutine that never runs never gives
 docs/core/memory.md	freeing a chain recurses one c stack
@@ -27,6 +23,5 @@ docs/runtime/package.md	initialization is eager not lazy every init
 docs/runtime/package.md	the boundary it compares is the module
 docs/runtime/package.md	the entry file s own directory is
 docs/runtime/package.md	the module layer is built and is
-docs/runtime/package.md	the reserved set is what the toolchain
 docs/tooling/desugar.md	check answers a wider question than it
 docs/tooling/fmt.md	a group the pass declines keeps its

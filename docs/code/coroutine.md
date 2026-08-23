@@ -6,8 +6,8 @@ futures, no join/handle. It builds on the memory and error models in the
 
 ## `spawn`
 
-`spawn f(args)` starts a coroutine (Go's `go`) on the runtime scheduler (see Scheduling & fairness for
-the **M:N** model and the **[deviation]** that it is not preemptive). It **returns nothing** — no
+`spawn f(args)` starts a coroutine (Go's `go`) on the runtime scheduler (see Scheduling for
+the **M:N** model, and why it is cooperative rather than preemptive). It **returns nothing** — no
 handle, no join/await; you observe results and completion **only through channels**. The callee is any
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
@@ -544,7 +544,7 @@ fire-and-forget, but the failure is **not lost**: closing a channel as the last 
 crash `Err`, which is **raised at the consumer's next receive** (a clean finish gives `nil` instead —
 Receive, above). Measured: a producer that aborts after one send makes the consumer's second `<-ch`
 re-raise `IOError: disk went away` rather than answer an absence. The **one** abort a coroutine boundary
-does not contain is a `StackOverflowError`, which ends the process from any stack — see the deviation in
+does not contain is a `StackOverflowError`, which ends the process from any stack — see
 [Errors](errors.md).
 
 The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at the top level prints one
@@ -560,32 +560,28 @@ For a _structured_ outcome — partial results, a specific error, or a failure t
 close a watched channel — the coroutine still `guard`s and sends over a channel. Making a death
 _fatal_ is the observer's job (react to `Right(err)` and abort), never the `spawn`'s.
 
-## Scheduling & fairness
+## Scheduling
 
-**Intended.** `spawn` runs coroutines on a **preemptive M:N scheduler** (many coroutines multiplexed over
-several OS threads), and that scheduler is **fair**: every **ready** coroutine eventually runs, and **no
-coroutine can indefinitely starve others** — not even a CPU-bound one that never touches a channel. You may
-`spawn` freely; a busy worker cannot freeze unrelated coroutines. This is a guarantee about the
-**observable property, not the mechanism**: _how_ fairness is achieved — preemption, compiler-inserted
-safepoints, reduction counting — is an implementation detail the language does not fix; only the property
-is promised.
+`spawn` runs coroutines on a **cooperative M:N scheduler** — many coroutines multiplexed over several OS
+threads — and cooperative is the load-bearing word. A coroutine yields **only** at a channel operation, a
+`select`, or a sleep, and nothing takes it off its worker until it does. Every coroutine that parks is
+therefore fairly served: among coroutines that yield, none can indefinitely starve another, and the
+mechanism is not fixed — a round-robin rotor is what this implementation uses and a conforming one may
+choose otherwise.
 
-**Today.** The scheduler **is M:N** — `M` worker OS threads (one per CPU, capped at 16) drain one shared
-FIFO run queue, and a coroutine migrates freely between workers, so it may resume on a thread it never
-started on. **`main` is coroutine 0**: it is queued on that run queue before any worker exists, and the
-thread that called it becomes a worker rather than a supervisor. So the pool is up around `main`'s first
-statement, not started in reaction to the first `spawn`, and `M` is the whole budget — no thread is held
-back for the program's own coroutine. What the scheduler is **not** is preemptive.
+**A coroutine that never parks occupies one worker for as long as it runs**, and that is the rule rather
+than a shortfall against one. The shape of the failure is a count, not a switch: one spinner costs a core,
+`M` spinners leave nothing to run anything else — including `main` — and on a single-CPU host (`M` = 1) the
+first spinner is already the whole program. So an unbounded compute loop needs a channel operation in it,
+the same discipline every cooperative runtime asks for. Preemption would lift that requirement; it is a
+[door](../../FUTURE.md#preemptive-scheduling), not a promise this page makes.
 
-> **[deviation]** The spec requires that no coroutine can indefinitely starve others; the scheduler is
-> **cooperative**, so a coroutine yields **only** at a channel operation, a `select`, or a sleep, and
-> nothing takes it off its worker until it does. A **CPU-bound coroutine that never parks therefore
-> occupies one worker** for as long as it runs. The shape of the failure is a count, not a switch: one
-> spinner costs a core, `M` spinners leave nothing to run anything else — including `main` — and on a
-> single-CPU host (`M` = 1) the first spinner is already the whole program. Preemption and
-> compiler-inserted safepoints are **deferred**, not abandoned; until one lands, keep every coroutine
-> channel-driven so it parks and lets others run, and treat any unbounded compute loop as needing a
-> channel operation in it.
+`M` is the worker count — one OS thread per CPU, capped at 16 — draining one shared FIFO run queue, and a
+coroutine migrates freely between workers, so it may resume on a thread it never started on. **`main` is
+coroutine 0**: it is queued on that run queue before any worker exists, and the thread that called it
+becomes a worker rather than a supervisor. So the pool is up around `main`'s first statement, not started
+in reaction to the first `spawn`, and `M` is the whole budget — no thread is held back for the program's
+own coroutine.
 
 Two limits bound the model:
 
@@ -605,15 +601,13 @@ Two limits bound the model:
 
   What ending the program guarantees is a statement about the **run queue**: nothing parked is ever
   resumed and nothing queued is ever started. It does **not** stop a coroutine that is already
-  **running**, because nothing preempts one (see Scheduling & fairness) — a coroutine mid-computation
+  **running**, because nothing preempts one (see Scheduling) — a coroutine mid-computation
   on another worker runs on until it parks or returns, and the process outlives `main` for exactly
   that long. Both halves are observable. With a single worker a spinning coroutine holds it, so
   `main` cannot resume — let alone return — until that coroutine yields; with several workers `main`
-  returns while the spinner is still going, and the process ends when the spinner does.
-
-  > **[deviation]** The spec's "still-running coroutines stop where they are" is the preemptive
-  > reading, and the scheduler is not preemptive. Treat `main` returning as _no further scheduling_,
-  > not as a kill, and give any coroutine whose work must be cut short a cancel channel to observe.
+  returns while the spinner is still going, and the process ends when the spinner does. So read `main`
+  returning as _no further scheduling_ rather than as a kill, and give any coroutine whose work must be
+  cut short a cancel channel to observe.
 
 - **A send with no receivers just blocks** — even when the receive side is provably empty forever,
   Zerg doesn't abort it; waiting or bailing is the **caller's** call (e.g. a `select` with a cancel

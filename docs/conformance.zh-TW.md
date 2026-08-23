@@ -229,14 +229,17 @@ module 的用途。
 `raise ValueError("bad input")` 與 runtime 自己引發的 fault 報出同一種形狀。**不帶**種類的錯誤（一個裸的
 `raise "…"` 建出來的那種）則只寫它的訊息。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
-> **[deviation]** stack 溢位——coroutine 越過其 guard page，或 `main` 越過其原生 stack——如今會帶著名字死去：
-> runtime 的 fault handler 將 `StackOverflowError: stack overflow` 寫到標準錯誤、並以 exit 狀態 **1** 終止，
-> 即上述契約的第 1、3 步。仍偏離的是第 2 步：出錯的 stack 已耗盡、無法從 signal handler 展開，所以待決的
-> `defer` 被**跳過**、不執行；而且與一般 abort（coroutine 會把它包住）不同，溢位無論發生在哪裡都結束整個行程。
-> handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action（sanitizer 的 handler，或預設處置），
-> 因此它仍以其本來的 signal 死去、該 handler 的診斷完整保留。它真正宣稱的兩個窗口**各為一頁**——coroutine 的
-> guard page 恰好一頁，以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍：落在 `main`
-> 下方那一頁的存取會被讀成溢位。見 [Errors](code/errors.zh-TW.md)。
+**stack 溢位是一次 fault、不是一次 abort**,而它是這份契約唯一沒有涵蓋的結束方式。runtime 會給它名字——
+`StackOverflowError: stack overflow` 寫到標準錯誤、exit 狀態 **1**,即第 1 與第 3 步——但第 2 步不可能成立:那條會
+去跑待決 `defer` 的 stack,正是已經耗盡的那一條,而站在它上面的 signal handler 展不開自己腳下的東西。所以 `defer`
+被**跳過**、沒有 `guard` 攔得住;而且與一般 abort(coroutine 會把它包住)不同,溢位無論發生在哪裡都結束**整個行程**。
+handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action(sanitizer 的 handler,或預設處置),因此它
+仍以其本來的 signal 死去、該 handler 的診斷完整保留。handler 宣稱的兩個窗口**各為一頁**——coroutine 的 guard page
+恰好一頁,以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍:落在 `main` 下方那一頁的存取會被讀
+成溢位。
+
+這是語言的規則,而不是對規則的虧欠。一個擁有並自行成長 stack 的 runtime,可以在 fault 之前就檢查呼叫深度、乾淨地
+展開;那是一扇[門](../FUTURE.zh-TW.md#一次深度檢查的-stack-溢位),不是本頁作出的承諾。
 
 ## 參考實作 emit 出來的 C
 

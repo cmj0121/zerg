@@ -439,6 +439,7 @@ pub enum Rule {
 	# nothing else: how a remote package is fetched, named or versioned is undecided, and a
 	# promise in a diagnostic is still a promise.
 	NotYetRemoteImport = 9105
+	NotYetCrossModuleFnValue = 9106
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

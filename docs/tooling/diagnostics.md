@@ -464,6 +464,7 @@ shipping compiler rather than a part of it (the line
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                               |
 | `E9104` | the module `atomic` ships and cannot be imported                                                        |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
+| `E9106` | module `…` declares the function `…`, and a module's function is not a value here                       |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

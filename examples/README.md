@@ -52,20 +52,21 @@ each adds one idea to the one before it.
 A second program hits this first, and it is the part with the fewest one-liners in the
 specification. Each of these is a **directory**: an entry file and the modules it imports.
 
-| Example                             | What it shows                                                             |
-| ----------------------------------- | ------------------------------------------------------------------------- |
-| [`modules/`](modules)               | a two-module program — an entry file and a sibling directory module       |
-| [`1g/visible/`](1g/visible)         | what a `pub` surface **does** reach across a module boundary              |
-| [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` is a real member; a module binding needs no `const`      |
-| [`1g/modconst/`](1g/modconst)       | a module constant is ONE object, read the same wherever it is read        |
-| [`1g/shapedconst/`](1g/shapedconst) | a module constant of a spelled type — a tuple, an optional                |
-| [`1g/modtype/`](1g/modtype)         | a type reached through an import is also its constructor                  |
-| [`1g/init/`](1g/init)               | an imported module's `init()` runs once, before `main`'s first line       |
-| [`1g/stdlibwins/`](1g/stdlibwins)   | a bare name is the standard library, beside a project module of that name |
-| [`1g/reexport/`](1g/reexport)       | `import pub` — a module putting another module's name on its surface      |
-| [`1g/spec/`](1g/spec)               | a `spec` declared in one module and implemented in another                |
-| [`1g/strings/`](1g/strings)         | the standard library's `strings`, exercised end to end                    |
-| [`1g/testfile/`](1g/testfile)       | what a normal build compiles, and what it leaves on the floor             |
+| Example                             | What it shows                                                                |
+| ----------------------------------- | ---------------------------------------------------------------------------- |
+| [`modules/`](modules)               | a two-module program — an entry file and a sibling directory module          |
+| [`1g/visible/`](1g/visible)         | what a `pub` surface **does** reach across a module boundary                 |
+| [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` is a real member; a module binding needs no `const`         |
+| [`1g/modconst/`](1g/modconst)       | a module constant is ONE object, read the same wherever it is read           |
+| [`1g/shapedconst/`](1g/shapedconst) | a module constant of a spelled type — a tuple, an optional                   |
+| [`1g/modtype/`](1g/modtype)         | a type reached through an import is also its constructor                     |
+| [`1g/init/`](1g/init)               | an imported module's `init()` runs once, before `main`'s first line          |
+| [`1g/initorder/`](1g/initorder)     | two independent constants — the module NAME breaks the tie, not import order |
+| [`1g/stdlibwins/`](1g/stdlibwins)   | a bare name is the standard library, beside a project module of that name    |
+| [`1g/reexport/`](1g/reexport)       | `import pub` — a module putting another module's name on its surface         |
+| [`1g/spec/`](1g/spec)               | a `spec` declared in one module and implemented in another                   |
+| [`1g/strings/`](1g/strings)         | the standard library's `strings`, exercised end to end                       |
+| [`1g/testfile/`](1g/testfile)       | what a normal build compiles, and what it leaves on the floor                |
 
 ### The two that must be refused
 

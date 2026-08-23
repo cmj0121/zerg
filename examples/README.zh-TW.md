@@ -50,20 +50,21 @@ make                            # ./bin/zerg
 第二支程式最先撞到的就是這裡，而它也是規格裡單行說明最少的一段。以下每一個都是一個**目錄**：一個
 entry 檔，加上它所 import 的模組。
 
-| 範例                                | 它展示什麼                                                 |
-| ----------------------------------- | ---------------------------------------------------------- |
-| [`modules/`](modules)               | 一支兩個模組的程式——一個 entry 檔與並排的目錄模組          |
-| [`1g/visible/`](1g/visible)         | 一個 `pub` 表面**確實**能跨過模組邊界抵達什麼              |
-| [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`      |
-| [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                   |
-| [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                      |
-| [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                 |
-| [`1g/init/`](1g/init)               | 被 import 的模組，它的 `init()` 在 `main` 第一行之前跑一次 |
-| [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組      |
-| [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上   |
-| [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                  |
-| [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                     |
-| [`1g/testfile/`](1g/testfile)       | 一次正常建置會編什麼，又把什麼留在地上                     |
+| 範例                                | 它展示什麼                                                       |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| [`modules/`](modules)               | 一支兩個模組的程式——一個 entry 檔與並排的目錄模組                |
+| [`1g/visible/`](1g/visible)         | 一個 `pub` 表面**確實**能跨過模組邊界抵達什麼                    |
+| [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`            |
+| [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                         |
+| [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                            |
+| [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                       |
+| [`1g/init/`](1g/init)               | 被 import 的模組，它的 `init()` 在 `main` 第一行之前跑一次       |
+| [`1g/initorder/`](1g/initorder)     | 兩個互不相干的常數 —— 打破平手的是模組**名稱**，不是 import 順序 |
+| [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組            |
+| [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |
+| [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                        |
+| [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                           |
+| [`1g/testfile/`](1g/testfile)       | 一次正常建置會編什麼，又把什麼留在地上                           |
 
 ### 那兩支必須被拒收的
 

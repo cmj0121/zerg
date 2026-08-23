@@ -1,0 +1,8 @@
+# A constant whose initializer is observable: it prints, so the order two of them run in
+# is something a program can see rather than something only the emitted C shows.
+fn ada_mark(s: str) -> int {
+	print s
+	return 1
+}
+
+pub const A: int = ada_mark("ada-const")

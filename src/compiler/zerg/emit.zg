@@ -2324,7 +2324,7 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[Ty]) -> str {
 	c_check_solved(em, tpl, sol)
 	c_check_bounds(em, tpl, sol)
 	c_check_inst_budget(em, name)
-	inst := subst_fn(tpl, sol)
+	inst := subst_fn(tpl, sol, c_place(em))
 	em.inst_names.append(key)
 	em.inst_fns.append(inst)
 	c_add_sig(em, inst)
@@ -5101,6 +5101,16 @@ fn c_arm_missing_bool(mut &em: Emitter, v: str) -> str {
 # marker c_at records and the resolution this stage has.
 fn c_diag(mut &em: Emitter, code: Rule, msg: str) -> str {
 	return c_diag_at(em.at_path, em.at_line, em.at_col, code, msg)
+}
+
+# c_place is the place trailer ALONE, for a rule that is raised somewhere else entirely and
+# needs to be told where the reader was. `c_diag` builds a whole message; this hands over
+# only the "--> path:line:col" half, which is what a rule living in `ast.zg` takes.
+#
+# It exists for ONE caller and the caller says why: specializing a template can reach a type
+# the source does not spell, and the place worth reporting is the instantiation (#55).
+fn c_place(mut &em: Emitter) -> str {
+	return "\n" + place_line(em.at_path, em.at_line, em.at_col)
 }
 
 # c_diag_at is for a rule that KNOWS its place rather than standing on it, and the emitter has

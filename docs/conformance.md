@@ -172,6 +172,14 @@ level in — a place nobody can open, and a name nobody can find. `scripts/rejec
 > here points at where the literal opened because that is the whole of what went wrong, and this one has a
 > character to name.
 >
+> **And the substituter was the last two.** `E3107` — a channel of optionals — was refused at seven
+> written positions with a place and at two more with none, because a `chan[T]` specialized at `T = int?`
+> is a type NOBODY WROTE: there is no position on it to point at, and an underline in the wrong place is
+> worse than none. The answer was that the place was never the type's. It is whatever CHOSE the type
+> argument — the call that instantiated the template, or the `impl` that bound the spec's parameter — and
+> both of those are lines a reader wrote. `scripts/reject-check.sh` has no `no-place` marker left and no
+> branch that would honour one: every rule reached from that gate says where.
+>
 > `scripts/error-codes-check.sh` cannot see an uncoded rule by comparing its three sets: it compares codes
 > that exist against the gates and the catalogue, and a rule with no code is absent from all three. It sees
 > the parser's and the emitter's by a different question — a `raise` in either file that writes its own

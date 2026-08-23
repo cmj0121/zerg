@@ -816,6 +816,33 @@ pub struct TopStmt {
 # module, and it lives HERE, beside the declaration that needs it, because it used to live
 # in two: one copy in the emitter and one in the linter, spelled differently and answering
 # the same question. Two copies of a naming rule is one rule that can disagree with itself.
+# mod_name is a module's identity AS A READER KNOWS IT. An identity is a root and a path under
+# it — `stdlib:json`, `project:util/text` — and a message that printed one verbatim said
+# `module \`project:glob\`` about a module the reader imports as `./glob`. The last segment is
+# the name they wrote, and `/` and `:` both end one.
+#
+# THE IDENTITY IS FOR COMPARING AND THIS IS FOR SAYING, which are two different jobs: the first
+# may not depend on which of two spellings was typed, and the second may not show a path nobody
+# wrote.
+pub fn mod_name(id: str) -> str {
+	b := bytearray(id)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' or b[i] == b':' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
 pub fn last_segment(path: str) -> str {
 	b := bytearray(path)
 	mut cut := 0

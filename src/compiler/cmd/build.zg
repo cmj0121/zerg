@@ -156,11 +156,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	if emit == "c" {
 		mut paths: list[str] = []
 		mut mods: list[str] = []
-		srcs := load_sources_at(files, paths, mods)
+		mut res := res_new()
+		srcs := load_sources_at(files, paths, mods, res)
 		mut diags: list[zerg.Diag] = []
 		lex_diags_of(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
-		code := zerg.emit_files_diag(srcs, paths, zerg.mods_of(paths, mods), diags)
+		code := zerg.emit_files_diag(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
 		report_diags(diags, srcs, paths)
 		guard {
 			write_result(code, out)
@@ -181,11 +182,12 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	if emit == "check" {
 		mut paths: list[str] = []
 		mut mods: list[str] = []
-		srcs := load_sources_at(files, paths, mods)
+		mut res := res_new()
+		srcs := load_sources_at(files, paths, mods, res)
 		mut diags: list[zerg.Diag] = []
 		lex_diags_of(srcs, paths, diags)
 		report_diags(diags, srcs, paths)
-		zerg.check_files_diag(srcs, paths, zerg.mods_of(paths, mods), diags)
+		zerg.check_files_diag(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
 		report_diags(diags, srcs, paths)
 		return
 	}

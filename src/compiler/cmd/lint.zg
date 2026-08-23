@@ -39,11 +39,12 @@ fn do_lint(c: cli.Ctx) -> int {
 fn run_lint(files: list[str], strict: bool) -> int {
 	mut paths: list[str] = []
 	mut mods: list[str] = []
-	srcs := load_sources_at(files, paths, mods)
+	mut res := res_new()
+	srcs := load_sources_at(files, paths, mods, res)
 
 	mut bad := 0
 	mut warned := 0
-	for f in zerg.lint_program(srcs, paths, zerg.mods_of(paths, mods)) {
+	for f in zerg.lint_program(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod)) {
 		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
 		if f.sev == "" {
 			bad = bad + 1

@@ -200,6 +200,24 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	return 0
 }
 
+# pkg_identity is what an IMPORT of this package's module would resolve to, in the one spelling
+# identities take (`stdlib:json`, `project:util/text`). The driver has to answer it because the
+# entry unit IS that module: `seen` is seeded with it so no import loads the same sources twice,
+# and `Unit.name` is it so every rule downstream reads the same identity for a declaration.
+#
+# A package inside the standard library's tree is a stdlib module — that is what a bare
+# `import "json"` from its own suite names — and anything else is this project's.
+fn pkg_identity(p: Pkg) -> str {
+	# THE TWO PATHS ARE THE SAME DIRECTORY SPELLED TWICE — `stdlib_dir()` is absolute, and a
+	# package's directory is whatever the caller typed — so this asks whether one is the tail of
+	# the other rather than whether the strings are equal. It is the same shape as the bug this
+	# whole change is about, one level down: a path is not an identity.
+	std := stdlib_dir()
+	return "stdlib:" + p.mod if p.dir == std or has_suffix(std, "/" + p.dir) or has_prefix(p.dir, std + "/")
+
+	return "project:" + p.mod
+}
+
 # run_pkg builds one package's test binary and runs it, adding its counts to the run's.
 #
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
@@ -282,10 +300,15 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# package built on a one-file module IS that module — `json.zg` is among the files above —
 	# and an import of it reached from anywhere else in this program must land on these sources
 	# rather than on a second copy of the same file.
+
+	# THE IDENTITY IS THE LOCATION, so both of these are one. `seen` and `Unit.name` compare
+	# where a module's files are (#67); handing them the import path a reader would type made
+	# the entry unit answer to a name no import resolves to, and `json.zg` was loaded a second
+	# time under its own location — two modules declaring one `pub fn get`.
 	mut provides: list[str] = []
 	mut uname := p.dir
 	if p.mod != "" {
-		provides.append(p.mod)
+		provides.append(pkg_identity(p))
 
 		# AND THE UNIT IS NAMED BY THAT MODULE, because it IS that module. The name is what
 		# `c_mod_of` reads back as a declaration's module identity, and naming a one-file
@@ -298,7 +321,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 		# IMPORT (`load_import`) rather than at the unit: asked at the unit, seeding `seen`
 		# with the same string would make this unit answer that it was already loaded, and
 		# the program would come back empty.
-		uname = p.mod
+		uname = pkg_identity(p)
 	}
 
 	res := guard {

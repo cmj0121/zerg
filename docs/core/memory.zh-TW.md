@@ -170,10 +170,14 @@ materialise-release-store。
 **交給** coroutine,由後者的 by-value 參數在函式體返回時還回去。那是每個捕獲值、在每一條退出路徑上各還一次,
 包含 abort-unwind 那條。
 
-> **[deviation]** 一個從來沒跑過的 coroutine 就從來不會還。環境在 `spawn` 當下就填好,而只有函式體會釋放它,
-> 所以一個 scheduler 始終沒輪到的 spawn——例如程式先結束了——會漏掉每個捕獲值各一個 reference,連同那塊環境。
-> 這是這一帶唯一一個哪裡都沒有案例的洩漏類別:`make sanitize-conc` 跑的程式,它們的 coroutine 全都會跑完,
-> 而 `make mem-check` 除了一個被排空的 channel 之外沒有任何併發案例。
+**一個從來沒跑過的 coroutine 也會還**,而且還的是另一份清單。`main` 一 return 程式就結束,還排在隊上的東西就留在
+原地——所以一個 scheduler 始終沒輪到的 `spawn`,沒有任何傳值參數可以把東西交還給它:那塊環境連同一份屬於它自己的
+teardown 一起交給 runtime,而 scheduler 在每個 worker 都停下之後跑它一次。兩份 teardown 互斥:函式體的 `defer` 從
+它的 trampoline 開始的那一瞬間就擁有那塊環境,而 runtime 在同一瞬間放掉它的指標,所以兩者恰好只有一個會跑。
+`make mem-check` 的 `spawn_unstarted` 守著它。
+
+一個**已經開始、而且停泊著**的 coroutine 不屬於這個情形,也不會被釋放:要把它的捕獲值還回去,就得展開一條語言明說
+「就地放生」的 stack。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 

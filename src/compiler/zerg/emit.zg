@@ -1311,11 +1311,28 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: Ty, e: Expr) -> str {
 	return c_carrier_drop_fn(em, t)
 }
 
+# c_carrier_owns is whether a carrier holds anything that has to be given back, and it asks
+# about BOTH SIDES.
+#
+# It used to ask only the Left, in both of the places that ask — so an `Either[int, str]` was
+# judged to own nothing, got no drop and no copy at all, and every `Either.Right(f"…")` leaked
+# the string it was built from. The wrap that builds a Right hands the carrier a
+# reference; nothing took it back. A leak and never a double free, which is why nothing
+# crashed and why macOS ASan, having no LeakSanitizer, never said a word.
+#
+# A `Result[T]` is unaffected either way: its Right is an `Err`, whose storage belongs to the
+# runtime, so `c_needs_copy` answers no for it exactly as it did.
+fn c_carrier_owns(mut &em: Emitter, t: Ty) -> bool {
+	return c_needs_copy(em, c_carrier_elem(t)) if ty_is_opt(t)
+
+	return c_needs_copy(em, c_either_left(t)) or c_needs_copy(em, c_either_right(t))
+}
+
 # c_carrier_drop_fn names the drop c_carrier_decl generated for this carrier, or "" when
-# the payload owns nothing and none was generated. The test is c_carrier_decl's own, in the
+# neither side owns anything and none was generated. The test is c_carrier_decl's own, in the
 # same words, because the two are one question asked from either side.
 fn c_carrier_drop_fn(mut &em: Emitter, t: Ty) -> str {
-	return "" if not c_needs_copy(em, c_carrier_elem(t))
+	return "" if not c_carrier_owns(em, t)
 	return "zg_drop_" + c_carrier_of(em, t)
 }
 
@@ -1458,15 +1475,30 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# c_copy_of, c_elem_kind and c_drop_thunk each decided to name these helpers from
 	# c_needs_copy — so a payload the two dispatches disagreed about got no helpers and was
 	# named anyway. `(int, str)?` was that payload, and cc reported the undefined symbol.
-	return d if not c_needs_copy(em, left)
+	return d if not c_carrier_owns(em, c)
 
-	df := c_drop_stmt(em, left, "r->ok")
-	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
-	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
-	d = d + "}\n"
-	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n"
-	d = d + "    if (" + c_res_is_left("v") + ") { " + c_res_ok("v") + " = " + c_copy_of(em, left, c_res_ok("v")) + "; }\n"
-	d = d + "    return v;\n}\n"
+	# EACH SIDE IS GIVEN BACK BY THE ARM THAT HOLDS IT. The Left arm is written whenever the
+	# Left owns something and the Right arm whenever the Right does, so a carrier where only
+	# one of them does gets exactly one arm — and an optional, which has no Right, gets the
+	# Left arm alone as it always did.
+	mut df := ""
+	if c_needs_copy(em, left) {
+		df = "    if (" + c_res_is_left("(*r)") + ") { " + c_drop_stmt(em, left, "r->ok") + " }\n"
+	}
+	mut cf := ""
+	if c_needs_copy(em, left) {
+		cf = "    if (" + c_res_is_left("v") + ") { " + c_res_ok("v") + " = " + c_copy_of(em, left, c_res_ok("v")) + "; }\n"
+	}
+	if not ty_is_opt(c) {
+		right := c_either_right(c)
+		if c_needs_copy(em, right) {
+			df = df + "    if (" + c_res_is_right("(*r)") + ") { " + c_drop_stmt(em, right, "r->err") + " }\n"
+			cf = cf + "    if (" + c_res_is_right("v") + ") { " + c_res_err("v") + " = " + c_copy_of(em, right, c_res_err("v")) + "; }\n"
+		}
+	}
+
+	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n" + df + "}\n"
+	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n" + cf + "    return v;\n}\n"
 
 	# and the ELEMENT VTABLE, because a `list[str?]`, a map value and a struct field of
 	# carrier type all reach the pair through a thunk rather than by name — and so does
@@ -3794,12 +3826,13 @@ fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	# nothing but literals behaves exactly as it did.
 	return true if c_is_str(t)
 
-	# A CARRIER owns its payload — that is what `if v := c { … }` retaining what it binds
-	# already says — so it owes a copy exactly when the payload does. Answering `false` here
-	# is what made `got := <-c` a second name for one reference: the value was bit-copied in
-	# and nothing was registered, because a type that needs no copy is a type that owes
-	# nothing back.
-	return c_needs_copy(em, c_carrier_elem(t)) if c_is_carrier(t)
+	# A CARRIER owns WHICHEVER SIDE IT HOLDS — that is what `if v := c { … }` retaining what
+	# it binds already says — so it owes a copy exactly when either side does. Answering
+	# `false` here is what made `got := <-c` a second name for one reference: the value was
+	# bit-copied in and nothing was registered, because a type that needs no copy is a type
+	# that owes nothing back. Asking only the LEFT was the same miss one level along: a
+	# `list[Either[int, str]]` was a list of things needing no copy.
+	return c_carrier_owns(em, t) if c_is_carrier(t)
 
 	# A HELD FUNCTION owns its environment, whatever it captured — the question cannot be
 	# asked of what is in there, because a `fn(int) -> int` is the type of every lambda with

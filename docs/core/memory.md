@@ -97,12 +97,12 @@ literal, or a plain name read — is left where it stands, so the common `f(g())
 The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — are left-to-right in the
 stronger sense that the right side is **skipped** when the left decides the result.
 
-> **[deviation]** Two combining forms still hand their operands to one C construct and inherit C's
-> unspecified order: an **enum variant's payload** (`E.V(f(1), g(2))`) and a call through a **function
-> value**. Each needs two or more effectful operands before the order is observable at all. The built-in
-> **`list` / `map` methods** stood here as a third and cannot: the ones that would take two effectful
-> operands — `insert`, `set`, `get` — are themselves refused by name, so no such call can be written.
-> Everything else named above is ordered.
+An **enum variant's payload** (`E.V(f(1), g(2))`) and a call through a **function value** are sequenced by
+the same rule — they were the last two forms that handed their operands to one C construct and inherited
+C's answer, and [`1g/evalorder`](../../examples/1g/evalorder) is the case that pins them. Two positions are
+deliberately NOT sequenced, in both compilers: the built-in intrinsics and the built-in error
+constructors. Neither can be told apart by a program that does not already know which C compiler built it,
+and the boundary is drawn in the same place on both sides because `make oracle` compares them.
 
 A form that reads an operand **more than once** is ordered by the same rule, and the trigger is the only
 thing that differs. `v in lo..hi` is the one: the membership test is a bounds comparison, so it names `v`

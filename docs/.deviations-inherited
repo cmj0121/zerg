@@ -9,7 +9,6 @@
 docs/code/collections.md	the freeze sees only a bare name
 docs/conformance.md	a form inside a template nobody instantiates
 docs/core/memory.md	freeing a chain recurses one c stack
-docs/core/memory.md	two combining forms still hand their operands
 docs/core/types.md	a bare variant name is not a
 docs/core/types.md	the correction that makes and euclidean is
 docs/runtime/package.md	the boundary it compares is the module

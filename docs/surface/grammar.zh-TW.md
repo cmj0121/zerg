@@ -410,7 +410,14 @@ list-pat-elem ::= pattern | '..' identifier?
   某個檔案宣告一個 variant,可能靜默改變另一個檔案裡某個 pattern 匹配的東西。名字**大小寫自由**,而決定這件事
   的從來不是大小寫。因此 pattern 文法不需符號表即可剖析。
 - **這個限定必須為真。** `Color.Apple` 指的是另一個 enum 的 variant,那是錯誤——而且現在它只能是錯誤,不會退化
-  成一個新的 binding。
+  成一個新的 binding。`Nope.Red` 也是,它的限定符根本沒有指到任何 enum:前者是 _E4018_、後者是 _E4074_,因為被檢查的是**寫出來的那個
+  名字**,而不只是它前面那個 variant。(在 0.2.0 之前第二種不是——parser 讀了那個 enum 名字就把它丟掉,所以
+  把一個 enum 改名之後,它的每一個 pattern 照樣命中,而且什麼都不說。)
+- **variant pattern 永遠不指名模組**,而那不是疏漏。在其他每一個位置,一個 enum 都是**參照**、要帶它進來的那個命名
+  空間——`t: ast.Ty`、`ast.Ty.TList(e)`——因為那些位置在回答「**哪一個** enum」。pattern 不是:subject 的型別已經
+  回答過了,所以寫在這裡的 enum 名字是一個**斷言**,拿去跟 subject 比對。對一個 `ast.Ty` 而言,
+  `match t { Ty.TList(e) => … }` 就是每個模組裡的寫法,包含宣告它的那個模組。這不會藏起任何東西:一個檔案要持有
+  `ast.Ty` 的值,它早就在某處寫過 `ast` 了。
 - **`as` 綁定。** `pattern as name` 在 pattern 繼續解構的同時,把**整個**被比對的值綁到 `name`——`Move{x, y} as m`、
   `[first, ..] as all`、巢狀 `Some(inner as v)`。讀法同 `with` / `import`:`<東西> as <名字>`。在 or-pattern 上,`as`
   綁最近的 alternative（`A | B as m` 即 `A | (B as m)`）;兩側都要綁就寫 `A as m | B as m`。

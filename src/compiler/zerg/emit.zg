@@ -10564,7 +10564,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
 		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL);\n"
+		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL, NULL);\n"
 	}
 
 	# ONE pass over the arguments for everything the env struct needs to know: each one's
@@ -10583,9 +10583,22 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	# not hold the channel open; before this every spawned argument took a sender, and a
 	# consumer you spawned counted as a producer that never finished. `dirs` carries that
 	# direction per argument, or -1 for an argument that is not a channel at all.
+	# TWO TEARDOWNS, because the two ways this environment can end are not the same list.
+	#
+	# `drops` is what the BODY owes: the channel handles, and nothing else. Every other
+	# capture is handed over to the coroutine and given back by the body's own BY-VALUE
+	# PARAMETER when it returns — that is what makes a capture the coroutine's rather than
+	# the spawning scope's.
+	#
+	# `abandons` is what nobody owes when there is no body. A coroutine the scheduler never
+	# reaches has no parameters to give anything back, so this list is the channels PLUS
+	# every capture the by-value parameter would have released. It is the runtime's, handed
+	# to `zrt_spawn`, and the scheduler drops its copy of the pointer the instant the
+	# trampoline starts — so exactly one of the two runs, never both.
 	mut fields := ""
 	mut call := ""
 	mut drops := ""
+	mut abandons := ""
 	mut dirs: list[int] = []
 	mut i := 0
 	for i < args.len() {
@@ -10600,6 +10613,9 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		if ty_is_chan(at) {
 			dir = c_chan_dir(c_param_ty(em, cal.key, i))
 			drops = drops + " " + c_chan_release_fn(dir) + "(e->" + fi + ");"
+			abandons = abandons + " " + c_chan_release_fn(dir) + "(e->" + fi + ");"
+		} else if c_needs_copy(em, at) {
+			abandons = abandons + " " + c_drop_stmt(em, at, "e->" + fi)
 		}
 		dirs.append(dir)
 		i = i + 1
@@ -10619,6 +10635,10 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut dd := "static void " + dropfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
 	dd = dd + drops + " zrt_free(p); }\n"
 	em.dfn_decls.append(dd)
+	abandonfn := "zg_spawnabandon_" + tag
+	mut ad := "static void " + abandonfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	ad = ad + abandons + " zrt_free(p); }\n"
+	em.dfn_decls.append(ad)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
@@ -10633,7 +10653,13 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
 	}
-	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zgt_se{tag});\n"
+
+	# THE ABANDON GOES WITH THE ENVIRONMENT, and it is the OTHER teardown: the thunk's own
+	# `zrt_defer` of `drops` covers both of the ways a coroutine that RUNS can leave, and
+	# this one covers the third, which is a coroutine that never runs at all — where there
+	# are no by-value parameters to give the captures back. The scheduler drops its copy of
+	# the pointer the moment the trampoline starts, so exactly one of the two runs.
+	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zgt_se{tag}, {abandonfn});\n"
 }
 
 # c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL

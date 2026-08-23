@@ -6,7 +6,6 @@
 # A line comes off when its marker is DISPOSED OF, three ways and no others: the compiler
 # is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
 # The release closes when nothing but this header is left.
-docs/code/collections.md	the freeze sees only a bare name
 docs/conformance.md	a form inside a template nobody instantiates
 docs/core/memory.md	freeing a chain recurses one c stack
 docs/core/types.md	a bare variant name is not a

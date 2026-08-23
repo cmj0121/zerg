@@ -260,6 +260,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3110` | 不能在 receive-only 的 `…` 上送出                                                                     |
 | `E3111` | 不能關閉 receive-only 的 channel `…`                                                                  |
 | `E3112` | channel 方向只能收窄：`…` 不能填進 `…`                                                                |
+| `E3113` | `fn main` 取的不是命令列引數                                                                          |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

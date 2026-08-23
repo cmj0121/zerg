@@ -77,12 +77,14 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 > **[not yet]** `io.stdin` / `io.stdout` / `io.stderr` 串流物件尚未建置，寫出其中一個得到的是 **`E3084`**——
 > _module `io` has no `stdout`_——包含作為方法呼叫的 receiver，也就是上方範例寫它的位置。此階段接好的是自由
 > 函式（見[標準函式庫](stdlib.zh-TW.md#io)）；各寫出器回 `Result[nil]`，但為 best-effort 寫出，尚不會產出 `Err`。
->
-> **[deviation] / [implementation-defined] 緩衝。** `print` 走**有緩衝的 libc stdio**，而 `io.*` 寫出走
-> **無緩衝**的 `write(2)`，所以兩者的輸出**不依原始碼順序交錯**。實測：一支交替呼叫 `print` 與 `io.println` 各
-> 四次的程式，兩行 `io` 全部先出、兩行 `print` 全部後出，在終端機與經由管線都一樣——所以這不是罕見的競態，而是
-> 這兩條路徑本來的樣子。規格不固定兩者之間的緩衝規範；要拿到原始碼順序，就把一段輸出集中在同一條路徑上。
-> （見 [Conformance](../conformance.zh-TW.md) 論 implementation-defined 行為。）
+
+**標準輸出是無緩衝的**,而那正是讓兩種寫法成為同一條 stream 的原因:`print` 降到 libc `printf`、`io.*` 降到
+`write(2)`,所以任何一邊有緩衝,兩者就會依「各自緩衝 flush 的順序」而不是「程式寫下的順序」出現。它沒有緩衝,所以一
+支交替呼叫 `print` 與 `io.println` 的程式就交替地印出來,在終端機與經由管線都一樣;而一次 abort 寫到標準錯誤的那一
+行,也會落在它之前寫出的輸出之後。Go 的 stdout 無緩衝,理由相同。
+
+代價是每一行一次 write syscall,那就是這個保證的價錢。想把它攤平的程式**先組好一行、再一次寫出**——那是程式做得到
+的事,而緩衝不是。
 
 ## 阻塞——在 coroutine、不在 thread
 

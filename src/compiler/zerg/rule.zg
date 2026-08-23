@@ -215,6 +215,7 @@ pub enum Rule {
 	SendOnRecvOnly = 3110
 	CloseRecvOnly = 3111
 	ChanDirectionNarrows = 3112
+	MainParamNotArgs = 3113
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

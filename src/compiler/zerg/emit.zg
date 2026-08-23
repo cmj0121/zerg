@@ -10225,6 +10225,8 @@ fn c_const_cycle_says(f: File, done: list[bool]) -> str {
 # each of those used to fall to the nil shape too, the value silently discarded, and a
 # value computed for nobody is the same disease at a different type.
 fn c_main_entry(mut &em: Emitter, own: File, inits: str) -> str {
+	c_main_params_check(em, own)
+
 	has_args := c_main_has_args(own)
 	ret := c_main_ret(own)
 	ret_int := c_is_int(ret)
@@ -13800,6 +13802,55 @@ fn c_main_ret(f: File) -> Ty {
 # its conjunction, so "an Either whose Right is `Err`" stays one fact in one place.
 fn c_is_result_nil(t: Ty) -> bool {
 	return c_is_result(t) and c_is_nil_ty(c_result_elem(t))
+}
+
+# c_main_params_check is the ENTRY'S INPUT SHAPE, and it is the other half of the result
+# check in c_main_entry.
+#
+# `main`'s parameter is the command-line arguments and there is nothing else it could be
+# (docs/runtime/package.md): the runtime builds a `list[str]` and hands it over. Nothing
+# asked what the DECLARATION wanted — `c_main_has_args` answers a count, not a shape — so
+# four bad shapes were emitted anyway and the C compiler reported the mismatch against
+# generated code nobody wrote: an `int` parameter, a `str` one, a second parameter, and a
+# `mut &`.
+#
+# THE FIFTH WAS WORSE. `fn main(args: list[int])` matched by shape at the C level, compiled,
+# ran, and read the argv pointers back as integers — a program printing `4308198304` for its
+# first argument. A cc error is a bad diagnostic; that one is a wrong answer with nothing
+# said, which is the thing this compiler's contract has no room for at all.
+#
+# It is a REJECTION and not a `NotImplemented`: the language has one entry input, so a
+# different one is not a form waiting to be built. The rule never retires.
+fn c_main_params_check(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == "main" and f.fns[i].recv == "" {
+			c_main_params_says(em, f.fns[i])
+			return
+		}
+		i = i + 1
+	}
+}
+
+# c_main_params_says is the finding, worded for the shape that reached it. THREE SENTENCES
+# AND ONE RAISE: what differs is which half of the declaration is wrong, and
+# `error-codes-check` holds a code to a single reporting site — a rule with two `raise`s is
+# two rules wearing one identity.
+fn c_main_params_says(mut &em: Emitter, fn_d: FnDecl) {
+	return if fn_d.params.len() == 0
+
+	shape := "the entry takes either nothing or the command-line arguments, `fn main(args: list[str])` (docs/runtime/package.md)"
+	mut why := ""
+	if fn_d.params.len() > 1 {
+		why = f"`fn main` takes {strconv.to_string(fn_d.params.len(), 10)} parameters, and {shape}"
+	} else if fn_d.params[0].is_ref {
+		why = f"`fn main` borrows `{fn_d.params[0].name}` with `mut &`, and the argument list is the runtime's, handed over by value — {shape}"
+	} else if not c_is_list(fn_d.params[0].ty) or not c_is_str(c_list_elem(fn_d.params[0].ty)) {
+		why = f"`fn main` takes `{fn_d.params[0].name}: {ty_name(fn_d.params[0].ty)}`, and {shape}"
+	}
+	return if why == ""
+
+	raise c_diag_at(fn_d.path, fn_d.line, fn_d.col, Rule.MainParamNotArgs, why)
 }
 
 fn c_main_has_args(f: File) -> bool {

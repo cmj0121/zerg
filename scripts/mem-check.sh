@@ -412,6 +412,52 @@ fn main() {
 }
 ZG
 
+# --- an Either whose RIGHT owns something ---------------------------------------------
+# THE OTHER SIDE, and every carrier case above holds its payload on the LEFT. Whether a
+# carrier owned anything at all used to be asked of the Left's type alone, so an
+# `Either[int, str]` was judged to own nothing and got no copy helper and NO DROP AT ALL —
+# while the wrap that builds a Right hands it a reference. One allocation leaked per Right
+# constructed, which is exactly the shape this gate reads, and no case here could see it
+# because none of them put anything on the right-hand side.
+#
+# A `Result[T]` would not have found it either: its Right is an `Err`, whose storage is the
+# runtime's, so the widened question answers the same for it as the narrow one did.
+#
+# The list element is here for the same reason it is in the tuple case: a
+# `list[Either[int, str]]` reaches the pair through an element vtable rather than by name,
+# and the ownership question is asked a second time to build that vtable. Both asks were
+# wrong, so both are measured.
+#
+# The seed does not build it — it has no `Either.Right` — so this one is `zerg` alone.
+case_run either_right no no <<'ZG'
+fn mk(i: int) -> Either[int, str] {
+	return Either.Right(str(i) + "!") if i % 2 == 0
+	return Either.Left(i)
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		e := mk(i)
+		f := e
+		if g := f {
+			n = n + g
+		}
+
+		mut rows: list[Either[int, str]] = []
+		rows.append(e)
+		more := rows
+		if h := more[0] {
+			n = n + h
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 # --- a carrier whose payload is a recursive enum --------------------------------------
 # The two units meet here. An `L?` is a carrier whose copy and drop are the ENUM's, reached
 # through the carrier's own pair, and a `list[L?]` reaches both through an element vtable —

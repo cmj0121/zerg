@@ -493,6 +493,24 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   never compared by `make oracle`. `scripts/reject-check.sh`'s `main-borrows-its-arguments`
   carries the `seed-gap` marker, which retires itself the day the seed asks the second half.
 
+- **A BINDING THAT TAKES AN IMPORT'S NAME IS NOT REFUSED.** `zerg` reports `E4075` at the
+  binding: a namespace is reached by writing its name and nothing else, so a local of that
+  name does not shadow the import for one expression, it puts the import out of reach for the
+  rest of the block. The seed accepts the program and resolves the qualified name to the
+  namespace, past the binding — which is not the innermost-binding rule either compiler
+  states, so what it runs is a program neither language definition describes.
+
+  Its own half of the collision — a TOP-LEVEL name against a namespace — the seed does check
+  (`declareSurface`), but only in the alphabet it checks it in: the whole-program flatten
+  mangles a module's own declarations and leaves the namespace bindings bare, so a collision
+  INSIDE one module compares two spellings that can never be equal. That is what turned
+  `lexer.zg`'s `fn emit` beside `check.zg`'s `import "./emit"` into a diagnostic four steps
+  downstream that named nothing (#57).
+
+  Nothing the seed compiles writes either shape, and a program the seed accepts and `zerg`
+  rejects is never compared by `make oracle`. `scripts/reject-check.sh`'s
+  `local-shadows-namespace` carries the `seed-gap` marker.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

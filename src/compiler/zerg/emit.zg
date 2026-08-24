@@ -1816,6 +1816,7 @@ fn c_add_var(mut &em: Emitter, name: str, t: ast.Ty, is_mut: bool, is_const: boo
 # The columns are appended in ONE place now, so the count cannot drift again.
 fn c_add_var_named(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, is_const: bool) {
 	check.chk_const_rebind(em, name)
+	check.chk_no_shadow_ns(em, name)
 	c_no_shadow_sub(em, name)
 
 	em.env_names.append(name)

@@ -145,12 +145,19 @@ EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 # ones have no single right output: `11_coroutines` interleaves, and pinning one interleaving
 # would be a gate that fails on a correct program.
 
-examples:                       # build every example with zerg itself, and run it
+# CHECKED AS WELL AS BUILT, because they are not the same walk. `--emit bin` loads the program
+# unit by unit (cmd/unit.zg) and every other stage loads it whole (cmd/source.zg), so a rule
+# that reads what an import RESOLVED to can be right in one loader and wrong in the other —
+# `examples/1g/siblings` built and ran and printed the right three lines while `--emit check`
+# refused it, because only one of the two loaders knew a sibling import loads nothing (#57).
+# The check costs no `cc`, and it is the stage an editor runs on every save.
+examples:                       # build every example with zerg itself, check it, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
 	for src in $(EXAMPLE_SRCS); do \
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
+		./bin/zerg build $$src --emit check >/dev/null 2>&1 || { echo "CHECK  $$src"; fail=1; continue; }; \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		got=$$($$out 2>/dev/null) || { echo "RUN    $$src"; fail=1; continue; }; \
 		want=$${src%.zg}.out; \

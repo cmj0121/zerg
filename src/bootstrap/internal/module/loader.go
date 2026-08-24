@@ -34,6 +34,11 @@ type loadedModule struct {
 	dir   string
 	tag   string
 	files []*ast.File
+	// names are the module's own source files, as the provider named them. They are kept
+	// because a SIBLING IMPORT is told from an ordinary one by asking whether what the
+	// import resolved to is already here — see resolveImports — and `ast.File` carries no
+	// name to ask it of.
+	names []string
 	deps  []string // canonical names of the modules it imports (graph edges)
 }
 
@@ -63,14 +68,14 @@ func (l *Loader) LoadProgram(src string) (*ast.File, *InitPlan, []diag.Diagnosti
 
 	// Expand the graph to a fixpoint from the entry module's imports, resolving any
 	// newly discovered module's own imports on the next pass; each spec is tagged.
-	l.resolveImports(entryCanonical, "", importSpecs([]*ast.File{entry}), reg, edges, &diags)
+	l.resolveImports(entryCanonical, "", nil, importSpecs([]*ast.File{entry}), reg, edges, &diags)
 	for changed := true; changed; {
 		changed = false
 		for _, m := range snapshot(reg) {
 			if m.deps != nil {
 				continue // its imports were already expanded
 			}
-			m.deps = l.resolveImports(m.canonical, m.dir, importSpecs(m.files), reg, edges, &diags)
+			m.deps = l.resolveImports(m.canonical, m.dir, m.names, importSpecs(m.files), reg, edges, &diags)
 			if m.deps == nil {
 				m.deps = []string{} // mark expanded even when it imports nothing
 			}
@@ -152,7 +157,7 @@ func (l *Loader) initPlan(entry *ast.File, reg map[string]*loadedModule, edges m
 // module in reg (parsing it on first sight), assigning the spec its canonical tag,
 // and returning the importer's dependency edges.
 func (l *Loader) resolveImports(
-	importer string, importerDir string, specs []*ast.ImportSpec, reg map[string]*loadedModule, edges map[string][]string, diags *diag.List,
+	importer string, importerDir string, own []string, specs []*ast.ImportSpec, reg map[string]*loadedModule, edges map[string][]string, diags *diag.List,
 ) []string {
 	deps := []string{}
 	for _, spec := range specs {
@@ -178,6 +183,24 @@ func (l *Loader) resolveImports(
 			diags.Add(spec.Span(), "cannot resolve import %q under any source root", spec.Path)
 			continue
 		}
+		// A SIBLING IS NOT A SECOND MODULE. When what an import names is already a file of
+		// the module doing the importing — `lib/text.zg` writing `import "./count"` where
+		// `lib/count.zg` is a file of the same module — loading it would compile that file
+		// twice, and two of them naming each other would read as a CYCLE besides. Neither is
+		// true of an arrangement docs/runtime/package.md calls ONE module.
+		//
+		// So it loads nothing and adds no edge, and the spec names the IMPORTER's own tag:
+		// the namespace binds onto a file that is already here, so the module it names is the
+		// module doing the naming. The bare spelling is unaffected — files of one module share
+		// a namespace, and this only lets a reader write down which file a name came from.
+		//
+		// `zerg` decides this the same way and for the same reason (cmd/unit.zg), and the two
+		// have to agree: the seed is what builds the self-hosting compiler, so a tree that
+		// uses sibling imports must be one the seed reads (#57).
+		if canonical != importer && isSibling(dir, files, importerDir, own) {
+			spec.Module = mangleTag(importer)
+			continue
+		}
 		spec.Module = mangleTag(canonical)
 		deps = append(deps, canonical)
 		if _, seen := reg[canonical]; seen {
@@ -187,10 +210,58 @@ func (l *Loader) resolveImports(
 		if perr {
 			continue
 		}
-		reg[canonical] = &loadedModule{canonical: canonical, dir: dir, tag: mangleTag(canonical), files: parsed}
+		reg[canonical] = &loadedModule{canonical: canonical, dir: dir, tag: mangleTag(canonical), files: parsed, names: fileNames(files)}
 	}
 	edges[importer] = deps
 	return deps
+}
+
+// fileNames is a module's source files as the provider named them, which is the form
+// isSibling compares — the parsed files carry no name of their own.
+func fileNames(files []ModuleFile) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+// isSibling reports whether every file an import resolved to is already a file of the module
+// doing the importing. It asks about the FILES and not about the canonical name, because the
+// two are different questions: `lib/count.zg` reached as `./count` is the module `lib/count`,
+// and reached as a member of `lib` it is `lib` — one file under two names, which is exactly
+// what makes it load twice.
+//
+// IMPORTING YOUR OWN MODULE IS NOT A SIBLING IMPORT, and the caller asks that first. Every
+// file of a module is "already here" by definition, so this predicate answers yes to a module
+// naming itself — and skipping THAT import removes the `a -> a` edge, which is the only thing
+// that made the self-import a detected cycle. It stayed refused, by name, because the caller
+// compares the canonical names before asking.
+//
+// THE DIRECTORY IS HALF THE QUESTION. `ModuleFile.Name` is a BASE name, so `a/util.zg` and
+// `b/util.zg` are the same string and two unrelated modules compared equal — the seed's own
+// loader tests name every module's file `mod.zg` and caught it at once, with a cycle between
+// two modules going undetected because neither import was recorded as an edge.
+//
+// An empty resolution is not a sibling; `resolve` has already refused an import that names
+// nothing, so the case cannot arrive, and answering false keeps the predicate true to its own
+// sentence rather than to its callers.
+func isSibling(dir string, files []ModuleFile, importerDir string, own []string) bool {
+	if len(files) == 0 || len(own) == 0 || dir != importerDir {
+		return false
+	}
+	for _, f := range files {
+		here := false
+		for _, o := range own {
+			if o == f.Name {
+				here = true
+			}
+		}
+		if !here {
+			return false
+		}
+	}
+	return true
 }
 
 // resolve tries each source root in order for an import path, first match wins.

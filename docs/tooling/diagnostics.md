@@ -283,6 +283,7 @@ shipping compiler rather than a part of it (the line
 | `E3111` | cannot close a receive-only channel `…`                                                                 |
 | `E3112` | a channel direction only narrows: a `…` cannot fill a `…`                                               |
 | `E3113` | `fn main` takes something other than the command-line arguments                                         |
+| `E3114` | a bare name is declared in another file of this module                                                  |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                             |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                            |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                     |

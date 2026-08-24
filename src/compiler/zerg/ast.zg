@@ -20,7 +20,11 @@
 # name, stored in a field, passed as an argument. Only a NAMED top-level function can be
 # held that way here; a closure literal captures, and capture is not in the subset.
 
-import "strconv"
+import (
+	"strconv"
+
+	"./rule"
+)
 pub enum Ty {
 	TInt
 	TFloat
@@ -467,8 +471,8 @@ pub struct Diag {
 # module-qualified struct constructor (`zerg.Diag(…)` emits a type name in call position),
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
-pub fn diag_at(path: str, line: int, col: int, code: Rule, msg: str) -> Diag {
-	return Diag(path, line, col, rule_code(code), msg, "")
+pub fn diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> Diag {
+	return Diag(path, line, col, rule.rule_code(code), msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
@@ -1135,7 +1139,7 @@ pub fn expr_kind(e: Expr) -> str {
 # and a statement's expressions are each measured on their own where that statement is
 # read (parser.zg's p_expr_root) — descending here would need a second walk over Stmt to
 # reach the same answer.
-fn expr_parts(e: Expr) -> list[Expr] {
+pub fn expr_parts(e: Expr) -> list[Expr] {
 	return match e {
 		Expr.EInt(_, _, _) => expr_parts_none()
 		Expr.EFloat(_) => expr_parts_none()
@@ -1240,7 +1244,7 @@ fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
 # The two are separate functions and not one, because a caller asking "what does this
 # statement mention" and a caller descending into blocks want different halves, and a walk
 # that got a flat list of both could not tell a condition from a body.
-fn stmt_exprs(s: Stmt) -> list[Expr] {
+pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 	return match s {
 		Stmt.SLet(_, _, _, _, _, v) => [v]
 		Stmt.SAssign(l, r) => [l, r]
@@ -1269,7 +1273,7 @@ fn stmt_exprs(s: Stmt) -> list[Expr] {
 	}
 }
 
-fn stmt_kids(s: Stmt) -> list[Stmt] {
+pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 	return match s {
 		Stmt.SLet(_, _, _, _, _, _) => stmt_kids_none()
 		Stmt.SAssign(_, _) => stmt_kids_none()
@@ -1369,7 +1373,7 @@ fn is_err_ty(t: Ty) -> bool {
 # TUnknown equals NOTHING, including itself. A type the compiler could not work out is not
 # evidence that two things are the same; a caller that wants to let an unknown through says
 # so itself, which is what makes this answer mean one thing.
-fn ty_eq(a: Ty, b: Ty) -> bool {
+pub fn ty_eq(a: Ty, b: Ty) -> bool {
 	return match a {
 		Ty.TNamed(an)      => ty_eq_named(an, b)
 		Ty.TList(ae)       => ty_eq_list(ae, b)
@@ -1495,7 +1499,7 @@ pub fn ty_name(t: Ty) -> str {
 # The parser needs them to read the directional forms and the emitter needs them on nearly
 # every lowering path; a type is a type, and one pair is what keeps the two from drifting.
 # ty_tuple_elems is a tuple's element types, or an empty list for anything else.
-fn ty_tuple_elems(t: Ty) -> list[Ty] {
+pub fn ty_tuple_elems(t: Ty) -> list[Ty] {
 	return match t {
 		Ty.TTuple(es) => es
 		_             => []
@@ -1535,7 +1539,7 @@ fn fn1_arg_of(ps: list[Ty], r: Ty) -> str {
 	return ty_name(ps[0])
 }
 
-fn ty_is_chan(t: Ty) -> bool {
+pub fn ty_is_chan(t: Ty) -> bool {
 	return match t {
 		Ty.TChan(_, _) => true
 		_ => false
@@ -1545,14 +1549,14 @@ fn ty_is_chan(t: Ty) -> bool {
 # ty_chan_dir reads back the direction ty_chan wrote: 0 bidirectional, 1 send-only,
 # 2 receive-only. A type that is not a channel has no direction, and answers the
 # bidirectional 0 rather than a value a caller would have to test for separately.
-fn ty_chan_dir(t: Ty) -> int {
+pub fn ty_chan_dir(t: Ty) -> int {
 	return match t {
 		Ty.TChan(_, d) => d
 		_ => 0
 	}
 }
 
-fn ty_chan_elem(t: Ty) -> Ty {
+pub fn ty_chan_elem(t: Ty) -> Ty {
 	return match t {
 		Ty.TChan(e, _) => e
 		_ => Ty.TUnknown
@@ -1580,8 +1584,8 @@ fn ty_chan_elem(t: Ty) -> Ty {
 # callers passed "" and the refusal said only what was wrong. The place they hand over now
 # is not the type — there is none — it is the thing that CHOSE the type argument: the call
 # that instantiated the template, or the `impl` that bound the spec's parameter (#55).
-fn ty_chan_elem_check(elem: Ty, at: str) {
-	raise rule_msg(Rule.ChanOfOptional, f"`chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel") + at if ty_is_opt(elem)
+pub fn ty_chan_elem_check(elem: Ty, at: str) {
+	raise rule.rule_msg(rule.Rule.ChanOfOptional, f"`chan[{ty_name(elem)}]` is refused — a channel of optionals: a receive answers `T?`, so `nil` would mean both the value that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct, or agree on a sentinel") + at if ty_is_opt(elem)
 }
 
 # ty_chan is the ONE WAY to build a channel type, and it exists so the rule above cannot be
@@ -1596,7 +1600,7 @@ fn ty_chan_elem_check(elem: Ty, at: str) {
 #
 # `at` is a place trailer (p_place), from a caller that knows where the type was written or,
 # for a type reached by SUBSTITUTION, from the one that chose the argument.
-fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
+pub fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
 	ty_chan_elem_check(elem, at)
 	return Ty.TChan(elem, dir)
 }
@@ -1610,7 +1614,7 @@ fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
 # stage that needed it first could not reach the stage that already had it. The emitter
 # reads this file directly (ty_is_chan, ty_chan_elem), so the copy had nothing left to be
 # for and is gone.
-fn ty_is_opt(t: Ty) -> bool {
+pub fn ty_is_opt(t: Ty) -> bool {
 	return match t {
 		Ty.TOpt(_) => true
 		_          => false
@@ -1626,7 +1630,7 @@ fn chan_ty_name(elem: Ty, dir: int) -> str {
 	return f"chan[{ty_name(elem)}]"
 }
 
-fn ty_names(ts: list[Ty]) -> str {
+pub fn ty_names(ts: list[Ty]) -> str {
 	mut out := ""
 	mut i := 0
 	for i < ts.len() {

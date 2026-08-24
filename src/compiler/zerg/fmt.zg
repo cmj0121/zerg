@@ -48,6 +48,11 @@
 # that MOVES code is a pre-pass over the tokens, so the printer stays one straight walk
 # and the rewrite is not tangled through it.
 
+import (
+	"./lexer"
+	"./token"
+)
+
 # fmt_balanced is whether a source's brackets close, which is the one structural fact
 # every spacing rule below leans on. It is the gate the driver applies BEFORE writing,
 # because fmt reads the token stream rather than the tree: without it a file with a syntax
@@ -63,14 +68,14 @@
 # error and a NotImplemented refusal stop being the same kind of abort.
 pub fn fmt_balanced(src: str) -> bool {
 	mut depth := 0
-	for t in tokenize_trivia(src) {
+	for t in lexer.tokenize_trivia(src) {
 		# `Hash` is `#[`, ONE token that opens a bracket the matching `]` closes as an
 		# ordinary RBrack — so a decorator reads as one close too many unless it is counted
 		# here. Every `#[derive(…)]` in the tree tripped this on the first attempt.
-		if t.kind == Kind.LParen or t.kind == Kind.LBrack or t.kind == Kind.LBrace or t.kind == Kind.Hash {
+		if t.kind == token.Kind.LParen or t.kind == token.Kind.LBrack or t.kind == token.Kind.LBrace or t.kind == token.Kind.Hash {
 			depth = depth + 1
 		}
-		if t.kind == Kind.RParen or t.kind == Kind.RBrack or t.kind == Kind.RBrace {
+		if t.kind == token.Kind.RParen or t.kind == token.Kind.RBrack or t.kind == token.Kind.RBrace {
 			depth = depth - 1
 
 			# a close with nothing open: the rest of the file cannot be read either
@@ -82,7 +87,7 @@ pub fn fmt_balanced(src: str) -> bool {
 
 # fmt_src_off is fmt_src with the named rules switched off.
 pub fn fmt_src_off(src: str, off: list[str]) -> str {
-	mut toks := tokenize_trivia(src)
+	mut toks := lexer.tokenize_trivia(src)
 	if not fmt_is_off(off, "F401") {
 		toks = fmt_guards(toks)
 	}
@@ -113,7 +118,7 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
 
-fn fmt_is_off(off: list[str], code: str) -> bool {
+pub fn fmt_is_off(off: list[str], code: str) -> bool {
 	for c in off {
 		return true if c == code
 	}
@@ -142,8 +147,8 @@ fn fmt_is_off(off: list[str], code: str) -> bool {
 #
 # Anything else is left exactly as written. A formatter that ate a comment is a formatter
 # nobody runs twice.
-fn fmt_guards(mut &toks: list[Token]) -> list[Token] {
-	mut out: list[Token] = []
+fn fmt_guards(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < toks.len() {
 		lb := fmt_guard_at(toks, i, out)
@@ -161,8 +166,8 @@ fn fmt_guards(mut &toks: list[Token]) -> list[Token] {
 
 # fmt_guard_at answers with the `{` of a rewritable if-block starting at `at`, or 0 when
 # the shape is anything else. Every reason to decline is here, in one place.
-fn fmt_guard_at(mut &toks: list[Token], at: int, mut &out: list[Token]) -> int {
-	return 0 if toks[at].kind != Kind.If or fmt_is_else_if(out)
+fn fmt_guard_at(mut &toks: list[token.Token], at: int, mut &out: list[token.Token]) -> int {
+	return 0 if toks[at].kind != token.Kind.If or fmt_is_else_if(out)
 	lb := fmt_block_start(toks, at)
 	return 0 if lb == 0 or fmt_head_binds(toks, at, lb)
 	rb := fmt_block_end(toks, lb)
@@ -186,10 +191,10 @@ fn fmt_guard_at(mut &toks: list[Token], at: int, mut &out: list[Token]) -> int {
 # Rewriting the binding form produced source that is not a program — `if s := v { return s }`
 # came back as `return s if s := v`, which stops at the `:=` with E2005, and the `s` being
 # returned names nothing once its binding is gone. The block stays a block.
-fn fmt_head_binds(mut &toks: list[Token], at: int, lb: int) -> bool {
+fn fmt_head_binds(mut &toks: list[token.Token], at: int, lb: int) -> bool {
 	mut i := at + 1
 	for i < lb {
-		return true if toks[i].kind == Kind.Walrus
+		return true if toks[i].kind == token.Kind.Walrus
 		i = i + 1
 	}
 	return false
@@ -197,7 +202,7 @@ fn fmt_head_binds(mut &toks: list[Token], at: int, lb: int) -> bool {
 
 # fmt_emit_guard writes `<jump> <value?> if <cond>` from the pieces of `if <cond> { <jump>
 # <value?> }`, all on the `if`'s own line so the printer lays it out as one statement.
-fn fmt_emit_guard(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: list[Token]) {
+fn fmt_emit_guard(mut &toks: list[token.Token], at: int, lb: int, rb: int, mut &out: list[token.Token]) {
 	ln := toks[at].line
 	col := toks[at].col
 	jump := fmt_jump_at(toks, lb)
@@ -214,7 +219,7 @@ fn fmt_emit_guard(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 		}
 		i = i + 1
 	}
-	out.append(Token(Kind.If, "if", "", ln, col))
+	out.append(token.Token(token.Kind.If, "if", "", ln, col))
 
 	# the condition: everything between `if` and the `{`
 	mut j := at + 1
@@ -222,17 +227,17 @@ fn fmt_emit_guard(mut &toks: list[Token], at: int, lb: int, rb: int, mut &out: l
 		out.append(fmt_on_line(toks[j], ln))
 		j = j + 1
 	}
-	out.append(Token(Kind.Semi, ";", "", ln, col))
+	out.append(token.Token(token.Kind.Semi, ";", "", ln, col))
 }
 
-fn fmt_on_line(t: Token, ln: int) -> Token {
-	return Token(t.kind, t.lexeme, t.value, ln, t.col)
+pub fn fmt_on_line(t: token.Token, ln: int) -> token.Token {
+	return token.Token(t.kind, t.lexeme, t.value, ln, t.col)
 }
 
 # fmt_block_start finds the `{` that opens the if's block: the first one at bracket depth
 # zero, so a `{` inside the condition's parentheses is not mistaken for it. It answers 0
 # when the shape is not an if-block at all.
-fn fmt_block_start(mut &toks: list[Token], at: int) -> int {
+pub fn fmt_block_start(mut &toks: list[token.Token], at: int) -> int {
 	mut depth := 0
 	mut i := at + 1
 	for i < toks.len() {
@@ -251,7 +256,7 @@ fn fmt_block_start(mut &toks: list[Token], at: int) -> int {
 	return 0
 }
 
-fn fmt_block_end(mut &toks: list[Token], lb: int) -> int {
+pub fn fmt_block_end(mut &toks: list[token.Token], lb: int) -> int {
 	mut depth := 0
 	mut i := lb
 	for i < toks.len() {
@@ -268,7 +273,7 @@ fn fmt_block_end(mut &toks: list[Token], lb: int) -> int {
 
 # fmt_is_lone_jump reports whether the block holds exactly one statement, a jump, with no
 # comment and no nested block.
-fn fmt_is_lone_jump(mut &toks: list[Token], lb: int, rb: int) -> bool {
+fn fmt_is_lone_jump(mut &toks: list[token.Token], lb: int, rb: int) -> bool {
 	r := fmt_jump_at(toks, lb)
 	return false if r < 0
 	mut i := r + 1
@@ -280,7 +285,7 @@ fn fmt_is_lone_jump(mut &toks: list[Token], lb: int, rb: int) -> bool {
 		# source the compiler cannot parse, written by the tool that is supposed to preserve
 		# meaning. There is no single guard that says what the nesting says, so the block
 		# stays a block. (An if-EXPRESSION being returned is already declined by the `{`.)
-		return false if is_comment(k) or is_lbrace(k) or k == Kind.If
+		return false if is_comment(k) or is_lbrace(k) or k == token.Kind.If
 
 		if is_semi(k) and fmt_more_after(toks, i, rb) {
 			return false # a second statement
@@ -293,7 +298,7 @@ fn fmt_is_lone_jump(mut &toks: list[Token], lb: int, rb: int) -> bool {
 # fmt_jump_at is the index of the block's jump — `return`, `break` or `continue` — skipping
 # the separators the lexer put after the `{`, or -1 when the first thing in the block is
 # not one.
-fn fmt_jump_at(mut &toks: list[Token], lb: int) -> int {
+fn fmt_jump_at(mut &toks: list[token.Token], lb: int) -> int {
 	mut i := lb + 1
 	for i < toks.len() {
 		k := toks[i].kind
@@ -308,7 +313,7 @@ fn fmt_jump_at(mut &toks: list[Token], lb: int) -> int {
 	return -1
 }
 
-fn fmt_more_after(mut &toks: list[Token], at: int, rb: int) -> bool {
+fn fmt_more_after(mut &toks: list[token.Token], at: int, rb: int) -> bool {
 	mut i := at + 1
 	for i < rb {
 		return true if not is_semi(toks[i].kind)
@@ -317,14 +322,14 @@ fn fmt_more_after(mut &toks: list[Token], at: int, rb: int) -> bool {
 	return false
 }
 
-fn fmt_has_else(mut &toks: list[Token], rb: int) -> bool {
+fn fmt_has_else(mut &toks: list[token.Token], rb: int) -> bool {
 	mut i := rb + 1
 	for i < toks.len() {
 		k := toks[i].kind
 		if is_semi(k) {
 			i = i + 1
 		} else {
-			return k == Kind.Else
+			return k == token.Kind.Else
 		}
 	}
 	return false
@@ -332,14 +337,14 @@ fn fmt_has_else(mut &toks: list[Token], rb: int) -> bool {
 
 # fmt_is_else_if reports whether the `if` about to be read is the tail of an `else if`,
 # which is a branch of an existing chain rather than a guard of its own.
-fn fmt_is_else_if(mut &out: list[Token]) -> bool {
+fn fmt_is_else_if(mut &out: list[token.Token]) -> bool {
 	return false if out.len() == 0
-	return out[out.len() - 1].kind == Kind.Else
+	return out[out.len() - 1].kind == token.Kind.Else
 }
 
 # fmt_stmt_start reports whether the token at `at` begins a statement — nothing but a
 # separator, a brace or a comment stands in front of it.
-fn fmt_stmt_start(mut &toks: list[Token], at: int) -> bool {
+pub fn fmt_stmt_start(mut &toks: list[token.Token], at: int) -> bool {
 	return true if at == 0
 	k := toks[at - 1].kind
 	return is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
@@ -362,8 +367,8 @@ fn fmt_stmt_start(mut &toks: list[Token], at: int) -> bool {
 # of its own, so a rule keyed on `{ x := e; defer x.close(); … }` would have to drop the
 # `defer` to produce one — which deletes a line somebody wrote. Nothing here is keyed on a
 # `defer`: whatever follows the binding stays inside the block, in order.
-fn fmt_withs(mut &toks: list[Token]) -> list[Token] {
-	mut out: list[Token] = []
+fn fmt_withs(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < toks.len() {
 		end := fmt_with_bind_end(toks, i)
@@ -373,7 +378,7 @@ fn fmt_withs(mut &toks: list[Token]) -> list[Token] {
 		} else {
 			ln := toks[i].line
 			col := toks[i].col
-			out.append(Token(Kind.With, "with", "", ln, col))
+			out.append(token.Token(token.Kind.With, "with", "", ln, col))
 
 			# the head is ONE line, so every token it is built from is re-lined onto the `{`'s.
 			# The expression came from the line below and would otherwise be printed there,
@@ -383,7 +388,7 @@ fn fmt_withs(mut &toks: list[Token]) -> list[Token] {
 				out.append(fmt_on_line(toks[j], ln))
 				j = j + 1
 			}
-			out.append(Token(Kind.As, "as", "", ln, col))
+			out.append(token.Token(token.Kind.As, "as", "", ln, col))
 			out.append(fmt_on_line(toks[i + 1], ln))
 			out.append(toks[i])
 
@@ -399,19 +404,19 @@ fn fmt_withs(mut &toks: list[Token]) -> list[Token] {
 
 # fmt_with_bind_end answers the index of the `;` that ends the binding a bare block opens
 # with, or -1 when this is not that shape. Every reason to decline is here, in one place.
-fn fmt_with_bind_end(mut &toks: list[Token], at: int) -> int {
+fn fmt_with_bind_end(mut &toks: list[token.Token], at: int) -> int {
 	return 0 - 1 if at + 3 >= toks.len()
 	return 0 - 1 if not is_lbrace(toks[at].kind) or not fmt_stmt_start(toks, at)
-	return 0 - 1 if toks[at + 1].kind != Kind.Ident or toks[at + 1].lexeme == "_"
-	return 0 - 1 if toks[at + 2].kind != Kind.Walrus
+	return 0 - 1 if toks[at + 1].kind != token.Kind.Ident or toks[at + 1].lexeme == "_"
+	return 0 - 1 if toks[at + 2].kind != token.Kind.Walrus
 
 	mut depth := 0
 	mut i := at + 3
 	for i < toks.len() {
 		k := toks[i].kind
-		if is_lbrace(k) or k == Kind.LParen or k == Kind.LBrack {
+		if is_lbrace(k) or k == token.Kind.LParen or k == token.Kind.LBrack {
 			depth = depth + 1
-		} else if is_rbrace(k) or k == Kind.RParen or k == Kind.RBrack {
+		} else if is_rbrace(k) or k == token.Kind.RParen or k == token.Kind.RBrack {
 			return 0 - 1 if depth == 0
 
 			depth = depth - 1
@@ -435,8 +440,8 @@ fn fmt_with_bind_end(mut &toks: list[Token], at: int) -> int {
 # It fires only where an `=>` proves a select arm. A STATEMENT `_ := <-ch` is a binding, and
 # dropping its binder would leave a bare receive standing where a statement was; that case
 # belongs to the linter (L104), which suggests rather than rewrites.
-fn fmt_discards(mut &toks: list[Token]) -> list[Token] {
-	mut out: list[Token] = []
+fn fmt_discards(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < toks.len() {
 		if fmt_is_discard_arm(toks, i) {
@@ -452,10 +457,10 @@ fn fmt_discards(mut &toks: list[Token]) -> list[Token] {
 # fmt_is_discard_arm reports whether `at` opens the head of a select arm that binds the
 # discard: `_ :=` at the start of a statement, a receive after it, and an `=>` closing the
 # head. Every reason to decline is here, in one place.
-fn fmt_is_discard_arm(mut &toks: list[Token], at: int) -> bool {
+fn fmt_is_discard_arm(mut &toks: list[token.Token], at: int) -> bool {
 	return false if at + 2 >= toks.len()
-	return false if toks[at].kind != Kind.Ident or toks[at].lexeme != "_"
-	return false if toks[at + 1].kind != Kind.Walrus or not is_larrow(toks[at + 2].kind)
+	return false if toks[at].kind != token.Kind.Ident or toks[at].lexeme != "_"
+	return false if toks[at + 1].kind != token.Kind.Walrus or not is_larrow(toks[at + 2].kind)
 	return false if not fmt_stmt_start(toks, at)
 
 	return fmt_arm_head_ends(toks, at + 3)
@@ -463,14 +468,14 @@ fn fmt_is_discard_arm(mut &toks: list[Token], at: int) -> bool {
 
 # fmt_arm_head_ends reports whether a `=>` closes the head that starts at `at`, before the
 # statement itself ends. That arrow is what tells a select arm from a plain binding.
-fn fmt_arm_head_ends(mut &toks: list[Token], at: int) -> bool {
+fn fmt_arm_head_ends(mut &toks: list[token.Token], at: int) -> bool {
 	mut depth := 0
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
 
 		return false if is_semi(k) or is_comment(k) or is_lbrace(k)
-		return true if k == Kind.FatArrow and depth == 0
+		return true if k == token.Kind.FatArrow and depth == 0
 
 		if is_bracket(k) {
 			depth = depth + 1
@@ -505,8 +510,8 @@ fn fmt_arm_head_ends(mut &toks: list[Token], at: int) -> bool {
 #
 # Each bound keeps its own LEXEME, so `0x10 | 0x11` becomes `0x10..=0x11` rather than being
 # rewritten in decimal. A literal's surface is the author's.
-fn fmt_ranges(mut &toks: list[Token]) -> list[Token] {
-	mut out: list[Token] = []
+fn fmt_ranges(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < toks.len() {
 		shut := fmt_or_pat_end(toks, i)
@@ -523,7 +528,7 @@ fn fmt_ranges(mut &toks: list[Token]) -> list[Token] {
 
 # fmt_or_pat_end answers with the index of the `=>` closing a rewritable or-pattern head at
 # `at`, or 0 when the shape is anything else at all.
-fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
+fn fmt_or_pat_end(mut &toks: list[token.Token], at: int) -> int {
 	return 0 if not fmt_stmt_start(toks, at)
 
 	mut i := at
@@ -531,13 +536,13 @@ fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
 	mut n := 0
 	for i < toks.len() {
 		mut neg := false
-		if toks[i].kind == Kind.Minus {
+		if toks[i].kind == token.Kind.Minus {
 			neg = true
 			i = i + 1
 			return 0 if i >= toks.len()
 		}
-		return 0 if toks[i].kind != Kind.Int
-		mut v := int_value(toks[i].lexeme)
+		return 0 if toks[i].kind != token.Kind.Int
+		mut v := lexer.int_value(toks[i].lexeme)
 		if neg {
 			v = 0 - v
 		}
@@ -548,11 +553,11 @@ fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
 		return 0 if i >= toks.len()
 
 		k := toks[i].kind
-		if k == Kind.FatArrow {
+		if k == token.Kind.FatArrow {
 			return i if n >= 2
 			return 0
 		}
-		return 0 if k != Kind.Pipe
+		return 0 if k != token.Kind.Pipe
 		i = i + 1
 		return 0 if i >= toks.len()
 	}
@@ -561,15 +566,15 @@ fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
 
 # fmt_emit_range writes `lo..=hi` from the FIRST and LAST alternative of the head, dropping
 # everything between them — the middle values are what the range now states.
-fn fmt_emit_range(mut &toks: list[Token], at: int, shut: int, mut &out: list[Token]) {
+fn fmt_emit_range(mut &toks: list[token.Token], at: int, shut: int, mut &out: list[token.Token]) {
 	ln := toks[at].line
 	col := toks[at].col
 	out.append(toks[at])
-	if toks[at].kind == Kind.Minus {
+	if toks[at].kind == token.Kind.Minus {
 		out.append(toks[at + 1])
 	}
-	out.append(Token(Kind.DotDotEq, "..=", "", ln, col))
-	if toks[shut - 2].kind == Kind.Minus {
+	out.append(token.Token(token.Kind.DotDotEq, "..=", "", ln, col))
+	if toks[shut - 2].kind == token.Kind.Minus {
 		out.append(toks[shut - 2])
 	}
 	out.append(toks[shut - 1])
@@ -604,7 +609,7 @@ fn fmt_emit_range(mut &toks: list[Token], at: int, shut: int, mut &out: list[Tok
 # It is F4xx and switchable because it inserts a line nobody wrote — the same test that put
 # F403 there. It runs LAST, after F403, because F403 renumbers lines and this rule's whole
 # job is to decide line numbers; running it earlier would have its work rewritten.
-fn fmt_blank(mut &toks: list[Token]) -> list[Token] {
+fn fmt_blank(mut &toks: list[token.Token]) -> list[token.Token] {
 	mut at: list[bool] = []
 	mut i := 0
 	for i < toks.len() {
@@ -618,7 +623,7 @@ fn fmt_blank(mut &toks: list[Token]) -> list[Token] {
 	# prints nothing but still moves the printer's `prev_line`, so a gap opened before that
 	# `;` is closed again by it — which is why F401 can collapse a four-line if-block onto
 	# one line without leaving a blank where the block used to be.
-	mut out: list[Token] = []
+	mut out: list[token.Token] = []
 	mut shift := 0
 	mut j := 0
 	for j < toks.len() {
@@ -635,7 +640,7 @@ fn fmt_blank(mut &toks: list[Token]) -> list[Token] {
 # depth because a comment only heads a chunk INSIDE a body: at the top level a comment is
 # a declaration's doc comment, or one of an import's, and the blank line between those is
 # the author's to place.
-fn fmt_blank_mark(mut &toks: list[Token], mut &at: list[bool]) {
+fn fmt_blank_mark(mut &toks: list[token.Token], mut &at: list[bool]) {
 	mut depth := 0
 	mut group := 0
 	mut i := 0
@@ -708,7 +713,7 @@ fn fmt_blank_mark(mut &toks: list[Token], mut &at: list[bool]) {
 # part of it; a comment under another comment is one block and is not split; and a comment
 # with nothing but the closing `}` after it heads nothing, so a blank would only push it
 # away from what it is commenting ON.
-fn fmt_blank_comment(mut &toks: list[Token], at: int) -> bool {
+fn fmt_blank_comment(mut &toks: list[token.Token], at: int) -> bool {
 	return false if not is_comment(toks[at].kind)
 	return false if at == 0
 
@@ -725,12 +730,12 @@ fn fmt_blank_comment(mut &toks: list[Token], at: int) -> bool {
 }
 
 # fmt_blank_leads reports whether a comment block has any code after it to head.
-fn fmt_blank_leads(mut &toks: list[Token], at: int) -> bool {
+fn fmt_blank_leads(mut &toks: list[token.Token], at: int) -> bool {
 	mut i := at + 1
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return false if is_rbrace(k) or is_eof(k)
+		return false if is_rbrace(k) or lexer.is_eof(k)
 		return true if not is_semi(k) and not is_comment(k)
 
 		i = i + 1
@@ -751,14 +756,14 @@ fn fmt_decl_min() -> int {
 #
 # A `{` at depth zero declines it, the way it declines a guard: `x := if c { 1 } else { 2 }`
 # is a statement with a shape of its own and not part of any preamble.
-fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
+fn fmt_decl_end(mut &toks: list[token.Token], at: int) -> int {
 	mut i := at
-	if toks[i].kind == Kind.Mut {
+	if toks[i].kind == token.Kind.Mut {
 		i = i + 1
 	}
-	return -1 if toks[i].kind != Kind.Ident
+	return -1 if toks[i].kind != token.Kind.Ident
 	i = i + 1
-	if toks[i].kind == Kind.Colon {
+	if toks[i].kind == token.Kind.Colon {
 		# `x: T = e` — step over the type to the `=` that opens the value
 		mut j := i + 1
 		mut d := 0
@@ -768,7 +773,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 				d = d + 1
 			} else if is_close(k) {
 				d = d - 1
-			} else if d == 0 and k == Kind.Assign {
+			} else if d == 0 and k == token.Kind.Assign {
 				break
 			} else if is_semi(k) or is_lbrace(k) or is_comment(k) {
 				return -1
@@ -777,7 +782,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 		}
 		return -1 if j >= toks.len()
 		i = j
-	} else if toks[i].kind != Kind.Walrus {
+	} else if toks[i].kind != token.Kind.Walrus {
 		return -1
 	}
 	mut depth := 0
@@ -792,7 +797,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 			return -1
 		} else if is_semi(k) and depth == 0 {
 			return j
-		} else if is_comment(k) or is_eof(k) {
+		} else if is_comment(k) or lexer.is_eof(k) {
 			return -1
 		}
 		j = j + 1
@@ -804,7 +809,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 # ahead of it to be separated from, and that code must not be a comment. A comment there is
 # the run's heading, and F406 has already put a blank in front of IT — putting a second one
 # between the heading and the table would split the two things that go together.
-fn fmt_blank_lead(mut &toks: list[Token], at: int) -> bool {
+fn fmt_blank_lead(mut &toks: list[token.Token], at: int) -> bool {
 	p := fmt_prev_code(toks, at)
 	return false if p < 0
 	k := toks[p].kind
@@ -813,12 +818,12 @@ fn fmt_blank_lead(mut &toks: list[Token], at: int) -> bool {
 }
 
 # fmt_blank_here is every reason a blank line is NOT wanted at `at`, in one place.
-fn fmt_blank_here(mut &toks: list[Token], at: int) -> bool {
+fn fmt_blank_here(mut &toks: list[token.Token], at: int) -> bool {
 	return false if at <= 0
 	k := toks[at].kind
 
 	# nothing to be separated FROM: a blank before a closer, or at the end of the file
-	return false if is_rbrace(k) or is_eof(k)
+	return false if is_rbrace(k) or lexer.is_eof(k)
 
 	# a blank is already there. The gap is measured against the token immediately before,
 	# because that is what the printer's `prev_line` will hold — a `;` among them prints
@@ -833,7 +838,7 @@ fn fmt_blank_here(mut &toks: list[Token], at: int) -> bool {
 # A guard is a jump with an `if` after it and no block of its own. The `{` test is what
 # tells it from `return if c { 1 } else { 2 }` — a jump whose VALUE is an if-expression,
 # which is a statement of a different shape and not part of any table.
-fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
+fn fmt_guard_end(mut &toks: list[token.Token], at: int) -> int {
 	return -1 if not is_jump(toks[at].kind)
 
 	mut depth := 0
@@ -851,9 +856,9 @@ fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
 		} else if is_semi(k) and depth == 0 {
 			return i if seen
 			return -1
-		} else if is_comment(k) or is_eof(k) {
+		} else if is_comment(k) or lexer.is_eof(k) {
 			return -1
-		} else if k == Kind.If and depth == 0 {
+		} else if k == token.Kind.If and depth == 0 {
 			seen = true
 		}
 		i = i + 1
@@ -863,7 +868,7 @@ fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
 
 # fmt_next_code is the next token that is not a separator. The `;`s are skipped because
 # they are what stands between one guard of a run and the next.
-fn fmt_next_code(mut &toks: list[Token], at: int) -> int {
+pub fn fmt_next_code(mut &toks: list[token.Token], at: int) -> int {
 	mut i := at + 1
 	for i < toks.len() {
 		return i if not is_semi(toks[i].kind)
@@ -902,7 +907,7 @@ fn fmt_next_code(mut &toks: list[Token], at: int) -> int {
 # lines, which does not parse — a formatter that turned a valid program into an invalid one.
 # Nothing caught it, because `make fmt-self` covers the compiler and the stdlib and neither
 # of them writes a map literal.
-fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
+fn fmt_opens_block(mut &toks: list[token.Token], at: int) -> bool {
 	p := fmt_prev_code(toks, at)
 
 	return true if p < 0
@@ -915,8 +920,8 @@ fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
 # purpose: the positions a body opens in are open-ended — after a `)`, a name, `else`, a type
 # — while the places an expression is expected are countable, and a new one joins by being
 # named here.
-fn fmt_wants_value(k: Kind) -> bool {
-	return true if k == Kind.Walrus or k == Kind.Assign or k == Kind.Colon or k == Kind.Comma or k == Kind.LParen or k == Kind.LBrack
+fn fmt_wants_value(k: token.Kind) -> bool {
+	return true if k == token.Kind.Walrus or k == token.Kind.Assign or k == token.Kind.Colon or k == token.Kind.Comma or k == token.Kind.LParen or k == token.Kind.LBrack
 
 	# `return {…}`, `x in {…}`, `ch <- {…}` — the keyword and the two operators that take a
 	# value on their right and can find a literal there. `in` and `<-` were missed when this
@@ -926,7 +931,7 @@ fn fmt_wants_value(k: Kind) -> bool {
 	# `=>` joined them when a block became an expression: GRAMMAR#match-arm's body is an
 	# `expr`, so `Line(n) => { … }` is a block in a value's position and `Line(n) => {"a": 1}`
 	# is a map in the same one.
-	return k == Kind.Return or k == Kind.In or k == Kind.LArrow or k == Kind.FatArrow
+	return k == token.Kind.Return or k == token.Kind.In or k == token.Kind.LArrow or k == token.Kind.FatArrow
 }
 
 # fmt_brace_is_map is the parser's p_brace_is_map over a token list: a `:` among the brace's
@@ -937,13 +942,13 @@ fn fmt_wants_value(k: Kind) -> bool {
 # told apart by what FOLLOWS: a map entry ends at its `,` or the closing `}`, and a binding
 # puts an `=` in between. Depth counts all three bracket kinds, so a `:` belonging to a named
 # argument, a nested map or a slice is not this brace's.
-fn fmt_brace_is_map(mut &toks: list[Token], at: int) -> bool {
+fn fmt_brace_is_map(mut &toks: list[token.Token], at: int) -> bool {
 	mut depth := 0
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return false if is_eof(k)
+		return false if lexer.is_eof(k)
 		if is_open(k) or is_lbrace(k) {
 			depth = depth + 1
 		} else if is_close(k) or is_rbrace(k) {
@@ -951,7 +956,7 @@ fn fmt_brace_is_map(mut &toks: list[Token], at: int) -> bool {
 			return false if depth == 0
 		} else if depth == 1 and is_semi(k) {
 			return false
-		} else if depth == 1 and k == Kind.Colon {
+		} else if depth == 1 and k == token.Kind.Colon {
 			return not fmt_entry_assigns(toks, i + 1)
 		}
 		i = i + 1
@@ -961,21 +966,21 @@ fn fmt_brace_is_map(mut &toks: list[Token], at: int) -> bool {
 
 # fmt_entry_assigns answers whether the entry a depth-1 `:` opened runs on to an `=` before
 # it ends — the typed binding `x: int = 1` rather than the map entry `"x": 1`.
-fn fmt_entry_assigns(mut &toks: list[Token], at: int) -> bool {
+fn fmt_entry_assigns(mut &toks: list[token.Token], at: int) -> bool {
 	mut depth := 1
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return false if is_eof(k)
+		return false if lexer.is_eof(k)
 		if is_open(k) or is_lbrace(k) {
 			depth = depth + 1
 		} else if is_close(k) or is_rbrace(k) {
 			depth = depth - 1
 			return false if depth == 0
-		} else if depth == 1 and (k == Kind.Comma or is_semi(k)) {
+		} else if depth == 1 and (k == token.Kind.Comma or is_semi(k)) {
 			return false
-		} else if depth == 1 and k == Kind.Assign {
+		} else if depth == 1 and k == token.Kind.Assign {
 			return true
 		}
 		i = i + 1
@@ -983,7 +988,7 @@ fn fmt_entry_assigns(mut &toks: list[Token], at: int) -> bool {
 	return false
 }
 
-fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
+fn fmt_prev_code(mut &toks: list[token.Token], at: int) -> int {
 	mut i := at - 1
 	for i >= 0 {
 		return i if not is_semi(toks[i].kind)
@@ -1044,7 +1049,7 @@ struct Fstr {
 	pub ok: bool
 }
 
-fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
+fn fmt_fstr(mut &toks: list[token.Token]) -> list[token.Token] {
 	mut head: list[int] = []
 	mut i := 0
 	for i < toks.len() {
@@ -1052,12 +1057,12 @@ fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
 		i = i + 1
 	}
 	fmt_fstr_mark(toks, head)
-	mut out: list[Token] = []
+	mut out: list[token.Token] = []
 	mut j := 0
 	for j < toks.len() {
 		if head[j] >= 0 {
 			r := fmt_fstr_render(toks, j, head[j])
-			out.append(Token(Kind.FStr, r.text, "", toks[j].line, toks[j].col))
+			out.append(token.Token(token.Kind.FStr, r.text, "", toks[j].line, toks[j].col))
 			j = head[j] + 1
 		} else {
 			out.append(toks[j])
@@ -1070,10 +1075,10 @@ fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
 # fmt_fstr_mark records, on each rewritable chain's FIRST token, the index of its last.
 # Every `+` of one chain walks out to the same pair, so writing the same answer twice is
 # how the overlapping anchors settle.
-fn fmt_fstr_mark(mut &toks: list[Token], mut &head: list[int]) {
+fn fmt_fstr_mark(mut &toks: list[token.Token], mut &head: list[int]) {
 	mut i := 0
 	for i < toks.len() {
-		if toks[i].kind == Kind.Plus {
+		if toks[i].kind == token.Kind.Plus {
 			lo := fmt_fstr_lo(toks, i)
 			hi := fmt_fstr_hi(toks, i)
 			r := fmt_fstr_render(toks, lo, hi)
@@ -1088,7 +1093,7 @@ fn fmt_fstr_mark(mut &toks: list[Token], mut &head: list[int]) {
 # fmt_fstr_atom is what a chain may hold BETWEEN its operators at its own bracket depth.
 # It is a whitelist and deliberately narrow: what is outside it is what the rewrite would
 # get wrong. Inside a bracket anything goes — the walk only tests at depth zero.
-fn fmt_fstr_atom(k: Kind) -> bool {
+fn fmt_fstr_atom(k: token.Kind) -> bool {
 	return match k {
 		Kind.Ident  => true
 		Kind.Str    => true
@@ -1110,7 +1115,7 @@ fn fmt_fstr_atom(k: Kind) -> bool {
 # fmt_fstr_lo walks left from a `+` to the chain's first token. A CLOSING bracket met going
 # left opens a group to step over; an OPENING one at depth zero is the bracket holding the
 # chain, and stops the walk without being taken.
-fn fmt_fstr_lo(mut &toks: list[Token], p: int) -> int {
+fn fmt_fstr_lo(mut &toks: list[token.Token], p: int) -> int {
 	mut d := 0
 	mut lo := p
 	mut i := p - 1
@@ -1121,7 +1126,7 @@ fn fmt_fstr_lo(mut &toks: list[Token], p: int) -> int {
 		} else if is_bracket(k) {
 			break if d == 0
 			d = d - 1
-		} else if d == 0 and not fmt_fstr_atom(k) and k != Kind.Plus {
+		} else if d == 0 and not fmt_fstr_atom(k) and k != token.Kind.Plus {
 			break
 		}
 		lo = i
@@ -1130,7 +1135,7 @@ fn fmt_fstr_lo(mut &toks: list[Token], p: int) -> int {
 	return lo
 }
 
-fn fmt_fstr_hi(mut &toks: list[Token], p: int) -> int {
+fn fmt_fstr_hi(mut &toks: list[token.Token], p: int) -> int {
 	mut d := 0
 	mut hi := p
 	mut i := p + 1
@@ -1141,7 +1146,7 @@ fn fmt_fstr_hi(mut &toks: list[Token], p: int) -> int {
 		} else if is_close(k) {
 			break if d == 0
 			d = d - 1
-		} else if d == 0 and not fmt_fstr_atom(k) and k != Kind.Plus {
+		} else if d == 0 and not fmt_fstr_atom(k) and k != token.Kind.Plus {
 			break
 		}
 		hi = i
@@ -1152,13 +1157,13 @@ fn fmt_fstr_hi(mut &toks: list[Token], p: int) -> int {
 
 # fmt_fstr_accum reports the `out = out + …` shape by comparing the assignment's target
 # with the chain's first operand.
-fn fmt_fstr_accum(mut &toks: list[Token], lo: int) -> bool {
+fn fmt_fstr_accum(mut &toks: list[token.Token], lo: int) -> bool {
 	return false if lo < 2
-	return false if toks[lo - 1].kind != Kind.Assign
+	return false if toks[lo - 1].kind != token.Kind.Assign
 
 	mut i := lo - 2
 	mut j := lo
-	for i >= 0 and toks[i].kind != Kind.Semi and not is_lbrace(toks[i].kind) {
+	for i >= 0 and toks[i].kind != token.Kind.Semi and not is_lbrace(toks[i].kind) {
 		return false if toks[j].kind != toks[i].kind or toks[j].lexeme != toks[i].lexeme
 		i = i - 1
 		j = j + 1
@@ -1167,7 +1172,7 @@ fn fmt_fstr_accum(mut &toks: list[Token], lo: int) -> bool {
 }
 
 # fmt_fstr_render builds the f-string a chain would become, and answers whether it may.
-fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
+fn fmt_fstr_render(mut &toks: list[token.Token], lo: int, hi: int) -> Fstr {
 	return Fstr("", false) if hi <= lo
 	return Fstr("", false) if toks[lo].line != toks[hi].line
 
@@ -1180,7 +1185,7 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 	mut i := lo
 	for i <= hi + 1 {
 		fin := i > hi
-		mut k := Kind.Semi
+		mut k := token.Kind.Semi
 		if not fin {
 			k = toks[i].kind
 		}
@@ -1189,13 +1194,13 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 		} else if not fin and is_close(k) {
 			d = d - 1
 		}
-		if fin or (d == 0 and k == Kind.Plus) {
+		if fin or (d == 0 and k == token.Kind.Plus) {
 			return Fstr("", false) if i <= a
 			piece := fmt_fstr_part(toks, a, i - 1)
 			return Fstr("", false) if not piece.ok
 			text = text + piece.text
 			parts = parts + 1
-			if a == i - 1 and toks[a].kind == Kind.Str {
+			if a == i - 1 and toks[a].kind == token.Kind.Str {
 				lits = lits + 1
 			} else {
 				holes = holes + 1
@@ -1210,8 +1215,8 @@ fn fmt_fstr_render(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 
 # fmt_fstr_part renders one operand: a string literal contributes its text, anything else
 # becomes a `{ … }` hole spelled the way the printer would spell it on one line.
-fn fmt_fstr_part(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
-	if lo == hi and toks[lo].kind == Kind.Str {
+fn fmt_fstr_part(mut &toks: list[token.Token], lo: int, hi: int) -> Fstr {
+	if lo == hi and toks[lo].kind == token.Kind.Str {
 		return Fstr("", false) if not fmt_fstr_lit_ok(toks[lo])
 		return Fstr(fmt_fstr_lit(toks[lo].lexeme), true)
 	}
@@ -1222,24 +1227,24 @@ fn fmt_fstr_part(mut &toks: list[Token], lo: int, hi: int) -> Fstr {
 
 # fmt_fstr_is_dec reports the `strconv.to_string(X, 10)` shape, whose whole content is the
 # base a hole renders in anyway.
-fn fmt_fstr_is_dec(mut &toks: list[Token], lo: int, hi: int) -> bool {
+fn fmt_fstr_is_dec(mut &toks: list[token.Token], lo: int, hi: int) -> bool {
 	return false if hi - lo < 7
-	return false if toks[lo].kind != Kind.Ident or toks[lo].lexeme != "strconv"
+	return false if toks[lo].kind != token.Kind.Ident or toks[lo].lexeme != "strconv"
 	return false if not is_dot(toks[lo + 1].kind)
-	return false if toks[lo + 2].kind != Kind.Ident or toks[lo + 2].lexeme != "to_string"
-	return false if toks[lo + 3].kind != Kind.LParen
+	return false if toks[lo + 2].kind != token.Kind.Ident or toks[lo + 2].lexeme != "to_string"
+	return false if toks[lo + 3].kind != token.Kind.LParen
 	return false if fmt_wrap_end(toks, lo + 3) != hi
-	return false if toks[hi - 1].kind != Kind.Int or toks[hi - 1].lexeme != "10"
+	return false if toks[hi - 1].kind != token.Kind.Int or toks[hi - 1].lexeme != "10"
 
 	return is_comma(toks[hi - 2].kind)
 }
 
-fn fmt_fstr_arg_lo(mut &toks: list[Token], lo: int, hi: int) -> int {
+fn fmt_fstr_arg_lo(mut &toks: list[token.Token], lo: int, hi: int) -> int {
 	return lo + 4 if fmt_fstr_is_dec(toks, lo, hi)
 	return lo
 }
 
-fn fmt_fstr_arg_hi(mut &toks: list[Token], lo: int, hi: int) -> int {
+fn fmt_fstr_arg_hi(mut &toks: list[token.Token], lo: int, hi: int) -> int {
 	return hi - 3 if fmt_fstr_is_dec(toks, lo, hi)
 	return hi
 }
@@ -1247,10 +1252,10 @@ fn fmt_fstr_arg_hi(mut &toks: list[Token], lo: int, hi: int) -> int {
 # fmt_fstr_span spells a token run the way the printer would on ONE line, through the
 # printer's own spacing predicate — so a hole's text is already canonical and formatting
 # the result again changes nothing.
-fn fmt_fstr_span(mut &toks: list[Token], lo: int, hi: int) -> str {
+pub fn fmt_fstr_span(mut &toks: list[token.Token], lo: int, hi: int) -> str {
 	mut out := ""
-	mut prev2 := Kind.Semi
-	mut prev := Kind.Semi
+	mut prev2 := token.Kind.Semi
+	mut prev := token.Kind.Semi
 	mut i := lo
 	for i <= hi {
 		t := toks[i]
@@ -1266,7 +1271,7 @@ fn fmt_fstr_span(mut &toks: list[Token], lo: int, hi: int) -> str {
 }
 
 # fmt_fstr_lit_ok is every reason a string literal declines to be an f-string's text.
-fn fmt_fstr_lit_ok(t: Token) -> bool {
+fn fmt_fstr_lit_ok(t: token.Token) -> bool {
 	b := bytearray(t.lexeme)
 	n := b.len()
 
@@ -1370,7 +1375,7 @@ struct Wrap {
 	pub col: int
 }
 
-fn fmt_wrap(mut &toks: list[Token]) -> list[Token] {
+pub fn fmt_wrap(mut &toks: list[token.Token]) -> list[token.Token] {
 	mut brk := fmt_wrap_breaks(toks)
 	mut drop: list[bool] = []
 	mut i := 0
@@ -1387,7 +1392,7 @@ fn fmt_wrap(mut &toks: list[Token]) -> list[Token] {
 # for "same line", 1 for a break, 2 for a break with a blank line kept (F104). Deciding on
 # THIS rather than on the line numbers themselves is what lets a decision be rewritten
 # without renumbering everything after it.
-fn fmt_wrap_breaks(mut &toks: list[Token]) -> list[int] {
+fn fmt_wrap_breaks(mut &toks: list[token.Token]) -> list[int] {
 	mut brk: list[int] = []
 	mut i := 0
 	for i < toks.len() {
@@ -1409,10 +1414,10 @@ fn fmt_wrap_breaks(mut &toks: list[Token]) -> list[int] {
 # fmt_wrap_widths is what each token costs on a flat line, its own text plus the space
 # F201/F202 would put before it. Measuring from the same predicate the printer uses is
 # what keeps the estimate and the output from drifting apart.
-fn fmt_wrap_widths(mut &toks: list[Token]) -> list[int] {
+fn fmt_wrap_widths(mut &toks: list[token.Token]) -> list[int] {
 	mut w: list[int] = []
-	mut prev2 := Kind.Semi
-	mut prev := Kind.Semi
+	mut prev2 := token.Kind.Semi
+	mut prev := token.Kind.Semi
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
@@ -1435,7 +1440,7 @@ fn fmt_wrap_widths(mut &toks: list[Token]) -> list[int] {
 # fmt_wrap_scan walks the top level and hands every bracket group to the decision. `col`
 # is the flat column the line has reached, which is what a group is measured against —
 # the same left-to-right walk the printer makes, so a group is judged where it lands.
-fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bool], mut &wid: list[int]) {
+fn fmt_wrap_scan(mut &toks: list[token.Token], mut &brk: list[int], mut &drop: list[bool], mut &wid: list[int]) {
 	mut depth := 0
 	mut col := 0
 	mut i := 0
@@ -1468,7 +1473,7 @@ fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 
 # fmt_wrap_opens reports whether token `at` opens a group this rule may decide. A `#[`
 # is a decorator's brackets rather than a list's, and its shape is the language's.
-fn fmt_wrap_opens(mut &toks: list[Token], at: int) -> bool {
+fn fmt_wrap_opens(mut &toks: list[token.Token], at: int) -> bool {
 	return false if not is_bracket(toks[at].kind)
 	return false if at > 0 and is_hash(toks[at - 1].kind)
 
@@ -1479,7 +1484,7 @@ fn fmt_wrap_opens(mut &toks: list[Token], at: int) -> bool {
 # with the opener printed; `depth` is the indent level the group's own line is at, so its
 # elements sit one level in from it and its closer lands back on it.
 fn fmt_wrap_group(
-	mut &toks: list[Token],
+	mut &toks: list[token.Token],
 	mut &brk: list[int],
 	mut &drop: list[bool],
 	mut &wid: list[int],
@@ -1542,7 +1547,7 @@ fn fmt_wrap_group(
 #
 # Joining a group joins everything nested inside it, so every trailing comma down there
 # is answered here too — the inner groups are never visited again.
-fn fmt_wrap_join(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bool], open: int, shut: int, col: int) -> Wrap {
+fn fmt_wrap_join(mut &toks: list[token.Token], mut &brk: list[int], mut &drop: list[bool], open: int, shut: int, col: int) -> Wrap {
 	mut i := open + 1
 	for i <= shut {
 		brk[i] = 0
@@ -1563,7 +1568,7 @@ fn fmt_wrap_join(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 # it in a signature and keeping it in a call would be one shape in two spellings, which is
 # what canonical means there is not, so it goes from both.
 fn fmt_wrap_split(
-	mut &toks: list[Token],
+	mut &toks: list[token.Token],
 	mut &brk: list[int],
 	mut &drop: list[bool],
 	mut &wid: list[int],
@@ -1601,7 +1606,7 @@ fn fmt_wrap_split(
 # expression. Its breaks are the author's and stay, but if it spans lines at all then its
 # opener ends its line, so every step starts in the same column.
 fn fmt_wrap_free(
-	mut &toks: list[Token],
+	mut &toks: list[token.Token],
 	mut &brk: list[int],
 	mut &drop: list[bool],
 	mut &wid: list[int],
@@ -1651,7 +1656,7 @@ fn fmt_wrap_break_at(mut &brk: list[int], at: int) {
 # formatted differently again. A formatter's one promise is that formatting formatted source
 # changes nothing, and it was being kept by every gate in the tree because no gated source
 # writes a block inside a call.
-fn fmt_wrap_spans(mut &toks: list[Token], mut &brk: list[int], open: int, shut: int) -> bool {
+fn fmt_wrap_spans(mut &toks: list[token.Token], mut &brk: list[int], open: int, shut: int) -> bool {
 	mut i := open + 1
 	for i <= shut {
 		return true if brk[i] > 0
@@ -1663,7 +1668,7 @@ fn fmt_wrap_spans(mut &toks: list[Token], mut &brk: list[int], open: int, shut: 
 # fmt_wrap_holds_block is the second half of fmt_wrap_spans asked on its own, which the
 # comma case needs separately: a group holding a block is split rather than merely known to
 # span lines.
-fn fmt_wrap_holds_block(mut &toks: list[Token], open: int, shut: int) -> bool {
+fn fmt_wrap_holds_block(mut &toks: list[token.Token], open: int, shut: int) -> bool {
 	mut i := open + 1
 	for i <= shut {
 		return true if is_lbrace(toks[i].kind) and fmt_opens_block(toks, i) and not fmt_guard_inline(toks, i)
@@ -1673,7 +1678,7 @@ fn fmt_wrap_holds_block(mut &toks: list[Token], open: int, shut: int) -> bool {
 }
 
 # fmt_wrap_end is the index of the bracket that closes the one at `open`.
-fn fmt_wrap_end(mut &toks: list[Token], open: int) -> int {
+fn fmt_wrap_end(mut &toks: list[token.Token], open: int) -> int {
 	mut d := 0
 	mut i := open
 	for i < toks.len() {
@@ -1689,7 +1694,7 @@ fn fmt_wrap_end(mut &toks: list[Token], open: int) -> int {
 	return 0
 }
 
-fn fmt_wrap_has_comment(mut &toks: list[Token], open: int, shut: int) -> bool {
+fn fmt_wrap_has_comment(mut &toks: list[token.Token], open: int, shut: int) -> bool {
 	mut i := open + 1
 	for i < shut {
 		return true if is_comment(toks[i].kind)
@@ -1711,7 +1716,7 @@ fn fmt_wrap_flat_width(mut &wid: list[int], lo: int, hi: int) -> int {
 # fmt_wrap_elem_count is how many top-level elements the group holds, and 0 when it has no
 # top-level comma at all — the shape that is exempt. A trailing comma closes the last
 # element rather than opening another.
-fn fmt_wrap_elem_count(mut &toks: list[Token], open: int, shut: int) -> int {
+fn fmt_wrap_elem_count(mut &toks: list[token.Token], open: int, shut: int) -> int {
 	mut commas := 0
 	mut d := 0
 	mut i := open + 1
@@ -1735,8 +1740,8 @@ fn fmt_wrap_elem_count(mut &toks: list[Token], open: int, shut: int) -> int {
 
 # fmt_wrap_relines writes the decisions back as line numbers, which is the only thing the
 # printer reads. A dropped token hands its break to whatever takes its place.
-fn fmt_wrap_relines(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bool]) -> list[Token] {
-	mut out: list[Token] = []
+fn fmt_wrap_relines(mut &toks: list[token.Token], mut &brk: list[int], mut &drop: list[bool]) -> list[token.Token] {
+	mut out: list[token.Token] = []
 	mut line := 1
 	mut pend := 0
 	mut i := 0
@@ -1750,7 +1755,7 @@ fn fmt_wrap_relines(mut &toks: list[Token], mut &brk: list[int], mut &drop: list
 			line = line + pend
 			pend = 0
 			t := toks[i]
-			out.append(Token(t.kind, t.lexeme, t.value, line, t.col))
+			out.append(token.Token(t.kind, t.lexeme, t.value, line, t.col))
 			i = i + 1
 		}
 	}
@@ -1760,7 +1765,7 @@ fn fmt_wrap_relines(mut &toks: list[Token], mut &brk: list[int], mut &drop: list
 # --- printing -------------------------------------------------------------------------
 
 # fmt_toks prints the tokens and then lines up the columns a run shares (F106, F107).
-fn fmt_toks(mut &toks: list[Token], no_close: bool) -> str {
+pub fn fmt_toks(mut &toks: list[token.Token], no_close: bool) -> str {
 	mut p := fmt_print(toks, no_close)
 	return fmt_align(p)
 }
@@ -1787,14 +1792,14 @@ struct Printed {
 # pass that had a loop to hang it on — whereupon the pass with no stack asked the question a
 # second way, and the THIRD pass, the wrap scanner, did not ask it at all and popped a level
 # that a map literal had never pushed. One function all three call cannot drift like that.
-fn fmt_rbrace_closes_block(mut &toks: list[Token], at: int) -> bool {
+fn fmt_rbrace_closes_block(mut &toks: list[token.Token], at: int) -> bool {
 	return fmt_opens_block(toks, fmt_brace_open(toks, at))
 }
 
 # fmt_brace_open is the index of the `{` the `}` at `at` closes, walking back. The formatter
 # has no tree and each pass sees one token at a time, so the pairing is re-derived where it is
 # wanted rather than carried.
-fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
+fn fmt_brace_open(mut &toks: list[token.Token], at: int) -> int {
 	mut depth := 0
 	mut i := at
 	for i >= 0 {
@@ -1810,7 +1815,7 @@ fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
 }
 
 # fmt_brace_shut is fmt_brace_open walked the other way: the `}` the `{` at `at` opens.
-fn fmt_brace_shut(mut &toks: list[Token], at: int) -> int {
+fn fmt_brace_shut(mut &toks: list[token.Token], at: int) -> int {
 	mut depth := 0
 	mut i := at
 	for i < toks.len() {
@@ -1836,11 +1841,11 @@ fn fmt_brace_shut(mut &toks: list[Token], at: int) -> int {
 # author's one line, none may be a comment (it would eat the rest of the line), and none a
 # `;` — a second statement is a block again. A guard whose block the author broke keeps the
 # block shape, breaks and all; this rule never joins, it only declines to break.
-fn fmt_guard_inline(mut &toks: list[Token], open: int) -> bool {
+fn fmt_guard_inline(mut &toks: list[token.Token], open: int) -> bool {
 	return false if not is_lbrace(toks[open].kind)
 
 	p := fmt_prev_code(toks, open)
-	return false if p < 0 or toks[p].kind != Kind.Guard
+	return false if p < 0 or toks[p].kind != token.Kind.Guard
 
 	shut := fmt_brace_shut(toks, open)
 	return false if shut == 0
@@ -1869,14 +1874,14 @@ fn fmt_pop_int(xs: list[int]) -> list[int] {
 	return out
 }
 
-fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
+fn fmt_print(mut &toks: list[token.Token], no_close: bool) -> Printed {
 	mut out: list[byte] = []
 	mut arrow: list[int] = []
 	mut trail: list[int] = []
 	mut depth := 0
-	mut col := 0           # bytes written on the current line
-	mut prev2 := Kind.Semi # the one before it — `<-` needs a token of context on each side
-	mut prev := Kind.Semi  # the last token that mattered for spacing
+	mut col := 0 # bytes written on the current line
+	mut prev2 := token.Kind.Semi # the one before it — `<-` needs a token of context on each side
+	mut prev := token.Kind.Semi # the last token that mattered for spacing
 	mut prev_line := 0
 
 	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
@@ -1909,7 +1914,7 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
-		break if is_eof(t.kind)
+		break if lexer.is_eof(t.kind)
 
 		# A `;` INSIDE BRACKETS is not a statement separator: it is the fill/array form's
 		# own separator (GRAMMAR#array-type's `[type ';' const-expr]`, and `[v; N]`). Breaking the
@@ -2036,7 +2041,7 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			}
 
 			# where a column a run shares would go, recorded before the token lands on it
-			if t.kind == Kind.FatArrow and not fmt_arm_guarded(toks, i) {
+			if t.kind == token.Kind.FatArrow and not fmt_arm_guarded(toks, i) {
 				arrow.append(out.len())
 			} else if is_comment(t.kind) and fmt_line_has_code(out) {
 				trail.append(out.len())
@@ -2087,13 +2092,13 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 # fmt_arm_guarded reports whether the arm this `=>` closes carries a GUARD — an `if expr`
 # between the pattern and the arrow. A guarded arm's head is a sentence rather than a name,
 # so it does not join a run and does not widen one: it ends the run it meets.
-fn fmt_arm_guarded(mut &toks: list[Token], at: int) -> bool {
+fn fmt_arm_guarded(mut &toks: list[token.Token], at: int) -> bool {
 	mut i := at - 1
 	for i >= 0 {
 		k := toks[i].kind
 
 		break if is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
-		return true if k == Kind.If
+		return true if k == token.Kind.If
 
 		i = i - 1
 	}
@@ -2404,11 +2409,11 @@ fn fmt_join_lines(mut &lines: list[str]) -> str {
 }
 
 # fmt_text is what a token contributes to the output: its exact source spelling.
-fn fmt_text(t: Token) -> str {
+fn fmt_text(t: token.Token) -> str {
 	return t.lexeme if is_comment(t.kind)
 	return t.lexeme if t.lexeme != ""
 
-	return kind_name(t.kind)
+	return token.kind_name(t.kind)
 }
 
 fn fmt_write(mut &out: list[byte], s: str) {
@@ -2443,7 +2448,7 @@ fn fmt_indent(mut &out: list[byte], depth: int) {
 # trailing type marker is followed by something that cannot begin an item. The prefix
 # forms are separated from the infix one by what PRECEDES the arrow: only the infix send
 # has an operand in front of it.
-fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) -> bool {
+fn fmt_space_between(mut &toks: list[token.Token], i: int, prev2: token.Kind, prev: token.Kind) -> bool {
 	k := toks[i].kind
 	if is_open(prev) {
 		return false # `(x`, `[x`
@@ -2476,7 +2481,7 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	if is_range_op(k) and not is_comma(prev) {
 		return false # `0..n`, `a..=b` — a range binds its bounds
 	}
-	if is_range_op(prev) and not no_bound_follows(k) {
+	if is_range_op(prev) and not token.no_bound_follows(k) {
 		return false # the other side of the same fact, and `[h, ..t]`'s rest marker
 	}
 	if is_larrow(k) and closes_chan_type(toks, i - 1) {
@@ -2507,9 +2512,9 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 # operand at all. Asking the lexer's predicate printed `return -1` as `return - 1` (and would
 # print `return <-ch` as `return <- ch`), which is the negation rule F203 states, backwards, in
 # the one position where a negative literal is most common.
-fn ends_operand(k: Kind) -> bool {
-	return false if is_jump(k) or k == Kind.Nop
-	return ends_item(k)
+fn ends_operand(k: token.Kind) -> bool {
+	return false if is_jump(k) or k == token.Kind.Nop
+	return token.ends_item(k)
 }
 
 # closes_chan_type reports whether the token at `i` is the `]` closing a `chan[…]` — which
@@ -2521,16 +2526,16 @@ fn ends_operand(k: Kind) -> bool {
 # block, so the marker read as a send and took a space it must not have. Looking left
 # answers the question instead of approximating it, and it cannot confuse the two — a send
 # `xs[0] <- v` closes a bracket too, but that bracket's `[` follows a NAME, not `chan`.
-fn closes_chan_type(mut &toks: list[Token], i: int) -> bool {
-	return false if i < 0 or toks[i].kind != Kind.RBrack
+fn closes_chan_type(mut &toks: list[token.Token], i: int) -> bool {
+	return false if i < 0 or toks[i].kind != token.Kind.RBrack
 	mut depth := 0
 	mut j := i
 	for j >= 0 {
 		k := toks[j].kind
-		if k == Kind.RBrack {
+		if k == token.Kind.RBrack {
 			depth = depth + 1
 		}
-		if k == Kind.LBrack {
+		if k == token.Kind.LBrack {
 			depth = depth - 1
 			return j > 0 and is_chan(toks[j - 1].kind) if depth == 0
 		}
@@ -2539,7 +2544,7 @@ fn closes_chan_type(mut &toks: list[Token], i: int) -> bool {
 	return false
 }
 
-fn is_chan(k: Kind) -> bool {
+fn is_chan(k: token.Kind) -> bool {
 	return match k {
 		Kind.Chan => true
 		_         => false
@@ -2550,7 +2555,7 @@ fn is_chan(k: Kind) -> bool {
 # `??` are tokens of their own, so a bare `!` is always the force-unwrap and a bare `?` is
 # always the propagate. The formatter never learned either, so `print v!` came back as
 # `print v !` — an operator adrift from the thing it operates on.
-fn is_postfix(k: Kind) -> bool {
+fn is_postfix(k: token.Kind) -> bool {
 	return match k {
 		Kind.Bang     => true
 		Kind.Question => true
@@ -2558,7 +2563,7 @@ fn is_postfix(k: Kind) -> bool {
 	}
 }
 
-fn is_larrow(k: Kind) -> bool {
+fn is_larrow(k: token.Kind) -> bool {
 	return match k {
 		Kind.LArrow => true
 		_           => false
@@ -2571,7 +2576,7 @@ fn is_larrow(k: Kind) -> bool {
 # `0 .. n` is the one spelling nobody writes. The same tokens spell a list pattern's rest
 # marker (`[h, ..t]`), where being tight to what FOLLOWS is equally what is wanted — so the
 # space a comma owes is the one exception on the left.
-fn is_range_op(k: Kind) -> bool {
+fn is_range_op(k: token.Kind) -> bool {
 	return match k {
 		Kind.DotDot   => true
 		Kind.DotDotEq => true
@@ -2581,7 +2586,7 @@ fn is_range_op(k: Kind) -> bool {
 
 # binds_tight reports whether a `(` or `[` after this token opens a call or an index
 # rather than a grouping — the difference between `f(x)` and `if (x)`.
-fn binds_tight(k: Kind) -> bool {
+fn binds_tight(k: token.Kind) -> bool {
 	return match k {
 		Kind.Ident  => true
 		Kind.RParen => true
@@ -2600,7 +2605,7 @@ fn binds_tight(k: Kind) -> bool {
 	}
 }
 
-fn is_open(k: Kind) -> bool {
+pub fn is_open(k: token.Kind) -> bool {
 	return match k {
 		Kind.LParen => true
 		Kind.LBrack => true
@@ -2609,7 +2614,7 @@ fn is_open(k: Kind) -> bool {
 	}
 }
 
-fn is_close(k: Kind) -> bool {
+pub fn is_close(k: token.Kind) -> bool {
 	return match k {
 		Kind.RParen => true
 		Kind.RBrack => true
@@ -2619,7 +2624,7 @@ fn is_close(k: Kind) -> bool {
 
 # is_bracket is is_open without the `#` of a decorator: the openers that have a closer to
 # pair with, which is what a group's extent is counted from.
-fn is_bracket(k: Kind) -> bool {
+fn is_bracket(k: token.Kind) -> bool {
 	return match k {
 		Kind.LParen => true
 		Kind.LBrack => true
@@ -2627,14 +2632,14 @@ fn is_bracket(k: Kind) -> bool {
 	}
 }
 
-fn is_hash(k: Kind) -> bool {
+fn is_hash(k: token.Kind) -> bool {
 	return match k {
 		Kind.Hash => true
 		_         => false
 	}
 }
 
-fn is_comma(k: Kind) -> bool {
+fn is_comma(k: token.Kind) -> bool {
 	return match k {
 		Kind.Comma => true
 		_          => false
@@ -2643,7 +2648,7 @@ fn is_comma(k: Kind) -> bool {
 
 # is_dot covers BOTH accessors: `.` and the optional chain `?.`, which is one token and
 # binds exactly as tightly. Without the second, `b?.value` came back as `b ?. value`.
-fn is_dot(k: Kind) -> bool {
+fn is_dot(k: token.Kind) -> bool {
 	return match k {
 		Kind.Dot    => true
 		Kind.OptDot => true
@@ -2651,7 +2656,7 @@ fn is_dot(k: Kind) -> bool {
 	}
 }
 
-fn is_colon(k: Kind) -> bool {
+fn is_colon(k: token.Kind) -> bool {
 	return match k {
 		Kind.Colon => true
 		_          => false
@@ -2679,7 +2684,7 @@ fn is_colon(k: Kind) -> bool {
 #
 # `&` WAS here and is not, for the same reason again: it is the reference marker in `mut &p`
 # AND the bitwise AND. It is asked further down, of what stands to its left.
-fn is_unary_prefix(k: Kind) -> bool {
+fn is_unary_prefix(k: token.Kind) -> bool {
 	return match k {
 		Kind.Tilde => true
 		_          => false
@@ -2694,7 +2699,7 @@ fn is_unary_prefix(k: Kind) -> bool {
 # `&` marks a reference in `mut &p` and ands two operands in `a & m`; it was in
 # is_unary_prefix, whose own comment says only-ever-a-prefix belongs there, so `x & M`
 # printed as `x &M` until `sha256` became the first module here to write one.
-fn is_dual_fix(k: Kind) -> bool {
+fn is_dual_fix(k: token.Kind) -> bool {
 	return match k {
 		Kind.Amp      => true
 		Kind.LArrow   => true
@@ -2704,28 +2709,28 @@ fn is_dual_fix(k: Kind) -> bool {
 	}
 }
 
-fn is_semi(k: Kind) -> bool {
+pub fn is_semi(k: token.Kind) -> bool {
 	return match k {
 		Kind.Semi => true
 		_         => false
 	}
 }
 
-fn is_lbrace(k: Kind) -> bool {
+pub fn is_lbrace(k: token.Kind) -> bool {
 	return match k {
 		Kind.LBrace => true
 		_           => false
 	}
 }
 
-fn is_rbrace(k: Kind) -> bool {
+pub fn is_rbrace(k: token.Kind) -> bool {
 	return match k {
 		Kind.RBrace => true
 		_           => false
 	}
 }
 
-fn is_comment(k: Kind) -> bool {
+pub fn is_comment(k: token.Kind) -> bool {
 	return match k {
 		Kind.Comment => true
 		_            => false
@@ -2758,7 +2763,7 @@ fn is_comment(k: Kind) -> bool {
 # to the import it sits on, and there is nowhere to put it back once the statements it sat
 # between are one statement. A run already in group form is left alone, which is what makes
 # running the rule twice a no-op.
-fn fmt_import_group(mut &toks: list[Token]) -> list[Token] {
+fn fmt_import_group(mut &toks: list[token.Token]) -> list[token.Token] {
 	first := fmt_first_import(toks)
 	return toks if first < 0
 	last := fmt_group_run_end(toks, first)
@@ -2766,7 +2771,7 @@ fn fmt_import_group(mut &toks: list[Token]) -> list[Token] {
 	return toks if last < 0
 	return toks if fmt_run_specs(toks, first, last) < 2
 
-	mut out: list[Token] = []
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < first {
 		out.append(toks[i])
@@ -2788,16 +2793,16 @@ fn fmt_import_group(mut &toks: list[Token]) -> list[Token] {
 # fmt_emit_group writes `import (`, one spec per line, and the `)`, and answers with the
 # line the closer landed on. Each spec keeps its own tokens — `pub`, the path, `as` and the
 # name — so nothing is re-spelled from a value that was parsed out of it.
-fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[Token]) -> int {
+fn fmt_emit_group(mut &toks: list[token.Token], first: int, last: int, mut &out: list[token.Token]) -> int {
 	ln := toks[first].line
-	out.append(Token(Kind.Import, "import", "", ln, 0))
-	out.append(Token(Kind.LParen, "(", "", ln, 0))
+	out.append(token.Token(token.Kind.Import, "import", "", ln, 0))
+	out.append(token.Token(token.Kind.LParen, "(", "", ln, 0))
 
 	mut cur := ln
 	mut src := -1
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Kind.Import {
+		if toks[i].kind == token.Kind.Import {
 			cur = cur + 1
 
 			# a blank line between two imports is the group separator F402 wrote, and it
@@ -2807,7 +2812,7 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 			}
 			src = toks[i].line
 			mut j := i + 1
-			for j <= last and toks[j].kind != Kind.Import and not is_semi(toks[j].kind) {
+			for j <= last and toks[j].kind != token.Kind.Import and not is_semi(toks[j].kind) {
 				out.append(fmt_on_line(toks[j], cur))
 				j = j + 1
 			}
@@ -2817,30 +2822,30 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 		}
 	}
 	cur = cur + 1
-	out.append(Token(Kind.RParen, ")", "", cur, 0))
-	out.append(Token(Kind.Semi, ";", "", cur, 0))
+	out.append(token.Token(token.Kind.RParen, ")", "", cur, 0))
+	out.append(token.Token(token.Kind.Semi, ";", "", cur, 0))
 	return cur
 }
 
 # fmt_group_run_end is the index of the last token of the run of import statements starting
 # at `first`, or -1 when the run holds something this rule will not fold up.
-fn fmt_group_run_end(mut &toks: list[Token], first: int) -> int {
+fn fmt_group_run_end(mut &toks: list[token.Token], first: int) -> int {
 	mut i := first
 	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
-		if k == Kind.Import {
+		if k == token.Kind.Import {
 			# already a group: folding a fold is what would make this rule non-idempotent
-			return -1 if toks[i + 1].kind == Kind.LParen
+			return -1 if toks[i + 1].kind == token.Kind.LParen
 			mut j := i + 1
-			if toks[j].kind == Kind.Pub {
+			if toks[j].kind == token.Kind.Pub {
 				j = j + 1
 			}
-			return -1 if toks[j].kind != Kind.Str
+			return -1 if toks[j].kind != token.Kind.Str
 			j = j + 1
-			if toks[j].kind == Kind.As {
+			if toks[j].kind == token.Kind.As {
 				j = j + 1
-				return -1 if toks[j].kind != Kind.Ident
+				return -1 if toks[j].kind != token.Kind.Ident
 				j = j + 1
 			}
 			last = j - 1
@@ -2860,12 +2865,12 @@ fn fmt_group_run_end(mut &toks: list[Token], first: int) -> int {
 	return last
 }
 
-fn fmt_more_imports_after(mut &toks: list[Token], at: int) -> bool {
+fn fmt_more_imports_after(mut &toks: list[token.Token], at: int) -> bool {
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return true if k == Kind.Import
+		return true if k == token.Kind.Import
 		return false if not is_semi(k) and not is_comment(k)
 
 		i = i + 1
@@ -2873,11 +2878,11 @@ fn fmt_more_imports_after(mut &toks: list[Token], at: int) -> bool {
 	return false
 }
 
-fn fmt_run_specs(mut &toks: list[Token], first: int, last: int) -> int {
+fn fmt_run_specs(mut &toks: list[token.Token], first: int, last: int) -> int {
 	mut n := 0
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Kind.Import {
+		if toks[i].kind == token.Kind.Import {
 			n = n + 1
 		}
 		i = i + 1
@@ -2912,14 +2917,14 @@ fn fmt_run_specs(mut &toks: list[Token], first: int, last: int) -> int {
 # declines the moment anything else appears among them: a comment (which belongs to the
 # import it sits on, and sorting would strand it), or an `import pub` (whose re-export is
 # an ordering the author chose). Anything declined is left exactly as written.
-fn fmt_imports(mut &toks: list[Token]) -> list[Token] {
+fn fmt_imports(mut &toks: list[token.Token]) -> list[token.Token] {
 	first := fmt_first_import(toks)
 	return toks if first < 0
 	last := fmt_import_run_end(toks, first)
 	return toks if last < 0
 	paths := fmt_run_paths(toks, first, last)
 	return toks if paths.len() < 2
-	mut out: list[Token] = []
+	mut out: list[token.Token] = []
 	mut i := 0
 	for i < first {
 		out.append(toks[i])
@@ -2941,7 +2946,7 @@ fn fmt_imports(mut &toks: list[Token]) -> list[Token] {
 
 # fmt_emit_imports writes the sorted paths, a blank line between the two groups, and
 # answers with the line the last one landed on.
-fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int {
+fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[token.Token]) -> int {
 	mut ln := start
 	mut wrote := false
 	for std in [true, false] {
@@ -2953,9 +2958,9 @@ fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int 
 					ln = ln + 1 # the blank line between the groups
 				}
 			}
-			out.append(Token(Kind.Import, "import", "", ln, 0))
-			out.append(Token(Kind.Str, f"\"{p}\"", p, ln, 0))
-			out.append(Token(Kind.Semi, ";", "", ln, 0))
+			out.append(token.Token(token.Kind.Import, "import", "", ln, 0))
+			out.append(token.Token(token.Kind.Str, f"\"{p}\"", p, ln, 0))
+			out.append(token.Token(token.Kind.Semi, ";", "", ln, 0))
 			wrote = true
 			group = true
 		}
@@ -3010,10 +3015,10 @@ fn fmt_is_stdlib(path: str) -> bool {
 }
 
 # fmt_first_import is the index of the first `import`, or -1 when the file has none.
-fn fmt_first_import(mut &toks: list[Token]) -> int {
+fn fmt_first_import(mut &toks: list[token.Token]) -> int {
 	mut i := 0
 	for i < toks.len() {
-		return i if toks[i].kind == Kind.Import
+		return i if toks[i].kind == token.Kind.Import
 		i = i + 1
 	}
 	return -1
@@ -3021,13 +3026,13 @@ fn fmt_first_import(mut &toks: list[Token]) -> int {
 
 # fmt_import_run_end is the index of the last token of the run of plain imports starting at
 # `first`, or -1 when the run holds anything this pass will not reorder.
-fn fmt_import_run_end(mut &toks: list[Token], first: int) -> int {
+fn fmt_import_run_end(mut &toks: list[token.Token], first: int) -> int {
 	mut i := first
 	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
-		if k == Kind.Import {
-			return -1 if toks[i + 1].kind != Kind.Str
+		if k == token.Kind.Import {
+			return -1 if toks[i + 1].kind != token.Kind.Str
 			last = i + 1
 			i = i + 2
 		} else if is_semi(k) {
@@ -3040,11 +3045,11 @@ fn fmt_import_run_end(mut &toks: list[Token], first: int) -> int {
 	return last
 }
 
-fn fmt_run_paths(mut &toks: list[Token], first: int, last: int) -> list[str] {
+fn fmt_run_paths(mut &toks: list[token.Token], first: int, last: int) -> list[str] {
 	mut out: list[str] = []
 	mut i := first
 	for i <= last {
-		if toks[i].kind == Kind.Import {
+		if toks[i].kind == token.Kind.Import {
 			out.append(toks[i + 1].value)
 		}
 		i = i + 1
@@ -3071,6 +3076,6 @@ fn fmt_before(a: str, b: str) -> bool {
 
 # is_jump reports the statements that DIVERGE — leave the block they are in without
 # producing a value — which is exactly the set GRAMMAR's postfix guard is defined for.
-fn is_jump(k: Kind) -> bool {
-	return k == Kind.Return or k == Kind.Break or k == Kind.Continue or k == Kind.Raise
+pub fn is_jump(k: token.Kind) -> bool {
+	return k == token.Kind.Return or k == token.Kind.Break or k == token.Kind.Continue or k == token.Kind.Raise
 }

@@ -251,6 +251,12 @@ spec 承載**行為,別的都不承載**。它不宣告 **associated type**—�
 輸出,所以要檢查一處 `This.Item` 的使用,必須先拿到 impl 才知道那個運算式的型別——型別往回流進推導。參數化的
 spec 把同一件事往前講:associated type 是每個 impl 一個輸出,參數則是每個引數一個 impl(`Indexable[K, V]`,見上)。
 
+> **[not yet]** 兩半都是**按名字拒絕**，都不是等著被建的形式：在 `impl` 裡寫一個是 _E9015 NotImplemented: an
+> associated type binding `type … = …` in an `impl`_，投影一個是 _E9028 NotImplemented: an associated type
+> projection `T.Item` — GRAMMAR lets a spec name a type its implementer supplies_。而 `impl` 裡出現任何非
+> method 的項目，是 _E9007 NotImplemented: `…` as an `impl` item — this compiler reads methods and nothing
+> else_。
+
 代價落在**單一輸出的協定**上。`Iterable[T]` 可以在不同 `T` 上有多個 impl,固定的 `Item` 不行,所以釘死元素型別
 的是 **coherence**——每個型別至多一個這種 impl,而 compiler 對其他每一組 (型別, spec) 本來就在檢查它。
 

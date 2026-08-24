@@ -119,6 +119,14 @@ match one level, bind the payload, and `match` the binding in turn.
 > **[not yet]** `L(Yes(v))` and `L(0)` are both _E9076 NotImplemented: a sub-pattern inside a variant payload,
 > beginning at `…`_. A RESERVED WORD in a payload position is a different rule and keeps its own: `L(this)`
 > is _E2013 `this` is a reserved word and cannot name a pattern binding_.
+>
+> Three more shapes an arm can be written with are refused by name. Binding the whole matched value
+> beside its parts is _E9018 NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds
+> the whole matched value, which this compiler does not carry alongside the destructured parts_;
+> matching absence literally is _E9068 NotImplemented: `nil` as a `match` pattern_; and shadowing an
+> arm's own binding inside that arm is _E9070 NotImplemented: `v` re-binds a name a `match` arm's
+> pattern already binds in this block — the arm's binding is spliced in as text, so the new one would
+> never be read_.
 
 ## Deliberately not added
 

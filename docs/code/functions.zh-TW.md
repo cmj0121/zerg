@@ -7,6 +7,11 @@
 成立——透過另一個模組指名的函式就是一個普通的值:`f := other.helper` 綁定它,接著 `f(x)` 呼叫它,與本地函式完全一樣。
 一個 **generic** 函式
 **在實例化之前不是一等值**:未實例化的 generic 名字本身不是值——唯有它的型別引數在使用點被固定後才成為值。
+
+> **[not yet]** 只把引數寫出來、不呼叫,也一樣不會實例化:`f := id[int]` 是 _E9030 NotImplemented:
+> `id[…]` with no call after it — this compiler instantiates a generic at the call_。被實例化的那個值這一期
+> 沒有自己的拼法;把呼叫包進 closure,或指名一個具體的函式。
+
 函式型別寫成 `fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。

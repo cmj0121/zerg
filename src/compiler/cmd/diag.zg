@@ -18,7 +18,7 @@ import (
 # and a parser handed unreadable text can only say something untrue about it. That is what
 # the old answer was: "`b'b` is not an expression this compiler reads", naming the wrong
 # layer, the wrong problem, and a fragment of what the person wrote.
-fn lex_check(src: str, path: str) {
+pub fn lex_check(src: str, path: str) {
 	mut one_src: list[str] = []
 	mut one_path: list[str] = []
 	one_src.append(src)
@@ -30,7 +30,7 @@ fn lex_check(src: str, path: str) {
 # anything is parsed: a token the lexer could not read is an error about text, and no later
 # pass can say anything true about it — the one that used to try answered "not an
 # expression", about the wrong layer and a fragment of what was written.
-fn lex_diags_of(srcs: list[str], paths: list[str], mut &diags: list[zerg.Diag]) {
+pub fn lex_diags_of(srcs: list[str], paths: list[str], mut &diags: list[zerg.Diag]) {
 	mut i := 0
 	for i < srcs.len() {
 		mut path := ""
@@ -52,7 +52,7 @@ fn lex_diags_of(srcs: list[str], paths: list[str], mut &diags: list[zerg.Diag]) 
 # It exits rather than returning a status because it is called from the middle of a build,
 # where the alternative is threading "did it work" back through every stage for a question
 # with one answer.
-fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
+pub fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	return if diags.len() == 0
 	for d in diags {
 		io.ewrite(render_diag(d, diag_source(d.path, srcs, paths)))
@@ -201,7 +201,7 @@ fn source_line(src: str, n: int) -> str {
 	return ""
 }
 
-fn line_slice(b: list[byte], at: int, to: int) -> str {
+pub fn line_slice(b: list[byte], at: int, to: int) -> str {
 	mut out: list[byte] = []
 	mut i := at
 	for i < to {
@@ -211,7 +211,7 @@ fn line_slice(b: list[byte], at: int, to: int) -> str {
 	return str(out)
 }
 
-fn blanks(n: int) -> str {
+pub fn blanks(n: int) -> str {
 	mut out := ""
 	mut i := 0
 	for i < n {

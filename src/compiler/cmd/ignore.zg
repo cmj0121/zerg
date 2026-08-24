@@ -35,6 +35,10 @@
 # the contract actually asks for — a NAME for what went wrong, the file it is in, and the line
 # — in the shape `zerg test` and `zerg fmt` already answer a path with.
 
+import "./layout"
+import "./source"
+import "./test"
+import "./walkdir"
 import (
 	"io"
 	"strconv"
@@ -42,13 +46,13 @@ import (
 
 # Ignore is a parsed ignore file. An empty one matches nothing, which is what a walk with no
 # ignore file has — so the walk asks the same question either way and has no second path.
-struct Ignore {
+pub struct Ignore {
 	pub pats: list[Pat]
 }
 
 # Pat is one line of it, already taken apart. Keeping the three questions as fields rather than
-# re-reading the text at each entry is what keeps the walk's inner loop about the walk.
-struct Pat {
+# re-reading the text at each entry is what keeps the walk's inner loop about the walkdir.
+pub struct Pat {
 	pub text: str
 	pub anchored: bool
 	pub dir_only: bool
@@ -61,12 +65,12 @@ fn ignore_none() -> Ignore {
 }
 
 # ignore_at loads the ignore file that governs a walk rooted at `dir`.
-fn ignore_at(dir: str) -> Ignore {
-	zg := join_path(dir, ".zergignore")
-	return ignore_read(zg) if exists(zg)
+pub fn ignore_at(dir: str) -> Ignore {
+	zg := layout.join_path(dir, ".zergignore")
+	return ignore_read(zg) if walkdir.exists(zg)
 
-	git := join_path(dir, ".gitignore")
-	return ignore_read(git) if exists(git)
+	git := layout.join_path(dir, ".gitignore")
+	return ignore_read(git) if walkdir.exists(git)
 
 	return ignore_none()
 }
@@ -74,15 +78,15 @@ fn ignore_at(dir: str) -> Ignore {
 fn ignore_read(path: str) -> Ignore {
 	mut pats: list[Pat] = []
 	mut n := 0
-	for raw in lines_of(str(io.read_file(path))) {
+	for raw in test.lines_of(str(io.read_file(path))) {
 		n = n + 1
 		line := trim_ws(raw)
-		continue if line == "" or has_prefix(line, "#")
+		continue if line == "" or test.has_prefix(line, "#")
 
 		ignore_refuse(path, n, line)
 
-		anchored := has_prefix(line, "/")
-		dir_only := has_suffix(line, "/")
+		anchored := test.has_prefix(line, "/")
+		dir_only := layout.has_suffix(line, "/")
 
 		mut lo := 0
 		mut hi := byte_len(line)
@@ -105,14 +109,14 @@ fn ignore_read(path: str) -> Ignore {
 # message names the file, the line and the pattern, because a reader whose walk skipped the
 # wrong thing has no other way to find which line did it.
 fn ignore_refuse(path: str, n: int, line: str) {
-	raise f"{path}:{strconv.to_string(n, 10)}: `{line}` — a `!` pattern is not read by this toolchain. It re-includes what an earlier line excluded, and the last-match-wins ordering that needs is what makes an ignore file unreadable; write the narrower pattern instead" if has_prefix(line, "!")
+	raise f"{path}:{strconv.to_string(n, 10)}: `{line}` — a `!` pattern is not read by this toolchain. It re-includes what an earlier line excluded, and the last-match-wins ordering that needs is what makes an ignore file unreadable; write the narrower pattern instead" if test.has_prefix(line, "!")
 
 	raise f"{path}:{strconv.to_string(n, 10)}: `{line}` — `**` is not read by this toolchain. A bare name already matches at any depth, and an anchored one names the place it means" if has_double_star(line)
 }
 
 # ignore_hit reports whether an entry is excluded. `rel` is the entry's path relative to the
 # walk root — `deep/b.zg` — and `is_dir_entry` is what a trailing `/` asks about.
-fn ignore_hit(ig: Ignore, rel: str, is_dir_entry: bool) -> bool {
+pub fn ignore_hit(ig: Ignore, rel: str, is_dir_entry: bool) -> bool {
 	for p in ig.pats {
 		continue if p.dir_only and not is_dir_entry
 
@@ -124,7 +128,7 @@ fn ignore_hit(ig: Ignore, rel: str, is_dir_entry: bool) -> bool {
 		# A BARE NAME MATCHES AT ANY DEPTH, so it is asked of the last segment. The whole
 		# relative path is not the question: `build` means every `build`, wherever it sits,
 		# and a reader who meant one of them writes `/a/build`.
-		return true if glob_match(p.text, path_tail(rel))
+		return true if glob_match(p.text, source.path_tail(rel))
 	}
 	return false
 }

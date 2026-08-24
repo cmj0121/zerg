@@ -5,10 +5,11 @@
 #   8
 #   8
 #
-# THE IMPORT ADDS A SPELLING AND TAKES NONE AWAY. Files of one module share a namespace, so
-# `count.width(a)` and a bare `width(a)` are the same call — the import binds a name onto a
-# file that is already in this unit rather than loading a second copy of it. Writing it out
-# is how a reader of `text.zg` alone can tell where `width` comes from.
+# THE IMPORT IS WHAT MAKES A SIBLING'S NAME REACHABLE. Files of one module do NOT share a
+# namespace (#57): `text.zg` reaches `count.zg`'s `width` by importing it and writing
+# `count.width(a)`, and the bare `width(a)` is refused. The import binds a name onto a file
+# that is already in this unit rather than loading a second copy of it, which is what lets
+# two files of one module name each other MUTUALLY where two modules may not.
 import "./lib"
 
 fn main() {

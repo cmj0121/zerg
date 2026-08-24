@@ -12,7 +12,7 @@
 # layout is only the last resort — which is what makes a checkout work with no setup.
 
 # env_or reads an environment variable, or gives fallback when it is unset.
-fn env_or(key: str, fallback: str) -> str {
+pub fn env_or(key: str, fallback: str) -> str {
 	return __zrt_getenv(key) if __zrt_has_env(key)
 	return fallback
 }
@@ -29,7 +29,7 @@ fn env_or(key: str, fallback: str) -> str {
 #
 # The scan is written out rather than reaching for `strings.split`, because this compiler
 # flattens every module into one namespace and importing one more would collide.
-fn cc_bin() -> str {
+pub fn cc_bin() -> str {
 	name := env_or("CC", "cc")
 	b := bytearray(name)
 	mut i := 0
@@ -65,7 +65,7 @@ fn cc_bin() -> str {
 # retreat when a `cc` cannot do C17, and probing for that is not built — so what exists is
 # the ability to ASK for a dialect, which is what lets CI compile the same emitted C under
 # both and find out whether the fallback is real before a user does.
-fn cc_std() -> str {
+pub fn cc_std() -> str {
 	if __zrt_has_env("ZERG_CSTD") {
 		std := __zrt_getenv("ZERG_CSTD")
 		return "-std=" + std
@@ -75,7 +75,7 @@ fn cc_std() -> str {
 
 # zerg_root is the installation root: $ZERG_ROOT, else the current directory (the repo
 # checkout, where src/runtime and src/stdlib sit).
-fn zerg_root() -> str {
+pub fn zerg_root() -> str {
 	return __zrt_getenv("ZERG_ROOT") if __zrt_has_env("ZERG_ROOT")
 
 	# WHERE THIS BINARY LIVES, not where the user happens to be standing. The root used to
@@ -115,7 +115,7 @@ fn root_layout(root: str) -> str {
 # rt_dir returns the runtime source tree — $ZERG_RUNTIME, else <root>/src/runtime/csrc.
 # It is probed rather than assumed, so a wrong root fails as a missing-runtime message
 # instead of a wall of cc errors about a header that was never there.
-fn rt_dir() -> str {
+pub fn rt_dir() -> str {
 	return __zrt_getenv("ZERG_RUNTIME") if __zrt_has_env("ZERG_RUNTIME")
 
 	root := zerg_root()
@@ -125,7 +125,7 @@ fn rt_dir() -> str {
 }
 
 # rt_sources are the runtime translation units, as paths.
-fn rt_sources() -> list[str] {
+pub fn rt_sources() -> list[str] {
 	rt := rt_dir()
 	mut out: list[str] = []
 	for u in rt_units() {
@@ -135,7 +135,7 @@ fn rt_sources() -> list[str] {
 }
 
 # stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
-fn stdlib_dir() -> str {
+pub fn stdlib_dir() -> str {
 	return __zrt_getenv("ZERG_STDLIB") if __zrt_has_env("ZERG_STDLIB")
 
 	root := zerg_root()
@@ -147,13 +147,13 @@ fn stdlib_dir() -> str {
 # --- paths -----------------------------------------------------------------------------
 
 # join_path joins a directory and a name, treating "" and "." as "here".
-fn join_path(dir: str, name: str) -> str {
+pub fn join_path(dir: str, name: str) -> str {
 	return name if dir == "" or dir == "."
 	return f"{dir}/{name}"
 }
 
 # dir_of returns the directory part of a path, or "." when it names a bare file.
-fn dir_of(path: str) -> str {
+pub fn dir_of(path: str) -> str {
 	b := bytearray(path)
 	mut cut := 0
 	mut seen := false
@@ -176,7 +176,7 @@ fn dir_of(path: str) -> str {
 }
 
 # has_suffix reports whether s ends with suffix.
-fn has_suffix(s: str, suffix: str) -> bool {
+pub fn has_suffix(s: str, suffix: str) -> bool {
 	b := bytearray(s)
 	x := bytearray(suffix)
 	return false if x.len() > b.len()
@@ -259,7 +259,7 @@ fn cc_dialect(mut &argv: list[str]) {
 
 # cc_object_argv compiles the emitted C to an object without linking: a module is not a
 # program, so it has no entry to link against and no runtime to pull in yet.
-fn cc_object_argv(cpath: str, output: str) -> list[str] {
+pub fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append(cc_bin())
 	argv.append(cc_std())
@@ -273,7 +273,7 @@ fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	return argv
 }
 
-fn cc_argv(cpath: str, output: str) -> list[str] {
+pub fn cc_argv(cpath: str, output: str) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
 	argv.append(cc_bin())

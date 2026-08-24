@@ -5,6 +5,12 @@
 # hold a test (`test_pkg.zg`), the plan one package's run is (`test_fixture.zg`), and the
 # driver source that plan is compiled as (`test_driver.zg`).
 
+import "./layout"
+import "./source"
+import "./test_driver"
+import "./test_fixture"
+import "./test_pkg"
+import "./unit"
 import (
 	"cli"
 	"io"
@@ -87,7 +93,7 @@ fn do_test(c: cli.Ctx) -> int {
 # failure a test runner must not have — every gate in this repository is written against it —
 # and a sentence alone is not enough, because the reader of a CI line is a shell.
 
-# NOTHING_FOUND is declared in walk.zg, because three commands walk a path now and the status
+# NOTHING_FOUND is declared in walkdir.zg, because three commands walk a path now and the status
 # a search-that-found-nothing answers is the toolchain's rather than this command's. The ladder
 # below is why it is a status of its own — a DIFFERENT ANSWER from the three already
 # spoken here. Rename a directory, move a suite, edit a glob or mistype a path into a CI line,
@@ -135,12 +141,12 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	# `test_pkgs` (test_pkg.zg) does not descend into a `.zg` name either. There is no `isdir`
 	# under this runtime, and inventing one for this would put a second answer to "is this a
 	# source file" in the tree.
-	base := search_root(root)
-	mut pkgs: list[Pkg] = []
+	base := test_pkg.search_root(root)
+	mut pkgs: list[test_pkg.Pkg] = []
 	if base == root {
-		test_pkgs(root, pkgs)
+		test_pkg.test_pkgs(root, pkgs)
 	} else {
-		file_pkgs(root, pkgs)
+		test_pkg.file_pkgs(root, pkgs)
 	}
 
 	# EVERY PACKAGE IS RESOLVED BEFORE ANY PACKAGE RUNS. A parameter naming no fixture, a
@@ -152,9 +158,9 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 	mut errs: list[str] = []
 	mut chosen := 0
 	for p in pkgs {
-		mut fixts: list[Fixt] = []
-		mut tests: list[Tst] = []
-		plan_pkg(base, p, only, fixts, tests, errs)
+		mut fixts: list[test_fixture.Fixt] = []
+		mut tests: list[test_fixture.Tst] = []
+		test_fixture.plan_pkg(base, p, only, fixts, tests, errs)
 		chosen = chosen + tests.len()
 	}
 	if errs.len() > 0 {
@@ -207,13 +213,13 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 #
 # A package inside the standard library's tree is a stdlib module — that is what a bare
 # `import "json"` from its own suite names — and anything else is this project's.
-fn pkg_identity(p: Pkg) -> str {
+fn pkg_identity(p: test_pkg.Pkg) -> str {
 	# THE TWO PATHS ARE THE SAME DIRECTORY SPELLED TWICE — `stdlib_dir()` is absolute, and a
 	# package's directory is whatever the caller typed — so this asks whether one is the tail of
 	# the other rather than whether the strings are equal. It is the same shape as the bug this
 	# whole change is about, one level down: a path is not an identity.
-	std := stdlib_dir()
-	return "stdlib:" + p.mod if p.dir == std or has_suffix(std, "/" + p.dir) or has_prefix(p.dir, std + "/")
+	std := layout.stdlib_dir()
+	return "stdlib:" + p.mod if p.dir == std or layout.has_suffix(std, "/" + p.dir) or has_prefix(p.dir, std + "/")
 
 	return "project:" + p.mod
 }
@@ -223,14 +229,14 @@ fn pkg_identity(p: Pkg) -> str {
 # The driver is the LAST file of the entry unit, so the whole package is one scope and a test
 # function needs no `pub` to be reachable from it. That is the same arrangement a white-box test
 # already has with the module it tests, applied one file further.
-fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
+fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, mut &failed: int, mut &skipped: int, mut &stuck: int) {
 	# `errs` is EMPTY BY THE TIME THIS RUNS and is taken only because plan_pkg has to put its
 	# findings somewhere: run_tests planned every package before it ran any of them, and a run
 	# holding one unresolved parameter never reaches here at all.
-	mut fixts: list[Fixt] = []
-	mut tests: list[Tst] = []
+	mut fixts: list[test_fixture.Fixt] = []
+	mut tests: list[test_fixture.Tst] = []
 	mut errs: list[str] = []
-	plan_pkg(root, p, only, fixts, tests, errs)
+	test_fixture.plan_pkg(root, p, only, fixts, tests, errs)
 	return if tests.len() == 0
 
 	mut names: list[str] = []
@@ -241,7 +247,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	}
 
 	mut own: list[bool] = []
-	srcs := pkg_files(root, p, own)
+	srcs := test_fixture.pkg_files(root, p, own)
 
 	# THE DRIVER IS A FILE OF THE PACKAGE, written into the package's own directory, because a
 	# module is a directory and that is the only thing that puts its declarations in the same
@@ -252,11 +258,11 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	#
 	# Only the BINARY and the report go under the build cache, which is where a build already
 	# puts what it made.
-	key := pkg_key(p)
-	drv := join_path(p.dir, driver_name(p))
-	bin := join_path(test_dir(), key + ".bin")
-	rep := join_path(test_dir(), key + ".rep")
-	sel := join_path(test_dir(), key + ".sel")
+	key := test_pkg.pkg_key(p)
+	drv := layout.join_path(p.dir, test_pkg.driver_name(p))
+	bin := layout.join_path(test_dir(), key + ".bin")
+	rep := layout.join_path(test_dir(), key + ".rep")
+	sel := layout.join_path(test_dir(), key + ".sel")
 
 	# THE TWO PATHS ARE BAKED INTO THE DRIVER rather than handed to it on the command line,
 	# and that is not a preference: `E9097 NotImplemented: main(args) in a program that uses
@@ -264,7 +270,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	# compiler, and the driver now has both. A generated file has no need of an argument
 	# anyway: whatever a run would have passed, the run also wrote the file.
 	guard {
-		io.write_file(drv, bytearray(gen_driver(fixts, tests, rep, sel, secs)))
+		io.write_file(drv, bytearray(test_driver.gen_driver(fixts, tests, rep, sel, secs)))
 	}
 
 	mut files: list[str] = []
@@ -274,9 +280,9 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 		if own[k] {
 			files.append(srcs[k])
 		} else {
-			c := join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			c := layout.join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
 			guard {
-				io.write_file(c, bytearray(read_source(srcs[k])))
+				io.write_file(c, bytearray(source.read_source(srcs[k])))
 			}
 			copies.append(c)
 			files.append(c)
@@ -325,7 +331,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 	}
 
 	res := guard {
-		load_units_of(files, uname, p.dir, provides)
+		unit.load_units_of(files, uname, p.dir, provides)
 	}
 	rm_file(drv)
 	for c in copies {
@@ -344,7 +350,7 @@ fn run_pkg(root: str, p: Pkg, only: str, secs: int, mut &passed: int, mut &faile
 		Either.Left(u)  => u
 		Either.Right(_) => []
 	}
-	link_units(units, drv, bin, TEST_JOBS)
+	unit.link_units(units, drv, bin, TEST_JOBS)
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []
@@ -442,7 +448,7 @@ const TEST_TIMEOUT := 60
 # cache, which is already the place a build puts what it made and which `make clean` already
 # takes away. The driver source is the one thing that cannot live here — see run_pkg.
 fn test_dir() -> str {
-	dir := join_path(cache_dir(), "test")
+	dir := layout.join_path(unit.cache_dir(), "test")
 	__zrt_mkdir(dir)
 	return dir
 }
@@ -465,7 +471,7 @@ fn take_records(path: str, names: list[str], mut &verdict: list[str], mut &text:
 			# nothing that follows belongs to one
 			at = -1
 			f := drop_tag(ln)
-			if not has_str(broke, f) {
+			if not test_fixture.str_in(broke, f) {
 				broke.append(f)
 			}
 		} else if at >= 0 and has_prefix(ln, "V ") {
@@ -498,7 +504,7 @@ fn drop_tag(ln: str) -> str {
 	return str(out)
 }
 
-fn has_prefix(s: str, prefix: str) -> bool {
+pub fn has_prefix(s: str, prefix: str) -> bool {
 	b := bytearray(s)
 	x := bytearray(prefix)
 	return false if x.len() > b.len()
@@ -513,7 +519,7 @@ fn has_prefix(s: str, prefix: str) -> bool {
 
 # lines_of splits text on newlines and drops the empty tail a trailing newline leaves. A
 # record file always ends in one, and an empty file is no lines rather than one empty one.
-fn lines_of(text: str) -> list[str] {
+pub fn lines_of(text: str) -> list[str] {
 	b := bytearray(text)
 	mut out: list[str] = []
 	mut cur: list[byte] = []

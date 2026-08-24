@@ -43,6 +43,11 @@
 #   - a second opinion about what a sentence is. `zerg.doc_first_sentence` answers that for the
 #     brief listing and the module index alike, and #20 will ask the same function.
 
+import "./diag"
+import "./layout"
+import "./source"
+import "./test"
+import "./test_fixture"
 import (
 	"/zerg"
 )
@@ -81,7 +86,7 @@ const DOC_NOTHING := "(nothing exposed)"
 # than through the sentinel string `log` carries. The sentinel exists because `log` reaches
 # the variable through `??`, which cannot tell an unset name from one exported empty; the
 # question here is presence, and presence is what the leaf answers.
-fn doc_colour() -> bool {
+pub fn doc_colour() -> bool {
 	return false if __zrt_has_env("NO_COLOR")
 
 	return __zrt_isatty(1)
@@ -115,7 +120,7 @@ fn doc_colour() -> bool {
 # this is where it is made. A method whose receiver names no type in this module is collected
 # under a bare `impl T` at the end of the TYPES of its own file rather than dropped, because a
 # document that silently omits a declaration is the one failure this tool cannot recover from.
-fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
+pub fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
 	mut out: list[str] = []
 	for f in m.files {
 		if m.files.len() > 1 {
@@ -195,7 +200,7 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 # the rows: `zerg doc log.Logger` that answered a struct with no methods would be describing a
 # type nobody can use. A METHOD ASKED FOR BY NAME is promoted to the top indent instead —
 # alone on the page there is no type above it for the deeper indent to mean anything against.
-fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
+pub fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
 	mut out: list[str] = []
 	for i in hits {
 		d := m.decls[i]
@@ -217,7 +222,7 @@ fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
 # run down either column. A description too long for what is left of the line is filled to the
 # same column its first line started at — a hanging indent, which is what keeps the two columns
 # readable as columns rather than as one ragged block.
-fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
+pub fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 	mut out: list[str] = []
 	doc_heading(out, "MODULES", col)
 
@@ -236,14 +241,14 @@ fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 		# a module nothing describes is its name alone: padding it out to a description that
 		# is not there would write trailing whitespace, which this document does not do
 		if rows.len() == 0 {
-			out.append(blanks(2) + doc_bold(m.name, col))
+			out.append(diag.blanks(2) + doc_bold(m.name, col))
 			continue
 		}
 
-		out.append(blanks(2) + doc_bold(m.name, col) + blanks(at - 2 - doc_width(m.name)) + rows[0])
+		out.append(diag.blanks(2) + doc_bold(m.name, col) + diag.blanks(at - 2 - doc_width(m.name)) + rows[0])
 		mut k := 1
 		for k < rows.len() {
-			out.append(blanks(at) + rows[k])
+			out.append(diag.blanks(at) + rows[k])
 			k = k + 1
 		}
 	}
@@ -338,7 +343,7 @@ fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief
 	mut done: list[str] = []
 	for k in orphans {
 		recv := m.decls[k].recv
-		continue if has_str(done, recv)
+		continue if test_fixture.str_in(done, recv)
 
 		done.append(recv)
 		doc_gap(out)
@@ -380,9 +385,9 @@ fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 	at = doc_step(b, at, d.kind + " ")
 
 	n := at + bytearray(d.name).len()
-	return d.sig if n > b.len() or line_slice(b, at, n) != d.name
+	return d.sig if n > b.len() or diag.line_slice(b, at, n) != d.name
 
-	return doc_bold(line_slice(b, 0, n), col) + line_slice(b, n, b.len())
+	return doc_bold(diag.line_slice(b, 0, n), col) + diag.line_slice(b, n, b.len())
 }
 
 # doc_step is `at` moved past `word` when the signature carries it there, and `at` unchanged
@@ -391,7 +396,7 @@ fn doc_step(b: list[byte], at: int, word: str) -> int {
 	n := at + bytearray(word).len()
 
 	return at if n > b.len()
-	return n if line_slice(b, at, n) == word
+	return n if diag.line_slice(b, at, n) == word
 
 	return at
 }
@@ -441,7 +446,7 @@ fn doc_note(mut &out: list[str], f: zerg.DocFile) {
 # `doc_no_decl` is the caller: it answers "the module `atomic` declares nothing called `load`"
 # from a module whose declarations are missing rather than absent, and the two paths through
 # this tool have to say that in the same words.
-fn doc_note_text(f: zerg.DocFile) -> str {
+pub fn doc_note_text(f: zerg.DocFile) -> str {
 	note := f"note: `{doc_short_path(f.path)}` does not parse under this compiler; its declarations are not listed"
 	return note + " (see docs/runtime/stdlib.md)" if doc_is_stdlib(f.path)
 
@@ -462,15 +467,15 @@ fn doc_short_path(path: str) -> str {
 	return path if not doc_is_stdlib(path)
 
 	b := bytearray(path)
-	return line_slice(b, bytearray(doc_stdlib_lead()).len(), b.len())
+	return diag.line_slice(b, bytearray(doc_stdlib_lead()).len(), b.len())
 }
 
 fn doc_is_stdlib(path: str) -> bool {
-	return has_prefix(path, doc_stdlib_lead())
+	return test.has_prefix(path, doc_stdlib_lead())
 }
 
 fn doc_stdlib_lead() -> str {
-	return stdlib_dir() + "/"
+	return layout.stdlib_dir() + "/"
 }
 
 # --- a comment, as prose ------------------------------------------------------------------------
@@ -505,7 +510,7 @@ fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 			doc_gap(out)
 			continue
 		}
-		if has_prefix(ln, "    ") {
+		if test.has_prefix(ln, "    ") {
 			doc_flush(out, para, indent)
 			out.append(doc_at(indent, ln))
 			continue
@@ -554,7 +559,7 @@ fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
 
 # doc_fence reports whether a line opens or closes a fenced block.
 fn doc_fence(line: str) -> bool {
-	return has_prefix(line, "```")
+	return test.has_prefix(line, "```")
 }
 
 # --- filling ---------------------------------------------------------------------------------
@@ -597,7 +602,7 @@ fn doc_fill(text: str, width: int) -> list[str] {
 			n = k
 			continue
 		}
-		line = line + blanks(p.gap) + p.text
+		line = line + diag.blanks(p.gap) + p.text
 		n = n + p.gap + k
 	}
 	if line != "" {
@@ -671,7 +676,7 @@ fn doc_pieces(text: str) -> list[DocPiece] {
 fn doc_at(indent: int, line: str) -> str {
 	return "" if line == ""
 
-	return blanks(indent) + line
+	return diag.blanks(indent) + line
 }
 
 # doc_gap separates two things by exactly one blank line, however many times it is asked. The
@@ -748,10 +753,10 @@ fn doc_tagline(m: zerg.DocModule) -> str {
 	return "" if s == ""
 
 	lead := m.name + " — "
-	return s if not has_prefix(s, lead)
+	return s if not test.has_prefix(s, lead)
 
 	b := bytearray(s)
-	return line_slice(b, bytearray(lead).len(), b.len())
+	return diag.line_slice(b, bytearray(lead).len(), b.len())
 }
 
 # doc_module_header is the header of the file a module is named after, and nothing when no file
@@ -760,7 +765,7 @@ fn doc_module_header(m: zerg.DocModule) -> list[str] {
 	mut none: list[str] = []
 	want := m.name + ".zg"
 	for f in m.files {
-		return f.header if path_tail(f.path) == want
+		return f.header if source.path_tail(f.path) == want
 	}
 	return none
 }

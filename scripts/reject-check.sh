@@ -989,7 +989,7 @@ import "./util/text"
 fn main() {
 	print bogus.text.shout("x")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1001,7 +1001,7 @@ import "./util/text"
 fn main() {
 	print util.shout("z")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1016,7 +1016,7 @@ EOF
 # so every file of a directory was one module to every visibility rule, and the whole of
 # `io`'s private surface was reachable from `strings`. The seed refuses it — placelessly, as
 # "undefined function" — which is how the gap was measured. #36.
-reject two-single-file-modules-in-one-directory E3001 'is not a public member of module `a`' <<'EOF'
+reject two-single-file-modules-in-one-directory E3001 'is not a public member of' <<'EOF'
 import (
 	"./lib/a"
 	"./lib/b"
@@ -1049,13 +1049,13 @@ import "./caller"
 fn main() {
 	print caller.go()
 }
---- caller/caller.zg
+--- caller/mod.zg
 import "/util/text"
 
 pub fn go() -> str {
 	return bogus.hidden()
 }
---- util/text/text.zg
+--- util/text/mod.zg
 fn hidden() -> str {
 	return "private"
 }
@@ -1081,11 +1081,11 @@ import (
 fn main() {
 	print b.helper()
 }
---- a/a.zg
+--- a/mod.zg
 pub fn helper() -> str {
 	return "A"
 }
---- b/b.zg
+--- b/mod.zg
 pub fn other() -> int {
 	return 1
 }
@@ -1100,9 +1100,9 @@ import (
 fn main() {
 	print b.COUNT
 }
---- a/a.zg
+--- a/mod.zg
 pub COUNT := 7
---- b/b.zg
+--- b/mod.zg
 pub fn other() -> int {
 	return 1
 }
@@ -1117,11 +1117,11 @@ import (
 fn main() {
 	print b.Box(1).v
 }
---- a/a.zg
+--- a/mod.zg
 pub struct Box {
 	pub v: int
 }
---- b/b.zg
+--- b/mod.zg
 pub fn other() -> int {
 	return 1
 }
@@ -1141,11 +1141,11 @@ fn main() {
 	p: b.Box = a.Box(4)
 	print p.v
 }
---- a/a.zg
+--- a/mod.zg
 pub struct Box {
 	pub v: int
 }
---- b/b.zg
+--- b/mod.zg
 pub fn other() -> int {
 	return 1
 }
@@ -1176,7 +1176,7 @@ fn main() {
 	defer bogus.shout("a")
 	print text.shout("b")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1192,7 +1192,7 @@ import "./util/text"
 fn main() {
 	print text.nosuch("a")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1224,11 +1224,11 @@ import (
 fn main() {
 	print text.shout("a")
 }
---- alt/text/text.zg
+--- alt/text/mod.zg
 pub fn whisper(s: str) -> str {
 	return s + "..."
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1247,7 +1247,7 @@ fn text() -> str {
 fn main() {
 	print text()
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1269,7 +1269,7 @@ fn text[T](v: T) -> T {
 fn main() {
 	print text(1)
 }
---- util/text/text.zg
+--- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
 }
@@ -1361,7 +1361,7 @@ impl Show for P {
 fn main() {
 	print 1
 }
---- far/far.zg
+--- far/mod.zg
 pub spec Show {
 	fn show() -> str
 }
@@ -3902,6 +3902,9 @@ pub fn make() -> A {
 pub struct A {
 	pub w: str
 }
+--- one/mod.zg
+import pub "./a"
+import pub "./b"
 EOF
 
 reject a-struct-declared-twice E4073 'the first is at line 1' <<'EOF'
@@ -5080,7 +5083,7 @@ fn main() {
 pub fn hi() -> int {
 	return 1
 }
---- two/two.zg
+--- two/mod.zg
 pub fn hi() -> int {
 	return 2
 }
@@ -5309,7 +5312,7 @@ fn main() {
 	spawn text.hidden("a")
 	print text.shout("b")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 fn hidden(s: str) {
 	print s
 }
@@ -5326,7 +5329,7 @@ fn main() {
 	defer text.hidden("a")
 	print text.shout("b")
 }
---- util/text/text.zg
+--- util/text/mod.zg
 fn hidden(s: str) {
 	print s
 }
@@ -5348,7 +5351,7 @@ import "./text"
 fn main() {
 	print text.helper()
 }
---- text/text.zg
+--- text/mod.zg
 fn helper() -> int {
 	return 42
 }
@@ -5383,13 +5386,13 @@ EOF
 # binding is module-private, so a reader outside is refused by the ordinary visibility rule
 # and there is no second rule owed for a mutable global in particular. Both directions, since
 # a write is what the hole was really about.
-reject a-mutable-global-read-from-another-module E3001 'module `glob`' <<'EOF'
+reject a-mutable-global-read-from-another-module E3001 'is not a public member of' <<'EOF'
 import "./glob"
 
 fn main() {
 	print glob.shared
 }
---- glob/glob.zg
+--- glob/mod.zg
 unsafe {
 	mut shared := 5
 }
@@ -5399,14 +5402,14 @@ pub fn read() -> int {
 }
 EOF
 
-reject a-mutable-global-assigned-from-another-module E3001 'module `glob`' <<'EOF'
+reject a-mutable-global-assigned-from-another-module E3001 'is not a public member of' <<'EOF'
 import "./glob"
 
 fn main() {
 	glob.shared = 11
 	print glob.read()
 }
---- glob/glob.zg
+--- glob/mod.zg
 unsafe {
 	mut shared := 5
 }
@@ -5429,7 +5432,7 @@ fn main() {
 	print glob.shared
 	glob.shared = 11
 }
---- glob/glob.zg
+--- glob/mod.zg
 unsafe {
 	pub mut shared := 5
 }
@@ -5458,7 +5461,7 @@ fn main() {
 	s: Secret = Secret("t")
 	print s.tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5479,7 +5482,7 @@ fn main() {
 	s: lib.Secret = lib.Secret("t")
 	print s.tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5501,7 +5504,7 @@ import "./lib"
 fn main() {
 	print lib.make().tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5519,7 +5522,7 @@ import "./lib"
 fn main() {
 	print lib.tag()
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5542,7 +5545,7 @@ import "./lib"
 fn main() {
 	print lib.tag()
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5569,7 +5572,7 @@ fn main() {
 	s := lib.make()
 	print s.hidden
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Secret {
 	pub tag: str
 	hidden: int = 42
@@ -5591,7 +5594,7 @@ fn main() {
 	s.hidden = 7
 	print s.tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Secret {
 	pub tag: str
 	hidden: int = 42
@@ -5616,7 +5619,7 @@ import "./lib"
 fn main() {
 	print lib.make().tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 struct Secret {
 	pub tag: str
 }
@@ -5681,7 +5684,7 @@ fn main() {
 	f := other.helper
 	print 1
 }
---- other/other.zg
+--- other/mod.zg
 pub fn helper(n: int) -> int {
 	return n * 3
 }
@@ -5709,6 +5712,9 @@ pub fn both() -> str {
 pub fn tail() -> str {
 	return "b"
 }
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
 EOF
 
 # The same rule at a TYPE POSITION, and a separate case because it is a separate table: a
@@ -5730,6 +5736,9 @@ pub fn both() -> Box {
 pub struct Box {
 	pub x: int
 }
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
 EOF
 
 # And the same rule for a MODULE CONSTANT, which is the one declaration that reached every
@@ -5747,6 +5756,35 @@ pub fn both() -> int {
 }
 --- pair/two.zg
 pub const LIMIT := 7
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# #57 decision 6: ONE WAY IN. A folder that holds a `mod.zg` has a surface, and what that
+# surface carries is reached THROUGH it — reaching around it would write the folder's internal
+# file layout into every caller, which is the thing a surface exists to prevent.
+#
+# What is NOT refused is a child the surface does not carry: a file `mod.zg` never re-exports
+# is not part of the door, so its own path is the only way to it and stays open. That is the
+# other half of "exactly one way in" rather than an exception to it, and `bar` below is there
+# to keep this case honest about which half it is testing.
+reject an-import-past-a-surface E5017 'reaches past a surface' seed-gap <<'EOF'
+import "./demo/foo"
+
+fn main() {
+	print foo.run()
+}
+--- demo/mod.zg
+import pub "./foo"
+--- demo/foo.zg
+pub fn run() -> int {
+	return 1
+}
+--- demo/bar.zg
+pub fn aside() -> int {
+	return 2
+}
 EOF
 
 reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
@@ -5769,6 +5807,9 @@ pub fn both() -> str {
 pub fn tail() -> str {
 	return strings.trim(" b ")
 }
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
 EOF
 
 reject a-namespace-this-module-did-not-import E5007 at=5:2 seed-gap <<'EOF'
@@ -5778,13 +5819,13 @@ fn main() {
 	print mid.relay()
 	print lib.make().tag
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return lib.make().tag
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Open {
 	pub tag: str
 }
@@ -5821,13 +5862,13 @@ fn main() {
 	print c.tag
 	print mid.relay()
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return "r"
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Counter {
 	pub tag: str
 }
@@ -5844,13 +5885,13 @@ fn main() {
 	print take(lib.Counter("a"))
 	print mid.relay()
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return "r"
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Counter {
 	pub tag: str
 }
@@ -5864,13 +5905,13 @@ fn main() {
 	print c.tag
 	print mid.relay()
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return "r"
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub struct Counter {
 	pub tag: str
 }
@@ -5890,13 +5931,13 @@ fn main() {
 	print int(c)
 	print mid.relay()
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return "r"
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub enum Colour {
 	Red
 	Green
@@ -5910,13 +5951,13 @@ fn main() {
 	spawn lib.shout("a")
 	print mid.relay()
 }
---- mid/mid.zg
+--- mid/mod.zg
 import "/lib"
 
 pub fn relay() -> str {
 	return "r"
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub fn shout(s: str) {
 	print s
 }
@@ -5944,13 +5985,13 @@ import "./ca"
 fn main() {
 	print ca.a_one()
 }
---- ca/ca.zg
+--- ca/mod.zg
 import "/cb"
 
 pub fn a_one() -> int {
 	return cb.b_one() + 1
 }
---- cb/cb.zg
+--- cb/mod.zg
 import "/ca"
 
 pub fn b_one() -> int {
@@ -5975,6 +6016,8 @@ import "/solo"
 pub fn one() -> int {
 	return 1
 }
+--- solo/mod.zg
+import pub "./solo"
 EOF
 
 # THE ENTRY FILE'S OWN NAME, and this half was SILENT under `--emit check`. The cycle rule
@@ -7198,11 +7241,11 @@ import (
 fn main() {
 	print ma.work() + mb.work()
 }
---- ma/ma.zg
+--- ma/mod.zg
 pub fn work() -> int {
 	return 1
 }
---- mb/mb.zg
+--- mb/mod.zg
 pub fn work() -> int {
 	return 2
 }
@@ -7231,6 +7274,9 @@ pub fn first() -> int {
 fn work() -> int {
 	return 2
 }
+--- one/mod.zg
+import pub "./a"
+import pub "./b"
 EOF
 
 # ONE FILE declaring a name twice, which is the other half of the same collision and is a
@@ -7812,7 +7858,7 @@ import "./lib"
 fn main() {
 	print lib.only_in_test()
 }
---- lib/lib.zg
+--- lib/mod.zg
 pub fn hello() -> int {
 	return 1
 }

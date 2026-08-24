@@ -1,0 +1,25 @@
+# The `zerg` module's SURFACE: what a file outside this directory may name (#57 decisions
+# 4-6). A directory is a module because it holds this file, and what the module exports is
+# what this file re-exports — not every `pub` in it.
+#
+# THE RE-EXPORT IS FLAT. `import pub "./emit"` puts `emit.zg`'s public names on THIS module's
+# surface under their own names, so a caller writes `zerg.emit_files_diag(…)` and never
+# `zerg.emit.emit_files_diag(…)`. That is what makes this file a stable door: the ten files
+# below can be split, merged or renamed without moving a single caller.
+#
+# THE FILE IS THE UNIT OF EXPOSURE, so there is no way to export part of one. Three files are
+# absent on purpose — `check`, `generic` and `token` are this compiler's internals, and a
+# `pub` in one of them means "my siblings may name me" and nothing more.
+
+import (
+	pub "./ast"
+	pub "./desugar"
+	pub "./doc"
+	pub "./emit"
+	pub "./fmt"
+	pub "./lexer"
+	pub "./lint"
+	pub "./parser"
+	pub "./rule"
+	pub "./version"
+)

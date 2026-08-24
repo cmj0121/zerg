@@ -22,6 +22,12 @@
 # declarations are reported missing. The document of a module nobody can import is the only
 # documentation that module has.
 
+import "./diag"
+import "./doc_render"
+import "./layout"
+import "./source"
+import "./test_fixture"
+import "./test_pkg"
 import (
 	"cli"
 	"io"
@@ -54,9 +60,9 @@ fn do_doc(c: cli.Ctx) -> int {
 fn run_doc(args: list[str], brief: bool) -> int {
 	raise "`zerg doc` reads one thing at a time — a module, one of its declarations, or a path" if args.len() > 1
 
-	col := doc_colour()
+	col := doc_render.doc_colour()
 	if args.len() == 0 {
-		io.write(render_doc_list(doc_index(), col))
+		io.write(doc_render.render_doc_list(doc_index(), col))
 		return 0
 	}
 
@@ -65,13 +71,13 @@ fn run_doc(args: list[str], brief: bool) -> int {
 		files := doc_path_files(name)
 		raise doc_no_source(name) if files.len() == 0
 
-		io.write(render_doc_module(doc_read(doc_path_name(name), files), brief, col))
+		io.write(doc_render.render_doc_module(doc_read(doc_path_name(name), files), brief, col))
 		return 0
 	}
 
-	whole := module_sources(name, ".", ".")
+	whole := source.module_sources(name, ".", ".")
 	if whole.len() > 0 {
-		io.write(render_doc_module(doc_read(path_tail(name), whole), brief, col))
+		io.write(doc_render.render_doc_module(doc_read(source.path_tail(name), whole), brief, col))
 		return 0
 	}
 
@@ -100,17 +106,17 @@ fn run_doc_decl(name: str, col: bool) -> int {
 	raise doc_no_such(name) if at < 0
 
 	b := bytearray(name)
-	mod := line_slice(b, 0, at)
-	key := line_slice(b, at + 1, b.len())
+	mod := diag.line_slice(b, 0, at)
+	key := diag.line_slice(b, at + 1, b.len())
 
-	files := module_sources(mod, ".", ".")
+	files := source.module_sources(mod, ".", ".")
 	raise doc_no_such(name) if files.len() == 0
 
-	m := doc_read(path_tail(mod), files)
+	m := doc_read(source.path_tail(mod), files)
 	hits := zerg.doc_find(m, key)
 	raise doc_no_decl(m, key) if hits.len() == 0
 
-	io.write(render_doc_decls(m, hits, col))
+	io.write(doc_render.render_doc_decls(m, hits, col))
 	return 0
 }
 
@@ -120,7 +126,7 @@ fn run_doc_decl(name: str, col: bool) -> int {
 # bare `strings` is a module however many files of that name exist elsewhere, and a
 # `notes/draft.zg` that has been deleted is not a path this can read.
 fn doc_is_path(name: str) -> bool {
-	return false if not has_suffix(name, ".zg") and doc_first_of(name, b'/') < 0
+	return false if not layout.has_suffix(name, ".zg") and doc_first_of(name, b'/') < 0
 
 	return __zrt_exists(name)
 }
@@ -131,14 +137,14 @@ fn doc_is_path(name: str) -> bool {
 # about test files the day the convention moves.
 fn doc_path_files(name: str) -> list[str] {
 	p := doc_no_slash(name)
-	return module_at(dir_of(p), doc_path_name(name))
+	return source.module_at(layout.dir_of(p), doc_path_name(name))
 }
 
 # doc_path_name is what the document is titled when a path was named: the last segment with the
 # `.zg` taken off, which is the name that path would be imported by.
 fn doc_path_name(name: str) -> str {
-	seg := path_tail(doc_no_slash(name))
-	return drop_suffix(seg, ".zg") if has_suffix(seg, ".zg")
+	seg := source.path_tail(doc_no_slash(name))
+	return test_pkg.drop_suffix(seg, ".zg") if layout.has_suffix(seg, ".zg")
 
 	return seg
 }
@@ -151,7 +157,7 @@ fn doc_no_slash(path: str) -> str {
 	for hi > 1 and b[hi - 1] == b'/' {
 		hi = hi - 1
 	}
-	return line_slice(b, 0, hi)
+	return diag.line_slice(b, 0, hi)
 }
 
 # doc_first_of is where `c` first appears in a name, or -1. Two questions are asked of it —
@@ -175,7 +181,7 @@ fn doc_read(name: str, files: list[str]) -> zerg.DocModule {
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
 	for f in files {
-		srcs.append(read_source(f))
+		srcs.append(source.read_source(f))
 		paths.append(f)
 	}
 	return zerg.doc_module(name, srcs, paths)
@@ -188,7 +194,7 @@ fn doc_read(name: str, files: list[str]) -> zerg.DocModule {
 fn doc_index() -> list[zerg.DocModule] {
 	mut out: list[zerg.DocModule] = []
 	for n in doc_module_names() {
-		files := module_sources(n, ".", ".")
+		files := source.module_sources(n, ".", ".")
 		if files.len() > 0 {
 			out.append(doc_read(n, files))
 		}
@@ -201,11 +207,11 @@ fn doc_index() -> list[zerg.DocModule] {
 # nearer one, which is the one `module_sources` would have resolved.
 fn doc_module_names() -> list[str] {
 	mut out: list[str] = []
-	for n in local_modules(".") {
+	for n in source.local_modules(".") {
 		out.append(n)
 	}
-	for n in stdlib_modules() {
-		if not has_str(out, n) {
+	for n in source.stdlib_modules() {
+		if not test_fixture.str_in(out, n) {
 			out.append(n)
 		}
 	}
@@ -267,7 +273,7 @@ fn doc_no_decl(m: zerg.DocModule, key: str) -> str {
 	mut out := f"the module `{m.name}` declares nothing called `{key}`"
 	for f in m.files {
 		if not f.ok {
-			out = out + "\n\n" + doc_note_text(f)
+			out = out + "\n\n" + doc_render.doc_note_text(f)
 		}
 	}
 	return out if m.decls.len() == 0

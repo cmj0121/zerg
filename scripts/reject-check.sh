@@ -5687,6 +5687,30 @@ pub fn helper(n: int) -> int {
 }
 EOF
 
+# #57 decision 2: THE NAMESPACE UNIT IS THE FILE. A sibling's name arrives through an import
+# and is written with the namespace that import bound — the bare spelling is gone, whether or
+# not the file imported the sibling, because the import binds a NAMESPACE and not a set of
+# names.
+#
+# The two files here are one module (one directory, and `zerg build` compiles them together),
+# so this is not a visibility question and not an unknown name: the declaration is found, and
+# the SPELLING is what is refused. That is why the sentence can carry the fix.
+reject bare-name-from-a-sibling-file E3114 'and a file names what it uses' seed-gap <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn both() -> str {
+	return tail()
+}
+--- pair/two.zg
+pub fn tail() -> str {
+	return "b"
+}
+EOF
+
 reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
 import "./pair"
 
@@ -5694,13 +5718,17 @@ fn main() {
 	print pair.both()
 }
 --- pair/one.zg
-import "strings"
+import (
+	"strings"
+
+	"./two"
+)
 
 pub fn both() -> str {
-	return strings.trim(" a ") + tail()
+	return strings.trim(" a ") + two.tail()
 }
 --- pair/two.zg
-fn tail() -> str {
+pub fn tail() -> str {
 	return strings.trim(" b ")
 }
 EOF

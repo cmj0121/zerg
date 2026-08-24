@@ -459,6 +459,14 @@ pub struct Emitter {
 	pub sig_mod: list[str]
 	pub sig_pub: list[bool]
 
+	# sig_path is the FILE that declared it, which the module cannot answer: #57 makes the
+	# file the unit of naming, so a bare name resolves to a declaration in the SAME FILE and
+	# a module holding thirteen of them is thirteen different answers. It rides beside
+	# sig_mod rather than replacing it because visibility is still asked of both — a name is
+	# reachable from a sibling FILE through an import, and from another MODULE only when the
+	# module's surface carries it.
+	pub sig_path: list[str]
+
 	# sig_unsafe is the third such column: whether the declaration sat inside a module-level
 	# `unsafe { … }` group, which GRAMMAR group 12 makes callable only from unsafe. It is
 	# recorded beside the other two for the same reason — the namespace is flat by the time a
@@ -2565,6 +2573,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	em.sig_names.append(key)
 	em.sig_mod.append(check.c_mod_of(em, fn_i.path))
 	em.sig_pub.append(fn_i.is_pub)
+	em.sig_path.append(fn_i.path)
 	em.sig_unsafe.append(fn_i.in_unsafe)
 	em.sig_rets.append(fn_i.ret)
 	em.sig_hasret.append(fn_i.has_ret)
@@ -7870,6 +7879,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# up once here is the difference between one scan of that table per call site and two.
 	sr := c_sig_row_of(em, name)
 	c_chk_visible_fn(em, name, sr)
+	c_chk_bare_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, "this call is in safe code", sr)
 
 	rels := c_owned_args(em, name, 0, args)
@@ -7896,6 +7906,16 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
 
 	check.chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
+}
+
+# c_chk_bare_fn is #57's rule for the one spelling that has no qualifier to check: a BARE
+# call. It reads the same row the two rules above read, and is a third function for their
+# reason — the question is different and the place it is asked is different, since a
+# namespaced call has already said which file it means.
+fn c_chk_bare_fn(mut &em: Emitter, name: str, r: int) {
+	return if r < 0
+
+	check.chk_name_is_this_file(em, name, em.sig_path[r])
 }
 
 # c_chk_unsafe_fn reads the same row for the `unsafe` group's caller rule. It is a second
@@ -14586,7 +14606,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

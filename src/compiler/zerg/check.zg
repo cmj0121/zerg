@@ -70,6 +70,7 @@ import (
 	"./ast"
 	"./emit"
 	"./lexer"
+	"./lint"
 	"./rule"
 )
 pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
@@ -215,6 +216,58 @@ pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_mod: str, is_pub: bool
 	return if not chk_across_modules(em, em.at_path, decl_mod)
 
 	chk_at(em, rule.Rule.NotPublicMember, f"`{name}` is not a public member of module `{ast.mod_name(decl_mod)}`")
+}
+
+# chk_name_is_this_file is #57's decision 2: THE NAMESPACE UNIT IS THE FILE. A bare name
+# resolves to a declaration this file wrote and to nothing else — a sibling's name arrives
+# through an import and is written with the namespace that import bound.
+#
+# It is asked of the ROW rather than of the resolution, so nothing about how a name is looked
+# up moves: the scan still finds the declaration, and this refuses the spelling. That is what
+# lets the rule carry the fix in its own sentence, which a failed lookup could not.
+#
+# ANOTHER MODULE IS NOT THIS RULE'S BUSINESS. A bare name reaching one is a visibility
+# question (chk_visible) or a namespace question (c_ns_names_mod), each with its own sentence;
+# saying the same program is wrong twice helps nobody.
+#
+# A file with no path is quiet, for chk_visible's reason: `<derive>` and `<builtin>` are trees
+# the compiler wrote, and a rule that guessed there would refuse a program for a reason nobody
+# can act on.
+pub fn chk_name_is_this_file(mut &em: emit.Emitter, name: str, decl_path: str) {
+	return if decl_path == "" or em.at_path == ""
+	return if decl_path == em.at_path
+	return if c_mod_of(em, decl_path) != c_mod_of(em, em.at_path)
+
+	# A `_test.zg` FILE NAMES ITS WHOLE MODULE, and that is the one carve-out. A test file is
+	# not shipped — `module_at` drops it from every ordinary build — and reaching inside is the
+	# whole of what it is for: held to this rule it could not call the module it tests without
+	# exporting that module's internals to everybody, which is a worse language for the sake of
+	# a consistent one.
+	#
+	# `zerg test`'s own generated driver is named `…_test.zg` for the same reason and is
+	# covered by the same sentence: its calls are ordinary calls in the package's scope, which
+	# is what its header says they are.
+	return if lint.is_test_file(ast.mod_name(em.at_path))
+
+	ns := ast.mod_name(chk_drop_zg(decl_path))
+	chk_at(em, rule.Rule.NameFromSibling, f"`{name}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{name}` (docs/runtime/package.md)")
+}
+
+# chk_drop_zg is a source path without its extension, which is the name an import of that
+# sibling binds: `./count` reaches `count.zg`, so the namespace is the file's own name.
+fn chk_drop_zg(path: str) -> str {
+	b := bytearray(path)
+	return path if b.len() < 3
+
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() - 3 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out) if b[b.len() - 3] == b'.' and b[b.len() - 2] == b'z' and b[b.len() - 1] == b'g'
+
+	return path
 }
 
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a

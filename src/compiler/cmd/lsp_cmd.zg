@@ -8,6 +8,7 @@
 # itself, which the cycle rule refuses as `E4047 lsp -> lsp`. A file in a module directory
 # shadows the module its name spells, for every file in that directory.
 
+import "./source"
 import (
 	"cli"
 	"/lsp"
@@ -38,7 +39,7 @@ fn lsp_program(path: str, text: str) -> lsp.Program {
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
 	mut mods: list[str] = []
-	mut res := res_new()
-	load_buffer(path, text, srcs, paths, mods, res)
+	mut res := source.res_new()
+	source.load_buffer(path, text, srcs, paths, mods, res)
 	return lsp.program(paths, srcs, mods, res.at, res.path, res.mod)
 }

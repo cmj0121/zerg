@@ -12,7 +12,9 @@ pub fn both(a: str, b: str) -> int {
 	return count.width(a) + count.width(b)
 }
 
-# The bare spelling, unchanged and still exact: `count.width` and `width` name one function.
+# AND THERE IS NO BARE SPELLING. `width` is `count.zg`'s, and a file names what it uses (#57)
+# — writing it without the namespace is `E3114`, whether or not this file imported `./count`.
+# The import is what makes the name reachable; the qualifier is what says which file it is.
 pub fn plain(a: str, b: str) -> int {
-	return width(a) + width(b)
+	return count.width(a) + count.width(b)
 }

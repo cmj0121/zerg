@@ -2,6 +2,9 @@
 # the bracket gate a source has to pass before it is rewritten, the ROUND-TRIP gate its
 # output has to pass before it is written, and the `--check` answer.
 
+import "./diag"
+import "./source"
+import "./walkdir"
 import (
 	"cli"
 	"io"
@@ -24,7 +27,7 @@ fn do_fmt(c: cli.Ctx) -> int {
 	# a path before the other commands took one — and a `.zg` file is itself. Handed a
 	# directory, this used to reach `read_source` as an unreadable file and answer
 	# `IOError: read failed`: no code, no place, and no name for what went wrong.
-	files := sources_from(c.args())
+	files := walkdir.sources_from(c.args())
 
 	return NOTHING_FOUND if files.len() == 0
 
@@ -38,7 +41,7 @@ fn do_fmt(c: cli.Ctx) -> int {
 # formatted file is byte-identical to what it was, so running fmt twice is a no-op.
 fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
-		src := read_source(f)
+		src := source.read_source(f)
 
 		# THE FIRST GATE IS THAT IT LEXES. fmt's whole promise is that it never SUBTRACTS,
 		# and a token stream is what it makes that promise out of: where the lexer could not
@@ -46,7 +49,7 @@ fn run_fmt(files: list[str], off: list[str]) {
 		# silently drops it. An unterminated `f"abc` came back with the rest of the function
 		# gone, exit 0. `lex_check` ends the run with the code and the place instead, and the
 		# file is left exactly as it was found.
-		lex_check(src, f)
+		diag.lex_check(src, f)
 
 		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
 		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
@@ -131,8 +134,8 @@ fn fmt_broke_it(path: str) -> str {
 fn run_fmt_check(files: list[str], off: list[str]) -> int {
 	mut bad := 0
 	for f in files {
-		src := read_source(f)
-		lex_check(src, f)
+		src := source.read_source(f)
+		diag.lex_check(src, f)
 		if not zerg.fmt_balanced(src) {
 			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
 			bad = bad + 1

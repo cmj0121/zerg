@@ -7,6 +7,10 @@
 # `layout.zg`'s. What is left here is the one-shot `compile_to`, which only `--emit lib`
 # reaches — `--emit bin` goes through `link_program`, for the reason written beside it.
 
+import "./diag"
+import "./layout"
+import "./source"
+import "./unit"
 import (
 	"cli"
 	"io"
@@ -76,7 +80,7 @@ fn declares_main(files: list[str]) -> bool {
 
 	mut found := false
 	guard {
-		src := read_source(files[0])
+		src := source.read_source(files[0])
 		found = zerg.c_has_main(zerg.parse_at(src, files[0]))
 	}
 	return found
@@ -115,27 +119,27 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# silent success load_unit had, and worse here — these are the two stages a person
 	# reaches for when they want to know WHY a file will not build.
 	if emit == "tokens" {
-		write_result(zerg.dump_tokens(read_source(files[0])), out)
+		write_result(zerg.dump_tokens(source.read_source(files[0])), out)
 		return
 	}
 	if emit == "ast" {
-		write_result(zerg.dump_ast(zerg.merge_files(load_sources(files))), out)
+		write_result(zerg.dump_ast(zerg.merge_files(source.load_sources(files))), out)
 		return
 	}
 	if emit == "lib" {
 		# separate compilation: the unit DECLARES the whole program but DEFINES only this
 		# module, so its object can be linked beside the objects of the modules it imports.
-		units := load_units(files[0])
+		units := unit.load_units(files[0])
 		mut lex: list[zerg.Diag] = []
-		lex_diags_of(unit_srcs(units), unit_paths(units), lex)
-		report_diags(lex, unit_srcs(units), unit_paths(units))
+		diag.lex_diags_of(unit.unit_srcs(units), unit.unit_paths(units), lex)
+		diag.report_diags(lex, unit.unit_srcs(units), unit.unit_paths(units))
 		mut trees: list[zerg.File] = []
 		for u in units {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
 		mut diags: list[zerg.Diag] = []
-		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], unit_mods(units), diags)
-		report_diags(diags, unit_srcs(units), unit_paths(units))
+		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], unit.unit_mods(units), diags)
+		diag.report_diags(diags, unit.unit_srcs(units), unit.unit_paths(units))
 		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
 		return
 	}
@@ -150,19 +154,19 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# c_emit_unit runs, and it runs it with the same whole-program view (merge_asts) over
 	# every unit rather than once over the merge.
 	if emit == "bin" {
-		link_program(files[0], out_or(out, drop_ext(files[0])), jobs)
+		unit.link_program(files[0], out_or(out, drop_ext(files[0])), jobs)
 		return
 	}
 	if emit == "c" {
 		mut paths: list[str] = []
 		mut mods: list[str] = []
-		mut res := res_new()
-		srcs := load_sources_at(files, paths, mods, res)
+		mut res := source.res_new()
+		srcs := source.load_sources_at(files, paths, mods, res)
 		mut diags: list[zerg.Diag] = []
-		lex_diags_of(srcs, paths, diags)
-		report_diags(diags, srcs, paths)
+		diag.lex_diags_of(srcs, paths, diags)
+		diag.report_diags(diags, srcs, paths)
 		code := zerg.emit_files_diag(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
-		report_diags(diags, srcs, paths)
+		diag.report_diags(diags, srcs, paths)
 		guard {
 			write_result(code, out)
 		}
@@ -182,13 +186,13 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	if emit == "check" {
 		mut paths: list[str] = []
 		mut mods: list[str] = []
-		mut res := res_new()
-		srcs := load_sources_at(files, paths, mods, res)
+		mut res := source.res_new()
+		srcs := source.load_sources_at(files, paths, mods, res)
 		mut diags: list[zerg.Diag] = []
-		lex_diags_of(srcs, paths, diags)
-		report_diags(diags, srcs, paths)
+		diag.lex_diags_of(srcs, paths, diags)
+		diag.report_diags(diags, srcs, paths)
 		zerg.check_files_diag(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
-		report_diags(diags, srcs, paths)
+		diag.report_diags(diags, srcs, paths)
 		return
 	}
 	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, check, c, lib, or bin)\n")
@@ -204,9 +208,9 @@ fn compile_to(code: str, output: str, object_only: bool) {
 	}
 	mut argv: list[str] = []
 	if object_only {
-		argv = cc_object_argv(cpath, output)
+		argv = layout.cc_object_argv(cpath, output)
 	} else {
-		argv = cc_argv(cpath, output)
+		argv = layout.cc_argv(cpath, output)
 	}
 	if __zrt_exec(argv) != 0 {
 		io.ewrite("zerg: cc failed\n")
@@ -240,7 +244,7 @@ fn write_result(text: str, out: str) {
 
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
-	return path if not has_suffix(path, ".zg")
+	return path if not layout.has_suffix(path, ".zg")
 
 	b := bytearray(path)
 	mut out: list[byte] = []

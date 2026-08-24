@@ -388,6 +388,11 @@ arguments, so a default makes **that** field optional and not the ones before it
 evaluated **per construction** rather than once at the declaration — an expression in it (a call, a sum
 over module constants) runs again for every construction that omits the field.
 
+> **[not yet]** A default that reads ANOTHER FIELD of the same struct is refused by name — _E9071
+> NotImplemented: the default on field `h` of `Box` reads the field `w` — a default is materialised at
+> the construction, where a field is not a name in scope_ — which is the field-wise reading of the same
+> limit a [parameter's default](../code/functions.md) has.
+
 There are **no zero values**. A non-optional field with no default is therefore **required** at
 construction, and a construction short of one is an error naming the field. The **one implicit default**
 is `nil` for a `T?` field, its natural absent state — a `T?` is omittable with no `=` written.

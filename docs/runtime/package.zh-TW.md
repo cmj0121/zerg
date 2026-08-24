@@ -308,6 +308,12 @@ package 根底下的 `x`,不是 `/usr/x`。
 > 這個成員——本節承諾的一等值到 module 邊界就停住了。那句話對該 module 也**不是真的** —— 它有那個名字,而且同一支
 > 程式裡 module **常數**讀得出值 —— 所以不論那個能力何時落地,這個拒絕都欠一句關於「值形式」而不是關於「成員」的
 > 話(#69)。
+> 它是 _E9106 NotImplemented: module `m` declares the function `f`, and a module's function is not a value
+> here_。
+>
+> **[not yet]** **遠端**套件在 import 就被拒絕:一個指名主機的路徑是 _E9105 NotImplemented: a remote package
+> — the path names a host, and resolving one needs a package layer this compiler has not built_。它解析標準
+> 函式庫與這個專案,沒有別的。
 
 ### Prelude 與 std（The prelude & std）
 

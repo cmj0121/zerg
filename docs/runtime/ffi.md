@@ -8,7 +8,9 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
 > `unsafe` context a foreign call sits inside is where it stops: the **block-expression** form is refused by name,
 > with a place (`E9011`), and so is a standalone **`unsafe fn`** (`E9027`) and the **`unsafe fn` TYPE** the bindings
-> above are spelled with (`E9073`) — which takes the import edge with it. There is no `ffi` module in the shipped
+> above are spelled with (`E9073`) — which takes the import edge with it. Inline assembly is refused
+> beside them: `asm(…)` is _E9033 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an
+> operand list (GRAMMAR#asm-operand)_. There is no `ffi` module in the shipped
 > standard library, so `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source
 > root_ — rather than later, at the `unsafe` the binding would have needed. The module-level **group** is the shape
 > that IS built, for its `mut` bindings; what its `fn` may do inside is still refused, one operation at a time. On the

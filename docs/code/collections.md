@@ -111,6 +111,15 @@ materializing a `str` only when it keeps a token.
 > indexes a list, but `xs[2..]` is _E9050 NotImplemented: an open-ended range has no upper bound here — a
 > slice needs an upper bound — `xs[a..xs.len()]`_, which is the spelling to write meanwhile. Found by the
 > 0.2.0 re-measurement (#74).
+>
+> The mirror shape is refused with its own sentence: a range with no LOWER bound is _E9022
+> NotImplemented: a range with no lower bound — write `xs[0..n]`_, which also names the list PATTERN
+> `[a, ..rest]` as a different form this compiler does not have.
+>
+> **[not yet]** A growth method needs a PLACE and not a value: `f().append(1)` is _E9049 NotImplemented:
+> `append` MUTATES its list, and … is a value rather than a place — bind it to a name first_. And a map
+> is built with the literal and not by calling its type: `map[str, int](…)` is _E9067 NotImplemented:
+> `map[…](…)` as a constructor — this compiler builds an empty map with the literal `{:}`_.
 
 ## Order & equality
 

@@ -534,23 +534,32 @@ pub fn shout(s: str) -> str {
 }
 ZG
 cat >"$tmp/proj/widget/a.zg" <<'ZG'
-import "/util"
+import (
+	"/util"
+
+	"./b"
+)
 
 pub fn greet() {
-	print util.shout(banner())
+	print util.shout(b.banner())
 }
 
-fn tagged(t: Tag) -> str {
+fn tagged(t: b.Tag) -> str {
 	return t.name
 }
 ZG
 cat >"$tmp/proj/widget/b.zg" <<'ZG'
+import (
+	"./a"
+	"./c"
+)
+
 struct Tag {
 	pub name: str
 }
 
 fn banner() -> str {
-	return tagged(Tag(stamp()))
+	return a.tagged(Tag(c.stamp()))
 }
 ZG
 cat >"$tmp/proj/widget/c.zg" <<'ZG'

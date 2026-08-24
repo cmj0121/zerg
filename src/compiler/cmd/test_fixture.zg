@@ -76,7 +76,7 @@ import (
 # `zerg test .` at the top of a project reads every level, and `zerg test pkg/sub` reads from
 # `pkg/sub` down. That is pytest's rootdir model, and the alternative is a walk with no upper
 # bound that would read files outside anything the caller named.
-const FIXTURES_NAME := "fixtures_test.zg"
+pub const FIXTURES_NAME := "fixtures_test.zg"
 
 # Fixt is one `#[fixture]`: its name, the type its `use: fn (T)` continuation takes — which is
 # what it produces — the names and declared types of its dependencies in order, and where it

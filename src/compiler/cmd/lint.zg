@@ -23,7 +23,7 @@ fn do_lint(c: cli.Ctx) -> int {
 	# A PATH, NOT ONLY A FILE — see `do_fmt`. The walk is one function for all three commands
 	# that take sources, so a directory means the same thing in each.
 	files := walkdir.sources_from(c.args())
-	return NOTHING_FOUND if files.len() == 0
+	return walkdir.NOTHING_FOUND if files.len() == 0
 
 	return run_lint(files, c.has("strict"))
 }

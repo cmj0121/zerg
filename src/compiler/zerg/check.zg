@@ -198,24 +198,34 @@ fn c_synthetic_path(path: str) -> bool {
 #
 # A rule that guessed at either unknown would refuse programs for a reason the reader cannot
 # see, which is why both answer false rather than true.
-fn chk_across_modules(em: emit.Emitter, at_path: str, decl_mod: str) -> bool {
-	return false if decl_mod == ""
+# THE UNIT IS THE FILE, not the module (#57 decision 1). `pub` means "an importer of this
+# file may name it", so a SIBLING reading a name its own file did not declare is outside it in
+# exactly the way another module is — and one comparison answers both. The reader's own file
+# is quiet for the reason its own module used to be: that is what private means.
+fn chk_across_modules(em: emit.Emitter, at_path: str, decl_path: str) -> bool {
+	# A SYNTHETIC PATH IS QUIET ON BOTH SIDES. `<derive>` and `<builtin>` are trees the
+	# compiler wrote, so neither is a file a reader could have put a `pub` in, and a rule that
+	# guessed there would refuse a program for a reason nobody can act on. It was `c_mod_of`
+	# answering `""` for them before this compared paths directly.
+	return false if c_synthetic_path(decl_path)
+	return false if c_synthetic_path(at_path)
 
-	here := c_mod_of(em, at_path)
+	return false if at_path == decl_path
 
-	return false if here == decl_mod
-	return false if here == ""
+	# A `_test.zg` FILE READS ITS WHOLE MODULE, the carve-out E3114 keeps and for its reason:
+	# a test file is not shipped and reaching inside is what it is for.
+	return false if lint.is_test_file(ast.mod_name(at_path))
 
 	return true
 }
 
 # chk_visible is the rule for a FUNCTION or a module binding: quiet on a `pub` declaration,
 # and otherwise reported exactly where chk_across_modules says a reader is outside.
-pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_mod: str, is_pub: bool) {
+pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_path: str, is_pub: bool) {
 	return if is_pub
-	return if not chk_across_modules(em, em.at_path, decl_mod)
+	return if not chk_across_modules(em, em.at_path, decl_path)
 
-	chk_at(em, rule.Rule.NotPublicMember, f"`{name}` is not a public member of module `{ast.mod_name(decl_mod)}`")
+	chk_at(em, rule.Rule.NotPublicMember, f"`{name}` is not a public member of `{decl_path}` — the file is the unit of privacy (docs/runtime/package.md)")
 }
 
 # chk_name_is_this_file is #57's decision 2: THE NAMESPACE UNIT IS THE FILE. A bare name
@@ -307,10 +317,10 @@ pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
 pub fn chk_ty_visible(mut &em: emit.Emitter, nm: str) {
 	return if emit.c_ty_pub(em, nm)
 
-	decl_mod := emit.c_ty_mod(em, nm)
-	return if not chk_across_modules(em, em.at_path, decl_mod)
+	decl_path := emit.c_ty_path(em, nm)
+	return if not chk_across_modules(em, em.at_path, decl_path)
 
-	chk_at(em, rule.Rule.NotPublicType, f"`{nm}` is not a public type of module `{ast.mod_name(decl_mod)}`")
+	chk_at(em, rule.Rule.NotPublicType, f"`{nm}` is not a public type of `{decl_path}` — the file is the unit of privacy (docs/runtime/package.md)")
 }
 
 # chk_ty_exported is the OTHER sentence, and it is not the same rule read backwards: "a
@@ -354,10 +364,10 @@ pub fn chk_ty_exported(mut &em: emit.Emitter, nm: str, site: str, decl_pub: bool
 pub fn chk_fld_visible(mut &em: emit.Emitter, sname: str, fname: str) {
 	return if emit.c_fld_pub(em, sname, fname)
 
-	decl_mod := emit.c_ty_mod(em, sname)
-	return if not chk_across_modules(em, em.at_path, decl_mod)
+	decl_path := emit.c_ty_path(em, sname)
+	return if not chk_across_modules(em, em.at_path, decl_path)
 
-	chk_at(em, rule.Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which module `{ast.mod_name(decl_mod)}` declared")
+	chk_at(em, rule.Rule.NotPublicField, f"`{fname}` is not a public field of `{sname}`, which `{decl_path}` declared")
 }
 
 # chk_ns_bound is NO TRANSITIVITY (docs/runtime/package.md): "importing a package gives you

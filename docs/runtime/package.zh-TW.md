@@ -11,10 +11,14 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 | ----------- | --------------------------------- | ------------------------------------------ |
 | **program** | 以含 `main` 的 entry 檔為根的建置 | 一次執行——依賴圖的根                       |
 | **package** | 一棵 module 樹                    | **散布 / 相依 / 版本** 與**對外 API** 單位 |
-| **module**  | 一個目錄                          | 預設的**私有**與**命名空間**單位           |
-| **file**    | 一個 module 的實體切片            | 無——同 module 的檔案共享一個命名空間       |
+| **module**  | 一個持有 `mod.zg` 的目錄          | **編譯**與**循環**單位，以及**表面**       |
+| **file**    | 一個 module 的來源檔              | **私有**與**命名空間**單位                 |
 
-把封裝／命名（`module`）與散布／API（`package`）分到兩層，正是讓 `pub` 有精確意義的原因。
+**檔案是私有與命名的單位**（#57）。`pub` 的意思是*這個檔案的 importer 可以指名它*，而 sibling 的名字只透過
+`import` 抵達——沒有任何檔案會因為待在某個目錄裡就身處某個命名空間。**module** 畫的是另外三條邊界：它作為一個
+整體被編譯、它的檔案可以**互相**指名（兩個 module 不行），而它匯出的東西就是它的 `mod.zg` re-export 的東西。
+
+把封裝／命名（`file`、`module`）與散布／API（`package`）分開，正是讓 `pub` 有精確意義的原因。
 
 > **[not yet]** **package 這一層在本工具鏈中不存在**。沒有 manifest、沒有版本宣告、沒有解析器、也沒有相依下載：
 > 一次建置就是一個 entry 檔，加上它的 import 在磁碟上碰得到的那些 module。下文凡是提到 package 的部分——版本、
@@ -22,10 +26,10 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > 實作的一層。`import "name"` 在磁碟上找不到對應物時是一個硬性的建置錯誤、不是靜默——_E5002 cannot resolve
 > import `name` under any source root_——而且早在它被 lex 之前就報出來。
 >
-> **[deviation]** **module 這一層有建，但不是表中所說的私有單位**：每個 module 都被壓平進同一個命名空間。
-> 那個代價已經不是可見性——函式、module 常數、型別與 struct 的欄位全都有檢查，各自帶位置（_E3001 `helper`
-> is not a public member of module `lib`_、_E5010 `secret` is not a public field of `P`_）——而是一個名字是
-> 全程式唯一的，所以兩個 module 不能宣告同一個公開名字。見下方「可見性」。
+> **[deviation]** 一個公開名字仍然是**全程式唯一**的。可見性是檔案的、也照表所說被檢查——函式、module
+> 常數、型別與 struct 的欄位各自帶位置（_E3001 `helper` is not a public member of `lib/two.zg`_、
+> _E5010 `secret` is not a public field of `P`_）——但 C 符號是一個扁平空間，所以兩個 module 不能宣告同一個
+> **公開**的 top-level 名字。那是 mangling 還沒跟上分層，不是語言想要的規則。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module
@@ -189,10 +193,9 @@ module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** �
 無論佈局如何，唯一必須無環的是**頂層常數初始化**（見 Program 生命週期與頂層初始化）：那裡的循環沒有合法順序、是
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
 
-> **[deviation]** **entry 檔自己的目錄不是一個 module**。與 entry 檔並列的檔案不在它的命名空間裡，也不會被編進這次
-> 建置：指名該檔宣告的函式會得到 _E4016 undefined function `beside`_。「各檔案共享一個命名空間」在每個被 `import` 觸及的 module
-> 都成立；以 entry 檔為根的那個 module 是例外——而 `import "./beside"` 就是抵達那個檔案的方式，跟本專案其他任何
-> module 用的是同一種拼法。
+與 entry 檔並列的檔案，抵達方式和其他每一個檔案一樣:`import "./beside"`,然後 `beside.helper()`。裸著指名
+它是 _E4016 undefined function `helper`_ ——那不是 entry 開的例外,而是規則本身,因為 #57 之後沒有任何檔案會
+因為待在某個目錄裡就身處某個命名空間。
 
 **單一檔案就是一個 module**，凡是目錄能當 module 的位置它都能——`import "./sib"` 在旁邊有一個 `sib.zg` 時會
 解析到那一個檔案與它的 `pub` 名字，而標準函式庫就是一個扁平目錄裡的十五個這種 module。它從前是 import 路徑
@@ -230,14 +233,18 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 每個 module 仍壓平進同一個命名空間——這也是兩個 module 宣告同名會相撞的原因，而那個拒絕針對的是名字、不是
 可見性。
 
+每個 module 的名字在 C **符號**上仍是一個扁平空間,這就是兩個 module 宣告同一個公開名字會撞的原因——那個拒絕
+是關於名字,不是關於可見性。
+
 規則比較的是**這個 module 被哪一條 import path 抵達**——由 loader 回答、在解析出這個 module 的地方記下來，之後
 按名字讀回。它不是從「檔案放在哪」算出來的：並排的 `./a` 與 `./b` 是兩個 module，標準函式庫就是一個扁平目錄裡
 的十五個。
 
-> **[deviation]** 它比較的邊界是 **module** 邊界而非 package 邊界。所以就編譯器而言，上文的
-> **package-internal** 與 **package-public** 仍是同一層：一個 `pub` 宣告，凡是 import 它的 module 都指名得到，
-> 沒有任何東西把它收窄到某個 package 的 root 表面——因為還沒有 package 這個單位可以拿來量。re-export
-> （`import pub`）建得出一個表面；但還沒有任何規則要求一個名字必須在某個表面上。
+> **[not yet]** 被比較的邊界是 **module** 邊界,因為上面那個 package 層並不存在、無法成為另一邊。所以就編譯器
+> 而言,**package-internal** 與 **package-public** 是同一層:一個 `pub` 宣告,凡是 import 它的 module 都指名
+> 得到,沒有任何東西把它收窄到某個 package 的 root 表面。這和「四層」底下那個 marker 說的是同一個缺席,只是
+> 讀在「收窄本來會被量測」的那個位置——不是第二個事實,也不是編譯器和一個已建的層意見不合。re-export
+> (`import pub`)建得出一個表面;但還沒有任何規則要求一個名字必須在某個表面上。
 
 唯一連 `pub` 都不能寫的宣告是**可變全域**——module 層級 `unsafe { … }` 分組裡的 `mut` binding，文法本身就把它定成
 module-private（`GRAMMAR` group 12）。一個分組是某個 module 與它自己作者之間的協議，`pub` 會把那份協議開放給每一個

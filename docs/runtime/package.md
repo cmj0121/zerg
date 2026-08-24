@@ -12,10 +12,16 @@ one concern:
 | ----------- | ------------------------------------------- | ----------------------------------------------- |
 | **program** | a build rooted at an entry file with `main` | the run — the root of the dependency graph      |
 | **package** | a tree of modules                           | the **distribution / version** and **API** unit |
-| **module**  | a directory                                 | the default **privacy** and **namespace** unit  |
-| **file**    | a physical slice of one module              | none — files in a module share one namespace    |
+| **module**  | a directory holding a `mod.zg`              | **compilation**, **cycles**, and the surface    |
+| **file**    | a source of one module                      | the **privacy** and **namespace** unit          |
 
-Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two layers is what gives
+**The file is the unit of privacy and of naming** (#57). `pub` means _an importer of this file may name
+it_, and a name arrives from a sibling only through an `import` — there is no namespace a file is in by
+being in a directory. What the MODULE draws is the other three boundaries: it is compiled as one, its
+files may name each other **mutually** where two modules may not, and what it exports is what its
+`mod.zg` re-exports.
+
+Keeping encapsulation/naming (`file`, `module`) and distribution/API (`package`) apart is what gives
 `pub` a precise meaning.
 
 > **[not yet]** The **package** layer does not exist in this toolchain. There is no manifest, no version
@@ -26,11 +32,11 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > build error, not a silence — _E5002 cannot resolve import `name` under any source root_ — reported before
 > a byte of it is lexed.
 >
-> **[deviation]** The **module** layer is built, and is not the privacy unit the table says it is: every
-> module is flattened into one namespace. What that costs is no longer visibility — a function, a module
-> constant, a type and a struct's fields are all checked, each with a place (_E3001 `helper` is not a
-> public member of module `lib`_, _E5010 `secret` is not a public field of `P`_) — it is that a name is
-> program-global, so two modules cannot declare the same public one. See Visibility below.
+> **[deviation]** A public name is still **program-global**. Visibility is the file's and is checked as
+> the table says — a function, a module constant, a type and a struct's fields each with a place (_E3001
+> `helper` is not a public member of `lib/two.zg`_, _E5010 `secret` is not a public field of `P`_) — but
+> the C symbols are one flat space, so two modules cannot declare the same PUBLIC top-level name. That is
+> a mangling that has not caught up with the layers, not a rule the language wants. See Visibility below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name —
 > _E9082 NotImplemented: `a` and `b` both define `f` — this compiler flattens every module into one
@@ -243,11 +249,9 @@ Program lifetime & top-level initialization): a cycle there has no valid order a
 A type naming another type is never such a cycle — only a constant whose initializer transitively needs
 its own value.
 
-> **[deviation]** The **entry file's own directory** is not a module. A file beside the entry file is not
-> in its namespace and is not compiled into the build: naming a function declared there reports
-> _E4016 undefined function `beside`_. Files share one namespace in every module that is reached by an `import`; the
-> module rooted at the entry file is the exception — and `import "./beside"` is how that file is reached,
-> which is the same spelling any other module of this project takes.
+A file beside the entry file is reached the way every other file is: `import "./beside"`, and then
+`beside.helper()`. Naming it bare is _E4016 undefined function `helper`_ — not an exception the entry
+makes, but the rule, since #57 gives no file a namespace it is in merely by sitting in a directory.
 
 A **single file is a module** wherever a directory would be one — `import "./sib"` beside a `sib.zg`
 resolves to that file and its `pub` names, and the standard library is fifteen of them in one flat
@@ -291,20 +295,21 @@ because they are two mistakes in two files and one message cannot point at both.
 with a fix available: the module that wrote `pub` decided to hand the type out and is the only party who
 can mark the type `pub` or stop returning it, where a dependent reading a private field can do neither.
 
-Every module is still flattened into one namespace, which is why two modules that declare the same name
-collide — that refusal is about the name, not about the visibility.
+Every module's names are still one flat space of C SYMBOLS, which is why two modules that declare the
+same public name collide — that refusal is about the name, not about the visibility.
 
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
 and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat
 directory.
 
-> **[deviation]** The boundary it compares is the **module** one and not the package one. So
-> **package-internal** and **package-public** above are still one tier as far as the compiler is
-> concerned: a `pub` declaration is nameable by every other module of the build that imports it, and
-> nothing narrows that to a package's root surface, because no package exists yet to be the unit that
-> narrowing is measured against. Re-export (`import pub`) builds a surface; nothing yet requires a name to
-> be on one.
+> **[not yet]** The boundary compared is the **module** one, because the package layer above does not
+> exist to be the other. So **package-internal** and **package-public** are one tier as far as the
+> compiler is concerned: a `pub` declaration is nameable by every module of the build that imports it,
+> and nothing narrows that to a package's root surface. It is the same absence the marker under Four
+> layers names, read at the place the narrowing would have been measured — not a second fact, and not a
+> compiler disagreeing with a built layer. Re-export (`import pub`) builds a surface; nothing yet
+> requires a name to be on one.
 
 The one declaration that may not be `pub` at all is a **mutable global** — a `mut` binding inside a
 module-level `unsafe { … }` group, which the grammar makes module-private by construction (`GRAMMAR`

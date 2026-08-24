@@ -76,6 +76,15 @@ type Symbol struct {
 	// module's public surface. Empty for a plain import.
 	Reexports []string
 
+	// SiblingTags are the tags of every OTHER module that bound a sibling namespace of this
+	// same local name. This seed keeps one namespace scope for the whole program while #57
+	// makes the file the unit, so two modules' `import "./fmt"` are two bindings that land on
+	// one symbol; resolution tries each tag rather than refusing the second declaration.
+	//
+	// It is a SEED GAP and named as one: the shipping compiler binds per file and needs no
+	// such list. What this buys is that the seed can still READ a tree written to #57.
+	SiblingTags []string
+
 	TypeDef *types.TypeDef    // set when Kind == SymType
 	Variant *types.VariantDef // set when Kind == SymVariant
 }

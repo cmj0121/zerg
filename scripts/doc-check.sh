@@ -83,17 +83,18 @@ ZERG="${ZERG:-./bin/zerg}"
 # run of 55, so ten checks could stop running with nothing said; a floor with slack in it
 # reports success for the checks that are left.
 #
-# `MIN_MODULES` is the one floor that guards something no loop below does. Every stdlib module
-# is asked for by name (§1, and the listing check at the end), and `local_modules` — the OTHER
-# half of what `zerg doc` can resolve — is guarded by this number alone: the 16th name is
-# `examples`, the modules standing beside the reader, and at 15 that half could empty out in
-# silence.
+# `MIN_MODULES` counts the STANDARD LIBRARY's modules, and nothing else. It used to be 16
+# because `examples/` was the sixteenth name — the local half, the modules standing beside the
+# reader — and #57 decision 4 made a folder a module only when it holds a `mod.zg`, which a
+# folder of example programs is not. The local half is asked for by its own check at the end,
+# in a directory built to have one, rather than by a number that would have gone on passing
+# while the walk answered nothing.
 #
 # 56 is the count on a host with no `script`, which is the smaller of the two runs: the
 # terminal half of §6 adds five more. A floor pinned to the larger one would turn every host
 # without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
-MIN_MODULES="${MIN_MODULES:-16}"
+MIN_MODULES="${MIN_MODULES:-15}"
 UNDOCUMENTED="${UNDOCUMENTED:-18}"
 MIN_CHECKS="${MIN_CHECKS:-56}"
 MIN_RULES="${MIN_RULES:-26}"
@@ -755,6 +756,23 @@ for m in $modules atomic; do
 	grep -qE "^  $m( |$)" "$tmp/list.out" ||
 		note "\`$m\` has a document and \`zerg doc\` does not list it"
 done
+checks=$((checks + 1))
+
+# AND THE LOCAL HALF, ASKED WHERE THERE IS ONE. `zerg doc` lists the modules standing beside
+# the reader as well as the standard library's, and this repository's root now holds none:
+# `examples/` was the sixteenth name until #57 decision 4 made a folder a module only when it
+# holds a `mod.zg`, and a folder of example PROGRAMS is not one.
+#
+# So the floor below no longer guards that half and this does, in a directory built to have
+# one. A guard that stopped guarding is worse than no guard: the number would have gone on
+# passing at 15 while the walk answered nothing.
+mkdir -p "$tmp/proj/greet"
+printf '# A module because it holds this file.\n\nimport pub "./hello"\n' >"$tmp/proj/greet/mod.zg"
+printf '# hello is the one name on the surface.\npub fn hello() -> str {\n\treturn "hi"\n}\n' >"$tmp/proj/greet/hello.zg"
+printf 'fn main() {\n\tnop\n}\n' >"$tmp/proj/main.zg"
+(cd "$tmp/proj" && "$OLDPWD/$ZERG" doc >"$tmp/local.out" 2>&1) || true
+grep -qE "^  greet( |$)" "$tmp/local.out" ||
+	note "a folder holding a \`mod.zg\` beside the reader is a module and \`zerg doc\` does not list it: $(cat "$tmp/local.out")"
 checks=$((checks + 1))
 
 if [ "$listed" -lt "$MIN_MODULES" ]; then

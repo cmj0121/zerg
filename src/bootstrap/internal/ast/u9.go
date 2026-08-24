@@ -115,6 +115,15 @@ type ImportSpec struct {
 	// directly resolves onto a re-exported module's public surface. Empty for a plain
 	// import (or before the loader runs).
 	Reexports []string
+
+	// Sibling is whether this spec names a FILE OF THE IMPORTER'S OWN MODULE (#57). Such an
+	// import loads nothing and adds no edge; what it binds is a namespace onto a file that is
+	// already here, so its `Module` is the IMPORTER's tag rather than a module of its own.
+	//
+	// sema needs to know, because a sibling namespace is the one binding whose local name is
+	// not unique across the program: every module's `mod.zg` writes `import pub "./fmt"` for
+	// its own `fmt.zg`, and this seed keeps one flat namespace scope for the whole program.
+	Sibling bool
 }
 
 // --- group 11: resource cleanup -----------------------------------------------

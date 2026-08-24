@@ -85,7 +85,10 @@ generics are **invariant**: `list[Cat]` is not a `list[Animal]` — abstract ove
 
 > **[not yet]** A generic **`fn`** is built, and so is a bound naming more than one spec — `T: Eq + Show`
 > is a conjunction, and the spec that is not met is the one the refusal names. A generic **`struct`** or
-> **`enum`** and a generic **method** are each still refused by name.
+> **`enum`** and a generic **method** are each still refused by name: the method is _E9044
+> NotImplemented: a generic METHOD `T.name[…]` — this compiler instantiates a free function_. A
+> parameterized spec written anywhere but on an `impl` is _E9001 NotImplemented: a parameterized `S[…]`
+> as a bound — this compiler carries a spec's type arguments only on an `impl`_.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,
@@ -102,6 +105,13 @@ implement `Iterator`.
 > builds. What it needs is one implementation monomorphized per instantiation of its target, and a
 > generic `fn` is the only thing this compiler monomorphizes. The form that works is an `impl` on a
 > `struct` or an `enum` the program declares.
+>
+> The three shapes beside it are refused by name for the same reason — an implementation is keyed by a
+> declared type's bare name. The `impl`'s OWN type parameters are _E9037 NotImplemented: an `impl`
+> carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them there_; a target that is not a
+> declared type is _E9047 NotImplemented: an `impl` on the built-in type `int` — this compiler gives a
+> method a declared struct or enum receiver_; and a target reached through a module is _E9074
+> NotImplemented: an `impl` on `mod.Type` — a dotted target_.
 
 A **blanket implementation** conditioned on a bound — one covering every type that satisfies some spec — is
 not offered, keeping resolution decidable; and there is **no "every type" implementation** either, the
@@ -314,6 +324,12 @@ syntax the grammar derives: both are **refused by name**. An associated type is 
 chooses, so checking a use of `This.Item` would need the impl in hand before the expression's type is
 known — a type flowing backwards into inference. A parameterized spec says the same thing forwards: one
 impl per argument (`Indexable[K, V]`, above) where an associated type was one output per impl.
+
+> **[not yet]** Both halves are refused by name and neither is a form waiting to be built: writing one
+> in an `impl` is _E9015 NotImplemented: an associated type binding `type … = …` in an `impl`_, and
+> projecting one is _E9028 NotImplemented: an associated type projection `T.Item` — GRAMMAR lets a spec
+> name a type its implementer supplies_. A non-method item in an `impl` at all is _E9007 NotImplemented:
+> `…` as an `impl` item — this compiler reads methods and nothing else_.
 
 The cost lands on a **single-output protocol**. `Iterable[T]` can be implemented at several `T` where a
 fixed `Item` could not, so what pins the element type is **coherence** — at most one such impl per type,

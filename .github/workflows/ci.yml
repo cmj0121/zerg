@@ -135,6 +135,12 @@ jobs:
       - name: Every deviation names a ticket, and the inherited list is honest
         run: make deviation-check
 
+      # An `E9xxx` is a form the LANGUAGE has and this compiler does not build. A reader meets
+      # that in the chapter or in a refusal, and only the first comes before they write the
+      # program — so the catalogue alone is not where it belongs (#74).
+      - name: Every unbuilt form is named where its readers are
+        run: make chapter-codes
+
       # And the board itself: a gate the workflow never runs is a gate that finds
       # nothing. This is the check that would have caught the nine that were green
       # only when somebody thought to type them.

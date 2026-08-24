@@ -227,6 +227,11 @@ does not read (_E9008 a struct pattern `Div{…}`_).
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
 
+> **[not yet]** A token that opens no production this compiler reads is refused where it stands rather
+> than carried into the tree: _E9040 NotImplemented: `…` is not an expression this compiler reads_. It
+> is the catch-all beneath every named form above, so a shape GRAMMAR derives and this phase does not
+> build reaches a reader as its own sentence and never as a parse that quietly went wrong.
+
 | Precedence | Operators                             | Assoc     |
 | ---------- | ------------------------------------- | --------- |
 | 1 highest  | `.` `()` `[]` (field / call / index)  | left      |

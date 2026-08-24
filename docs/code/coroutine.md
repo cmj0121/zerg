@@ -17,6 +17,11 @@ NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. 
 > shape and nothing about closures: a lambda **does** capture (`add := fn (x: int) -> int { return x + n }`
 > reads `n` and runs), so an environment exists; what is missing is a call through anything but a name.
 > Bind the closure to a name and `spawn` it by that name.
+>
+> Anything else in callee position is refused by the same rule: _E9098 NotImplemented: `spawn` of
+> anything but a function, a method, or a namespaced function_ when the shape is not a call at all, and
+> _E9099 NotImplemented: `spawn` of `x` — not a function, a method, or a namespaced function_ when the
+> name is one the program bound to something else. `defer` reads both sentences with its own word.
 
 - **Arguments are a snapshot** — taken where the `spawn` is **written**, not where the call runs. A
   `mut` binding written afterwards is not seen by the coroutine, which may not have started; a `list`,

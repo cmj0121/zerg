@@ -1,0 +1,40 @@
+# The `E9xxx` codes that are NOT an unbuilt form, and therefore owe no chapter marker (#74).
+#
+# `E9xxx` means *NotImplemented* — a form the language HAS and this compiler does not build —
+# and `scripts/chapter-codes-check.sh` holds every code in the range to being named in a
+# chapter, because a form nobody can use is a fact its chapter owes its reader.
+#
+# These are the exceptions, and they are exceptions for one reason: THERE IS NOTHING TO MARK.
+# A wrong-arity call to `ok_or`, a field an `Err` does not have, `?` on an `int` — none of them
+# is a form waiting to be built. They are programs the language rejects, and `errors.md`
+# already says what `ok_or` takes; a `[not yet]` beside it would be a marker for a feature
+# nobody is waiting for.
+#
+# THE RANGE IS WHAT IS REALLY IN QUESTION. #74 settled the same argument once already, for
+# `fn main`'s PARAMETER: "a rejection and not a `NotImplemented`, because the language has one
+# entry input and a different one is not a form waiting to be built" — which is `E3113`. The
+# entry's RESULT is `E9096` and is on this list, one number away from the rule that was decided
+# the other way. Moving these out of `E9xxx` spends twenty numbers this project retires rather
+# than reuses, so the list is where they sit until that is decided.
+#
+# One `code<TAB>why` per line.
+E9053	a carrier form over a type that is not a carrier — a type error, not an unbuilt form
+E9061	`in` over elements with no `==` — a missing bound on the program's own type
+E9062	`in` over a type the operator does not take — a type error
+E9080	`?` on a type that is not a carrier — a type error
+E9083	`!` on a type that is not a carrier — a type error
+E9084	`??` on a type that is not a carrier — a type error
+E9086	a method on an `Err` called with an argument it does not take — arity
+E9087	a method an `Err` does not have — the `Error` interface is three names
+E9088	`ok_or` called with no error — arity
+E9089	`ok_or` called with more than one error — arity
+E9090	`ok_or` called with something that is not an `Err` — a type error
+E9091	`ok` called with an argument it does not take — arity
+E9092	a method a carrier does not have
+E9093	a member an enum type does not have — it answers `of(n)` and its variants
+E9094	a method the receiver's type does not have
+E9095	a pattern a `Result[T]` does not have — it has Left and Right
+E9096	`fn main` declared with a result the entry does not have — see the header
+E9100	a method a `map` does not have
+E9101	a field an `Err` does not have — it has `msg` and `kind`
+E9102	`..=` with no upper bound — a malformed range, not a form

@@ -32,7 +32,9 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 > public member of module `lib`_, _E5010 `secret` is not a public field of `P`_) — it is that a name is
 > program-global, so two modules cannot declare the same public one. See Visibility below.
 >
-> **[not yet]** Two modules that declare the same **public** top-level name are refused by name. A
+> **[not yet]** Two modules that declare the same **public** top-level name are refused by name —
+> _E9082 NotImplemented: `a` and `b` both define `f` — this compiler flattens every module into one
+> namespace_. A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
 > the caller's own, and the two only have to be told apart in C — where each gets a module tag, its
 > position in a sorted list of the program's modules. Sorted rather than first-seen because that name has
@@ -387,7 +389,12 @@ package **cycles be rejected**.
 > `f := other.helper` reports that the module has no such member, so the first-class value this section
 > promises stops at the module boundary. The sentence is also untrue of the module — it HAS the name,
 > and a module CONSTANT reads as a value in the same program — so whatever happens to the capability,
-> the refusal owes a sentence about the value form rather than about the member (#69).
+> the refusal owes a sentence about the value form rather than about the member (#69). It is _E9106
+> NotImplemented: module `m` declares the function `f`, and a module's function is not a value here_.
+>
+> **[not yet]** A REMOTE package is refused at the import: a path naming a host is _E9105
+> NotImplemented: a remote package — the path names a host, and resolving one needs a package layer this
+> compiler has not built_. It resolves the standard library and this project, and nothing else.
 
 ### The prelude & std
 

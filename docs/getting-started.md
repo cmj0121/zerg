@@ -93,17 +93,19 @@ calls.
 
 ## A second file
 
-A module is a **directory**. Put one beside your entry file:
+A module is a **directory that holds a `mod.zg`**. That file is the module's surface — what a
+reader outside the folder may name — and a folder without one is just a folder, whose modules
+are its files. Put one beside your entry file:
 
 ```text
 app/
     main.zg
     greet/
-        greet.zg
+        mod.zg
 ```
 
 ```zerg
-# greet/greet.zg
+# greet/mod.zg
 pub fn hello(name: str) -> str {
     return "hello, " + name
 }

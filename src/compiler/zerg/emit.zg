@@ -7926,7 +7926,7 @@ fn c_sig_row_of(mut &em: Emitter, name: str) -> int {
 fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
 
-	check.chk_visible(em, name, em.sig_mod[r], em.sig_pub[r])
+	check.chk_visible(em, name, em.sig_path[r], em.sig_pub[r])
 }
 
 # c_chk_bare_fn is #57's rule for the one spelling that has no qualifier to check: a BARE
@@ -7960,7 +7960,7 @@ fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str, r: int) {
 fn c_chk_visible_const(mut &em: Emitter, name: str) {
 	i := c_k_idx(em, name)
 	return if i < 0
-	check.chk_visible(em, name, check.c_mod_of(em, em.k_decls[i].path), em.k_decls[i].is_pub)
+	check.chk_visible(em, name, em.k_decls[i].path, em.k_decls[i].is_pub)
 }
 
 # c_k_idx is a name's row in the module-constant table (k_decls and the k_tys beside it),

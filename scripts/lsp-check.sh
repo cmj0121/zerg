@@ -533,6 +533,12 @@ pub fn shout(s: str) -> str {
 	return s + "!"
 }
 ZG
+cat >"$tmp/proj/widget/mod.zg" <<'ZG'
+# `widget/` is a module because it holds this file (#57 decision 4), and its surface is what
+# this file re-exports.
+
+import pub "./a"
+ZG
 cat >"$tmp/proj/widget/a.zg" <<'ZG'
 import (
 	"/util"
@@ -544,7 +550,7 @@ pub fn greet() {
 	print util.shout(b.banner())
 }
 
-fn tagged(t: b.Tag) -> str {
+pub fn tagged(t: b.Tag) -> str {
 	return t.name
 }
 ZG
@@ -554,16 +560,16 @@ import (
 	"./c"
 )
 
-struct Tag {
+pub struct Tag {
 	pub name: str
 }
 
-fn banner() -> str {
+pub fn banner() -> str {
 	return a.tagged(Tag(c.stamp()))
 }
 ZG
 cat >"$tmp/proj/widget/c.zg" <<'ZG'
-fn stamp() -> str {
+pub fn stamp() -> str {
 	return "hello"
 }
 ZG

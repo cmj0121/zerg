@@ -1,0 +1,4 @@
+# The `lsp` module's surface (#57 decisions 4-6). One file, and the directory is a module
+# because this one says so.
+
+import pub "./server"

@@ -35,6 +35,16 @@ func (c *checker) resolveMember(ns *Symbol, local, member string) memberResoluti
 		}
 		return memberResolution{Key: key, Sym: s, Private: true}
 	}
+	// AND THE OTHER MODULES THAT BOUND THIS SAME SIBLING NAME. See Symbol.SiblingTags: the
+	// seed has one namespace scope and #57 gives every module a file named `fmt`, so the
+	// binding a lookup lands on may be another module's. Trying each tag is what lets one
+	// symbol answer for all of them.
+	for _, tag := range ns.SiblingTags {
+		k := moduleMember(tag, member)
+		if s := c.module.lookup(k); s != nil && s.Pub {
+			return memberResolution{Key: k, Sym: s, Found: true}
+		}
+	}
 	for _, tag := range ns.Reexports {
 		k := moduleMember(tag, member)
 		if s := c.module.lookup(k); s != nil && s.Pub {

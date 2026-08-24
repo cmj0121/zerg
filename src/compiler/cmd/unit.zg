@@ -6,6 +6,9 @@
 # relaxed language — so the emit-cache-link sequence is written once here rather than twice
 # beside them.
 
+import "./diag"
+import "./layout"
+import "./source"
 import (
 	"io"
 	"sha256"
@@ -15,7 +18,7 @@ import (
 
 # unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
 # renderer looks a source up in. A unit knows its own files; a finding knows one path.
-fn unit_srcs(units: list[Unit]) -> list[str] {
+pub fn unit_srcs(units: list[Unit]) -> list[str] {
 	mut out: list[str] = []
 	for u in units {
 		for s in u.srcs {
@@ -32,7 +35,7 @@ fn unit_srcs(units: list[Unit]) -> list[str] {
 # `Unit.paths` is the files wearing it, so the loader has already decided this and nothing here
 # gets a second opinion. See `c_mod_of` in `zerg/check.zg` for what goes wrong when a rule
 # computes it from the path instead.
-fn unit_mods(units: list[Unit]) -> zerg.Mods {
+pub fn unit_mods(units: list[Unit]) -> zerg.Mods {
 	mut ps: list[str] = []
 	mut ns: list[str] = []
 	mut ia: list[str] = []
@@ -55,7 +58,7 @@ fn unit_mods(units: list[Unit]) -> zerg.Mods {
 	return zerg.mods_of(ps, ns, ia, ip, im)
 }
 
-fn unit_paths(units: list[Unit]) -> list[str] {
+pub fn unit_paths(units: list[Unit]) -> list[str] {
 	mut out: list[str] = []
 	for u in units {
 		for p in u.paths {
@@ -69,7 +72,7 @@ fn unit_paths(units: list[Unit]) -> list[str] {
 # own object, then one link. A unit whose object is already in the cache is not compiled
 # again — which is the whole point of splitting the build up, since most rebuilds change
 # one module and leave the rest exactly as they were.
-fn link_program(entry: str, output: str, jobs: int) {
+pub fn link_program(entry: str, output: str, jobs: int) {
 	link_units(load_units(entry), entry, output, jobs)
 }
 
@@ -81,12 +84,12 @@ fn link_program(entry: str, output: str, jobs: int) {
 #
 # `entry` is still passed, because the no-`fn main` finding below is about a FILE and has to
 # name one.
-fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
+pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	# BEFORE anything is parsed: a token the lexer could not read is an error about text,
 	# and a parser handed the wreckage can only say something untrue about it
 	mut lex: list[zerg.Diag] = []
-	lex_diags_of(unit_srcs(units), unit_paths(units), lex)
-	report_diags(lex, unit_srcs(units), unit_paths(units))
+	diag.lex_diags_of(unit_srcs(units), unit_paths(units), lex)
+	diag.report_diags(lex, unit_srcs(units), unit_paths(units))
 
 	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
 	# units used to re-parse the whole program N times, which cost more than the C
@@ -120,7 +123,7 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 
 	# every unit is emitted before anything is reported, so one run answers for the whole
 	# program rather than for its first bad module
-	report_diags(diags, unit_srcs(units), unit_paths(units))
+	diag.report_diags(diags, unit_srcs(units), unit_paths(units))
 
 	# A program is a build rooted at an entry file that DEFINES `fn main`
 	# (docs/runtime/package.md; GRAMMAR group 10) — grammatically a main-less source is
@@ -137,13 +140,13 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	if not zerg.c_has_main(trees[trees.len() - 1]) {
 		mut nomain: list[zerg.Diag] = []
 		nomain.append(zerg.diag_at(entry, 1, 1, zerg.Rule.EntryHasNoMain, "this entry file declares no `fn main` — a program is a build rooted at an entry that defines one (docs/runtime/package.md); a module without an entry point builds with `--emit lib`"))
-		report_diags(nomain, unit_srcs(units), unit_paths(units))
+		diag.report_diags(nomain, unit_srcs(units), unit_paths(units))
 	}
 
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link
 	# was the largest thing a rebuild was paying for.
-	for rc in rt_sources() {
+	for rc in layout.rt_sources() {
 		obj := cache_path(file_key(rc))
 		objs.append(obj)
 		if not __zrt_exists(obj) {
@@ -164,7 +167,7 @@ fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 fn file_key(path: str) -> str {
 	mut body := ""
 	guard {
-		body = str(io.read_file(path)) + str(io.read_file(rt_dir() + "/zergrt.h"))
+		body = str(io.read_file(path)) + str(io.read_file(layout.rt_dir() + "/zergrt.h"))
 	}
 	return unit_key(body)
 }
@@ -172,8 +175,8 @@ fn file_key(path: str) -> str {
 # link_objs_argv links objects only — everything was compiled beforehand.
 fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
-	argv.append(cc_bin())
-	argv.append(cc_std())
+	argv.append(layout.cc_bin())
+	argv.append(layout.cc_std())
 
 	# LINK ONLY — no source is read here, so the dialect flags (cc_dialect, layout.zg) belong
 	# to the two invocations that compile, not to this one.
@@ -196,7 +199,7 @@ fn compile_batch(cpaths: list[str], opaths: list[str], jobs: int) {
 	mut running: list[int] = []
 	mut i := 0
 	for i < cpaths.len() {
-		pid := __zrt_proc_spawn(cc_object_argv(cpaths[i], opaths[i]))
+		pid := __zrt_proc_spawn(layout.cc_object_argv(cpaths[i], opaths[i]))
 		if pid < 0 {
 			io.ewrite("zerg: cannot start cc\n")
 			__zrt_exit(1)
@@ -246,14 +249,14 @@ fn reap(pids: list[int]) {
 
 # cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
 # cannot be created is not fatal: the build carries on without one.
-fn cache_dir() -> str {
-	dir := env_or("ZERG_CACHE", join_path(zerg_root(), ".zerg-cache"))
+pub fn cache_dir() -> str {
+	dir := layout.env_or("ZERG_CACHE", layout.join_path(layout.zerg_root(), ".zerg-cache"))
 	__zrt_mkdir(dir)
 	return dir
 }
 
 fn cache_path(key: str) -> str {
-	return join_path(cache_dir(), key + ".o")
+	return layout.join_path(cache_dir(), key + ".o")
 }
 
 # unit_key names a unit's cached object by the SHA-256 of everything that decides what
@@ -266,7 +269,7 @@ fn cache_path(key: str) -> str {
 # "far less likely". A digest is the answer, and the standard library has one now
 # (`sha256`, pure Zerg, checked against FIPS 180-4's vectors and against the system tool).
 fn unit_key(code: str) -> str {
-	return sha256.hex(bytearray(f"{cc_bin()}\n{cc_std()}\n{code}"))
+	return sha256.hex(bytearray(f"{layout.cc_bin()}\n{layout.cc_std()}\n{code}"))
 }
 
 # --- compilation units --------------------------------------------------------------------
@@ -279,7 +282,7 @@ fn unit_key(code: str) -> str {
 
 # Unit is one module: the name it is known by (its import path, or the entry file's path)
 # and the sources that make it up.
-struct Unit {
+pub struct Unit {
 	pub name: str
 
 	# imp_at / imp_path / imp_mod are WHAT THIS UNIT'S IMPORTS RESOLVED TO, row for row: the
@@ -301,11 +304,11 @@ struct Unit {
 
 # load_units returns every unit of the program, dependencies before dependents, the entry
 # last. A unit is loaded once however many modules import it.
-fn load_units(entry: str) -> list[Unit] {
+pub fn load_units(entry: str) -> list[Unit] {
 	mut one: list[str] = []
 	one.append(entry)
 	mut none: list[str] = []
-	return load_units_of(one, entry, dir_of(entry), none)
+	return load_units_of(one, entry, layout.dir_of(entry), none)
 }
 
 # load_units_of is load_units for an entry unit whose FILES are named directly rather than
@@ -326,7 +329,7 @@ fn load_units(entry: str) -> list[Unit] {
 # suite CREATES by existing: `json_test.zg` imports `testing`, `testing` renders a note through
 # `log`, and `log` encodes with `json`. Refusing that is refusing the arrangement
 # docs/runtime/package.md asks for, for a module the program compiles exactly once.
-fn load_units_of(files: list[str], name: str, root_dir: str, provides: list[str]) -> list[Unit] {
+pub fn load_units_of(files: list[str], name: str, root_dir: str, provides: list[str]) -> list[Unit] {
 	mut seen: list[str] = provides
 	mut units: list[Unit] = []
 	mut root: list[str] = []
@@ -352,8 +355,8 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 	# names the lexical rule and where — so letting them out is what puts the real reason in
 	# front of the reader. `load_with`, the loader in `source.zg`, has read them so all along.
 	for f in files {
-		src := read_source(f)
-		lex_check(src, f)
+		src := source.read_source(f)
+		diag.lex_check(src, f)
 		srcs.append(src)
 		paths.append(f)
 	}
@@ -367,8 +370,8 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 	mut si := 0
 	for si < srcs.len() {
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
-			chk_test_import(imd)
-			chk_unbuilt_module(imd)
+			source.chk_test_import(imd)
+			source.chk_unbuilt_module(imd)
 			sib := load_import(imd, paths[si], paths, root_dir, seen, stack, units)
 
 			# recorded AFTER the load, so an import that could not resolve has already been
@@ -383,7 +386,7 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 			if sib {
 				imp_mod.append(name)
 			} else {
-				imp_mod.append(module_where(imd, dir_of(paths[si]), root_dir))
+				imp_mod.append(source.module_where(imd, layout.dir_of(paths[si]), root_dir))
 			}
 		}
 		si = si + 1
@@ -408,12 +411,12 @@ fn load_import(imd: zerg.ImportDecl, file: str, own: list[str], root_dir: str, m
 
 	# The importer's own directory for `./`, the package root for `/` — the same pair the
 	# other loader threads, and for the same reason.
-	files := module_files(imd, dir_of(file), root_dir)
+	files := source.module_files(imd, layout.dir_of(file), root_dir)
 
 	# BEFORE the `seen` return, not after: a module already loaded is skipped, and an import of
 	# THIS FILE'S own module names one that always is — the unit being built. Asked second, the
 	# rule would be silent for exactly the program it is about.
-	chk_import_self(imd, files, file)
+	source.chk_import_self(imd, files, file)
 
 	# A SIBLING IS NOT A SECOND MODULE. When what an import names is already IN THIS UNIT —
 	# `lib/use.zg` writing `import "./base"` where `lib/base.zg` is a file of the same module
@@ -430,12 +433,12 @@ fn load_import(imd: zerg.ImportDecl, file: str, own: list[str], root_dir: str, m
 	# DEDUPED BY WHERE THE MODULE IS, not by how the import spelled it. `./lib` from one file
 	# and `/lib` from another are one module, and keying this on the string compiled its source
 	# into two units — `E4073 declared twice`, about a file the reader wrote once (#67).
-	loc := module_where(imd, dir_of(file), root_dir)
+	loc := source.module_where(imd, layout.dir_of(file), root_dir)
 
 	# AND THE CYCLE IS MATCHED ON THE LOCATION for the same reason: `a -> b -> a` written with
 	# two spellings of `a` is still a cycle, and comparing the strings somebody typed missed it
 	# the moment a module could be spelled twice.
-	chk_import_cycle(imd, stack, loc)
+	source.chk_import_cycle(imd, stack, loc)
 	for s in seen {
 		return false if s == loc
 	}
@@ -465,7 +468,7 @@ fn load_import(imd: zerg.ImportDecl, file: str, own: list[str], root_dir: str, m
 # An EMPTY resolution is not a sibling. `module_files` refuses an import that names nothing
 # before this is reached, so the case cannot arrive; answering false for it anyway keeps the
 # predicate true to its own sentence rather than to its callers.
-fn imp_is_sibling(files: list[str], own: list[str]) -> bool {
+pub fn imp_is_sibling(files: list[str], own: list[str]) -> bool {
 	return false if files.len() == 0
 
 	for f in files {

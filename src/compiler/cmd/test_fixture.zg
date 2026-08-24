@@ -5,7 +5,14 @@
 # when that closure has a cycle or names a fixture nothing declares. HOW it is written out
 # is `test_driver.zg`.
 
-import "/zerg"
+import (
+	"/zerg"
+
+	"./layout"
+	"./source"
+	"./test"
+	"./test_pkg"
+)
 
 # A TEST DECLARES WHAT IT NEEDS AND THE FRAMEWORK BUILDS IT. A `#[fixture]` is a function
 # that takes its tests as a CONTINUATION:
@@ -74,7 +81,7 @@ const FIXTURES_NAME := "fixtures_test.zg"
 # Fixt is one `#[fixture]`: its name, the type its `use: fn (T)` continuation takes — which is
 # what it produces — the names and declared types of its dependencies in order, and where it
 # was written.
-struct Fixt {
+pub struct Fixt {
 	pub name: str
 	pub produces: str
 	pub deps: list[str]
@@ -87,7 +94,7 @@ struct Fixt {
 # Tst is one `#[test]`: its name and place, its parameters, which of them is the
 # `testing.Context`, and — filled in by resolution — the fixtures that have to be standing
 # before it can run, dependencies first.
-struct Tst {
+pub struct Tst {
 	pub name: str
 	pub path: str
 	pub line: int
@@ -103,7 +110,7 @@ struct Tst {
 # fixture produces, and every circle. It is called twice per run — once for the whole tree
 # before anything executes, and once by run_pkg with the answers it needs — because a plan is
 # cheap and a second copy of the resolution would be a second place the rule is written down.
-fn plan_pkg(root: str, p: Pkg, only: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
+pub fn plan_pkg(root: str, p: test_pkg.Pkg, only: str, mut &fixts: list[Fixt], mut &tests: list[Tst], mut &errs: list[str]) {
 	mut own: list[bool] = []
 	files := pkg_files(root, p, own)
 	pkg_decls(files, own, fixts, tests, errs)
@@ -123,16 +130,16 @@ fn plan_pkg(root: str, p: Pkg, only: str, mut &fixts: list[Fixt], mut &tests: li
 # directory between the path `zerg test` was given and this one, then the package's own
 # sources. `own` says, for each, whether its `#[test]` functions belong to this package —
 # an inherited file contributes its fixtures and nothing else.
-fn pkg_files(root: str, p: Pkg, mut &own: list[bool]) -> list[str] {
+pub fn pkg_files(root: str, p: test_pkg.Pkg, mut &own: list[bool]) -> list[str] {
 	mut out: list[str] = []
 	for a in ancestors_of(root, p.dir) {
-		f := join_path(a, FIXTURES_NAME)
+		f := layout.join_path(a, FIXTURES_NAME)
 		if __zrt_exists(f) {
 			out.append(f)
 			own.append(false)
 		}
 	}
-	for f in pkg_sources(p) {
+	for f in test_pkg.pkg_sources(p) {
 		out.append(f)
 		own.append(true)
 	}
@@ -154,7 +161,7 @@ fn keep_only(only: str, mut &tests: list[Tst]) {
 
 	mut kept: list[Tst] = []
 	for t in tests {
-		if has_prefix(t.name, only) {
+		if test.has_prefix(t.name, only) {
 			kept.append(t)
 		}
 	}
@@ -169,7 +176,7 @@ fn ancestors_of(root: str, dir: str) -> list[str] {
 	return out if dir == root
 
 	mut rev: list[str] = []
-	mut at := dir_of(dir)
+	mut at := layout.dir_of(dir)
 	mut more := true
 	for more {
 		rev.append(at)
@@ -180,7 +187,7 @@ fn ancestors_of(root: str, dir: str) -> list[str] {
 		if at == root or at == "." or at == "/" {
 			more = false
 		} else {
-			at = dir_of(at)
+			at = layout.dir_of(at)
 		}
 	}
 	mut i := rev.len() - 1
@@ -211,7 +218,7 @@ fn pkg_decls(files: list[str], own: list[bool], mut &fixts: list[Fixt], mut &tes
 	mut i := 0
 	for i < files.len() {
 		f := files[i]
-		tree := zerg.parse_at(read_source(f), f)
+		tree := zerg.parse_at(source.read_source(f), f)
 		for fd in tree.fns {
 			if fd.is_fixture {
 				fixts.append(mk_fixture(fd, errs))
@@ -300,7 +307,7 @@ fn mk_test(fd: zerg.FnDecl, mut &errs: list[str]) -> Tst {
 }
 
 # fix_index is where a fixture of this name is, or -1.
-fn fix_index(fixts: list[Fixt], name: str) -> int {
+pub fn fix_index(fixts: list[Fixt], name: str) -> int {
 	mut i := 0
 	for i < fixts.len() {
 		return i if fixts[i].name == name
@@ -309,7 +316,7 @@ fn fix_index(fixts: list[Fixt], name: str) -> int {
 	return -1
 }
 
-fn has_str(xs: list[str], s: str) -> bool {
+pub fn str_in(xs: list[str], s: str) -> bool {
 	for x in xs {
 		return true if x == s
 	}
@@ -437,7 +444,7 @@ fn resolve_test(fixts: list[Fixt], order: list[str], mut &tests: list[Tst], i: i
 
 	mut need: list[str] = []
 	for nm in order {
-		if has_str(want, nm) {
+		if str_in(want, nm) {
 			need.append(nm)
 		}
 	}
@@ -448,7 +455,7 @@ fn resolve_test(fixts: list[Fixt], order: list[str], mut &tests: list[Tst], i: i
 # ends it: a circle is reported by fix_order, and this walk must not hang on one before the
 # report is printed.
 fn add_closure(fixts: list[Fixt], j: int, mut &want: list[str]) {
-	return if has_str(want, fixts[j].name)
+	return if str_in(want, fixts[j].name)
 
 	want.append(fixts[j].name)
 	mut d := 0

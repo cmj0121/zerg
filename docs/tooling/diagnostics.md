@@ -364,6 +364,7 @@ shipping compiler rather than a part of it (the line
 | `E5014` | import cycle: `…` -> `…` -> `…`                                                                         |
 | `E5015` | `…` is the module this file is already part of                                                          |
 | `E5016` | this unit emits more than `…` bytes of C — `$ZERG_EMIT_MAX`                                             |
+| `E5017` | an import reaches past a folder that declares a surface                                                 |
 | `E9001` | a parameterized `…[…]` as …                                                                             |
 | `E9002` | a `spec` member with a BODY                                                                             |
 | `E9003` | a generic enum `…[…]`                                                                                   |

@@ -280,9 +280,14 @@ res=$(grep -niE 'scope in hand|name resolution|symbol table' "$GRAMMAR")
 # It compares KINDS, not values, which is exactly as strong as it needs to be: every
 # argument is a zero value, so two fields of the same kind may swap with no effect, and a
 # swap between different kinds is the bug.
+# A QUALIFIED TYPE IS THE SAME KIND AS THE BARE ONE. Since #57 a file names its siblings
+# through an import, so `Ty` is spelled `ast.Ty` here and `Ty.TUnknown` in the constructor —
+# the same type, written from a file that has to say where it came from. The module prefix is
+# dropped so the two sides compare as they always did.
 kind_of_field() {
 	case $1 in
 	list\[*) printf 'list\n' ;;
+	*.*) printf '%s\n' "${1#*.}" ;;
 	*) printf '%s\n' "$1" ;;
 	esac
 }
@@ -296,7 +301,7 @@ kind_of_arg() {
 	"[]" | diags) printf 'list\n' ;;
 	true | false | want_lints) printf 'bool\n' ;;
 	'""') printf 'str\n' ;;
-	Ty.*) printf 'Ty\n' ;;
+	Ty.* | *.Ty.*) printf 'Ty\n' ;;
 	"c_nosub()") printf 'Subst\n' ;;
 	[0-9]*) printf 'int\n' ;;
 	*) printf 'UNKNOWN(%s)\n' "$1" ;;
@@ -309,7 +314,7 @@ if [ -z "$ctor" ]; then
 else
 	# the field KINDS, in declaration order
 	awk '/^(pub )?struct Emitter \{/{on=1; next} on && /^}/{exit} on' "$ZG/emit.zg" |
-		grep -oE "^$TAB(pub )?[a-z_][A-Za-z0-9_]*: [A-Za-z0-9_]+(\[[A-Za-z0-9_, ]+\])?$" |
+		grep -oE "^$TAB(pub )?[a-z_][A-Za-z0-9_]*: ([a-z_][A-Za-z0-9_]*\.)?[A-Za-z0-9_]+(\[([a-z_][A-Za-z0-9_]*\.)?[A-Za-z0-9_, ]+\])?$" |
 		sed -E "s/^$TAB(pub )?[a-z_][A-Za-z0-9_]*: //" >"$TMPD/fields"
 	while read -r f; do kind_of_field "$f"; done <"$TMPD/fields" >"$TMPD/fkinds"
 

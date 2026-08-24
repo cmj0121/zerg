@@ -1772,6 +1772,24 @@ fn main() {
 }
 EOF
 
+# A NAMESPACE IS REACHED BY WRITING ITS NAME AND NOTHING ELSE. There is no path
+# qualification in this language, so a binding that takes an import's name does not shadow it
+# for one expression — it puts the import out of reach for the rest of the block, with no
+# spelling left that reaches it.
+#
+# It was silent, and the two front halves disagreed about it: `zerg` resolved a qualified name
+# past a parameter of that name to the namespace, and the seed's checker agreed while its
+# emitter did not — `SystemError: unresolved call target`, about generated code. Found by #57
+# step 4, which is what first put module names in scope beside ordinary locals.
+reject local-shadows-namespace E4075 'is the name an import bound in this file' seed-gap <<'EOF'
+import "strings"
+
+fn main() {
+	strings := 1
+	print(f"{strings}")
+}
+EOF
+
 # --- the entry's own shape ---------------------------------------------------------
 #
 # `main`'s parameter is the command-line arguments and there is nothing else it could be

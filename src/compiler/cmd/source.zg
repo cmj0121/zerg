@@ -438,6 +438,8 @@ pub fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[s
 
 	found := resolve_module(im.path, from_dir, root_dir)
 
+	chk_past_a_surface(im, found, place)
+
 	return found if found.len() > 0
 
 	# The sentence names the ROOT that was looked in, because that is the half the reader
@@ -445,11 +447,81 @@ pub fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[s
 	raise zerg.rule_msg(zerg.Rule.ImportUnresolved, f"cannot resolve import `{im.path}`: {imp_missing_says(im.path, from_dir, root_dir)}\n{place}")
 }
 
+# chk_past_a_surface is #57 decision 6: ONE WAY IN. A folder that holds a `mod.zg` has a
+# surface, and what that surface carries is reached THROUGH it — `demo.run`, never
+# `demo/foo`. Reaching around it would write the folder's internal file layout into every
+# caller, which is the thing a surface exists to prevent.
+#
+# What is NOT refused is a child the surface does not carry. A file `mod.zg` never re-exports
+# is not part of the door, so its own path is the only way to it and stays open — which is the
+# other half of "exactly one way in" rather than an exception to it.
+#
+# It compares the LAST SEGMENT of each re-export against the file's own name, which is what a
+# sibling import resolves to by construction: `import pub "./count"` in `demo/mod.zg` is
+# `demo/count.zg` and can be nothing else.
+fn chk_past_a_surface(im: zerg.ImportDecl, found: list[str], place: str) {
+	return if found.len() != 1
+
+	dir := layout.dir_of(found[0])
+	return if not dir_has(dir, "mod.zg")
+
+	# A FILE OF THE FOLDER IS NOT REACHING PAST ANYTHING. `ast.zg` writing `import "./rule"`
+	# beside it is what #57 asks every file to do; the surface is what a reader OUTSIDE the
+	# folder is held to, and inside it there is nothing to reach around.
+	return if layout.dir_of(im.at) == dir
+
+	want := drop_zg(path_tail(found[0]))
+	return if want == "mod"
+
+	# THE READ IS GUARDED AND THE REFUSAL IS NOT. A `mod.zg` that cannot be read is not this
+	# rule's business — whatever is wrong with it has its own sentence — but a `raise` inside a
+	# `guard` is a raise nobody hears, which is what this was until the probe said so.
+	mut carried := false
+	at := layout.join_path(dir, "mod.zg")
+	guard {
+		for md in zerg.import_decls_at(read_source(at), at) {
+			if md.is_pub and drop_zg(path_tail(md.path)) == want {
+				carried = true
+			}
+		}
+	}
+
+	raise zerg.rule_msg(zerg.Rule.ImportPastASurface, f"`{im.path}` reaches past a surface — `{dir}` holds a `mod.zg` and puts `{want}`'s names on it, so they are reached through the folder (`{path_tail(dir)}.…`) and not through the file (#57). Import the folder\n{place}") if carried
+}
+
+# drop_zg is a source file's name without its extension, which is the name a sibling import of
+# it writes.
+fn drop_zg(name: str) -> str {
+	b := bytearray(name)
+	return name if b.len() < 3
+
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() - 3 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out) if b[b.len() - 3] == b'.' and b[b.len() - 2] == b'z' and b[b.len() - 1] == b'g'
+
+	return name
+}
+
 # imp_missing_says is the second half of an unresolved import: where it was looked for, and —
 # when the OTHER root holds a module of that name — the one line that fixes it. A reader who
 # wrote `import "log"` beside their own `log/` is one character away and has no way to know it.
 fn imp_missing_says(path: str, from_dir: str, root_dir: str) -> str {
 	body := imp_body(path)
+
+	# A DIRECTORY THAT IS THERE AND IS NOT A MODULE is the one miss worth its own sentence:
+	# "no module at `demo`" is true and unhelpful when `demo/` is sitting right there. What it
+	# lacks is a `mod.zg` — the file that declares a surface, and the whole of what makes a
+	# folder a module (#57 decision 4).
+	local := layout.join_path(from_dir, body)
+	return f"`{local}` is a directory and declares no surface — a folder is a module when it holds a `mod.zg`, and the modules in one that does not are its files" if imp_is_local(path) and dir_has(layout.join_path(from_dir, imp_parent(body)), path_tail(body))
+
+	at_root_dir := layout.join_path(root_dir, body)
+
+	return f"`{at_root_dir}` is a directory and declares no surface — a folder is a module when it holds a `mod.zg`, and the modules in one that does not are its files" if imp_is_root(path) and dir_has(layout.join_path(root_dir, imp_parent(body)), path_tail(body))
 
 	return f"no module at `{path}` (looked in {layout.join_path(from_dir, body)})" if imp_is_local(path)
 	return f"no module at `{path}` (looked in {layout.join_path(root_dir, body)})" if imp_is_root(path)
@@ -639,7 +711,15 @@ pub fn module_at(root: str, path: str) -> list[str] {
 
 	return none if file and dir
 	return module_one(layout.join_path(parent, base + ".zg")) if file
-	return module_many(layout.join_path(parent, base)) if dir
+
+	# A DIRECTORY IS A MODULE WHEN IT HOLDS `mod.zg`, and not otherwise (#57 decision 4). The
+	# file is what declares the surface — a folder full of sources with no `mod.zg` is a
+	# folder, and the modules in it are its files, reached one at a time.
+	#
+	# No keyword says so because the tree already carries the fact: `mod.zg` is a filename, and
+	# a `mod` keyword beside it would state it twice. It is an ordinary file written with
+	# ordinary syntax, which is what `import pub` was already for.
+	return module_many(layout.join_path(parent, base)) if dir and dir_has(layout.join_path(parent, base), "mod.zg")
 
 	return none
 }

@@ -199,6 +199,7 @@ func (l *Loader) resolveImports(
 		// uses sibling imports must be one the seed reads (#57).
 		if canonical != importer && isSibling(dir, files, importerDir, own) {
 			spec.Module = mangleTag(importer)
+			spec.Sibling = true
 			continue
 		}
 		spec.Module = mangleTag(canonical)

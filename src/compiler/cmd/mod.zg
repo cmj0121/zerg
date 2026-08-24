@@ -1,0 +1,16 @@
+# The `cmd` module's SURFACE: the terminal half of every subcommand, which `zergc.zg` calls
+# and nothing else does (#57 decisions 4-6). A directory is a module because it holds this
+# file, and what the module exports is what this file re-exports — not every `pub` in it.
+#
+# THE RE-EXPORT IS FLAT, so `zergc.zg` writes `cmd.run_build(…)` and never
+# `cmd.build.run_build(…)`: the eleven files not listed here are this driver's own workings,
+# and a `pub` in one of them means "my siblings may name me" and nothing more.
+import (
+	pub "./build"
+	pub "./desugar"
+	pub "./doc"
+	pub "./fmt"
+	pub "./lint"
+	pub "./lsp"
+	pub "./test"
+)

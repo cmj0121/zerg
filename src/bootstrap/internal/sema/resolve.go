@@ -263,6 +263,18 @@ func (r *resolver) collectImport(n *ast.ImportStmt) {
 		if name == "" {
 			continue
 		}
+		// TWO MODULES' SIBLING IMPORTS OF ONE FILE NAME ARE NOT A COLLISION. #57 makes the
+		// file the unit of naming, so every module's `mod.zg` writes `import pub "./fmt"` for
+		// its own `fmt.zg` — and this seed keeps ONE namespace scope for the whole program, so
+		// those land on one symbol. They are two bindings in two files and neither shadows the
+		// other; what the seed cannot do is tell them apart by file, so it records the second
+		// module's tag and resolveMember tries each in turn.
+		//
+		// A SEED GAP, and listed as one: `zerg` binds per file and needs none of this.
+		if prev := r.module.local(name); prev != nil && prev.Kind == SymNamespace && spec.Sibling && prev.Module != spec.Module {
+			prev.SiblingTags = append(prev.SiblingTags, spec.Module)
+			continue
+		}
 		if prev := r.module.local(name); prev != nil {
 			// The whole-program flatten (Phase 1g) merges every module's imports into one
 			// unit, so a module imported from two places (a diamond, or the entry and a

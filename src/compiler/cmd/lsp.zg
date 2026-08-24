@@ -2,16 +2,16 @@
 # is `src/compiler/lsp`; what is here is the command that starts it, and the one thing it
 # cannot do for itself.
 #
-# THE FILE IS NOT CALLED `lsp.zg`, and it is the only one here that is not named after its
-# command. A module is resolved BESIDE THE IMPORTER first, so `cmd/lsp.zg` would be what
-# `import "lsp"` resolves to from inside this directory — the language server would import
-# itself, which the cycle rule refuses as `E4047 lsp -> lsp`. A file in a module directory
-# shadows the module its name spells, for every file in that directory.
+# THE SERVER IS IMPORTED `as server`, and it is the only import here that is renamed. This
+# file is `lsp.zg` like every other command is named after its own, and `cmd/mod.zg` puts its
+# name on the module's surface — so the bare `lsp` in this directory is that namespace, and
+# the module `/lsp` needs one of its own. E3085 says so and `as` is what it asks for.
 
 import "./source"
 import (
 	"cli"
-	"/lsp"
+
+	"/lsp" as server
 )
 
 # lsp takes no arguments and no flags. The protocol is the interface: an editor starts the
@@ -28,18 +28,18 @@ pub fn lsp_cmd() -> cli.Command {
 # environment variables, an installation root and a checkout layout — `source.zg` and
 # `layout.zg` beside this file — and none of it the protocol's business.
 fn do_lsp(c: cli.Ctx) -> int {
-	return lsp.serve(lsp_program)
+	return server.serve(lsp_program)
 }
 
 # lsp_program is that function. The work is `source.zg`'s `load_buffer`, because finding the
 # program a file belongs to is the same question `module_files` answers one import at a time
 # — and a copy of it here would be the server's own opinion about what a module is, which is
 # the one thing this split exists to prevent.
-fn lsp_program(path: str, text: str) -> lsp.Program {
+fn lsp_program(path: str, text: str) -> server.Program {
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
 	mut mods: list[str] = []
 	mut res := source.res_new()
 	source.load_buffer(path, text, srcs, paths, mods, res)
-	return lsp.program(paths, srcs, mods, res.at, res.path, res.mod)
+	return server.program(paths, srcs, mods, res.at, res.path, res.mod)
 }

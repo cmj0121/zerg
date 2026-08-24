@@ -159,3 +159,25 @@ program can write, once user drops exist.
 structure this toolchain has built stays far under it, and a structure that genuinely goes that deep is
 better served by a `list` indexed by position — which is a shape the language already has, and which frees
 in one loop.
+
+## Checking a template nobody instantiates
+
+**Status: closed as a cost with no reader.**
+
+Every rule this compiler enforces is driven by the walk that **lowers** a body, and a template is removed
+before that walk — only the specializations a call asks for are lowered. So `fn f[T](xs: list[T], v: T)`
+that no call reaches compiles in silence, and so does the same body assigning to an immutable binding,
+which is `E3006` everywhere else. The seed diagnoses both, because its semantic pass walks a
+**declaration** rather than a lowering.
+
+Closing it needs a body checked against a type parameter's **bounds** rather than against a concrete
+type. That is not a smaller version of the checker that exists: `x.show()` on a `T: Show` has no method to
+resolve until `T` is one, and lowering is defined only over concrete types — so it is a second checker,
+over a second type language, agreeing with the first everywhere the two overlap. The gap it closes is a
+template **nobody calls**, which is a template with no reader; the first call is what makes every one of
+these rules fire, and a template that is never called is dead code the linter already reports (`L102`).
+
+**Threshold: a template that ships uncalled and matters.** A library exporting a generic its own build
+never instantiates, where a reader would meet the error only after depending on it — not the intermediate
+state inside one program's own tree, where the call that makes it fire is a few lines away and the
+compiler names the rule the moment it arrives.

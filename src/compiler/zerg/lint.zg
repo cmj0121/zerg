@@ -746,6 +746,12 @@ fn ref_arg(nm: str, args: list[ast.Expr], n: str, refs: list[str]) -> bool {
 # lint_imports reports an import whose namespace nothing reaches through.
 fn lint_imports(f: ast.File, ns: list[str], ids: list[str], mut &out: list[Finding]) {
 	for im in f.imports {
+		# AN `import pub` IS USED BY BEING WRITTEN. It is a RE-EXPORT (#57 decision 5): what it
+		# does is put another file's public names on this module's surface, and a `mod.zg` whose
+		# whole body is re-exports reaches through none of its own namespaces on purpose.
+		# Calling those unused told the reader to delete the module's surface.
+		continue if im.is_pub
+
 		# the BINDING, not the path's last segment: an `as` rename is the name this file
 		# reaches the module by, so asking about anything else calls every renamed import
 		# unused and lets one that genuinely is go unreported

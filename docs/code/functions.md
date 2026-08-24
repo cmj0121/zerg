@@ -10,6 +10,12 @@ another module is an ordinary value: `f := other.helper` binds it, then `f(x)` c
 local function. A **generic** function is **not first-class until instantiated**: the un-instantiated
 generic name is not itself a value — it becomes one only once its type arguments are **inferred** at a
 use site.
+
+> **[not yet]** Writing the arguments WITHOUT a call does not instantiate one either: `f := id[int]` is
+> _E9030 NotImplemented: `id[…]` with no call after it — this compiler instantiates a generic at the
+> call_. The instantiated value has no spelling of its own this phase; wrap the call in a closure or
+> name a concrete function.
+
 A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
 differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`

@@ -211,6 +211,10 @@ pattern（_E9008 a struct pattern `Div{…}`_）。
 
 expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 
+> **[not yet]** 一個開不出這個編譯器讀得懂的產生式的 token,會在它所在的位置被拒絕,而不是被帶進樹裡:
+> _E9040 NotImplemented: `…` is not an expression this compiler reads_。它是上面每一個具名形式底下的兜底,
+> 所以一個 GRAMMAR 導得出、而這一期沒建的形狀,抵達讀者時是它自己的句子,而不是一次悄悄走歪的 parse。
+
 | 優先序 | 運算子                                | 結合   |
 | ------ | ------------------------------------- | ------ |
 | 1 最高 | `.` `()` `[]`（field／call／index）   | 左     |

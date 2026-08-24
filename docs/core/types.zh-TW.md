@@ -326,6 +326,10 @@ decorator 的職責——**[not yet]**，所以今天只要型別可及，litera
 **那一個**欄位可省略、不會讓它前面的欄位也可省略；而預設值是**每次建構各求值一次**，不是在宣告處只算一次——裡面
 若寫了運算式（一個呼叫、幾個 module 常數的和），每一次省略該欄位的建構都會再跑一次。
 
+> **[not yet]** 讀同一個 struct 的**另一個欄位**的預設值會被按名字拒絕—— _E9071 NotImplemented: the default
+> on field `h` of `Box` reads the field `w` — a default is materialised at the construction, where a field
+> is not a name in scope_ ——這是[參數預設值](../code/functions.zh-TW.md)那個限制在欄位這一層的讀法。
+
 **沒有零值（zero value）**。因此沒有預設值的非 optional 欄位在建構時是**必填**的，少給就是錯誤、並且會指名該欄位。
 **唯一的隱含預設值**是 `T?` 欄位的 `nil`，那是它天生的「不存在」狀態——`T?` 不必寫 `=` 就可以省略。
 

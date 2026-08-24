@@ -766,7 +766,7 @@ fn path_tail(path: str) -> str {
 
 fn load_into(file: str, root_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
 	mut root: list[str] = []
-	load_with(file, file, root_dir, seen, root, srcs, paths, mods, res, Buffer("", ""))
+	load_with(file, file, [file], root_dir, seen, root, srcs, paths, mods, res, Buffer("", ""))
 }
 
 # Buffer is the one source the loader must NOT read from disk: the file a language server
@@ -789,7 +789,12 @@ struct Buffer {
 # module reached a second time is skipped and the loop never runs — which terminates the walk
 # without noticing what it walked. The two loaders ask ONE function, so the rule and its
 # sentence are in one place and cannot drift apart the way the walks themselves have to.
-fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res, buf: Buffer) {
+# `own` is THE FILES OF THE MODULE `file` BELONGS TO, and it is threaded rather than computed
+# because only the caller knows it: this loader recurses per FILE, and a file cannot be asked
+# which of its directory's files share its module — `src/stdlib` holds fifteen one-file modules
+# in one directory. It is what `imp_is_sibling` (unit.zg) is asked, and the two loaders ask the
+# one predicate so the answer cannot differ between `--emit lib` and every other build.
+fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list[str], stack: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res, buf: Buffer) {
 	for s in seen {
 		return if s == file
 	}
@@ -811,20 +816,35 @@ fn load_with(file: str, mod: str, root_dir: str, mut &seen: list[str], stack: li
 		# file that wrote it, and the root travels beside it for `/`. Threading one directory
 		# for both is what made `./b` in `sub/a.zg` look for `<root>/b`.
 		deps := module_files(imd, dir_of(file), root_dir)
-		res_add(res, file, imd.path, module_where(imd, dir_of(file), root_dir))
 
 		# ASKED BEFORE THE CYCLE RULE, because the cycle rule fires on the same program with a
 		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
 		# it is one file that is already in the module it named. The specific finding speaks.
 		chk_import_self(imd, deps, file)
 
+		# A SIBLING IS NOT A SECOND MODULE, and this loader has to say so too. `cmd/unit.zg`
+		# taught the rule to the loader `--emit lib` runs; every OTHER build runs this one,
+		# and here the same import loaded the sibling's file a second time under an identity
+		# of its own — `lib/b.zg` became the module `project:lib/b` — so a third party's
+		# `lib.g()` was refused as `E3084 module `lib` has no `g``, about a name `lib`
+		# declares. The file is already in this module: it binds a NAMESPACE and loads
+		# nothing (#57).
+		#
+		# The resolution recorded is THIS module, for the reason `imp_mod` records it there:
+		# the namespace names the module doing the naming.
+		if imp_is_sibling(deps, own) {
+			res_add(res, file, imd.path, mod)
+			continue
+		}
+
 		# MATCHED ON THE LOCATION, not on the spelling — see cmd/unit.zg's load_import.
 		loc := module_where(imd, dir_of(file), root_dir)
+		res_add(res, file, imd.path, loc)
 		chk_import_cycle(imd, stack, loc)
 		mut here := stack
 		here.append(loc)
 		for dep in deps {
-			load_with(dep, loc, root_dir, seen, here, srcs, paths, mods, res, buf)
+			load_with(dep, loc, deps, root_dir, seen, here, srcs, paths, mods, res, buf)
 		}
 	}
 	srcs.append(src)
@@ -920,7 +940,7 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 
 	mut seen: list[str] = []
 	mut stack: list[str] = []
-	load_with(path, path, dir_of(path), seen, stack, srcs, paths, mods, res, buf)
+	load_with(path, path, [path], dir_of(path), seen, stack, srcs, paths, mods, res, buf)
 }
 
 # entry_files is the candidate entries directly in one directory: its `.zg` files, in the
@@ -956,7 +976,7 @@ fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &
 	mut stack: list[str] = []
 	mut ok := false
 	guard {
-		load_with(entry, entry, dir_of(entry), seen, stack, srcs, paths, mods, res, buf)
+		load_with(entry, entry, [entry], dir_of(entry), seen, stack, srcs, paths, mods, res, buf)
 		ok = true
 	}
 	return false if not ok

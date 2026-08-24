@@ -369,13 +369,22 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
 			chk_test_import(imd)
 			chk_unbuilt_module(imd)
-			load_import(imd, paths[si], root_dir, seen, stack, units)
+			sib := load_import(imd, paths[si], paths, root_dir, seen, stack, units)
 
 			# recorded AFTER the load, so an import that could not resolve has already been
 			# refused by name and nothing here has to answer for it.
 			imp_at.append(paths[si])
 			imp_path.append(imd.path)
-			imp_mod.append(module_where(imd, dir_of(paths[si]), root_dir))
+
+			# A SIBLING NAMES THIS UNIT, which is the whole of what makes it one. The import
+			# binds a namespace onto a file that is already here, so the module it names is
+			# the module doing the naming — and every rule downstream reads `imp_mod`, so
+			# saying so here is saying it once.
+			if sib {
+				imp_mod.append(name)
+			} else {
+				imp_mod.append(module_where(imd, dir_of(paths[si]), root_dir))
+			}
 		}
 		si = si + 1
 	}
@@ -395,7 +404,7 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 #
 # An import path and a directory are different things that happen to be spelled alike, and the
 # fix is to stop asking one list about both: every caller of this is an import, by construction.
-fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) {
+fn load_import(imd: zerg.ImportDecl, file: str, own: list[str], root_dir: str, mut &seen: list[str], stack: list[str], mut &units: list[Unit]) -> bool {
 
 	# The importer's own directory for `./`, the package root for `/` — the same pair the
 	# other loader threads, and for the same reason.
@@ -405,6 +414,18 @@ fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[s
 	# THIS FILE'S own module names one that always is — the unit being built. Asked second, the
 	# rule would be silent for exactly the program it is about.
 	chk_import_self(imd, files, file)
+
+	# A SIBLING IS NOT A SECOND MODULE. When what an import names is already IN THIS UNIT —
+	# `lib/use.zg` writing `import "./base"` where `lib/base.zg` is a file of the same module
+	# — loading it would compile that file twice, and every declaration in it would collide
+	# with itself: `E4073 declared twice`, about a file the reader wrote once. Two of them
+	# naming each other would be a CYCLE besides, which is what `E5014` said about the very
+	# arrangement docs/runtime/package.md calls one module.
+	#
+	# So it loads nothing and adds no edge. What it does is bind a NAMESPACE onto a file that
+	# is already here, which is the one spelling this adds: `base.foo()` beside the `foo()`
+	# that has always worked. Nothing that compiled before compiles differently (#57).
+	return true if imp_is_sibling(files, own)
 
 	# DEDUPED BY WHERE THE MODULE IS, not by how the import spelled it. `./lib` from one file
 	# and `/lib` from another are one module, and keying this on the string compiled its source
@@ -416,7 +437,7 @@ fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[s
 	# the moment a module could be spelled twice.
 	chk_import_cycle(imd, stack, loc)
 	for s in seen {
-		return if s == loc
+		return false if s == loc
 	}
 
 	# THE STACK GROWS AT THE IMPORT, and that is where the path down actually is. It used to
@@ -432,4 +453,29 @@ fn load_import(imd: zerg.ImportDecl, file: str, root_dir: str, mut &seen: list[s
 	mut deeper := stack
 	deeper.append(loc)
 	load_unit(files, loc, root_dir, seen, deeper, units)
+	return false
+}
+
+# imp_is_sibling is whether every file an import named is already a file of the unit doing the
+# importing. It is asked of the FILES and not of the module identity, because the two are
+# different questions: `lib/base.zg` reached as `./base` is the identity `project:lib/base`,
+# and reached as a member of `lib` it is `project:lib` — the same file under two names, which
+# is exactly the confusion that made it load twice.
+#
+# An EMPTY resolution is not a sibling. `module_files` refuses an import that names nothing
+# before this is reached, so the case cannot arrive; answering false for it anyway keeps the
+# predicate true to its own sentence rather than to its callers.
+fn imp_is_sibling(files: list[str], own: list[str]) -> bool {
+	return false if files.len() == 0
+
+	for f in files {
+		mut here := false
+		for o in own {
+			if o == f {
+				here = true
+			}
+		}
+		return false if not here
+	}
+	return true
 }

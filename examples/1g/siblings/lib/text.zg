@@ -1,0 +1,18 @@
+# And back the other way. Two files of one module may name each other MUTUALLY, which two
+# MODULES may not: `E5014` refuses a cycle because modules form a DAG and a cycle has no
+# order for its `init()` blocks to be readied in. A module is one node, so a name crossing
+# from one of its files to another crosses nothing.
+import "./count"
+
+pub fn bytes(s: str) -> bytearray {
+	return bytearray(s)
+}
+
+pub fn both(a: str, b: str) -> int {
+	return count.width(a) + count.width(b)
+}
+
+# The bare spelling, unchanged and still exact: `count.width` and `width` name one function.
+pub fn plain(a: str, b: str) -> int {
+	return width(a) + width(b)
+}

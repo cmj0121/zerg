@@ -70,6 +70,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/outputorder/`](1g/outputorder) | `print` and `io.println` reach stdout in the order they were written         |
 | [`1g/evalorder/`](1g/evalorder)     | two operands that can both run code run in the order they were written       |
 | [`1g/testfile/`](1g/testfile)       | what a normal build compiles, and what it leaves on the floor                |
+| [`1g/siblings/`](1g/siblings)       | two files of one module naming each other through imports                    |
 
 ### The two that must be refused
 

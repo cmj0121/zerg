@@ -28,7 +28,7 @@ fn do_desugar(c: cli.Ctx) -> int {
 	# A PATH, NOT ONLY A FILE — see `do_fmt`.
 	files := walkdir.sources_from(c.args())
 
-	return NOTHING_FOUND if files.len() == 0
+	return walkdir.NOTHING_FOUND if files.len() == 0
 
 	return run_desugar_check(files, c.all("off")) if c.has("check")
 

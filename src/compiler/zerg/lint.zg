@@ -115,7 +115,16 @@
 # which is the one property a lint finding does not have. The severity is the difference and
 # it is the only field Diag has no room for.
 
-import "strconv"
+import (
+	"strconv"
+
+	"./ast"
+	"./check"
+	"./emit"
+	"./lexer"
+	"./parser"
+	"./token"
+)
 pub struct Finding {
 	# sev is the word printed before the code — "warning", "info", or "" for a finding. It is
 	# the printed spelling rather than a tag mapped to one, so there is no second table
@@ -132,11 +141,11 @@ pub struct Finding {
 # lint_program reports every finding across a loaded program (the entry file plus the modules
 # it imports, as the driver resolved them), with the `#[allow(…)]` suppressions applied and
 # the two things worth saying about a suppression itself.
-pub fn lint_program(srcs: list[str], paths: list[str], ms: Mods) -> list[Finding] {
+pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Finding] {
 	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
 	# declared by the language, so a program that implements it declares no spec by that name
 	# — and L102 read the resulting `into` as a private function nobody calls.
-	f := c_with_builtin_specs(merge_files_at(srcs, paths))
+	f := emit.c_with_builtin_specs(emit.merge_files_at(srcs, paths))
 	mut out: list[Finding] = []
 
 	# Names used ANYWHERE in the program: a private function called from another module
@@ -165,9 +174,9 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: Mods) -> list[Finding
 	# that line, and the raise took the whole run with it. Everything above comes from the
 	# parsed tree and is true of a program the emitter cannot lower, so the honest answer is
 	# no conversions rather than no lint.
-	mut convs: list[Diag] = []
+	mut convs: list[ast.Diag] = []
 	guard {
-		convs = lint_conversions(srcs, paths, ms)
+		convs = emit.lint_conversions(srcs, paths, ms)
 	}
 	for d in convs {
 		out.append(Finding("", d.path, d.line, d.col, d.code, d.msg))
@@ -183,7 +192,7 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: Mods) -> list[Finding
 fn lint_token_rules(srcs: list[str], paths: list[str], mut &out: list[Finding]) {
 	mut k := 0
 	for k < srcs.len() {
-		mut toks := tokenize(srcs[k])
+		mut toks := lexer.tokenize(srcs[k])
 		path := lint_path_at(paths, k)
 		lint_with_names(toks, path, out)
 		lint_ships_an_assert(toks, path, out)
@@ -200,10 +209,10 @@ fn lint_token_rules(srcs: list[str], paths: list[str], mut &out: list[Finding]) 
 # parser (GRAMMAR defines it by expansion), so by the time there is an AST there is no
 # `with` left to lint. Every rule about this form is a token rule for the same reason —
 # F409 next door is the other one.
-fn lint_with_names(mut &toks: list[Token], path: str, mut &out: list[Finding]) {
+fn lint_with_names(mut &toks: list[token.Token], path: str, mut &out: list[Finding]) {
 	mut i := 0
 	for i + 3 < toks.len() {
-		if toks[i].kind == Kind.With {
+		if toks[i].kind == token.Kind.With {
 			at := lint_with_as(toks, i)
 			if at > 0 {
 				name := toks[at].lexeme
@@ -228,18 +237,18 @@ fn lint_path_at(paths: list[str], i: int) -> str {
 # lint_with_as answers the index of the identifier a `with` binds, or -1 when it binds none.
 # The `as` is what it looks for, at the same bracket depth the `with` opened at, before the
 # block's `{`.
-fn lint_with_as(toks: list[Token], at: int) -> int {
+fn lint_with_as(toks: list[token.Token], at: int) -> int {
 	mut depth := 0
 	mut i := at + 1
 	for i + 1 < toks.len() {
 		k := toks[i].kind
-		if k == Kind.LParen or k == Kind.LBrack {
+		if k == token.Kind.LParen or k == token.Kind.LBrack {
 			depth = depth + 1
-		} else if k == Kind.RParen or k == Kind.RBrack {
+		} else if k == token.Kind.RParen or k == token.Kind.RBrack {
 			depth = depth - 1
 		} else if depth == 0 {
-			return i + 1 if k == Kind.As and toks[i + 1].kind == Kind.Ident
-			return 0 - 1 if k == Kind.LBrace or k == Kind.Semi
+			return i + 1 if k == token.Kind.As and toks[i + 1].kind == token.Kind.Ident
+			return 0 - 1 if k == token.Kind.LBrace or k == token.Kind.Semi
 		}
 		i = i + 1
 	}
@@ -249,9 +258,9 @@ fn lint_with_as(toks: list[Token], at: int) -> int {
 # lint_reads_name reports whether the block opening at or after `at` mentions `name`. The
 # block's own `{` is found first, so a mention in the HEAD — which cannot be a read of a
 # binding the head is still making — does not count.
-fn lint_reads_name(toks: list[Token], at: int, name: str) -> bool {
+fn lint_reads_name(toks: list[token.Token], at: int, name: str) -> bool {
 	mut i := at
-	for i < toks.len() and toks[i].kind != Kind.LBrace {
+	for i < toks.len() and toks[i].kind != token.Kind.LBrace {
 		i = i + 1
 	}
 	return false if i >= toks.len()
@@ -260,13 +269,13 @@ fn lint_reads_name(toks: list[Token], at: int, name: str) -> bool {
 	i = i + 1
 	for i < toks.len() {
 		k := toks[i].kind
-		if k == Kind.LBrace {
+		if k == token.Kind.LBrace {
 			depth = depth + 1
-		} else if k == Kind.RBrace {
+		} else if k == token.Kind.RBrace {
 			return false if depth == 0
 
 			depth = depth - 1
-		} else if k == Kind.Ident and toks[i].lexeme == name {
+		} else if k == token.Kind.Ident and toks[i].lexeme == name {
 			return true
 		}
 		i = i + 1
@@ -283,7 +292,7 @@ fn lint_reads_name(toks: list[Token], at: int, name: str) -> bool {
 #
 # The test is a WRITE to `this`, not a mention of it: a `mut fn` that reads `this` is the
 # ordinary case, and one that passes it to a `mut &` parameter is writing through it.
-fn lint_idle_mut_fn(f: File, mut &out: list[Finding]) {
+fn lint_idle_mut_fn(f: ast.File, mut &out: list[Finding]) {
 	refs := lint_ref_params(f)
 	for fd in f.fns {
 		if fd.recv != "" and lint_recv_is_mut(fd) and not writes_this(fd.body, refs) {
@@ -303,7 +312,7 @@ fn lint_idle_mut_fn(f: File, mut &out: list[Finding]) {
 # discovers what to run, and L601 below asks whether a `#[test]` is somewhere it will ship
 # from. One fact, one home.
 pub fn is_test_file(name: str) -> bool {
-	return name == "_test.zg" or strings_has_suffix(name, "_test.zg")
+	return name == "_test.zg" or parser.strings_has_suffix(name, "_test.zg")
 }
 
 # lint_ships_a_test is L601: a `#[test]` function outside a `*_test.zg` file.
@@ -316,7 +325,7 @@ pub fn is_test_file(name: str) -> bool {
 #
 # So the sentence leads with the CONSEQUENCE. "Move it" alone is style advice about a program
 # that runs, and style advice is what a reader learns to scroll past.
-fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
+fn lint_ships_a_test(f: ast.File, mut &out: list[Finding]) {
 	for fd in f.fns {
 		if (fd.is_test or fd.is_fixture) and not is_test_file(fd.path) {
 			out.append(Finding("warning", fd.path, fd.line, fd.col, "L601", f"`{fd.name}` is a `{deco_of(fd)}` outside a `*_test.zg` file, so it SHIPS — it is compiled into the binary like any other function, nothing calls it, and its `import \"testing\"` travels with it; move it to a `*_test.zg` file beside its module if that is not what you meant"))
@@ -336,11 +345,11 @@ fn lint_ships_a_test(f: File, mut &out: list[Finding]) {
 # one — and a rule that quietly misses a case is the shape this project takes out of its
 # gates. A token cannot be missed. L105 next door is a token rule for its own reason, and the
 # two share one lex — see lint_token_rules.
-fn lint_ships_an_assert(mut &toks: list[Token], path: str, mut &out: list[Finding]) {
+fn lint_ships_an_assert(mut &toks: list[token.Token], path: str, mut &out: list[Finding]) {
 	return if is_test_file(path)
 
 	for t in toks {
-		if t.kind == Kind.Assert {
+		if t.kind == token.Kind.Assert {
 			out.append(Finding("warning", path, t.line, t.col, "L602", "`assert` outside a `*_test.zg` file SHIPS — it is always compiled in, there is no flag that strips it, and this claim can abort a running program. It is not a weaker check than the one you meant, it is a LESS SPECIFIC one: it says the claim was false, never what it meant. `raise ValueError(\"xs must be non-empty\") if xs.len() == 0` says both, and is the form that belongs in a program somebody runs"))
 		}
 	}
@@ -349,19 +358,19 @@ fn lint_ships_an_assert(mut &toks: list[Token], path: str, mut &out: list[Findin
 # deco_of spells which of the two decorators a declaration carries, for the one sentence that
 # has to name it. They cannot both be on one item — a decorator leads a declaration and there
 # is one per item (E2063) — so the question has an answer.
-fn deco_of(fd: FnDecl) -> str {
+fn deco_of(fd: ast.FnDecl) -> str {
 	return "#[fixture]" if fd.is_fixture
 
 	return "#[test]"
 }
 
-fn lint_recv_is_mut(fd: FnDecl) -> bool {
+fn lint_recv_is_mut(fd: ast.FnDecl) -> bool {
 	return false if fd.params.len() == 0
 	return fd.params[0].is_ref
 }
 
 # writes_this is assigns_to over a whole body, including the blocks a statement carries.
-fn writes_this(body: list[Stmt], refs: list[str]) -> bool {
+fn writes_this(body: list[ast.Stmt], refs: list[str]) -> bool {
 	mut i := 0
 	for i < body.len() {
 		return true if assigns_to(body[i], "this", refs) or writes_this_in(body[i], refs)
@@ -370,7 +379,7 @@ fn writes_this(body: list[Stmt], refs: list[str]) -> bool {
 	return false
 }
 
-fn writes_this_in(s: Stmt, refs: list[str]) -> bool {
+fn writes_this_in(s: ast.Stmt, refs: list[str]) -> bool {
 	return match s {
 		Stmt.SIf(c, tb, he, eb)        => writes_this(tb, refs) or writes_this(eb, refs)
 		Stmt.SIfLet(nm, v, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
@@ -387,7 +396,7 @@ fn writes_this_in(s: Stmt, refs: list[str]) -> bool {
 	}
 }
 
-fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
+fn writes_this_arms(arms: list[ast.SelArm], refs: list[str]) -> bool {
 	for a in arms {
 		return true if writes_this(a.body, refs)
 	}
@@ -412,7 +421,7 @@ fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
 # Both checks are answered from the parsed File alone, like every other rule here. That is
 # what keeps them honest: `?? nil` is a SHAPE, and so is a `!` inside a function whose
 # declared result is a `T?`. Neither needs to know a type that was not written down.
-fn lint_optionals(f: File, mut &out: list[Finding]) {
+fn lint_optionals(f: ast.File, mut &out: list[Finding]) {
 	for fd in f.fns {
 		lint_opt_body(fd.body, LWhere(fd.path, fd.line, fd.col, fd.name), c_ret_is_opt(fd), out)
 	}
@@ -432,14 +441,14 @@ struct LWhere {
 # lint_step is `w` moved to the statement a marker names, and left alone for anything else.
 # A block's statements each carry one (parse_block), so walking a body means asking this at
 # every step and the place is exact without any rule tracking it.
-fn lint_step(w: LWhere, s: Stmt) -> LWhere {
+fn lint_step(w: LWhere, s: ast.Stmt) -> LWhere {
 	return match s {
 		Stmt.SAt(l, c) => LWhere(w.path, l, c, w.fname)
 		_ => w
 	}
 }
 
-fn c_ret_is_opt(fd: FnDecl) -> bool {
+fn c_ret_is_opt(fd: ast.FnDecl) -> bool {
 	return false if not fd.has_ret
 	return match fd.ret {
 		Ty.TOpt(_) => true
@@ -447,7 +456,7 @@ fn c_ret_is_opt(fd: FnDecl) -> bool {
 	}
 }
 
-fn lint_opt_body(body: list[Stmt], at: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_body(body: list[ast.Stmt], at: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	mut w := at
 	for s in body {
 		w = lint_step(w, s)
@@ -472,18 +481,18 @@ fn lint_opt_body(body: list[Stmt], at: LWhere, ret_opt: bool, mut &out: list[Fin
 	}
 }
 
-fn lint_opt_two(a: list[Stmt], b: list[Stmt], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_two(a: list[ast.Stmt], b: list[ast.Stmt], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	lint_opt_body(a, w, ret_opt, out)
 	lint_opt_body(b, w, ret_opt, out)
 }
 
-fn lint_opt_arms(arms: list[SelArm], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_arms(arms: list[ast.SelArm], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	for a in arms {
 		lint_opt_body(a.body, w, ret_opt, out)
 	}
 }
 
-fn lint_opt_expr(e: Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_expr(e: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	match e {
 		Expr.ECoalesce(a, b, jump) => lint_opt_coalesce(a, b, w, ret_opt, out)
 		Expr.EForce(x) => lint_opt_force(x, w, ret_opt, out)
@@ -498,18 +507,18 @@ fn lint_opt_expr(e: Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	}
 }
 
-fn lint_opt_pair(a: Expr, b: Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_pair(a: ast.Expr, b: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	lint_opt_expr(a, w, ret_opt, out)
 	lint_opt_expr(b, w, ret_opt, out)
 }
 
-fn lint_opt_args(args: list[Expr], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_args(args: list[ast.Expr], w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	for a in args {
 		lint_opt_expr(a, w, ret_opt, out)
 	}
 }
 
-fn lint_opt_coalesce(a: Expr, b: Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_coalesce(a: ast.Expr, b: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	if is_nil_expr(b) {
 		out.append(Finding("", w.path, w.line, w.col, "L201", f"`?? nil` in `{w.fname}` changes nothing — the result is optional either way"))
 	}
@@ -517,14 +526,14 @@ fn lint_opt_coalesce(a: Expr, b: Expr, w: LWhere, ret_opt: bool, mut &out: list[
 	lint_opt_expr(b, w, ret_opt, out)
 }
 
-fn lint_opt_force(x: Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
+fn lint_opt_force(x: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	if ret_opt {
 		out.append(Finding("", w.path, w.line, w.col, "L202", f"`!` in `{w.fname}`, which answers a `T?` — `?` hands the absence back instead of aborting"))
 	}
 	lint_opt_expr(x, w, ret_opt, out)
 }
 
-fn is_nil_expr(e: Expr) -> bool {
+fn is_nil_expr(e: ast.Expr) -> bool {
 	return match e {
 		Expr.ENil => true
 		_         => false
@@ -548,7 +557,7 @@ fn lint_skip() {
 # It looks WITHIN ONE BLOCK, at the statements after the capture. A write from a nested
 # block, or from a later call, is not reported: this reports the shape that misleads,
 # rather than every shape that could.
-fn lint_captures(f: File, mut &out: list[Finding]) {
+fn lint_captures(f: ast.File, mut &out: list[Finding]) {
 	refs := lint_ref_params(f)
 	for fd in f.fns {
 		mut muts: list[str] = []
@@ -559,7 +568,7 @@ fn lint_captures(f: File, mut &out: list[Finding]) {
 # lint_ref_params is `name#idx` for every `mut &` parameter in the program. A call is a
 # WRITE to the variable it passes only in those slots, and the declaration is the only
 # place that says which — without it, `show(k)` (a read) was reported as a write.
-fn lint_ref_params(f: File) -> list[str] {
+fn lint_ref_params(f: ast.File) -> list[str] {
 	mut refs: list[str] = []
 	for fd in f.fns {
 		mut j := 0
@@ -577,7 +586,7 @@ fn lint_ref_params(f: File) -> list[str] {
 # block-scoped by DECLARATION when the documented rule is block-scoped by STATEMENT: a
 # `mut k` declared in a function and captured-then-written inside an `if` was silent, even
 # though the capture and the write sat next to each other.
-fn lint_captures_body(body: list[Stmt], at: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_body(body: list[ast.Stmt], at: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	mut w := at
 	mut i := 0
 	for i < body.len() {
@@ -609,18 +618,18 @@ fn lint_captures_body(body: list[Stmt], at: LWhere, refs: list[str], mut &muts: 
 	}
 }
 
-fn lint_captures_two(a: list[Stmt], b: list[Stmt], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_two(a: list[ast.Stmt], b: list[ast.Stmt], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	lint_captures_body(a, w, refs, muts, out)
 	lint_captures_body(b, w, refs, muts, out)
 }
 
-fn lint_captures_arms(arms: list[SelArm], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_arms(arms: list[ast.SelArm], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	for a in arms {
 		lint_captures_body(a.body, w, refs, muts, out)
 	}
 }
 
-fn lint_captures_let(nm: str, is_mut: bool, v: Expr, w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_let(nm: str, is_mut: bool, v: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	lint_note_mut(nm, is_mut, muts)
 	lint_captures_expr(v, w, refs, muts, out)
 }
@@ -630,7 +639,7 @@ fn lint_captures_let(nm: str, is_mut: bool, v: Expr, w: LWhere, refs: list[str],
 # was silent inside every closure. `collect_binds_expr` grew the same descent for the same
 # reason. A closure is reached through a call's arguments too, since `run(fn() { … })` is
 # the shape they are actually written in.
-fn lint_captures_expr(e: Expr, w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_expr(e: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	match e {
 		Expr.EGuard(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EBlock(b) => lint_captures_body(b, w, refs, muts, out)
@@ -641,7 +650,7 @@ fn lint_captures_expr(e: Expr, w: LWhere, refs: list[str], mut &muts: list[str],
 	}
 }
 
-fn lint_captures_each(args: list[Expr], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
+fn lint_captures_each(args: list[ast.Expr], w: LWhere, refs: list[str], mut &muts: list[str], mut &out: list[Finding]) {
 	for a in args {
 		lint_captures_expr(a, w, refs, muts, out)
 	}
@@ -662,7 +671,7 @@ fn lint_note_mut(nm: str, is_mut: bool, mut &muts: list[str]) {
 
 # lint_capture_at reports every `mut` name this statement captured that a LATER statement
 # in the same block writes to.
-fn lint_capture_at(body: list[Stmt], at: int, x: Expr, kw: str, w: LWhere, refs: list[str], muts: list[str], mut &out: list[Finding]) {
+fn lint_capture_at(body: list[ast.Stmt], at: int, x: ast.Expr, kw: str, w: LWhere, refs: list[str], muts: list[str], mut &out: list[Finding]) {
 	# `spawn f(k, k)` and `f(k + k)` reach walk_expr as two occurrences of one name, and the
 	# finding is about the NAME — reporting it twice would say the same thing twice
 	mut said: list[str] = []
@@ -676,7 +685,7 @@ fn lint_capture_at(body: list[Stmt], at: int, x: Expr, kw: str, w: LWhere, refs:
 
 # expr_idents is the names an expression reads. walk_expr collects three kinds at once
 # because its other callers want all three; this one wants the first.
-fn expr_idents(x: Expr) -> list[str] {
+fn expr_idents(x: ast.Expr) -> list[str] {
 	mut names: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
@@ -685,7 +694,7 @@ fn expr_idents(x: Expr) -> list[str] {
 }
 
 # assigned_after is whether any statement after `at` assigns to `n`, in this block.
-fn assigned_after(body: list[Stmt], at: int, n: str, refs: list[str]) -> bool {
+fn assigned_after(body: list[ast.Stmt], at: int, n: str, refs: list[str]) -> bool {
 	mut i := at + 1
 	for i < body.len() {
 		return true if assigns_to(body[i], n, refs)
@@ -700,9 +709,9 @@ fn assigned_after(body: list[Stmt], at: int, n: str, refs: list[str]) -> bool {
 # `SAssign`. `chk_root_name` is the checker's walk of an assignment target; this file had a
 # verbatim copy of it, which meant the set of shapes that count as a target was written
 # down twice.
-fn assigns_to(s: Stmt, n: str, refs: list[str]) -> bool {
+fn assigns_to(s: ast.Stmt, n: str, refs: list[str]) -> bool {
 	return match s {
-		Stmt.SAssign(lhs, rhs) => chk_root_name(lhs) == n
+		Stmt.SAssign(lhs, rhs) => check.chk_root_name(lhs) == n
 		Stmt.SExpr(e) => mutates_expr(e, n, refs)
 		_ => false
 	}
@@ -716,26 +725,26 @@ fn assigns_to(s: Stmt, n: str, refs: list[str]) -> bool {
 # `c_meth_mutates` is the emitter's one statement of which methods write through their
 # receiver, and `refs` is read off the declarations. Both facts are asked of their owner
 # rather than guessed at here, so a method or a signature added later is seen for free.
-fn mutates_expr(e: Expr, n: str, refs: list[str]) -> bool {
+fn mutates_expr(e: ast.Expr, n: str, refs: list[str]) -> bool {
 	return match e {
-		Expr.EMethod(t, m, args) => c_meth_mutates(m) and chk_root_name(t) == n
+		Expr.EMethod(t, m, args) => emit.c_meth_mutates(m) and check.chk_root_name(t) == n
 		Expr.ECall(nm, args, _) => ref_arg(nm, args, n, refs)
 		_ => false
 	}
 }
 
 # ref_arg is whether `nm` takes `n` in a `mut &` slot.
-fn ref_arg(nm: str, args: list[Expr], n: str, refs: list[str]) -> bool {
+fn ref_arg(nm: str, args: list[ast.Expr], n: str, refs: list[str]) -> bool {
 	mut i := 0
 	for i < args.len() {
-		return true if chk_root_name(args[i]) == n and has_str(refs, f"{nm}#{strconv.to_string(i, 10)}")
+		return true if check.chk_root_name(args[i]) == n and has_str(refs, f"{nm}#{strconv.to_string(i, 10)}")
 		i = i + 1
 	}
 	return false
 }
 
 # lint_imports reports an import whose namespace nothing reaches through.
-fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[Finding]) {
+fn lint_imports(f: ast.File, ns: list[str], ids: list[str], mut &out: list[Finding]) {
 	for im in f.imports {
 		# the BINDING, not the path's last segment: an `as` rename is the name this file
 		# reaches the module by, so asking about anything else calls every renamed import
@@ -748,11 +757,11 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[Finding])
 
 # lint_dead_fns reports a private function nothing calls. `main` is the program's entry —
 # the runtime calls it, so it is never "unused" no matter what the source says.
-fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[Finding]) {
+fn lint_dead_fns(f: ast.File, calls: list[str], ids: list[str], mut &out: list[Finding]) {
 	reqs := spec_required_names(f)
 	for fd in f.fns {
 		# `init` is called by the generated main, the same way the runtime calls `main`
-		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
+		if fd.is_pub or fd.name == "main" or parser.is_init_name(fd.name) {
 			continue_marker()
 		} else if fd.is_test or fd.is_fixture {
 			# A `#[test]` AND A `#[fixture]` ARE CALLED BY THE DRIVER `zerg test` GENERATES,
@@ -780,7 +789,7 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[Findi
 # the SPECS rather than of the impls, and deliberately: a name is checked here, not a (type,
 # name) pair, and matching more loosely errs toward saying nothing — which is the right
 # direction for a rule whose finding is "delete this".
-fn spec_required_names(f: File) -> list[str] {
+fn spec_required_names(f: ast.File) -> list[str] {
 	mut out: list[str] = []
 	for sp in f.specs {
 		for r in sp.reqs {
@@ -799,7 +808,7 @@ fn spec_required_names(f: File) -> list[str] {
 # every name a function binds, `_` among them. An unread `_` is what `_` MEANS, so "never read"
 # is the one thing there is no point saying about it — what is worth saying is that the BINDER
 # has no reader, and that is the same fact this walk already has in hand.
-fn lint_unread_bindings(f: File, mut &out: list[Finding]) {
+fn lint_unread_bindings(f: ast.File, mut &out: list[Finding]) {
 	for fd in f.fns {
 		mut names: list[str] = []
 		mut ats: list[LWhere] = []
@@ -832,7 +841,7 @@ fn lint_unread_bindings(f: File, mut &out: list[Finding]) {
 # collect_binds gathers the names a block binds, descending into nested blocks. It is the
 # name-only face of collect_binds_at, for the emitter's capture analysis, which wants the
 # set and has no diagnostic to place.
-fn collect_binds(body: list[Stmt], mut &names: list[str]) {
+pub fn collect_binds(body: list[ast.Stmt], mut &names: list[str]) {
 	mut ats: list[LWhere] = []
 	collect_binds_at(body, LWhere("", 0, 0, ""), names, ats)
 }
@@ -851,7 +860,7 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 # The temporaries cost nothing here. Every one of them is READ — by the condition that tests
 # it, and by the message that names it — so L103 has nothing to say about any of them, and the
 # rule that would have needed protecting protects itself.
-fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_at(body: list[ast.Stmt], at: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	mut w := at
 	for s in body {
 		w = lint_step(w, s)
@@ -876,13 +885,13 @@ fn collect_binds_at(body: list[Stmt], at: LWhere, mut &names: list[str], mut &at
 
 # collect_binds_arms reaches the bindings inside a select's arm bodies. Without it a binding
 # made in an arm was invisible to L103 and L104 both — an arm body is a block like any other.
-fn collect_binds_arms(arms: list[SelArm], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_arms(arms: list[ast.SelArm], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	for a in arms {
 		collect_binds_at(a.body, w, names, ats)
 	}
 }
 
-fn collect_binds_let(name: str, value: Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_let(name: str, value: ast.Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	names.append(name)
 	ats.append(w)
 	collect_binds_expr(value, w, names, ats)
@@ -891,7 +900,7 @@ fn collect_binds_let(name: str, value: Expr, w: LWhere, mut &names: list[str], m
 # collect_binds_expr descends into the one EXPRESSION that carries a block of its own.
 # `guard` is an expression (GRAMMAR#guard-expr), so a binding made inside one is reached from the
 # statement that holds the guard rather than from a statement of its own.
-fn collect_binds_expr(e: Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_expr(e: ast.Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	match e {
 		Expr.EGuard(body_b) => collect_binds_at(body_b, w, names, ats)
 		Expr.EBlock(body_b) => collect_binds_at(body_b, w, names, ats)
@@ -904,14 +913,14 @@ fn collect_binds_expr(e: Expr, w: LWhere, mut &names: list[str], mut &ats: list[
 	}
 }
 
-fn collect_binds_if(then_b: list[Stmt], else_b: list[Stmt], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_if(then_b: list[ast.Stmt], else_b: list[ast.Stmt], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	collect_binds_at(then_b, w, names, ats)
 	collect_binds_at(else_b, w, names, ats)
 }
 
 # collect_binds_iflet records the name `if v := e` binds as well as the blocks', since
 # the binding is the whole reason the form exists and an unread one is still dead.
-fn collect_binds_iflet(name: str, then_b: list[Stmt], else_b: list[Stmt], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
+fn collect_binds_iflet(name: str, then_b: list[ast.Stmt], else_b: list[ast.Stmt], w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	names.append(name)
 	ats.append(w)
 	collect_binds_at(then_b, w, names, ats)
@@ -942,7 +951,7 @@ fn collect_binds_iflet(name: str, then_b: list[Stmt], else_b: list[Stmt], w: LWh
 # The three cost `src/stdlib/log.zg` three `#[allow(L102)]` that suppressed a false positive
 # for as long as the walk was short — a suppression standing in for a linter defect, which
 # is the outcome an allow must never be used for.
-fn walk_program(f: File, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_program(f: ast.File, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for fd in f.fns {
 		walk_body(fd.body, ids, calls, ns)
 		walk_defaults(fd.params, ids, calls, ns)
@@ -962,7 +971,7 @@ fn walk_program(f: File, mut &ids: list[str], mut &calls: list[str], mut &ns: li
 }
 
 # walk_defaults visits the default value of every parameter that has one.
-fn walk_defaults(ps: list[Param], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_defaults(ps: list[ast.Param], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for p in ps {
 		if p.has_def {
 			walk_expr(p.def, ids, calls, ns)
@@ -972,7 +981,7 @@ fn walk_defaults(ps: list[Param], mut &ids: list[str], mut &calls: list[str], mu
 
 # walk_field_defaults is the same for a struct's fields. It is a second function and not a
 # generic one because `Param` and `FieldDef` are two structs, not one shape.
-fn walk_field_defaults(fields: list[FieldDef], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_field_defaults(fields: list[ast.FieldDef], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for fl in fields {
 		if fl.has_def {
 			walk_expr(fl.def, ids, calls, ns)
@@ -982,7 +991,7 @@ fn walk_field_defaults(fields: list[FieldDef], mut &ids: list[str], mut &calls: 
 
 # walk_body records every identifier read, every called function name, and every namespace
 # a method call goes through, for a whole block.
-fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for s in body {
 		match s {
 			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => walk_expr(value, ids, calls, ns)
@@ -1029,24 +1038,24 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 	}
 }
 
-fn walk_pair(a: Expr, b: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_pair(a: ast.Expr, b: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(a, ids, calls, ns)
 	walk_expr(b, ids, calls, ns)
 }
 
-fn walk_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_if(cond: ast.Expr, then_b: list[ast.Stmt], else_b: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(cond, ids, calls, ns)
 	walk_body(then_b, ids, calls, ns)
 	walk_body(else_b, ids, calls, ns)
 }
 
-fn walk_loop(head: Expr, body_b: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_loop(head: ast.Expr, body_b: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(head, ids, calls, ns)
 	walk_body(body_b, ids, calls, ns)
 }
 
 # walk_expr records the names an expression reaches for.
-fn walk_sel(arms: list[SelArm], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_sel(arms: list[ast.SelArm], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for a in arms {
 		walk_expr(a.ch, ids, calls, ns)
 		walk_expr(a.val, ids, calls, ns)
@@ -1054,21 +1063,21 @@ fn walk_sel(arms: list[SelArm], mut &ids: list[str], mut &calls: list[str], mut 
 	}
 }
 
-fn walk_two_lists(a: list[Expr], b: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_two_lists(a: list[ast.Expr], b: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_all(a, ids, calls, ns)
 	walk_all(b, ids, calls, ns)
 }
 
 # walk_raise visits a raise's Err and, when it has one, its `from` cause — both are
 # ordinary expressions, and a name used only as a cause is still a name used.
-fn walk_raise(x: Expr, has_cause: bool, cause: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_raise(x: ast.Expr, has_cause: bool, cause: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(x, ids, calls, ns)
 	if has_cause {
 		walk_expr(cause, ids, calls, ns)
 	}
 }
 
-fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match e {
 		Expr.EIdent(name) => ids.append(name)
 		Expr.EUnary(oper, x) => walk_expr(x, ids, calls, ns)
@@ -1105,13 +1114,13 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 
 # walk_coalesce reaches both halves of `a ?? b`: the fallback is either an expression or
 # a divergent statement, and only one of the two is ever populated.
-fn walk_coalesce(a: Expr, b: Expr, jump: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_coalesce(a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(a, ids, calls, ns)
 	walk_expr(b, ids, calls, ns)
 	walk_body(jump, ids, calls, ns)
 }
 
-fn walk_call(name: str, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_call(name: str, args: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	calls.append(name)
 	walk_all(args, ids, calls, ns)
 }
@@ -1124,7 +1133,7 @@ fn walk_call(name: str, args: list[Expr], mut &ids: list[str], mut &calls: list[
 # mark it used — without this every private method reads as dead code. When the target is
 # a bare identifier it is also recorded as a namespace, because the same syntax is how a
 # module's function is reached, and that is what tells an import from an unused one.
-fn walk_method(target: Expr, meth: str, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_method(target: ast.Expr, meth: str, args: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match target {
 		Expr.EIdent(name) => ns.append(name)
 		_ => skip()
@@ -1134,19 +1143,19 @@ fn walk_method(target: Expr, meth: str, args: list[Expr], mut &ids: list[str], m
 	walk_all(args, ids, calls, ns)
 }
 
-fn walk_three(a: Expr, b: Expr, c: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_three(a: ast.Expr, b: ast.Expr, c: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(a, ids, calls, ns)
 	walk_expr(b, ids, calls, ns)
 	walk_expr(c, ids, calls, ns)
 }
 
-fn walk_all(es: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_all(es: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for x in es {
 		walk_expr(x, ids, calls, ns)
 	}
 }
 
-fn walk_match(scrut: Expr, arms: list[Arm], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_match(scrut: ast.Expr, arms: list[ast.Arm], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_expr(scrut, ids, calls, ns)
 	for a in arms {
 		walk_expr(a.body, ids, calls, ns)
@@ -1258,7 +1267,7 @@ fn lint_allow_says(a: Allow, fired: int, mut &out: list[Finding]) {
 # given. An `E` code is the case worth separating: it is not a typo, it is a reader asking
 # for something the language will not do.
 fn lint_no_rule_why(code: str) -> str {
-	return "an `E` code is a COMPILER diagnostic and `#[allow]` never suppresses one: a program that could switch a compiler check off would make the bypass an official feature" if strings_has_prefix(code, "E")
+	return "an `E` code is a COMPILER diagnostic and `#[allow]` never suppresses one: a program that could switch a compiler check off would make the bypass an official feature" if parser.strings_has_prefix(code, "E")
 
 	return "this linter's rules are the `L…` codes documented in lint.zg"
 }
@@ -1268,11 +1277,11 @@ fn lint_allows(srcs: list[str], paths: list[str]) -> list[Allow] {
 	mut out: list[Allow] = []
 	mut k := 0
 	for k < srcs.len() {
-		toks := tokenize(srcs[k])
+		toks := lexer.tokenize(srcs[k])
 		path := lint_path_at(paths, k)
 		mut i := 0
 		for i < toks.len() {
-			if toks[i].kind == Kind.Hash {
+			if toks[i].kind == token.Kind.Hash {
 				lint_allow_at(toks, i, path, out)
 			}
 			i = i + 1
@@ -1289,12 +1298,12 @@ fn lint_allows(srcs: list[str], paths: list[str]) -> list[Allow] {
 # (E2063), so a `#[test]` that wants an allow beside it has to write `#[allow(L601), test]` —
 # and a scan that only looked at the item after the `#[` would see nothing in exactly the
 # program the merged form was made for.
-fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {
+fn lint_allow_at(toks: list[token.Token], at: int, path: str, mut &out: list[Allow]) {
 	h := toks[at]
 	mut codes: list[str] = []
 	mut i := at + 1
-	for i < toks.len() and toks[i].kind != Kind.RBrack {
-		if toks[i].kind == Kind.Ident and toks[i].lexeme == "allow" {
+	for i < toks.len() and toks[i].kind != token.Kind.RBrack {
+		if toks[i].kind == token.Kind.Ident and toks[i].lexeme == "allow" {
 			i = lint_allow_args(toks, i + 1, codes)
 		} else {
 			i = i + 1
@@ -1310,12 +1319,12 @@ fn lint_allow_at(toks: list[Token], at: int, path: str, mut &out: list[Allow]) {
 # lint_allow_args reads one `( CODE, … )` argument list onto `codes` and answers the index
 # just past it — or `at` itself when the item took no arguments, which is E2064's program and
 # not this walk's business.
-fn lint_allow_args(toks: list[Token], at: int, mut &codes: list[str]) -> int {
-	return at if at >= toks.len() or toks[at].kind != Kind.LParen
+fn lint_allow_args(toks: list[token.Token], at: int, mut &codes: list[str]) -> int {
+	return at if at >= toks.len() or toks[at].kind != token.Kind.LParen
 
 	mut i := at + 1
-	for i < toks.len() and toks[i].kind != Kind.RParen {
-		if toks[i].kind == Kind.Ident {
+	for i < toks.len() and toks[i].kind != token.Kind.RParen {
+		if toks[i].kind == token.Kind.Ident {
 			codes.append(toks[i].lexeme)
 		}
 		i = i + 1
@@ -1330,9 +1339,9 @@ fn lint_allow_args(toks: list[Token], at: int, mut &codes: list[str]) -> int {
 # rule covers both a line and a block: a `;` inside braces belongs to a statement of the
 # BLOCK, so the scan runs past it, and the `}` that closes the block is the last token of the
 # statement that owns it.
-fn lint_stmt_last_line(toks: list[Token], at: int) -> int {
+fn lint_stmt_last_line(toks: list[token.Token], at: int) -> int {
 	mut i := at
-	for i < toks.len() and toks[i].kind == Kind.Semi {
+	for i < toks.len() and toks[i].kind == token.Kind.Semi {
 		i = i + 1
 	}
 	return 0 if i >= toks.len()
@@ -1342,12 +1351,12 @@ fn lint_stmt_last_line(toks: list[Token], at: int) -> int {
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return last if k == Kind.Eof
-		return last if depth == 0 and (k == Kind.Semi or k == Kind.RBrace)
+		return last if k == token.Kind.Eof
+		return last if depth == 0 and (k == token.Kind.Semi or k == token.Kind.RBrace)
 
-		if k == Kind.LParen or k == Kind.LBrack or k == Kind.LBrace or k == Kind.Hash {
+		if k == token.Kind.LParen or k == token.Kind.LBrack or k == token.Kind.LBrace or k == token.Kind.Hash {
 			depth = depth + 1
-		} else if k == Kind.RParen or k == Kind.RBrack or k == Kind.RBrace {
+		} else if k == token.Kind.RParen or k == token.Kind.RBrack or k == token.Kind.RBrace {
 			depth = depth - 1
 		}
 		last = toks[i].line

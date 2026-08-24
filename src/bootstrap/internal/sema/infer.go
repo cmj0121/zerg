@@ -762,18 +762,33 @@ func (c *checker) enumTypeQualified(fld *ast.Field) (*types.Enum, *Symbol, strin
 // qualified variant constructor, the mirror of the bare `Variant(...)`). It reports
 // true once it owns an enum-namespace callee so inferCall does not fall through.
 func (c *checker) enumNamespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
-	id, ok := fld.X.(*ast.Ident)
-	if !ok {
-		return nil, false
-	}
-	en, sym, ok := c.enumTypeNamed(id)
-	if !ok {
+	var en *types.Enum
+	var sym *Symbol
+	var tag string
+	switch x := fld.X.(type) {
+	case *ast.Ident:
+		var ok bool
+		if en, sym, ok = c.enumTypeNamed(x); !ok {
+			return nil, false
+		}
+	case *ast.Field:
+		// the same constructor one module over: `mod.Enum.Variant(...)`. The left of the
+		// dot is itself a field — a namespace member naming an enum TYPE — so the Ident
+		// case never sees it, and the ordinary call path reports the enum as a type used
+		// as a value. inferField already reads the NULLARY half of this shape; without
+		// this the payload half was the one form of a qualified variant that had no way
+		// to be written.
+		var ok bool
+		if en, sym, tag, ok = c.enumTypeQualified(x); !ok {
+			return nil, false
+		}
+	default:
 		return nil, false
 	}
 	if fld.Name == "of" {
 		return c.enumOfCall(n, en), true
 	}
-	if vsym := c.enumVariantSym(sym, fld.Name); vsym != nil {
+	if vsym := c.enumVariantSym(sym, tag+fld.Name); vsym != nil {
 		c.info.ExprTypes[fld] = en
 		return c.constructVariant(n, vsym), true
 	}

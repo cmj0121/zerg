@@ -9,6 +9,10 @@
 # oracle prints never shows it, so the subset lexer simply drops it. An f-string is scanned
 # WHOLE, as one FStr token the parser cuts up (scan_fstring); the f-cmd and decorator
 # interpolation forms are still deferred.
+import "./ast"
+import "./parser"
+import "./rule"
+import "./token"
 import (
 	"ascii"
 	"strconv"
@@ -25,7 +29,7 @@ struct Lex {
 	pub depth: int
 	pub stack: list[int]
 	pub sp: int
-	pub prev: Kind
+	pub prev: token.Kind
 
 	# keep_trivia makes a comment a TOKEN instead of nothing. The compiler never sets it —
 	# it would only have to skip them again — but the formatter cannot do its job without
@@ -60,7 +64,7 @@ fn advance(mut &l: Lex) -> byte {
 	return c
 }
 
-fn is_ident(c: byte) -> bool {
+pub fn is_ident(c: byte) -> bool {
 	return ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_'
 }
 
@@ -78,9 +82,9 @@ fn lexeme_from(mut &l: Lex, a: int) -> str {
 
 # --- token production ----------------------------------------------------------
 
-fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
+fn emit_tok(mut &l: Lex, k: token.Kind, line: int, col: int, lexeme: str) -> token.Token {
 	l.prev = k
-	return Token(k, lexeme, "", line, col)
+	return token.Token(k, lexeme, "", line, col)
 }
 
 # bad emits an ILLEGAL token that says what is wrong with it. The lexer has always marked
@@ -91,13 +95,13 @@ fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
 #
 # The reason rides in the token's VALUE, which an Illegal has no other use for, and
 # `lex_diags` turns every one of them into a diagnostic with a place and a code.
-fn bad(mut &l: Lex, code: Rule, why: str, line: int, col: int, lexeme: str) -> Token {
-	return emit_val(l, Kind.Illegal, line, col, lexeme, f"{rule_code(code)} {why}")
+fn bad(mut &l: Lex, code: rule.Rule, why: str, line: int, col: int, lexeme: str) -> token.Token {
+	return emit_val(l, token.Kind.Illegal, line, col, lexeme, f"{rule.rule_code(code)} {why}")
 }
 
-fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
+fn emit_val(mut &l: Lex, k: token.Kind, line: int, col: int, lexeme: str, value: str) -> token.Token {
 	l.prev = k
-	return Token(k, lexeme, value, line, col)
+	return token.Token(k, lexeme, value, line, col)
 }
 
 # lex_code_end is where `bad` put the space, and it is the whole of the encoding: an Illegal
@@ -116,7 +120,7 @@ fn lex_code_end(b: list[byte]) -> int {
 
 # next returns the next token, inserting a ';' at a line break per the ASI rule and
 # dropping comments and blank lines along the way.
-fn next(mut &l: Lex) -> Token {
+fn next(mut &l: Lex) -> token.Token {
 	for not eof(l) {
 		c := at(l, 0)
 		if c == b' ' or c == byte(9) {
@@ -136,7 +140,7 @@ fn next(mut &l: Lex) -> Token {
 			sline := l.line
 			scol := l.col
 			advance(l)
-			return emit(l, Kind.Semi, sline, scol, ";") if l.depth == 0 and ends_item(l.prev)
+			return emit_tok(l, token.Kind.Semi, sline, scol, ";") if l.depth == 0 and token.ends_item(l.prev)
 		} else if c == b'#' {
 			return scan_token(l) if at(l, 1) == b'['
 			return scan_comment(l, l.line, l.col) if l.keep_trivia
@@ -146,7 +150,7 @@ fn next(mut &l: Lex) -> Token {
 			return scan_token(l)
 		}
 	}
-	return emit(l, Kind.Eof, l.line, l.col, "")
+	return emit_tok(l, token.Kind.Eof, l.line, l.col, "")
 }
 
 fn skip_comment(mut &l: Lex) {
@@ -157,15 +161,15 @@ fn skip_comment(mut &l: Lex) {
 
 # scan_comment reads a `#` comment to the end of its line and returns it as a token,
 # lexeme and all, so the formatter can put it back exactly as written.
-fn scan_comment(mut &l: Lex, sline: int, scol: int) -> Token {
+fn scan_comment(mut &l: Lex, sline: int, scol: int) -> token.Token {
 	mut sb: list[byte] = []
 	for not eof(l) and at(l, 0) != byte(10) {
 		sb.append(advance(l))
 	}
-	return emit(l, Kind.Comment, sline, scol, str(sb))
+	return emit_tok(l, token.Kind.Comment, sline, scol, str(sb))
 }
 
-fn scan_token(mut &l: Lex) -> Token {
+fn scan_token(mut &l: Lex) -> token.Token {
 	sline := l.line
 	scol := l.col
 	soff := l.offs
@@ -177,13 +181,13 @@ fn scan_token(mut &l: Lex) -> Token {
 
 	if c == b'b' and at(l, 1) == b'\'' {
 		advance(l) # b
-		return scan_char_lit(l, Kind.Byte, true, sline, scol, soff)
+		return scan_char_lit(l, token.Kind.Byte, true, sline, scol, soff)
 	}
 
 	return scan_ident(l, sline, scol, soff) if ascii.is_alpha(c) or c == b'_'
 	return scan_number(l, sline, scol, soff) if ascii.is_digit(c)
 	return scan_string(l, sline, scol, soff) if c == b'"'
-	return scan_char_lit(l, Kind.Rune, false, sline, scol, soff) if c == b'\''
+	return scan_char_lit(l, token.Kind.Rune, false, sline, scol, soff) if c == b'\''
 	return scan_cmd(l, sline, scol, soff) if c == b'`'
 
 	if c == b'#' {
@@ -191,7 +195,7 @@ fn scan_token(mut &l: Lex) -> Token {
 		advance(l) # '#'
 		advance(l) # '['
 		l.depth = l.depth + 1
-		return emit(l, Kind.Hash, sline, scol, "#[")
+		return emit_tok(l, token.Kind.Hash, sline, scol, "#[")
 	}
 	return scan_nonascii(l, sline, scol, soff) if int(c) >= 0x80
 
@@ -214,7 +218,7 @@ fn scan_token(mut &l: Lex) -> Token {
 # both a legal `str` and ONE error where a byte at a time would be three. The lead byte
 # always begins a well-formed sequence here, because the driver reads the file as a `str`
 # before this ever sees it, so `rune_len` is the whole of the answer.
-fn scan_nonascii(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_nonascii(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	n := rune_len(at(l, 0))
 	mut i := 0
 	for i < n and not eof(l) {
@@ -224,12 +228,12 @@ fn scan_nonascii(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return bad_char(l, sline, scol, soff)
 }
 
-fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	for not eof(l) and is_ident(at(l, 0)) {
 		advance(l)
 	}
 	lexeme := lexeme_from(l, soff)
-	return emit(l, lookup_keyword(lexeme), sline, scol, lexeme)
+	return emit_tok(l, token.lookup_keyword(lexeme), sline, scol, lexeme)
 }
 
 # --- numbers -------------------------------------------------------------------
@@ -269,11 +273,11 @@ fn consume_based(mut &l: Lex, base: byte) {
 	}
 }
 
-fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	# a number just after '.' is a bare decimal tuple index, never a float
-	if l.prev == Kind.Dot {
+	if l.prev == token.Kind.Dot {
 		consume_dec(l)
-		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
+		return emit_tok(l, token.Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 	if at(l, 0) == b'0' and (at(l, 1) == b'x' or at(l, 1) == b'o' or at(l, 1) == b'b') {
 		base := at(l, 1)
@@ -299,16 +303,16 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		# lexer standing inside the literal, and `_1F` would come back as an identifier —
 		# one mistake, two messages, the second of them about a name nobody wrote.
 		consume_based(l, base)
-		return bad(l, Rule.BasedNumberNoDigit, "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
-		return emit(l, Kind.Int, sline, scol, lexeme_from(l, soff))
+		return bad(l, rule.Rule.BasedNumberNoDigit, "a based number needs a digit immediately after its prefix", sline, scol, lexeme_from(l, soff)) if not lead
+		return emit_tok(l, token.Kind.Int, sline, scol, lexeme_from(l, soff))
 	}
 
 	consume_dec(l)
-	mut kind := Kind.Int
+	mut kind := token.Kind.Int
 
 	# fractional part: '.' immediately followed by a digit
 	if at(l, 0) == b'.' and ascii.is_digit(at(l, 1)) {
-		kind = Kind.Float
+		kind = token.Kind.Float
 		advance(l) # .
 		consume_dec(l)
 	}
@@ -317,7 +321,7 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	if at(l, 0) == b'e' or at(l, 0) == b'E' {
 		nx := at(l, 1)
 		if ascii.is_digit(nx) or (nx == b'+' or nx == b'-') and ascii.is_digit(at(l, 2)) {
-			kind = Kind.Float
+			kind = token.Kind.Float
 			advance(l) # e/E
 			if at(l, 0) == b'+' or at(l, 0) == b'-' {
 				advance(l)
@@ -325,7 +329,7 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			consume_dec(l)
 		}
 	}
-	return emit(l, kind, sline, scol, lexeme_from(l, soff))
+	return emit_tok(l, kind, sline, scol, lexeme_from(l, soff))
 }
 
 # --- strings, runes, bytes, commands -------------------------------------------
@@ -436,7 +440,7 @@ fn eat_to_quote(mut &l: Lex, q: byte) {
 
 # bad_escape reports a malformed backslash escape, after recovering to the end of the
 # literal. The noun names the literal form, as the seed's message does.
-fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> Token {
+fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int) -> token.Token {
 	eat_to_quote(l, q)
 	return bad_escape_here(l, noun, sline, scol, soff)
 }
@@ -446,16 +450,16 @@ fn bad_escape(mut &l: Lex, noun: str, q: byte, sline: int, scol: int, soff: int)
 # and then says the same thing. One rule reported from two places is two rules wearing one
 # code, and this was one — the gate that says so could not see it until a code moved out of a
 # message and into an argument.
-fn bad_escape_here(mut &l: Lex, noun: str, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, Rule.EscapeInvalid, f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
+fn bad_escape_here(mut &l: Lex, noun: str, sline: int, scol: int, soff: int) -> token.Token {
+	return bad(l, rule.Rule.EscapeInvalid, f"invalid escape in a {noun} literal", sline, scol, lexeme_from(l, soff))
 }
 
-fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	return scan_triple_string(l, sline, scol, soff) if at(l, 1) == b'"' and at(l, 2) == b'"'
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, Rule.StrUnterminated, "a string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, rule.Rule.StrUnterminated, "a string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if c == b'"' {
 			advance(l)
@@ -473,7 +477,7 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 	}
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, token.Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # has_nul is the seed's NUL rule: a Zerg str is text, and the bridge that makes one refuses
@@ -489,8 +493,8 @@ fn has_nul(sb: list[byte]) -> bool {
 # nul_bad is that refusal, once. Three literal forms can decode to a NUL — a plain string,
 # a triple string and a raw string — and E1010 is ONE row in docs/tooling/diagnostics.md, so
 # the sentence is written here rather than at each of the three exits.
-fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, Rule.StrHoldsNul, "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
+fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
+	return bad(l, rule.Rule.StrHoldsNul, "a string literal may not contain a NUL", sline, scol, lexeme_from(l, soff))
 }
 
 # scan_fstring scans an f-string as ONE token: the lexeme is the verbatim source `f"a{x}b"`
@@ -503,7 +507,7 @@ fn nul_bad(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 # braces in the token stream would have it tear an f-string across four indented lines.
 # The cost is that `zerg fmt` does not reach INSIDE a hole, and that `--emit tokens` no
 # longer matches the seed for a source that has one.
-fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	advance(l) # f
 	advance(l) # opening "
 	mut sb: list[byte] = []
@@ -515,7 +519,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		# lacked it. `lex_diags` is what retired that reason: it is a pass of its own, run
 		# before anything is parsed, and it reports every Illegal token with the code and the
 		# place the token recorded. A raise had neither.
-		return bad(l, Rule.FStrUnterminated, "an f-string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, rule.Rule.FStrUnterminated, "an f-string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if depth > 0 {
 			if c == b'{' {
@@ -555,7 +559,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			if not eof(l) and at(l, 0) == b'"' {
 				advance(l)
 			}
-			return bad(l, Rule.FStrBareBrace, "a bare `}` in an f-string is not text — write `}}` for one", bline, bcol, lexeme_from(l, soff))
+			return bad(l, rule.Rule.FStrBareBrace, "a bare `}` in an f-string is not text — write `}}` for one", bline, bcol, lexeme_from(l, soff))
 		} else if c == b'{' {
 			depth = 1
 			sb.append(advance(l))
@@ -565,7 +569,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 		}
 	}
-	return emit_val(l, Kind.FStr, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, token.Kind.FStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # copy_escape copies a backslash escape through VERBATIM, so the parser decodes it with the
@@ -599,13 +603,13 @@ fn copy_quoted(mut &l: Lex, mut &sb: list[byte], q: byte) {
 	}
 }
 
-fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	advance(l)
 	advance(l)
 	advance(l) # opening """
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, Rule.TripleStrUnterminated, "a triple-quoted string is never closed", sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, rule.Rule.TripleStrUnterminated, "a triple-quoted string is never closed", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'"' and at(l, 1) == b'"' and at(l, 2) == b'"' {
 			advance(l)
 			advance(l)
@@ -636,30 +640,30 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 	}
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, token.Kind.Str, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
-fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	advance(l) # r
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, Rule.RawStrUnterminated, "a raw string has no closing quote on this line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, rule.Rule.RawStrUnterminated, "a raw string has no closing quote on this line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		break if at(l, 0) == b'"'
 
 		sb.append(advance(l))
 	}
 	advance(l) # closing "
 	return nul_bad(l, sline, scol, soff) if has_nul(sb)
-	return emit_val(l, Kind.RawStr, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, token.Kind.RawStr, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # scan_char_lit scans a single-quoted rune or byte literal; the cursor sits on the
 # opening quote, and byte_mode selects the byte form's '\xHH' escape.
-fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int, soff: int) -> Token {
+fn scan_char_lit(mut &l: Lex, kind: token.Kind, byte_mode: bool, sline: int, scol: int, soff: int) -> token.Token {
 	advance(l) # opening '
 	mut sb: list[byte] = []
-	return bad(l, Rule.RuneEmpty, "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
+	return bad(l, rule.Rule.RuneEmpty, "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
 	mut val := 0
 	if at(l, 0) == b'\\' {
 		val = decode_escape(l, byte_mode)
@@ -686,7 +690,7 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 	}
 	if at(l, 0) != b'\'' {
 		eat_to_quote(l, b'\'')
-		return bad(l, Rule.RuneTooLong, "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
+		return bad(l, rule.Rule.RuneTooLong, "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
 	}
 	advance(l) # closing '
 
@@ -709,132 +713,132 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), strconv.to_string(val, 10))
 }
 
-fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	advance(l) # opening `
 	mut sb: list[byte] = []
 	for true {
-		return bad(l, Rule.CommandUnterminated, "a command literal has no closing backtick", sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, rule.Rule.CommandUnterminated, "a command literal has no closing backtick", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'`' {
 			advance(l)
 			break
 		}
 		sb.append(advance(l))
 	}
-	return emit_val(l, Kind.Cmd, sline, scol, lexeme_from(l, soff), str(sb))
+	return emit_val(l, token.Kind.Cmd, sline, scol, lexeme_from(l, soff), str(sb))
 }
 
 # --- operators and punctuation -------------------------------------------------
 
 # op advances `extra` further bytes past the already-consumed first, then emits.
-fn op(mut &l: Lex, k: Kind, sline: int, scol: int, soff: int, extra: int) -> Token {
+fn op(mut &l: Lex, k: token.Kind, sline: int, scol: int, soff: int, extra: int) -> token.Token {
 	mut i := 0
 	for i < extra {
 		advance(l)
 		i = i + 1
 	}
-	return emit(l, k, sline, scol, lexeme_from(l, soff))
+	return emit_tok(l, k, sline, scol, lexeme_from(l, soff))
 }
 
-fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	c := advance(l)
 	two := at(l, 0)
 	if c == b'+' {
-		return op(l, Kind.PlusMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Kind.Plus, sline, scol, soff, 0)
+		return op(l, token.Kind.PlusMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, token.Kind.Plus, sline, scol, soff, 0)
 	}
 	if c == b'-' {
-		return op(l, Kind.MinusMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Kind.Arrow, sline, scol, soff, 1) if two == b'>'
+		return op(l, token.Kind.MinusMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, token.Kind.Arrow, sline, scol, soff, 1) if two == b'>'
 
-		return op(l, Kind.Minus, sline, scol, soff, 0)
+		return op(l, token.Kind.Minus, sline, scol, soff, 0)
 	}
 	if c == b'*' {
-		return op(l, Kind.StarMod, sline, scol, soff, 1) if two == b'%'
-		return op(l, Kind.Star, sline, scol, soff, 0)
+		return op(l, token.Kind.StarMod, sline, scol, soff, 1) if two == b'%'
+		return op(l, token.Kind.Star, sline, scol, soff, 0)
 	}
 
 	# `//` is floor division, not a comment: a Zerg comment starts with '#'.
 	if c == b'/' {
-		return op(l, Kind.SlashDiv, sline, scol, soff, 1) if two == b'/'
-		return op(l, Kind.Slash, sline, scol, soff, 0)
+		return op(l, token.Kind.SlashDiv, sline, scol, soff, 1) if two == b'/'
+		return op(l, token.Kind.Slash, sline, scol, soff, 0)
 	}
 
-	return op(l, Kind.Percent, sline, scol, soff, 0) if c == b'%'
-	return op(l, Kind.Amp, sline, scol, soff, 0) if c == b'&'
-	return op(l, Kind.Pipe, sline, scol, soff, 0) if c == b'|'
-	return op(l, Kind.Caret, sline, scol, soff, 0) if c == b'^'
-	return op(l, Kind.Tilde, sline, scol, soff, 0) if c == b'~'
+	return op(l, token.Kind.Percent, sline, scol, soff, 0) if c == b'%'
+	return op(l, token.Kind.Amp, sline, scol, soff, 0) if c == b'&'
+	return op(l, token.Kind.Pipe, sline, scol, soff, 0) if c == b'|'
+	return op(l, token.Kind.Caret, sline, scol, soff, 0) if c == b'^'
+	return op(l, token.Kind.Tilde, sline, scol, soff, 0) if c == b'~'
 
 	if c == b'<' {
-		return op(l, Kind.Shl, sline, scol, soff, 1) if two == b'<'
-		return op(l, Kind.Le, sline, scol, soff, 1) if two == b'='
-		return op(l, Kind.LArrow, sline, scol, soff, 1) if two == b'-'
+		return op(l, token.Kind.Shl, sline, scol, soff, 1) if two == b'<'
+		return op(l, token.Kind.Le, sline, scol, soff, 1) if two == b'='
+		return op(l, token.Kind.LArrow, sline, scol, soff, 1) if two == b'-'
 
-		return op(l, Kind.Lt, sline, scol, soff, 0)
+		return op(l, token.Kind.Lt, sline, scol, soff, 0)
 	}
 	if c == b'>' {
-		return op(l, Kind.Shr, sline, scol, soff, 1) if two == b'>'
-		return op(l, Kind.Ge, sline, scol, soff, 1) if two == b'='
+		return op(l, token.Kind.Shr, sline, scol, soff, 1) if two == b'>'
+		return op(l, token.Kind.Ge, sline, scol, soff, 1) if two == b'='
 
-		return op(l, Kind.Gt, sline, scol, soff, 0)
+		return op(l, token.Kind.Gt, sline, scol, soff, 0)
 	}
 	if c == b'=' {
-		return op(l, Kind.EqEq, sline, scol, soff, 1) if two == b'='
-		return op(l, Kind.FatArrow, sline, scol, soff, 1) if two == b'>'
+		return op(l, token.Kind.EqEq, sline, scol, soff, 1) if two == b'='
+		return op(l, token.Kind.FatArrow, sline, scol, soff, 1) if two == b'>'
 
-		return op(l, Kind.Assign, sline, scol, soff, 0)
+		return op(l, token.Kind.Assign, sline, scol, soff, 0)
 	}
 	if c == b'!' {
-		return op(l, Kind.Ne, sline, scol, soff, 1) if two == b'='
-		return op(l, Kind.Bang, sline, scol, soff, 0)
+		return op(l, token.Kind.Ne, sline, scol, soff, 1) if two == b'='
+		return op(l, token.Kind.Bang, sline, scol, soff, 0)
 	}
 	if c == b':' {
-		return op(l, Kind.Walrus, sline, scol, soff, 1) if two == b'='
-		return op(l, Kind.Colon, sline, scol, soff, 0)
+		return op(l, token.Kind.Walrus, sline, scol, soff, 1) if two == b'='
+		return op(l, token.Kind.Colon, sline, scol, soff, 0)
 	}
 	if c == b'?' {
-		return op(l, Kind.Coalesce, sline, scol, soff, 1) if two == b'?'
-		return op(l, Kind.OptDot, sline, scol, soff, 1) if two == b'.'
+		return op(l, token.Kind.Coalesce, sline, scol, soff, 1) if two == b'?'
+		return op(l, token.Kind.OptDot, sline, scol, soff, 1) if two == b'.'
 
-		return op(l, Kind.Question, sline, scol, soff, 0)
+		return op(l, token.Kind.Question, sline, scol, soff, 0)
 	}
 	if c == b'.' {
 		if two == b'.' {
-			return op(l, Kind.DotDotEq, sline, scol, soff, 2) if at(l, 1) == b'='
-			return op(l, Kind.DotDot, sline, scol, soff, 1)
+			return op(l, token.Kind.DotDotEq, sline, scol, soff, 2) if at(l, 1) == b'='
+			return op(l, token.Kind.DotDot, sline, scol, soff, 1)
 		}
-		return op(l, Kind.Dot, sline, scol, soff, 0)
+		return op(l, token.Kind.Dot, sline, scol, soff, 0)
 	}
-	return op(l, Kind.Comma, sline, scol, soff, 0) if c == b','
+	return op(l, token.Kind.Comma, sline, scol, soff, 0) if c == b','
 	if c == b'(' {
 		l.depth = l.depth + 1
-		return op(l, Kind.LParen, sline, scol, soff, 0)
+		return op(l, token.Kind.LParen, sline, scol, soff, 0)
 	}
 	if c == b')' {
 		if l.depth > 0 {
 			l.depth = l.depth - 1
 		}
-		return op(l, Kind.RParen, sline, scol, soff, 0)
+		return op(l, token.Kind.RParen, sline, scol, soff, 0)
 	}
 	if c == b'[' {
 		l.depth = l.depth + 1
-		return op(l, Kind.LBrack, sline, scol, soff, 0)
+		return op(l, token.Kind.LBrack, sline, scol, soff, 0)
 	}
 	if c == b']' {
 		if l.depth > 0 {
 			l.depth = l.depth - 1
 		}
-		return op(l, Kind.RBrack, sline, scol, soff, 0)
+		return op(l, token.Kind.RBrack, sline, scol, soff, 0)
 	}
 	if c == b'{' {
 		brace_push(l)
-		return op(l, Kind.LBrace, sline, scol, soff, 0)
+		return op(l, token.Kind.LBrace, sline, scol, soff, 0)
 	}
 	if c == b'}' {
 		brace_pop(l)
-		return op(l, Kind.RBrace, sline, scol, soff, 0)
+		return op(l, token.Kind.RBrace, sline, scol, soff, 0)
 	}
-	return op(l, Kind.Semi, sline, scol, soff, 0) if c == b';'
+	return op(l, token.Kind.Semi, sline, scol, soff, 0) if c == b';'
 
 	return bad_char(l, sline, scol, soff)
 }
@@ -843,8 +847,8 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 # claims, and a non-ASCII one scan_nonascii has consumed whole — and they are one rule, so
 # they are one code and therefore one raise (scripts/error-codes-check.sh counts a code
 # reported twice as two rules sharing an identity).
-fn bad_char(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
-	return bad(l, Rule.CharNotAToken, "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
+fn bad_char(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
+	return bad(l, rule.Rule.CharNotAToken, "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 
 # brace_push saves the enclosing paren/bracket depth and resets it, so ASI resumes
@@ -870,7 +874,7 @@ fn brace_pop(mut &l: Lex) {
 
 # tokenize scans src to completion, returning the token stream terminated by an Eof
 # token.
-fn tokenize(src: str) -> list[Token] {
+pub fn tokenize(src: str) -> list[token.Token] {
 	return lex_with(src, false)
 }
 
@@ -882,13 +886,13 @@ fn tokenize(src: str) -> list[Token] {
 # token reached parse_primary's fallback, which answered "`b'b` is not an expression this
 # compiler reads" — the wrong layer, the wrong problem, and a lexeme that is a fragment of
 # what the person wrote.
-pub fn lex_diags(src: str, path: str) -> list[Diag] {
-	mut out: list[Diag] = []
+pub fn lex_diags(src: str, path: str) -> list[ast.Diag] {
+	mut out: list[ast.Diag] = []
 	for t in tokenize(src) {
-		if t.kind == Kind.Illegal {
+		if t.kind == token.Kind.Illegal {
 			b := bytearray(t.value)
 			at := lex_code_end(b)
-			out.append(Diag(path, t.line, t.col, fstr_slice(b, 0, at), fstr_slice(b, at + 1, b.len()), ""))
+			out.append(ast.Diag(path, t.line, t.col, parser.fstr_slice(b, 0, at), parser.fstr_slice(b, at + 1, b.len()), ""))
 		}
 	}
 	return out
@@ -899,14 +903,14 @@ pub fn lex_diags(src: str, path: str) -> list[Diag] {
 # declaration's documentation off them — which is why the comment no longer names one of the
 # three, and why a comment token is part of this module's answer rather than the formatter's
 # private business.
-fn tokenize_trivia(src: str) -> list[Token] {
+pub fn tokenize_trivia(src: str) -> list[token.Token] {
 	return lex_with(src, true)
 }
 
-fn lex_with(src: str, keep: bool) -> list[Token] {
+fn lex_with(src: str, keep: bool) -> list[token.Token] {
 	b := bytearray(src)
-	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Kind.Semi, keep)
-	mut out: list[Token] = []
+	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, token.Kind.Semi, keep)
+	mut out: list[token.Token] = []
 	for true {
 		t := next(l)
 		out.append(t)
@@ -915,7 +919,7 @@ fn lex_with(src: str, keep: bool) -> list[Token] {
 	return out
 }
 
-fn is_eof(k: Kind) -> bool {
+pub fn is_eof(k: token.Kind) -> bool {
 	return match k {
 		Kind.Eof => true
 		_        => false
@@ -1082,7 +1086,7 @@ pub fn uint_scan(lex: str) -> UintLit {
 
 # token_category classifies a kind for rendering: 1 -> NAME(lexeme), 2 -> NAME(quoted
 # value), 0 -> the bare kind name.
-fn token_category(k: Kind) -> int {
+fn token_category(k: token.Kind) -> int {
 	return match k {
 		Kind.Int => 1
 		Kind.Float => 1
@@ -1148,13 +1152,13 @@ fn hex_digit(n: int) -> byte {
 	return byte(97 + n - 10)
 }
 
-fn render_token(t: Token) -> str {
+fn render_token(t: token.Token) -> str {
 	cat := token_category(t.kind)
 
-	return f"{kind_name(t.kind)}({t.lexeme})" if cat == 1
-	return f"{kind_name(t.kind)}({quote(t.value)})" if cat == 2
+	return f"{token.kind_name(t.kind)}({t.lexeme})" if cat == 1
+	return f"{token.kind_name(t.kind)}({quote(t.value)})" if cat == 2
 
-	return kind_name(t.kind)
+	return token.kind_name(t.kind)
 }
 
 # dump_tokens renders the whole stream in the bootstrap's `--emit tokens` format —

@@ -1,8 +1,9 @@
 # A four-module program, and the shapes an import path can take. Build it with
 #   zerg build examples/modules/main.zg
 #
-#   ./util/text   a DIRECTORY module, beside this file
-#   ./tools/tally a ONE-FILE module — `tools/` holds two of them rather than being one
+#   ./util/text   a DIRECTORY module: it holds a `mod.zg`, which is what makes a folder one
+#   ./tools/tally a ONE-FILE module — `tools/` holds NO `mod.zg`, so it is a folder and the
+#                 modules in it are its files (#57 decision 4)
 #
 # and inside those, the two spellings that differ once a file is not at the root:
 # `util/text/text.zg` names `/shared` at the package root, and `tools/tally.zg` names its

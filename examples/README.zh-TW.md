@@ -68,6 +68,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/outputorder/`](1g/outputorder) | `print` 與 `io.println` 依寫下的順序抵達 stdout                  |
 | [`1g/evalorder/`](1g/evalorder)     | 兩個都會跑程式碼的運算元,依寫下的順序執行                        |
 | [`1g/testfile/`](1g/testfile)       | 一次正常建置會編什麼，又把什麼留在地上                           |
+| [`1g/siblings/`](1g/siblings)       | 同一個模組的兩個檔案，透過 import 互相指名                       |
 
 ### 那兩支必須被拒收的
 

@@ -3197,6 +3197,36 @@ pub fn chk_const_rebind(mut &em: emit.Emitter, name: str) {
 	}
 }
 
+# chk_no_shadow_ns refuses a binding that takes the name an import bound in the SAME FILE.
+#
+# THERE IS NO WAY TO SPELL PAST IT. A namespace is reached by writing its name and nothing
+# else — Zerg has no path qualification, no `::`, no `import` alias reachable from inside a
+# scope — so a local of the same name does not shadow the import for one expression, it makes
+# the import UNREACHABLE for the rest of the block. A name a file asked for and can no longer
+# write is worse than a refusal.
+#
+# It was SILENT, and worse than silent: the two front halves disagreed. `zerg` resolved
+# `check.chk_ty_quals(…)` inside `fn c_emit_unit(…, check: bool, …)` as the namespace, past a
+# parameter of that name; the seed's checker agreed and its emitter did not, so the build died
+# with `SystemError: unresolved call target` — a sentence about generated code, for a
+# collision the reader can see. #57's migration is what put a module name in scope beside
+# ordinary locals often enough for the two to meet.
+#
+# The report lands at the BINDING and not at the import, the mirror of chk_import_name's
+# reason: here it is the binding that carries the fix, since renaming the import would move
+# every qualified name in the file.
+#
+# A file with no path is quiet. `<derive>` and `<builtin>` bind nothing a reader wrote, and a
+# rule that guessed there would refuse a program for a reason nobody can act on.
+pub fn chk_no_shadow_ns(mut &em: emit.Emitter, name: str) {
+	return if name == "_"
+	return if em.at_path == ""
+
+	if emit.c_ns_bound_in(em, name, em.at_path) {
+		chk_at(em, rule.Rule.LocalShadowsNamespace, f"`{name}` is the name an import bound in this file — a namespace is reached by writing its name and nothing else, so a binding of that name puts the import out of reach for the rest of the block. Rename the binding, or rename the import with `as`")
+	}
+}
+
 # chk_const_mint is direction two: this `const` takes a name some visible binding already
 # holds — an outer block's or this very block's alike, since re-declaration is legal for a
 # plain binding and a `const` is precisely the binding that refuses to take part in it. A

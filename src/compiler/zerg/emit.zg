@@ -14457,8 +14457,8 @@ fn c_into_user_from(mut &em: Emitter, src: str) -> bool {
 # — `defs = defs + c_fn(…)` copies everything emitted so far on every one of ~1500 steps —
 # so the C is 3.6 MB and the walk that builds it peaks at 2.8 GB. Suppressing the append
 # leaves the accumulators empty and each step O(1), which is 0.22 GB for the same findings.
-fn c_lowered(check: bool, s: str) -> str {
-	return "" if check
+fn c_lowered(checking: bool, s: str) -> str {
+	return "" if checking
 	return s
 }
 
@@ -14559,7 +14559,7 @@ fn c_section(parts: list[str], budget: int, at: str, mut &sofar: int) -> str {
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
-fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool, check: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool, checking: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -14677,16 +14677,16 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	mut carriers: list[Ty] = []
 	c_decl_types(sites, tuples, carriers)
 
-	types = types + c_lowered(check, c_type_decls(em, f, carriers, tuples))
+	types = types + c_lowered(checking, c_type_decls(em, f, carriers, tuples))
 	mut i := 0
 	for i < f.enums.len() {
-		types = types + c_lowered(check, c_refbox_helpers(f.enums[i]))
+		types = types + c_lowered(checking, c_refbox_helpers(f.enums[i]))
 		i = i + 1
 	}
 
 	# after the typedefs, because a helper names the struct it copies, and before the
 	# prototypes and bodies, which are what call them
-	types = types + c_lowered(check, c_copy_helpers(em, f))
+	types = types + c_lowered(checking, c_copy_helpers(em, f))
 
 	# the top level is immutable: a `mut` module binding is refused at its own declaration
 	# (over `own`, so a multi-unit build reports it once), before c_const_globals walks
@@ -14698,7 +14698,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	chk_top_stmts(em, own)
 
 	# the constants are declared before the prototypes, so a body may name one
-	globals := c_lowered(check, c_const_globals(em, f, own, whole))
+	globals := c_lowered(checking, c_const_globals(em, f, own, whole))
 
 	# COLLECTED AND JOINED ONCE, not rebound per function. `defs = defs + c_fn(…)` over ~1500
 	# functions allocates a fresh buffer holding everything emitted so far on every step: the
@@ -14711,13 +14711,13 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	mut proto_parts: list[str] = []
 	i = 0
 	for i < f.fns.len() {
-		proto_parts.append(c_lowered(check, c_proto(em, f.fns[i])))
+		proto_parts.append(c_lowered(checking, c_proto(em, f.fns[i])))
 		i = i + 1
 	}
 	mut def_parts: list[str] = []
 	i = 0
 	for i < own.fns.len() {
-		def_parts.append(c_lowered(check, c_fn(em, own.fns[i])))
+		def_parts.append(c_lowered(checking, c_fn(em, own.fns[i])))
 		i = i + 1
 	}
 
@@ -14741,8 +14741,8 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 		# The cost is a copy per unit, which is what a C header carrying an inline function
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
-		proto_parts.append(c_lowered(check, "static " + c_proto(em, inst)))
-		def_parts.append(c_lowered(check, "static " + c_fn(em, inst)))
+		proto_parts.append(c_lowered(checking, "static " + c_proto(em, inst)))
+		def_parts.append(c_lowered(checking, "static " + c_fn(em, inst)))
 		done = done + 1
 	}
 
@@ -14781,7 +14781,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 
 	mut mainw := ""
 	if c_has_main(own) {
-		mainw = c_lowered(check, c_main_entry(em, own, inits))
+		mainw = c_lowered(checking, c_main_entry(em, own, inits))
 	}
 
 	# A separately-compiled unit declares the WHOLE program's prototypes, and any of them
@@ -14830,7 +14830,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# shared, so a shape is emitted exactly once whichever path first met it.
 	mut ress := ""
 	for d in em.res_decls {
-		ress = ress + c_lowered(check, d)
+		ress = ress + c_lowered(checking, d)
 	}
 
 	# the map vtables AFTER the typedef stream: a vtable's initializer names the copy thunk
@@ -14838,17 +14838,17 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# landed in
 	mut mvts := ""
 	for d in em.mvt_decls {
-		mvts = mvts + c_lowered(check, d)
+		mvts = mvts + c_lowered(checking, d)
 	}
 
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
 	for d in em.rcv_decls {
-		dfns = dfns + c_lowered(check, d)
+		dfns = dfns + c_lowered(checking, d)
 	}
 	for d in em.dfn_decls {
-		dfns = dfns + c_lowered(check, d)
+		dfns = dfns + c_lowered(checking, d)
 	}
 
 	# a lifted lambda is a whole function, emitted BEFORE the bodies that name it: the
@@ -14856,7 +14856,7 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# the definition has to be what the use sees
 	mut lams := ""
 	for d in em.lam_defs {
-		lams = lams + c_lowered(check, d)
+		lams = lams + c_lowered(checking, d)
 	}
 
 	# ONLY WHAT THIS UNIT ADDED. The list went in already holding the earlier units' findings,
@@ -14874,6 +14874,6 @@ fn c_emit_unit(prog0: File, own0: File, ms: Mods, whole: bool, want_lints: bool,
 	# and the header, which is the one section built from literals rather than from a
 	# lowering step, so it is the one c_lowered never sees. A check-only walk returns
 	# the empty string, not a file with nothing but includes in it.
-	return "" if check
+	return "" if checking
 	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }

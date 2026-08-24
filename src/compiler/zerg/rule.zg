@@ -329,6 +329,7 @@ pub enum Rule {
 	# already owns, it is the same on every host and allocator, and a gate can reproduce it;
 	# RSS needs an OS call the runtime has not got and a number that moves under you.
 	EmitTooLarge = 5016
+	ImportPastASurface = 5017
 
 	# unbuilt — NOT a stage — a form the language HAS and this compiler has not built. It is its own
 	# range because it is its own class: each of these retires when the form is built, and

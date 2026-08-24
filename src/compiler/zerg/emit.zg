@@ -149,6 +149,10 @@ pub struct Emitter {
 	# nameable, and returnable, from anywhere.
 	pub tk_mod: list[str]
 	pub tk_pub: list[bool]
+
+	# tk_path is sig_path's twin: the FILE that declared the type, which the module cannot
+	# answer once #57 makes the file the unit of naming.
+	pub tk_path: list[str]
 	pub fld_struct: list[str]
 	pub fld_name: list[str]
 	pub fld_ty: list[ast.Ty]
@@ -3339,6 +3343,7 @@ fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str,
 	em.tk_unders.append(under)
 	em.tk_mod.append(check.c_mod_of(em, path))
 	em.tk_pub.append(is_pub)
+	em.tk_path.append(path)
 }
 
 # c_ty_mod / c_ty_pub are the registry's answer to "who declared this, and did they export
@@ -3346,6 +3351,15 @@ fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str,
 # keeps every rule that asks quiet about a built-in, a type parameter, or a name whose
 # declaration was itself refused. A rule that guessed there would refuse a working program
 # for a reason its author cannot see, which is chk_visible's standing discipline.
+# c_ty_path is c_ty_mod's twin for #57's file rule, and answers the same sentinel — the empty
+# path, which every rule reads as "be quiet" — for a name the registry does not hold.
+pub fn c_ty_path(mut &em: Emitter, nm: str) -> str {
+	r := c_ty_row(em, nm)
+	return "" if r < 0
+
+	return em.tk_path[r]
+}
+
 pub fn c_ty_mod(mut &em: Emitter, nm: str) -> str {
 	r := c_ty_row(em, nm)
 	return "" if r < 0
@@ -14606,7 +14620,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

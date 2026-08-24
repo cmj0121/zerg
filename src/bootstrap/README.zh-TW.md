@@ -381,6 +381,19 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   種子會編譯的東西裡沒有一份這樣宣告,而「種子接受、`zerg` 拒絕」的程式永遠不會被 `make oracle` 拿去比對。
   `scripts/reject-check.sh` 的 `main-borrows-its-arguments` 帶著 `seed-gap` 標記,種子問出第二半的那天它會自己退場。
 
+- **取走 import 名字的 binding 不會被拒絕。** `zerg` 在 binding 上回報 `E4075`:namespace 只能靠寫出它的名字
+  來抵達、沒有別的寫法,所以同名的區域 binding 不是遮蔽一個運算式,而是讓那個 import 在該區塊剩下的部分**再也
+  拼不出來**。種子接受這支程式,並把限定名字解析成 namespace、越過那個 binding —— 這既不是兩個編譯器都聲明的
+  「最內層 binding 贏」,所以它跑的是一支兩份語言定義都沒有描述的程式。
+
+  這個衝突的另一半 —— **頂層名字**對上 namespace —— 種子確實有檢查(`declareSurface`),但只在它檢查的那套拼法
+  裡:整程式攤平會把一個模組自己的宣告改名,卻讓 namespace 綁定維持原樣,所以**同一個模組內**的衝突比的是兩種
+  永遠不可能相等的拼法。這正是 `lexer.zg` 的 `fn emit` 撞上 `check.zg` 的 `import "./emit"` 之後,變成四步之外
+  一個什麼都沒指名的診斷的原因(#57)。
+
+  種子會編譯的東西裡沒有一份寫成這兩種形狀,而「種子接受、`zerg` 拒絕」的程式永遠不會被 `make oracle` 拿去比對。
+  `scripts/reject-check.sh` 的 `local-shadows-namespace` 帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

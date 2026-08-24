@@ -116,7 +116,7 @@ check_group() {
 	cg_lines=$2
 	[ -d "$tmp/prog" ] || return 0
 
-	cg_entries=$(cd "$tmp/prog" && grep -lE '^fn main\(' $(find . -name '*.zg' ! -name '*_test.zg') 2>/dev/null | sed 's|^\./||' | sort)
+	cg_entries=$(cd "$tmp/prog" && grep -lE '^(pub )?fn main\(' $(find . -name '*.zg' ! -name '*_test.zg') 2>/dev/null | sed 's|^\./||' | sort)
 	cg_n=$(printf '%s' "$cg_entries" | grep -c . || true)
 
 	if [ "$cg_n" != 1 ]; then

@@ -27,10 +27,16 @@
 # every other byte becomes `_<hex>_`, so the escape character can never be confused with
 # itself and two distinct `ty_name`s can never meet.
 
-import "strconv"
-fn gen_ty_key(t: Ty) -> str {
+import (
+	"strconv"
+
+	"./ast"
+	"./emit"
+	"./lexer"
+)
+fn gen_ty_key(t: ast.Ty) -> str {
 	mut out := ""
-	for b in bytearray(ty_name(t)) {
+	for b in bytearray(ast.ty_name(t)) {
 		out = out + gen_key_byte(b)
 	}
 	return out
@@ -38,7 +44,7 @@ fn gen_ty_key(t: Ty) -> str {
 
 fn gen_key_byte(b: byte) -> str {
 	return "__" if b == b'_'
-	return f"_{strconv.to_string(int(b), 16)}_" if not is_ident(b)
+	return f"_{strconv.to_string(int(b), 16)}_" if not lexer.is_ident(b)
 
 	mut one: list[byte] = []
 	one.append(b)
@@ -51,7 +57,7 @@ fn gen_key_byte(b: byte) -> str {
 #
 # `$` is not legal in a Zerg identifier, so a mangled name cannot collide with one a
 # program declares. It is mapped to `_` on the way into C, which does not accept it either.
-fn gen_mangle(name: str, args: list[Ty]) -> str {
+pub fn gen_mangle(name: str, args: list[ast.Ty]) -> str {
 	mut out := name
 	for a in args {
 		out = out + "$" + gen_ty_key(a)
@@ -66,10 +72,10 @@ fn gen_mangle(name: str, args: list[Ty]) -> str {
 # An unsolved parameter answers TUnknown, and the caller reports it: a type argument that
 # cannot be worked out is a call that has not said what it means, and guessing `int` would
 # make the program compile as something nobody wrote.
-fn gen_solve(tparams: list[str], decls: list[Ty], actuals: list[Ty]) -> list[Ty] {
-	mut sol: list[Ty] = []
+pub fn gen_solve(tparams: list[str], decls: list[ast.Ty], actuals: list[ast.Ty]) -> list[ast.Ty] {
+	mut sol: list[ast.Ty] = []
 	for n in tparams {
-		sol.append(Ty.TUnknown)
+		sol.append(ast.Ty.TUnknown)
 	}
 	mut i := 0
 	for i < decls.len() and i < actuals.len() {
@@ -83,12 +89,12 @@ fn gen_solve(tparams: list[str], decls: list[Ty], actuals: list[Ty]) -> list[Ty]
 # the declared side is a type parameter. The FIRST binding wins: `f(a: T, b: T)` given an
 # int and a str takes int, and the mismatch is then reported by the ordinary argument rule
 # against the specialization's own signature — which says `b: int` and means it.
-fn gen_match(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty) {
-	nm := c_named_of(decl)
-	if nm != "" and c_name_in(tparams, nm) {
+fn gen_match(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty) {
+	nm := emit.c_named_of(decl)
+	if nm != "" and emit.c_name_in(tparams, nm) {
 		mut i := 0
 		for i < tparams.len() {
-			if tparams[i] == nm and c_is_unknown(sol[i]) {
+			if tparams[i] == nm and emit.c_is_unknown(sol[i]) {
 				sol[i] = actual
 				return
 			}
@@ -111,14 +117,14 @@ fn gen_match(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty) {
 # A shape that does not line up simply binds nothing, because two part lists of different
 # lengths stop at the shorter — which is what the argument rule downstream is there to
 # report, against a signature that by then has real types in it.
-fn gen_match_inner(tparams: list[str], mut &sol: list[Ty], decl: Ty, actual: Ty) {
+fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty) {
 	gen_match_all(tparams, sol, gen_parts(decl), gen_parts(actual))
 }
 
 # gen_parts is a type's SUB-TYPES, in written order — the one place this file knows how a
 # type is built out of others. A scalar has none, and so does a name: a `TNamed` reaching
 # here is a struct or an enum, whose fields are not the type's arguments.
-fn gen_parts(t: Ty) -> list[Ty] {
+fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
 	return match t {
 		Ty.TList(e) => [e]
 		Ty.TOpt(e) => [e]
@@ -133,13 +139,13 @@ fn gen_parts(t: Ty) -> list[Ty] {
 
 # a function type's parts are its parameters and then its result, which is the order they
 # are written in and the order two of them have to be compared in
-fn gen_fn_parts(ps: list[Ty], r: Ty) -> list[Ty] {
+fn gen_fn_parts(ps: list[ast.Ty], r: ast.Ty) -> list[ast.Ty] {
 	mut out := ps
 	out.append(r)
 	return out
 }
 
-fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list[Ty]) {
+fn gen_match_all(tparams: list[str], mut &sol: list[ast.Ty], ds: list[ast.Ty], as_: list[ast.Ty]) {
 	mut i := 0
 	for i < ds.len() and i < as_.len() {
 		gen_match(tparams, sol, ds[i], as_[i])
@@ -168,18 +174,18 @@ fn gen_match_all(tparams: list[str], mut &sol: list[Ty], ds: list[Ty], as_: list
 # wrote (#55).
 struct TySubst {
 	pub names: list[str]
-	pub args: list[Ty]
+	pub args: list[ast.Ty]
 	pub at: str
 }
 
-fn subst_fn(tpl: FnDecl, args: list[Ty], at: str) -> FnDecl {
+pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, at)
-	return FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
-fn subst_ty(su: TySubst, t: Ty) -> Ty {
-	nm := c_named_of(t)
+fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
+	nm := emit.c_named_of(t)
 	if nm != "" {
 		mut i := 0
 		for i < su.names.len() {
@@ -189,13 +195,13 @@ fn subst_ty(su: TySubst, t: Ty) -> Ty {
 		return t
 	}
 	return match t {
-		Ty.TList(e) => Ty.TList(subst_ty(su, e))
-		Ty.TOpt(e) => Ty.TOpt(subst_ty(su, e))
-		Ty.TChan(e, d) => ty_chan(subst_ty(su, e), d, su.at)
-		Ty.TMap(k, v) => Ty.TMap(subst_ty(su, k), subst_ty(su, v))
-		Ty.TTuple(es) => Ty.TTuple(subst_tys(su, es))
-		Ty.TEither(x, y) => Ty.TEither(subst_ty(su, x), subst_ty(su, y))
-		Ty.TFn(ps, r) => Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
+		Ty.TList(e) => ast.Ty.TList(subst_ty(su, e))
+		Ty.TOpt(e) => ast.Ty.TOpt(subst_ty(su, e))
+		Ty.TChan(e, d) => ast.ty_chan(subst_ty(su, e), d, su.at)
+		Ty.TMap(k, v) => ast.Ty.TMap(subst_ty(su, k), subst_ty(su, v))
+		Ty.TTuple(es) => ast.Ty.TTuple(subst_tys(su, es))
+		Ty.TEither(x, y) => ast.Ty.TEither(subst_ty(su, x), subst_ty(su, y))
+		Ty.TFn(ps, r) => ast.Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
 		_ => t
 	}
 }
@@ -211,59 +217,59 @@ fn subst_ty(su: TySubst, t: Ty) -> Ty {
 # (ast.zg), which asks the rule at construction. A constructor's node carries the ELEMENT
 # rather than the channel type, so it never reaches that constructor — which is exactly why
 # this one stays, and why covering only the `Ty.TChan` arm once left `chan[T](1)` unchecked.
-fn subst_chan_elem(su: TySubst, e: Ty) -> Ty {
+fn subst_chan_elem(su: TySubst, e: ast.Ty) -> ast.Ty {
 	el := subst_ty(su, e)
-	ty_chan_elem_check(el, su.at)
+	ast.ty_chan_elem_check(el, su.at)
 	return el
 }
 
-fn subst_tys(su: TySubst, ts: list[Ty]) -> list[Ty] {
-	mut out: list[Ty] = []
+fn subst_tys(su: TySubst, ts: list[ast.Ty]) -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
 	for t in ts {
 		out.append(subst_ty(su, t))
 	}
 	return out
 }
 
-fn subst_block(su: TySubst, b: list[Stmt]) -> list[Stmt] {
-	mut out: list[Stmt] = []
+fn subst_block(su: TySubst, b: list[ast.Stmt]) -> list[ast.Stmt] {
+	mut out: list[ast.Stmt] = []
 	for s in b {
 		out.append(subst_stmt(su, s))
 	}
 	return out
 }
 
-fn subst_stmt(su: TySubst, s: Stmt) -> Stmt {
+fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 	return match s {
-		Stmt.SLet(nm, ty, ht, im, ic, v) => Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v))
-		Stmt.SAssign(l, r) => Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
-		Stmt.SPrint(v) => Stmt.SPrint(subst_expr(su, v))
-		Stmt.SReturn(hv, v) => Stmt.SReturn(hv, subst_expr(su, v))
-		Stmt.SReturnIf(v, c) => Stmt.SReturnIf(subst_expr(su, v), subst_expr(su, c))
-		Stmt.SExpr(v) => Stmt.SExpr(subst_expr(su, v))
-		Stmt.SIf(c, tb, he, eb) => Stmt.SIf(subst_expr(su, c), subst_block(su, tb), he, subst_block(su, eb))
-		Stmt.SFor(hc, c, b) => Stmt.SFor(hc, subst_expr(su, c), subst_block(su, b))
-		Stmt.SForIn(nm, it, b) => Stmt.SForIn(nm, subst_expr(su, it), subst_block(su, b))
-		Stmt.SForSelect(arms) => Stmt.SForSelect(subst_sel_arms(su, arms))
-		Stmt.SRaise(e, hf, cause) => Stmt.SRaise(subst_expr(su, e), hf, subst_expr(su, cause))
-		Stmt.SDefer(v) => Stmt.SDefer(subst_expr(su, v))
-		Stmt.SSpawn(v) => Stmt.SSpawn(subst_expr(su, v))
-		Stmt.SSend(ch, v) => Stmt.SSend(subst_expr(su, ch), subst_expr(su, v))
-		Stmt.SSelect(arms) => Stmt.SSelect(subst_sel_arms(su, arms))
-		Stmt.SClose(ch, tw) => Stmt.SClose(subst_expr(su, ch), tw)
-		Stmt.SIfLet(nm, v, tb, he, eb) => Stmt.SIfLet(nm, subst_expr(su, v), subst_block(su, tb), he, subst_block(su, eb))
+		Stmt.SLet(nm, ty, ht, im, ic, v) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v))
+		Stmt.SAssign(l, r) => ast.Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
+		Stmt.SPrint(v) => ast.Stmt.SPrint(subst_expr(su, v))
+		Stmt.SReturn(hv, v) => ast.Stmt.SReturn(hv, subst_expr(su, v))
+		Stmt.SReturnIf(v, c) => ast.Stmt.SReturnIf(subst_expr(su, v), subst_expr(su, c))
+		Stmt.SExpr(v) => ast.Stmt.SExpr(subst_expr(su, v))
+		Stmt.SIf(c, tb, he, eb) => ast.Stmt.SIf(subst_expr(su, c), subst_block(su, tb), he, subst_block(su, eb))
+		Stmt.SFor(hc, c, b) => ast.Stmt.SFor(hc, subst_expr(su, c), subst_block(su, b))
+		Stmt.SForIn(nm, it, b) => ast.Stmt.SForIn(nm, subst_expr(su, it), subst_block(su, b))
+		Stmt.SForSelect(arms) => ast.Stmt.SForSelect(subst_sel_arms(su, arms))
+		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(subst_expr(su, e), hf, subst_expr(su, cause))
+		Stmt.SDefer(v) => ast.Stmt.SDefer(subst_expr(su, v))
+		Stmt.SSpawn(v) => ast.Stmt.SSpawn(subst_expr(su, v))
+		Stmt.SSend(ch, v) => ast.Stmt.SSend(subst_expr(su, ch), subst_expr(su, v))
+		Stmt.SSelect(arms) => ast.Stmt.SSelect(subst_sel_arms(su, arms))
+		Stmt.SClose(ch, tw) => ast.Stmt.SClose(subst_expr(su, ch), tw)
+		Stmt.SIfLet(nm, v, tb, he, eb) => ast.Stmt.SIfLet(nm, subst_expr(su, v), subst_block(su, tb), he, subst_block(su, eb))
 
 		# an `assert` holds the author's own condition, desugared, so a `T` written in it — in a
 		# closure's parameter, say — is a `T` this pass owes an argument like any other. The
 		# fallback below left it, quietly: nothing downstream looks at those statements again,
 		# so the specialization carried a `fn(T) -> bool` into a position wanting `fn(int)`.
-		Stmt.SAssert(b) => Stmt.SAssert(subst_block(su, b))
+		Stmt.SAssert(b) => ast.Stmt.SAssert(subst_block(su, b))
 
 		# A BARE BLOCK IS A BLOCK, and it was the fallback's second victim. `{ x: T = v }`
 		# inside a template kept its `T` and the specialization was refused with
 		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
 		# true, which sends the reader looking for a declaration they wrote in the signature.
-		Stmt.SScope(b) => Stmt.SScope(subst_block(su, b))
+		Stmt.SScope(b) => ast.Stmt.SScope(subst_block(su, b))
 
 		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
 		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each
@@ -280,47 +286,47 @@ fn subst_stmt(su: TySubst, s: Stmt) -> Stmt {
 	}
 }
 
-fn subst_sel_arms(su: TySubst, arms: list[SelArm]) -> list[SelArm] {
-	mut out: list[SelArm] = []
+fn subst_sel_arms(su: TySubst, arms: list[ast.SelArm]) -> list[ast.SelArm] {
+	mut out: list[ast.SelArm] = []
 	for a in arms {
-		out.append(SelArm(a.op, a.bind, subst_expr(su, a.ch), subst_expr(su, a.val), subst_block(su, a.body)))
+		out.append(ast.SelArm(a.op, a.bind, subst_expr(su, a.ch), subst_expr(su, a.val), subst_block(su, a.body)))
 	}
 	return out
 }
 
-fn subst_expr(su: TySubst, e: Expr) -> Expr {
+fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 	return match e {
-		Expr.EUnary(o, x) => Expr.EUnary(o, subst_expr(su, x))
-		Expr.EBinary(o, a, b) => Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
-		Expr.ECall(nm, xs, ts) => Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts))
-		Expr.EField(x, f) => Expr.EField(subst_expr(su, x), f)
-		Expr.EOptChain(x, f) => Expr.EOptChain(subst_expr(su, x), f)
-		Expr.ETry(x) => Expr.ETry(subst_expr(su, x))
-		Expr.EIndex(x, i) => Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
-		Expr.EMethod(x, m, xs) => Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
-		Expr.EListLit(xs) => Expr.EListLit(subst_exprs(su, xs))
-		Expr.EConv(ty, x, as_) => Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
-		Expr.EIf(c, a, b) => Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
-		Expr.EMatch(x, arms) => Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
-		Expr.ERange(a, b, inc) => Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)
-		Expr.ETuple(xs) => Expr.ETuple(subst_exprs(su, xs))
-		Expr.EMapLit(ks, vs) => Expr.EMapLit(subst_exprs(su, ks), subst_exprs(su, vs))
-		Expr.EFn(ps, hr, r, b) => Expr.EFn(subst_params(su, ps), hr, subst_ty(su, r), subst_block(su, b))
-		Expr.EChanNew(ty, cap) => Expr.EChanNew(subst_chan_elem(su, ty), subst_expr(su, cap))
-		Expr.ERecv(x) => Expr.ERecv(subst_expr(su, x))
-		Expr.EForce(x) => Expr.EForce(subst_expr(su, x))
-		Expr.ECoalesce(a, b, jump) => Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
-		Expr.EGuard(b) => Expr.EGuard(subst_block(su, b))
-		Expr.EBlock(b) => Expr.EBlock(subst_block(su, b))
-		Expr.EIs(x, nm) => Expr.EIs(subst_expr(su, x), nm)
-		Expr.EIn(x, s) => Expr.EIn(subst_expr(su, x), subst_expr(su, s))
+		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
+		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
+		Expr.ECall(nm, xs, ts) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts))
+		Expr.EField(x, f) => ast.Expr.EField(subst_expr(su, x), f)
+		Expr.EOptChain(x, f) => ast.Expr.EOptChain(subst_expr(su, x), f)
+		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))
+		Expr.EIndex(x, i) => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
+		Expr.EMethod(x, m, xs) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
+		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
+		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
+		Expr.EIf(c, a, b) => ast.Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
+		Expr.EMatch(x, arms) => ast.Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
+		Expr.ERange(a, b, inc) => ast.Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)
+		Expr.ETuple(xs) => ast.Expr.ETuple(subst_exprs(su, xs))
+		Expr.EMapLit(ks, vs) => ast.Expr.EMapLit(subst_exprs(su, ks), subst_exprs(su, vs))
+		Expr.EFn(ps, hr, r, b) => ast.Expr.EFn(subst_params(su, ps), hr, subst_ty(su, r), subst_block(su, b))
+		Expr.EChanNew(ty, cap) => ast.Expr.EChanNew(subst_chan_elem(su, ty), subst_expr(su, cap))
+		Expr.ERecv(x) => ast.Expr.ERecv(subst_expr(su, x))
+		Expr.EForce(x) => ast.Expr.EForce(subst_expr(su, x))
+		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
+		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
+		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
+		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), nm)
+		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 
 		# THE FILL FORM CARRIES TWO EXPRESSIONS and the fallback left both. `[T(0); 3]` in a
 		# template kept its `T` and the specialization was refused with _E4064 no type named
 		# `T` to construct_ — the same shape as the bare block next door in subst_stmt, one
 		# node type along, and found the same way: by asking which variants this match does
 		# not name.
-		Expr.EFill(v, n) => Expr.EFill(subst_expr(su, v), subst_expr(su, n))
+		Expr.EFill(v, n) => ast.Expr.EFill(subst_expr(su, v), subst_expr(su, n))
 
 		# and no catch-all, for subst_stmt's reason. What is left is the literals and a bare
 		# name, which hold no type for an argument to reach.
@@ -336,26 +342,26 @@ fn subst_expr(su: TySubst, e: Expr) -> Expr {
 # subst_params is a parameter list, and it is a function of its own because BOTH a template
 # and a closure inside one have one. The rebuild was written twice, so a Param that grew a
 # field would have been substituted in one and copied unchanged in the other.
-fn subst_params(su: TySubst, ps: list[Param]) -> list[Param] {
-	mut out: list[Param] = []
+fn subst_params(su: TySubst, ps: list[ast.Param]) -> list[ast.Param] {
+	mut out: list[ast.Param] = []
 	for pm in ps {
-		out.append(Param(pm.name, subst_ty(su, pm.ty), pm.is_ref, pm.has_def, subst_expr(su, pm.def)))
+		out.append(ast.Param(pm.name, subst_ty(su, pm.ty), pm.is_ref, pm.has_def, subst_expr(su, pm.def)))
 	}
 	return out
 }
 
-fn subst_exprs(su: TySubst, xs: list[Expr]) -> list[Expr] {
-	mut out: list[Expr] = []
+fn subst_exprs(su: TySubst, xs: list[ast.Expr]) -> list[ast.Expr] {
+	mut out: list[ast.Expr] = []
 	for x in xs {
 		out.append(subst_expr(su, x))
 	}
 	return out
 }
 
-fn subst_arms(su: TySubst, arms: list[Arm]) -> list[Arm] {
-	mut out: list[Arm] = []
+fn subst_arms(su: TySubst, arms: list[ast.Arm]) -> list[ast.Arm] {
+	mut out: list[ast.Arm] = []
 	for a in arms {
-		out.append(Arm(a.pat, subst_expr(su, a.lit), a.bind, a.ctor, a.qual, a.binds, a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body)))
+		out.append(ast.Arm(a.pat, subst_expr(su, a.lit), a.bind, a.ctor, a.qual, a.binds, a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body)))
 	}
 	return out
 }

@@ -14,7 +14,7 @@ import "ascii"
 # GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
 # lexer does not yet emit every kind (f-strings, decorators).
 #[derive(Eq)]
-enum Kind {
+pub enum Kind {
 	Eof
 	Illegal
 	Semi
@@ -148,7 +148,7 @@ enum Kind {
 
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
 # value for string-like literals, and the 1-based line/column where it starts.
-struct Token {
+pub struct Token {
 	pub kind: Kind
 	pub lexeme: str
 	pub value: str
@@ -158,7 +158,7 @@ struct Token {
 
 # kind_name renders a kind exactly as the bootstrap's token.Kind.String, so the
 # `--emit tokens` output matches byte-for-byte.
-fn kind_name(k: Kind) -> str {
+pub fn kind_name(k: Kind) -> str {
 	return match k {
 		Kind.Eof => "EOF"
 		Kind.Illegal => "ILLEGAL"
@@ -272,7 +272,7 @@ fn kind_name(k: Kind) -> str {
 
 # lookup_keyword maps an identifier spelling to its reserved kind, or Ident when the
 # word is not a keyword.
-fn lookup_keyword(w: str) -> Kind {
+pub fn lookup_keyword(w: str) -> Kind {
 	if w == "fn" {
 		return Kind.Fn
 	} else if w == "return" {
@@ -377,7 +377,7 @@ fn lookup_keyword(w: str) -> Kind {
 #
 # The formatter asks the same question for the same reason: printed tight, `20.. =>` becomes
 # `20..=>`, which lexes as `20`, `..=`, `>`.
-fn no_bound_follows(k: Kind) -> bool {
+pub fn no_bound_follows(k: Kind) -> bool {
 	return match k {
 		Kind.FatArrow => true
 		Kind.If       => true
@@ -400,7 +400,7 @@ fn no_bound_follows(k: Kind) -> bool {
 # ends_item reports whether a token of this kind can end a grammatical item, which
 # is what lets the lexer insert a ';' at a following line break (GRAMMAR group 2,
 # ASI).
-fn ends_item(k: Kind) -> bool {
+pub fn ends_item(k: Kind) -> bool {
 	return match k {
 		Kind.Ident    => true
 		Kind.Int      => true
@@ -453,7 +453,7 @@ fn ends_item(k: Kind) -> bool {
 # exactly this; and a type parameter's bound names a spec or a concrete type by it as
 # well. A parser that reaches into the emitter cannot be said to parse without one, so
 # the shared fact moved to the layer both sides may see.
-fn name_is_type(name: str) -> bool {
+pub fn name_is_type(name: str) -> bool {
 	b := bytearray(name)
 	return false if b.len() == 0
 	return ascii.is_upper(b[0])

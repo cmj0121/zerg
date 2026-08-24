@@ -2621,6 +2621,18 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	if k, ok := e.info.NsMembers[fld]; ok {
 		key = k
 	}
+	// `mod.P(…)` IS A CONSTRUCTION, NOT A CALL. The member names a TYPE, and `construct`
+	// reads the construction's own type rather than the callee's spelling — so it has
+	// always been able to lower this shape and what was missing was reaching it. Falling
+	// through spelled the C type name in callee position, `zg_lib__P(…)`, which is not an
+	// expression: the failure was `cc` complaining about generated code rather than
+	// anything the reader wrote.
+	if _, isFn := e.info.Funcs[key]; !isFn {
+		if _, isStruct := e.cur.ExprType(e.info, n).(*types.Struct); isStruct {
+			return e.construct(n), true
+		}
+	}
+
 	// A `mut &` parameter of the resolved function takes the argument's ADDRESS, exactly
 	// as a direct call does — sema already checked each such argument is a mut lvalue.
 	byref := e.namespaceByRefArgs(key)
@@ -2703,20 +2715,50 @@ func (e *emitter) qualifiedVariant(callee ast.Expr) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	id, ok := fld.X.(*ast.Ident)
+	vs, tag, ok := e.calleeEnum(fld)
 	if !ok {
 		return "", false
 	}
-	sym, ok := e.info.Refs[id]
-	if !ok || sym.Kind != sema.SymType || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
-		return "", false
-	}
-	for _, v := range sym.TypeDef.Enum.Variants {
-		if v.Name == fld.Name {
+	for _, v := range vs {
+		if v.Name == tag+fld.Name {
 			return v.Name, true
 		}
 	}
 	return "", false
+}
+
+// calleeEnum is the enum the left of an `… . Variant` callee names, and the TAG the merged
+// program put in front of that enum's variants.
+//
+// Two shapes, because an enum can be reached two ways. A bare `Enum.Variant` names one this
+// module declares, and the tag is empty. A qualified `mod.Enum.Variant` names one a module
+// over — the left of the dot is itself a field — and the merge renamed both the enum and
+// its variants under that module's prefix, so the variant a reader spells has to be looked
+// up under the same one. Without this the qualified payload constructor was the one form of
+// a variant with no spelling at all: sema read it and the emitter could not name it.
+func (e *emitter) calleeEnum(fld *ast.Field) ([]*types.VariantDef, string, bool) {
+	switch l := fld.X.(type) {
+	case *ast.Ident:
+		sym, ok := e.info.Refs[l]
+		if !ok || sym.Kind != sema.SymType || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
+			return nil, "", false
+		}
+		return sym.TypeDef.Enum.Variants, "", true
+	case *ast.Field:
+		// the enum came back from sema on the WHOLE callee, and the tag from the member the
+		// inner field resolved to: `mod.Enum` merged to `mod__Enum`, so its variants merged
+		// to `mod__Variant` and that is the name this has to answer with.
+		key, ok := e.info.NsMembers[l]
+		if !ok {
+			return nil, "", false
+		}
+		en, ok := e.info.ExprTypes[fld].(*types.Enum)
+		if !ok || en.Def == nil || en.Def.Enum == nil {
+			return nil, "", false
+		}
+		return en.Def.Enum.Variants, strings.TrimSuffix(key, l.Name), true
+	}
+	return nil, "", false
 }
 
 // callTarget is the mangled C name a call resolves to: a generic call site is

@@ -63,7 +63,7 @@ list nobody can ever finish reading.
 
 ```text
 error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3113,
-                                              emitting E4074, building E5017, unbuilt E9106
+                                              emitting E4075, building E5017, unbuilt E9106
 ```
 
 It reads the ranges out of the table above rather than carrying its own copy, so adding one
@@ -348,6 +348,7 @@ shipping compiler rather than a part of it (the line
 | `E4072` | `…` has … type parameters and this gives …                                                              |
 | `E4073` | `…` is declared twice in this file — one scope declares a name once                                     |
 | `E4074` | a variant pattern's qualifier is not the subject's enum                                                 |
+| `E4075` | a binding takes the name an import bound in this file                                                   |
 | `E5001` | this entry file declares no `fn main`                                                                   |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                  |
 | `E5007` | `…` is a module this build compiles and this module did not import                                      |

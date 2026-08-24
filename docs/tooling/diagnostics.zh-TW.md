@@ -50,7 +50,7 @@
 
 ```text
 error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3113,
-                                              emitting E4074, building E5017, unbuilt E9106
+                                              emitting E4075, building E5017, unbuilt E9106
 ```
 
 號碼段是從上面那張表讀出來的,而不是在腳本裡另存一份,所以新增一段就是在這裡多一列,除此之外什麼都不必動。
@@ -326,6 +326,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4072` | `…` 有 … 個型別參數,而這裡給了 …                                                                      |
 | `E4073` | `…` 在這個檔案裡被宣告了兩次 — 一個 scope 只宣告一次同名的東西                                        |
 | `E4074` | variant pattern 的限定符不是 subject 的 enum                                                          |
+| `E4075` | 某個 binding 取走了本檔案某個 import 綁定的名字                                                       |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |

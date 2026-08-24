@@ -15,7 +15,12 @@
 # at each site, because `k == 2` at a call site is a fact about the runtime that a reader of
 # this compiler has no way to look up.
 
-import "io"
+import (
+	"io"
+
+	"./ignore"
+	"./layout"
+)
 const KIND_MISSING := 0
 const KIND_FILE := 1
 const KIND_DIR := 2
@@ -40,7 +45,7 @@ pub fn exists(path: str) -> bool {
 
 # is_hidden is a NAME rule and not a path one: the walk asks it of the entry, so a hidden
 # directory is not entered and a hidden file is not read, wherever the walk happens to be.
-fn is_hidden(name: str) -> bool {
+pub fn is_hidden(name: str) -> bool {
 	b := bytearray(name)
 	return false if b.len() == 0
 
@@ -74,32 +79,32 @@ pub fn walk_sources(root: str) -> list[str] {
 
 	# THE IGNORE FILE IS READ ONCE, at the root, and carried down. Reading one per directory is
 	# `.gitignore`'s shape and it brings an ordering with it (ignore.zg says why); reading it
-	# once per ENTRY would be the same file parsed a thousand times for one walk.
-	ig := ignore_at(root)
+	# once per ENTRY would be the same file parsed a thousand times for one walkdir.
+	ig := ignore.ignore_at(root)
 	walk_into(root, "", ig, out)
 	return out
 }
 
-fn walk_into(dir: str, rel: str, ig: Ignore, mut &out: list[str]) {
+fn walk_into(dir: str, rel: str, ig: ignore.Ignore, mut &out: list[str]) {
 	for name in __zrt_listdir(dir) {
 		continue if is_hidden(name)
 
-		path := join_path(dir, name)
+		path := layout.join_path(dir, name)
 
 		# THE PATH THE PATTERN SEES IS RELATIVE TO THE ROOT, not the one on disk. An anchored
 		# `/test-data` means the walk's own root, so an absolute prefix the caller happened to
 		# type would make the same tree match differently depending on where it was named from.
 		mut r := name
 		if rel != "" {
-			r = join_path(rel, name)
+			r = layout.join_path(rel, name)
 		}
 
 		here := is_dir(path)
-		continue if ignore_hit(ig, r, here)
+		continue if ignore.ignore_hit(ig, r, here)
 
 		if here {
 			walk_into(path, r, ig, out)
-		} else if is_file(path) and has_suffix(name, ".zg") {
+		} else if is_file(path) and layout.has_suffix(name, ".zg") {
 			out.append(path)
 		}
 	}

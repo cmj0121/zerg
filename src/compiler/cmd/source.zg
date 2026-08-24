@@ -6,6 +6,11 @@
 # Resolution in particular is the part that decides WHAT A PROGRAM IS, and a second copy of
 # it kept in step by hand is the one thing this module exists to prevent.
 
+import "./diag"
+import "./layout"
+import "./test"
+import "./test_pkg"
+import "./unit"
 import (
 	"ascii"
 	"io"
@@ -59,7 +64,7 @@ import (
 #
 # A REAL CYCLE STILL BELONGS TO THE CYCLE RULE: `b/b.zg` importing `./a` resolves to `a/a.zg`,
 # which is not `b/b.zg`, so this is quiet and E5014 speaks.
-fn chk_import_self(imd: zerg.ImportDecl, files: list[str], file: str) {
+pub fn chk_import_self(imd: zerg.ImportDecl, files: list[str], file: str) {
 	for f in files {
 		if f == file {
 			place := zerg.place_line(imd.at, imd.line, imd.col)
@@ -68,7 +73,7 @@ fn chk_import_self(imd: zerg.ImportDecl, files: list[str], file: str) {
 	}
 }
 
-fn chk_import_cycle(imd: zerg.ImportDecl, stack: list[str], im: str) {
+pub fn chk_import_cycle(imd: zerg.ImportDecl, stack: list[str], im: str) {
 	mut at := -1
 	mut i := 0
 	for i < stack.len() {
@@ -118,14 +123,14 @@ fn chk_import_cycle(imd: zerg.ImportDecl, stack: list[str], im: str) {
 #
 # A test file is not importable from anywhere, including a sibling test file: the convention
 # says which builds compile one, and `zerg test` is what will compile them together.
-fn chk_test_import(im: zerg.ImportDecl) {
+pub fn chk_test_import(im: zerg.ImportDecl) {
 	return if not zerg.is_test_file(path_tail(im.path) + ".zg")
 
 	place := zerg.place_line(im.at, im.line, im.col)
 	raise zerg.rule_msg(zerg.Rule.TestFileImported, f"`{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}")
 }
 
-fn chk_unbuilt_module(im: zerg.ImportDecl) {
+pub fn chk_unbuilt_module(im: zerg.ImportDecl) {
 	return if path_tail(im.path) != "atomic"
 
 	place := zerg.place_line(im.at, im.line, im.col)
@@ -136,7 +141,7 @@ fn chk_unbuilt_module(im: zerg.ImportDecl) {
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
 # that several entries share.
-fn load_sources(files: list[str]) -> list[str] {
+pub fn load_sources(files: list[str]) -> list[str] {
 	mut paths: list[str] = []
 	mut mods: list[str] = []
 	mut res := res_new()
@@ -147,11 +152,11 @@ fn load_sources(files: list[str]) -> list[str] {
 # same order. A diagnostic names the file it is about, and by the time anything is emitted
 # the whole program is one merged tree — so the path has to travel with the source from
 # here, or nothing downstream can say where a statement came from.
-fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) -> list[str] {
+pub fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) -> list[str] {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	for f in files {
-		load_into(f, dir_of(f), seen, srcs, paths, mods, res)
+		load_into(f, layout.dir_of(f), seen, srcs, paths, mods, res)
 	}
 	return srcs
 }
@@ -199,7 +204,7 @@ fn load_sources_at(files: list[str], mut &paths: list[str], mut &mods: list[str]
 # reach an import path. And a dotted first segment can never be anything else, so reserving the
 # remote shape today costs nothing and stops it being used for something it is not.
 fn imp_is_local(path: str) -> bool {
-	return has_prefix(path, "./")
+	return test.has_prefix(path, "./")
 }
 
 # imp_is_root is the PACKAGE ROOT prefix. It exists because `./` became relative to the file
@@ -212,16 +217,16 @@ fn imp_is_local(path: str) -> bool {
 # branches already have. An import path is never a filesystem path: `/x` is `x` under the
 # package root, not `/usr/x`.
 fn imp_is_root(path: str) -> bool {
-	return false if not has_prefix(path, "/")
+	return false if not test.has_prefix(path, "/")
 
-	return not has_prefix(path, "//")
+	return not test.has_prefix(path, "//")
 }
 
 # imp_body is the package path with the local prefix taken off — the part that is expanded
 # under whichever root the classifier picked, and the one string the two roots share.
 fn imp_body(path: str) -> str {
-	return cut_prefix(path, "./") if imp_is_local(path)
-	return cut_prefix(path, "/") if imp_is_root(path)
+	return test_pkg.cut_prefix(path, "./") if imp_is_local(path)
+	return test_pkg.cut_prefix(path, "/") if imp_is_root(path)
 
 	return path
 }
@@ -287,13 +292,13 @@ fn imp_name_ok(seg: str) -> bool {
 # being computed from a string somebody happened to type.
 fn imp_ill_formed(path: str) -> str {
 	return "an import path may not be empty" if path == ""
-	return "`//` names no root: `/` is this package's root and `./` is beside the file that wrote the import" if has_prefix(path, "//")
+	return "`//` names no root: `/` is this package's root and `./` is beside the file that wrote the import" if test.has_prefix(path, "//")
 	return "`/` names no module on its own — a module at this package's root is `/<name>`" if path == "/"
 
 	body := imp_body(path)
 
 	return "`./` names no module on its own — a module of this project is `./<name>`" if body == ""
-	return "an import names a MODULE and not a file — write `" + drop_suffix(path, ".zg") + "`" if has_suffix(path, ".zg")
+	return "an import names a MODULE and not a file — write `" + test_pkg.drop_suffix(path, ".zg") + "`" if layout.has_suffix(path, ".zg")
 
 	segs := imp_segs(body)
 
@@ -338,7 +343,7 @@ fn imp_root(path: str, from_dir: str, root_dir: str) -> str {
 	return from_dir if imp_is_local(path)
 	return root_dir if imp_is_root(path)
 
-	return stdlib_dir()
+	return layout.stdlib_dir()
 }
 
 # resolve_module is the files one import path names, or an empty list when nothing is there.
@@ -381,7 +386,7 @@ fn resolve_module(path: str, from_dir: str, root_dir: str) -> list[str] {
 #
 # The root is what the prefix chose and the body is the path under it, so `./lib` written at the
 # root and `/lib` written anywhere are one string, and neither depends on where the tree sits.
-fn module_where(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> str {
+pub fn module_where(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> str {
 	return mod_id("stdlib", imp_body(im.path)) if not imp_is_local(im.path) and not imp_is_root(im.path)
 
 	base := imp_body(im.path)
@@ -400,7 +405,7 @@ fn strip_root(root: str, full: str) -> str {
 	return full if root == "" or root == "."
 
 	pre := root + "/"
-	return full if not has_prefix(full, pre)
+	return full if not test.has_prefix(full, pre)
 
 	b := bytearray(full)
 	mut out: list[byte] = []
@@ -417,7 +422,7 @@ fn mod_id(root: str, body: str) -> str {
 	return f"{root}:{body}"
 }
 
-fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] {
+pub fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] {
 	place := zerg.place_line(im.at, im.line, im.col)
 
 	# THE STRING FIRST, and the disk only after it. A path that is not an import path is
@@ -446,8 +451,8 @@ fn module_files(im: zerg.ImportDecl, from_dir: str, root_dir: str) -> list[str] 
 fn imp_missing_says(path: str, from_dir: str, root_dir: str) -> str {
 	body := imp_body(path)
 
-	return f"no module at `{path}` (looked in {join_path(from_dir, body)})" if imp_is_local(path)
-	return f"no module at `{path}` (looked in {join_path(root_dir, body)})" if imp_is_root(path)
+	return f"no module at `{path}` (looked in {layout.join_path(from_dir, body)})" if imp_is_local(path)
+	return f"no module at `{path}` (looked in {layout.join_path(root_dir, body)})" if imp_is_root(path)
 
 	# THE OTHER TWO ROOTS ARE BOTH WORTH NAMING, because a bare name is neither of them and the
 	# reader is one character from either: `log` beside the importing file is `./log`, and `log`
@@ -458,7 +463,7 @@ fn imp_missing_says(path: str, from_dir: str, root_dir: str) -> str {
 	at_root := module_at(root_dir, body)
 	return f"there is no standard-library module `{path}`, and `{body}` is at this package's root — did you mean `/{body}`?" if at_root.len() > 0
 
-	return f"there is no standard-library module `{path}` (looked in {stdlib_dir()})"
+	return f"there is no standard-library module `{path}` (looked in {layout.stdlib_dir()})"
 }
 
 # module_sources is the same resolution asked BY NAME rather than by import: the files that
@@ -556,9 +561,9 @@ fn is_module_name(seg: str) -> bool {
 # unimportable is not unreadable (see module_sources).
 pub fn stdlib_modules() -> list[str] {
 	mut out: list[str] = []
-	for name in __zrt_listdir(stdlib_dir()) {
-		if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
-			out.append(drop_suffix(name, ".zg"))
+	for name in __zrt_listdir(layout.stdlib_dir()) {
+		if layout.has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+			out.append(test_pkg.drop_suffix(name, ".zg"))
 		}
 	}
 	return out
@@ -586,8 +591,8 @@ pub fn local_modules(from_dir: str) -> list[str] {
 
 	for name in __zrt_listdir(from_dir) {
 		mut cand := name
-		if has_suffix(name, ".zg") {
-			cand = drop_suffix(name, ".zg")
+		if layout.has_suffix(name, ".zg") {
+			cand = test_pkg.drop_suffix(name, ".zg")
 		}
 		continue if zerg.is_test_file(cand + ".zg")
 
@@ -619,7 +624,7 @@ pub fn local_modules(from_dir: str) -> list[str] {
 # The directory case drops them; the single-file case refuses, because `import "lib/lib_test"`
 # names one deliberately and dropping it would leave the module empty and the complaint about
 # some name much later.
-fn module_at(root: str, path: str) -> list[str] {
+pub fn module_at(root: str, path: str) -> list[str] {
 	parent := imp_under(root, imp_parent(path))
 	base := path_tail(path)
 
@@ -633,8 +638,8 @@ fn module_at(root: str, path: str) -> list[str] {
 	mut none: list[str] = []
 
 	return none if file and dir
-	return module_one(join_path(parent, base + ".zg")) if file
-	return module_many(join_path(parent, base)) if dir
+	return module_one(layout.join_path(parent, base + ".zg")) if file
+	return module_many(layout.join_path(parent, base)) if dir
 
 	return none
 }
@@ -645,13 +650,13 @@ fn module_at(root: str, path: str) -> list[str] {
 # IT IS THE LOADER'S ANSWER AND NOT A SECOND OPINION. The emitter cannot work the third column
 # out — it does not know the roots a prefix expands under — and `c_mod_of`'s own comment says why
 # it must not try: an identity computed twice is an identity two rules can disagree about.
-struct Res {
+pub struct Res {
 	pub at: list[str]
 	pub path: list[str]
 	pub mod: list[str]
 }
 
-fn res_new() -> Res {
+pub fn res_new() -> Res {
 	mut a: list[str] = []
 	mut b: list[str] = []
 	mut c: list[str] = []
@@ -708,8 +713,8 @@ fn module_one(file: str) -> list[str] {
 fn module_many(dir: str) -> list[str] {
 	mut many: list[str] = []
 	for name in __zrt_listdir(dir) {
-		if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
-			many.append(join_path(dir, name))
+		if layout.has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+			many.append(layout.join_path(dir, name))
 		}
 	}
 	return many
@@ -722,7 +727,7 @@ fn module_many(dir: str) -> list[str] {
 fn imp_under(root: str, parent: str) -> str {
 	return root if parent == ""
 
-	return join_path(root, parent)
+	return layout.join_path(root, parent)
 }
 
 # imp_parent is a package path without its last segment — "" for a single-segment path, which
@@ -743,7 +748,7 @@ fn imp_parent(path: str) -> str {
 
 # path_tail is the last '/'-separated segment of an import path, which is the module's
 # name.
-fn path_tail(path: str) -> str {
+pub fn path_tail(path: str) -> str {
 	b := bytearray(path)
 	mut cut := 0
 	mut i := 0
@@ -801,7 +806,7 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 	seen.append(file)
 	src := buffer_src(file, buf)
 	if buf.path == "" {
-		lex_check(src, file)
+		diag.lex_check(src, file)
 	} else if zerg.lex_diags(src, file).len() > 0 {
 		return
 	}
@@ -815,7 +820,7 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 		# THE IMPORTER'S OWN DIRECTORY, not the one threaded through: `./` is relative to the
 		# file that wrote it, and the root travels beside it for `/`. Threading one directory
 		# for both is what made `./b` in `sub/a.zg` look for `<root>/b`.
-		deps := module_files(imd, dir_of(file), root_dir)
+		deps := module_files(imd, layout.dir_of(file), root_dir)
 
 		# ASKED BEFORE THE CYCLE RULE, because the cycle rule fires on the same program with a
 		# sentence that is not true of it: `greet -> greet` is not two modules without an order,
@@ -832,13 +837,13 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 		#
 		# The resolution recorded is THIS module, for the reason `imp_mod` records it there:
 		# the namespace names the module doing the naming.
-		if imp_is_sibling(deps, own) {
+		if unit.imp_is_sibling(deps, own) {
 			res_add(res, file, imd.path, mod)
 			continue
 		}
 
 		# MATCHED ON THE LOCATION, not on the spelling — see cmd/unit.zg's load_import.
-		loc := module_where(imd, dir_of(file), root_dir)
+		loc := module_where(imd, layout.dir_of(file), root_dir)
 		res_add(res, file, imd.path, loc)
 		chk_import_cycle(imd, stack, loc)
 		mut here := stack
@@ -915,9 +920,9 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 # deliberately the one path here that is NOT guarded: a buffer that does not parse must
 # raise, because `ls_check` turns that raise into the diagnostic that says so, and a
 # swallowed one is a server showing a clean file the compiler will not build.
-fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
+pub fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
 	buf := Buffer(path, text)
-	mut dir := dir_of(dir_of(path))
+	mut dir := layout.dir_of(layout.dir_of(path))
 	for dir != "" and dir != "." {
 		here := entry_files(dir)
 		for entry in here {
@@ -935,12 +940,12 @@ fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str]
 		}
 		break if here.len() > 0
 
-		dir = dir_of(dir)
+		dir = layout.dir_of(dir)
 	}
 
 	mut seen: list[str] = []
 	mut stack: list[str] = []
-	load_with(path, path, [path], dir_of(path), seen, stack, srcs, paths, mods, res, buf)
+	load_with(path, path, [path], layout.dir_of(path), seen, stack, srcs, paths, mods, res, buf)
 }
 
 # entry_files is the candidate entries directly in one directory: its `.zg` files, in the
@@ -955,8 +960,8 @@ fn entry_files(dir: str) -> list[str] {
 	return out if not __zrt_exists(dir)
 
 	for name in __zrt_listdir(dir) {
-		if has_suffix(name, ".zg") and not zerg.is_test_file(name) {
-			out.append(join_path(dir, name))
+		if layout.has_suffix(name, ".zg") and not zerg.is_test_file(name) {
+			out.append(layout.join_path(dir, name))
 		}
 	}
 	return out
@@ -976,7 +981,7 @@ fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &
 	mut stack: list[str] = []
 	mut ok := false
 	guard {
-		load_with(entry, entry, [entry], dir_of(entry), seen, stack, srcs, paths, mods, res, buf)
+		load_with(entry, entry, [entry], layout.dir_of(entry), seen, stack, srcs, paths, mods, res, buf)
 		ok = true
 	}
 	return false if not ok
@@ -1004,7 +1009,7 @@ fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &
 # paragraph about. The guard covers the conversion alone, which is the only thing in here
 # that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
 # failed on, which is a gap in `io` rather than one here.)
-fn read_source(path: str) -> str {
+pub fn read_source(path: str) -> str {
 	b := io.read_file(path)
 
 	mut src := ""

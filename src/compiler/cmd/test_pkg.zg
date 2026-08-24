@@ -2,6 +2,11 @@
 # discovery half — which directories hold a test, which sources each package compiles, and
 # the names the generated files wear so a run can take them away again.
 
+import "./layout"
+import "./source"
+import "./test"
+import "./test_fixture"
+import "./walkdir"
 import (
 	"sha256"
 
@@ -32,7 +37,7 @@ import (
 # used it) and never a silent one, and the way out is to name the file for the module rather
 # than for one of its parts. In exchange the rule is MONOTONE: adding a test file never
 # changes what another package is built from.
-struct Pkg {
+pub struct Pkg {
 	pub dir: str
 	pub mod: str
 }
@@ -50,12 +55,12 @@ struct Pkg {
 # cost one `opendir` per source file and — the part that mattered — could not tell a directory
 # from a SYMLINK to one. A link pointing at an ancestor was descended into as if it were a
 # directory: the same test was found under `up/`, and again under `up/up/`, rebuilt and re-run
-# every round, and the run did not end. `is_dir` is `lstat`, so a link answers false (walk.zg).
-fn test_pkgs(root: str, mut &out: list[Pkg]) {
+# every round, and the run did not end. `is_dir` is `lstat`, so a link answers false (walkdir.zg).
+pub fn test_pkgs(root: str, mut &out: list[Pkg]) {
 	dir_pkgs(root, out)
 	for name in __zrt_listdir(root) {
-		path := join_path(root, name)
-		if not is_hidden(name) and is_dir(path) {
+		path := layout.join_path(root, name)
+		if not walkdir.is_hidden(name) and walkdir.is_dir(path) {
 			test_pkgs(path, out)
 		}
 	}
@@ -132,7 +137,7 @@ fn a_source_declares_a_test(dir: str) -> bool {
 fn file_declares_a_test(path: str) -> bool {
 	mut found := false
 	guard {
-		found = has_a_test(zerg.parse_at(read_source(path), path))
+		found = has_a_test(zerg.parse_at(source.read_source(path), path))
 	}
 	return found
 }
@@ -151,8 +156,8 @@ fn has_a_test(tree: zerg.File) -> bool {
 # path names a `.zg` file. Ancestors — the `fixtures_test.zg` of each level — are counted from
 # it, which keeps the rule the one docs/runtime/package.md already states: they are counted
 # from the path `zerg test` was GIVEN, and the directory a named file sits in is that path.
-fn search_root(path: str) -> str {
-	return dir_of(path) if has_suffix(path, ".zg")
+pub fn search_root(path: str) -> str {
+	return layout.dir_of(path) if layout.has_suffix(path, ".zg")
 
 	return path
 }
@@ -166,11 +171,11 @@ fn search_root(path: str) -> str {
 #
 # There may be no package, which is a run that found nothing and is reported as one: a `.zg`
 # file with no `#[test]` in it and no test file naming it is in none.
-fn file_pkgs(path: str, mut &out: list[Pkg]) {
+pub fn file_pkgs(path: str, mut &out: list[Pkg]) {
 	mut all: list[Pkg] = []
 	dir_pkgs(search_root(path), all)
 	for p in all {
-		if has_str(pkg_sources(p), path) {
+		if test_fixture.str_in(pkg_sources(p), path) {
 			out.append(p)
 		}
 	}
@@ -189,7 +194,7 @@ fn test_module(dir: str, name: str) -> str {
 
 	return "" if base == ""
 
-	return base if __zrt_exists(join_path(dir, base + ".zg"))
+	return base if __zrt_exists(layout.join_path(dir, base + ".zg"))
 
 	return ""
 }
@@ -204,7 +209,7 @@ fn claimed(dir: str, name: str) -> bool {
 	return false if base == ""
 
 	t := base + "_test.zg"
-	return false if not __zrt_exists(join_path(dir, t))
+	return false if not __zrt_exists(layout.join_path(dir, t))
 
 	return test_module(dir, t) != ""
 }
@@ -212,8 +217,8 @@ fn claimed(dir: str, name: str) -> bool {
 # cut_prefix is drop_suffix from the other end, and it is spelled `cut_` because a module-private
 # name is program-global in this compiler: `cli` already has a `drop_prefix`, and two of them
 # would be one symbol.
-fn cut_prefix(s: str, prefix: str) -> str {
-	return s if not has_prefix(s, prefix)
+pub fn cut_prefix(s: str, prefix: str) -> str {
+	return s if not test.has_prefix(s, prefix)
 
 	b := bytearray(s)
 	mut out: list[byte] = []
@@ -227,8 +232,8 @@ fn cut_prefix(s: str, prefix: str) -> str {
 
 # drop_suffix is `s` without `suffix`, or `""` when `s` does not end in one — and `""` also
 # when the two are equal, since a file named `_test.zg` names no module either.
-fn drop_suffix(s: str, suffix: str) -> str {
-	return "" if not has_suffix(s, suffix)
+pub fn drop_suffix(s: str, suffix: str) -> str {
+	return "" if not layout.has_suffix(s, suffix)
 
 	b := bytearray(s)
 	n := b.len() - bytearray(suffix).len()
@@ -245,7 +250,7 @@ fn drop_suffix(s: str, suffix: str) -> str {
 # of an inherited fixture file. Neither is a source, and neither makes a directory a package:
 # a leftover from an interrupted run would otherwise be discovered as a test file of its own.
 fn is_own_file(name: str) -> bool {
-	return has_prefix(name, DRIVER_PREFIX) or has_prefix(name, INHERITED_PREFIX)
+	return test.has_prefix(name, DRIVER_PREFIX) or test.has_prefix(name, INHERITED_PREFIX)
 }
 
 # pkg_sources is every file one package is compiled from, the `*_test.zg` files INCLUDED — and
@@ -260,22 +265,22 @@ fn is_own_file(name: str) -> bool {
 # a previous run was interrupted between writing it and taking it away; reading it back would
 # compile the last run's driver beside this one's — two `fn main`, and a list of tests from
 # whatever the file declared then.
-fn pkg_sources(p: Pkg) -> list[str] {
+pub fn pkg_sources(p: Pkg) -> list[str] {
 	mut out: list[str] = []
 	if p.mod == "" {
 		for name in __zrt_listdir(p.dir) {
-			if has_suffix(name, ".zg") and not is_own_file(name) and not claimed(p.dir, name) {
-				out.append(join_path(p.dir, name))
+			if layout.has_suffix(name, ".zg") and not is_own_file(name) and not claimed(p.dir, name) {
+				out.append(layout.join_path(p.dir, name))
 			}
 		}
 		return out
 	}
-	out.append(join_path(p.dir, p.mod + ".zg"))
-	fx := join_path(p.dir, FIXTURES_NAME)
+	out.append(layout.join_path(p.dir, p.mod + ".zg"))
+	fx := layout.join_path(p.dir, FIXTURES_NAME)
 	if __zrt_exists(fx) {
 		out.append(fx)
 	}
-	out.append(join_path(p.dir, p.mod + "_test.zg"))
+	out.append(layout.join_path(p.dir, p.mod + "_test.zg"))
 	return out
 }
 
@@ -291,7 +296,7 @@ fn pkg_sources(p: Pkg) -> list[str] {
 # directory would be one driver.
 const DRIVER_PREFIX := "zerg_test_driver_"
 
-fn driver_name(p: Pkg) -> str {
+pub fn driver_name(p: Pkg) -> str {
 	return DRIVER_PREFIX + "test.zg" if p.mod == ""
 
 	return f"{DRIVER_PREFIX}{p.mod}_test.zg"
@@ -299,7 +304,7 @@ fn driver_name(p: Pkg) -> str {
 
 # pkg_key is what a package's binary and report are filed under, and it names BOTH halves of
 # the package: two packages of one directory would otherwise share a binary.
-fn pkg_key(p: Pkg) -> str {
+pub fn pkg_key(p: Pkg) -> str {
 	return sha256.hex(bytearray(f"{p.dir}|{p.mod}"))
 }
 

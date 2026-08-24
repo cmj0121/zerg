@@ -42,7 +42,7 @@ fail=0
 #
 # The lexer's side is `lookup_keyword`, which is the one function that decides what a
 # reserved word IS — every other list in the compiler is downstream of it.
-awk '/^fn lookup_keyword/,/^}/' "$TOKEN" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u >"$tmp/lexer"
+awk '/^(pub )?fn lookup_keyword/,/^}/' "$TOKEN" | grep -oE '"[a-z]+"' | tr -d '"' | sort -u >"$tmp/lexer"
 
 # The syntax file's side is every word it names as a keyword, in any group. `syntax match`
 # counts too: `for` is written as one so that the `impl X for Y` override can win, which is
@@ -70,11 +70,11 @@ awk '/^fn lookup_keyword/,/^}/' "$TOKEN" | grep -oE '"[a-z]+"' | tr -d '"' | sor
 # never heard of it. They are held to their own list, in the parser, for the same reason.
 {
 	# the scalars, which the parser resolves by name
-	grep -oE 'return Ty\.T[A-Za-z]+ if name == "[a-z]+"' src/compiler/zerg/parser.zg |
+	grep -oE 'return ([a-z_]+\.)?Ty\.T[A-Za-z]+ if name == "[a-z]+"' src/compiler/zerg/parser.zg |
 		sed -E 's/.*"([a-z]+)"/\1/'
 
 	# and the containers, which it resolves by name AND a following `[`
-	grep -oE 'if name == "[a-z]+" and p_at\(p, Kind\.LBrack\)' src/compiler/zerg/parser.zg |
+	grep -oE 'if name == "[a-z]+" and p_at\(p, ([a-z_]+\.)?Kind\.LBrack\)' src/compiler/zerg/parser.zg |
 		sed -E 's/.*"([a-z]+)".*/\1/'
 
 	# `set[T]` is named by the syntax file and is not built: the specification has it and
@@ -134,7 +134,7 @@ fi
 # below ask that question — the tab width and the wrap column — and a pipeline copied for the
 # second is a pipeline that goes stale on one of them.
 fmt_return_int() {
-	awk -v fn="^fn $1" '$0 ~ fn, /^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1
+	awk -v fn="^(pub )?fn $1" '$0 ~ fn, /^}/' "$FMT" | grep -oE 'return [0-9]+' | grep -oE '[0-9]+' | head -1
 }
 
 tab=$(printf '\t')

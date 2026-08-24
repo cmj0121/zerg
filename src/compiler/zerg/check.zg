@@ -270,6 +270,27 @@ fn chk_drop_zg(path: str) -> str {
 	return path
 }
 
+# chk_ty_is_this_file is chk_name_is_this_file FOR A TYPE NAME, and it is a second function
+# rather than a second caller of the first because what it reads is a different table: a
+# function's row carries its file (sig_path) and a type's carries it in the type registry
+# (tk_path). The table and the sentence are the whole difference.
+#
+# AN UNREGISTERED NAME IS QUIET, which is the registry's standing sentinel and is what keeps
+# this silent about a type PARAMETER, a spec named in a bound, and a name whose declaration
+# was itself refused — none of which is a declared type and all of which reach a type
+# position spelled exactly like one.
+pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
+	decl_path := emit.c_ty_path(em, nm)
+
+	return if decl_path == "" or em.at_path == ""
+	return if decl_path == em.at_path
+	return if c_mod_of(em, decl_path) != c_mod_of(em, em.at_path)
+	return if lint.is_test_file(ast.mod_name(em.at_path))
+
+	ns := ast.mod_name(chk_drop_zg(decl_path))
+	chk_at(em, rule.Rule.TypeFromSibling, f"the type `{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)")
+}
+
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a
 # third caller of the first because what it reads is a different table: a function's row
 # carries its module and its marker (sig_mod / sig_pub), and a type's carries them in the
@@ -397,7 +418,13 @@ pub fn chk_ty_quals(mut &em: emit.Emitter, f: ast.File) {
 		em.at_path = q.path
 		em.at_line = q.line
 		em.at_col = q.col
-		if not emit.c_is_ns(em, q.ns) {
+
+		# AN EMPTY `ns` IS A TYPE WRITTEN BARE, which the parser records for this rule alone:
+		# #57 makes the file the unit of naming, so a type position naming a SIBLING's type
+		# without a qualifier is the same mistake E3114 names for a call.
+		if q.ns == "" {
+			chk_ty_is_this_file(em, q.member)
+		} else if not emit.c_is_ns(em, q.ns) {
 			emit.c_undefined_name(em, q.ns)
 		} else {
 			chk_ns_bound(em, q.ns)

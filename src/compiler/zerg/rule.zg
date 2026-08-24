@@ -217,6 +217,7 @@ pub enum Rule {
 	ChanDirectionNarrows = 3112
 	MainParamNotArgs = 3113
 	NameFromSibling = 3114
+	TypeFromSibling = 3115
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

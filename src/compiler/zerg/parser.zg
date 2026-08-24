@@ -945,6 +945,23 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# `Result[T]`: it erases generics, so a type's identity is its name. What matters is
 	# that the brackets are CONSUMED.
 	skip_ty_args(p)
+
+	# A BARE NAMED TYPE IS WRITTEN DOWN TOO, with an empty `ns`. #57 makes the file the unit
+	# of naming, so "no qualifier was typed" is a fact a rule needs just as much as "this one
+	# was" — and it is a fact only the parser holds, for the same reason the qualified half
+	# is: by the time the type is a `TNamed` the spelling is gone.
+	#
+	# HERE and not beside the qualified half, because every built-in returns above this line:
+	# recording there would put a row down for every `int` and `str` in the program, and this
+	# is the one place a name the reader DECLARED arrives.
+	#
+	# It records the NAME AND NOTHING ELSE, which is what keeps this a parse. Whether the name
+	# is a declared type, a type parameter, or a spec in a bound is a question for the table
+	# the checker has; asking it here would be the symbol table `layering-check` says this
+	# parser does not have.
+	if quals.len() == 0 {
+		p.ty_quals.append(ast.TyQual("", name, p.path, kw.line, kw.col))
+	}
 	return ast.Ty.TNamed(name)
 }
 

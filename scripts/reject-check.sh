@@ -5711,6 +5711,27 @@ pub fn tail() -> str {
 }
 EOF
 
+# The same rule at a TYPE POSITION, and a separate case because it is a separate table: a
+# function's row carries its file and a type's carries it in the type registry. It is also a
+# separate PARSE — the qualifier a type position wrote is dropped by `parse_base_type`, so the
+# fact that none was written is recorded on the side (File.ty_quals with an empty `ns`) or the
+# rule would have nothing to read.
+reject bare-type-from-a-sibling-file E3115 'and a file names what it uses' seed-gap <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both().x
+}
+--- pair/one.zg
+pub fn both() -> Box {
+	return Box(1)
+}
+--- pair/two.zg
+pub struct Box {
+	pub x: int
+}
+EOF
+
 reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
 import "./pair"
 

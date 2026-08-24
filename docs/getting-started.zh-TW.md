@@ -92,11 +92,11 @@ fn main() {
 app/
     main.zg
     greet/
-        greet.zg
+        mod.zg
 ```
 
 ```zerg
-# greet/greet.zg
+# greet/mod.zg
 pub fn hello(name: str) -> str {
     return "hello, " + name
 }

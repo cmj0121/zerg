@@ -29,7 +29,7 @@ fn do_fmt(c: cli.Ctx) -> int {
 	# `IOError: read failed`: no code, no place, and no name for what went wrong.
 	files := walkdir.sources_from(c.args())
 
-	return NOTHING_FOUND if files.len() == 0
+	return walkdir.NOTHING_FOUND if files.len() == 0
 
 	return run_fmt_check(files, c.all("off")) if c.has("check")
 

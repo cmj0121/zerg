@@ -233,11 +233,11 @@ fi
 # `chk_lit_fits`, `c_carrier_fit`, `c_into`, `c_either_wrap` — which take a `want` and
 # return C or a verdict, never a TYPE. So the assertion is on the inference family's
 # signatures.
-infers=$(grep -cE '^fn c_infer[a-z_]*\(' "$ZG/emit.zg")
+infers=$(grep -cE '^(pub )?fn c_infer[a-z_]*\(' "$ZG/emit.zg")
 if [ "$infers" -lt 8 ]; then
 	note "the inference family did not extract — $infers functions found"
 else
-	leak=$(grep -nE '^fn c_infer[a-z_]*\([^)]*\b(want|wanted|expected|hint)\b' "$ZG/emit.zg")
+	leak=$(grep -nE '^(pub )?fn c_infer[a-z_]*\([^)]*\b(want|wanted|expected|hint)\b' "$ZG/emit.zg")
 	[ -z "$leak" ] || note "an inference function takes an expected type: $leak"
 fi
 

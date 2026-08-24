@@ -552,7 +552,7 @@ done
 # is either a rule that can never be allowed or an allow for a rule nobody documented — and
 # both look exactly like nothing at all from the outside.
 documented=$(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u)
-catalogued=$(sed -n '/^fn lint_codes()/,/^}/p' "$LINT_SRC" | grep -oE 'L[0-9]{3}' | sort -u)
+catalogued=$(sed -nE '/^(pub )?fn lint_codes\(\)/,/^\}/p' "$LINT_SRC" | grep -oE 'L[0-9]{3}' | sort -u)
 if [ "$documented" != "$catalogued" ]; then
 	echo "CATALOGUE lint_codes() and the doc block in $LINT_SRC name different sets:"
 	diff <(echo "$documented") <(echo "$catalogued") | sed 's/^/          /'

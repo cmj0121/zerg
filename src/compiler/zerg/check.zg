@@ -255,7 +255,7 @@ pub fn chk_name_is_this_file(mut &em: emit.Emitter, name: str, decl_path: str) {
 
 # chk_drop_zg is a source path without its extension, which is the name an import of that
 # sibling binds: `./count` reaches `count.zg`, so the namespace is the file's own name.
-fn chk_drop_zg(path: str) -> str {
+pub fn chk_drop_zg(path: str) -> str {
 	b := bytearray(path)
 	return path if b.len() < 3
 
@@ -1344,7 +1344,7 @@ pub fn chk_payload_says(where: str, carrier: ast.Ty) -> str {
 # each site: both walks reach the same bad `return` and both report at the statement's place,
 # so an identical sentence is ONE finding after chk_at_place's dedupe — and two the day the
 # wording drifts by a word. It drifted, and a reader was told twice.
-const CHK_ANSWER := "this function's answer"
+pub const CHK_ANSWER := "this function's answer"
 
 # chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
 #
@@ -1827,7 +1827,7 @@ fn chk_fold_in_range(mut &em: emit.Emitter, want: ast.Ty, f: Folded) -> bool {
 
 	return chk_int_in_range(em, want, mag, true) if mag > 0
 
-	return emit.c_scalar_class(want) == SC_SIGNED and emit.c_scalar_bits(want) >= 64
+	return emit.c_scalar_class(want) == emit.SC_SIGNED and emit.c_scalar_bits(want) >= 64
 }
 
 # chk_fold_offender names what the reader has to change, and the rule is the same one twice: DO
@@ -2134,7 +2134,7 @@ fn chk_lit_adopts(mut &em: emit.Emitter, want: ast.Ty, e: ast.Expr) -> bool {
 fn chk_into_side(t: ast.Ty) -> bool {
 	cls := emit.c_scalar_class(t)
 
-	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
+	return cls == emit.SC_SIGNED or cls == emit.SC_UNSIGNED or cls == emit.SC_FLOAT
 }
 
 # chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
@@ -2365,7 +2365,7 @@ fn chk_lit_minus(mut &em: emit.Emitter, want: ast.Ty, o: str, x: ast.Expr, neg: 
 fn chk_int_in_range(mut &em: emit.Emitter, want: ast.Ty, v: int, neg: bool) -> bool {
 	cls := emit.c_scalar_class(want)
 
-	return true if cls != SC_SIGNED and cls != SC_UNSIGNED
+	return true if cls != emit.SC_SIGNED and cls != emit.SC_UNSIGNED
 
 	# A RUNE is asked its own question, because its values are not a range: the width test
 	# below would accept a surrogate, and `zrt_conv_rune` — the run-time half of this very
@@ -2378,7 +2378,7 @@ fn chk_int_in_range(mut &em: emit.Emitter, want: ast.Ty, v: int, neg: bool) -> b
 	# THE SIGN QUESTION IS NOT A QUESTION ABOUT WIDTH. An unsigned target has no negative
 	# side at any width, so asking the width first let `uint = -1` through — `uint` is 64
 	# bits, which is exactly where the magnitude check stops having anything to say.
-	return v == 0 if neg and cls == SC_UNSIGNED
+	return v == 0 if neg and cls == emit.SC_UNSIGNED
 
 	bits := emit.c_scalar_bits(want)
 
@@ -2770,7 +2770,7 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 	# name is not a str to c_is_str, so nothing retained it, nothing released it, and
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
-	if emit.c_scalar_class(td.under) == SC_NONE {
+	if emit.c_scalar_class(td.under) == emit.SC_NONE {
 		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
 		return ast.Ty.TUnknown
 	}
@@ -3101,7 +3101,7 @@ fn chk_is_bitwise_operand(t: ast.Ty) -> bool {
 	cls := emit.c_scalar_class(t)
 	return false if emit.c_is_rune(t)
 
-	return cls == SC_SIGNED or cls == SC_UNSIGNED
+	return cls == emit.SC_SIGNED or cls == emit.SC_UNSIGNED
 }
 
 pub fn chk_is_scalar(t: ast.Ty) -> bool {
@@ -3160,7 +3160,7 @@ fn chk_is_typedef_operand(mut &em: emit.Emitter, t: ast.Ty) -> bool {
 # a type everything permits.
 fn chk_is_num(t: ast.Ty) -> bool {
 	cls := emit.c_scalar_class(t)
-	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
+	return cls == emit.SC_SIGNED or cls == emit.SC_UNSIGNED or cls == emit.SC_FLOAT
 }
 
 # chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not

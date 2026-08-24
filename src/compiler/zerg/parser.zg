@@ -296,7 +296,7 @@ fn p_continues_expr(k: token.Kind) -> bool {
 # while sitting forty times above the deepest nesting anywhere in this repository, which is
 # five. The bound is a translation limit of this implementation
 # (docs/conformance.md), like C's own minimum of 63 nested parenthesized expressions.
-const ZG_MAX_NESTING := 200
+pub const ZG_MAX_NESTING := 200
 
 # p_deeper takes one nesting level, and refuses the program once the budget is spent —
 # BEFORE the recursion happens, so the stack the refusal is reported from is a healthy one.

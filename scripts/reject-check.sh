@@ -5732,6 +5732,23 @@ pub struct Box {
 }
 EOF
 
+# And the same rule for a MODULE CONSTANT, which is the one declaration that reached every
+# body by being BOUND rather than looked up — so the rule is enforced by not binding a
+# sibling's, and the read then lands where an unknown name would with a sentence of its own.
+reject bare-const-from-a-sibling-file E3116 'and a file names what it uses' seed-gap <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn both() -> int {
+	return LIMIT
+}
+--- pair/two.zg
+pub const LIMIT := 7
+EOF
+
 reject a-namespace-a-neighbour-imported E5007 seed-gap <<'EOF'
 import "./pair"
 

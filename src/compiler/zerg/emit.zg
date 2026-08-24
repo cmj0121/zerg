@@ -1781,7 +1781,14 @@ fn c_reset_env(mut &em: Emitter) {
 		# and a local that shadows one is in a block of its own; and a KEYWORD `const` is
 		# shadow-proof in every body the way a local `const` is (chk_const_rebind). All of that
 		# is c_const_bind's, which c_const_globals also calls as it registers each row.
-		c_const_bind(em, em.k_decls[i], em.k_tys[i])
+		# A SIBLING'S CONSTANT IS NOT IN SCOPE HERE. #57 makes the file the unit of naming, and
+		# a module constant is the one declaration that reached every body by being BOUND
+		# rather than looked up — so the rule is enforced by not binding it, and a read then
+		# lands in c_ident_val's unbound branch where c_const_from_sibling gives it the
+		# sentence a bare "undefined name" could not.
+		if c_const_here(em, em.k_decls[i]) {
+			c_const_bind(em, em.k_decls[i], em.k_tys[i])
+		}
 		i = i + 1
 	}
 }
@@ -5103,9 +5110,9 @@ fn c_bool(b: bool) -> str {
 # two come to be in different numbers.
 fn c_deeper(mut &em: Emitter) {
 	em.depth = em.depth + 1
-	return if em.depth <= ZG_MAX_NESTING
+	return if em.depth <= parser.ZG_MAX_NESTING
 
-	raise c_diag(em, rule.Rule.ChainTooDeep, f"this expression chains more than {strconv.to_string(ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word")
+	raise c_diag(em, rule.Rule.ChainTooDeep, f"this expression chains more than {strconv.to_string(parser.ZG_MAX_NESTING, 10)} levels deep — a translation limit of this compiler (docs/conformance.md): its emitter and checker recurse once per operator, call or method link, and refusing here is what a recursive walk can still say before the native stack it runs on overflows without a word")
 }
 
 # --- the emitter's reporting channel ------------------------------------------------------
@@ -6754,10 +6761,10 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 # is. This is the seed's `sema.ScalarClass` (src/bootstrap/internal/sema/convert.go), ported
 # rather than re-derived — the two compilers have to agree about which conversions are
 # lossless, and stating the rule twice in two shapes is how they stop agreeing.
-const SC_NONE := 0
-const SC_SIGNED := 1
-const SC_UNSIGNED := 2
-const SC_FLOAT := 3
+pub const SC_NONE := 0
+pub const SC_SIGNED := 1
+pub const SC_UNSIGNED := 2
+pub const SC_FLOAT := 3
 const SC_BOOL := 4
 
 # c_scalar_class answers a type's scalar class, or SC_NONE for a type that is not a
@@ -8489,6 +8496,8 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
 		c_builtin_check(em, n)
 
+		return "0" if c_const_from_sibling(em, n)
+
 		# The ordinary unknown name is the same kind of statement and takes the same channel.
 		# It was a bare `raise` for as long as it existed, which said the sentence and nothing
 		# else — and of every rule here this is the one that needs a place most, because the
@@ -9941,6 +9950,36 @@ fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 	# row there rather than reading this column, so the constant has exactly one value and no
 	# way for two copies of it to drift.
 	em.env_cval.append(check.Folded(false, 0))
+}
+
+# c_const_here is whether a module constant is one THIS FILE may name bare (#57): its own, or
+# any of them when the file being emitted is a `_test.zg` — the same carve-out E3114 keeps,
+# and for the same reason.
+#
+# A constant from ANOTHER MODULE is left alone: it is reached through a namespace and never by
+# a bare name, so it is not this rule's business and refusing it here would be a second
+# sentence about a program another rule already answers for.
+pub fn c_const_here(mut &em: Emitter, c: ast.ConstDecl) -> bool {
+	return true if c.path == "" or em.at_path == ""
+	return true if c.path == em.at_path
+	return true if check.c_mod_of(em, c.path) != check.c_mod_of(em, em.at_path)
+
+	return lint.is_test_file(ast.mod_name(em.at_path))
+}
+
+# c_const_from_sibling is the sentence for a read of one that was not bound. It answers false
+# for every other unknown name, so the ordinary typo keeps the ordinary message.
+fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
+	mut i := 0
+	for i < em.k_decls.len() {
+		if em.k_decls[i].name == n and not c_const_here(em, em.k_decls[i]) {
+			ns := ast.mod_name(check.chk_drop_zg(em.k_decls[i].path))
+			check.chk_at(em, rule.Rule.ConstFromSibling, f"the constant `{n}` is declared in `{em.k_decls[i].path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{n}` (docs/runtime/package.md)")
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 fn c_const_in(f: ast.File, name: str) -> bool {
@@ -13067,7 +13106,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
 	# the nil is a value there and has to travel the value path below.
 	if has_val and c_is_nil_lit(e) and c_is_carrier(em.fn_ret) {
-		nv := c_carrier_fit(em, CHK_ANSWER, em.fn_ret, e, c_nosub())
+		nv := c_carrier_fit(em, check.CHK_ANSWER, em.fn_ret, e, c_nosub())
 		return f"{pre}{ind}return {nv};\n"
 	}
 	if has_val and not c_is_nil_lit(e) {
@@ -13078,7 +13117,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 		et := check.chk_returned(em, e)
 		ret_chan := ast.ty_is_chan(em.fn_ret)
 		if ret_chan {
-			c_chan_check(em, et, em.fn_ret, CHK_ANSWER)
+			c_chan_check(em, et, em.fn_ret, check.CHK_ANSWER)
 		}
 
 		# a carrier result FITS the value rather than rendering it: `Left(v)` and `Right(e)`
@@ -13094,7 +13133,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 		if ret_chan {
 			v = c_expr(em, e, c_nosub())
 		} else {
-			v = c_fit_copied(em, CHK_ANSWER, em.fn_ret, e, c_nosub())
+			v = c_fit_copied(em, check.CHK_ANSWER, em.fn_ret, e, c_nosub())
 		}
 
 		# A channel travelling OUT is a handle the caller will own, so it carries a reference

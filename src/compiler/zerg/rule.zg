@@ -218,6 +218,7 @@ pub enum Rule {
 	MainParamNotArgs = 3113
 	NameFromSibling = 3114
 	TypeFromSibling = 3115
+	ConstFromSibling = 3116
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

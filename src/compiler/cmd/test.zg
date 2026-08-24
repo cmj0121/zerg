@@ -14,6 +14,8 @@ import "./unit"
 import (
 	"cli"
 	"io"
+
+	"./walkdir"
 )
 
 # test is `build` pointed at the files a build leaves out. A `*_test.zg` is compiled by no
@@ -189,7 +191,7 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 
 	if passed + failed + skipped + stuck == 0 {
 		io.ewrite(f"zerg: no tests: nothing under `{root}` declares a `#[test]`\n")
-		return NOTHING_FOUND
+		return walkdir.NOTHING_FOUND
 	}
 	io.println("")
 
@@ -280,7 +282,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 		if own[k] {
 			files.append(srcs[k])
 		} else {
-			c := layout.join_path(p.dir, f"{INHERITED_PREFIX}{copies.len()}_test.zg")
+			c := layout.join_path(p.dir, f"{test_pkg.INHERITED_PREFIX}{copies.len()}_test.zg")
 			guard {
 				io.write_file(c, bytearray(source.read_source(srcs[k])))
 			}

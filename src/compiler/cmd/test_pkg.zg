@@ -188,7 +188,7 @@ pub fn file_pkgs(path: str, mut &out: list[Pkg]) {
 # package in it, and a `fixtures.zg` that happened to sit there would otherwise carry it off
 # into a package of its own.
 fn test_module(dir: str, name: str) -> str {
-	return "" if name == FIXTURES_NAME
+	return "" if name == test_fixture.FIXTURES_NAME
 
 	base := drop_suffix(name, "_test.zg")
 
@@ -276,7 +276,7 @@ pub fn pkg_sources(p: Pkg) -> list[str] {
 		return out
 	}
 	out.append(layout.join_path(p.dir, p.mod + ".zg"))
-	fx := layout.join_path(p.dir, FIXTURES_NAME)
+	fx := layout.join_path(p.dir, test_fixture.FIXTURES_NAME)
 	if __zrt_exists(fx) {
 		out.append(fx)
 	}
@@ -321,4 +321,4 @@ pub fn pkg_key(p: Pkg) -> str {
 # The copy is byte for byte, so a diagnostic inside one points at the right LINE of the file
 # the author wrote; only the name in front of it is this run's. It ends in `_test.zg` like
 # everything else here, so no shipping build reads one, and it is taken away with the driver.
-const INHERITED_PREFIX := "zerg_test_inherited_"
+pub const INHERITED_PREFIX := "zerg_test_inherited_"

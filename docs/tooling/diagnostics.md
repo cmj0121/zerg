@@ -24,9 +24,11 @@ order a build meets them:
 **A range names the question, not the file.** The two are usually the same and the stage column
 says which, but where they differ the question decides. `emit.zg` is _AST -> C, with the minimal
 typecheck emit needs_, so the checking rules reported from it stay `E3xxx` — most of the range,
-and twenty more arrived there when #74 asked the same question of the unbuilt range: which file
+and the rules #74 moved out of the unbuilt range are there for the same reason: which file
 asks a question is an implementation fact, and a reader looking a code up wants to know what kind
-of thing went wrong. A source that is not UTF-8 is `E1xxx` for the same reason, though the
+of thing went wrong. There is no count of them here, because the counts below are of the numbers
+that RETIRED, which is what the table holds and what a reader can check it against; the arrivals
+are one more each time a code splits. A source that is not UTF-8 is `E1xxx` for the same reason, though the
 driver is what opens the file.
 
 Forty-two codes sat in a range that named a different question and were re-seated — twenty-five

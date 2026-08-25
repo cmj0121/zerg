@@ -40,12 +40,20 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > **The renderings are reached by name, not by call.** `str(x)`, a hole and `print` consult them on every
 > value, and `x.display()` / `x.debug()` written out reach the override alone: a type that declares one
 > answers through it, and a value that has not — an `int`, a `str`, a `list`, a `map`, an `Err`, a carrier —
-> is **[not yet]**, _E9107 NotImplemented: the method `display` on a int — `str(x)` renders any value, and
-> an `impl` on a declared type is how a type overrides that_, and the same sentence for _NotImplemented: the
+> is **[not yet]**, _E9107 NotImplemented: the method `display` on a int — `str(x)` renders it, and an
+> `impl` on a declared type is how a type overrides that_, and the same sentence for _NotImplemented: the
 > method `debug` on a int_. It is one answer for every receiver, which is what "on every value" means: a
 > `map` does not get the map's sentence about `len` and `has` for a rendering. So "available on every value"
-> holds through the three spellings above and not yet through the fourth; `str(x)` is what to write while it
-> waits.
+> holds through the three spellings above and not yet through the fourth.
+>
+> **What to write while it waits is NOT one answer for every receiver**, and that is the paragraph above
+> read back against this one. `str(x)` stands in only where the value renders at all — a scalar, a `str`,
+> an `Err`, a `list[byte]`, or a type with an override. On the composites the Status note rejects there is
+> nothing to stand in, because the fourth spelling is waiting on the same gap the first three are, and the
+> message says so rather than naming an expression this same compiler refuses: _E9107 NotImplemented: the
+> method `display` on a list[int] — there is nothing to write in its place — this value has no rendering of
+> its own until the structural `Display` this compiler does not generate, so render its parts_. For a
+> composite it is one gap and not two.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

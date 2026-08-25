@@ -35,10 +35,18 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > **這兩種渲染是靠名字抵達的,不是靠呼叫。** `str(x)`、洞與 `print` 在每個值上都會諮詢它們,而寫成
 > `x.display()` / `x.debug()` 時只會抵達 override:有宣告的型別由它回答,沒有宣告的值——一個 `int`、一個
 > `str`、一個 `list`、一個 `map`、一個 `Err`、一個載體——則是 **[not yet]**,_E9107 NotImplemented: the
-> method `display` on a int — `str(x)` renders any value, and an `impl` on a declared type is how a type
+> method `display` on a int — `str(x)` renders it, and an `impl` on a declared type is how a type
 > overrides that_,`debug` 也是同一句 _NotImplemented: the method `debug` on a int_。每一種接收者都是同一個
 > 答案,而這正是「每個值」的意思:`map` 不會為了一個渲染而拿到 map 那句關於 `len` 與 `has` 的話。所以「每個值
-> 都能渲染」在上面三種拼法上成立、在第四種上還不成立;在它落地之前要寫的是 `str(x)`。
+> 都能渲染」在上面三種拼法上成立、在第四種上還不成立。
+>
+> **在它落地之前要寫什麼,並不是每一種接收者都同一個答案**,這是把上一段拿回來對照這一段讀出來的。`str(x)`
+> 只在那個值本來就渲染得出來時才頂得上——一個純量、一個 `str`、一個 `Err`、一個 `list[byte]`,或一個有
+> override 的型別。在 Status 那段所拒絕的複合值上,沒有東西可以頂上,因為第四種拼法等的就是前三種等的同一個
+> 缺口;訊息說的是這件事,而不是指名一個同一個編譯器會拒絕的運算式:_E9107 NotImplemented: the method
+> `display` on a list[int] — there is nothing to write in its place — this value has no rendering of its
+> own until the structural `Display` this compiler does not generate, so render its parts_。對一個複合值來說
+> 那是一個缺口，不是兩個。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

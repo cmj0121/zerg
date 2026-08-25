@@ -43,7 +43,8 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 所以同一種 `list` 型別，既是凍結序列（plain）也是可增長 vector（`mut`）；**只有 `mut` collection 能改它的元素**。
 
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
-> 指名拒絕（_E9056 NotImplemented: the list method `insert` — this compiler has `len` and `append`_），所以一個
+> 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
+> compiler has `len` and `append`_，`map` 上是 _E9100 NotImplemented: the map method `insert`_。所以一個
 > collection 只能從尾端增長、完全不能縮短。
 
 ```text
@@ -80,8 +81,8 @@ first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
-> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 與 `m.get(k)` 都是 `E9056`，所以上面那行 `m.get(id) ?? "anon"`
-> 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內的不存在」不是程式問得出口的問題，而是它必須在索引
+> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 `E9056`，而 `m.get(k)` 是 _E9100 NotImplemented: the map
+> method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內的不存在」不是程式問得出口的問題，而是它必須在索引
 > 之前先用 `k in m` 迴避掉的事。
 
 ## 切片——唯讀子區間

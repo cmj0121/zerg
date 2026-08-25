@@ -1589,6 +1589,45 @@ fn main() {
 }
 EOF
 
+# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. The three above are composites: they
+# are waiting for the structural `Display` this compiler does not generate, and until it comes
+# their parts are what a reader renders instead. An IDENTITY is not waiting and has no parts —
+# `E4034` names the class, a channel and a function value, and the predicate that decides the
+# substitute wrote out the channel alone, so `f := g; f.display()` said "`str(x)` renders it"
+# while `str(f)` reached cc and was refused against a line nobody wrote. NIL is a third answer
+# and not either of those: `str(f())` is `E3086` by name.
+#
+# All three assert the WORDS and not the code, because the code was already `E9107` on every
+# one of them while the sentence was wrong — and the channel had no case at all, so deleting
+# the line that excludes it left the whole board green.
+expect "$ZERG" chan-display E9107 'on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	print ch.display()
+}
+EOF
+
+expect "$ZERG" fn-display E9107 'on a fn() -> int — there is nothing to write in its place — a fn() -> int is an identity rather than a value' <<'EOF'
+fn g() -> int {
+	return 1
+}
+
+fn main() {
+	f := g
+	print f.display()
+}
+EOF
+
+expect "$ZERG" nil-display E9107 'on a void — there is nothing to write in its place — nil is the absence of a value' <<'EOF'
+fn h() {
+	nop
+}
+
+fn main() {
+	print h().display()
+}
+EOF
+
 # `format` IS THE SAME DOOR. Its substitute is `f"{x}"`, which lowers through the `str(…)`
 # arm this file's E4011 case pins, so a composite is refused there too — one case, because
 # what is being asserted is that the split reaches all three renderings and not only two.
@@ -1596,6 +1635,16 @@ expect "$ZERG" list-format E9107 'no spec-less rendering to fall back on' <<'EOF
 fn main() {
 	xs := [1, 2]
 	print xs.format("04d")
+}
+EOF
+
+# AND THE IDENTITY'S REASON REACHES IT, which is the half a composite case cannot show: both
+# clauses of `format` end in the same `c_no_render_says`, so if the second copy of that reason
+# ever grows back this case is the one that says which copy the reader got.
+expect "$ZERG" chan-format E9107 'fall back on — a chan[int] is an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	print ch.format("04d")
 }
 EOF
 

@@ -139,12 +139,29 @@ EXAMPLE_MIN ?= 20
 EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg
 EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 
-# An example that ships a `.out` beside it is held to WHAT IT PRINTS and not merely to
-# running. Almost every example already states its expected output in a comment — "Expected
-# output: 40" — and nothing read those comments, so an example could print something else
-# for a year and this gate would call it green. The file is OPT-IN because the concurrent
-# ones have no single right output: `11_coroutines` interleaves, and pinning one interleaving
-# would be a gate that fails on a correct program.
+# An example is held to WHAT IT PRINTS and not merely to running. Almost every example already
+# states its expected output in a comment — "Expected output: 40" — and nothing read those
+# comments, so an example could print something else for a year and this gate would call it
+# green.
+#
+# THE EXPECTED OUTPUT LIVES IN THE PRIVATE SUBMODULE, at `test-data/examples/<the example's
+# path>.out`. `examples/` is what a reader opens, and a reader opens it for PROGRAMS: a `.out`
+# beside a `.zg` is this project's test fixture sitting in the middle of somebody else's
+# tutorial, and it is corpus content like every other expected output in this tree
+# (`test-data/codegen/*.out`, `test-data/fmt`). The directory holds examples and nothing else.
+#
+# IT IS OPT-IN twice over. A file that is not there is not compared, which is what the
+# concurrent examples need — `11_coroutines` interleaves, and pinning one interleaving would be
+# a gate that fails on a correct program — and it is also what a checkout WITHOUT the submodule
+# gets: every example still builds, is checked and is run, and only the comparison is missing.
+# That is the trade `corpus` and `fmt-corpus` already make, and it is the reason this target
+# does not fail on an absent `test-data/`: an example must build everywhere.
+#
+# WITH the submodule there, a FLOOR. The comparison is silent when a file is absent, so a
+# renamed directory or a moved corpus turns the whole assertion off and leaves a target that
+# reports "39 examples built and run" having compared none of them. `EXAMPLE_OUT_MIN` is what
+# tells that apart from the concurrent examples legitimately having no file.
+EXAMPLE_OUT_MIN ?= 30
 
 # CHECKED AS WELL AS BUILT, because they are not the same walk. `--emit bin` loads the program
 # unit by unit (cmd/unit.zg) and every other stage loads it whole (cmd/source.zg), so a rule
@@ -154,15 +171,18 @@ EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 # The check costs no `cc`, and it is the stage an editor runs on every save.
 examples:                       # build every example with zerg itself, check it, and run it
 	$(MAKE) build
-	@fail=0; n=0; mkdir -p bin/examples; \
+	@fail=0; n=0; cmp=0; mkdir -p bin/examples; \
 	for src in $(EXAMPLE_SRCS); do \
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit check >/dev/null 2>&1 || { echo "CHECK  $$src"; fail=1; continue; }; \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		got=$$($$out 2>/dev/null) || { echo "RUN    $$src"; fail=1; continue; }; \
-		want=$${src%.zg}.out; \
-		if [ -f $$want ] && [ "$$got" != "$$(cat $$want)" ]; then echo "OUTPUT $$src"; fail=1; continue; fi; \
+		want=test-data/examples/$$(echo $$src | sed 's|^examples/||; s|\.zg$$|.out|'); \
+		if [ -f $$want ]; then \
+			cmp=$$((cmp+1)); \
+			[ "$$got" = "$$(cat $$want)" ] || { echo "OUTPUT $$src"; fail=1; continue; }; \
+		fi; \
 		n=$$((n+1)); \
 	done; \
 	for src in $(EXAMPLE_REFUSED); do \
@@ -174,7 +194,12 @@ examples:                       # build every example with zerg itself, check it
 	done; \
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
 	[ $$n -ge $(EXAMPLE_MIN) ] || { echo "examples: only $$n were built, and the floor is $(EXAMPLE_MIN)"; exit 1; }; \
-	echo "examples: $$n examples built and run"
+	if [ -d test-data/examples ]; then \
+		[ $$cmp -ge $(EXAMPLE_OUT_MIN) ] || { echo "examples: the corpus is there and only $$cmp outputs were compared, floor $(EXAMPLE_OUT_MIN) — this gate is measuring nothing"; exit 1; }; \
+		echo "examples: $$n examples built and run, $$cmp held to what they print"; \
+	else \
+		echo "examples: $$n examples built and run (test-data not initialized — no output was compared)"; \
+	fi
 
 # Where the fmt cases live, and a FLOOR under how many of them were checked. Same shape as
 # `corpus`: the directory guard below catches an absent submodule, and a checkout that has

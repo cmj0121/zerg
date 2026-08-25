@@ -397,11 +397,12 @@ spec Into[T] {
 - **型別靠實作它來加入。沒有任何內建型別加入**,而理由是分開的兩個。數字之間,轉換是寫出來的 `T(x)`——那就是上面
   那條規則的全部,而一個並列的 `.into()` 會需要 position 說出它指的是哪個目標,那是 [型別系統](type-system.zh-TW.md)
   在同一句話裡禁止的。而轉成文字則根本沒有東西可加入:`display` 是內建的值**渲染**、不是 spec
-  (見 [Format](../runtime/format.zh-TW.md)),所以 `str(x)` 對每個型別都有答案——想要文字的泛型完全不需要 bound。
+  (見 [Format](../runtime/format.zh-TW.md)),所以想要文字的泛型完全**不需要 bound**。那是關於 `display` 不是
+  spec 的事實,不是「每個值都渲染得出來」的保證。
   (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E9059 NotImplemented: rendering a P as text — a
   composite needs the structural `Display` this compiler does not generate_,而泛型在 monomorphize 之後撞到的
-  是同一個拒絕。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染,對複合值尚未建置,一如
-  [Spec 與 Generics](specs.zh-TW.md) 所標。)
+  是同一個拒絕。**channel**、**函式值**與 **nil** 不在等那個東西,而且永遠不會渲染——見
+  [Format](../runtime/format.zh-TW.md)。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染並不是普世的。)
 - **剩下的是語言沒有的那種轉換**:`impl Into[Meters] for Feet`,以寫出來的 `x.into()` 呼叫。內建型別上的 `into`
   會被指名拒絕,並說出該改寫什麼。
 - **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。**引數
@@ -448,8 +449,9 @@ spec Into[T] {
 [標準函式庫](../runtime/stdlib.zh-TW.md))。
 
 **`bool(x)` 和 `str(x)` 不在這張表上**,這也是上面那一列點名四個目標、而不是每一個目標的原因。兩者都不是這個意
-義下的轉換:`bool(3.5)` 是上面說的那個零值測試,答 `true`,而 `str(x)` 是透過 `display` 渲染一個值,每個型別都有
-`display`。兩者都沒有丟掉任何小數,所以兩者都沒有決定要做。
+義下的轉換:`bool(3.5)` 是上面說的那個零值測試,答 `true`,而 `str(x)` 是透過 `display` 渲染一個值——那是語言給
+的渲染、不是型別去實作的 spec,也不是每個值都有的東西（見 [Format](../runtime/format.zh-TW.md)）。兩者都沒有
+丟掉任何小數,所以兩者都沒有決定要做。
 
 `int("42")` 以自己的一列進了表,因為它是穿著同一種寫法的另一種運算:它**解析**數字的文字,而不是重新建構一個值,
 而且只有 `int`、`uint` 和 `float` 這麼做(見[內建函式](../runtime/builtins.zh-TW.md))。

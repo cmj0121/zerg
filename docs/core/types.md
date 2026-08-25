@@ -476,11 +476,12 @@ spec Into[T] {
   `.into()` beside it would need the position to say which target it meant, which
   [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
   `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
-  `str(x)` answers for every type — a generic that wants text needs no bound at all. (**[not yet]** for a
-  **composite**: `str(P(7))` on a `struct` is _E9059 NotImplemented: rendering a P as text — a composite
-  needs the structural `Display` this compiler does not generate_, and a generic reaches the same refusal
-  once monomorphized. The no-bound rule is what holds; the rendering behind it is unbuilt for composites,
-  as [Specs & Generics](specs.md) marks.)
+  a generic that wants text needs **no bound at all**. That is a fact about `display` not being a spec, and
+  not a promise that every value renders. (**[not yet]** for a **composite**: `str(P(7))` on a `struct` is
+  _E9059 NotImplemented: rendering a P as text — a composite needs the structural `Display` this compiler
+  does not generate_, and a generic reaches the same refusal once monomorphized. A **channel**, a
+  **function value** and **nil** are not waiting for that and never render — see [Format](../runtime/format.md).
+  The no-bound rule is what holds; the rendering behind it is not universal.)
 - **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
   as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
 - **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed
@@ -536,7 +537,8 @@ that can fail (see [Standard Library](../runtime/stdlib.md)).
 
 **`bool(x)` and `str(x)` are not on this table**, which is why the row above names four targets and not
 every one. Neither is a conversion in this sense: `bool(3.5)` is the zero test above, answering `true`,
-and `str(x)` renders a value through `display`, which every type has. A fraction is not dropped by
+and `str(x)` renders a value through `display` — a rendering the language gives rather than a spec a type
+implements, and not one every value has ([Format](../runtime/format.md)). A fraction is not dropped by
 either, so neither has a decision to make.
 
 `int("42")` is on the table as its own row because it is a different operation wearing the same

@@ -422,8 +422,11 @@ generic bound gates on it:
   `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](../code/collections.md)).
 - **`Into[T]`** — the conversion spec: a type declares what it converts to and generic code bounds on
   it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
-  between numbers the conversion is `T(x)`, and to text it is `str(x)`, which every type answers
-  through `display` (see [Type Conversion](types.md#into--an-ordinary-conversion-spec)).
+  between numbers the conversion is `T(x)`, and to text it is `str(x)`, which needs no bound because
+  `display` is a **rendering** the language gives rather than a spec a type implements. That is not the
+  same claim as "every type answers it": a composite and an `enum` are **[not yet]**, and a **channel**, a
+  **function value** and **nil** have no rendering at all ([Format](../runtime/format.md)). See
+  [Type Conversion](types.md#into--an-ordinary-conversion-spec).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead

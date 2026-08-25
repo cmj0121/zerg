@@ -30,8 +30,13 @@ fail=0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# every E9xxx the catalogue lists
-grep -oE '^\| `E9[0-9]{3}` \|' "$CAT" | grep -oE 'E9[0-9]{3}' | sort -u >"$tmp/all"
+# EVERY E9xxx THE CATALOGUE LISTS AS LIVE, which is every one above `### Retired codes`. The
+# retired table has the same row shape — `E9088`, then `E3125`, then the reason — so reading
+# the whole file asks a chapter to carry a marker for a number that no longer names anything,
+# and the only way to satisfy that is to write a marker that is false. #74 retired seventeen
+# of these and that is what said so; `error-codes-check` already splits on the same heading.
+sed -n '1,/^### Retired codes/p' "$CAT" |
+	grep -oE '^\| `E9[0-9]{3}` \|' | grep -oE 'E9[0-9]{3}' | sort -u >"$tmp/all"
 
 # THE CHAPTERS ARE EVERY `.md` UNDER docs/ EXCEPT THE CATALOGUE ITSELF and its translation:
 # a code quoted only where every code is quoted is a code no chapter names.

@@ -479,4 +479,10 @@ in-place `mut` — only when `X` is `mut`.
 > producer crash — so what is missing is only the spelling that lets a reader put a `guard` around one
 > element, which is the spelling the paragraph above recommends. `next()` on anything but a channel, and
 > `iter()` on a receiver no loop walks, would each be a method of a declared `Iterator[T]` or `Iterable[T]`
-> impl — neither spec is declared, so both are refused permanently (`E3131`).
+> impl — neither spec is declared, so both are refused **permanently**. The CODE a reader meets is the
+> RECEIVER's, not the missing spec's: a name no type declares is answered by the fallback of whatever type
+> family the receiver turned out to be, and a `list`, a `map`, an `Err` and a carrier each have one of
+> their own. `E3131` is the answer for a receiver with **no** family at all — an `int`, a `str`, a
+> `struct`. This chapter quotes no number for the rest on purpose: which family a value turned out to be
+> is not part of the finding, and a list of five codes here is a list that drifts the next time one
+> splits.

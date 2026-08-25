@@ -2,9 +2,11 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-Thirty-three programs, in a reading order. Every one of them is **built and run by
-`make examples`**, so nothing here is a snippet that used to work — the two that are meant to be
-_refused_ are held to the sentence they must be refused with.
+Every program in this directory, in a reading order. Each one is **built and run by
+`make examples`**, **linted by `make lint`** and **held to `zerg fmt` by `make fmt-self`**, so
+nothing here is a snippet that used to work, or one the tool a reader is told to run would ask
+them to change — the two that are meant to be _refused_ are held to the sentence they must be
+refused with.
 
 ```sh
 make                            # ./bin/zerg

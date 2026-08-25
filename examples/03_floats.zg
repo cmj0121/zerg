@@ -1,7 +1,9 @@
 # 03 — Floating-point numbers.
 #
-# A numeric literal is untyped and adopts the type its context needs,
-# so a plain `2` becomes `2.0` where a float is expected.
+# A numeric literal is untyped and adopts the type its position needs, so a plain
+# `2` becomes `2.0` where a float is wanted — `x: float = 3` is a legal way to write
+# 3.0. Every literal below is spelled as the type it ends up being, which is what
+# `zerg lint` asks for (L502): `1` and `1.0` should be different to a READER too.
 fn average(a: float, b: float) -> float {
 	return (a + b) / 2.0
 }
@@ -9,7 +11,7 @@ fn average(a: float, b: float) -> float {
 fn main() {
 	print 1.5 + 2.5         # 4
 	print 10.0 / 4.0        # 2.5
-	x: float = 3            # 3 adopts float -> 3.0
+	x: float = 3.0          # the type is written on both sides
 	print x / 2.0           # 1.5
 	print average(2.0, 5.0) # 3.5
 }

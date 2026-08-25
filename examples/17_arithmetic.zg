@@ -159,12 +159,10 @@ fn main() {
 	mut fzero := 0.0
 	check("a zero float divisor raises", guard { f75 // fzero } ?? 7, 7)
 
-	# mixed operands: an untyped integer literal adopts the float context, and the
-	# operation is the float one. Handing the emitter the LEFT operand's type instead of
-	# the result's sent this through the checked integer path, which truncated the 7.5 on
-	# the way in and printed a denormal.
-	check_str("a literal adopts the float context", f"{0 - 7.5}", "-7.5")
-	check_str("and on the right too", f"{1 + 2.5}", "3.5")
+	# MIXED OPERANDS — `0 - 7.5`, `1 + 2.5` — are checked by `test-data/codegen/floats.zg`
+	# and not here. The untyped literal adopts the float context, which is the one thing on
+	# this page `zerg lint` advises against writing (L502), and an example a reader is told
+	# to copy may not be a program the linter would ask them to change.
 
 	print "arithmetic: ok"
 }

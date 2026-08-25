@@ -63,9 +63,16 @@ list nobody can ever finish reading.
 `make error-codes-check` answers, per range, what the next free code is:
 
 ```text
-error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3137,
-                                              emitting E4076, building E5018, unbuilt E9108
+error-codes-check: next free code per range — lexical E1…, parser E2…, checking E3…,
+                                              emitting E4…, building E5…, unbuilt E9…
 ```
+
+**The numbers are left out on purpose.** Every other number on this page is a permanent
+identity — that is the whole subject of the page — and this line is the one quantity in the
+catalogue that is _supposed_ to move: it advances the moment anybody adds a rule, which is what
+makes it worth asking for. A sample that quoted six of them would go stale by design, and it
+did, twice in one branch. Run the command for today's answer; what belongs here is the shape of
+the reply, which is one code per range and a range that is full saying so instead.
 
 It reads the ranges out of the table above rather than carrying its own copy, so adding one
 is a row here and nothing else.

@@ -50,9 +50,14 @@
 `make error-codes-check` 會按號碼段回答下一個可用的代碼是什麼:
 
 ```text
-error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3137,
-                                              emitting E4076, building E5018, unbuilt E9108
+error-codes-check: next free code per range — lexical E1…, parser E2…, checking E3…,
+                                              emitting E4…, building E5…, unbuilt E9…
 ```
+
+**號碼是刻意留空的。** 這一頁上其他每一個號碼都是永久的身分——那正是這一頁的主題——而這一行是整份型錄裡
+唯一「應該」會動的量:任何人新增一條規則的當下它就往前走,而那也正是它值得被問的原因。一份引用了六個號碼
+的範例注定會過時,而它也真的過時了,在同一條分支上兩次。今天的答案請跑那個指令;該留在這裡的是回覆的
+形狀——每個號碼段一個代碼,而一個滿了的號碼段則改成說它滿了。
 
 號碼段是從上面那張表讀出來的,而不是在腳本裡另存一份,所以新增一段就是在這裡多一列,除此之外什麼都不必動。
 

@@ -7741,7 +7741,13 @@ fn main() {
 }
 EOF
 
-reject a-list-method-this-compiler-does-not-have E9056 <<'EOF'
+# THE HALF OF THE LIST'S FALLBACK THAT IS NOT A FORM. `E9056` used to answer every name a
+# `list` does not have, so `xs.pop()` — which no chapter promises and no build will ever grow
+# — was refused with `NotImplemented:`, in the temporary corpus, one arm away from the map's
+# fallback that #74 had already split. The eight names the chapters DO promise keep `E9056`
+# and are pinned one case each in scripts/refuse-check.sh; this is the boundary from the
+# other side, and a name that joins that list stops matching this line.
+reject a-list-method-this-compiler-does-not-have E3137 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	xs.pop()

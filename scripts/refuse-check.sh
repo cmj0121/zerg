@@ -1384,7 +1384,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" unknown-list-method E9056 <<'EOF'
+expect "$ZERG" list-slice E9056 'the list method `slice`' <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	print xs.slice(0, 2).len()
@@ -1394,7 +1394,7 @@ EOF
 # THE COLLECTION METHODS docs/code/collections.md SPECIFIES AND THIS COMPILER HAS NOT BUILT.
 # E9056 and E9100 each had one case, and each of those cases named a method the language does
 # not have either — `xs.pop()`, `m.drop(1)` — which is the reject list's question, not this
-# one. So the six methods the chapter names as `[not yet]` were pinned by nothing: every one
+# one. So the methods the chapters name as `[not yet]` were pinned by nothing: every one
 # of them answered correctly, and would have gone on answering correctly if the rule that
 # says so were deleted, because the case that would notice tested a different sentence.
 #
@@ -1432,6 +1432,27 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" list-get E9056 'the list method `get`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.get(0) ?? 0
+}
+EOF
+
+expect "$ZERG" list-map E9056 'the list method `map`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.map(fn(v: int) -> int { return v + 1 }).len()
+}
+EOF
+
+expect "$ZERG" list-fold E9056 'the list method `fold`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.fold(0, fn(a: int, b: int) -> int { return a + b })
+}
+EOF
+
 expect "$ZERG" map-insert E9100 'the map method `insert`' <<'EOF'
 fn main() {
 	m := {1: 2}
@@ -1461,21 +1482,28 @@ EOF
 # chapters specify and this compiler has not lowered. Same shape as the pair above: the
 # SENTENCE is asserted, because one code covers all four and the code alone cannot tell
 # `display` from `next`, so a name that lands stops matching its own line.
-expect "$ZERG" builtin-display E9107 'the method `display` on a int' <<'EOF'
+#
+# AND THE SENTENCE RUNS PAST THE NAME, as far as the SUBSTITUTE, for the three renderings.
+# `display`, `debug` and `format` are given on every receiver and what to write instead is
+# not: `str(x)` and `f"{x}"` render an `int` and are refused on a `list[int]` (E4011), a map,
+# a struct, a carrier (E9059) and an enum (E9085). A case that stopped at the receiver's name
+# passed while the compiler told the reader to write an expression it refuses, so each side of
+# that split is pinned by the words that differ — here the substitute, below its absence.
+expect "$ZERG" builtin-display E9107 'the method `display` on a int — `str(x)` renders it' <<'EOF'
 fn main() {
 	x := 5
 	print x.display()
 }
 EOF
 
-expect "$ZERG" builtin-debug E9107 'the method `debug` on a int' <<'EOF'
+expect "$ZERG" builtin-debug E9107 'the method `debug` on a int — `str(x)` renders it' <<'EOF'
 fn main() {
 	x := 5
 	print x.debug()
 }
 EOF
 
-expect "$ZERG" builtin-format E9107 'the method `format` on a int' <<'EOF'
+expect "$ZERG" builtin-format E9107 'the method `format` on a int — a spec is unread here' <<'EOF'
 fn main() {
 	x := 5
 	print x.format("04d")
@@ -1506,14 +1534,14 @@ EOF
 # codes for one question, three of them permanent, for a rendering docs/runtime/format.md
 # gives every value. One case per family, because one case per family is what a shared
 # fallback cannot fake.
-expect "$ZERG" map-display E9107 'the method `display` on a map[str, int]' <<'EOF'
+expect "$ZERG" map-display E9107 'on a map[str, int] — there is nothing to write in its place' <<'EOF'
 fn main() {
 	m := {"a": 1}
 	print m.display()
 }
 EOF
 
-expect "$ZERG" err-display E9107 'the method `display` on a Err' <<'EOF'
+expect "$ZERG" err-display E9107 'the method `display` on a Err — `str(x)` renders it' <<'EOF'
 fn f() -> int {
 	raise ValueError("x")
 }
@@ -1533,7 +1561,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" carrier-display E9107 'the method `display` on a int?' <<'EOF'
+expect "$ZERG" carrier-display E9107 'on a int? — there is nothing to write in its place' <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -1543,10 +1571,31 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" list-display E9107 'the method `display` on a list[int]' <<'EOF'
+expect "$ZERG" list-display E9107 'on a list[int] — there is nothing to write in its place' <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print xs.display()
+}
+EOF
+
+# AND THE OTHER SIDE OF THE SAME RECEIVER, which is what proves the predicate is about the
+# rendering and not about the word "list". `str(xs)` over a `list[byte]` IS built — it is the
+# way back from the bytes — so this one is handed the substitute the case above is refused,
+# from the same clause, on a receiver spelled almost the same way.
+expect "$ZERG" bytes-display E9107 'on a list[byte] — `str(x)` renders it' <<'EOF'
+fn main() {
+	xs: list[byte] = [b'a', b'b']
+	print xs.display()
+}
+EOF
+
+# `format` IS THE SAME DOOR. Its substitute is `f"{x}"`, which lowers through the `str(…)`
+# arm this file's E4011 case pins, so a composite is refused there too — one case, because
+# what is being asserted is that the split reaches all three renderings and not only two.
+expect "$ZERG" list-format E9107 'no spec-less rendering to fall back on' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.format("04d")
 }
 EOF
 

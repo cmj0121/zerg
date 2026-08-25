@@ -7206,6 +7206,24 @@ fn main() {
 }
 EOF
 
+# `if v := e` BINDS THE LEFT OF A CARRIER, and an enum is not one. It arrived from
+# `refuse-check.sh` with #74: the rule was an `E9xxx` wearing a `NotImplemented:` prefix, and
+# a head the language does not give this form is not a form waiting to be built.
+reject if-let-over-an-enum E3117 <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	if v := e {
+		print 1
+	}
+	print 2
+}
+EOF
+
 reject unwrap-a-value-that-carries-nothing E3120 <<'EOF'
 fn f() -> int? {
 	x := 1
@@ -7350,6 +7368,39 @@ fn main() {
 	x := 1
 	b := x in IOError
 	print b
+}
+EOF
+
+# --- `in` over a set the LANGUAGE does not give it ------------------------------------
+#
+# Both arrived from `refuse-check.sh` with #74, and both are half of a site that used to
+# answer two questions under one number. The other halves ARE unbuilt forms and stayed there:
+# a list whose elements carry an `Eq` this compiler does not call (`E9061`), and a range of
+# `str` whose bounds C's `>=` cannot be handed (`E9062`).
+#
+# So each of these names its SENTENCE as well as its code, which is what the second assertion
+# asks for where one case of a rule has to be told from another. Here the other case is not in
+# this file at all — it is the sibling half, one number away, asserting the same site — and
+# that is the pair a reader is most likely to confuse.
+
+reject in-over-a-list-of-structs E3118 'add `#[derive(Eq)]` to it' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
+}
+EOF
+
+# seed-gap: the seed does not read `in` here at all. It emits `(3 ? 5)` — C's conditional,
+# missing its second arm — and leaves clang to answer against generated code nobody wrote,
+# which is a build that failed rather than a program that was refused. `seed_refuses` tells
+# those two apart on purpose, so the marker is the honest record and not a weakened assertion.
+reject in-over-a-plain-int E3119 'and this is none of them' seed-gap <<'EOF'
+fn main() {
+	print str(3 in 5)
 }
 EOF
 

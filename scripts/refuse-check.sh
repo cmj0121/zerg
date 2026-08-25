@@ -1854,21 +1854,6 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" if-let-over-an-enum E3117 <<'EOF'
-enum E {
-	A(int)
-	B
-}
-
-fn main() {
-	e := A(5)
-	if v := e {
-		print 1
-	}
-	print 2
-}
-EOF
-
 expect "$ZERG" spec-member-with-a-body E9002 <<'EOF'
 spec Show {
 	fn show() -> int {
@@ -2178,6 +2163,13 @@ EOF
 # one that is not built — the grammar makes `v in 0..10` sugar for `r.contains(v)` over stdlib
 # machinery that does not exist — so it is named rather than left to be read as something else,
 # and the message says which set was written.
+#
+# THE HALVES THAT ARE NOT REFUSALS ARE IN reject-check.sh. `in` over a struct that carries no
+# `Eq` (`E3118`) and over a set that is no set at all (`E3119`) are the LANGUAGE's answers and
+# no future feature makes either legal, so they are rejections and belong in the corpus with
+# that lifetime (#74). Each of them is one number away from a case here, deliberately: they
+# came out of a split, and the two halves of a split site are what a reader most needs to be
+# able to tell apart.
 
 # an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
 # makes `in` refuse a str looked for among ints rather than compare a pointer to a number
@@ -2188,24 +2180,11 @@ fn main() {
 }
 EOF
 
-# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one. That is
-# the PROGRAM's gap and closes with a `#[derive(Eq)]`, so it is a rejection (`E3118`) rather
-# than a refusal, and it is here beside the half that is a refusal.
-expect "$ZERG" in-over-a-list-of-structs E3118 <<'EOF'
-struct P {
-	pub x: int
-}
-
-fn main() {
-	ps := [P(1)]
-	print str(P(2) in ps)
-}
-EOF
-
-# THE HALF THAT IS UNBUILT is the same program with the `Eq` written. collections.md
-# specifies `x in xs`, the impl is there to be called, and this compiler does not call it —
-# so the day it does, this case goes and the one above stays. Without it `E9061` would be
-# reported by the compiler and asserted by nothing, which is the state the split created.
+# and a STRUCT ELEMENT THAT CARRIES AN `Eq`, which is the unbuilt half of that site:
+# collections.md specifies `x in xs`, the impl is there to be called, and this compiler does
+# not call it — so the day it does, this case goes. Its sibling is the same program with the
+# `Eq` left off, which is the program's own gap rather than this compiler's, and that one is
+# a rejection in reject-check.sh under `E3118`.
 expect "$ZERG" in-over-a-list-of-structs-with-eq E9061 <<'EOF'
 #[derive(Eq)]
 struct P {
@@ -2225,13 +2204,6 @@ EOF
 expect "$ZERG" in-over-a-range-of-str E9062 <<'EOF'
 fn main() {
 	print str("c" in "a".."z")
-}
-EOF
-
-# And a set that is no set at all, which is the rest of the same code.
-expect "$ZERG" in-over-a-plain-int E3119 <<'EOF'
-fn main() {
-	print str(3 in 5)
 }
 EOF
 

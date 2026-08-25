@@ -10752,7 +10752,7 @@ fn c_chan_check(mut &em: Emitter, have: ast.Ty, want: ast.Ty, site: str) {
 # asked `ty_chan_elem` for an element type, were handed the `TUnknown` it answers for
 # anything that is not a channel, and carried on. A receive then typed as `TOpt(TUnknown)`,
 # an optional of nothing that `ty_name` spells `?`, and every later sentence was about that
-# `?` rather than about the mistake: `` `??` on a ? ``, `E9053 … over a ?`. Where the walk
+# `?` rather than about the mistake: `` `??` on a ? ``, `E3117 … over a ?`. Where the walk
 # never touched the broken type, the C came out with a carrier struct in a `zrt_chan *`
 # slot and cc rejected generated code nobody wrote.
 #

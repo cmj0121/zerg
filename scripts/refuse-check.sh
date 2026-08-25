@@ -1589,6 +1589,18 @@ fn main() {
 }
 EOF
 
+# AND THE SECOND SPELLING OF THE SAME BRIDGE. `c_str_bridges_list` admits a `list[rune]` as
+# well — bytes and code points are the two ways back to a string — and only one of the two was
+# asserted, so deleting `c_is_rune` from that clause left the board green while the chapter's
+# stand-in set (docs/runtime/format.md) went on promising the substitute. Proved by deleting
+# it: this case fails alone and `bytes-display` does not.
+expect "$ZERG" runes-display E9107 'on a list[rune] — `str(x)` renders it' <<'EOF'
+fn main() {
+	xs: list[rune] = ['a', 'b']
+	print xs.display()
+}
+EOF
+
 # AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. The three above are composites: they
 # are waiting for the structural `Display` this compiler does not generate, and until it comes
 # their parts are what a reader renders instead. An IDENTITY is not waiting and has no parts —

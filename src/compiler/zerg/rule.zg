@@ -225,7 +225,14 @@ pub enum Rule {
 	# does not carry, `?` on an `int`. A code in that range retires when its form is built, and
 	# a rule with no form has no such day — so it was a number that could never be spent. The
 	# ones it left behind are retired in the catalogue and are never reissued.
+	#
+	# THREE OF THEM SPLIT INSTEAD. `InElemNoEq`, `InSetNotAContainer` and `MapMethodUnknown`
+	# came out of a code that answered TWO questions at one raise — one half a form the
+	# language has and this compiler has not lowered, the other half a program with no meaning.
+	# The unbuilt half keeps its `E9xxx`, because it still retires the day the form lands.
 	IfBindNotCarrier = 3117
+	InElemNoEq = 3118
+	InSetNotAContainer = 3119
 	TryNotCarrier = 3120
 	ForceNotCarrier = 3121
 	CoalesceNotCarrier = 3122
@@ -240,6 +247,7 @@ pub enum Rule {
 	MethodUnknown = 3131
 	ResultPatternUnknown = 3132
 	MainResult = 3133
+	MapMethodUnknown = 3134
 	ErrFieldUnknown = 3135
 	OpenRangeInclusive = 3136
 

@@ -6346,9 +6346,18 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	elem := c_in_elem_ty(st)
 
-	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
-	# reason: a structural comparison is what a derived impl would supply and none is generated
-	raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none") if c_is_aggregate(em, elem)
+	# an AGGREGATE has no `==` C can write, and TWO different rules answer for that. A declared
+	# struct or enum carrying no `Eq` is the PROGRAM's gap — the same finding `a == b` reports,
+	# closed by the same `#[derive(Eq)]`. Everything else here HAS an equality the language
+	# means `in` to use and this compiler does not call: a declared type that carries an `Eq`
+	# (which the one sentence below used to tell it had none, in as many words), and a
+	# CONTAINER, whose structural equality is docs/code/collections.md's `[not yet]` rather
+	# than anything its author left out.
+	if c_is_aggregate(em, elem) {
+		raise c_diag(em, rule.Rule.InElemNoEq, f"`in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none: add `#[derive(Eq)]` to it or write `impl Eq for {ast.ty_name(elem)}`") if c_in_elem_owes_eq(em, elem)
+
+		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)}")
+	}
 
 	n := c_tmp(em, "zgt_in")
 	sv := n + "s"
@@ -6371,6 +6380,17 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop
 	return f"({{ {head} {bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+}
+
+# c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
+# not. A declared struct or enum is: it has a declaration to decorate and `#[derive(Eq)]` is
+# the answer. A container is not — there is nothing to decorate, and no impl a program could
+# write for it — so its missing `==` is this compiler's gap and not the author's. That is the
+# same line c_eq_refuse already draws between E4020 and E9057, asked here of the ELEMENT.
+fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
+	return false if c_has_eq(em, elem)
+
+	return c_is_struct_name(em, c_named_of(elem)) or c_is_enum_ty(em, elem)
 }
 
 # c_in_elem_ty is what a member of this set is: a list's element, a map's KEY. `in` asks a map
@@ -6448,7 +6468,7 @@ fn c_in_range(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	# comparison at all. Refused by name rather than lowered, which is what the rest of `in`
 	# does with a set it cannot read.
 	off := c_in_range_offender(em, run)
-	return c_in_refuse(em, set, f"a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way") if off != ""
+	return c_in_range_unbuilt(em, set, off) if off != ""
 
 	# THE OPERANDS MEET EACH OTHER as the comparisons they are. Writing the C by hand means
 	# nothing else asks whether a subject and a bound are types `>=` relates — an optional, a
@@ -6489,15 +6509,22 @@ fn c_in_range_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
 	return ""
 }
 
-# c_in_refuse is the ONE place `E9062` is reported from. Two rules answer with it — a set that
-# is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
-# an identity, so the sentence differs and the identity does not.
+# The two rules that used to share `E9062`. One code covered both because "a code is an
+# identity, so the sentence differs and the identity does not" — and they are not one rule. A
+# range whose bounds C's `>=` cannot be handed is a form the language HAS, `"c" in "a".."z"`,
+# waiting on a comparison this compiler does not write; a set that is no set at all, `3 in 5`,
+# is a program with no meaning, and no day comes when it acquires one. So the unbuilt half
+# keeps the number and the other half is a checking rule.
 #
-# It says WHERE (c_diag), which is the trailer docs/conformance.md owes every diagnostic and
-# which this one had not got. `reject-fuzz` is what found it: retype one binding to `str` and
-# the guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
-fn c_in_refuse(mut &em: Emitter, set: ast.Expr, why: str) -> str {
-	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — {why}")
+# Both say WHERE (c_diag), which is the trailer docs/conformance.md owes every diagnostic and
+# which this had not got. `reject-fuzz` is what found it: retype one binding to `str` and the
+# guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
+fn c_in_range_unbuilt(mut &em: Emitter, set: ast.Expr, off: str) -> str {
+	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way")
+}
+
+fn c_in_not_a_set(mut &em: Emitter, set: ast.Expr) -> str {
+	raise c_diag(em, rule.Rule.InSetNotAContainer, f"`in` over {c_set_says(em, set)} — a set names a list's elements, a map's keys, a range's members or an error kind, and this is none of them")
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
@@ -6528,7 +6555,7 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		return c_in_refuse(em, set, "this compiler reads `in` over a list, a map, a range, or an error kind")
+		return c_in_not_a_set(em, set)
 	}
 
 	t := c_infer(em, x)
@@ -12009,7 +12036,14 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
 	}
 
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`")
+	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
+	# docs/code/collections.md's `[not yet]`: the chapter specifies them, so each retires the
+	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
+	# is no day on which it does.
+	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`") if unbuilt
+
+	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the map method `{meth}` — a map answers `len` and `has`, and is read with `m[k]`")
 }
 
 fn c_index_target(e: ast.Expr) -> ast.Expr {

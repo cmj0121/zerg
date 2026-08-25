@@ -5161,8 +5161,26 @@ fn c_carrier_method_unknown(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 	return c_diag(em, rule.Rule.CarrierMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`")
 }
 
+# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER, and the map's fallback next door has
+# had them apart since #74 while this one — one arm away, the same shape, the same two
+# questions — went on answering both with `NotImplemented:`. So `xs.wobble()`, a method the
+# language does not give a list and never will, was refused as a form somebody is waiting for.
+#
+# The eight below are the list methods the chapters mark `[not yet]`: growth, the checked read,
+# the window and the in-place transform from docs/code/collections.md, and the three adapters
+# from docs/code/control-flow.md and docs/code/patterns.md. Each retires the day it is built.
+# Any other name is a method the LANGUAGE does not give a list, and there is no such day.
+#
+# The three bindings are ADJACENT to the raise on purpose: scripts/method-gaps-check.sh reads
+# this list by walking up from the raise while the lines are bindings, so a comment or a blank
+# line between them hides every name above it. The comment goes here, where the walk stops.
 fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`")
+	collection := meth == "insert" or meth == "remove" or meth == "get" or meth == "slice" or meth == "retain"
+	adapters := meth == "map" or meth == "filter" or meth == "fold"
+	unbuilt := collection or adapters
+	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`") if unbuilt
+
+	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len` and `append`, and is read with `xs[i]`")
 }
 
 # c_twice_in_file_says is the sentence for a name declared twice IN ONE FILE, which is one of

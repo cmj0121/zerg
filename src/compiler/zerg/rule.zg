@@ -226,10 +226,13 @@ pub enum Rule {
 	# a rule with no form has no such day — so it was a number that could never be spent. The
 	# ones it left behind are retired in the catalogue and are never reissued.
 	#
-	# THREE OF THEM SPLIT INSTEAD. `InElemNoEq`, `InSetNotAContainer` and `MapMethodUnknown`
-	# came out of a code that answered TWO questions at one raise — one half a form the
-	# language has and this compiler has not lowered, the other half a program with no meaning.
-	# The unbuilt half keeps its `E9xxx`, because it still retires the day the form lands.
+	# FOUR OF THEM SPLIT INSTEAD. `InElemNoEq`, `InSetNotAContainer`, `MapMethodUnknown` and
+	# `ListMethodUnknown` came out of a code that answered TWO questions at one raise — one
+	# half a form the language has and this compiler has not lowered, the other half a program
+	# with no meaning. The unbuilt half keeps its `E9xxx`, because it still retires the day the
+	# form lands. The fourth was found last and by review: a split is not a property of a code,
+	# it is a property of a FALLBACK, and every fallback that cannot hold a declaration has the
+	# same two questions behind it.
 	IfBindNotCarrier = 3117
 	InElemNoEq = 3118
 	InSetNotAContainer = 3119
@@ -250,6 +253,15 @@ pub enum Rule {
 	MapMethodUnknown = 3134
 	ErrFieldUnknown = 3135
 	OpenRangeInclusive = 3136
+
+	# THE FOURTH SPLIT, and the one #74 walked past. `MapMethodUnknown` came out of `E9100`
+	# because a map's fallback answered two questions at one raise; `E9056` is the LIST's
+	# fallback and it answered the same two, unconditionally, one arm away. So `xs.wobble()`
+	# — a method the language does not give a list and never will — was refused with
+	# `NotImplemented:`, which is #74's own defect surviving inside #74's own change. The
+	# names docs/code/collections.md and docs/code/patterns.md specify keep `E9056` and retire
+	# the day each is built; every other name is this.
+	ListMethodUnknown = 3137
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

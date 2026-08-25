@@ -153,7 +153,12 @@ syntax match zergCall "\<\%(\l\|_\)\w*\ze("
 " Circle, Left). This is a highlight heuristic, not a grammar rule (names are case-free).
 syntax match zergType "\<\u\w*\>"
 
-" The match wildcard `_`, highlighted as special.
+" `_` — the name that names nothing. It is not one form but five, and they are one token:
+" a `match` arm that covers the rest, a `select` arm that fires when nothing is ready, the
+" discard binder `_ := f()`, a `for _ in xs` that wants the count and not the element, and a
+" receive whose value is thrown away, `_ := <-ch`. One `\<_\>` colours all five, and the
+" word boundaries are what keep it OFF the two places a `_` is not the wildcard: inside a
+" name (`_with_36`, `to_string`) and inside a number, where `1_000_000` groups digits.
 syntax match zergWildcard "\<_\>"
 
 " --- example code inside a comment ---------------------------------------------
@@ -248,7 +253,6 @@ highlight default link zergEscape    SpecialChar
 highlight default link zergInterp     Identifier
 highlight default link zergDeclName   Function
 highlight default link zergCall       Function
-highlight default link zergWildcard   Special
 highlight default link zergTodo       Todo
 highlight default link zergEscapeError Error
 highlight default link zergDecorator  PreProc
@@ -256,6 +260,14 @@ highlight default link zergCommentBar   Comment
 highlight default link zergDocPrompt   SpecialComment
 highlight default link zergFormatSpec Special
 highlight default link zergFormatConv Special
+
+" `_` is NOT linked either, and for the same kind of reason. `Special` is where it was, and
+" `Special` is also the f-string format specs and — one link away, `SpecialChar` — the escape
+" sequences, so the one token that names NOTHING rendered as the same colour as the two that
+" are pure notation. It is given an explicit italic instead: a reader scanning a `match` can
+" find the arm that covers the rest without reading any of them, which is the whole job.
+" `default` keeps it overridable by a user's own theme.
+highlight default zergWildcard term=italic,bold cterm=bold ctermfg=magenta gui=bold,italic guifg=#af5fff
 
 " The danger surface (`unsafe` / `asm`) is NOT linked to an ordinary group — it is
 " given an explicit alarming bold-red so it reads as dangerous under any colorscheme.

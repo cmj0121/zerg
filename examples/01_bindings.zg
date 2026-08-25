@@ -4,10 +4,14 @@
 #   mut name := expr    a binding you may reassign later
 #   name: T = expr      fix the type explicitly
 #   const name := expr  a shadow-proof constant
+#
+# A numeric literal is untyped and ADOPTS the type its position needs, so `ratio: float = 2`
+# is legal and means 2.0. `zerg lint` asks for the second spelling anyway (L502): the type
+# should be visible to a reader, not only to the compiler.
 fn main() {
 	greeting := "welcome" # inferred as str
 	mut count := 3        # a mutable int
-	ratio: float = 2      # typed float; the untyped literal adopts it -> 2.0
+	ratio: float = 2.0    # typed float, and the literal written as one
 	const limit := 10     # a constant
 
 	count = count + 1 # only a `mut` binding may be reassigned

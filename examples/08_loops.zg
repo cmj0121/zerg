@@ -1,17 +1,33 @@
-# 08 — Loops.
+# 08 — Loops. `for` is the only loop keyword, in four shapes.
 #
-#   for cond { ... }   repeat while `cond` (a bool) holds  (a "while")
-#   for { ... }        loop forever; leave it with `break`
-# `continue` skips to the next iteration.
+#   for cond { ... }     repeat while `cond` (a bool) holds  (a "while")
+#   for x in a..b { ... } walk a range — `..` stops before `b`, `..=` includes it
+#   for x in xs { ... }  walk a list, one element at a time
+#   for { ... }          loop forever; leave it with `break`
+#
+# `break` and `continue` take the same trailing `if` a `return` does, so a loop
+# that leaves early says so on one line.
 fn main() {
-	# count up while a condition holds
+	# a condition: the counter, the test and the step are all yours
 	mut i := 0
 	for i < 5 {
 		print i # 0 1 2 3 4
 		i = i + 1
 	}
 
-	# count down with an infinite loop and `break`
+	# a range: the same five numbers, with none of the three to get wrong
+	for n in 0..5 {
+		print n # 0 1 2 3 4
+	}
+
+	# a list: `for in` walks the elements themselves, not their positions
+	names := ["ann", "bo", "cy"]
+	for name in names {
+		continue if name == "bo"
+		print name # ann cy
+	}
+
+	# no head at all: the loop ends when the body says so
 	mut c := 3
 	for {
 		break if c == 0

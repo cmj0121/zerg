@@ -154,7 +154,7 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 	mut calls: list[str] = []
 	mut ns: list[str] = []
 	walk_program(f, ids, calls, ns)
-	lint_imports(f, ns, ids, out)
+	lint_imports(f, ns, ids, ms, out)
 	lint_dead_fns(f, calls, ids, out)
 	lint_unread_bindings(f, out)
 	lint_captures(f, out)
@@ -744,13 +744,20 @@ fn ref_arg(nm: str, args: list[ast.Expr], n: str, refs: list[str]) -> bool {
 }
 
 # lint_imports reports an import whose namespace nothing reaches through.
-fn lint_imports(f: ast.File, ns: list[str], ids: list[str], mut &out: list[Finding]) {
+fn lint_imports(f: ast.File, ns: list[str], ids: list[str], ms: emit.Mods, mut &out: list[Finding]) {
 	for im in f.imports {
 		# AN `import pub` IS USED BY BEING WRITTEN. It is a RE-EXPORT (#57 decision 5): what it
 		# does is put another file's public names on this module's surface, and a `mod.zg` whose
 		# whole body is re-exports reaches through none of its own namespaces on purpose.
 		# Calling those unused told the reader to delete the module's surface.
 		continue if im.is_pub
+
+		# A SPEC IS REACHED BY A BARE NAME, so no namespace is written for the test below to
+		# find. `impl Tag for A` names the interface, `Tag` is declared in another module, and
+		# the import is what put that module in the program — delete the line and the compiler
+		# answers E3013, "no spec named Tag". So it is the opposite of unused: it is the one
+		# line the program does not compile without, and L101 was telling the reader to cut it.
+		continue if lint_import_supplies_spec(f, im, ms)
 
 		# the BINDING, not the path's last segment: an `as` rename is the name this file
 		# reaches the module by, so asking about anything else calls every renamed import
@@ -759,6 +766,49 @@ fn lint_imports(f: ast.File, ns: list[str], ids: list[str], mut &out: list[Findi
 			out.append(Finding("", im.at, im.line, im.col, "L101", f"unused import \"{im.path}\""))
 		}
 	}
+}
+
+# lint_import_supplies_spec is whether this import is what brought in a spec the program
+# implements. It asks the LOADER's answer rather than working one out: `Mods` carries what each
+# import resolved to (imp_at / imp_path / imp_mod, row for row) and which module each file was
+# read as (paths / names), so the two ends meet on a module identity nothing here derives.
+#
+# c_mod_of's comment is the reason it may not be derived here — a module is what an import
+# resolved to, and only the loader knows the roots a prefix expands under. A `dirname` in this
+# file would be the second copy of that fact, and the first thing it would get wrong is
+# `src/stdlib`, where fifteen one-file modules share a directory.
+fn lint_import_supplies_spec(f: ast.File, im: ast.ImportDecl, ms: emit.Mods) -> bool {
+	m := lint_import_mod(im, ms)
+	return false if m == ""
+
+	for ip in f.impls {
+		for sd in f.specs {
+			return true if sd.name == ip.on and lint_file_mod(sd.path, ms) == m
+		}
+	}
+	return false
+}
+
+# lint_import_mod is the module identity an import resolved to, "" when the table has no row
+# for it — a synthetic import, or a program the loader never registered.
+fn lint_import_mod(im: ast.ImportDecl, ms: emit.Mods) -> str {
+	mut i := 0
+	for i < ms.imp_at.len() {
+		return ms.imp_mod[i] if ms.imp_at[i] == im.at and ms.imp_path[i] == im.path
+		i = i + 1
+	}
+	return ""
+}
+
+# lint_file_mod is the module a FILE was read as, "" when it is not in the table — which is
+# what a declaration the compiler itself wrote answers, and it must never match an import.
+fn lint_file_mod(path: str, ms: emit.Mods) -> str {
+	mut i := 0
+	for i < ms.paths.len() {
+		return ms.names[i] if ms.paths[i] == path
+		i = i + 1
+	}
+	return ""
 }
 
 # lint_dead_fns reports a private function nothing calls. `main` is the program's entry —
@@ -834,7 +884,14 @@ fn lint_unread_bindings(f: ast.File, mut &out: list[Finding]) {
 			w := ats[i]
 			if n == "_" {
 				out.append(Finding("", w.path, w.line, w.col, "L104", f"`_ :=` in `{fd.name}` — the expression is already a statement, so the binder says nothing"))
-			} else if not has_str(ids, n) {
+			} else if parser.is_with_name(n) {
+				# THE PARSER WROTE THIS NAME, so no reader can act on a finding about it. A
+				# nameless `with e { … }` still BINDS — that is what holding a resource means —
+				# and the binding it makes is `_with_<line>`, which the author did not type and
+				# cannot read, rename or delete. L105 is the rule that HAS something to say
+				# about a `with` whose name buys nothing, and it says it about the named form.
+				skip()
+			} else if not has_str(ids, n) and not has_str(calls, n) {
 				out.append(Finding("", w.path, w.line, w.col, "L103", f"binding `{n}` in `{fd.name}` is never read"))
 			}
 			i = i + 1

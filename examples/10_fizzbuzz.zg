@@ -1,19 +1,23 @@
-# 10 — FizzBuzz: a capstone combining loops, conditions, and print.
+# 10 — FizzBuzz: a capstone combining a range loop, guards, and `print`.
 #
 # Print 1..15, but "Fizz" for multiples of 3, "Buzz" for multiples of 5,
 # and "FizzBuzz" for multiples of both.
+#
+# The three cases are three `return … if` guards — the trailing form of `if`, which
+# is how a function states what it answers early without a block for each answer.
+# The last line is the case no guard claimed.
+fn label(n: int) -> str {
+	return "FizzBuzz" if n % 15 == 0
+	return "Fizz" if n % 3 == 0
+	return "Buzz" if n % 5 == 0
+
+	return str(n)
+}
+
 fn main() {
-	mut i := 1
-	for i <= 15 {
-		if i % 15 == 0 {
-			print "FizzBuzz"
-		} else if i % 3 == 0 {
-			print "Fizz"
-		} else if i % 5 == 0 {
-			print "Buzz"
-		} else {
-			print i
-		}
-		i = i + 1
+	# `for x in a..=b` walks an INCLUSIVE range: the counter, the test and the step
+	# are the loop's, so none of the three can be got wrong.
+	for i in 1..=15 {
+		print label(i)
 	}
 }

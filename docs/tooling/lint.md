@@ -104,6 +104,19 @@ uses the `testing` import and writes no expression at all), and so is a module-l
 initialiser, a struct field's default and a parameter's default. Each of those is code that
 belongs to a declaration rather than to a body.
 
+An import that supplies a **`spec`** is used, and it is the one use that is written with no
+namespace at all: `impl Tag for A` names the interface by a bare name, and the import is what
+put the module declaring it into the program. `L101` asks the loader which module each import
+resolved to and which module each file was read as, rather than deriving either — a module is
+what an import resolved to, and only the loader knows the roots a prefix expands under.
+
+`L103` counts a **call** as a read. `g := add` followed by `g(1, 2)` reads `g`; a binding that
+holds a function is used by being called, which is the only way to use one. And it says nothing
+about the binding a **nameless `with`** makes: `with acquire() { … }` still binds — that is what
+holding a resource means — but the name is the parser's (`_with_<line>`), so there is no
+finding about it a reader could act on. The named form has [`L105`](#l1xx--dead-code), which is
+about a name the author did write.
+
 ## L2xx — null safety
 
 Nothing here is a compile error: each of these programs runs, and does something slightly

@@ -93,6 +93,18 @@ L104 `_ :=` in `main` — the expression is already a statement, so the binder s
 運算式），模組層級 `const` 的初始式、struct 欄位的預設值、參數的預設值也都是。這些都是屬於宣告而
 不屬於本體的程式碼。
 
+供應一個 **`spec`** 的 import 是有被用到的，而且那是唯一一種完全不帶 namespace 的使用處：
+`impl Tag for A` 以一個裸名字指名那個介面，而 import 正是把宣告它的 module 放進這支程式的那一行。
+`L101` 是去問 loader「每個 import 解析到哪個 module」與「每個檔案是以哪個 module 讀進來的」，而不是
+自己推導其中任何一個——一個 module 就是某個 import 解析出來的東西，而只有 loader 知道一個前綴會在
+哪些 root 底下展開。
+
+`L103` 把一次**呼叫**算成一次讀取。`g := add` 之後寫 `g(1, 2)` 就是讀了 `g`；一個放著函式的繫結，
+被呼叫就是它唯一的用法。而對**沒有名字的 `with`** 所建立的繫結，它什麼都不說：`with acquire() { … }`
+仍然會建立繫結——這正是「持有一個資源」的意思——但那個名字是 parser 的（`_with_<line>`），所以關於它
+的任何 finding，讀者都無從處理。有名字的那個形式有 `L105`，那才是關於作者真的
+寫下來的名字。
+
 ## L2xx——null safety
 
 這裡沒有一條是編譯錯誤：每一支程式都跑得動，只是做的事跟它寫的略有出入。這正是它們屬於 linter

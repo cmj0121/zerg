@@ -326,16 +326,30 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
 # name (`E9104`, chk_unbuilt_module) and there is no program for the linter to be handed. The
 # entry deletes itself the day a generic struct is built — the same end state CORPUS_SKIP has.
+#
+# THE EXAMPLES ARE ENTRIES TOO, and they were linted by nothing. `zerg lint` is advice a
+# reader is meant to take, so a corpus that exists to be COPIED is the last place a finding
+# may sit: six of them did, and half were the linter's own fault rather than the example's —
+# a binding the parser wrote (`_with_36`), a function value that is called and so is read, an
+# import that supplies a `spec` by a bare name. A rule nobody points at its own examples is a
+# rule measured only against code written by people who already know it.
+#
+# The unit is `EXAMPLE_SRCS`, the same glob `make examples` builds, because an entry is what
+# `zerg lint` takes: a module file of an example — `1g/siblings/lib/text.zg` — is not a
+# program and answers `E5014 import cycle` when handed over as one. The two REFUSED examples
+# are in, not filtered out: neither has a finding, and a negative example is source a reader
+# copies from too.
 LINT_SKIP := src/stdlib/atomic.zg
-LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg))
+LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg)) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop
 # with nothing to iterate and a gate that exits 0 for having asked one question.
 #
-# 16 against the 20 there are today: far enough below that adding a module or retiring a suite
-# is not a chore here, far enough above that a pattern which stopped matching cannot pass.
-LINT_MIN ?= 16
+# 50 against the 59 there are today — 20 modules and suites, 39 examples: far enough below that
+# adding a module or retiring a suite is not a chore here, far enough above that a pattern which
+# stopped matching cannot pass.
+LINT_MIN ?= 50
 
 # `--strict`, and the tool without it exits 0 on a warning. That is not two answers to one
 # question: `zerg lint` reports on somebody else's program, where a `#[test]` that ships and a
@@ -345,7 +359,7 @@ LINT_MIN ?= 16
 #
 # EVERY ENTRY IS LINTED BEFORE THE GATE FAILS, rather than the loop stopping at the first —
 # a board that reports one finding per run makes a reader run it once per finding.
-lint:                           # lint the compiler, the stdlib and the suites with zerg itself
+lint:                           # lint the compiler, the stdlib, the suites and the examples
 	$(MAKE) build
 	@fail=0; n=0; \
 	for f in $(LINT_ENTRIES); do \
@@ -371,13 +385,20 @@ lint:                           # lint the compiler, the stdlib and the suites w
 # to, and the glob that used to reach the suites under `tests/` is GONE rather than
 # rewritten: the set is the same set, named once instead of twice.
 # THE TREES, not a glob per directory. `zerg fmt` takes a path and a path is the tree under it,
-# so the scope is two names and adding a directory under either changes nothing here — which is
-# what this list existed to get wrong. It is still a list for `treesitter`, and the comment
-# there says why.
-SELF_TREES := src/compiler src/stdlib
+# so the scope is three names and adding a directory under any of them changes nothing here —
+# which is what this list existed to get wrong. It is still a list for `treesitter`, and the
+# comment there says why.
+#
+# `examples` IS ONE OF THE THREE, and it was outside the rule until a reader asked why
+# `print 0b1100 &0b1010` had lost the space in front of its operand. It had never been
+# formatted: `zerg fmt` fixed the spacing the day `&` stopped being read as only-ever-a-prefix
+# (fmt.zg, is_dual_fix) and no gate ever ran it over this directory, so the corpus a reader
+# meets FIRST was the one corpus written in a style the tool does not write. Two files were
+# stale; one of them was the bitwise chapter, whose whole subject is that operator.
+SELF_TREES := src/compiler src/stdlib examples
 
 SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
 
-fmt:                            # rewrite the compiler and stdlib in canonical style
+fmt:                            # rewrite every Zerg source this repository writes in canonical style
 	$(MAKE) build
 	@./bin/zerg fmt $(SELF_TREES)

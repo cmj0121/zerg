@@ -75,6 +75,16 @@
 (identifier_pattern) @variable
 (wildcard_pattern) @character.special
 
+; `_` IS AN IDENTIFIER to the grammar — `identifier ::= ( letter | '_' ) …` (GRAMMAR) — so only
+; the pattern position above had a node of its own, and the other four spellings of the discard
+; highlighted as ordinary variables: `_ := f()`, `for _ in xs`, `_ := <-ch`, and the `select`
+; arm that fires when nothing is ready. The predicate is what tells the token from a name that
+; merely begins with one (`_with_36`), which no node type can.
+((identifier) @character.special
+ (#eq? @character.special "_"))
+
+(select_arm "_" @character.special)
+
 ; --- keywords ---------------------------------------------------------------------------------
 
 [

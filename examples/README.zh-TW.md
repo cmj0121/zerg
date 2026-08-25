@@ -2,8 +2,9 @@
 
 [English](README.md) | 繁體中文
 
-三十三支程式，附閱讀順序。每一支都由 **`make examples` 建起來並執行**，所以這裡沒有「以前能動」的
-片段——那兩支**應該被拒收**的，也被釘在它們必須被拒收的那句話上。
+這個目錄裡的每一支程式，附閱讀順序。每一支都由 **`make examples` 建起來並執行**、由 **`make lint`
+檢查**、也由 **`make fmt-self` 釘在 `zerg fmt` 的形狀上**，所以這裡沒有「以前能動」的片段，也沒有一支
+會被我們叫讀者去跑的工具要求修改——那兩支**應該被拒收**的，也被釘在它們必須被拒收的那句話上。
 
 ```sh
 make                            # ./bin/zerg
@@ -17,19 +18,19 @@ make                            # ./bin/zerg
 
 名字裡的數字**就是**順序。每一支都是一支會印東西的完整程式，而且各自比前一支多一個概念。
 
-| 範例                                   | 它展示什麼                                  |
-| -------------------------------------- | ------------------------------------------- |
-| [`00_hello.zg`](00_hello.zg)           | `fn main`，以及 `print` 是關鍵字而不是函式  |
-| [`01_bindings.zg`](01_bindings.zg)     | `:=` 建立繫結；不寫 `mut` 的繫結是不可變的  |
-| [`02_arithmetic.zg`](02_arithmetic.zg) | 整數運算子，以及誰綁得比誰緊                |
-| [`03_floats.zg`](03_floats.zg)         | `float`，以及為什麼 `1 / 2` 不是 `0.5`      |
-| [`04_booleans.zg`](04_booleans.zg)     | 比較，以及寫成單字的 `and` / `or` / `not`   |
-| [`05_bitwise.zg`](05_bitwise.zg)       | 位元運算子——整數有，浮點沒有                |
-| [`06_functions.zg`](06_functions.zg)   | 參數、回傳型別，以及呼叫                    |
-| [`07_match.zg`](07_match.zg)           | 對值與範圍做 `match`，以及它為什麼必須窮盡  |
-| [`08_loops.zg`](08_loops.zg)           | `for` 的三種形狀——條件、範圍、走訪一個 list |
-| [`09_recursion.zg`](09_recursion.zg)   | 函式呼叫自己，以及 stack 在哪裡結束         |
-| [`10_fizzbuzz.zg`](10_fizzbuzz.zg)     | 收尾之作：迴圈、條件與 `print` 合在一起     |
+| 範例                                   | 它展示什麼                                   |
+| -------------------------------------- | -------------------------------------------- |
+| [`00_hello.zg`](00_hello.zg)           | `fn main`，以及 `print` 是關鍵字而不是函式   |
+| [`01_bindings.zg`](01_bindings.zg)     | `:=` 建立繫結；不寫 `mut` 的繫結是不可變的   |
+| [`02_arithmetic.zg`](02_arithmetic.zg) | 整數運算子，以及誰綁得比誰緊                 |
+| [`03_floats.zg`](03_floats.zg)         | `float`，以及為什麼 `1 / 2` 不是 `0.5`       |
+| [`04_booleans.zg`](04_booleans.zg)     | 比較，以及寫成單字的 `and` / `or` / `not`    |
+| [`05_bitwise.zg`](05_bitwise.zg)       | 位元運算子——整數有，浮點沒有                 |
+| [`06_functions.zg`](06_functions.zg)   | 參數、回傳型別，以及呼叫                     |
+| [`07_match.zg`](07_match.zg)           | 對值與範圍做 `match`，以及它為什麼必須窮盡   |
+| [`08_loops.zg`](08_loops.zg)           | `for` 的四種形狀——條件、範圍、list、無頭     |
+| [`09_recursion.zg`](09_recursion.zg)   | 函式呼叫自己，以及 stack 在哪裡結束          |
+| [`10_fizzbuzz.zg`](10_fizzbuzz.zg)     | 收尾之作：範圍迴圈、`return … if` 與 `print` |
 
 ## 讓它是一個語言、而不是一台計算機的那些部分
 

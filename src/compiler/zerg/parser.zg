@@ -2039,6 +2039,23 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false)
 }
 
+# with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
+# somebody's source tells it from a name they wrote. The pair exists for the same reason
+# `init_name` / `is_init_name` does: the name is the parser's, so the fact that it is the
+# parser's lives once, beside the line that writes it.
+#
+# L103 read one of these as an unread binding — "binding `_with_36` in `main` is never read" —
+# about a statement whose author wrote `with open_log("held") { … }` and cannot delete, rename
+# or read a name they never typed. A finding on a correct program is the one thing a linter
+# must not have, and no wording of the message could have made that one actionable.
+pub fn with_name(line: int) -> str {
+	return "_with_" + strconv.to_string(line, 10)
+}
+
+pub fn is_with_name(name: str) -> bool {
+	return strings_has_prefix(name, "_with_")
+}
+
 pub fn init_name(at: int) -> str {
 	return "init__" + strconv.to_string(at, 10)
 }
@@ -2759,7 +2776,7 @@ fn parse_with(mut &p: Parser) -> ast.Stmt {
 	p_no_brace_head(p, "a `with` head", false)
 	value := parse_expr(p)
 
-	mut name := f"_with_{strconv.to_string(line, 10)}"
+	mut name := with_name(line)
 	if p_at(p, token.Kind.As) {
 		p_advance(p)
 		name = p_name(p, "a `with` binding")
@@ -4698,6 +4715,19 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
 
 	mut toks := lexer.tokenize(hole)
 
+	# THE HOLE IS LEXED ON ITS OWN, so its tokens count from line 1 column 1 of the hole and not
+	# of the file. Every refusal below already says `t.line, t.col` for that reason — but a
+	# diagnostic made LATER, off a node the hole produced, had nothing to correct it. An
+	# f-string holding `1 + 2.5` reported `L502 the literal 1 is a float here` at 1:1 — a place
+	# in no file, to an author who is holding a real line number. Stamping the enclosing
+	# token's place on the hole's tokens is what those refusals do by hand, done once and for
+	# every node the hole goes on to produce.
+	#
+	# It is the f-string's place and not the literal's, because the hole's own column counts
+	# characters of a string this compiler never re-joined to the source. A place a reader can
+	# find beats a column that is exact about the wrong text.
+	fstr_place(toks, t)
+
 	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
 	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
@@ -4709,6 +4739,16 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
 	# silent wrong answer this path exists to avoid
 	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringHoleManyExprs, "f-string: a hole must be a single expression: {" + hole + "}") if not p_at(hp, token.Kind.Eof) and not p_at(hp, token.Kind.Semi)
 	return ast.Expr.EConv(ast.Ty.TStr, e, "str")
+}
+
+# fstr_place puts the enclosing f-string's line and column on every token of a re-lexed hole.
+fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
+	mut i := 0
+	for i < toks.len() {
+		k := toks[i]
+		toks[i] = token.Token(k.kind, k.lexeme, k.value, t.line, t.col)
+		i = i + 1
+	}
 }
 
 # fstr_reject refuses the hole forms this compiler does not implement, naming which one.

@@ -460,6 +460,18 @@ pub enum Rule {
 	# promise in a diagnostic is still a promise.
 	NotYetRemoteImport = 9105
 	NotYetCrossModuleFnValue = 9106
+
+	# A METHOD THE LANGUAGE GIVES A VALUE WITHOUT ITS TYPE DECLARING ONE, split out of
+	# `MethodUnknown` (#74). That rule is the last resort of `c_free_method` and it now says
+	# *this program is permanently wrong*, which is true of `x.wobble()` and false of four
+	# names the specification hands out for free: `display` and `debug` are
+	# docs/runtime/format.md's renderings, "available on every value without opting into
+	# anything"; `format` is docs/surface/syntax-sugar.md's desugaring of `f"{x:spec}"`; and
+	# `next` on a CHANNEL is docs/core/specs.md's language fact that a channel is an
+	# `Iterator[T]`. A type that declares one of them is answered before the fallback is
+	# reached, so a name in this set arriving here is a form the language has and this
+	# compiler has not lowered — and it retires the day the lowering lands.
+	NotYetSpecifiedMethod = 9107
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

@@ -7661,7 +7661,31 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# told what to write rather than told to wait.
 	c_no_builtin_into(em, meth, target)
 
-	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(c_infer(em, target))}")
+	# TWO ANSWERS BEHIND ONE FALLBACK. Four names are the language's rather than a type's:
+	# `display` and `debug` are docs/runtime/format.md's renderings, "available on every value
+	# without opting into anything"; `format` is docs/surface/syntax-sugar.md's desugaring of
+	# `f"{x:spec}"`, whose f-string spelling already answers `E9012`; and `next` on a CHANNEL is
+	# docs/core/specs.md's language fact that a channel IS an `Iterator[T]`, which that chapter
+	# tells the reader to drive by hand. A type that declares any of them is answered by
+	# `MethKind.MRecv` and never arrives here, so one of these names getting this far is a form
+	# the language has and this compiler has not lowered — it retires the day the lowering
+	# lands. Any other name is a method no type here declares, and there is no such day.
+	tty := c_infer(em, target)
+	unbuilt := meth == "display" or meth == "debug" or meth == "format" or (meth == "next" and ast.ty_is_chan(tty))
+	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {c_specified_meth_says(meth)}") if unbuilt
+
+	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)}")
+}
+
+# c_specified_meth_says names what to write WHILE the form waits. The four names above wait on
+# three different chapters and share no substitute, so the sentence that would cover all of them
+# says nothing; each gets the one its own chapter points at.
+fn c_specified_meth_says(meth: str) -> str {
+	return match meth {
+		"format" => "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one"
+		"next"   => "receive one element with `<-ch`, or drain the channel with `for v in ch`"
+		_        => "`str(x)` renders any value, and an `impl` on a declared type is how a type overrides that"
+	}
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written

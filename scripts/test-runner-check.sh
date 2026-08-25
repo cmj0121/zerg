@@ -1334,7 +1334,20 @@ say "a test that returned \`false\` was still reported \`ok\`" $?
 #     does not have — which is exactly how `fn(T)` came to be written all through this file for
 #     the canonical `fn (T)`, with nothing to say so. No generated driver is among them: every
 #     run above took its own away, which the `before`/`after` checks already assert.
-find "$tmp" -name '*.zg' -print0 | xargs -0 "$ZERG" fmt --check >/dev/null 2>&1
+#
+#     THE LIST IS GUARDED BEFORE IT IS READ, and that is not a formality here: `$tmp` is a
+#     scratch tree this gate writes itself, so it is emptied by any earlier case that stops
+#     writing sources or starts cleaning up after itself. BSD xargs handed NO input exits 0
+#     WITHOUT RUNNING the command, so an empty tree makes `say` record a PASS for a sweep that
+#     read nothing — and GNU xargs runs `zerg fmt --check` once with no operands, which is a
+#     different answer, so the same defect would be green on macOS and red in CI. The same
+#     shape and the same measurement as `chapter-codes-check.sh`, one gate over.
+find "$tmp" -name '*.zg' -print0 >"$tmp/canonical-sources"
+[ -s "$tmp/canonical-sources" ] || {
+	echo "test-runner-check: no source was found under the scratch tree — the sweep has gone stale" >&2
+	exit 1
+}
+xargs -0 "$ZERG" fmt --check <"$tmp/canonical-sources" >/dev/null 2>&1
 say "a source this gate holds up as the way to write a test or a fixture is not in canonical form" $?
 
 

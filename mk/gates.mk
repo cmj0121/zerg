@@ -25,7 +25,7 @@
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check \
-	chapter-codes \
+	chapter-codes method-gaps \
 	doc-check stmt-walk entry-path examples-index mem-peak release-notes
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
@@ -447,7 +447,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check chapter-codes cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check chapter-codes method-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -608,6 +608,19 @@ deviation-check:                # every deviation names a ticket, and the inheri
 
 chapter-codes:                  # every unbuilt form is named where its readers are, not only in the catalogue
 	./scripts/chapter-codes-check.sh
+
+# `chapter-codes` asks whether a live `E9xxx` is quoted in some chapter; it cannot ask WHICH
+# FORMS that code covers, because the answer is a list of method names hard-coded in emit.zg.
+# Each such list is a second copy of a chapter's `[not yet]` marker. This holds the copies to
+# each other, in both directions, using the compiler's own sentence as the needle so there is
+# no third place to write the fact down (#74).
+#
+# HOW MANY LISTS THERE ARE IS NOT WRITTEN HERE. It was, and it said two while the gate printed
+# three on every run from the day `E9056` split — a header stating a count its own gate
+# contradicts out loud. The gate discovers the lists; it does not check a number against this
+# comment, and one more split makes it four.
+method-gaps:                    # a method the compiler calls unbuilt is one a chapter promises
+	./scripts/method-gaps-check.sh
 
 seed-gaps:                      # the seed's gap list says the same thing in both languages
 	./scripts/seed-gaps-check.sh

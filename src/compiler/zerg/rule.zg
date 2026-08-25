@@ -220,6 +220,61 @@ pub enum Rule {
 	TypeFromSibling = 3115
 	ConstFromSibling = 3116
 
+	# The rules below arrived in this range from `E9xxx` (#74). Each of them was a
+	# *NotImplemented* and none of them was a form: a wrong arity to `ok_or`, a field an `Err`
+	# does not carry, `?` on an `int`. A code in that range retires when its form is built, and
+	# a rule with no form has no such day — so it was a number that could never be spent. The
+	# ones it left behind are retired in the catalogue and are never reissued.
+	#
+	# SOME OF THEM SPLIT INSTEAD. `InElemNoEq`, `InSetNotAContainer`, `MethodUnknown`,
+	# `MapMethodUnknown` and `ListMethodUnknown` each came out of a code that answered TWO
+	# questions at one raise — one half a form the language has and this compiler has not
+	# lowered, the other half a program with no meaning. The unbuilt half carries an `E9xxx`,
+	# because it still retires the day the form lands: the number the code had where there was
+	# one to keep, and a fresh one where the whole number had already retired.
+	#
+	# THERE IS NO COUNT IN THIS COMMENT ON PURPOSE. A split is not a property of a code, it is
+	# a property of a FALLBACK, and every fallback that cannot hold a declaration has the same
+	# two questions behind it — so this list grows whenever somebody reads one more of them.
+	# A number here would be a second copy of a count the catalogue already keeps, held by
+	# nothing, and it had already drifted one behind that catalogue.
+	IfBindNotCarrier = 3117
+	InElemNoEq = 3118
+	InSetNotAContainer = 3119
+	TryNotCarrier = 3120
+	ForceNotCarrier = 3121
+	CoalesceNotCarrier = 3122
+	ErrMethodArgs = 3123
+	ErrMethodUnknown = 3124
+	OkOrNoArg = 3125
+	OkOrManyArgs = 3126
+	OkOrNotErr = 3127
+	OkTakesNoArg = 3128
+	CarrierMethodUnknown = 3129
+	EnumTypeMethodUnknown = 3130
+	MethodUnknown = 3131
+	ResultPatternUnknown = 3132
+	MainResult = 3133
+	MapMethodUnknown = 3134
+	ErrFieldUnknown = 3135
+	OpenRangeInclusive = 3136
+
+	# THE SPLIT #74 WALKED PAST. `MapMethodUnknown` came out of `E9100` because a map's
+	# fallback answered two questions at one raise; `E9056` is the LIST's fallback and it
+	# answered the same two, unconditionally, one arm away. So `xs.wobble()`
+	# — a method the language does not give a list and never will — was refused with
+	# `NotImplemented:`, which is #74's own defect surviving inside #74's own change. A name a
+	# chapter marks `[not yet]` keeps `E9056` and retires the day it is built; every other name
+	# is this.
+	#
+	# WHICH CHAPTER MARKS WHICH NAME IS NOT WRITTEN HERE. It was, and it was wrong twice in two
+	# iterations — first naming two chapters where the raise site names three, then claiming
+	# `filter` and `fold` are quoted in control-flow.md alone when `filter` is marked in
+	# collections.md as well. The list lives once, beside the raise in c_list_method_unknown,
+	# and scripts/method-gaps-check.sh is what holds it to the chapters. A per-chapter
+	# attribution here is a third copy, and both times it has been one it has drifted.
+	ListMethodUnknown = 3137
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -386,7 +441,6 @@ pub enum Rule {
 	NotYetOpenRangeHere = 9050
 	NotYetAssociatedFn = 9051
 	NotYetMapKeyType = 9052
-	NotYetIfBindOver = 9053
 	NotYetDerive = 9054
 	NotYetDeriveEq = 9055
 	NotYetListMethod = 9056
@@ -413,29 +467,13 @@ pub enum Rule {
 	NotYetRangeAsValue = 9077
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
-	NotYetTryOnType = 9080
 	NotYetTwoModulesDefine = 9081
 	NotYetNamespaceCollision = 9082
-	NotYetForceOnType = 9083
-	NotYetCoalesceOnType = 9084
 	NotYetRenderEnumAsText = 9085
-	NotYetErrMethodArgs = 9086
-	NotYetErrMethod = 9087
-	NotYetOkOrNoArg = 9088
-	NotYetOkOrManyArgs = 9089
-	NotYetOkOrNotErr = 9090
-	NotYetOkTakesNoArg = 9091
-	NotYetCarrierMethod = 9092
-	NotYetEnumTypeMethod = 9093
-	NotYetMethodOnType = 9094
-	NotYetResultPattern = 9095
-	NotYetMainSignature = 9096
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfNonFunction = 9098
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100
-	NotYetErrField = 9101
-	NotYetOpenRangeInclusive = 9102
 	NotYetSpawnOfBinding = 9103
 	NotYetAtomicImport = 9104
 
@@ -446,6 +484,25 @@ pub enum Rule {
 	# promise in a diagnostic is still a promise.
 	NotYetRemoteImport = 9105
 	NotYetCrossModuleFnValue = 9106
+
+	# A METHOD THE LANGUAGE GIVES A VALUE WITHOUT ITS TYPE DECLARING ONE, split out of
+	# `MethodUnknown` (#74). That rule said *this program is permanently wrong*, which is true
+	# of `x.wobble()` and false of five names the specification hands out for free.
+	#
+	# EACH CARRIES THE RECEIVER IT IS GIVEN ON, and the set is not the same for all five.
+	# `display` and `debug` are docs/runtime/format.md's renderings, "available on every value
+	# without opting into anything"; `format` is docs/surface/syntax-sugar.md's desugaring of
+	# `f"{x:spec}"` and is a protocol on every value the same way. `next` is docs/core/specs.md's
+	# `Iterator[T]` and a CHANNEL is the one receiver that is one without an `impl`. `iter` is
+	# the next sentence of that same paragraph — `Iterable[T]` is what has `iter()`, and
+	# `for x in X` requires `X: Iterable[T]` — so it is given on everything that loop walks, a
+	# list, a map, a `str` and a channel, and not on a channel alone.
+	#
+	# A type that declares one of them is answered before this is reached, so a name in this
+	# set arriving here is a form the language has and this compiler has not lowered — and it
+	# retires the day the lowering lands. Where the value has no rendering of its own the
+	# sentence says there is nothing to write instead, because the substitute has to compile.
+	NotYetSpecifiedMethod = 9107
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

@@ -1384,7 +1384,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" unknown-list-method E9056 <<'EOF'
+expect "$ZERG" list-slice E9056 'the list method `slice`' <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
 	print xs.slice(0, 2).len()
@@ -1394,7 +1394,7 @@ EOF
 # THE COLLECTION METHODS docs/code/collections.md SPECIFIES AND THIS COMPILER HAS NOT BUILT.
 # E9056 and E9100 each had one case, and each of those cases named a method the language does
 # not have either — `xs.pop()`, `m.drop(1)` — which is the reject list's question, not this
-# one. So the six methods the chapter names as `[not yet]` were pinned by nothing: every one
+# one. So the methods the chapters name as `[not yet]` were pinned by nothing: every one
 # of them answered correctly, and would have gone on answering correctly if the rule that
 # says so were deleted, because the case that would notice tested a different sentence.
 #
@@ -1432,6 +1432,27 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" list-get E9056 'the list method `get`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.get(0) ?? 0
+}
+EOF
+
+expect "$ZERG" list-map E9056 'the list method `map`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.map(fn(v: int) -> int { return v + 1 }).len()
+}
+EOF
+
+expect "$ZERG" list-fold E9056 'the list method `fold`' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.fold(0, fn(a: int, b: int) -> int { return a + b })
+}
+EOF
+
 expect "$ZERG" map-insert E9100 'the map method `insert`' <<'EOF'
 fn main() {
 	m := {1: 2}
@@ -1445,6 +1466,222 @@ fn main() {
 	m := {1: 2}
 	m.remove(1)
 	print m.len()
+}
+EOF
+
+expect "$ZERG" map-get E9100 'the map method `get`' <<'EOF'
+fn main() {
+	m := {1: 2}
+	print m.get(1)
+}
+EOF
+
+# THE FOUR METHOD NAMES THE LANGUAGE HANDS OUT WITHOUT A DECLARATION. `c_free_method`'s
+# fallback is the last resort for a `x.meth(…)` no type answers, and it says `E3131` — this
+# program is permanently wrong. It is, for `x.wobble()`; it is not for these, which three
+# chapters specify and this compiler has not lowered. Same shape as the pair above: the
+# SENTENCE is asserted, because one code covers all four and the code alone cannot tell
+# `display` from `next`, so a name that lands stops matching its own line.
+#
+# AND THE SENTENCE RUNS PAST THE NAME, as far as the SUBSTITUTE, for the three renderings.
+# `display`, `debug` and `format` are given on every receiver and what to write instead is
+# not: `str(x)` and `f"{x}"` render an `int` and are refused on a `list[int]` (E4011), a map,
+# a struct, a carrier (E9059) and an enum (E9085). A case that stopped at the receiver's name
+# passed while the compiler told the reader to write an expression it refuses, so each side of
+# that split is pinned by the words that differ — here the substitute, below its absence.
+expect "$ZERG" builtin-display E9107 'the method `display` on a int — `str(x)` renders it' <<'EOF'
+fn main() {
+	x := 5
+	print x.display()
+}
+EOF
+
+expect "$ZERG" builtin-debug E9107 'the method `debug` on a int — `str(x)` renders it' <<'EOF'
+fn main() {
+	x := 5
+	print x.debug()
+}
+EOF
+
+expect "$ZERG" builtin-format E9107 'the method `format` on a int — a spec is unread here' <<'EOF'
+fn main() {
+	x := 5
+	print x.format("04d")
+}
+EOF
+
+expect "$ZERG" channel-next E9107 'the method `next` on a chan[int]' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- 1
+	print ch.next()
+}
+EOF
+
+expect "$ZERG" channel-iter E9107 'the method `iter` on a chan[int]' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- 1
+	print ch.iter()
+}
+EOF
+
+# AND ON A RECEIVER THAT HAS A FAMILY. Every case above stands on an `int` or a channel, and
+# neither is a list, a map, an `Err` or a carrier — which is to say every one of them reached
+# the fallback that carries this split, and none of them could see that the four families
+# above it were answering the same names for themselves. `m.display()` was `E3134`,
+# `e.display()` was `E3124`, `o.display()` was `E3129` and `xs.display()` was `E9056`: four
+# codes for one question, three of them permanent, for a rendering docs/runtime/format.md
+# gives every value. One case per family, because one case per family is what a shared
+# fallback cannot fake.
+expect "$ZERG" map-display E9107 'on a map[str, int] — there is nothing to write in its place' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m.display()
+}
+EOF
+
+expect "$ZERG" err-display E9107 'the method `display` on a Err — `str(x)` renders it' <<'EOF'
+fn f() -> int {
+	raise ValueError("x")
+}
+
+fn main() {
+	r: Result[int] = guard {
+		f()
+	}
+	match r {
+		Either.Left(v) => {
+			print v
+		}
+		Either.Right(e) => {
+			print e.display()
+		}
+	}
+}
+EOF
+
+expect "$ZERG" carrier-display E9107 'on a int? — there is nothing to write in its place' <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	print g().display()
+}
+EOF
+
+expect "$ZERG" list-display E9107 'on a list[int] — there is nothing to write in its place' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.display()
+}
+EOF
+
+# AND THE OTHER SIDE OF THE SAME RECEIVER, which is what proves the predicate is about the
+# rendering and not about the word "list". `str(xs)` over a `list[byte]` IS built — it is the
+# way back from the bytes — so this one is handed the substitute the case above is refused,
+# from the same clause, on a receiver spelled almost the same way.
+expect "$ZERG" bytes-display E9107 'on a list[byte] — `str(x)` renders it' <<'EOF'
+fn main() {
+	xs: list[byte] = [b'a', b'b']
+	print xs.display()
+}
+EOF
+
+# AND THE SECOND SPELLING OF THE SAME BRIDGE. `c_str_bridges_list` admits a `list[rune]` as
+# well — bytes and code points are the two ways back to a string — and only one of the two was
+# asserted, so deleting `c_is_rune` from that clause left the board green while the chapter's
+# stand-in set (docs/runtime/format.md) went on promising the substitute. Proved by deleting
+# it: this case fails alone and `bytes-display` does not.
+expect "$ZERG" runes-display E9107 'on a list[rune] — `str(x)` renders it' <<'EOF'
+fn main() {
+	xs: list[rune] = ['a', 'b']
+	print xs.display()
+}
+EOF
+
+# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. The three above are composites: they
+# are waiting for the structural `Display` this compiler does not generate, and until it comes
+# their parts are what a reader renders instead. An IDENTITY is not waiting and has no parts —
+# `E4034` names the class, a channel and a function value, and the predicate that decides the
+# substitute wrote out the channel alone, so `f := g; f.display()` said "`str(x)` renders it"
+# while `str(f)` reached cc and was refused against a line nobody wrote. NIL is a third answer
+# and not either of those: `str(f())` is `E3086` by name.
+#
+# All three assert the WORDS and not the code, because the code was already `E9107` on every
+# one of them while the sentence was wrong — and the channel had no case at all, so deleting
+# the line that excludes it left the whole board green.
+expect "$ZERG" chan-display E9107 'on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	print ch.display()
+}
+EOF
+
+expect "$ZERG" fn-display E9107 'on a fn() -> int — there is nothing to write in its place — a fn() -> int is an identity rather than a value' <<'EOF'
+fn g() -> int {
+	return 1
+}
+
+fn main() {
+	f := g
+	print f.display()
+}
+EOF
+
+expect "$ZERG" nil-display E9107 'on a void — there is nothing to write in its place — nil is the absence of a value' <<'EOF'
+fn h() {
+	nop
+}
+
+fn main() {
+	print h().display()
+}
+EOF
+
+# `format` IS THE SAME DOOR. Its substitute is `f"{x}"`, which lowers through the `str(…)`
+# arm this file's E4011 case pins, so a composite is refused there too — one case, because
+# what is being asserted is that the split reaches all three renderings and not only two.
+expect "$ZERG" list-format E9107 'no spec-less rendering to fall back on' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.format("04d")
+}
+EOF
+
+# AND THE IDENTITY'S REASON REACHES IT, which is the half a composite case cannot show: both
+# clauses of `format` end in the same `c_no_render_says`, so if the second copy of that reason
+# ever grows back this case is the one that says which copy the reader got.
+expect "$ZERG" chan-format E9107 'fall back on — a chan[int] is an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	print ch.format("04d")
+}
+EOF
+
+# `iter` IS GIVEN ON WHAT `for … in` WALKS, not on a channel alone. docs/core/specs.md derives
+# it from `for x in X` requiring `X: Iterable[T]`, and that loop walks a list, a map and a str
+# as well — each of which was answering its own family's permanent rejection for a loop the
+# language gives it. The channel case above pins the fourth.
+expect "$ZERG" list-iter E9107 'the method `iter` on a list[int]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.iter()
+}
+EOF
+
+expect "$ZERG" map-iter E9107 'the method `iter` on a map[str, int]' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m.iter()
+}
+EOF
+
+expect "$ZERG" str-iter E9107 'the method `iter` on a str' <<'EOF'
+fn main() {
+	s := "ab"
+	print s.iter()
 }
 EOF
 
@@ -1847,21 +2084,6 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" if-let-over-an-enum E9053 <<'EOF'
-enum E {
-	A(int)
-	B
-}
-
-fn main() {
-	e := A(5)
-	if v := e {
-		print 1
-	}
-	print 2
-}
-EOF
-
 expect "$ZERG" spec-member-with-a-body E9002 <<'EOF'
 spec Show {
 	fn show() -> int {
@@ -2171,6 +2393,13 @@ EOF
 # one that is not built — the grammar makes `v in 0..10` sugar for `r.contains(v)` over stdlib
 # machinery that does not exist — so it is named rather than left to be read as something else,
 # and the message says which set was written.
+#
+# EVERY PERMANENT ANSWER `in` GIVES IS IN reject-check.sh, and this comment does not list them
+# — it used to name two, and the set has grown twice since. `in` over a struct that carries no
+# `Eq` and over a set that is no set at all came out of the two splits below and sit one number
+# away from their siblings here, deliberately: the two halves of a split site are what a reader
+# most needs to be able to tell apart. What `in` answers permanently is the LANGUAGE's and no
+# future feature makes it legal, so it belongs in the corpus with that lifetime (#74).
 
 # an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
 # makes `in` refuse a str looked for among ints rather than compare a pointer to a number
@@ -2181,8 +2410,13 @@ fn main() {
 }
 EOF
 
-# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
-expect "$ZERG" in-over-a-list-of-structs E9061 <<'EOF'
+# and a STRUCT ELEMENT THAT CARRIES AN `Eq`, which is the unbuilt half of that site:
+# collections.md specifies `x in xs`, the impl is there to be called, and this compiler does
+# not call it — so the day it does, this case goes. Its sibling is the same program with the
+# `Eq` left off, which is the program's own gap rather than this compiler's, and that one is
+# a rejection in reject-check.sh under `E3118`.
+expect "$ZERG" in-over-a-list-of-structs-with-eq E9061 <<'EOF'
+#[derive(Eq)]
 struct P {
 	pub x: int
 }
@@ -2200,13 +2434,6 @@ EOF
 expect "$ZERG" in-over-a-range-of-str E9062 <<'EOF'
 fn main() {
 	print str("c" in "a".."z")
-}
-EOF
-
-# And a set that is no set at all, which is the rest of the same code.
-expect "$ZERG" in-over-a-plain-int E9062 <<'EOF'
-fn main() {
-	print str(3 in 5)
 }
 EOF
 

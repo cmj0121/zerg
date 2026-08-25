@@ -30,12 +30,47 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > `list` of something else. An **`enum`** is a third door with a third code — _E9085 NotImplemented:
 > rendering an `E` as text — an enum has no name for it_ — which the 0.2.0 re-measurement found unnamed
 > here (#74). So the intended "every value renders" holds for scalars, strings, errors and
-> overridden types now, and for the rest once structural `debug` lands. The exact spelling of a structural
-> `debug` string is therefore **not pinned** ([not yet]).
+> overridden types now, and for a **composite** once structural `debug` lands. It does not hold for every
+> remaining receiver: a **channel**, a **function value** and **nil** are waiting for nothing, and the
+> paragraph on the three of them below says why a structural `debug` would not be their answer if it
+> arrived. The exact spelling of a structural `debug` string is therefore **not pinned** ([not yet]).
 >
 > It is one gap with a third face: a composite has no structural **equality** either, so `xs == ys` over
 > two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering and comparing are the two things a
 > reader most expects a container to do for free, and neither is derived.
+>
+> **The renderings are reached by name, not by call.** `str(x)`, a hole and `print` consult them on every
+> value, and `x.display()` / `x.debug()` written out reach the override alone: a type that declares one
+> answers through it, and a value that has not — an `int`, a `str`, a `list`, a `map`, an `Err`, a carrier —
+> is **[not yet]**, _E9107 NotImplemented: the method `display` on a int — `str(x)` renders it, and an
+> `impl` on a declared type is how a type overrides that_, and the same sentence for _NotImplemented: the
+> method `debug` on a int_. It is one answer for every receiver, which is what "on every value" means: a
+> `map` does not get the map's sentence about `len` and `has` for a rendering. So "available on every value"
+> holds through the three spellings above and not yet through the fourth.
+>
+> **What to write while it waits is NOT one answer for every receiver**, and that is the paragraph above
+> read back against this one. `str(x)` stands in only where the value renders at all — a scalar, a `str`,
+> an `Err`, a `list[byte]`, a `list[rune]`, or a type with an override. Both list spellings are there
+> because `str(…)` **bridges** them — bytes and code points are the two ways back to a string — and it is
+> the bridge and not the word "list" that decides it. On the composites the Status note rejects there is
+> nothing to stand in, because the fourth spelling is waiting on the same gap the first three are, and the
+> message says so rather than naming an expression this same compiler refuses: _E9107 NotImplemented: the
+> method `display` on a list[int] — there is nothing to write in its place — this value has no rendering of
+> its own until the structural `Display` this compiler does not generate, so render its parts_. For a
+> composite it is one gap and not two.
+>
+> **Three receivers are in neither set, and what they are missing is not what a composite is missing.** A
+> composite is _waiting_: the structural `Display` above is exactly what stands between it and a rendering,
+> and its parts are what to render meanwhile. A **channel** and a **function value** are not waiting for
+> anything. They are an identity rather than a value — the same class `==` is refused on, _E4034 a … is an
+> identity rather than a value, and the language gives it no equality_ — so there are no parts to render
+> instead, and a `Display` would not be their answer if it arrived: _E9107 NotImplemented: the method
+> `display` on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than
+> a value_. **nil** is a third answer, because nil is not a value at all: a `fn` with no `-> type` answers it
+> ([`GRAMMAR#fn-decl`](../../GRAMMAR)), `str(f())` is told so by name — _E3086 this rendering needs a value,
+> and this one is nil_ — and what the reader needs is a `fn` that answers with something, not a rendering.
+> So `str(x)` stands in on the first set; on the second there is nothing to stand in and something to wait
+> for; and on these three there is nothing to stand in and nothing coming.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

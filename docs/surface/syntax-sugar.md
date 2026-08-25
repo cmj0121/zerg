@@ -35,7 +35,10 @@ user-defined type. In a hole only the plain `{x}` form does: a **conversion** (`
 (_E9059 NotImplemented:
 rendering a P as text_) and a `list` or `map` by an ordinary checked rule that blames a bridge the program
 never wrote (_E4011 `str(…)` over a list bridges bytes or code points_) — see
-[Formatting & Text](../runtime/format.md).
+[Formatting & Text](../runtime/format.md). The **desugared spelling is the same gap**: `x.format(spec)`
+written out is _E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the
+same gap spelled in an f-string hole), and `f"{x}"` renders without one_, because the `Format` protocol
+this row names is not a declaration any type carries yet.
 
 **`del ch`** is **[not yet]**: _E9066 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
 and at the release the binding's scope already performs. And the **operator** row desugars only where the

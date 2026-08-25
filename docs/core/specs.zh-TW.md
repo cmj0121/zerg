@@ -330,8 +330,10 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
   `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，所以 `+` 會
   **串接**成新字串（見 [Collection](../code/collections.zh-TW.md)）。
 - **`Into[T]`**——轉換 spec:型別宣告它能轉成什麼,泛型程式碼以它為 bound;轉換永遠**寫出來**、絕不由
-  position 套用。它**不出貨任何內建 impl**——數字之間的轉換是 `T(x)`,轉成文字是 `str(x)`,而後者每個型別都
-  透過 `display` 有答案（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。
+  position 套用。它**不出貨任何內建 impl**——數字之間的轉換是 `T(x)`,轉成文字是 `str(x)`,而後者不需要 bound,
+  因為 `display` 是語言給的**渲染**、不是型別去實作的 spec。那跟「每個型別都有答案」不是同一句話:複合值與
+  `enum` 是 **[not yet]**,而 **channel**、**函式值**與 **nil** 根本沒有渲染（見
+  [Format](../runtime/format.zh-TW.md)）。另見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
 型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(this)` 在最後一個持有者的 scope 退出時
@@ -364,3 +366,18 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 `Iterable[T]`，所以 **lazy adapters**（`map`、`filter`、`take`、`zip`…）就是普通的 stdlib 迭代器、可鏈式——每個
 回傳一個**具體 adapter 型別**（`map` 回傳身為 `Iterator[U]` 的 `Map[This, U]`，存著來源與 closure），所以整條鏈全程
 **monomorphize**、不 box。`for mut x in X` 把每個元素綁成就地的 `mut`——僅當 `X` 為 `mut`。
+
+> **[not yet]** **手動驅動這套協定**沒有建置。`next()` 只有一個不靠 `impl` 就身為 `Iterator[T]` 的接收者
+> ——channel——所以 `ch.next()` 是 _E9107 NotImplemented: the method `next` on a chan[int] — receive one
+> element with `<-ch`, or drain the channel with `for v in ch`_。`iter()` 觸及得更遠,因為上一段也推導得更
+> 遠:`for x in X` 需要 `X: Iterable[T]`,所以**那個迴圈走過的每一個接收者**——`list`、`map`、`str` 與
+> channel——都是語言給的 `Iterable[T]`、而非程式宣告出來的,每一個都回答 _E9107 NotImplemented: the method
+> `iter` on a chan[int] — `for v in x` walks this value directly, and that is the loop an iterator would be
+> handed to_。迴圈本身是建好的、而且把整套協定都做了——它在乾淨關閉時結束、並把 producer 的崩潰重新
+> raise——所以缺的只是那個讓讀者能對單一元素包一層 `guard` 的拼法,也就是上一段建議的拼法。channel 以外的
+> `next()`,以及沒有任何迴圈走過的接收者上的 `iter()`,都會是某個已宣告 `Iterator[T]` 或 `Iterable[T]` impl
+> 的方法——而這兩個 spec 都還沒有被宣告,所以兩者都被**永久**拒絕。讀者遇到的那個代碼是**接收者**的、不是那個
+> 缺席的 spec 的:一個沒有任何型別宣告過的名字,是由接收者最後屬於哪個型別族的那個 fallback 回答的,而
+> `list`、`map`、`Err` 與載體各自都有一個。`E3131` 是**沒有**任何型別族的接收者的答案——一個 `int`、一個
+> `str`、一個 `struct`。這一章刻意不為其餘的情形引任何號碼:一個值最後屬於哪個型別族並不是這個發現的一部分,
+> 而在這裡列五個代碼,就是下一次有代碼分裂時會漂掉的那種列表。

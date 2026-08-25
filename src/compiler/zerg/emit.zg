@@ -1179,7 +1179,7 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 
-	raise c_diag(em, rule.Rule.NotYetTryOnType, f"NotImplemented: `?` on a {ast.ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.TryNotCarrier, f"`?` on a {ast.ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`") if not c_is_carrier(t)
 	raise c_diag(em, rule.Rule.TryCarrierMismatch, f"`?` early-returns the RIGHT of {ast.ty_name(t)}, so the enclosing function must answer a carrier with the same right — this one answers {ast.ty_name(em.fn_ret)}") if not c_is_carrier(em.fn_ret)
 
 	# the two rights must MATCH: `?` hands the operand's right side straight out of the
@@ -1622,6 +1622,16 @@ pub fn c_is_fn(t: ast.Ty) -> bool {
 		Ty.TFn(_, _) => true
 		_            => false
 	}
+}
+
+# c_is_identity is the class `E4034` names out loud: a CHANNEL and a FUNCTION are an identity
+# rather than a value. What they are is a place to send to or a place to jump to, and the
+# language gives neither of them any of the things a value has — no equality, no rendering, and
+# no parts to reach for instead. It is one predicate because every rule that has ever asked
+# about one of the two has meant both, and the two that asked wrote the pair out by hand while
+# a third wrote only the channel and let a `fn` through.
+pub fn c_is_identity(t: ast.Ty) -> bool {
+	return ast.ty_is_chan(t) or c_is_fn(t)
 }
 
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
@@ -3805,7 +3815,14 @@ pub fn c_fld_pub(mut &em: Emitter, sname: str, fname: str) -> bool {
 	return true
 }
 
+# NO STRUCT IS NAMED "", so an unnamed receiver has no field to find and the walk below can
+# only answer `TUnknown` after reading every field in the program. c_has_method — the other
+# declaration table, asked beside this one on the same line of c_meth_kind — has carried this
+# guard from the start; this one did not, so every `xs.len()` and `m.has(k)`, receivers that
+# c_named_of answers "" for, paid a scan of the whole field table before the family was picked.
 fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> ast.Ty {
+	return ast.Ty.TUnknown if sname == ""
+
 	mut i := 0
 	for i < em.fld_struct.len() {
 		return em.fld_ty[i] if em.fld_struct[i] == sname and em.fld_name[i] == fname
@@ -5154,15 +5171,33 @@ fn c_deeper(mut &em: Emitter) {
 # one rule once per side.
 
 fn c_err_method_unknown(mut &em: Emitter, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetErrMethod, f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`")
+	return c_diag(em, rule.Rule.ErrMethodUnknown, f"the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`")
 }
 
 fn c_carrier_method_unknown(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetCarrierMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`")
+	return c_diag(em, rule.Rule.CarrierMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`")
 }
 
+# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER, and the map's fallback next door has
+# had them apart since #74 while this one — one arm away, the same shape, the same two
+# questions — went on answering both with `NotImplemented:`. So `xs.wobble()`, a method the
+# language does not give a list and never will, was refused as a form somebody is waiting for.
+#
+# The eight below are the list methods the chapters mark `[not yet]`: growth, the checked read,
+# the window and the in-place transform from docs/code/collections.md, and the three adapters
+# from docs/code/control-flow.md and docs/code/patterns.md. Each retires the day it is built.
+# Any other name is a method the LANGUAGE does not give a list, and there is no such day.
+#
+# The three bindings are ADJACENT to the raise on purpose: scripts/method-gaps-check.sh reads
+# this list by walking up from the raise while the lines are bindings, so a comment or a blank
+# line between them hides every name above it. The comment goes here, where the walk stops.
 fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`")
+	collection := meth == "insert" or meth == "remove" or meth == "get" or meth == "slice" or meth == "retain"
+	adapters := meth == "map" or meth == "filter" or meth == "fold"
+	unbuilt := collection or adapters
+	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`") if unbuilt
+
+	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len` and `append`, and is read with `xs[i]`")
 }
 
 # c_twice_in_file_says is the sentence for a name declared twice IN ONE FILE, which is one of
@@ -5311,7 +5346,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 # knowing how a carrier is spelled.
 fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
-	raise c_diag(em, rule.Rule.NotYetForceOnType, f"NotImplemented: `!` on a {ast.ty_name(t)} — it forces a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.ForceNotCarrier, f"`!` on a {ast.ty_name(t)} — it forces a Result[T] or a T?") if not c_is_carrier(t)
 
 	name := c_carrier_of(em, t)
 	rendered := c_expr(em, x, sb)
@@ -5340,7 +5375,7 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 # here — so the result temp is read only where it was written.
 fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], sb: Subst) -> str {
 	t := c_infer(em, a)
-	raise c_diag(em, rule.Rule.NotYetCoalesceOnType, f"NotImplemented: `??` on a {ast.ty_name(t)} — its left side is a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.CoalesceNotCarrier, f"`??` on a {ast.ty_name(t)} — its left side is a Result[T] or a T?") if not c_is_carrier(t)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
@@ -6045,7 +6080,7 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 # derived or written. Nothing else does: a carrier is not a value until it is unwrapped, and a
 # channel is an identity the language never gave an equality to.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
-	return false if c_is_carrier(t) or ast.ty_is_chan(t) or c_is_fn(t)
+	return false if c_is_carrier(t) or c_is_identity(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
 	return true
@@ -6086,7 +6121,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 	# code it used to carry is retired — one mistake earns one finding, and this is not it.
 	return if oper != "==" and oper != "!="
 
-	if ast.ty_is_chan(t) or c_is_fn(t) {
+	if c_is_identity(t) {
 		check.chk_at(em, rule.Rule.IdentityHasNoEquality, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries")
 		return
 	}
@@ -6346,9 +6381,35 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	elem := c_in_elem_ty(st)
 
-	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
-	# reason: a structural comparison is what a derived impl would supply and none is generated
-	raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none") if c_is_aggregate(em, elem)
+	# an AGGREGATE has no `==` C can write, and TWO different rules answer for that. A declared
+	# struct or enum carrying no `Eq` is the PROGRAM's gap — the same finding `a == b` reports,
+	# closed by the same `#[derive(Eq)]`. Everything else here HAS an equality the language
+	# means `in` to use and this compiler does not call: a declared type that carries an `Eq`
+	# (which the one sentence below used to tell it had none, in as many words), and a
+	# CONTAINER, whose structural equality is docs/code/collections.md's `[not yet]` rather
+	# than anything its author left out.
+	if c_is_aggregate(em, elem) {
+		raise c_diag(em, rule.Rule.InElemNoEq, f"`in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none: add `#[derive(Eq)]` to it or write `impl Eq for {ast.ty_name(elem)}`") if c_in_elem_owes_eq(em, elem)
+
+		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)}")
+	}
+
+	# WHAT IS LEFT IS NOT AN AGGREGATE, AND `in` STILL CANNOT COMPARE ALL OF IT. `in` compares
+	# its elements with `==` — the two sentences above say so in as many words — so whether that
+	# comparison MEANS anything is `==`'s question, and c_eq_legal is the one function that
+	# answers it. This rule asked c_is_aggregate instead, which is a different question by two
+	# whole classes: an IDENTITY, so `ch in chans` handed two channels to C's `==` and answered
+	# about their ADDRESSES with nothing said; and a CARRIER, so an `int?` element reached cc
+	# against a line nobody wrote. Neither is an aggregate and neither has an equality.
+	#
+	# THE ANSWER COMES FROM `==`'s OWN REPORTING SITE. `E4034` already says a channel and a
+	# `fn` are an identity the language gives no equality, and `E4038` already says a carrier
+	# may hold nothing to compare — the same finding, reached by a different spelling of the
+	# same comparison. A fresh number for it would be one gap wearing two codes, which is the
+	# defect #74 exists to undo, and `c_eq_refuse` is where both sentences live.
+	if not c_eq_legal(em, elem) {
+		c_eq_refuse(em, "==", elem)
+	}
 
 	n := c_tmp(em, "zgt_in")
 	sv := n + "s"
@@ -6371,6 +6432,20 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop
 	return f"({{ {head} {bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+}
+
+# c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
+# not. A declared struct or enum is: it has a declaration to decorate and `#[derive(Eq)]` is
+# the answer. A container is not — there is nothing to decorate, and no impl a program could
+# write for it — so its missing `==` is this compiler's gap and not the author's. That is the
+# same line c_eq_refuse draws between E4020 and E9057, asked here of the ELEMENT — and it is
+# the LAST of the four c_eq_refuse draws, not the only one. The comment used to call it "the
+# same line", singular, which read as a parity claim and was the reason the two classes above
+# it — an identity and a carrier — were never asked of an element at all.
+fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
+	return false if c_has_eq(em, elem)
+
+	return c_is_struct_name(em, c_named_of(elem)) or c_is_enum_ty(em, elem)
 }
 
 # c_in_elem_ty is what a member of this set is: a list's element, a map's KEY. `in` asks a map
@@ -6448,7 +6523,7 @@ fn c_in_range(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	# comparison at all. Refused by name rather than lowered, which is what the rest of `in`
 	# does with a set it cannot read.
 	off := c_in_range_offender(em, run)
-	return c_in_refuse(em, set, f"a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way") if off != ""
+	return c_in_range_unbuilt(em, set, off) if off != ""
 
 	# THE OPERANDS MEET EACH OTHER as the comparisons they are. Writing the C by hand means
 	# nothing else asks whether a subject and a bound are types `>=` relates — an optional, a
@@ -6489,15 +6564,22 @@ fn c_in_range_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
 	return ""
 }
 
-# c_in_refuse is the ONE place `E9062` is reported from. Two rules answer with it — a set that
-# is none of the three `in` reads, and a range whose bounds cannot be compared — and a code is
-# an identity, so the sentence differs and the identity does not.
+# The two rules that used to share `E9062`. One code covered both because "a code is an
+# identity, so the sentence differs and the identity does not" — and they are not one rule. A
+# range whose bounds C's `>=` cannot be handed is a form the language HAS, `"c" in "a".."z"`,
+# waiting on a comparison this compiler does not write; a set that is no set at all, `3 in 5`,
+# is a program with no meaning, and no day comes when it acquires one. So the unbuilt half
+# keeps the number and the other half is a checking rule.
 #
-# It says WHERE (c_diag), which is the trailer docs/conformance.md owes every diagnostic and
-# which this one had not got. `reject-fuzz` is what found it: retype one binding to `str` and
-# the guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
-fn c_in_refuse(mut &em: Emitter, set: ast.Expr, why: str) -> str {
-	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — {why}")
+# Both say WHERE (c_diag), which is the trailer docs/conformance.md owes every diagnostic and
+# which this had not got. `reject-fuzz` is what found it: retype one binding to `str` and the
+# guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
+fn c_in_range_unbuilt(mut &em: Emitter, set: ast.Expr, off: str) -> str {
+	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way")
+}
+
+fn c_in_not_a_set(mut &em: Emitter, set: ast.Expr) -> str {
+	raise c_diag(em, rule.Rule.InSetNotAContainer, f"`in` over {c_set_says(em, set)} — a set names a list's elements, a map's keys, a range's members or an error kind, and this is none of them")
 }
 
 # c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
@@ -6528,7 +6610,7 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 		st := c_infer(em, set)
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
 
-		return c_in_refuse(em, set, "this compiler reads `in` over a list, a map, a range, or an error kind")
+		return c_in_not_a_set(em, set)
 	}
 
 	t := c_infer(em, x)
@@ -6603,6 +6685,15 @@ fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
 # bridge unconditionally handed `zgs_from_bytes` an `int64_t`, so `str(n)` was not a thing
 # anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
 # display leaves are already in the runtime header for the seed's f-strings.
+# c_str_bridges_list is the condition E4011 turns a list away on, given a name because it is
+# asked twice: here, where `str(xs)` is lowered, and by c_renders_as_text, which owes a reader
+# the same answer about the same expression. A `list[rune]` is the way back from the code
+# points and a `list[byte]` the way back from the bytes; a list of anything else has nothing
+# to bridge, and there is no structural rendering underneath it to fall back on.
+fn c_str_bridges_list(t: ast.Ty) -> bool {
+	return c_is_rune(c_list_elem(t)) or c_is_byte(c_list_elem(t))
+}
+
 fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str {
 	# the operand is rendered by the paths that emit it — the identity, bridge and
 	# override returns above them answer through c_copied or a method call instead, so a
@@ -6651,7 +6742,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 			# so `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
-			raise c_diag(em, rule.Rule.StrOfListElement, f"`str(…)` over a list bridges bytes or code points, and this is {ast.ty_name(xt0)} — a composite has no rendering of its own, so render its elements") if not c_is_byte(c_list_elem(xt0))
+			raise c_diag(em, rule.Rule.StrOfListElement, f"`str(…)` over a list bridges bytes or code points, and this is {ast.ty_name(xt0)} — a composite has no rendering of its own, so render its elements") if not c_str_bridges_list(xt0)
 
 			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
 			# the raise, so a caller passing a temporary owes no post-call drop that an
@@ -6986,14 +7077,35 @@ fn c_conv_to_i64(sc: int, inner: str) -> str {
 # every rendering site call both in the right order — and the second re-scanned what the
 # first had just scanned.
 fn c_render_override(mut &em: Emitter, t: ast.Ty) -> str? {
+	return nil if not c_declares_rendering(em, t)
+
 	nm := c_named_of(t)
 
-	return nil if nm == ""
 	return "display" if c_render_shape_ok(em, nm, "display")
 	return "debug" if c_render_shape_ok(em, nm, "debug")
-	return "" if c_has_method(em, nm, "display") or c_has_method(em, nm, "debug")
 
-	return nil
+	return ""
+}
+
+# c_declares_rendering is the PRESENCE half of the question above, and it is a function
+# because one rule wants the presence and not the name: c_renders_as_text asks whether a
+# value renders at all, and the two sites that dispatch ask which method to dispatch through.
+#
+# It is not a second copy of the rule. It is the FIRST of the two states above — the `nil`
+# row — and c_render_override is now written on top of it, so the two cannot answer
+# differently about the same type. Reading the answer out of the optional was the alternative
+# and this language has no presence test that does not bind: `E3039` refuses an optional as
+# an operand of `==`/`!=` and prescribes `if v := x { … }` in the same sentence, which leaves
+# a binding nothing reads (`L103`) — and `#[allow(L103)]` is not available in this tree,
+# because the SEED does not parse a decorator on a statement.
+#
+# `c_render_shape_ok` implies `c_has_method`: both key off the same signature row, and a row
+# with the override shape is a row. That is why the mis-shaped `""` can be the unconditional
+# tail above rather than a fourth condition — everything reaching it has a declaration.
+fn c_declares_rendering(mut &em: Emitter, t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+
+	return c_has_method(em, nm, "display") or c_has_method(em, nm, "debug")
 }
 
 # c_render_shape_ok is whether `recv` declares `meth` with the override contract's shape:
@@ -7251,7 +7363,145 @@ enum MethKind {
 	MFree
 }
 
+# c_ty_is_iterable is the set `for … in` walks, and it is written here because that is the
+# set `iter()` is language-given on: `Iterable[T]` is what has `iter()` (docs/core/specs.md),
+# and `for x in X` is the form that requires `X: Iterable[T]`. c_forin's own NotIterable
+# sentence names the set — a list, a map, a str, a range or a channel — and a range is a form
+# rather than a value with a type here (c_is_range asks the EXPRESSION), so it is the four
+# that have one. Narrower than this and a `map`'s `iter` is refused permanently for a loop the
+# language gives it; wider and an `int` is promised a loop nothing walks.
+fn c_ty_is_iterable(tty: ast.Ty) -> bool {
+	return c_is_list(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
+}
+
+# c_renders_as_text answers whether this value HAS a rendering, and it is asked because a
+# diagnostic that names a substitute owes the reader an expression that compiles. It states
+# what c_conv's `str(…)` arm decides, in the same three steps: a declared override renders
+# (whatever shape it is in — a mis-shaped one earned its finding at the declaration and an
+# inert placeholder is what stands in), a `list` renders only where it BRIDGES, and everything
+# else renders unless it is a composite or a carrier — which is c_display_check's own pair of
+# refusals read as a question rather than as a raise.
+#
+# AN IDENTITY IS NOT ONE, and that is the single place this parts company with what the
+# `str(…)` arm ACCEPTS. `str(ch)` reaches C and prints the channel's address: a number, and not
+# a rendering of anything; `str(f)` over a function value reaches C too and is refused there,
+# against a line nobody wrote. Offering either as a substitute is a sentence that answers
+# nonsense or does not compile, so what is asked here is what renders rather than what is
+# accepted. The channel was written out by name here and the `fn` beside it was not, which is
+# how the catch-all below — a `fn` is no composite and no carrier — answered TRUE for it. Both
+# are asked through c_is_identity now, so a third rule cannot part them again. That `str(ch)`
+# and `str(f)` are refused by nothing is a gap of its own and not this rule's to close.
+#
+# NIL IS NOT ONE EITHER, and that half is c_display_check's THIRD refusal read as a question —
+# the pair above it were already read here and the nil one was not. A `fn` with no `-> type`
+# answers nil (GRAMMAR#fn-decl), and `str(f())` is chk_no_nil_value's `E3086`. The catch-all
+# answered TRUE for it too, because nil is no composite and no carrier, so `f().display()`
+# named as its substitute the one expression this same compiler refuses by name.
+fn c_renders_as_text(mut &em: Emitter, t: ast.Ty) -> bool {
+	return true if c_declares_rendering(em, t)
+
+	return false if c_is_identity(t)
+	return c_str_bridges_list(t) if c_is_list(t)
+
+	return not c_is_aggregate(em, t) and not c_is_carrier(t) and not c_holds_nil(t)
+}
+
+# c_no_render_says is the other half of a rendering's sentence: not what to write instead, but
+# WHY there is nothing to. It is asked once per spelling and answers three ways, because a
+# value can have no rendering for three different reasons and only one of them is a gap.
+#
+# A COMPOSITE is waiting: the structural `Display` this compiler does not generate is exactly
+# what stands between it and a rendering, and it has parts a reader can render one at a time in
+# the meantime. That sentence was written as if it were the only one, and the two below
+# inherited it — which told the reader of a channel to render parts it does not have, and the
+# reader of a nil to wait for a `Display` that would still leave nothing to render.
+#
+# AN IDENTITY is not waiting for anything (c_is_identity): a place to send to and a place to
+# call are not values with an unrendered inside, and nothing a compiler could generate would
+# make text of one.
+#
+# AND NIL IS NOT A VALUE AT ALL, so what the reader needs is not a rendering but a `fn` that
+# answers with something — chk_no_nil_value's own advice, said here in the position that sends
+# them to it.
+fn c_no_render_says(mut &em: Emitter, t: ast.Ty) -> str {
+	return f"a {ast.ty_name(t)} is an identity rather than a value, so there are no parts to render instead, and a structural `Display` is not what stands between it and a rendering: it has none, and none is coming" if c_is_identity(t)
+	return "nil is the absence of a value, so there is nothing to render and no parts to render instead — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl); give it a type to answer with" if c_holds_nil(t)
+
+	return "this value has no rendering of its own until the structural `Display` this compiler does not generate, so render its parts"
+}
+
+# c_specified_meth_says answers what to write WHILE the form waits, and answering is the same
+# act as deciding: a name is one the LANGUAGE gives this receiver exactly when there is a
+# sentence saying what stands in for it, so the predicate and the substitute are one list with
+# one clause per name. An empty answer is "not one of these", which is not a sentence and can
+# never be printed as one.
+#
+# Written as a `match` with a `_` arm this was two lists — the names on a predicate line and
+# the sentences here — and the `_` arm handed every future name `display`'s substitute. There
+# is no arm here to inherit: a sixth name is added by writing its clause, and the clause is
+# what puts the name in the predicate at all.
+#
+# Each clause carries the RECEIVER it is given on, because the three chapters do. `display` and
+# `debug` are docs/runtime/format.md's renderings, "available on every value without opting
+# into anything", so they name no receiver. `format` is docs/surface/syntax-sugar.md's
+# desugaring of `f"{x:spec}"`, whose f-string spelling already answers `E9012`, and it is a
+# protocol on every value the same way. `next` is docs/core/specs.md's `Iterator[T]`, and a
+# CHANNEL is the one receiver that is one without an `impl`. `iter` is the next sentence of
+# that same paragraph — `Iterable[T]` is what has `iter()`, and `for x in X` requires
+# `X: Iterable[T]` — so it is given on everything that loop walks, not on a channel alone.
+#
+# THE THREE RENDERINGS ARE GIVEN ON EVERY RECEIVER AND THEIR SUBSTITUTE IS NOT. `display`,
+# `debug` and `format` were widened to every value, correctly — the chapter says "on every
+# value" — while their substitutes went on naming `str(x)` and `f"{x}"`, which a `list[int]`
+# answers with E4011 and a map, a struct, an enum and a carrier with E9059 and E9085. The
+# compiler was telling a reader to write an expression the same compiler refuses, which is a
+# worse answer than the permanent rejection this split was built to remove. So each of the
+# three has TWO clauses, one per side of c_renders_as_text: where the value renders, the
+# substitute is the expression that renders it, and where it does not there is no substitute
+# and c_no_render_says says which absence it is. The fourth spelling waits on whatever the
+# first three wait on, so for a composite that is one gap and not two.
+fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
+	renders := c_renders_as_text(em, tty)
+
+	return "`str(x)` renders it, and an `impl` on a declared type is how a type overrides that" if renders and (meth == "display" or meth == "debug")
+	return f"there is nothing to write in its place — {c_no_render_says(em, tty)}" if meth == "display" or meth == "debug"
+	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if renders and meth == "format"
+	return f"a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — {c_no_render_says(em, tty)}" if meth == "format"
+	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
+	return "`for v in x` walks this value directly, and that is the loop an iterator would be handed to" if meth == "iter" and c_ty_is_iterable(tty)
+
+	return ""
+}
+
+# c_specified_method raises for a name the language gives and this compiler has not lowered.
+# It is the whole of `E9107`, and it is ONE raise because it is one finding — which receiver
+# the value turned out to be is not part of it.
+fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
+	says := c_specified_meth_says(em, tty, meth)
+	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
+}
+
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
+	# THE NAMES THAT ARE NOT THIS RECEIVER'S QUESTION, asked before the receiver's family is
+	# picked. A list, a map, an `Err` and a carrier each end in a fallback of their own, and
+	# every one of them was answering `x.display()` for itself — a map with "a map answers
+	# `len` and `has`", an `Err` with "the `Error` interface is …", a carrier with "a carrier
+	# answers `ok_or` …". Four permanent rejections of a rendering docs/runtime/format.md says
+	# every value has, and the five-name split below them was consulted for no receiver that
+	# had a family. The question is the same question whatever the value turns out to be, so
+	# it is asked once, here, above the four.
+	#
+	# A DECLARATION STILL WINS. A type declaring `fn display()` is `MRecv` and a field holding
+	# one is `MFnField`; both are asked here rather than below, because below is too late.
+	#
+	# AN UNKNOWN RECEIVER IS LEFT ALONE. A module prefix and an ill-formed target both infer to
+	# nothing, and each has a rule of its own that is the whole finding (c_free_method reports
+	# both). `strings.display()` is a member no module declares, not a rendering.
+	nm := c_named_of(tty)
+	if not c_is_unknown(tty) and not c_has_method(em, nm, meth) and not c_is_fn(c_field_ty(em, nm, meth)) {
+		c_specified_method(em, tty, meth)
+	}
+
 	return MethKind.MList if c_is_list(tty)
 	return MethKind.MMap if c_is_map(tty)
 
@@ -7325,7 +7575,7 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# NONE of the three takes an argument, and an argument list nobody reads is a question
 	# the program asked that nothing answered: `e.message(1)` compiled, with the `1`
 	# evaluated nowhere and mentioned by nothing.
-	raise c_diag(em, rule.Rule.NotYetErrMethodArgs, f"NotImplemented: the method `{meth}` on an Err takes no argument") if args.len() != 0
+	raise c_diag(em, rule.Rule.ErrMethodArgs, f"the method `{meth}` on an Err takes no argument") if args.len() != 0
 
 	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
 
@@ -7363,14 +7613,14 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 # is a leak it is the same leak in both places.
 fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
 	if meth == "ok_or" and ast.ty_is_opt(tty) {
-		raise c_diag(em, rule.Rule.NotYetOkOrNoArg, "NotImplemented: `ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
-		raise c_diag(em, rule.Rule.NotYetOkOrManyArgs, "NotImplemented: `ok_or` takes ONE error to answer an absence with") if args.len() != 1
+		raise c_diag(em, rule.Rule.OkOrNoArg, "`ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
+		raise c_diag(em, rule.Rule.OkOrManyArgs, "`ok_or` takes ONE error to answer an absence with") if args.len() != 1
 
 		# The argument is the RIGHT of the Result being built, so it has to be an `Err`.
 		# Without the check `o.ok_or(3)` assigned an `int` to a `zrt_err` field and the
 		# diagnostic came from cc, against a line of generated C.
 		at := c_infer(em, args[0])
-		raise c_diag(em, rule.Rule.NotYetOkOrNotErr, "NotImplemented: `ok_or` answers an absence with an `Err`, and this is a " + ast.ty_name(at)) if not c_is_err_ty(at)
+		raise c_diag(em, rule.Rule.OkOrNotErr, "`ok_or` answers an absence with an `Err`, and this is a " + ast.ty_name(at)) if not c_is_err_ty(at)
 
 		elem := c_opt_elem(tty)
 		on := c_opt_name(em, elem)
@@ -7391,7 +7641,7 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		return out + " " + r + "; })"
 	}
 	if meth == "ok" and c_is_either(tty) {
-		raise c_diag(em, rule.Rule.NotYetOkTakesNoArg, "NotImplemented: `ok` forgets the Right and takes no argument") if args.len() != 0
+		raise c_diag(em, rule.Rule.OkTakesNoArg, "`ok` forgets the Right and takes no argument") if args.len() != 0
 
 		left := c_either_left(tty)
 		cn := c_carrier_ty_cname(tty)
@@ -7512,7 +7762,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 	# shape, and `of` is the other thing an enum name answers.
 	return c_variant_ctor(em, en, meth, args, sb) if c_is_variant_in(em, en, meth)
 
-	raise c_diag(em, rule.Rule.NotYetEnumTypeMethod, f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither") if meth != "of"
+	raise c_diag(em, rule.Rule.EnumTypeMethodUnknown, f"`{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither") if meth != "of"
 	raise c_diag(em, rule.Rule.OfTakesOneInt, f"`{en}.of(n)` takes one integer — the discriminant to reverse") if args.len() != 1
 	raise c_diag(em, rule.Rule.OfOnPayloadEnum, f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless") if not c_is_flat_enum(em, en)
 
@@ -7634,7 +7884,11 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# told what to write rather than told to wait.
 	c_no_builtin_into(em, meth, target)
 
-	raise c_diag(em, rule.Rule.NotYetMethodOnType, f"NotImplemented: the method `{meth}` on a {ast.ty_name(c_infer(em, target))}")
+	# THE LAST RESORT, and it now says only the one thing it is true of. The five names the
+	# LANGUAGE gives a value are decided in c_meth_kind, above every receiver family, so a name
+	# arriving here is a method no type here declares and there is no day on which it is one.
+	tty := c_infer(em, target)
+	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)}")
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -8842,7 +9096,7 @@ fn c_result_tag(mut &em: Emitter, ctor: str) -> int {
 	return 0 if ctor == "Left"
 	return 1 if ctor == "Right"
 
-	raise c_diag(em, rule.Rule.NotYetResultPattern, f"NotImplemented: the pattern `{ctor}` on a Result[T] — it has Left and Right")
+	raise c_diag(em, rule.Rule.ResultPatternUnknown, f"the pattern `{ctor}` on a Result[T] — it has Left and Right")
 }
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
@@ -8993,7 +9247,7 @@ fn c_arm_range(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> s
 		# expression: `parse_add` accepts the literal, so `1..=nil` parses to exactly the
 		# shape the bare `1..=` used to make. The refusal is about the RANGE having no upper
 		# bound, whatever the reader wrote to leave it without one.
-		raise c_diag(em, rule.Rule.NotYetOpenRangeInclusive, "NotImplemented: `..=` with no upper bound is not a range — write `500..` for open-ended")
+		raise c_diag(em, rule.Rule.OpenRangeInclusive, "`..=` with no upper bound is not a range — write `500..` for open-ended")
 	}
 
 	# a guard on a range arm is AND-ed on, the way a constructor pattern's is: the range says
@@ -10327,7 +10581,7 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 	ret_int := c_is_int(ret)
 	ret_res := c_is_result_nil(ret)
 
-	raise c_diag(em, rule.Rule.NotYetMainSignature, f"NotImplemented: `fn main() -> {ast.ty_name(ret)}` — the entry's shapes are `fn main()`, `-> int` (the exit status) and `-> Result[nil]` (docs/runtime/package.md); any other result would be computed and silently discarded") if not ret_int and not ret_res and not c_is_nil_ty(ret)
+	raise c_diag(em, rule.Rule.MainResult, f"`fn main() -> {ast.ty_name(ret)}` — the entry's shapes are `fn main()`, `-> int` (the exit status) and `-> Result[nil]` (docs/runtime/package.md); any other result would be computed and silently discarded") if not ret_int and not ret_res and not c_is_nil_ty(ret)
 
 	if has_args and em.used_conc {
 		# The scheduler's program-entry shims all take a NULLARY function pointer, so
@@ -10498,7 +10752,7 @@ fn c_chan_check(mut &em: Emitter, have: ast.Ty, want: ast.Ty, site: str) {
 # asked `ty_chan_elem` for an element type, were handed the `TUnknown` it answers for
 # anything that is not a channel, and carried on. A receive then typed as `TOpt(TUnknown)`,
 # an optional of nothing that `ty_name` spells `?`, and every later sentence was about that
-# `?` rather than about the mistake: `` `??` on a ? ``, `E9053 … over a ?`. Where the walk
+# `?` rather than about the mistake: `` `??` on a ? ``, `E3117 … over a ?`. Where the walk
 # never touched the broken type, the C came out with a carrier struct in a `zrt_chan *`
 # slot and cc rejected generated code nobody wrote.
 #
@@ -12009,7 +12263,14 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
 	}
 
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`")
+	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
+	# docs/code/collections.md's `[not yet]`: the chapter specifies them, so each retires the
+	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
+	# is no day on which it does.
+	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`") if unbuilt
+
+	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the map method `{meth}` — a map answers `len` and `has`, and is read with `m[k]`")
 }
 
 fn c_index_target(e: ast.Expr) -> ast.Expr {
@@ -12234,7 +12495,7 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return ast.Ty.TStr if fld == "msg"
 		return ast.Ty.TInt if fld == "kind"
 
-		raise c_diag(em, rule.Rule.NotYetErrField, f"NotImplemented: the field `{fld}` on an Err — it has `msg` and `kind`")
+		raise c_diag(em, rule.Rule.ErrFieldUnknown, f"the field `{fld}` on an Err — it has `msg` and `kind`")
 	}
 	return c_field_ty(em, c_named_of(t), fld)
 }
@@ -13195,7 +13456,7 @@ fn c_if(mut &em: Emitter, cond: ast.Expr, then_body: list[ast.Stmt], has_else: b
 # an outer `v` may already be in scope and C has no shadowing inside a function.
 fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stmt], has_else: bool, else_body: list[ast.Stmt], ind: str) -> str {
 	t := c_infer(em, value)
-	raise c_diag(em, rule.Rule.NotYetIfBindOver, f"NotImplemented: `if {name} := …` over a {ast.ty_name(t)} — it binds the Left of a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.IfBindNotCarrier, f"`if {name} := …` over a {ast.ty_name(t)} — it binds the Left of a Result[T] or a T?") if not c_is_carrier(t)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)

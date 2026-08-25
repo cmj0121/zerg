@@ -422,8 +422,11 @@ generic bound gates on it:
   `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](../code/collections.md)).
 - **`Into[T]`** — the conversion spec: a type declares what it converts to and generic code bounds on
   it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
-  between numbers the conversion is `T(x)`, and to text it is `str(x)`, which every type answers
-  through `display` (see [Type Conversion](types.md#into--an-ordinary-conversion-spec)).
+  between numbers the conversion is `T(x)`, and to text it is `str(x)`, which needs no bound because
+  `display` is a **rendering** the language gives rather than a spec a type implements. That is not the
+  same claim as "every type answers it": a composite and an `enum` are **[not yet]**, and a **channel**, a
+  **function value** and **nil** have no rendering at all ([Format](../runtime/format.md)). See
+  [Type Conversion](types.md#into--an-ordinary-conversion-spec).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead
@@ -464,3 +467,22 @@ adapters** (`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators t
 **concrete adapter type** (`map` a `Map[This, U]` that is `Iterator[U]`, holding the source and the
 closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each element as an
 in-place `mut` — only when `X` is `mut`.
+
+> **[not yet]** **Driving the protocol by hand** is not built. `next()` has one receiver that is an
+> `Iterator[T]` without an `impl` — a channel — so `ch.next()` is _E9107 NotImplemented: the method `next`
+> on a chan[int] — receive one element with `<-ch`, or drain the channel with `for v in ch`_. `iter()`
+> reaches further, because the sentence above derives it further: `for x in X` requires `X: Iterable[T]`,
+> so **every receiver that loop walks** — a `list`, a `map`, a `str` and a channel — is an `Iterable[T]`
+> the language gives rather than one a program declares, and each answers _E9107 NotImplemented: the method
+> `iter` on a chan[int] — `for v in x` walks this value directly, and that is the loop an iterator would be
+> handed to_. The loop is built and does the whole protocol — it ends on a clean close and re-raises a
+> producer crash — so what is missing is only the spelling that lets a reader put a `guard` around one
+> element, which is the spelling the paragraph above recommends. `next()` on anything but a channel, and
+> `iter()` on a receiver no loop walks, would each be a method of a declared `Iterator[T]` or `Iterable[T]`
+> impl — neither spec is declared, so both are refused **permanently**. The CODE a reader meets is the
+> RECEIVER's, not the missing spec's: a name no type declares is answered by the fallback of whatever type
+> family the receiver turned out to be, and a `list`, a `map`, an `Err` and a carrier each have one of
+> their own. `E3131` is the answer for a receiver with **no** family at all — an `int`, a `str`, a
+> `struct`. This chapter quotes no number for the rest on purpose: which family a value turned out to be
+> is not part of the finding, and a list of five codes here is a list that drifts the next time one
+> splits.

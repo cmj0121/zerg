@@ -45,8 +45,15 @@ So one `list` type is both a frozen sequence (plain) and a growable vector (`mut
 collection can modify its elements**.
 
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
-> refused by name on both `list` and `map` (_E9056 NotImplemented: the list method `insert` — this compiler
-> has `len` and `append`_), so a collection grows at its end and does not shrink at all.
+> refused by name on both `list` and `map`, and each container answers with its own code — _E9056
+> NotImplemented: the list method `insert` — this compiler has `len` and `append`_ and _NotImplemented: the
+> list method `remove`_ on a `list`, _E9100 NotImplemented: the map method `insert`_ and _E9100
+> NotImplemented: the map method `remove`_ on a `map`. So a collection grows at its end and does not shrink
+> at all. Each name is quoted rather than described, because each container's code is split by a list of
+> names — `E9056`'s and `E9100`'s alike, one half a form that is coming and the other a method the language
+> does not have — and `make method-gaps` reads these markers to hold both lists to them: a method promised
+> here and missing there is refused for good, and one listed there and promised nowhere is a compiler
+> promising a form alone.
 
 ```text
 xs := [1, 2, 3]            # frozen: xs.append(4) and xs[0] = 9 are errors
@@ -80,15 +87,29 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
   element type like a value entering any other [typed position](../core/types.md#typed-positions), so
   `72 in bytearray(…)` is a byte.
 
+> **[not yet]** `x in xs` is built only for the element types this compiler writes a `==` for. A
+> container element, or a declared type that already carries an `Eq`, is not one of them: `P(1) in [P(1)]`
+> is _E9061 NotImplemented: `in` over list[P] — its elements are compared with `==`, and this compiler does
+> not write that comparison for P_. That is [container equality](#order--equality)'s gap reached through
+> `in`, and it retires with it. An element type carrying **no** `Eq` is a different answer — `E3118`, which
+> the program closes itself by writing `#[derive(Eq)]` on the type.
+>
+> An element the language gives **no equality at all** is a third answer and a permanent one, and it is
+> `==`'s own: a **channel** or a **function value** is an identity — _E4034 a chan[int] is an identity
+> rather than a value, and the language gives it no equality_ — and a **carrier** may hold nothing to
+> compare, _E4038_. `in` compares its elements with `==`, so where `==` means nothing `in` means nothing,
+> and the reader is told by the code they would have met writing the comparison out.
+
 ```text
 first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
-> **[not yet]** The checked path does not exist: `xs.get(i)` and `m.get(k)` are both `E9056`, so
-> the `m.get(id) ?? "anon"` line above does not compile and indexing — which aborts — is the only way into
-> a container. Expected absence is therefore not a question a program can ask; it is one it has to head off
-> with `k in m` before indexing.
+> **[not yet]** The checked path does not exist: `xs.get(i)` is _E9056 NotImplemented: the list method
+> `get`_ and `m.get(k)` is _E9100
+> NotImplemented: the map method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
+> indexing — which aborts — is the only way into a container. Expected absence is therefore not a question a
+> program can ask; it is one it has to head off with `k in m` before indexing.
 
 ## Slicing — read-only subranges
 
@@ -102,7 +123,8 @@ alongside copy-elision and the move (Values & Memory), adding no visible sharing
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
 materializing a `str` only when it keeps a token.
 
-> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is `E9056`. The
+> **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is _E9056 NotImplemented: the
+> list method `slice`_. The
 > **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
 > `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
 > form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
@@ -165,8 +187,9 @@ To transform in place, use a single `mut` method whose internal walk is controll
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.
 
-> **[not yet]** Neither alternative exists: `xs.retain(pred)` and `xs.filter(pred)` are both `E9056`, so a
-> transform is written as a `for` that appends into a second `list`, and a rebind after the loop.
+> **[not yet]** Neither alternative exists: `xs.retain(pred)` is _E9056 NotImplemented: the list method
+> `retain`_ and `xs.filter(pred)` is _NotImplemented: the list method `filter`_, so a transform is written
+> as a `for` that appends into a second `list`, and a rebind after the loop.
 
 ## Fixed-size arrays — `[T; N]`
 

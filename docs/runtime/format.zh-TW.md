@@ -26,11 +26,40 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > _E4011 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。**`enum`** 是第三道門、
 > 第三個碼 —— _E9085 NotImplemented: rendering an `E` as text — an enum has no name for it_ —— 那是 0.2.0 的重新
 > 量測發現這裡沒有指名的(#74)。所以「每個值都能渲染」
-> 對純量、字串、錯誤與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切
-> 拼法**尚未被釘定**（[not yet]）。
+> 對純量、字串、錯誤與有 override 的型別現已成立，對一個**複合值**則待結構化 `debug` 落地。它並不是對其餘每一
+> 種接收者都成立：**channel**、**函式值**與 **nil** 不在等任何東西，下面那段講這三者的文字說明了為什麼就算結構
+> 化 `debug` 落地了也不會是它們的答案。因此結構化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
 >
 > 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E9057`
 > （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
+>
+> **這兩種渲染是靠名字抵達的,不是靠呼叫。** `str(x)`、洞與 `print` 在每個值上都會諮詢它們,而寫成
+> `x.display()` / `x.debug()` 時只會抵達 override:有宣告的型別由它回答,沒有宣告的值——一個 `int`、一個
+> `str`、一個 `list`、一個 `map`、一個 `Err`、一個載體——則是 **[not yet]**,_E9107 NotImplemented: the
+> method `display` on a int — `str(x)` renders it, and an `impl` on a declared type is how a type
+> overrides that_,`debug` 也是同一句 _NotImplemented: the method `debug` on a int_。每一種接收者都是同一個
+> 答案,而這正是「每個值」的意思:`map` 不會為了一個渲染而拿到 map 那句關於 `len` 與 `has` 的話。所以「每個值
+> 都能渲染」在上面三種拼法上成立、在第四種上還不成立。
+>
+> **在它落地之前要寫什麼,並不是每一種接收者都同一個答案**,這是把上一段拿回來對照這一段讀出來的。`str(x)`
+> 只在那個值本來就渲染得出來時才頂得上——一個純量、一個 `str`、一個 `Err`、一個 `list[byte]`、一個
+> `list[rune]`,或一個有 override 的型別。兩種 list 拼法都在,是因為 `str(…)` 會**橋接**它們——bytes 與碼位是
+> 回到字串的兩條路——決定這件事的是那座橋,不是「list」這個字。在 Status 那段所拒絕的複合值上,沒有東西可以頂上,因為第四種拼法等的就是前三種等的同一個
+> 缺口;訊息說的是這件事,而不是指名一個同一個編譯器會拒絕的運算式:_E9107 NotImplemented: the method
+> `display` on a list[int] — there is nothing to write in its place — this value has no rendering of its
+> own until the structural `Display` this compiler does not generate, so render its parts_。對一個複合值來說
+> 那是一個缺口，不是兩個。
+>
+> **有三種接收者兩邊都不在,而它們缺的東西跟複合值缺的並不一樣。** 複合值是在*等*:上面那個結構化的
+> `Display` 正是擋在它與渲染之間的東西,在那之前它的各個部分就是可以拿來渲染的。**channel** 與**函式值**則
+> 不在等任何東西。它們是身分而不是值——就是 `==` 被拒絕的那同一類,_E4034 a … is an identity rather than a
+> value, and the language gives it no equality_——所以沒有部分可以拿來頂上,而且就算 `Display` 落地了也不會是
+> 它們的答案:_E9107 NotImplemented: the method `display` on a chan[int] — there is nothing to write in its
+> place — a chan[int] is an identity rather than a value_。**nil** 是第三種答案,因為 nil 根本不是一個值:沒
+> 有 `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,`str(f())` 會被指名這麼告知——
+> _E3086 this rendering needs a value, and this one is nil_——而讀者需要的是一個會回答出東西的 `fn`,不是一個
+> 渲染。所以 `str(x)` 頂得上第一組;第二組沒有東西可以頂上,但有東西可以等;而這三種沒有東西可以頂上,也沒有
+> 東西會來。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

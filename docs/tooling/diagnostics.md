@@ -23,14 +23,17 @@ order a build meets them:
 
 **A range names the question, not the file.** The two are usually the same and the stage column
 says which, but where they differ the question decides. `emit.zg` is _AST -> C, with the minimal
-typecheck emit needs_, so twenty-two checking rules are reported from it and stay `E3xxx`: which
-file asks a question is an implementation fact, and a reader looking a code up wants to know what
-kind of thing went wrong. A source that is not UTF-8 is `E1xxx` for the same reason, though the
+typecheck emit needs_, so the checking rules reported from it stay `E3xxx` — most of the range,
+and the rules #74 moved out of the unbuilt range are there for the same reason: which file
+asks a question is an implementation fact, and a reader looking a code up wants to know what kind
+of thing went wrong. There is no count of them here, because the counts below are of the numbers
+that RETIRED, which is what the table holds and what a reader can check it against; the arrivals
+are one more each time a code splits. A source that is not UTF-8 is `E1xxx` for the same reason, though the
 driver is what opens the file.
 
-Twenty-five codes sat in a range that named a different question and were re-seated before the
-first release; they are listed under [Retired codes](#retired-codes), which is where a number that
-moved goes.
+Forty-two codes sat in a range that named a different question and were re-seated — twenty-five
+before the first release and seventeen after it. They are listed under
+[Retired codes](#retired-codes), which is where a number that moved goes.
 
 `E5xxx` is the one range that is not a point in that order. A build resolves imports before
 it lexes what they name and looks for `fn main` after everything is emitted, so the driver's
@@ -62,9 +65,16 @@ list nobody can ever finish reading.
 `make error-codes-check` answers, per range, what the next free code is:
 
 ```text
-error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3113,
-                                              emitting E4075, building E5017, unbuilt E9106
+error-codes-check: next free code per range — lexical E1…, parser E2…, checking E3…,
+                                              emitting E4…, building E5…, unbuilt E9…
 ```
+
+**The numbers are left out on purpose.** Every other number on this page is a permanent
+identity — that is the whole subject of the page — and this line is the one quantity in the
+catalogue that is _supposed_ to move: it advances the moment anybody adds a rule, which is what
+makes it worth asking for. A sample that quoted six of them would go stale by design, and it
+did, twice in one branch. Run the command for today's answer; what belongs here is the shape of
+the reply, which is one code per range and a range that is full saying so instead.
 
 It reads the ranges out of the table above rather than carrying its own copy, so adding one
 is a row here and nothing else.
@@ -286,6 +296,27 @@ shipping compiler rather than a part of it (the line
 | `E3114` | a bare name is declared in another file of this module                                                  |
 | `E3115` | a bare type name is declared in another file of this module                                             |
 | `E3116` | a bare module constant is declared in another file of this module                                       |
+| `E3117` | `if … := …` over a … — it binds the Left of a Result[T] or a T?                                         |
+| `E3118` | `in` over … — its elements are compared with `==`, and … has none                                       |
+| `E3119` | `in` over … — a set names a list's elements, a map's keys, a range's members or an error kind           |
+| `E3120` | `?` on a … — it unwraps the Left of a carrier                                                           |
+| `E3121` | `!` on a … — it forces a Result[T] or a T?                                                              |
+| `E3122` | `??` on a … — its left side is a Result[T] or a T?                                                      |
+| `E3123` | the method `…` on an Err takes no argument                                                              |
+| `E3124` | the method `…` on a Err — the `Error` interface is `message`, `unwrap` and `code`                       |
+| `E3125` | `ok_or` takes the error to answer an absence with, and none was given                                   |
+| `E3126` | `ok_or` takes ONE error to answer an absence with                                                       |
+| `E3127` | `ok_or` answers an absence with an `Err`, and this is a …                                               |
+| `E3128` | `ok` forgets the Right and takes no argument                                                            |
+| `E3129` | the method `…` on a … — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`                     |
+| `E3130` | `….…(…)` — an enum type answers `of(n)` and its own variants                                            |
+| `E3131` | the method `…` on a …                                                                                   |
+| `E3132` | the pattern `…` on a Result[T] — it has Left and Right                                                  |
+| `E3133` | `fn main() -> …` — the entry's shapes are `fn main()`, `-> int` and `-> Result[nil]`                    |
+| `E3134` | the map method `…` — a map answers `len` and `has`, and is read with `m[k]`                             |
+| `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                       |
+| `E3136` | `..=` with no upper bound is not a range                                                                |
+| `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                             |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                            |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                     |
@@ -417,7 +448,6 @@ shipping compiler rather than a part of it (the line
 | `E9050` | an open-ended range has no upper bound here                                                             |
 | `E9051` | `….…(…)` is an associated function                                                                      |
 | `E9052` | a map key of type …                                                                                     |
-| `E9053` | `if … := …` over a …                                                                                    |
 | `E9054` | `#[derive(…)]`                                                                                          |
 | `E9055` | `#[derive(Eq)]` on `…`                                                                                  |
 | `E9056` | the list method `…`                                                                                     |
@@ -425,8 +455,8 @@ shipping compiler rather than a part of it (the line
 | `E9058` | a refcounted box `Ref(x)` / `deref(r)`                                                                  |
 | `E9059` | rendering a … as text                                                                                   |
 | `E9060` | a second `impl Into[…] for …`                                                                           |
-| `E9061` | `in` over a list whose elements have no `==`                                                            |
-| `E9062` | `in` over anything but a list, a map, a range or an error kind                                          |
+| `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison     |
+| `E9062` | `in` over … — a range's members are found by comparing its bounds                                       |
 | `E9063` | `…` is part of the fixed-width ladder                                                                   |
 | `E9064` | the built-in `set`                                                                                      |
 | `E9065` | … is a `mut &`, and a function VALUE cannot carry one                                                   |
@@ -444,33 +474,18 @@ shipping compiler rather than a part of it (the line
 | `E9077` | a range used as a value                                                                                 |
 | `E9078` | `is …` names one of the built-in error kinds                                                            |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                    |
-| `E9080` | `?` on a … — it unwraps the Left of a carrier                                                           |
 | `E9081` | two modules both define `…` and at least one is `pub`                                                   |
 | `E9082` | `…` and `…` both define `…` — one flat namespace                                                        |
-| `E9083` | `!` on a … — it forces a Result[T] or a T?                                                              |
-| `E9084` | `??` on a … — its left side is a Result[T] or a T?                                                      |
 | `E9085` | rendering a … as text — an enum has no name for its variant                                             |
-| `E9086` | the method `…` on an Err takes no argument                                                              |
-| `E9087` | the method `…` on a Err — the `Error` interface is three names                                          |
-| `E9088` | `ok_or` takes the error to answer an absence with, and none was given                                   |
-| `E9089` | `ok_or` takes ONE error to answer an absence with                                                       |
-| `E9090` | `ok_or` answers an absence with an `Err`, and this is a …                                               |
-| `E9091` | `ok` forgets the Right and takes no argument                                                            |
-| `E9092` | the method `…` on a … — a carrier answers `ok_or` and `ok`                                              |
-| `E9093` | `….…(…)` — an enum type answers `of(n)` and its own variants                                            |
-| `E9094` | the method `…` on a …                                                                                   |
-| `E9095` | the pattern `…` on a Result[T] — it has Left and Right                                                  |
-| `E9096` | `fn main() -> …` — the entry answers nothing, an int or a Result[nil]                                   |
 | `E9097` | main(args) in a program that uses concurrency                                                           |
 | `E9098` | … of anything but a function, a method, or a namespaced function                                        |
 | `E9099` | … of `…` — not a function, a method, or a namespaced function                                           |
 | `E9100` | the map method `…`                                                                                      |
-| `E9101` | the field `…` on an Err — it has `msg` and `kind`                                                       |
-| `E9102` | `..=` with no upper bound is not a range                                                                |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                               |
 | `E9104` | the module `atomic` ships and cannot be imported                                                        |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                       |
+| `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks   |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -514,6 +529,35 @@ free: nothing has ever shipped under these numbers, so no report, no log and no 
 last year carries one. They are listed here all the same, because the rule that a number is
 never reused is a rule about the NUMBER and not about who happens to have seen it.
 
+**Seventeen more, and these had shipped.** They sat in `E9xxx`, which says the LANGUAGE has this
+form and this compiler has not built it — and not one of them was a form. `ok_or` handed two
+errors, a field an `Err` does not carry, `?` on an `int`: wrong programs wearing a
+`NotImplemented:` prefix. A code in that range retires the day its form is built, and a rule with
+no form has no such day, so each was a number that could never be spent. They answer a question
+about the meaning of the program in front of them, so they now carry a checking number (#74).
+Three others were asked TWO questions at one raise site and **split** rather than moved: `E9061`,
+`E9062` and `E9100` keep their numbers for the half that really is a form, and the other half took
+`E3118`, `E3119` and `E3134`. Unlike the twenty-five above these had shipped, under v0.1.0, so a
+message from that build says `E9088` where this one says `E3125` — which is the case this table
+exists for.
+
+**A fourth split, found after the move.** `E9094` was read as a wrong program and retired into
+`E3131`, and it was two questions as well: `c_free_method`'s fallback answers every name no type
+declares, and five of those names are the language's rather than a type's — `display` and `debug`,
+which every value renders with, `format`, which `f"{x:spec}"` desugars to, `next` on a channel, which is
+an `Iterator[T]`, and `iter` on everything `for … in` walks, since an `Iterator[T]` is trivially an
+`Iterable[T]`. Those five are forms, so they
+took the fresh **`E9107`**. The number they had is spent: `E9094` stays retired and is not reissued.
+
+**A fifth split, and the one that was inside this change the whole time.** `E9100` is the map's
+fallback and `E9056` is the list's — one arm apart, the same shape, the same two questions — and only
+the map's was asked the second one. So `xs.wobble()`, a method the language does not give a `list` and
+no build will grow, was refused with `NotImplemented:`: a permanent rejection filed as a form that is
+coming, which is the whole of #74, alive inside #74. The eight names the chapters mark `[not yet]` keep
+`E9056` and retire as each is built; every other name takes **`E3137`**. A split is a property of a
+FALLBACK rather than of a code, and every fallback that cannot hold a declaration has these two
+questions behind it — which is why the first four were found by reading codes and this one was not.
+
 | Code    | Now     | Why it left                                                   |
 | ------- | ------- | ------------------------------------------------------------- |
 | `E2009` | `E3095` | a repeated discriminant is a meaning, not a form              |
@@ -541,6 +585,23 @@ never reused is a rule about the NUMBER and not about who happens to have seen i
 | `E5004` | `E3110` | as above                                                      |
 | `E5005` | `E3111` | as above                                                      |
 | `E5006` | `E3112` | as above                                                      |
+| `E9053` | `E3117` | `if … := …` over a type that carries nothing is a meaning     |
+| `E9080` | `E3120` | `?` on a non-carrier is a meaning, not a missing form         |
+| `E9083` | `E3121` | as above, for `!`                                             |
+| `E9084` | `E3122` | as above, for `??`                                            |
+| `E9086` | `E3123` | how many arguments an `Err` method takes is a meaning         |
+| `E9087` | `E3124` | a name the `Error` interface does not declare                 |
+| `E9088` | `E3125` | `ok_or`'s arity is a meaning                                  |
+| `E9089` | `E3126` | as above                                                      |
+| `E9090` | `E3127` | what `ok_or` answers an absence with is a type rule           |
+| `E9091` | `E3128` | `ok`'s arity is a meaning                                     |
+| `E9092` | `E3129` | a method neither carrier answers                              |
+| `E9093` | `E3130` | a member an enum type does not have                           |
+| `E9094` | `E3131` | a method the type declares none of                            |
+| `E9095` | `E3132` | a third side on a two-sided `Result[T]`                       |
+| `E9096` | `E3133` | what the entry may answer is a meaning                        |
+| `E9101` | `E3135` | a field an `Err` does not carry                               |
+| `E9102` | `E3136` | `..=` with no bound is not a range, and that is a meaning     |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
@@ -552,8 +613,9 @@ is nothing left for a rule of its own to say. Its number is listed here for the 
 other number is: so that it is never reissued.
 
 Twenty-seven others were measured and are **not** findings, which is what deciding the
-question settled: the twenty-two checking rules `emit.zg` reports (it is _AST -> C, with the
-minimal typecheck emit needs_, so the file is an implementation fact), the four visibility
-rules that are about the program as a set of files, and `E1011` — a source that is not UTF-8
-is a question about TEXT, and the driver reports it only because the driver is what opens the
-file.
+question settled: the twenty-two checking rules `emit.zg` reported when that audit ran (it is
+_AST -> C, with the minimal typecheck emit needs_, so the file is an implementation fact), the
+four visibility rules that are about the program as a set of files, and `E1011` — a source
+that is not UTF-8 is a question about TEXT, and the driver reports it only because the driver
+is what opens the file. The three numbers are that audit's and are left as it wrote them; the
+count of rules `emit.zg` reports has moved since, and no gate holds this sentence to it.

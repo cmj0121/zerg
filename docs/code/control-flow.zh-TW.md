@@ -59,6 +59,12 @@ branches give int and float_,與 `match` 的 `E3021` 並排。`nil` 分支是例
 會被指名拒絕、帶位置（`E9077`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
 拿來測的東西」裡。
 
+> **[not yet]** 成員關係只對這個編譯器交得進 C 的 `>=` 的上下界成立，也就是 `str` 以外的每一種純量。上下界是別
+> 的東西的 range 則是 _E9062 NotImplemented: `in` over a range of str — a range's members are found by
+> comparing its bounds, and str is not a type this compiler compares that way_，所以 `"c" in "a".."z"` 今天
+> 還不是一支程式，即使 `GRAMMAR#range-expr` 推導得出它。一個根本不是 set 的 set——`3 in 5`——讀起來一樣、答案
+> 卻不一樣：它是 `E3119`，而且沒有任何東西在等著它。
+
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
 後綴 `if` 也載得住 `return` 與 `raise`：
@@ -81,9 +87,11 @@ conditional-return 的 `if` 取的是**裸條件、沒有區塊**。
 `for` 是 statement——不產出值；要組結果就鏈一個 iterator adapter（`map` / `filter` / `fold`）或 append 進另一個
 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 
-> **[not yet]** iterator adapter 尚未建置：`map`、`filter` 與 `fold` 三者都是 _E9056 NotImplemented: the list
-> method `…` — this compiler has `len` and `append`_，所以這個階段要把結果帶出迴圈，唯一的辦法是 append 進另一個
-> collection。
+> **[not yet]** iterator adapter 尚未建置：`xs.map(f)` 是 _E9056 NotImplemented: the list method `map` — this
+> compiler has `len` and `append`_,同一句話也回答 _NotImplemented: the list method `filter`_ 與
+> _NotImplemented: the list method `fold`_。所以這個階段要把結果帶出迴圈，唯一的辦法是 append 進另一個
+> collection。三個名字各自寫出來而不是用一個 `…` 帶過,因為 `E9056` 是靠一份名字清單分家的,而
+> `make method-gaps` 會讀這些標記來把它釘住。
 
 ## 模式比對（Pattern matching）
 

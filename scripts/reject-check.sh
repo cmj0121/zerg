@@ -4628,7 +4628,7 @@ EOF
 # took the `TUnknown` it got back for a type, so a receive on a non-channel came out as
 # `TOpt(TUnknown)` — an optional of nothing, printed `?` — and the program went on being
 # compiled around it. What the reader was told about afterwards was the `?`: `` `??` on a
-# ? ``, `E9053 … over a ?`, sentences about a type nothing in the source had written. Where
+# ? ``, `E3117 … over a ?`, sentences about a type nothing in the source had written. Where
 # the walk did not touch the broken type at all, the C came out with a carrier struct in a
 # `zrt_chan *` slot and cc rejected generated code nobody wrote.
 #
@@ -7206,7 +7206,25 @@ fn main() {
 }
 EOF
 
-reject unwrap-a-value-that-carries-nothing E9080 <<'EOF'
+# `if v := e` BINDS THE LEFT OF A CARRIER, and an enum is not one. It arrived from
+# `refuse-check.sh` with #74: the rule was an `E9xxx` wearing a `NotImplemented:` prefix, and
+# a head the language does not give this form is not a form waiting to be built.
+reject if-let-over-an-enum E3117 <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	if v := e {
+		print 1
+	}
+	print 2
+}
+EOF
+
+reject unwrap-a-value-that-carries-nothing E3120 <<'EOF'
 fn f() -> int? {
 	x := 1
 	return x?
@@ -7323,14 +7341,14 @@ fn main() {
 }
 EOF
 
-reject force-a-value-that-carries-nothing E9083 <<'EOF'
+reject force-a-value-that-carries-nothing E3121 <<'EOF'
 fn main() {
 	x := 1
 	print x!
 }
 EOF
 
-reject coalesce-a-value-that-carries-nothing E9084 <<'EOF'
+reject coalesce-a-value-that-carries-nothing E3122 <<'EOF'
 fn main() {
 	x := 1
 	print x ?? 2
@@ -7350,6 +7368,82 @@ fn main() {
 	x := 1
 	b := x in IOError
 	print b
+}
+EOF
+
+# --- `in` over a set the LANGUAGE does not give it ------------------------------------
+#
+# Both arrived from `refuse-check.sh` with #74, and both are half of a site that used to
+# answer two questions under one number. The other halves ARE unbuilt forms and stayed there:
+# a list whose elements carry an `Eq` this compiler does not call (`E9061`), and a range of
+# `str` whose bounds C's `>=` cannot be handed (`E9062`).
+#
+# So each of these names its SENTENCE as well as its code, which is what the second assertion
+# asks for where one case of a rule has to be told from another. Here the other case is not in
+# this file at all — it is the sibling half, one number away, asserting the same site — and
+# that is the pair a reader is most likely to confuse.
+
+reject in-over-a-list-of-structs E3118 'add `#[derive(Eq)]` to it' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
+}
+EOF
+
+# seed-gap: the seed does not read `in` here at all. It emits `(3 ? 5)` — C's conditional,
+# missing its second arm — and leaves clang to answer against generated code nobody wrote,
+# which is a build that failed rather than a program that was refused. `seed_refuses` tells
+# those two apart on purpose, so the marker is the honest record and not a weakened assertion.
+reject in-over-a-plain-int E3119 'and this is none of them' seed-gap <<'EOF'
+fn main() {
+	print str(3 in 5)
+}
+EOF
+
+# --- `in` over an element `==` MEANS NOTHING ON -----------------------------------------
+#
+# `in` compares its elements with `==`, so the four answers `==` gives are the four answers
+# `in` owes, and it was asking a narrower question — `c_is_aggregate` — that names two of
+# them and excludes two. What fell through the gap was not a worse message, it was NO message:
+# `ch in chans` compiled and answered about two channel ADDRESSES, and a `fn` or a carrier
+# element reached cc against a line nobody wrote.
+#
+# THE CODE IS `==`'s OWN. A channel and a `fn` are one class (`E4034`, `c_is_identity`) and a
+# carrier is the other (`E4038`); both are permanent answers of the language, both already have
+# a sentence, and a second number for a finding that already has one is what #74 exists to
+# undo. So these three cases assert the codes the sibling `==` cases in this file and in
+# `refuse-check.sh` assert, from the other spelling of the same comparison.
+#
+# The SENTENCE is asserted with the code because each of these codes now has two cases, and
+# what has to be told apart is `a == b` from `a in bs` — same code, same words, different site.
+reject in-over-a-list-of-channels E4034 'an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	chans := [ch]
+	print str(ch in chans)
+}
+EOF
+
+reject in-over-a-list-of-fns E4034 'a fn(int) -> int is an identity' <<'EOF'
+fn g(a: int) -> int {
+	return a
+}
+
+fn main() {
+	fs := [g]
+	print str(g in fs)
+}
+EOF
+
+reject in-over-a-list-of-carriers E4038 'may hold no value' <<'EOF'
+fn main() {
+	a: int? = 1
+	xs: list[int?] = [a]
+	print str(a in xs)
 }
 EOF
 
@@ -7386,7 +7480,7 @@ fn main() {
 }
 EOF
 
-reject an-err-method-given-an-argument E9086 <<'EOF'
+reject an-err-method-given-an-argument E3123 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7398,7 +7492,7 @@ fn main() {
 }
 EOF
 
-reject a-method-the-error-interface-does-not-declare E9087 <<'EOF'
+reject a-method-the-error-interface-does-not-declare E3124 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7410,7 +7504,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-no-error-to-answer-with E9088 <<'EOF'
+reject ok-or-with-no-error-to-answer-with E3125 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7421,7 +7515,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-two-errors-to-answer-with E9089 <<'EOF'
+reject ok-or-with-two-errors-to-answer-with E3126 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7432,7 +7526,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-answering-an-absence-with-something-that-is-not-an-err E9090 <<'EOF'
+reject ok-or-answering-an-absence-with-something-that-is-not-an-err E3127 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7443,7 +7537,7 @@ fn main() {
 }
 EOF
 
-reject ok-given-an-argument E9091 <<'EOF'
+reject ok-given-an-argument E3128 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7454,7 +7548,7 @@ fn main() {
 }
 EOF
 
-reject a-carrier-method-neither-carrier-answers E9092 <<'EOF'
+reject a-carrier-method-neither-carrier-answers E3129 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7464,7 +7558,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-type-method-that-is-not-of E9093 <<'EOF'
+reject an-enum-type-method-that-is-not-of E3130 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -7488,10 +7582,32 @@ fn main() {
 }
 EOF
 
-reject a-method-on-a-value-whose-type-declares-none E9094 <<'EOF'
+reject a-method-on-a-value-whose-type-declares-none E3131 <<'EOF'
 fn main() {
 	x := 1
 	print x.wobble()
+}
+EOF
+
+# THE RECEIVER HALF OF `E9107`'s SPLIT, which is the half no gate reads. Two of its five names
+# are given on a RECEIVER SET rather than on every value — `next` on a channel, `iter` on what
+# `for … in` walks — and `scripts/method-gaps-check.sh` compares names against the chapters and
+# never the predicate that decides which receivers get them. Delete the receiver test from
+# either clause and the compiler starts promising an `int` a loop nothing walks, in a
+# `NotImplemented:` sentence that says to write `for v in x`. These two cases are what notices:
+# an `int` is not iterated and is not an iterator, so both names are permanently wrong on one,
+# and that verdict is `E3131`.
+reject iter-on-a-value-no-loop-walks E3131 <<'EOF'
+fn main() {
+	x := 1
+	print x.iter()
+}
+EOF
+
+reject next-on-a-value-that-is-not-an-iterator E3131 <<'EOF'
+fn main() {
+	x := 1
+	print x.next()
 }
 EOF
 
@@ -7544,7 +7660,7 @@ fn main() {
 }
 EOF
 
-reject a-constructor-pattern-on-an-either-that-is-neither-side E9095 <<'EOF'
+reject a-constructor-pattern-on-an-either-that-is-neither-side E3132 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7566,7 +7682,7 @@ fn main() {
 }
 EOF
 
-reject an-entry-answering-something-that-is-neither-int-nor-result E9096 <<'EOF'
+reject an-entry-answering-something-that-is-neither-int-nor-result E3133 <<'EOF'
 fn main() -> str {
 	return "a"
 }
@@ -7649,14 +7765,14 @@ fn main() {
 }
 EOF
 
-reject a-map-method-this-compiler-does-not-have E9100 <<'EOF'
+reject a-map-method-this-compiler-does-not-have E3134 <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.drop(1)
 }
 EOF
 
-reject a-field-an-err-does-not-carry E9101 <<'EOF'
+reject a-field-an-err-does-not-carry E3135 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7668,7 +7784,13 @@ fn main() {
 }
 EOF
 
-reject a-list-method-this-compiler-does-not-have E9056 <<'EOF'
+# THE HALF OF THE LIST'S FALLBACK THAT IS NOT A FORM. `E9056` used to answer every name a
+# `list` does not have, so `xs.pop()` — which no chapter promises and no build will ever grow
+# — was refused with `NotImplemented:`, in the temporary corpus, one arm away from the map's
+# fallback that #74 had already split. The eight names the chapters DO promise keep `E9056`
+# and are pinned one case each in scripts/refuse-check.sh; this is the boundary from the
+# other side, and a name that joins that list stops matching this line.
+reject a-list-method-this-compiler-does-not-have E3137 <<'EOF'
 fn main() {
 	xs := [1, 2]
 	xs.pop()
@@ -7695,7 +7817,7 @@ fn main() {
 }
 EOF
 
-reject an-inclusive-range-arm-whose-upper-bound-is-nil E9102 seed-gap <<'EOF'
+reject an-inclusive-range-arm-whose-upper-bound-is-nil E3136 seed-gap <<'EOF'
 fn main() {
 	x := 3
 	match x {

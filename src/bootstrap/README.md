@@ -383,9 +383,16 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
   matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
   one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
-  (`E9102`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
+  (`E3136`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
   every value and the `match` falls through to its catch-all with nothing said. One case in
   `reject-check.sh` carries the marker.
+- **`in` OVER SOMETHING THAT IS NO SET AT ALL is accepted, and cc answers.** `in` tests
+  membership, and a set is a list's elements, a map's keys, a range's members or an error kind
+  ([grammar](../../docs/surface/grammar.md)); `3 in 5` names none of them, so `zerg` refuses
+  it (`E3119`). The seed does not read the operator here at all — it emits `(3 ? 5)`, C's
+  conditional with its second arm missing, and clang answers against generated code nobody
+  wrote. A build that failed is not a program that was refused, which is the distinction
+  `seed_refuses` is written around. One case in `reject-check.sh` carries the marker.
 - **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,
   not a value's type ([specs](../../docs/core/specs.md)), and `zerg` refuses it at every
   position a type is written (`E9048`). The seed asks the question of a parameter and a result

@@ -290,6 +290,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3134` | map 的方法 `…` — 一個 map 只回答 `len` 與 `has`,並且用 `m[k]` 讀                                      |
 | `E3135` | Err 上的欄位 `…` — 它只有 `msg` 與 `kind`                                                             |
 | `E3136` | 沒有上界的 `..=` 不是 range                                                                           |
+| `E3137` | list 的方法 `…` — 一個 list 只回答 `len` 與 `append`,並且用 `xs[i]` 讀                                |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -503,9 +504,17 @@ arm 綁住了全部，它下面的 arm 都到不了。
 
 **第四次分家，是搬完之後才發現的。** `E9094` 被讀成錯程式、退場成 `E3131`，可是它同樣是兩個問題：
 `c_free_method` 的 fallback 回答的是每一個沒有型別宣告過的名字，而其中五個名字屬於語言而不屬於型別
-——每個值都用來呈現的 `display` 與 `debug`、`f"{x:spec}"` 脫糖成的 `format`，以及 channel 上的
-`next` 與 `iter`,因為 channel 是一個 `Iterator[T]`、也因此 trivially 是一個 `Iterable[T]`。這五個是形式，
+——每個值都用來呈現的 `display` 與 `debug`、`f"{x:spec}"` 脫糖成的 `format`、channel 上的 `next`（因為
+channel 是一個 `Iterator[T]`）,以及 `for … in` 走得到的一切上的 `iter`（因為 `Iterator[T]` trivially
+是一個 `Iterable[T]`）。這五個是形式，
 所以它們拿了全新的 **`E9107`**。它們本來的號碼已經花掉了:`E9094` 維持退場，不會再發出去。
+
+**第五次分家，而它從頭到尾就在這次修改裡。** `E9100` 是 map 的 fallback,`E9056` 是 list 的——相隔一個
+arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了第二個。於是 `xs.wobble()`,一個語言不會給
+`list`、也沒有任何一版建置會長出來的方法，被用 `NotImplemented:` 拒絕:一個被歸檔成「即將到來的形式」
+的永久拒絕，那正是 #74 的全部，活在 #74 裡面。章節標成 `[not yet]` 的那八個名字留住 `E9056`,每一個都
+在被建好那天退場；其他任何名字拿 **`E3137`**。分家是 FALLBACK 的性質而不是代碼的性質，而每一個放不下
+宣告的 fallback 背後都有這兩個問題——這也就是為什麼前四次是靠讀代碼找到的，而這一次不是。
 
 | 代碼    | 現在    | 為什麼離開                                    |
 | ------- | ------- | --------------------------------------------- |

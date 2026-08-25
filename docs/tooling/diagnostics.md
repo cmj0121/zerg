@@ -314,6 +314,7 @@ shipping compiler rather than a part of it (the line
 | `E3134` | the map method `…` — a map answers `len` and `has`, and is read with `m[k]`                             |
 | `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                       |
 | `E3136` | `..=` with no upper bound is not a range                                                                |
+| `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                             |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                            |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                     |
@@ -541,9 +542,19 @@ exists for.
 **A fourth split, found after the move.** `E9094` was read as a wrong program and retired into
 `E3131`, and it was two questions as well: `c_free_method`'s fallback answers every name no type
 declares, and five of those names are the language's rather than a type's — `display` and `debug`,
-which every value renders with, `format`, which `f"{x:spec}"` desugars to, and `next` and `iter` on a
-channel, which is an `Iterator[T]` and therefore trivially an `Iterable[T]`. Those five are forms, so they
+which every value renders with, `format`, which `f"{x:spec}"` desugars to, `next` on a channel, which is
+an `Iterator[T]`, and `iter` on everything `for … in` walks, since an `Iterator[T]` is trivially an
+`Iterable[T]`. Those five are forms, so they
 took the fresh **`E9107`**. The number they had is spent: `E9094` stays retired and is not reissued.
+
+**A fifth split, and the one that was inside this change the whole time.** `E9100` is the map's
+fallback and `E9056` is the list's — one arm apart, the same shape, the same two questions — and only
+the map's was asked the second one. So `xs.wobble()`, a method the language does not give a `list` and
+no build will grow, was refused with `NotImplemented:`: a permanent rejection filed as a form that is
+coming, which is the whole of #74, alive inside #74. The eight names the chapters mark `[not yet]` keep
+`E9056` and retire as each is built; every other name takes **`E3137`**. A split is a property of a
+FALLBACK rather than of a code, and every fallback that cannot hold a declaration has these two
+questions behind it — which is why the first four were found by reading codes and this one was not.
 
 | Code    | Now     | Why it left                                                   |
 | ------- | ------- | ------------------------------------------------------------- |

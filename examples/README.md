@@ -19,19 +19,19 @@ takes `hello.zg` to a program in more than one file, and hands you back here.
 The number in the name **is** the order. Each one is a whole program that prints something, and
 each adds one idea to the one before it.
 
-| Example                                | What it shows                                                 |
-| -------------------------------------- | ------------------------------------------------------------- |
-| [`00_hello.zg`](00_hello.zg)           | `fn main`, and `print` as a keyword rather than a function    |
-| [`01_bindings.zg`](01_bindings.zg)     | `:=` binds; a binding is immutable until you write `mut`      |
-| [`02_arithmetic.zg`](02_arithmetic.zg) | the integer operators, and what binds tighter than what       |
-| [`03_floats.zg`](03_floats.zg)         | `float`, and why `1 / 2` is not `0.5`                         |
-| [`04_booleans.zg`](04_booleans.zg)     | comparison, `and` / `or` / `not` as words                     |
-| [`05_bitwise.zg`](05_bitwise.zg)       | the bit operators, which integers have and floats do not      |
-| [`06_functions.zg`](06_functions.zg)   | parameters, a return type, and calling                        |
-| [`07_match.zg`](07_match.zg)           | `match` over values and ranges, and why it must be exhaustive |
-| [`08_loops.zg`](08_loops.zg)           | `for` in its three shapes — condition, range, and over a list |
-| [`09_recursion.zg`](09_recursion.zg)   | a function calling itself, and where the stack ends           |
-| [`10_fizzbuzz.zg`](10_fizzbuzz.zg)     | a capstone: loops, conditions and `print` together            |
+| Example                                | What it shows                                                  |
+| -------------------------------------- | -------------------------------------------------------------- |
+| [`00_hello.zg`](00_hello.zg)           | `fn main`, and `print` as a keyword rather than a function     |
+| [`01_bindings.zg`](01_bindings.zg)     | `:=` binds; a binding is immutable until you write `mut`       |
+| [`02_arithmetic.zg`](02_arithmetic.zg) | the integer operators, and what binds tighter than what        |
+| [`03_floats.zg`](03_floats.zg)         | `float`, and why `1 / 2` is not `0.5`                          |
+| [`04_booleans.zg`](04_booleans.zg)     | comparison, `and` / `or` / `not` as words                      |
+| [`05_bitwise.zg`](05_bitwise.zg)       | the bit operators, which integers have and floats do not       |
+| [`06_functions.zg`](06_functions.zg)   | parameters, a return type, and calling                         |
+| [`07_match.zg`](07_match.zg)           | `match` over values and ranges, and why it must be exhaustive  |
+| [`08_loops.zg`](08_loops.zg)           | `for` in its four shapes — condition, range, list, and no head |
+| [`09_recursion.zg`](09_recursion.zg)   | a function calling itself, and where the stack ends            |
+| [`10_fizzbuzz.zg`](10_fizzbuzz.zg)     | a capstone: a range loop, `return … if` guards, and `print`    |
 
 ## The parts that make it a language rather than a calculator
 

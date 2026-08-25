@@ -123,7 +123,22 @@ while read -r ln; do
 	# and `E9056` was it: the list's fallback, one arm from the map's fallback the same change
 	# had split, wearing `NotImplemented:` for `xs.wobble()`. There is nothing to compare a
 	# chapter against here, because there is no list; what is owed is the split.
-	case $raise in
+	#
+	# IT IS THE LINE'S SHAPE THAT IS ASKED, not its text. A statement modifier is a SUFFIX, so
+	# a conditional raise ends in `) if …` — but the test ran over the raw line, where `") if "`
+	# is equally satisfied by a MESSAGE that writes those five characters in its own prose.
+	# `E9107`'s sentences already name expressions in backticks and one of them is a call, so a
+	# reworded message is one step from making this check pass without a name list, and it would
+	# pass SILENTLY: an unsplit raise is what this whole gate exists to find. Blanking the string
+	# literals first leaves only the shape, which no message can spell.
+	#
+	# The reverse mistake is deliberate: a raise made conditional by a surrounding `if` block
+	# still reads UNSPLIT, because the block is not on this line and this gate reads lines. That
+	# is a FALSE RED naming a real raise, and the line it names is the one to look at — which is
+	# the direction a gate is allowed to be wrong in, and the direction the two `if` blocks in
+	# `c_eq_refuse` would report if they ever grew a method name.
+	bare=$(printf '%s\n' "$raise" | sed -e 's/\\"//g' -e 's/"[^"]*"/""/g')
+	case $bare in
 	*") if "*) ;;
 	*)
 		echo "UNSPLIT   $code names a method and calls every one of them unbuilt with no condition — a name the language does not give is refused as a form that is coming" >&2

@@ -64,6 +64,15 @@ done <"$tmp/all"
 # number, so the live `E9xxx` rows the catalogue carries are the `= 9xxx` variants the compiler
 # has — not approximately, exactly. Comparing the two says the extraction read the whole
 # catalogue AND that the catalogue is the registry, and it tracks whatever either becomes.
+#
+# IT IS A BRANCH INVARIANT, NOT A PER-COMMIT ONE, and that is deliberate. Under this repo's
+# commit order — feat, then test, then build, then doc — the feat commit adds a code to
+# `rule.zg` and the doc commit catalogues it, so between them the two counts differ by exactly
+# the codes in flight and this gate reads STALE for correct work. Measured on this branch:
+# `24a3bd91` reads 89 against 90. Nothing is wrong at that commit and nothing here should be
+# loosened to hide it — a per-commit CI run or a bisect will meet it, and what is owed is this
+# paragraph rather than a weaker assertion. The invariant holds where it is checked: at the
+# head of a branch, and at every merge.
 declared=$(grep -cE '^	[A-Za-z_][A-Za-z_0-9]* = 9[0-9]{3}$' "$RULES")
 [ "$n" -eq "$declared" ] || { echo "STALE     $n codes were read from $CAT and $RULES declares $declared — one of the two has gone stale" >&2; fail=1; }
 

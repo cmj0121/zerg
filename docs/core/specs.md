@@ -465,12 +465,15 @@ adapters** (`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators t
 closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each element as an
 in-place `mut` — only when `X` is `mut`.
 
-> **[not yet]** **Driving the protocol by hand** is not built, on the one receiver that has it without an
-> `impl`: `ch.next()` is _E9107 NotImplemented: the method `next` on a chan[int] — receive one element with
-> `<-ch`, or drain the channel with `for v in ch`_, and `ch.iter()` — which the sentence above derives, an
-> `Iterator[T]` being trivially `Iterable[T]` — is _E9107 NotImplemented: the method `iter` on a chan[int] —
-> a channel is its own iterator, so `for v in ch` is the loop this would be handed to_. The loop is built
-> and does the whole protocol — it ends on a clean close and re-raises a producer crash — so what is
-> missing is only the spelling that lets a reader put a `guard` around one element, which is the spelling
-> the paragraph above recommends. Every other `next()` and `iter()` is a method of a declared `Iterator[T]`
-> or `Iterable[T]` impl, and neither spec is declared.
+> **[not yet]** **Driving the protocol by hand** is not built. `next()` has one receiver that is an
+> `Iterator[T]` without an `impl` — a channel — so `ch.next()` is _E9107 NotImplemented: the method `next`
+> on a chan[int] — receive one element with `<-ch`, or drain the channel with `for v in ch`_. `iter()`
+> reaches further, because the sentence above derives it further: `for x in X` requires `X: Iterable[T]`,
+> so **every receiver that loop walks** — a `list`, a `map`, a `str` and a channel — is an `Iterable[T]`
+> the language gives rather than one a program declares, and each answers _E9107 NotImplemented: the method
+> `iter` on a chan[int] — `for v in x` walks this value directly, and that is the loop an iterator would be
+> handed to_. The loop is built and does the whole protocol — it ends on a clean close and re-raises a
+> producer crash — so what is missing is only the spelling that lets a reader put a `guard` around one
+> element, which is the spelling the paragraph above recommends. `next()` on anything but a channel, and
+> `iter()` on a receiver no loop walks, would each be a method of a declared `Iterator[T]` or `Iterable[T]`
+> impl — neither spec is declared, so both are refused permanently (`E3131`).

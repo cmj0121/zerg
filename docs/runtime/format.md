@@ -39,11 +39,13 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 >
 > **The renderings are reached by name, not by call.** `str(x)`, a hole and `print` consult them on every
 > value, and `x.display()` / `x.debug()` written out reach the override alone: a type that declares one
-> answers through it, and a value that has not — an `int`, a `str` — is **[not yet]**, _E9107
-> NotImplemented: the method `display` on a int — `str(x)` renders any value, and an `impl` on a declared
-> type is how a type overrides that_, and the same sentence for _NotImplemented: the method `debug` on a
-> int_. So "available on every value" holds through the three spellings above and not yet through the
-> fourth; `str(x)` is what to write while it waits.
+> answers through it, and a value that has not — an `int`, a `str`, a `list`, a `map`, an `Err`, a carrier —
+> is **[not yet]**, _E9107 NotImplemented: the method `display` on a int — `str(x)` renders any value, and
+> an `impl` on a declared type is how a type overrides that_, and the same sentence for _NotImplemented: the
+> method `debug` on a int_. It is one answer for every receiver, which is what "on every value" means: a
+> `map` does not get the map's sentence about `len` and `has` for a rendering. So "available on every value"
+> holds through the three spellings above and not yet through the fourth; `str(x)` is what to write while it
+> waits.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

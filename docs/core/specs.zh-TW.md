@@ -365,11 +365,13 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 回傳一個**具體 adapter 型別**（`map` 回傳身為 `Iterator[U]` 的 `Map[This, U]`，存著來源與 closure），所以整條鏈全程
 **monomorphize**、不 box。`for mut x in X` 把每個元素綁成就地的 `mut`——僅當 `X` 為 `mut`。
 
-> **[not yet]** **手動驅動這套協定**沒有建置,在那唯一不靠 `impl` 就擁有它的接收者上也一樣:`ch.next()` 是
-> _E9107 NotImplemented: the method `next` on a chan[int] — receive one element with `<-ch`, or drain the
-> channel with `for v in ch`_,而上一段推導出來的 `ch.iter()`——因為 `Iterator[T]` trivially 就是
-> `Iterable[T]`——是 _E9107 NotImplemented: the method `iter` on a chan[int] — a channel is its own iterator,
-> so `for v in ch` is the loop this would be handed to_。迴圈本身是建好的、而且把整套協定都做了——它在乾淨
-> 關閉時結束、並把 producer 的崩潰重新 raise——所以缺的只是那個讓讀者能對單一元素包一層 `guard` 的拼法,也
-> 就是上一段建議的拼法。其他每一個 `next()` 與 `iter()` 都是某個已宣告 `Iterator[T]` 或 `Iterable[T]` impl
-> 的方法,而這兩個 spec 都還沒有被宣告。
+> **[not yet]** **手動驅動這套協定**沒有建置。`next()` 只有一個不靠 `impl` 就身為 `Iterator[T]` 的接收者
+> ——channel——所以 `ch.next()` 是 _E9107 NotImplemented: the method `next` on a chan[int] — receive one
+> element with `<-ch`, or drain the channel with `for v in ch`_。`iter()` 觸及得更遠,因為上一段也推導得更
+> 遠:`for x in X` 需要 `X: Iterable[T]`,所以**那個迴圈走過的每一個接收者**——`list`、`map`、`str` 與
+> channel——都是語言給的 `Iterable[T]`、而非程式宣告出來的,每一個都回答 _E9107 NotImplemented: the method
+> `iter` on a chan[int] — `for v in x` walks this value directly, and that is the loop an iterator would be
+> handed to_。迴圈本身是建好的、而且把整套協定都做了——它在乾淨關閉時結束、並把 producer 的崩潰重新
+> raise——所以缺的只是那個讓讀者能對單一元素包一層 `guard` 的拼法,也就是上一段建議的拼法。channel 以外的
+> `next()`,以及沒有任何迴圈走過的接收者上的 `iter()`,都會是某個已宣告 `Iterator[T]` 或 `Iterable[T]` impl
+> 的方法——而這兩個 spec 都還沒有被宣告,所以兩者都被永久拒絕(`E3131`)。

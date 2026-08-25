@@ -87,9 +87,11 @@ conditional-return 的 `if` 取的是**裸條件、沒有區塊**。
 `for` 是 statement——不產出值；要組結果就鏈一個 iterator adapter（`map` / `filter` / `fold`）或 append 進另一個
 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 
-> **[not yet]** iterator adapter 尚未建置：`map`、`filter` 與 `fold` 三者都是 _E9056 NotImplemented: the list
-> method `…` — this compiler has `len` and `append`_，所以這個階段要把結果帶出迴圈，唯一的辦法是 append 進另一個
-> collection。
+> **[not yet]** iterator adapter 尚未建置：`xs.map(f)` 是 _E9056 NotImplemented: the list method `map` — this
+> compiler has `len` and `append`_,同一句話也回答 _NotImplemented: the list method `filter`_ 與
+> _NotImplemented: the list method `fold`_。所以這個階段要把結果帶出迴圈，唯一的辦法是 append 進另一個
+> collection。三個名字各自寫出來而不是用一個 `…` 帶過,因為 `E9056` 是靠一份名字清單分家的,而
+> `make method-gaps` 會讀這些標記來把它釘住。
 
 ## 模式比對（Pattern matching）
 

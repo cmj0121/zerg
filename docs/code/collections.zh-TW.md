@@ -44,10 +44,12 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
 > 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
-> compiler has `len` and `append`_，`map` 上是 _E9100 NotImplemented: the map method `insert`_ 與
-> _E9100 NotImplemented: the map method `remove`_。所以一個 collection 只能從尾端增長、完全不能縮短。每個名字
-> 都是引用而非描述,因為編譯器是靠一份名字清單來分辨 `E9100` 的兩半,而 `make method-gaps` 會讀這個標記來把那
-> 份清單釘住——在這裡被承諾、在那裡卻缺席的 method,會被永久拒絕。
+> compiler has `len` and `append`_ 與 _NotImplemented: the list method `remove`_,`map` 上是
+> _E9100 NotImplemented: the map method `insert`_ 與 _E9100 NotImplemented: the map method `remove`_。所以一個
+> collection 只能從尾端增長、完全不能縮短。每個名字都是引用而非描述,因為每個容器的代碼都是靠一份名字清單
+> 分成兩半——`E9056` 與 `E9100` 都一樣，一半是即將到來的形式、另一半是語言沒有的 method——而
+> `make method-gaps` 會讀這些標記來把兩份清單都釘住：在這裡被承諾、在那裡卻缺席的 method 會被永久拒絕,
+> 而在那裡列了、這裡卻沒承諾的，是編譯器單方面在承諾一個形式。
 
 ```text
 xs := [1, 2, 3]            # 凍結：xs.append(4) 與 xs[0] = 9 都是錯誤
@@ -89,8 +91,8 @@ first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
-> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 `E9056`，而 `m.get(k)` 是 _E9100 NotImplemented: the map
-> method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
+> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 _E9056 NotImplemented: the list method `get`_,而 `m.get(k)`
+> 是 _E9100 NotImplemented: the map method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
 > 的不存在」不是程式問得出口的問題，而是它必須在索引之前先用 `k in m` 迴避掉的事。
 
 ## 切片——唯讀子區間
@@ -103,7 +105,8 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 
 於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
 
-> **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 是 `E9056`。**`x[a..b]`** slice-index 語法糖
+> **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 是 _E9056 NotImplemented: the list method
+> `slice`_。**`x[a..b]`** slice-index 語法糖
 > 已建置且正確——`xs[1..3]` 產出一個全新的兩元素 `list`、`xs[0..=2]` 產出三元素的，各自都是獨立的值——所以在
 > method 落地前，子區間就用中括號那個形式寫。上面那個唯讀、copy-on-write 的設計是兩者共同的預期語意。
 >
@@ -157,8 +160,9 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 
-> **[not yet]** 這兩個替代方案都不存在：`xs.retain(pred)` 與 `xs.filter(pred)` 都是 `E9056`，所以一次轉換今天
-> 得寫成一個 append 進第二個 `list` 的 `for`，再在迴圈之後 rebind。
+> **[not yet]** 這兩個替代方案都不存在：`xs.retain(pred)` 是 _E9056 NotImplemented: the list method `retain`_,
+> `xs.filter(pred)` 是 _NotImplemented: the list method `filter`_，所以一次轉換今天得寫成一個 append 進第二個
+> `list` 的 `for`，再在迴圈之後 rebind。
 
 ## 定長陣列——`[T; N]`
 

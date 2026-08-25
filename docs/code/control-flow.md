@@ -110,9 +110,11 @@ conditional-return `if` takes a **bare condition and no block**.
 `for` is a statement — it yields no value; build a result with an iterator adapter (`map` / `filter` /
 `fold`) or by appending into another collection ([Collections](collections.md)), never a break-with-value.
 
-> **[not yet]** The iterator adapters are not built: `map`, `filter` and `fold` are each _E9056 NotImplemented:
-> the list method `…` — this compiler has `len` and `append`_, so appending into another collection is the
-> only way to carry a result out of a loop this phase.
+> **[not yet]** The iterator adapters are not built: `xs.map(f)` is _E9056 NotImplemented: the list method
+> `map` — this compiler has `len` and `append`_, and the same sentence answers _NotImplemented: the list
+> method `filter`_ and _NotImplemented: the list method `fold`_. So appending into another collection is
+> the only way to carry a result out of a loop this phase. Each is named rather than covered by a `…`,
+> because `E9056` is split by a list of names and `make method-gaps` reads these markers to hold it.
 
 ## Pattern matching
 

@@ -7371,30 +7371,41 @@ fn c_ty_is_iterable(tty: ast.Ty) -> bool {
 # how the catch-all below — a `fn` is no composite and no carrier — answered TRUE for it. Both
 # are asked through c_is_identity now, so a third rule cannot part them again. That `str(ch)`
 # and `str(f)` are refused by nothing is a gap of its own and not this rule's to close.
+#
+# NIL IS NOT ONE EITHER, and that half is c_display_check's THIRD refusal read as a question —
+# the pair above it were already read here and the nil one was not. A `fn` with no `-> type`
+# answers nil (GRAMMAR#fn-decl), and `str(f())` is chk_no_nil_value's `E3086`. The catch-all
+# answered TRUE for it too, because nil is no composite and no carrier, so `f().display()`
+# named as its substitute the one expression this same compiler refuses by name.
 fn c_renders_as_text(mut &em: Emitter, t: ast.Ty) -> bool {
 	return true if c_declares_rendering(em, t)
 
 	return false if c_is_identity(t)
 	return c_str_bridges_list(t) if c_is_list(t)
 
-	return not c_is_aggregate(em, t) and not c_is_carrier(t)
+	return not c_is_aggregate(em, t) and not c_is_carrier(t) and not c_holds_nil(t)
 }
 
 # c_no_render_says is the other half of a rendering's sentence: not what to write instead, but
-# WHY there is nothing to. It is asked once per spelling and answers the same way each time,
-# because a value can have no rendering for more than one reason and only one of them is a gap.
+# WHY there is nothing to. It is asked once per spelling and answers three ways, because a
+# value can have no rendering for three different reasons and only one of them is a gap.
 #
 # A COMPOSITE is waiting: the structural `Display` this compiler does not generate is exactly
 # what stands between it and a rendering, and it has parts a reader can render one at a time in
-# the meantime. That sentence was written as if it were the only one, and the identity below
-# inherited it — which told the reader of a channel to render parts it does not have, and to
-# wait for a `Display` that would not be its answer if it arrived.
+# the meantime. That sentence was written as if it were the only one, and the two below
+# inherited it — which told the reader of a channel to render parts it does not have, and the
+# reader of a nil to wait for a `Display` that would still leave nothing to render.
 #
 # AN IDENTITY is not waiting for anything (c_is_identity): a place to send to and a place to
 # call are not values with an unrendered inside, and nothing a compiler could generate would
 # make text of one.
+#
+# AND NIL IS NOT A VALUE AT ALL, so what the reader needs is not a rendering but a `fn` that
+# answers with something — chk_no_nil_value's own advice, said here in the position that sends
+# them to it.
 fn c_no_render_says(mut &em: Emitter, t: ast.Ty) -> str {
 	return f"a {ast.ty_name(t)} is an identity rather than a value, so there are no parts to render instead, and a structural `Display` is not what stands between it and a rendering: it has none, and none is coming" if c_is_identity(t)
+	return "nil is the absence of a value, so there is nothing to render and no parts to render instead — a `fn` with no `-> type` answers nil (GRAMMAR#fn-decl); give it a type to answer with" if c_holds_nil(t)
 
 	return "this value has no rendering of its own until the structural `Display` this compiler does not generate, so render its parts"
 }

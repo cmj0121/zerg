@@ -6394,6 +6394,23 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)}")
 	}
 
+	# WHAT IS LEFT IS NOT AN AGGREGATE, AND `in` STILL CANNOT COMPARE ALL OF IT. `in` compares
+	# its elements with `==` — the two sentences above say so in as many words — so whether that
+	# comparison MEANS anything is `==`'s question, and c_eq_legal is the one function that
+	# answers it. This rule asked c_is_aggregate instead, which is a different question by two
+	# whole classes: an IDENTITY, so `ch in chans` handed two channels to C's `==` and answered
+	# about their ADDRESSES with nothing said; and a CARRIER, so an `int?` element reached cc
+	# against a line nobody wrote. Neither is an aggregate and neither has an equality.
+	#
+	# THE ANSWER COMES FROM `==`'s OWN REPORTING SITE. `E4034` already says a channel and a
+	# `fn` are an identity the language gives no equality, and `E4038` already says a carrier
+	# may hold nothing to compare — the same finding, reached by a different spelling of the
+	# same comparison. A fresh number for it would be one gap wearing two codes, which is the
+	# defect #74 exists to undo, and `c_eq_refuse` is where both sentences live.
+	if not c_eq_legal(em, elem) {
+		c_eq_refuse(em, "==", elem)
+	}
+
 	n := c_tmp(em, "zgt_in")
 	sv := n + "s"
 	kv := n + "k"
@@ -6421,7 +6438,10 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 # not. A declared struct or enum is: it has a declaration to decorate and `#[derive(Eq)]` is
 # the answer. A container is not — there is nothing to decorate, and no impl a program could
 # write for it — so its missing `==` is this compiler's gap and not the author's. That is the
-# same line c_eq_refuse already draws between E4020 and E9057, asked here of the ELEMENT.
+# same line c_eq_refuse draws between E4020 and E9057, asked here of the ELEMENT — and it is
+# the LAST of the four c_eq_refuse draws, not the only one. The comment used to call it "the
+# same line", singular, which read as a parity claim and was the reason the two classes above
+# it — an identity and a carrier — were never asked of an element at all.
 fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
 	return false if c_has_eq(em, elem)
 

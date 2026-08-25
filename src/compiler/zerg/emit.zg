@@ -1179,7 +1179,7 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 
-	raise c_diag(em, rule.Rule.NotYetTryOnType, f"NotImplemented: `?` on a {ast.ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.TryNotCarrier, f"`?` on a {ast.ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`") if not c_is_carrier(t)
 	raise c_diag(em, rule.Rule.TryCarrierMismatch, f"`?` early-returns the RIGHT of {ast.ty_name(t)}, so the enclosing function must answer a carrier with the same right — this one answers {ast.ty_name(em.fn_ret)}") if not c_is_carrier(em.fn_ret)
 
 	# the two rights must MATCH: `?` hands the operand's right side straight out of the
@@ -5154,11 +5154,11 @@ fn c_deeper(mut &em: Emitter) {
 # one rule once per side.
 
 fn c_err_method_unknown(mut &em: Emitter, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetErrMethod, f"NotImplemented: the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`")
+	return c_diag(em, rule.Rule.ErrMethodUnknown, f"the method `{meth}` on a Err — the `Error` interface is `message`, `unwrap` and `code`")
 }
 
 fn c_carrier_method_unknown(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
-	return c_diag(em, rule.Rule.NotYetCarrierMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`")
+	return c_diag(em, rule.Rule.CarrierMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`")
 }
 
 fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
@@ -5311,7 +5311,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 # knowing how a carrier is spelled.
 fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
-	raise c_diag(em, rule.Rule.NotYetForceOnType, f"NotImplemented: `!` on a {ast.ty_name(t)} — it forces a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.ForceNotCarrier, f"`!` on a {ast.ty_name(t)} — it forces a Result[T] or a T?") if not c_is_carrier(t)
 
 	name := c_carrier_of(em, t)
 	rendered := c_expr(em, x, sb)
@@ -5340,7 +5340,7 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 # here — so the result temp is read only where it was written.
 fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], sb: Subst) -> str {
 	t := c_infer(em, a)
-	raise c_diag(em, rule.Rule.NotYetCoalesceOnType, f"NotImplemented: `??` on a {ast.ty_name(t)} — its left side is a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.CoalesceNotCarrier, f"`??` on a {ast.ty_name(t)} — its left side is a Result[T] or a T?") if not c_is_carrier(t)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
@@ -7325,7 +7325,7 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# NONE of the three takes an argument, and an argument list nobody reads is a question
 	# the program asked that nothing answered: `e.message(1)` compiled, with the `1`
 	# evaluated nowhere and mentioned by nothing.
-	raise c_diag(em, rule.Rule.NotYetErrMethodArgs, f"NotImplemented: the method `{meth}` on an Err takes no argument") if args.len() != 0
+	raise c_diag(em, rule.Rule.ErrMethodArgs, f"the method `{meth}` on an Err takes no argument") if args.len() != 0
 
 	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
 
@@ -7363,14 +7363,14 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 # is a leak it is the same leak in both places.
 fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
 	if meth == "ok_or" and ast.ty_is_opt(tty) {
-		raise c_diag(em, rule.Rule.NotYetOkOrNoArg, "NotImplemented: `ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
-		raise c_diag(em, rule.Rule.NotYetOkOrManyArgs, "NotImplemented: `ok_or` takes ONE error to answer an absence with") if args.len() != 1
+		raise c_diag(em, rule.Rule.OkOrNoArg, "`ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
+		raise c_diag(em, rule.Rule.OkOrManyArgs, "`ok_or` takes ONE error to answer an absence with") if args.len() != 1
 
 		# The argument is the RIGHT of the Result being built, so it has to be an `Err`.
 		# Without the check `o.ok_or(3)` assigned an `int` to a `zrt_err` field and the
 		# diagnostic came from cc, against a line of generated C.
 		at := c_infer(em, args[0])
-		raise c_diag(em, rule.Rule.NotYetOkOrNotErr, "NotImplemented: `ok_or` answers an absence with an `Err`, and this is a " + ast.ty_name(at)) if not c_is_err_ty(at)
+		raise c_diag(em, rule.Rule.OkOrNotErr, "`ok_or` answers an absence with an `Err`, and this is a " + ast.ty_name(at)) if not c_is_err_ty(at)
 
 		elem := c_opt_elem(tty)
 		on := c_opt_name(em, elem)
@@ -7391,7 +7391,7 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		return out + " " + r + "; })"
 	}
 	if meth == "ok" and c_is_either(tty) {
-		raise c_diag(em, rule.Rule.NotYetOkTakesNoArg, "NotImplemented: `ok` forgets the Right and takes no argument") if args.len() != 0
+		raise c_diag(em, rule.Rule.OkTakesNoArg, "`ok` forgets the Right and takes no argument") if args.len() != 0
 
 		left := c_either_left(tty)
 		cn := c_carrier_ty_cname(tty)
@@ -7512,7 +7512,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 	# shape, and `of` is the other thing an enum name answers.
 	return c_variant_ctor(em, en, meth, args, sb) if c_is_variant_in(em, en, meth)
 
-	raise c_diag(em, rule.Rule.NotYetEnumTypeMethod, f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither") if meth != "of"
+	raise c_diag(em, rule.Rule.EnumTypeMethodUnknown, f"`{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither") if meth != "of"
 	raise c_diag(em, rule.Rule.OfTakesOneInt, f"`{en}.of(n)` takes one integer — the discriminant to reverse") if args.len() != 1
 	raise c_diag(em, rule.Rule.OfOnPayloadEnum, f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless") if not c_is_flat_enum(em, en)
 
@@ -7634,7 +7634,7 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# told what to write rather than told to wait.
 	c_no_builtin_into(em, meth, target)
 
-	raise c_diag(em, rule.Rule.NotYetMethodOnType, f"NotImplemented: the method `{meth}` on a {ast.ty_name(c_infer(em, target))}")
+	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(c_infer(em, target))}")
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -8842,7 +8842,7 @@ fn c_result_tag(mut &em: Emitter, ctor: str) -> int {
 	return 0 if ctor == "Left"
 	return 1 if ctor == "Right"
 
-	raise c_diag(em, rule.Rule.NotYetResultPattern, f"NotImplemented: the pattern `{ctor}` on a Result[T] — it has Left and Right")
+	raise c_diag(em, rule.Rule.ResultPatternUnknown, f"the pattern `{ctor}` on a Result[T] — it has Left and Right")
 }
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
@@ -8993,7 +8993,7 @@ fn c_arm_range(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> s
 		# expression: `parse_add` accepts the literal, so `1..=nil` parses to exactly the
 		# shape the bare `1..=` used to make. The refusal is about the RANGE having no upper
 		# bound, whatever the reader wrote to leave it without one.
-		raise c_diag(em, rule.Rule.NotYetOpenRangeInclusive, "NotImplemented: `..=` with no upper bound is not a range — write `500..` for open-ended")
+		raise c_diag(em, rule.Rule.OpenRangeInclusive, "`..=` with no upper bound is not a range — write `500..` for open-ended")
 	}
 
 	# a guard on a range arm is AND-ed on, the way a constructor pattern's is: the range says
@@ -10327,7 +10327,7 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 	ret_int := c_is_int(ret)
 	ret_res := c_is_result_nil(ret)
 
-	raise c_diag(em, rule.Rule.NotYetMainSignature, f"NotImplemented: `fn main() -> {ast.ty_name(ret)}` — the entry's shapes are `fn main()`, `-> int` (the exit status) and `-> Result[nil]` (docs/runtime/package.md); any other result would be computed and silently discarded") if not ret_int and not ret_res and not c_is_nil_ty(ret)
+	raise c_diag(em, rule.Rule.MainResult, f"`fn main() -> {ast.ty_name(ret)}` — the entry's shapes are `fn main()`, `-> int` (the exit status) and `-> Result[nil]` (docs/runtime/package.md); any other result would be computed and silently discarded") if not ret_int and not ret_res and not c_is_nil_ty(ret)
 
 	if has_args and em.used_conc {
 		# The scheduler's program-entry shims all take a NULLARY function pointer, so
@@ -12234,7 +12234,7 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return ast.Ty.TStr if fld == "msg"
 		return ast.Ty.TInt if fld == "kind"
 
-		raise c_diag(em, rule.Rule.NotYetErrField, f"NotImplemented: the field `{fld}` on an Err — it has `msg` and `kind`")
+		raise c_diag(em, rule.Rule.ErrFieldUnknown, f"the field `{fld}` on an Err — it has `msg` and `kind`")
 	}
 	return c_field_ty(em, c_named_of(t), fld)
 }
@@ -13195,7 +13195,7 @@ fn c_if(mut &em: Emitter, cond: ast.Expr, then_body: list[ast.Stmt], has_else: b
 # an outer `v` may already be in scope and C has no shadowing inside a function.
 fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stmt], has_else: bool, else_body: list[ast.Stmt], ind: str) -> str {
 	t := c_infer(em, value)
-	raise c_diag(em, rule.Rule.NotYetIfBindOver, f"NotImplemented: `if {name} := …` over a {ast.ty_name(t)} — it binds the Left of a Result[T] or a T?") if not c_is_carrier(t)
+	raise c_diag(em, rule.Rule.IfBindNotCarrier, f"`if {name} := …` over a {ast.ty_name(t)} — it binds the Left of a Result[T] or a T?") if not c_is_carrier(t)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)

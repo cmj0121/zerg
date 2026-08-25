@@ -220,6 +220,29 @@ pub enum Rule {
 	TypeFromSibling = 3115
 	ConstFromSibling = 3116
 
+	# The rules below arrived in this range from `E9xxx` (#74). Each of them was a
+	# *NotImplemented* and none of them was a form: a wrong arity to `ok_or`, a field an `Err`
+	# does not carry, `?` on an `int`. A code in that range retires when its form is built, and
+	# a rule with no form has no such day — so it was a number that could never be spent. The
+	# ones it left behind are retired in the catalogue and are never reissued.
+	IfBindNotCarrier = 3117
+	TryNotCarrier = 3120
+	ForceNotCarrier = 3121
+	CoalesceNotCarrier = 3122
+	ErrMethodArgs = 3123
+	ErrMethodUnknown = 3124
+	OkOrNoArg = 3125
+	OkOrManyArgs = 3126
+	OkOrNotErr = 3127
+	OkTakesNoArg = 3128
+	CarrierMethodUnknown = 3129
+	EnumTypeMethodUnknown = 3130
+	MethodUnknown = 3131
+	ResultPatternUnknown = 3132
+	MainResult = 3133
+	ErrFieldUnknown = 3135
+	OpenRangeInclusive = 3136
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -386,7 +409,6 @@ pub enum Rule {
 	NotYetOpenRangeHere = 9050
 	NotYetAssociatedFn = 9051
 	NotYetMapKeyType = 9052
-	NotYetIfBindOver = 9053
 	NotYetDerive = 9054
 	NotYetDeriveEq = 9055
 	NotYetListMethod = 9056
@@ -413,29 +435,13 @@ pub enum Rule {
 	NotYetRangeAsValue = 9077
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
-	NotYetTryOnType = 9080
 	NotYetTwoModulesDefine = 9081
 	NotYetNamespaceCollision = 9082
-	NotYetForceOnType = 9083
-	NotYetCoalesceOnType = 9084
 	NotYetRenderEnumAsText = 9085
-	NotYetErrMethodArgs = 9086
-	NotYetErrMethod = 9087
-	NotYetOkOrNoArg = 9088
-	NotYetOkOrManyArgs = 9089
-	NotYetOkOrNotErr = 9090
-	NotYetOkTakesNoArg = 9091
-	NotYetCarrierMethod = 9092
-	NotYetEnumTypeMethod = 9093
-	NotYetMethodOnType = 9094
-	NotYetResultPattern = 9095
-	NotYetMainSignature = 9096
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfNonFunction = 9098
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100
-	NotYetErrField = 9101
-	NotYetOpenRangeInclusive = 9102
 	NotYetSpawnOfBinding = 9103
 	NotYetAtomicImport = 9104
 

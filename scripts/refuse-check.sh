@@ -1455,6 +1455,41 @@ fn main() {
 }
 EOF
 
+# THE FOUR METHOD NAMES THE LANGUAGE HANDS OUT WITHOUT A DECLARATION. `c_free_method`'s
+# fallback is the last resort for a `x.meth(…)` no type answers, and it says `E3131` — this
+# program is permanently wrong. It is, for `x.wobble()`; it is not for these, which three
+# chapters specify and this compiler has not lowered. Same shape as the pair above: the
+# SENTENCE is asserted, because one code covers all four and the code alone cannot tell
+# `display` from `next`, so a name that lands stops matching its own line.
+expect "$ZERG" builtin-display E9107 'the method `display` on a int' <<'EOF'
+fn main() {
+	x := 5
+	print x.display()
+}
+EOF
+
+expect "$ZERG" builtin-debug E9107 'the method `debug` on a int' <<'EOF'
+fn main() {
+	x := 5
+	print x.debug()
+}
+EOF
+
+expect "$ZERG" builtin-format E9107 'the method `format` on a int' <<'EOF'
+fn main() {
+	x := 5
+	print x.format("04d")
+}
+EOF
+
+expect "$ZERG" channel-next E9107 'the method `next` on a chan[int]' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- 1
+	print ch.next()
+}
+EOF
+
 expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
 fn main() {
 	t := (1, 2)

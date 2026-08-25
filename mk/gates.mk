@@ -203,15 +203,19 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 	[ $$n -ge $(FMT_CORPUS_MIN) ] || { echo "fmt-corpus: only $$n cases were checked, and the floor is $(FMT_CORPUS_MIN)"; exit 1; }; \
 	echo "fmt-corpus: $$n cases are fmt's fixpoint"
 
-# The compiler's OWN sources, which no gate covered. That is how three fresh deviations
+# The sources this repository WRITES, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
-# needs no submodule, so it runs everywhere. The set it checks is SELF_SRCS, which is
+# needs no submodule, so it runs everywhere. The set it checks is SELF_TREES, which is
 # defined beside `fmt` in the root Makefile because that verb writes what this one reads.
-fmt-self:                       # the compiler and the stdlib are canonical too
+#
+# `examples` JOINED THAT SET and immediately had two: the corpus a reader meets first had
+# never been handed to the formatter, so `05_bitwise` shipped `0b1100 &0b1010` — the operand
+# spacing of a chapter whose subject IS that operator.
+fmt-self:                       # every Zerg source this repository writes is canonical
 	$(MAKE) build
 	@./bin/zerg fmt --check $(SELF_TREES) \
-		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
-	@echo "fmt-self: the compiler and the standard library are fmt's fixpoint"
+		|| { echo "fmt-self: a source this repository writes is not in canonical form"; exit 1; }
+	@echo "fmt-self: the compiler, the standard library and the examples are fmt's fixpoint"
 
 # A target of its own, and it stays one now that CI runs both: they ask different questions
 # of the same cases. `fmt-corpus` asks whether a case is already canonical — a rule that is

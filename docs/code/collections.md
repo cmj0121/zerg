@@ -82,6 +82,13 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
   element type like a value entering any other [typed position](../core/types.md#typed-positions), so
   `72 in bytearray(…)` is a byte.
 
+> **[not yet]** `x in xs` is built only for the element types this compiler writes a `==` for. A
+> container element, or a declared type that already carries an `Eq`, is not one of them: `P(1) in [P(1)]`
+> is _E9061 NotImplemented: `in` over list[P] — its elements are compared with `==`, and this compiler does
+> not write that comparison for P_. That is [container equality](#order--equality)'s gap reached through
+> `in`, and it retires with it. An element type carrying **no** `Eq` is a different answer — `E3118`, which
+> the program closes itself by writing `#[derive(Eq)]` on the type.
+
 ```text
 first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default

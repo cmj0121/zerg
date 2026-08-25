@@ -76,14 +76,20 @@ collection 也能拿來當 key。
   map 是**雜湊**——同一個問題、不同的代價——而被找的那個值會像進入任何其他
   [有型別的位置](../core/types.zh-TW.md#有型別的位置typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
 
+> **[not yet]** `x in xs` 只對這個編譯器寫得出 `==` 的元素型別建置了。容器元素、以及已經帶著 `Eq` 的宣告型別都不
+> 在其中：`P(1) in [P(1)]` 是 _E9061 NotImplemented: `in` over list[P] — its elements are compared with `==`,
+> and this compiler does not write that comparison for P_。那是[順序與相等性](#順序與相等性)那個缺口從 `in` 這一
+> 側看過去的樣子，也會跟它一起退場。元素型別**沒有** `Eq` 則是另一個答案——`E3118`，那個缺口是程式自己用
+> `#[derive(Eq)]` 補上的。
+
 ```text
 first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
 > **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 `E9056`，而 `m.get(k)` 是 _E9100 NotImplemented: the map
-> method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內的不存在」不是程式問得出口的問題，而是它必須在索引
-> 之前先用 `k in m` 迴避掉的事。
+> method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
+> 的不存在」不是程式問得出口的問題，而是它必須在索引之前先用 `k in m` 迴避掉的事。
 
 ## 切片——唯讀子區間
 

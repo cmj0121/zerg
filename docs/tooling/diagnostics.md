@@ -64,7 +64,7 @@ list nobody can ever finish reading.
 
 ```text
 error-codes-check: next free code per range — lexical E1014, parser E2071, checking E3137,
-                                              emitting E4076, building E5018, unbuilt E9107
+                                              emitting E4076, building E5018, unbuilt E9108
 ```
 
 It reads the ranges out of the table above rather than carrying its own copy, so adding one
@@ -475,6 +475,7 @@ shipping compiler rather than a part of it (the line
 | `E9104` | the module `atomic` ships and cannot be imported                                                        |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                       |
+| `E9107` | the method `…` on a … — `display`, `debug`, `format`, or a channel's `next`                             |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -529,6 +530,13 @@ Three others were asked TWO questions at one raise site and **split** rather tha
 `E3118`, `E3119` and `E3134`. Unlike the twenty-five above these had shipped, under v0.1.0, so a
 message from that build says `E9088` where this one says `E3125` — which is the case this table
 exists for.
+
+**A fourth split, found after the move.** `E9094` was read as a wrong program and retired into
+`E3131`, and it was two questions as well: `c_free_method`'s fallback answers every name no type
+declares, and four of those names are the language's rather than a type's — `display` and `debug`,
+which every value renders with, `format`, which `f"{x:spec}"` desugars to, and `next` on a channel,
+which is an `Iterator[T]`. Those four are forms, so they took the fresh **`E9107`**. The number
+they had is spent: `E9094` stays retired and is not reissued.
 
 | Code    | Now     | Why it left                                                   |
 | ------- | ------- | ------------------------------------------------------------- |

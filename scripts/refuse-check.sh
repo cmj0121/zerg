@@ -2382,12 +2382,12 @@ EOF
 # machinery that does not exist — so it is named rather than left to be read as something else,
 # and the message says which set was written.
 #
-# THE HALVES THAT ARE NOT REFUSALS ARE IN reject-check.sh. `in` over a struct that carries no
-# `Eq` (`E3118`) and over a set that is no set at all (`E3119`) are the LANGUAGE's answers and
-# no future feature makes either legal, so they are rejections and belong in the corpus with
-# that lifetime (#74). Each of them is one number away from a case here, deliberately: they
-# came out of a split, and the two halves of a split site are what a reader most needs to be
-# able to tell apart.
+# EVERY PERMANENT ANSWER `in` GIVES IS IN reject-check.sh, and this comment does not list them
+# — it used to name two, and the set has grown twice since. `in` over a struct that carries no
+# `Eq` and over a set that is no set at all came out of the two splits below and sit one number
+# away from their siblings here, deliberately: the two halves of a split site are what a reader
+# most needs to be able to tell apart. What `in` answers permanently is the LANGUAGE's and no
+# future feature makes it legal, so it belongs in the corpus with that lifetime (#74).
 
 # an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
 # makes `in` refuse a str looked for among ints rather than compare a pointer to a number

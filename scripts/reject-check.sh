@@ -4628,7 +4628,7 @@ EOF
 # took the `TUnknown` it got back for a type, so a receive on a non-channel came out as
 # `TOpt(TUnknown)` — an optional of nothing, printed `?` — and the program went on being
 # compiled around it. What the reader was told about afterwards was the `?`: `` `??` on a
-# ? ``, `E9053 … over a ?`, sentences about a type nothing in the source had written. Where
+# ? ``, `E3117 … over a ?`, sentences about a type nothing in the source had written. Where
 # the walk did not touch the broken type at all, the C came out with a carrier struct in a
 # `zrt_chan *` slot and cc rejected generated code nobody wrote.
 #
@@ -7206,7 +7206,7 @@ fn main() {
 }
 EOF
 
-reject unwrap-a-value-that-carries-nothing E9080 <<'EOF'
+reject unwrap-a-value-that-carries-nothing E3120 <<'EOF'
 fn f() -> int? {
 	x := 1
 	return x?
@@ -7323,14 +7323,14 @@ fn main() {
 }
 EOF
 
-reject force-a-value-that-carries-nothing E9083 <<'EOF'
+reject force-a-value-that-carries-nothing E3121 <<'EOF'
 fn main() {
 	x := 1
 	print x!
 }
 EOF
 
-reject coalesce-a-value-that-carries-nothing E9084 <<'EOF'
+reject coalesce-a-value-that-carries-nothing E3122 <<'EOF'
 fn main() {
 	x := 1
 	print x ?? 2
@@ -7386,7 +7386,7 @@ fn main() {
 }
 EOF
 
-reject an-err-method-given-an-argument E9086 <<'EOF'
+reject an-err-method-given-an-argument E3123 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7398,7 +7398,7 @@ fn main() {
 }
 EOF
 
-reject a-method-the-error-interface-does-not-declare E9087 <<'EOF'
+reject a-method-the-error-interface-does-not-declare E3124 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7410,7 +7410,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-no-error-to-answer-with E9088 <<'EOF'
+reject ok-or-with-no-error-to-answer-with E3125 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7421,7 +7421,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-with-two-errors-to-answer-with E9089 <<'EOF'
+reject ok-or-with-two-errors-to-answer-with E3126 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7432,7 +7432,7 @@ fn main() {
 }
 EOF
 
-reject ok-or-answering-an-absence-with-something-that-is-not-an-err E9090 <<'EOF'
+reject ok-or-answering-an-absence-with-something-that-is-not-an-err E3127 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7443,7 +7443,7 @@ fn main() {
 }
 EOF
 
-reject ok-given-an-argument E9091 <<'EOF'
+reject ok-given-an-argument E3128 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7454,7 +7454,7 @@ fn main() {
 }
 EOF
 
-reject a-carrier-method-neither-carrier-answers E9092 <<'EOF'
+reject a-carrier-method-neither-carrier-answers E3129 <<'EOF'
 fn g() -> int? {
 	return nil
 }
@@ -7464,7 +7464,7 @@ fn main() {
 }
 EOF
 
-reject an-enum-type-method-that-is-not-of E9093 <<'EOF'
+reject an-enum-type-method-that-is-not-of E3130 <<'EOF'
 enum Color {
 	Red
 	Green
@@ -7488,7 +7488,7 @@ fn main() {
 }
 EOF
 
-reject a-method-on-a-value-whose-type-declares-none E9094 <<'EOF'
+reject a-method-on-a-value-whose-type-declares-none E3131 <<'EOF'
 fn main() {
 	x := 1
 	print x.wobble()
@@ -7544,7 +7544,7 @@ fn main() {
 }
 EOF
 
-reject a-constructor-pattern-on-an-either-that-is-neither-side E9095 <<'EOF'
+reject a-constructor-pattern-on-an-either-that-is-neither-side E3132 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)
 }
@@ -7566,7 +7566,7 @@ fn main() {
 }
 EOF
 
-reject an-entry-answering-something-that-is-neither-int-nor-result E9096 <<'EOF'
+reject an-entry-answering-something-that-is-neither-int-nor-result E3133 <<'EOF'
 fn main() -> str {
 	return "a"
 }
@@ -7649,14 +7649,14 @@ fn main() {
 }
 EOF
 
-reject a-map-method-this-compiler-does-not-have E9100 <<'EOF'
+reject a-map-method-this-compiler-does-not-have E3134 <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.drop(1)
 }
 EOF
 
-reject a-field-an-err-does-not-carry E9101 <<'EOF'
+reject a-field-an-err-does-not-carry E3135 <<'EOF'
 fn main() {
 	r := guard {
 		raise "boom"
@@ -7695,7 +7695,7 @@ fn main() {
 }
 EOF
 
-reject an-inclusive-range-arm-whose-upper-bound-is-nil E9102 seed-gap <<'EOF'
+reject an-inclusive-range-arm-whose-upper-bound-is-nil E3136 seed-gap <<'EOF'
 fn main() {
 	x := 3
 	match x {

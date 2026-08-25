@@ -1448,6 +1448,13 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" map-get E9100 'the map method `get`' <<'EOF'
+fn main() {
+	m := {1: 2}
+	print m.get(1)
+}
+EOF
+
 expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
 fn main() {
 	t := (1, 2)
@@ -1847,7 +1854,7 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" if-let-over-an-enum E9053 <<'EOF'
+expect "$ZERG" if-let-over-an-enum E3117 <<'EOF'
 enum E {
 	A(int)
 	B
@@ -2181,8 +2188,26 @@ fn main() {
 }
 EOF
 
-# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
-expect "$ZERG" in-over-a-list-of-structs E9061 <<'EOF'
+# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one. That is
+# the PROGRAM's gap and closes with a `#[derive(Eq)]`, so it is a rejection (`E3118`) rather
+# than a refusal, and it is here beside the half that is a refusal.
+expect "$ZERG" in-over-a-list-of-structs E3118 <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
+}
+EOF
+
+# THE HALF THAT IS UNBUILT is the same program with the `Eq` written. collections.md
+# specifies `x in xs`, the impl is there to be called, and this compiler does not call it —
+# so the day it does, this case goes and the one above stays. Without it `E9061` would be
+# reported by the compiler and asserted by nothing, which is the state the split created.
+expect "$ZERG" in-over-a-list-of-structs-with-eq E9061 <<'EOF'
+#[derive(Eq)]
 struct P {
 	pub x: int
 }
@@ -2204,7 +2229,7 @@ fn main() {
 EOF
 
 # And a set that is no set at all, which is the rest of the same code.
-expect "$ZERG" in-over-a-plain-int E9062 <<'EOF'
+expect "$ZERG" in-over-a-plain-int E3119 <<'EOF'
 fn main() {
 	print str(3 in 5)
 }

@@ -2039,6 +2039,23 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false)
 }
 
+# with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
+# somebody's source tells it from a name they wrote. The pair exists for the same reason
+# `init_name` / `is_init_name` does: the name is the parser's, so the fact that it is the
+# parser's lives once, beside the line that writes it.
+#
+# L103 read one of these as an unread binding — "binding `_with_36` in `main` is never read" —
+# about a statement whose author wrote `with open_log("held") { … }` and cannot delete, rename
+# or read a name they never typed. A finding on a correct program is the one thing a linter
+# must not have, and no wording of the message could have made that one actionable.
+pub fn with_name(line: int) -> str {
+	return "_with_" + strconv.to_string(line, 10)
+}
+
+pub fn is_with_name(name: str) -> bool {
+	return strings_has_prefix(name, "_with_")
+}
+
 pub fn init_name(at: int) -> str {
 	return "init__" + strconv.to_string(at, 10)
 }
@@ -2759,7 +2776,7 @@ fn parse_with(mut &p: Parser) -> ast.Stmt {
 	p_no_brace_head(p, "a `with` head", false)
 	value := parse_expr(p)
 
-	mut name := f"_with_{strconv.to_string(line, 10)}"
+	mut name := with_name(line)
 	if p_at(p, token.Kind.As) {
 		p_advance(p)
 		name = p_name(p, "a `with` binding")

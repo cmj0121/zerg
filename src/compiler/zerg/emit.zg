@@ -3805,7 +3805,14 @@ pub fn c_fld_pub(mut &em: Emitter, sname: str, fname: str) -> bool {
 	return true
 }
 
+# NO STRUCT IS NAMED "", so an unnamed receiver has no field to find and the walk below can
+# only answer `TUnknown` after reading every field in the program. c_has_method — the other
+# declaration table, asked beside this one on the same line of c_meth_kind — has carried this
+# guard from the start; this one did not, so every `xs.len()` and `m.has(k)`, receivers that
+# c_named_of answers "" for, paid a scan of the whole field table before the family was picked.
 fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> ast.Ty {
+	return ast.Ty.TUnknown if sname == ""
+
 	mut i := 0
 	for i < em.fld_struct.len() {
 		return em.fld_ty[i] if em.fld_struct[i] == sname and em.fld_name[i] == fname

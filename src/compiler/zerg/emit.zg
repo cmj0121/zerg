@@ -1624,6 +1624,16 @@ pub fn c_is_fn(t: ast.Ty) -> bool {
 	}
 }
 
+# c_is_identity is the class `E4034` names out loud: a CHANNEL and a FUNCTION are an identity
+# rather than a value. What they are is a place to send to or a place to jump to, and the
+# language gives neither of them any of the things a value has — no equality, no rendering, and
+# no parts to reach for instead. It is one predicate because every rule that has ever asked
+# about one of the two has meant both, and the two that asked wrote the pair out by hand while
+# a third wrote only the channel and let a `fn` through.
+pub fn c_is_identity(t: ast.Ty) -> bool {
+	return ast.ty_is_chan(t) or c_is_fn(t)
+}
+
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
 	return match t {
 		Ty.TFn(_, r) => r
@@ -6070,7 +6080,7 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 # derived or written. Nothing else does: a carrier is not a value until it is unwrapped, and a
 # channel is an identity the language never gave an equality to.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
-	return false if c_is_carrier(t) or ast.ty_is_chan(t) or c_is_fn(t)
+	return false if c_is_carrier(t) or c_is_identity(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
 	return true
@@ -6111,7 +6121,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 	# code it used to carry is retired — one mistake earns one finding, and this is not it.
 	return if oper != "==" and oper != "!="
 
-	if ast.ty_is_chan(t) or c_is_fn(t) {
+	if c_is_identity(t) {
 		check.chk_at(em, rule.Rule.IdentityHasNoEquality, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries")
 		return
 	}
@@ -7352,19 +7362,41 @@ fn c_ty_is_iterable(tty: ast.Ty) -> bool {
 # else renders unless it is a composite or a carrier — which is c_display_check's own pair of
 # refusals read as a question rather than as a raise.
 #
-# A CHANNEL IS NOT ONE, and that is the single place this parts company with what the `str(…)`
-# arm ACCEPTS. `str(ch)` compiles today and prints the channel's address: a number, and not a
-# rendering of anything. Offering it as a substitute would be a sentence that runs and answers
-# nonsense, which is worse than one that does not compile, so what is asked here is what
-# renders rather than what is accepted. That `str(ch)` is refused by nothing is a gap of its
-# own and not this rule's to close.
+# AN IDENTITY IS NOT ONE, and that is the single place this parts company with what the
+# `str(…)` arm ACCEPTS. `str(ch)` reaches C and prints the channel's address: a number, and not
+# a rendering of anything; `str(f)` over a function value reaches C too and is refused there,
+# against a line nobody wrote. Offering either as a substitute is a sentence that answers
+# nonsense or does not compile, so what is asked here is what renders rather than what is
+# accepted. The channel was written out by name here and the `fn` beside it was not, which is
+# how the catch-all below — a `fn` is no composite and no carrier — answered TRUE for it. Both
+# are asked through c_is_identity now, so a third rule cannot part them again. That `str(ch)`
+# and `str(f)` are refused by nothing is a gap of its own and not this rule's to close.
 fn c_renders_as_text(mut &em: Emitter, t: ast.Ty) -> bool {
 	return true if c_declares_rendering(em, t)
 
-	return false if ast.ty_is_chan(t)
+	return false if c_is_identity(t)
 	return c_str_bridges_list(t) if c_is_list(t)
 
 	return not c_is_aggregate(em, t) and not c_is_carrier(t)
+}
+
+# c_no_render_says is the other half of a rendering's sentence: not what to write instead, but
+# WHY there is nothing to. It is asked once per spelling and answers the same way each time,
+# because a value can have no rendering for more than one reason and only one of them is a gap.
+#
+# A COMPOSITE is waiting: the structural `Display` this compiler does not generate is exactly
+# what stands between it and a rendering, and it has parts a reader can render one at a time in
+# the meantime. That sentence was written as if it were the only one, and the identity below
+# inherited it — which told the reader of a channel to render parts it does not have, and to
+# wait for a `Display` that would not be its answer if it arrived.
+#
+# AN IDENTITY is not waiting for anything (c_is_identity): a place to send to and a place to
+# call are not values with an unrendered inside, and nothing a compiler could generate would
+# make text of one.
+fn c_no_render_says(mut &em: Emitter, t: ast.Ty) -> str {
+	return f"a {ast.ty_name(t)} is an identity rather than a value, so there are no parts to render instead, and a structural `Display` is not what stands between it and a rendering: it has none, and none is coming" if c_is_identity(t)
+
+	return "this value has no rendering of its own until the structural `Display` this compiler does not generate, so render its parts"
 }
 
 # c_specified_meth_says answers what to write WHILE the form waits, and answering is the same
@@ -7395,15 +7427,15 @@ fn c_renders_as_text(mut &em: Emitter, t: ast.Ty) -> bool {
 # worse answer than the permanent rejection this split was built to remove. So each of the
 # three has TWO clauses, one per side of c_renders_as_text: where the value renders, the
 # substitute is the expression that renders it, and where it does not there is no substitute
-# and the clause says so. The fourth spelling waits on the same gap the first three do, and
-# for a composite that is one gap and not two.
+# and c_no_render_says says which absence it is. The fourth spelling waits on whatever the
+# first three wait on, so for a composite that is one gap and not two.
 fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 	renders := c_renders_as_text(em, tty)
 
 	return "`str(x)` renders it, and an `impl` on a declared type is how a type overrides that" if renders and (meth == "display" or meth == "debug")
-	return "there is nothing to write in its place — this value has no rendering of its own until the structural `Display` this compiler does not generate, so render its parts" if meth == "display" or meth == "debug"
+	return f"there is nothing to write in its place — {c_no_render_says(em, tty)}" if meth == "display" or meth == "debug"
 	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if renders and meth == "format"
-	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — this value has none of its own until the structural `Display` this compiler does not generate" if meth == "format"
+	return f"a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — {c_no_render_says(em, tty)}" if meth == "format"
 	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
 	return "`for v in x` walks this value directly, and that is the loop an iterator would be handed to" if meth == "iter" and c_ty_is_iterable(tty)
 

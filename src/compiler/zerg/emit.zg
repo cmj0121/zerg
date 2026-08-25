@@ -7278,7 +7278,74 @@ enum MethKind {
 	MFree
 }
 
+# c_ty_is_iterable is the set `for … in` walks, and it is written here because that is the
+# set `iter()` is language-given on: `Iterable[T]` is what has `iter()` (docs/core/specs.md),
+# and `for x in X` is the form that requires `X: Iterable[T]`. c_forin's own NotIterable
+# sentence names the set — a list, a map, a str, a range or a channel — and a range is a form
+# rather than a value with a type here (c_is_range asks the EXPRESSION), so it is the four
+# that have one. Narrower than this and a `map`'s `iter` is refused permanently for a loop the
+# language gives it; wider and an `int` is promised a loop nothing walks.
+fn c_ty_is_iterable(tty: ast.Ty) -> bool {
+	return c_is_list(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
+}
+
+# c_specified_meth_says answers what to write WHILE the form waits, and answering is the same
+# act as deciding: a name is one the LANGUAGE gives this receiver exactly when there is a
+# sentence saying what stands in for it, so the predicate and the substitute are one list with
+# one clause per name. An empty answer is "not one of these", which is not a sentence and can
+# never be printed as one.
+#
+# Written as a `match` with a `_` arm this was two lists — the names on a predicate line and
+# the sentences here — and the `_` arm handed every future name `display`'s substitute. There
+# is no arm here to inherit: a sixth name is added by writing its clause, and the clause is
+# what puts the name in the predicate at all.
+#
+# Each clause carries the RECEIVER it is given on, because the three chapters do. `display` and
+# `debug` are docs/runtime/format.md's renderings, "available on every value without opting
+# into anything", so they name no receiver. `format` is docs/surface/syntax-sugar.md's
+# desugaring of `f"{x:spec}"`, whose f-string spelling already answers `E9012`, and it is a
+# protocol on every value the same way. `next` is docs/core/specs.md's `Iterator[T]`, and a
+# CHANNEL is the one receiver that is one without an `impl`. `iter` is the next sentence of
+# that same paragraph — `Iterable[T]` is what has `iter()`, and `for x in X` requires
+# `X: Iterable[T]` — so it is given on everything that loop walks, not on a channel alone.
+fn c_specified_meth_says(tty: ast.Ty, meth: str) -> str {
+	return "`str(x)` renders any value, and an `impl` on a declared type is how a type overrides that" if meth == "display" or meth == "debug"
+	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if meth == "format"
+	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
+	return "`for v in x` walks this value directly, and that is the loop an iterator would be handed to" if meth == "iter" and c_ty_is_iterable(tty)
+
+	return ""
+}
+
+# c_specified_method raises for a name the language gives and this compiler has not lowered.
+# It is the whole of `E9107`, and it is ONE raise because it is one finding — which receiver
+# the value turned out to be is not part of it.
+fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
+	says := c_specified_meth_says(tty, meth)
+	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
+}
+
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
+	# THE NAMES THAT ARE NOT THIS RECEIVER'S QUESTION, asked before the receiver's family is
+	# picked. A list, a map, an `Err` and a carrier each end in a fallback of their own, and
+	# every one of them was answering `x.display()` for itself — a map with "a map answers
+	# `len` and `has`", an `Err` with "the `Error` interface is …", a carrier with "a carrier
+	# answers `ok_or` …". Four permanent rejections of a rendering docs/runtime/format.md says
+	# every value has, and the five-name split below them was consulted for no receiver that
+	# had a family. The question is the same question whatever the value turns out to be, so
+	# it is asked once, here, above the four.
+	#
+	# A DECLARATION STILL WINS. A type declaring `fn display()` is `MRecv` and a field holding
+	# one is `MFnField`; both are asked here rather than below, because below is too late.
+	#
+	# AN UNKNOWN RECEIVER IS LEFT ALONE. A module prefix and an ill-formed target both infer to
+	# nothing, and each has a rule of its own that is the whole finding (c_free_method reports
+	# both). `strings.display()` is a member no module declares, not a rendering.
+	nm := c_named_of(tty)
+	if not c_is_unknown(tty) and not c_has_method(em, nm, meth) and not c_is_fn(c_field_ty(em, nm, meth)) {
+		c_specified_method(em, tty, meth)
+	}
+
 	return MethKind.MList if c_is_list(tty)
 	return MethKind.MMap if c_is_map(tty)
 
@@ -7661,39 +7728,11 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# told what to write rather than told to wait.
 	c_no_builtin_into(em, meth, target)
 
-	# TWO ANSWERS BEHIND ONE FALLBACK. Five names are the language's rather than a type's:
-	# `display` and `debug` are docs/runtime/format.md's renderings, "available on every value
-	# without opting into anything"; `format` is docs/surface/syntax-sugar.md's desugaring of
-	# `f"{x:spec}"`, whose f-string spelling already answers `E9012`; and `next` and `iter` on a
-	# CHANNEL are docs/core/specs.md's language fact that a channel IS an `Iterator[T]`, which
-	# that chapter tells the reader to drive by hand, plus its next sentence — an `Iterator[T]`
-	# is trivially `Iterable[T]`, and `Iterable[T]` is what has `iter()`. The two are one
-	# derivation and they split only by which sentence carries them, which is not a difference
-	# a reader can act on. A type that declares any of these is answered by `MethKind.MRecv` and
-	# never arrives here, so one of these names getting this far is a form the language has and
-	# this compiler has not lowered — it retires the day the lowering lands. Any other name is a
-	# method no type here declares, and there is no such day.
+	# THE LAST RESORT, and it now says only the one thing it is true of. The five names the
+	# LANGUAGE gives a value are decided in c_meth_kind, above every receiver family, so a name
+	# arriving here is a method no type here declares and there is no day on which it is one.
 	tty := c_infer(em, target)
-	unbuilt := meth == "display" or meth == "debug" or meth == "format" or ((meth == "next" or meth == "iter") and ast.ty_is_chan(tty))
-	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {c_specified_meth_says(meth)}") if unbuilt
-
 	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)}")
-}
-
-# c_specified_meth_says names what to write WHILE the form waits. The five names above wait on
-# three different chapters and share no substitute, so the sentence that would cover all of them
-# says nothing; each gets the one its own chapter points at.
-#
-# `next` and `iter` are one gap and take two sentences all the same: what a reader reaches for
-# `next` for is one element, and what they reach for `iter` for is the loop, so the substitute
-# is not the same substitute.
-fn c_specified_meth_says(meth: str) -> str {
-	return match meth {
-		"format" => "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one"
-		"next"   => "receive one element with `<-ch`, or drain the channel with `for v in ch`"
-		"iter"   => "a channel is its own iterator, so `for v in ch` is the loop this would be handed to"
-		_        => "`str(x)` renders any value, and an `impl` on a declared type is how a type overrides that"
-	}
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written

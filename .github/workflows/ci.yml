@@ -141,9 +141,9 @@ jobs:
       - name: Every unbuilt form is named where its readers are
         run: make chapter-codes
 
-      # And which FORMS that code covers, which the one above cannot see: the split is a list
-      # of method names in emit.zg, and it is a second copy of a chapter's `[not yet]` marker.
-      # A chapter promising a fourth name the list does not carry gets it refused permanently.
+      # And which FORMS that code covers, which the one above cannot see: each split is a list
+      # of method names in emit.zg, and each is a second copy of a chapter's `[not yet]` marker.
+      # A chapter promising a name its list does not carry gets that name refused permanently.
       - name: A method the compiler calls unbuilt is one a chapter promises
         run: make method-gaps
 

@@ -611,9 +611,14 @@ chapter-codes:                  # every unbuilt form is named where its readers 
 
 # `chapter-codes` asks whether a live `E9xxx` is quoted in some chapter; it cannot ask WHICH
 # FORMS that code covers, because the answer is a list of method names hard-coded in emit.zg.
-# Two of those lists exist and each is a second copy of a chapter's `[not yet]` marker. This
-# holds the copies to each other, in both directions, using the compiler's own sentence as the
-# needle so there is no third place to write the fact down (#74).
+# Each such list is a second copy of a chapter's `[not yet]` marker. This holds the copies to
+# each other, in both directions, using the compiler's own sentence as the needle so there is
+# no third place to write the fact down (#74).
+#
+# HOW MANY LISTS THERE ARE IS NOT WRITTEN HERE. It was, and it said two while the gate printed
+# three on every run from the day `E9056` split — a header stating a count its own gate
+# contradicts out loud. The gate discovers the lists; it does not check a number against this
+# comment, and one more split makes it four.
 method-gaps:                    # a method the compiler calls unbuilt is one a chapter promises
 	./scripts/method-gaps-check.sh
 

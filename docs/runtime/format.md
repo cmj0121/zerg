@@ -54,6 +54,19 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > method `display` on a list[int] — there is nothing to write in its place — this value has no rendering of
 > its own until the structural `Display` this compiler does not generate, so render its parts_. For a
 > composite it is one gap and not two.
+>
+> **Three receivers are in neither set, and what they are missing is not what a composite is missing.** A
+> composite is _waiting_: the structural `Display` above is exactly what stands between it and a rendering,
+> and its parts are what to render meanwhile. A **channel** and a **function value** are not waiting for
+> anything. They are an identity rather than a value — the same class `==` is refused on, _E4034 a … is an
+> identity rather than a value, and the language gives it no equality_ — so there are no parts to render
+> instead, and a `Display` would not be their answer if it arrived: _E9107 NotImplemented: the method
+> `display` on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than
+> a value_. **nil** is a third answer, because nil is not a value at all: a `fn` with no `-> type` answers it
+> ([`GRAMMAR#fn-decl`](../../GRAMMAR)), `str(f())` is told so by name — _E3086 this rendering needs a value,
+> and this one is nil_ — and what the reader needs is a `fn` that answers with something, not a rendering.
+> So `str(x)` stands in on the first set; on the second there is nothing to stand in and something to wait
+> for; and on these three there is nothing to stand in and nothing coming.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

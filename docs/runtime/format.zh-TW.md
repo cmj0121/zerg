@@ -47,6 +47,17 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > `display` on a list[int] — there is nothing to write in its place — this value has no rendering of its
 > own until the structural `Display` this compiler does not generate, so render its parts_。對一個複合值來說
 > 那是一個缺口，不是兩個。
+>
+> **有三種接收者兩邊都不在,而它們缺的東西跟複合值缺的並不一樣。** 複合值是在*等*:上面那個結構化的
+> `Display` 正是擋在它與渲染之間的東西,在那之前它的各個部分就是可以拿來渲染的。**channel** 與**函式值**則
+> 不在等任何東西。它們是身分而不是值——就是 `==` 被拒絕的那同一類,_E4034 a … is an identity rather than a
+> value, and the language gives it no equality_——所以沒有部分可以拿來頂上,而且就算 `Display` 落地了也不會是
+> 它們的答案:_E9107 NotImplemented: the method `display` on a chan[int] — there is nothing to write in its
+> place — a chan[int] is an identity rather than a value_。**nil** 是第三種答案,因為 nil 根本不是一個值:沒
+> 有 `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,`str(f())` 會被指名這麼告知——
+> _E3086 this rendering needs a value, and this one is nil_——而讀者需要的是一個會回答出東西的 `fn`,不是一個
+> 渲染。所以 `str(x)` 頂得上第一組;第二組沒有東西可以頂上,但有東西可以等;而這三種沒有東西可以頂上,也沒有
+> 東西會來。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

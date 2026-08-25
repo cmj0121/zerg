@@ -26,8 +26,9 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > _E4011 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。**`enum`** 是第三道門、
 > 第三個碼 —— _E9085 NotImplemented: rendering an `E` as text — an enum has no name for it_ —— 那是 0.2.0 的重新
 > 量測發現這裡沒有指名的(#74)。所以「每個值都能渲染」
-> 對純量、字串、錯誤與有 override 的型別現已成立，其餘則待結構化 `debug` 落地。因此結構化 `debug` 字串的確切
-> 拼法**尚未被釘定**（[not yet]）。
+> 對純量、字串、錯誤與有 override 的型別現已成立，對一個**複合值**則待結構化 `debug` 落地。它並不是對其餘每一
+> 種接收者都成立：**channel**、**函式值**與 **nil** 不在等任何東西，下面那段講這三者的文字說明了為什麼就算結構
+> 化 `debug` 落地了也不會是它們的答案。因此結構化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
 >
 > 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E9057`
 > （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
@@ -41,8 +42,9 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > 都能渲染」在上面三種拼法上成立、在第四種上還不成立。
 >
 > **在它落地之前要寫什麼,並不是每一種接收者都同一個答案**,這是把上一段拿回來對照這一段讀出來的。`str(x)`
-> 只在那個值本來就渲染得出來時才頂得上——一個純量、一個 `str`、一個 `Err`、一個 `list[byte]`,或一個有
-> override 的型別。在 Status 那段所拒絕的複合值上,沒有東西可以頂上,因為第四種拼法等的就是前三種等的同一個
+> 只在那個值本來就渲染得出來時才頂得上——一個純量、一個 `str`、一個 `Err`、一個 `list[byte]`、一個
+> `list[rune]`,或一個有 override 的型別。兩種 list 拼法都在,是因為 `str(…)` 會**橋接**它們——bytes 與碼位是
+> 回到字串的兩條路——決定這件事的是那座橋,不是「list」這個字。在 Status 那段所拒絕的複合值上,沒有東西可以頂上,因為第四種拼法等的就是前三種等的同一個
 > 缺口;訊息說的是這件事,而不是指名一個同一個編譯器會拒絕的運算式:_E9107 NotImplemented: the method
 > `display` on a list[int] — there is nothing to write in its place — this value has no rendering of its
 > own until the structural `Display` this compiler does not generate, so render its parts_。對一個複合值來說

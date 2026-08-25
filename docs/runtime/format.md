@@ -30,8 +30,10 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > `list` of something else. An **`enum`** is a third door with a third code — _E9085 NotImplemented:
 > rendering an `E` as text — an enum has no name for it_ — which the 0.2.0 re-measurement found unnamed
 > here (#74). So the intended "every value renders" holds for scalars, strings, errors and
-> overridden types now, and for the rest once structural `debug` lands. The exact spelling of a structural
-> `debug` string is therefore **not pinned** ([not yet]).
+> overridden types now, and for a **composite** once structural `debug` lands. It does not hold for every
+> remaining receiver: a **channel**, a **function value** and **nil** are waiting for nothing, and the
+> paragraph on the three of them below says why a structural `debug` would not be their answer if it
+> arrived. The exact spelling of a structural `debug` string is therefore **not pinned** ([not yet]).
 >
 > It is one gap with a third face: a composite has no structural **equality** either, so `xs == ys` over
 > two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering and comparing are the two things a
@@ -48,7 +50,9 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 >
 > **What to write while it waits is NOT one answer for every receiver**, and that is the paragraph above
 > read back against this one. `str(x)` stands in only where the value renders at all — a scalar, a `str`,
-> an `Err`, a `list[byte]`, or a type with an override. On the composites the Status note rejects there is
+> an `Err`, a `list[byte]`, a `list[rune]`, or a type with an override. Both list spellings are there
+> because `str(…)` **bridges** them — bytes and code points are the two ways back to a string — and it is
+> the bridge and not the word "list" that decides it. On the composites the Status note rejects there is
 > nothing to stand in, because the fourth spelling is waiting on the same gap the first three are, and the
 > message says so rather than naming an expression this same compiler refuses: _E9107 NotImplemented: the
 > method `display` on a list[int] — there is nothing to write in its place — this value has no rendering of

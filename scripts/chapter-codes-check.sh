@@ -23,9 +23,11 @@
 set -eu
 
 CAT=${CAT:-docs/tooling/diagnostics.md}
+RULES=${RULES:-src/compiler/zerg/rule.zg}
 fail=0
 
 [ -f "$CAT" ] || { echo "chapter-codes-check: no catalogue at $CAT" >&2; exit 1; }
+[ -f "$RULES" ] || { echo "chapter-codes-check: no rule registry at $RULES" >&2; exit 1; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -50,11 +52,20 @@ while read -r code; do
 	fail=1
 done <"$tmp/all"
 
-# THE FLOOR IS 80, and it moved: it was 90 against the 106 codes in the range before #74 took
-# seventeen of them out of it, which is a number the change itself would have tripped. It is
-# here for one job — every comparison above is against `$tmp/all`, and an extraction that stops
-# matching empties it and turns this gate silently green.
-[ "$n" -ge 80 ] || { echo "EMPTY     only $n codes were read from $CAT — the extraction has gone stale" >&2; fail=1; }
+# THE EXTRACTION'S OWN GUARD, and it is not a number. Every comparison above is against
+# `$tmp/all`, so an extraction that stops matching empties it and turns this gate silently
+# green — which is what the guard is for. It was a hand-set floor, 90 and then 80, and both
+# times the count moved underneath it: #74 took seventeen codes out of the range in one span,
+# and this repo has merged a span that BUILT sixteen forms in one go. A floor set against
+# today's count is a number that blames its own extraction the day somebody does correct work
+# at scale, which is the same defect the two corrections above were for.
+#
+# So it is derived. `rule.zg` declares every code exactly once and its discriminant IS the
+# number, so the live `E9xxx` rows the catalogue carries are the `= 9xxx` variants the compiler
+# has — not approximately, exactly. Comparing the two says the extraction read the whole
+# catalogue AND that the catalogue is the registry, and it tracks whatever either becomes.
+declared=$(grep -cE '^	[A-Za-z_][A-Za-z_0-9]* = 9[0-9]{3}$' "$RULES")
+[ "$n" -eq "$declared" ] || { echo "STALE     $n codes were read from $CAT and $RULES declares $declared — one of the two has gone stale" >&2; fail=1; }
 
 [ "$fail" -eq 0 ] || { echo "chapter-codes-check: an unbuilt form is not named where its readers are" >&2; exit 1; }
 echo "chapter-codes-check: $n unbuilt-form codes, each named in a chapter"

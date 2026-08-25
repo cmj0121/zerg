@@ -232,6 +232,43 @@ fn main() {
 }
 EOF
 
+# --- the three programs L1xx used to report and had no business reporting -------------
+#
+# Each of these was found by pointing `make lint` at `examples/`, which nothing had ever done.
+# A finding on a correct program is the one failure a linter must not have, and all three were
+# on a page a reader is told to copy from.
+
+# THE PARSER WROTE THAT BINDING. A nameless `with e { … }` still binds — that is what holding a
+# resource means — and the name it binds is `_with_<line>`, which the author did not type and
+# cannot read, rename or delete. `examples/18_scoped.zg` carried the finding.
+quiet L103 'l103-nameless-with' 'the binding a NAMELESS `with` makes, which no author wrote' <<'EOF'
+fn hold() -> list[str] {
+	mut xs: list[str] = []
+	xs.append("x")
+	return xs
+}
+
+fn main() {
+	with hold() {
+		print 1
+	}
+}
+EOF
+
+# A CALL IS A READ. `g := add` then `g(1, 2)` records `g` as a CALL and not as an identifier,
+# so the binding read as never read — on `examples/1g/evalorder/main.zg`, whose whole subject
+# is a call through a function value.
+quiet L103 'l103-fn-value-called' 'a binding that holds a function and is only ever called' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	g := add
+	print g(1, 2)
+}
+EOF
+
 quiet L102 'l102-from-const' 'a private function called only from a module-level const' <<'EOF'
 import "math"
 
@@ -533,6 +570,67 @@ else
 	fail=$((fail + 1))
 fi
 
+# --- an import whose only job is to supply a `spec` -----------------------------------
+#
+# A SPEC IS REACHED BY A BARE NAME. `impl Tag for A` names the interface, `Tag` is declared in
+# another module, and nothing about the import's NAMESPACE is written anywhere in the file — so
+# the rule that judges an import by what reaches through its namespace called it unused. It is
+# the opposite: delete the import and the compiler answers `E3013 no spec named \`Tag\``, which
+# is what the assertion below proves before it asks the linter anything.
+#
+# It is written out rather than handed to `quiet`, because that helper takes ONE file on stdin
+# and this is the one rule whose subject cannot be one file.
+mkdir -p "$tmp/spec/proto"
+cat >"$tmp/spec/proto/mod.zg" <<'EOF'
+pub spec Tag {
+	fn tag(n: int) -> int
+}
+EOF
+cat >"$tmp/spec/main.zg" <<'EOF'
+import "./proto"
+
+struct A {
+	pub v: int
+}
+
+impl Tag for A {
+	fn tag(n: int) -> int {
+		return this.v + n
+	}
+}
+
+fn main() {
+	print A(1).tag(2)
+}
+EOF
+
+# the import is LOad-BEARING, and this is what says so: with the line gone the program does not
+# compile. A silence asserted about an import the program does not need would prove nothing.
+grep -v '^import "./proto"$' "$tmp/spec/main.zg" >"$tmp/spec/without.zg"
+if "$ZERG" build "$tmp/spec/without.zg" --emit check >/dev/null 2>&1; then
+	echo "NEEDLESS  the spec fixture builds without its import, so the silence below proves nothing"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+
+spec_out=$("$ZERG" lint "$tmp/spec/main.zg" 2>&1)
+spec_status=$?
+case $spec_out in
+*L101*)
+	echo "SPOKE     L101 fired on an import that supplies a spec: $(echo "$spec_out" | head -1)"
+	fail=$((fail + 1))
+	;;
+*)
+	if [ "$spec_status" -ne 0 ]; then
+		echo "STATUS    l101-supplies-a-spec — wanted exit 0 on a clean program, got $spec_status: $(echo "$spec_out" | head -1)"
+		fail=$((fail + 1))
+	else
+		pass=$((pass + 1))
+	fi
+	;;
+esac
+
 # --- every documented rule has a case ----------------------------------------------
 
 for code in $(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u); do
@@ -565,4 +663,8 @@ if [ $fail -ne 0 ]; then
 	echo "lint-check: $fail rule(s) the linter no longer reports"
 	exit 1
 fi
-echo "lint-check: $pass rules seen firing, every documented code covered"
+# WHAT THE NUMBER IS. `pass` counts ASSERTIONS — a rule seen firing, a rule seen staying
+# silent, an exit status, a catalogue comparison — and the line used to call every one of them
+# a "rule seen firing", which read as a coverage figure four times the size of the rule set.
+# The rules are `seen`, and that is the number a reader of this gate wants.
+echo "lint-check: $(printf '%s\n' $seen | sort -u | grep -c .) rules seen firing over $pass assertions, every documented code covered"

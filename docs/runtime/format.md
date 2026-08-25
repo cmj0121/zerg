@@ -36,6 +36,14 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > It is one gap with a third face: a composite has no structural **equality** either, so `xs == ys` over
 > two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering and comparing are the two things a
 > reader most expects a container to do for free, and neither is derived.
+>
+> **The renderings are reached by name, not by call.** `str(x)`, a hole and `print` consult them on every
+> value, and `x.display()` / `x.debug()` written out reach the override alone: a type that declares one
+> answers through it, and a value that has not — an `int`, a `str` — is **[not yet]**, _E9107
+> NotImplemented: the method `display` on a int — `str(x)` renders any value, and an `impl` on a declared
+> type is how a type overrides that_, and the same sentence for _NotImplemented: the method `debug` on a
+> int_. So "available on every value" holds through the three spellings above and not yet through the
+> fourth; `str(x)` is what to write while it waits.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

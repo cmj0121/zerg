@@ -364,3 +364,9 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 `Iterable[T]`，所以 **lazy adapters**（`map`、`filter`、`take`、`zip`…）就是普通的 stdlib 迭代器、可鏈式——每個
 回傳一個**具體 adapter 型別**（`map` 回傳身為 `Iterator[U]` 的 `Map[This, U]`，存著來源與 closure），所以整條鏈全程
 **monomorphize**、不 box。`for mut x in X` 把每個元素綁成就地的 `mut`——僅當 `X` 為 `mut`。
+
+> **[not yet]** **手動驅動 `next()`** 沒有建置,在那唯一不靠 `impl` 就擁有它的接收者上也一樣:`ch.next()` 是
+> _E9107 NotImplemented: the method `next` on a chan[int] — receive one element with `<-ch`, or drain the
+> channel with `for v in ch`_。迴圈本身是建好的、而且把整套協定都做了——它在乾淨關閉時結束、並把 producer
+> 的崩潰重新 raise——所以缺的只是那個讓讀者能對單一元素包一層 `guard` 的拼法,也就是上一段建議的拼法。其他
+> 每一個 `next()` 都是某個已宣告 `Iterator[T]` impl 的方法,而 `Iterator[T]` 同樣還沒有被宣告。

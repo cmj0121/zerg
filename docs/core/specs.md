@@ -464,3 +464,10 @@ adapters** (`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators t
 **concrete adapter type** (`map` a `Map[This, U]` that is `Iterator[U]`, holding the source and the
 closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each element as an
 in-place `mut` — only when `X` is `mut`.
+
+> **[not yet]** **Driving `next()` by hand** is not built, on the one receiver that has it without an
+> `impl`: `ch.next()` is _E9107 NotImplemented: the method `next` on a chan[int] — receive one element with
+> `<-ch`, or drain the channel with `for v in ch`_. The loop is built and does the whole protocol — it ends
+> on a clean close and re-raises a producer crash — so what is missing is only the spelling that lets a
+> reader put a `guard` around one element, which is the spelling the paragraph above recommends. Every
+> other `next()` is a method of a declared `Iterator[T]` impl, and `Iterator[T]` is not declared either.

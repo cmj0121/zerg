@@ -31,6 +31,13 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 >
 > 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E9057`
 > （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
+>
+> **這兩種渲染是靠名字抵達的,不是靠呼叫。** `str(x)`、洞與 `print` 在每個值上都會諮詢它們,而寫成
+> `x.display()` / `x.debug()` 時只會抵達 override:有宣告的型別由它回答,沒有宣告的值——一個 `int`、一個
+> `str`——則是 **[not yet]**,_E9107 NotImplemented: the method `display` on a int — `str(x)` renders any
+> value, and an `impl` on a declared type is how a type overrides that_,`debug` 也是同一句
+> _NotImplemented: the method `debug` on a int_。所以「每個值都能渲染」在上面三種拼法上成立、在第四種上還
+> 不成立;在它落地之前要寫的是 `str(x)`。
 
 **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式

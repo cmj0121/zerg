@@ -32,7 +32,10 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 `f"{x=}"` 是 `E9014`。**複合值**的洞同樣被拒,所以結構化渲染也是 **[not yet]**——`struct` 是指名的
 （_E9059 NotImplemented: rendering a P as text_）,而 `list` 或 `map` 走的是一條普通的受檢規則、且怪罪一個程式從未
 寫過的 bridge（_E4011 `str(…)` over a list bridges bytes or code points_）——見
-[格式化與文字](../runtime/format.zh-TW.md)。
+[格式化與文字](../runtime/format.zh-TW.md)。**desugar 之後的拼法是同一個缺口**:寫成 `x.format(spec)` 是
+_E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the same gap spelled
+in an f-string hole), and `f"{x}"` renders without one_,因為這一列點名的 `Format` protocol 還不是任何型別
+帶著的宣告。
 
 **`del ch`** 是 **[not yet]**:_E9066 NotImplemented: `del ch` on a CHANNEL_,它指向 `close(ch)`,以及 binding
 的 scope 本來就會做的那次釋放。而**運算子**那一列只有在運算子屬編譯器所有時才 desugar:沒有任何運算子 `spec` 被

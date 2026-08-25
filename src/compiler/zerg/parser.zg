@@ -4715,6 +4715,19 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
 
 	mut toks := lexer.tokenize(hole)
 
+	# THE HOLE IS LEXED ON ITS OWN, so its tokens count from line 1 column 1 of the hole and not
+	# of the file. Every refusal below already says `t.line, t.col` for that reason — but a
+	# diagnostic made LATER, off a node the hole produced, had nothing to correct it. An
+	# f-string holding `1 + 2.5` reported `L502 the literal 1 is a float here` at 1:1 — a place
+	# in no file, to an author who is holding a real line number. Stamping the enclosing
+	# token's place on the hole's tokens is what those refusals do by hand, done once and for
+	# every node the hole goes on to produce.
+	#
+	# It is the f-string's place and not the literal's, because the hole's own column counts
+	# characters of a string this compiler never re-joined to the source. A place a reader can
+	# find beats a column that is exact about the wrong text.
+	fstr_place(toks, t)
+
 	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
 	# inherits `edepth` for the mirror reason — the hole's expression is spliced into the
@@ -4726,6 +4739,16 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
 	# silent wrong answer this path exists to avoid
 	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringHoleManyExprs, "f-string: a hole must be a single expression: {" + hole + "}") if not p_at(hp, token.Kind.Eof) and not p_at(hp, token.Kind.Semi)
 	return ast.Expr.EConv(ast.Ty.TStr, e, "str")
+}
+
+# fstr_place puts the enclosing f-string's line and column on every token of a re-lexed hole.
+fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
+	mut i := 0
+	for i < toks.len() {
+		k := toks[i]
+		toks[i] = token.Token(k.kind, k.lexeme, k.value, t.line, t.col)
+		i = i + 1
+	}
 }
 
 # fstr_reject refuses the hole forms this compiler does not implement, naming which one.

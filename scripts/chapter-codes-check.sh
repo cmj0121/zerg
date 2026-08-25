@@ -42,7 +42,21 @@ sed -n '1,/^### Retired codes/p' "$CAT" |
 
 # THE CHAPTERS ARE EVERY `.md` UNDER docs/ EXCEPT THE CATALOGUE ITSELF and its translation:
 # a code quoted only where every code is quoted is a code no chapter names.
-find docs -name '*.md' ! -name 'diagnostics*.md' -print0 >"$tmp/chapters" 2>/dev/null || true
+find docs -name '*.md' ! -name 'diagnostics*.md' -print0 >"$tmp/chapters"
+
+# AND THE CHAPTER LIST HAS A GUARD OF ITS OWN, which is the half the derived count at the
+# bottom cannot reach. Every comparison below is against `$tmp/all`; the chapters are read by
+# `xargs -0 grep`, and BSD xargs handed NO input exits 0 WITHOUT RUNNING grep — so an empty
+# list makes the `if` below true for every code, `n` counts on unchanged, the derived count
+# still matches, and this gate prints its success line having read no chapter at all.
+#
+# Measured on macOS: pointed at an empty directory the old code printed `90 unbuilt-form
+# codes, each named in a chapter` and exited 0. GNU xargs runs grep once on empty input and
+# would have gone red, so the defect was green here and red in CI — the worse of the two ways
+# to be wrong, because the machine that reports it is not the machine that can debug it. The
+# `2>/dev/null || true` that used to close this line is gone with it: a `find` that fails is a
+# gate that cannot run, not a gate with nothing to say.
+[ -s "$tmp/chapters" ] || { echo "chapter-codes-check: no chapter was read from docs/ — the extraction has gone stale" >&2; exit 1; }
 
 n=0
 while read -r code; do

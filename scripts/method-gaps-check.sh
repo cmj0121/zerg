@@ -56,13 +56,18 @@ trap 'rm -rf "$tmp"' EXIT
 find docs -name '*.md' ! -name '*.zh-TW.md' ! -name 'diagnostics*.md' -exec cat {} + |
 	sed -e 's/^[[:space:]]*>[[:space:]]*//' | tr '\n' ' ' >"$tmp/chapters"
 
-# THE SPLITS, and they are read out of the messages rather than listed here. A method-gap
-# message is one whose SUBJECT is the name — `NotImplemented: the method `{meth}`` or `the map
-# method `{meth}`` — which is what tells it from the other conditional `NotImplemented:` raises
-# that happen to carry a `{meth}` hole (an rvalue mutation, an associated function). Of those,
-# a SPLIT is the CONDITIONAL one: `E9056` calls every unknown list method unbuilt and has no
-# condition, so it has no list, and a code with no list has no second copy to hold.
-grep -nE 'rule\.Rule\.[A-Za-z_]+, f"NotImplemented: the ([a-z]+ )?method .\{meth\}.*\) if ' "$SRC" |
+# THE METHOD-GAP RAISES, read out of the messages rather than listed here. One is a raise
+# whose SUBJECT is the name — `NotImplemented: the method `{meth}`` or `the map method
+# `{meth}`` — which is what tells it from the other `NotImplemented:` raises that happen to
+# carry a `{meth}` hole (an rvalue mutation, an associated function).
+#
+# THE ANCHOR USED TO REQUIRE A CONDITION, and that is how #74 shipped its own defect. It read
+# `.*\) if `, so only a raise that was ALREADY split was visible, and the one that was not —
+# `E9056`, calling every name it was reached with unbuilt, `xs.wobble()` included — could not
+# be seen by the gate written to find exactly that. A gate that only inspects the work already
+# done cannot report the work not done. So the condition is no longer part of the anchor: it
+# is read below, and its absence is a finding of its own.
+grep -nE 'rule\.Rule\.[A-Za-z_]+, f"NotImplemented: the ([a-z]+ )?method .\{meth\}' "$SRC" |
 	cut -d: -f1 >"$tmp/raises"
 
 # THE NAMES, read from the bindings the raise's condition stands on: walk up from the raise
@@ -111,6 +116,21 @@ while read -r ln; do
 		continue
 	fi
 	code="E$num"
+
+	# AND IT MUST BE CONDITIONAL. An unconditional method-gap raise calls EVERY name it is
+	# reached with unbuilt, so a name the language does not give the receiver — and no build
+	# will ever grow — is refused as a form somebody is waiting for. That is the whole of #74,
+	# and `E9056` was it: the list's fallback, one arm from the map's fallback the same change
+	# had split, wearing `NotImplemented:` for `xs.wobble()`. There is nothing to compare a
+	# chapter against here, because there is no list; what is owed is the split.
+	case $raise in
+	*") if "*) ;;
+	*)
+		echo "UNSPLIT   $code names a method and calls every one of them unbuilt with no condition — a name the language does not give is refused as a form that is coming" >&2
+		fail=1
+		continue
+		;;
+	esac
 
 	# The needle: the message's literal text up to the FIRST `{meth}` hole, which ends in the
 	# opening backtick the chapters quote the name inside. Both cuts take the first match —

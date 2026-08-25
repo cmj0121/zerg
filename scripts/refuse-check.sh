@@ -1490,6 +1490,14 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" channel-iter E9107 'the method `iter` on a chan[int]' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- 1
+	print ch.iter()
+}
+EOF
+
 expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
 fn main() {
 	t := (1, 2)

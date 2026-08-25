@@ -6630,6 +6630,15 @@ fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
 # bridge unconditionally handed `zgs_from_bytes` an `int64_t`, so `str(n)` was not a thing
 # anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
 # display leaves are already in the runtime header for the seed's f-strings.
+# c_str_bridges_list is the condition E4011 turns a list away on, given a name because it is
+# asked twice: here, where `str(xs)` is lowered, and by c_renders_as_text, which owes a reader
+# the same answer about the same expression. A `list[rune]` is the way back from the code
+# points and a `list[byte]` the way back from the bytes; a list of anything else has nothing
+# to bridge, and there is no structural rendering underneath it to fall back on.
+fn c_str_bridges_list(t: ast.Ty) -> bool {
+	return c_is_rune(c_list_elem(t)) or c_is_byte(c_list_elem(t))
+}
+
 fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str {
 	# the operand is rendered by the paths that emit it — the identity, bridge and
 	# override returns above them answer through c_copied or a method call instead, so a
@@ -6678,7 +6687,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 			# so `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
-			raise c_diag(em, rule.Rule.StrOfListElement, f"`str(…)` over a list bridges bytes or code points, and this is {ast.ty_name(xt0)} — a composite has no rendering of its own, so render its elements") if not c_is_byte(c_list_elem(xt0))
+			raise c_diag(em, rule.Rule.StrOfListElement, f"`str(…)` over a list bridges bytes or code points, and this is {ast.ty_name(xt0)} — a composite has no rendering of its own, so render its elements") if not c_str_bridges_list(xt0)
 
 			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
 			# the raise, so a caller passing a temporary owes no post-call drop that an
@@ -7013,14 +7022,35 @@ fn c_conv_to_i64(sc: int, inner: str) -> str {
 # every rendering site call both in the right order — and the second re-scanned what the
 # first had just scanned.
 fn c_render_override(mut &em: Emitter, t: ast.Ty) -> str? {
+	return nil if not c_declares_rendering(em, t)
+
 	nm := c_named_of(t)
 
-	return nil if nm == ""
 	return "display" if c_render_shape_ok(em, nm, "display")
 	return "debug" if c_render_shape_ok(em, nm, "debug")
-	return "" if c_has_method(em, nm, "display") or c_has_method(em, nm, "debug")
 
-	return nil
+	return ""
+}
+
+# c_declares_rendering is the PRESENCE half of the question above, and it is a function
+# because one rule wants the presence and not the name: c_renders_as_text asks whether a
+# value renders at all, and the two sites that dispatch ask which method to dispatch through.
+#
+# It is not a second copy of the rule. It is the FIRST of the two states above — the `nil`
+# row — and c_render_override is now written on top of it, so the two cannot answer
+# differently about the same type. Reading the answer out of the optional was the alternative
+# and this language has no presence test that does not bind: `E3039` refuses an optional as
+# an operand of `==`/`!=` and prescribes `if v := x { … }` in the same sentence, which leaves
+# a binding nothing reads (`L103`) — and `#[allow(L103)]` is not available in this tree,
+# because the SEED does not parse a decorator on a statement.
+#
+# `c_render_shape_ok` implies `c_has_method`: both key off the same signature row, and a row
+# with the override shape is a row. That is why the mis-shaped `""` can be the unconditional
+# tail above rather than a fourth condition — everything reaching it has a declaration.
+fn c_declares_rendering(mut &em: Emitter, t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+
+	return c_has_method(em, nm, "display") or c_has_method(em, nm, "debug")
 }
 
 # c_render_shape_ok is whether `recv` declares `meth` with the override contract's shape:
@@ -7289,6 +7319,29 @@ fn c_ty_is_iterable(tty: ast.Ty) -> bool {
 	return c_is_list(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
 }
 
+# c_renders_as_text answers whether this value HAS a rendering, and it is asked because a
+# diagnostic that names a substitute owes the reader an expression that compiles. It states
+# what c_conv's `str(…)` arm decides, in the same three steps: a declared override renders
+# (whatever shape it is in — a mis-shaped one earned its finding at the declaration and an
+# inert placeholder is what stands in), a `list` renders only where it BRIDGES, and everything
+# else renders unless it is a composite or a carrier — which is c_display_check's own pair of
+# refusals read as a question rather than as a raise.
+#
+# A CHANNEL IS NOT ONE, and that is the single place this parts company with what the `str(…)`
+# arm ACCEPTS. `str(ch)` compiles today and prints the channel's address: a number, and not a
+# rendering of anything. Offering it as a substitute would be a sentence that runs and answers
+# nonsense, which is worse than one that does not compile, so what is asked here is what
+# renders rather than what is accepted. That `str(ch)` is refused by nothing is a gap of its
+# own and not this rule's to close.
+fn c_renders_as_text(mut &em: Emitter, t: ast.Ty) -> bool {
+	return true if c_declares_rendering(em, t)
+
+	return false if ast.ty_is_chan(t)
+	return c_str_bridges_list(t) if c_is_list(t)
+
+	return not c_is_aggregate(em, t) and not c_is_carrier(t)
+}
+
 # c_specified_meth_says answers what to write WHILE the form waits, and answering is the same
 # act as deciding: a name is one the LANGUAGE gives this receiver exactly when there is a
 # sentence saying what stands in for it, so the predicate and the substitute are one list with
@@ -7308,9 +7361,24 @@ fn c_ty_is_iterable(tty: ast.Ty) -> bool {
 # CHANNEL is the one receiver that is one without an `impl`. `iter` is the next sentence of
 # that same paragraph — `Iterable[T]` is what has `iter()`, and `for x in X` requires
 # `X: Iterable[T]` — so it is given on everything that loop walks, not on a channel alone.
-fn c_specified_meth_says(tty: ast.Ty, meth: str) -> str {
-	return "`str(x)` renders any value, and an `impl` on a declared type is how a type overrides that" if meth == "display" or meth == "debug"
-	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if meth == "format"
+#
+# THE THREE RENDERINGS ARE GIVEN ON EVERY RECEIVER AND THEIR SUBSTITUTE IS NOT. `display`,
+# `debug` and `format` were widened to every value, correctly — the chapter says "on every
+# value" — while their substitutes went on naming `str(x)` and `f"{x}"`, which a `list[int]`
+# answers with E4011 and a map, a struct, an enum and a carrier with E9059 and E9085. The
+# compiler was telling a reader to write an expression the same compiler refuses, which is a
+# worse answer than the permanent rejection this split was built to remove. So each of the
+# three has TWO clauses, one per side of c_renders_as_text: where the value renders, the
+# substitute is the expression that renders it, and where it does not there is no substitute
+# and the clause says so. The fourth spelling waits on the same gap the first three do, and
+# for a composite that is one gap and not two.
+fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
+	renders := c_renders_as_text(em, tty)
+
+	return "`str(x)` renders it, and an `impl` on a declared type is how a type overrides that" if renders and (meth == "display" or meth == "debug")
+	return "there is nothing to write in its place — this value has no rendering of its own until the structural `Display` this compiler does not generate, so render its parts" if meth == "display" or meth == "debug"
+	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if renders and meth == "format"
+	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — this value has none of its own until the structural `Display` this compiler does not generate" if meth == "format"
 	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
 	return "`for v in x` walks this value directly, and that is the loop an iterator would be handed to" if meth == "iter" and c_ty_is_iterable(tty)
 
@@ -7321,7 +7389,7 @@ fn c_specified_meth_says(tty: ast.Ty, meth: str) -> str {
 # It is the whole of `E9107`, and it is ONE raise because it is one finding — which receiver
 # the value turned out to be is not part of it.
 fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
-	says := c_specified_meth_says(tty, meth)
+	says := c_specified_meth_says(em, tty, meth)
 	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
 }
 

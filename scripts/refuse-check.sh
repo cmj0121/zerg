@@ -1498,6 +1498,83 @@ fn main() {
 }
 EOF
 
+# AND ON A RECEIVER THAT HAS A FAMILY. Every case above stands on an `int` or a channel, and
+# neither is a list, a map, an `Err` or a carrier — which is to say every one of them reached
+# the fallback that carries this split, and none of them could see that the four families
+# above it were answering the same names for themselves. `m.display()` was `E3134`,
+# `e.display()` was `E3124`, `o.display()` was `E3129` and `xs.display()` was `E9056`: four
+# codes for one question, three of them permanent, for a rendering docs/runtime/format.md
+# gives every value. One case per family, because one case per family is what a shared
+# fallback cannot fake.
+expect "$ZERG" map-display E9107 'the method `display` on a map[str, int]' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m.display()
+}
+EOF
+
+expect "$ZERG" err-display E9107 'the method `display` on a Err' <<'EOF'
+fn f() -> int {
+	raise ValueError("x")
+}
+
+fn main() {
+	r: Result[int] = guard {
+		f()
+	}
+	match r {
+		Either.Left(v) => {
+			print v
+		}
+		Either.Right(e) => {
+			print e.display()
+		}
+	}
+}
+EOF
+
+expect "$ZERG" carrier-display E9107 'the method `display` on a int?' <<'EOF'
+fn g() -> int? {
+	return nil
+}
+
+fn main() {
+	print g().display()
+}
+EOF
+
+expect "$ZERG" list-display E9107 'the method `display` on a list[int]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.display()
+}
+EOF
+
+# `iter` IS GIVEN ON WHAT `for … in` WALKS, not on a channel alone. docs/core/specs.md derives
+# it from `for x in X` requiring `X: Iterable[T]`, and that loop walks a list, a map and a str
+# as well — each of which was answering its own family's permanent rejection for a loop the
+# language gives it. The channel case above pins the fourth.
+expect "$ZERG" list-iter E9107 'the method `iter` on a list[int]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs.iter()
+}
+EOF
+
+expect "$ZERG" map-iter E9107 'the method `iter` on a map[str, int]' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m.iter()
+}
+EOF
+
+expect "$ZERG" str-iter E9107 'the method `iter` on a str' <<'EOF'
+fn main() {
+	s := "ab"
+	print s.iter()
+}
+EOF
+
 expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
 fn main() {
 	t := (1, 2)

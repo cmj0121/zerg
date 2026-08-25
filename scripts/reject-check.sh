@@ -7546,6 +7546,28 @@ fn main() {
 }
 EOF
 
+# THE RECEIVER HALF OF `E9107`'s SPLIT, which is the half no gate reads. Two of its five names
+# are given on a RECEIVER SET rather than on every value — `next` on a channel, `iter` on what
+# `for … in` walks — and `scripts/method-gaps-check.sh` compares names against the chapters and
+# never the predicate that decides which receivers get them. Delete the receiver test from
+# either clause and the compiler starts promising an `int` a loop nothing walks, in a
+# `NotImplemented:` sentence that says to write `for v in x`. These two cases are what notices:
+# an `int` is not iterated and is not an iterator, so both names are permanently wrong on one,
+# and that verdict is `E3131`.
+reject iter-on-a-value-no-loop-walks E3131 <<'EOF'
+fn main() {
+	x := 1
+	print x.iter()
+}
+EOF
+
+reject next-on-a-value-that-is-not-an-iterator E3131 <<'EOF'
+fn main() {
+	x := 1
+	print x.next()
+}
+EOF
+
 reject construct-the-end-of-stream-sentinel E4063 <<'EOF'
 fn main() {
 	e := StopIteration("x")

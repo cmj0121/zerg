@@ -585,8 +585,9 @@ is nothing left for a rule of its own to say. Its number is listed here for the 
 other number is: so that it is never reissued.
 
 Twenty-seven others were measured and are **not** findings, which is what deciding the
-question settled: the twenty-two checking rules `emit.zg` reports (it is _AST -> C, with the
-minimal typecheck emit needs_, so the file is an implementation fact), the four visibility
-rules that are about the program as a set of files, and `E1011` — a source that is not UTF-8
-is a question about TEXT, and the driver reports it only because the driver is what opens the
-file.
+question settled: the twenty-two checking rules `emit.zg` reported when that audit ran (it is
+_AST -> C, with the minimal typecheck emit needs_, so the file is an implementation fact), the
+four visibility rules that are about the program as a set of files, and `E1011` — a source
+that is not UTF-8 is a question about TEXT, and the driver reports it only because the driver
+is what opens the file. The three numbers are that audit's and are left as it wrote them; the
+count of rules `emit.zg` reports has moved since, and no gate holds this sentence to it.

@@ -44,8 +44,10 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
 > 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
-> compiler has `len` and `append`_，`map` 上是 _E9100 NotImplemented: the map method `insert`_。所以一個
-> collection 只能從尾端增長、完全不能縮短。
+> compiler has `len` and `append`_，`map` 上是 _E9100 NotImplemented: the map method `insert`_ 與
+> _E9100 NotImplemented: the map method `remove`_。所以一個 collection 只能從尾端增長、完全不能縮短。每個名字
+> 都是引用而非描述,因為編譯器是靠一份名字清單來分辨 `E9100` 的兩半,而 `make method-gaps` 會讀這個標記來把那
+> 份清單釘住——在這裡被承諾、在那裡卻缺席的 method,會被永久拒絕。
 
 ```text
 xs := [1, 2, 3]            # 凍結：xs.append(4) 與 xs[0] = 9 都是錯誤

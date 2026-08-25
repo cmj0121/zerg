@@ -47,8 +47,10 @@ collection can modify its elements**.
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
 > refused by name on both `list` and `map`, and each container answers with its own code — _E9056
 > NotImplemented: the list method `insert` — this compiler has `len` and `append`_ on a `list`, _E9100
-> NotImplemented: the map method `insert`_ on a `map`. So a collection grows at its end and does not shrink
-> at all.
+> NotImplemented: the map method `insert`_ and _E9100 NotImplemented: the map method `remove`_ on a `map`.
+> So a collection grows at its end and does not shrink at all. Each name is quoted rather than described,
+> because the compiler tells the two halves of `E9100` apart by a list of names and `make method-gaps`
+> reads this marker to hold that list to it — a method promised here and missing there is refused for good.
 
 ```text
 xs := [1, 2, 3]            # frozen: xs.append(4) and xs[0] = 9 are errors

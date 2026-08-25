@@ -383,7 +383,7 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
   matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
   one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
-  (`E9102`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
+  (`E3136`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
   every value and the `match` falls through to its catch-all with nothing said. One case in
   `reject-check.sh` carries the marker.
 - **A `spec` NAMED AS A STRUCT FIELD'S TYPE is accepted.** A spec is a bound and an interface,

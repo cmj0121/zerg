@@ -475,7 +475,7 @@ shipping compiler rather than a part of it (the line
 | `E9104` | the module `atomic` ships and cannot be imported                                                        |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                       |
-| `E9107` | the method `…` on a … — `display`, `debug`, `format`, or a channel's `next`                             |
+| `E9107` | the method `…` on a … — `display`, `debug`, `format`, or a channel's `next` / `iter`                    |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -533,10 +533,10 @@ exists for.
 
 **A fourth split, found after the move.** `E9094` was read as a wrong program and retired into
 `E3131`, and it was two questions as well: `c_free_method`'s fallback answers every name no type
-declares, and four of those names are the language's rather than a type's — `display` and `debug`,
-which every value renders with, `format`, which `f"{x:spec}"` desugars to, and `next` on a channel,
-which is an `Iterator[T]`. Those four are forms, so they took the fresh **`E9107`**. The number
-they had is spent: `E9094` stays retired and is not reissued.
+declares, and five of those names are the language's rather than a type's — `display` and `debug`,
+which every value renders with, `format`, which `f"{x:spec}"` desugars to, and `next` and `iter` on a
+channel, which is an `Iterator[T]` and therefore trivially an `Iterable[T]`. Those five are forms, so they
+took the fresh **`E9107`**. The number they had is spent: `E9094` stays retired and is not reissued.
 
 | Code    | Now     | Why it left                                                   |
 | ------- | ------- | ------------------------------------------------------------- |

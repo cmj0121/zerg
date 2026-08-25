@@ -93,6 +93,12 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
 > not write that comparison for P_. That is [container equality](#order--equality)'s gap reached through
 > `in`, and it retires with it. An element type carrying **no** `Eq` is a different answer — `E3118`, which
 > the program closes itself by writing `#[derive(Eq)]` on the type.
+>
+> An element the language gives **no equality at all** is a third answer and a permanent one, and it is
+> `==`'s own: a **channel** or a **function value** is an identity — _E4034 a chan[int] is an identity
+> rather than a value, and the language gives it no equality_ — and a **carrier** may hold nothing to
+> compare, _E4038_. `in` compares its elements with `==`, so where `==` means nothing `in` means nothing,
+> and the reader is told by the code they would have met writing the comparison out.
 
 ```text
 first := xs[0]                 # aborts if empty

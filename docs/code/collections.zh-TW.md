@@ -85,6 +85,11 @@ collection 也能拿來當 key。
 > and this compiler does not write that comparison for P_。那是[順序與相等性](#順序與相等性)那個缺口從 `in` 這一
 > 側看過去的樣子，也會跟它一起退場。元素型別**沒有** `Eq` 則是另一個答案——`E3118`，那個缺口是程式自己用
 > `#[derive(Eq)]` 補上的。
+>
+> 語言**根本沒給相等性**的元素是第三個答案,而且是永久的,也是 `==` 自己的答案:一個 **channel** 或一個**函式
+> 值**是身分——_E4034 a chan[int] is an identity rather than a value, and the language gives it no
+> equality_——而一個**載體**可能什麼都沒裝著可比,_E4038_。`in` 是用 `==` 比較它的元素的,所以 `==` 沒有意思
+> 的地方 `in` 就沒有意思,而讀者被告知的就是他們把那個比較寫出來時會遇到的同一個代碼。
 
 ```text
 first := xs[0]                 # 空的話 abort

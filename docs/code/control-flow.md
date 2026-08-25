@@ -80,6 +80,13 @@ writes each edited element back to its slot, is **[not yet]** (`E9025`). Testing
 refused by name and with a place (`E9077`); a range exists only as the thing a `for` walks, a `match` arm
 contains, and an `in` tests against.
 
+> **[not yet]** Membership holds for the bounds this compiler can hand to C's `>=`, which is every scalar
+> but a `str`. A range bounded by anything else is _E9062 NotImplemented: `in` over a range of str — a
+> range's members are found by comparing its bounds, and str is not a type this compiler compares that
+> way_, so `"c" in "a".."z"` is not a program today though `GRAMMAR#range-expr` derives it. A set that is
+> no set at all — `3 in 5` — reads the same way and is not the same answer: it is `E3119`, and nothing is
+> coming for it.
+
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly
 `if cond { break }` / `if cond { continue }`. The same postfix `if` carries a `return` and a `raise`:

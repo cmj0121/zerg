@@ -59,6 +59,12 @@ branches give int and float_,與 `match` 的 `E3021` 並排。`nil` 分支是例
 會被指名拒絕、帶位置（`E9077`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
 拿來測的東西」裡。
 
+> **[not yet]** 成員關係只對這個編譯器交得進 C 的 `>=` 的上下界成立，也就是 `str` 以外的每一種純量。上下界是別
+> 的東西的 range 則是 _E9062 NotImplemented: `in` over a range of str — a range's members are found by
+> comparing its bounds, and str is not a type this compiler compares that way_，所以 `"c" in "a".."z"` 今天
+> 還不是一支程式，即使 `GRAMMAR#range-expr` 推導得出它。一個根本不是 set 的 set——`3 in 5`——讀起來一樣、答案
+> 卻不一樣：它是 `E3119`，而且沒有任何東西在等著它。
+
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
 後綴 `if` 也載得住 `return` 與 `raise`：

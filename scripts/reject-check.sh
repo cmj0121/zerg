@@ -7404,6 +7404,49 @@ fn main() {
 }
 EOF
 
+# --- `in` over an element `==` MEANS NOTHING ON -----------------------------------------
+#
+# `in` compares its elements with `==`, so the four answers `==` gives are the four answers
+# `in` owes, and it was asking a narrower question — `c_is_aggregate` — that names two of
+# them and excludes two. What fell through the gap was not a worse message, it was NO message:
+# `ch in chans` compiled and answered about two channel ADDRESSES, and a `fn` or a carrier
+# element reached cc against a line nobody wrote.
+#
+# THE CODE IS `==`'s OWN. A channel and a `fn` are one class (`E4034`, `c_is_identity`) and a
+# carrier is the other (`E4038`); both are permanent answers of the language, both already have
+# a sentence, and a second number for a finding that already has one is what #74 exists to
+# undo. So these three cases assert the codes the sibling `==` cases in this file and in
+# `refuse-check.sh` assert, from the other spelling of the same comparison.
+#
+# The SENTENCE is asserted with the code because each of these codes now has two cases, and
+# what has to be told apart is `a == b` from `a in bs` — same code, same words, different site.
+reject in-over-a-list-of-channels E4034 'an identity rather than a value' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	chans := [ch]
+	print str(ch in chans)
+}
+EOF
+
+reject in-over-a-list-of-fns E4034 'a fn(int) -> int is an identity' <<'EOF'
+fn g(a: int) -> int {
+	return a
+}
+
+fn main() {
+	fs := [g]
+	print str(g in fs)
+}
+EOF
+
+reject in-over-a-list-of-carriers E4038 'may hold no value' <<'EOF'
+fn main() {
+	a: int? = 1
+	xs: list[int?] = [a]
+	print str(a in xs)
+}
+EOF
+
 reject convert-a-list-into-a-list E4059 <<'EOF'
 fn main() {
 	xs := [1, 2]

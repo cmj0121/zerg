@@ -129,7 +129,7 @@ via `derive`; there is **no auto-derived equality** and no implicit `Object` spe
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |
 | -------- | --------------------------------------------- | --------------------- | ------------------------ |
-| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | —                        |
+| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | `chan`/`fn`              |
 | `Ord`    | lexicographic by field, then by variant order | `Eq` and `Ord`        | any `float` field        |
 | `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)  | `Hash`                | any `float` field        |
 | `Encode` | product per field; sum: tag then payload      | `Encode`              | `chan`/`Ref`/`fn`/handle |
@@ -149,9 +149,12 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 
 - **Recursive / self-referential** (auto-boxed) types derive fine — the generated impl recurses through
   the transparent box like any other field.
-- **A `Ref` value** (`chan`, `Ref[T]`) copies by refcount-bump (the memory model's rule, not a spec) and,
-  under a derived `Eq`, compares by identity; it is not `Encode`/`Decode`, so a type holding one cannot
-  derive those.
+- **A `Ref` value** (`chan`, `Ref[T]`) copies by refcount-bump (the memory model's rule, not a spec). It
+  is **not** compared by identity under a derived `Eq`, and it is not `Encode`/`Decode` either, so a type
+  holding one cannot derive any of the three. A `chan` field is the live spelling — `Ref[T]` is itself
+  **[not yet]** — and the derive is refused at the field, by the code the operator uses: _E4034 a
+  `chan[int]` is an identity rather than a value, and the language gives it no equality_. A `fn` field is
+  the same class and the same answer, which is why the `Eq` row excludes both by name.
 - **Adding an `enum` variant** re-derives automatically — there is no `match` for the author to update,
   because the compiler, not user code, walks the structure.
 

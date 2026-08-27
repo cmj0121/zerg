@@ -6,8 +6,9 @@
 # an array type `[T; N]`_ — is a claim `make error-codes-check` and the refusal corpus can
 # both reach. A marker that quotes nothing is a sentence, and a sentence is checked by
 # whoever last read it. Measured on the day this gate was written: of 157 markers in the
-# English documents, 123 quoted no code at all — so the standing rule was verifiable for
-# about a fifth of the forms that claim it.
+# English documents, a third quoted no code at all — so the standing rule was asserted for
+# every form and verifiable for two in three. The list is empty now; the gate is what keeps
+# it that way.
 #
 # THE RULE. Every `**[not yet]**` marker's own block must quote an error code THAT EXISTS —
 # a number `src/compiler/zerg/rule.zg` still assigns. Quoting a retired one is the staleness
@@ -19,18 +20,20 @@
 # reader `deviation-check` used to have and the reason a marker there could borrow a ticket
 # from ninety-one lines away.
 #
-# THE NUMBER HERE IS NOT #86's. That ticket measured 133 markers with no code by reading the
-# marker's own SENTENCE; scoped to the block a reader actually meets, it is 53. Neither
+# THE POPULATION HERE WAS NOT #86's. That ticket counted markers with no code by reading the
+# marker's own SENTENCE; scoped to the block a reader actually meets, it is smaller. Neither
 # reading is wrong — a code three lines below the marker in the same block does connect the
 # marker to its rule, and demanding it be restated in the sentence is a formatting rule
-# rather than a claim about the compiler. The block is what this gate holds, and 53 is what
-# is owed.
+# rather than a claim about the compiler. The block is what this gate holds.
 #
 # THE INHERITED LIST is `docs/.markers-uncoded`, and it works the way the deviation list
 # does — with one clause more, which is the half that makes it a ratchet rather than a
 # filing cabinet:
 #
-#   1. A marker NOT on the list must quote a code. New prose cannot add to the debt.
+#   1. A marker NOT on the list must quote a code, or name the TICKET for a rule that does
+#      not exist — the second discharge, for the handful of forms this compiler accepts in
+#      silence, where the debt is the missing rule rather than the missing citation. New
+#      prose cannot add to the debt either way.
 #   2. An entry ON the list must still be FINDABLE. A marker that was deleted or reworded
 #      takes its line with it.
 #   3. An entry on the list that NOW QUOTES A CODE must come off. Without this the list
@@ -105,18 +108,37 @@ scan() {
 				# one single-quoted shell word, so an apostrophe closes the quote and every
 				# line after it is read as shell. This paragraph cost two attempts to write:
 				# the first put one in the prose, and the second put one in the warning.
+				# A LIST BELONGS TO THE PROSE THAT INTRODUCES IT, AND NOT TO A SIBLING ITEM,
+				# which is the whole of the distinction. The back-walk stops on an item because
+				# that item is where the marker lives; whether the forward-walk stops on one
+				# then follows from what it found. A marker INSIDE an item stops at the next —
+				# it is one bullet among peers, and that is how `#[repr]` took the `E9079` of
+				# `#[sealed]`. A marker in the prose ABOVE a list owns the list: `control-flow.md`
+				# introduces three refused pattern kinds and names one code per bullet, and
+				# stopping at the first would hide every code the sentence promises.
+				inside = 0
 				for (s = i; s > 1; s--) {
-					if (isitem(line[s])) break
+					if (isitem(line[s])) { inside = 1; break }
 					if (isbreak(line[s - 1])) break
 				}
 				for (e = i; e < NR; e++)
-					if (isbreak(line[e + 1]) || isitem(line[e + 1])) break
+					if (isbreak(line[e + 1]) || (inside && isitem(line[e + 1]))) break
+				# AND THE SAMPLE ATTACHED UNDER IT, which is a fence or a list. Both are the
+				# same relationship — a sentence ending in a colon and the thing it introduces
+				# — and both are separated from it by one break, a blank line or the bare `>`
+				# that ends a paragraph inside a quote. A list is attached only for a marker
+				# that is NOT itself in an item, so this reaches what a marker introduces and
+				# never what a peer bullet says.
 				j = e + 1
-				if (j <= NR && isblank(line[j])) j++
+				if (j <= NR && isbreak(line[j])) j++
 				if (j <= NR && line[j] ~ /^[[:space:]]*(> )?[[:space:]]*```/) {
 					for (k = j + 1; k <= NR; k++)
 						if (line[k] ~ /^[[:space:]]*(> )?[[:space:]]*```/) break
 					e = k
+				} else if (!inside && j <= NR && isitem(line[j])) {
+					for (k = j; k <= NR; k++)
+						if (isbreak(line[k]) && !(k + 1 <= NR && isitem(line[k + 1]))) break
+					e = k - 1
 				}
 				coded = "UNCODED"
 				for (k = s; k <= e; k++) {
@@ -128,6 +150,18 @@ scan() {
 						coded = "RETIRED " n
 					}
 					if (coded == "CODED") break
+				}
+				# THE SECOND DISCHARGE: A TICKET. A handful of forms are specified, unbuilt,
+				# and refused by NOTHING — a user writes them and the compiler is silent. The
+				# marker is right that the form is missing and cannot quote a code, because the
+				# debt is the missing RULE. Naming the issue for that rule is the honest
+				# alternative, and it is the same clause `deviation-check` carries for the same
+				# reason: a disagreement nobody is accountable for is how a list gets emptied by
+				# deletion. Measured before it was allowed: no uncoded marker in the tree
+				# carried a `#NN` by accident, so this discharges nothing it was not given.
+				if (coded == "UNCODED") {
+					for (k = s; k <= e; k++)
+						if (line[k] ~ /#[0-9]+/) { coded = "TICKET"; break }
 				}
 				# A MARKER MAY BE THE WHOLE LINE. `docs/core/specs.md` carries one — a list item
 				# wrapped so that `**[not yet]**` sits alone on its continuation — and slugging
@@ -157,9 +191,25 @@ scan() {
 	' "$1"
 }
 
-rows=$(for f in $(pages); do scan "$f"; done)
+# PROSE ABOUT THE MARKER IS NOT A MARKER. `docs/conformance.md` defines what `[not yet]`
+# MEANS and `docs/language.md` tabulates it; neither is a claim about a form, and neither can
+# quote a code without inventing one. They share `docs/.marker-prose` with `deviation-check`,
+# for the reason that file gives: the key is a slug, so exempting a sentence never exempts a
+# chapter, and the list is short enough to read in one go.
+#
+# They are dropped from the POPULATION rather than passed, because a sentence that defines a
+# marker is not one of the markers being counted, and counting it would put the total this
+# gate reports permanently above the number of claims anybody has to answer for.
+PROSE=${PROSE:-docs/.marker-prose}
+rows=$(
+	for f in $(pages); do scan "$f"; done | while IFS='	' read -r f s c; do
+		grep -qF "$(printf '%s\t%s' "$f" "$s")" "$PROSE" 2>/dev/null && continue
+		printf '%s\t%s\t%s\n' "$f" "$s" "$c"
+	done
+)
 total=$(printf '%s\n' "$rows" | grep -c . || true)
-uncoded=$(printf '%s\n' "$rows" | grep -cv '	CODED$' || true)
+undischarged=$(printf '%s\n' "$rows" | grep -cvE '	(CODED|TICKET)$' || true)
+ticketed=$(printf '%s\n' "$rows" | grep -c '	TICKET$' || true)
 
 [ "$total" -ge "$MIN_MARKERS" ] || {
 	echo "marker-codes-check: $total markers found, floor is $MIN_MARKERS — the extractor is reading nothing"
@@ -172,7 +222,7 @@ uncoded=$(printf '%s\n' "$rows" | grep -cv '	CODED$' || true)
 # on a countdown would be filing the bug instead of fixing it.
 printf '%s\n' "$rows" | while IFS='	' read -r f s c; do
 	case "$c" in
-	CODED) continue ;;
+	CODED | TICKET) continue ;;
 	RETIRED*) echo "STALE CODE $f: $s — quotes ${c#RETIRED }, which $RULES no longer assigns" ;;
 	*)
 		grep -qF "$(printf '%s\t%s' "$f" "$s")" "$LIST" 2>/dev/null && continue
@@ -191,7 +241,7 @@ while IFS='	' read -r f s; do
 		echo "GONE       $f: $s — take it off $LIST"
 		fail=$((fail + 1))
 	elif ! printf '%s\n' "$row" | grep -q '	UNCODED$'; then
-		echo "CODED      $f: $s — take it off $LIST"
+		echo "CLOSED     $f: $s — it now names a code or a ticket; take it off $LIST"
 		fail=$((fail + 1))
 	fi
 done <"$LIST"
@@ -201,4 +251,6 @@ left=$(grep -cv '^#' "$LIST" || true)
 	echo "marker-codes-check: the inventory and the documents disagree"
 	exit 1
 }
-echo "marker-codes-check: $total markers — $((total - uncoded)) quote a code, $left inherited and still to close"
+# NO SILENT CAP: the two discharges are counted apart, so "quotes a code" never absorbs
+# "names a ticket for the rule that does not exist" — they are different states of health.
+echo "marker-codes-check: $total markers — $((total - undischarged - ticketed)) quote a code, $ticketed name a ticket for a rule that does not exist, $left inherited and still to close"

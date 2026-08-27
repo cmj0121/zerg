@@ -125,6 +125,12 @@ pub struct Outcome {
 	pub text: str = ""
 }
 
+# Context is what a `#[test]` function is handed: the test's own name, and the channel it
+# reports on. Every method a test calls — `log`, `skip`, `fatal` — is one of these, so the
+# context is the whole surface a test has to the runner.
+#
+# IT IS THE LAST SENDER on that channel, which is what ends the runner's loop; the note on
+# the field below is the whole of why the channel is bidirectional and `pub`.
 pub struct Context {
 	# `name` is the method, so the field cannot be
 	tname: str = ""

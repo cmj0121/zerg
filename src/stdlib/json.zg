@@ -240,22 +240,43 @@ pub fn of_list(xs: list[Val]) -> Val {
 	return Val.Arr(xs)
 }
 
+# of_obj closes a field list into an object — the last step of the `mut fs: list[json.Field]
+# = []` idiom the section above describes, and the only way to build the `Obj` variant.
+#
+# ```zerg
+# json.encode(json.of_obj([json.Field("k", json.of_str("v"))]))
+# ```
+# ```output
+# {"k":"v"}
+# ```
 pub fn of_obj(fs: list[Field]) -> Val {
 	return Val.Obj(fs)
 }
 
+# put appends one field to a list a caller is building. It is the general form the three
+# typed helpers below are written on, and the one to reach for when the value is already a
+# `Val` — a nested object, an array, or a `null`.
+#
+# THE LIST IS TAKEN `mut &` and appended to rather than answered fresh, because building an
+# object is a sequence of puts and a version that returned a new list would copy the whole
+# thing once per field.
 pub fn put(mut &fs: list[Field], key: str, v: Val) {
 	fs.append(Field(key, v))
 }
 
+# put_str appends a string field. It is `put` with the `Val.Str` written for you, which is
+# what keeps a caller's object-building readable — the reason the section above gives.
 pub fn put_str(mut &fs: list[Field], key: str, s: str) {
 	fs.append(Field(key, Val.Str(s)))
 }
 
+# put_int appends an integer field. Integer is the only number this module has — see the
+# header on why `Val` carries no float variant.
 pub fn put_int(mut &fs: list[Field], key: str, n: int) {
 	fs.append(Field(key, Val.Int(n)))
 }
 
+# put_bool appends a boolean field, rendered `true` or `false` and never quoted.
 pub fn put_bool(mut &fs: list[Field], key: str, b: bool) {
 	fs.append(Field(key, Val.Bool(b)))
 }

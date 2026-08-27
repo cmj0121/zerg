@@ -481,6 +481,16 @@ pub fn trim_left(s: str) -> str {
 	return slice_str(b, lo, n)
 }
 
+# trim_right is `trim_left` from the other end — the same ASCII space class, and the middle
+# untouched. The `|` in the example is the terminator the note above explains: a trailing
+# space in an ```output block would be trimmed by this repository's own pre-commit hook.
+#
+# ```zerg
+# strings.trim_right("  hi  ") + "|"
+# ```
+# ```output
+#   hi|
+# ```
 pub fn trim_right(s: str) -> str {
 	b := bytearray(s)
 	mut hi := b.len()
@@ -552,6 +562,16 @@ pub fn pad_start(s: str, width: int, fill: str) -> str {
 	return repeat(fill, n) + s
 }
 
+# pad_end is `pad_start` from the other end: the fill goes after the string rather than
+# before it, and every other rule is the same one — width is counted in RUNES, a string
+# already that wide comes back untouched, and a fill that is not one rune is refused.
+#
+# ```zerg
+# strings.pad_end("ab", 5, ".")
+# ```
+# ```output
+# ab...
+# ```
 pub fn pad_end(s: str, width: int, fill: str) -> str {
 	n := pad_count(s, width, fill)
 	return s if n == 0

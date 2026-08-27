@@ -386,7 +386,7 @@ Zerg 沒有鎖、也沒有共享可變狀態，但真實程式需要協調的可
 觸及。單一 coroutine 一次處理一則 mailbox 訊息，所以寫入**無鎖地序列化**；又因為沒有別人握著那份 state，不會有
 data race。
 
-```text
+```zerg
 enum Cmd {
     Add(int)                  # 寫
     Get(chan[int]<-)          # 讀——夾帶回覆用的 channel

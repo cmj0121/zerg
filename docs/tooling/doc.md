@@ -9,6 +9,7 @@ zerg doc strings              # that module's whole document
 zerg doc --brief strings      # its exposed surface, one line each
 zerg doc strings.split        # one declaration; log.Logger.level for a method
 zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stands
+zerg doc --check strings      # name what carries no comment; exit 1 if anything does
 ```
 
 ## The claim
@@ -55,6 +56,17 @@ sentence of its comment, with fields, variants and methods left out. It is the s
 the same code the module index uses, so a declaration it dropped would disappear from the
 first page a reader ever sees. It is not read for a single declaration: a listing of one is
 the thing itself, so `zerg doc --brief strings.split` prints the whole entry.
+
+`--check` reads the document for what is **missing** from it. Every exposed declaration whose
+comment is empty is named at the place it was declared, a file that did not parse is named
+too — because a module whose declarations never reached the document would answer "nothing is
+missing" by having nothing to report — and the run exits **1** if either happened.
+
+The mark it reports is the one the document already prints. What did not exist before it is a
+way to _ask_: `(undocumented)` is met in the middle of a page, one module at a time, with no
+place to jump to, and a gate over it could pin the COUNT and not the set. An equality on a
+total is met by two errors cancelling — write one comment, add one bare `pub`, and the number
+has not moved while the set underneath it has moved twice.
 
 ## What is exposed is what is documented
 

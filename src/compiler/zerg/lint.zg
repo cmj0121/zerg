@@ -15,6 +15,12 @@
 #         the binder is the one part of the line nothing reaches
 #   L105  `with e as x { … }` where nothing in the block reads `x` — the block already scopes
 #         the resource, so the name buys nothing and costs the next reader a question
+#   L108  a `match` arm an earlier arm already covers — the same literal, or the same variant,
+#         written twice, so the second can never be reached. It is a FINDING and not a warning
+#         because it is the same thing L102 and L103 are: code written that nothing reaches.
+#         The CATCH-ALL half is a compile error rather than a lint finding (E4032, "this
+#         catch-all arm makes the following arms unreachable"), so what is left for a lint to
+#         say is the duplicate, which nothing asked about at all
 #   L106  an `#[allow(…)]` with nothing to suppress — the rule did not fire over the
 #         statement below it, so the suppression is silencing nothing AND will go on
 #         silencing it when the real problem comes back. That is the shape this project
@@ -160,6 +166,7 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 	lint_captures(f, out)
 	lint_optionals(f, out)
 	lint_idle_mut_fn(f, out)
+	lint_dead_arms(f, out)
 	lint_ships_a_test(f, out)
 	lint_token_rules(srcs, paths, out)
 
@@ -292,6 +299,93 @@ fn lint_reads_name(toks: list[token.Token], at: int, name: str) -> bool {
 #
 # The test is a WRITE to `this`, not a mention of it: a `mut fn` that reads `this` is the
 # ordinary case, and one that passes it to a `mut &` parameter is writing through it.
+# --- L108: a match arm an earlier arm already covers ---------------------------------------
+#
+# ONLY A DUPLICATE, and that is the whole of what is left to say. An arm after a CATCH-ALL —
+# a binding or the wildcard — is already `E4032` in the emitter and is an error rather than a
+# finding, so a lint repeating it would be a second voice on a settled question. What nothing
+# asked about is the same pattern written twice: `1 => …` twice over, or `C.Red => …` twice,
+# where the second arm is code no value can reach.
+#
+# A GUARDED ARM COVERS NOTHING. `1 if x > 0 => …` may not fire, so the arm after it is
+# reachable and neither arm is keyed — which is why the guard is tested before the key rather
+# than after it.
+#
+# THE KEY IS THE LEXEME for a number, so `1` and `0x1` are two keys for one value and the
+# duplicate goes unreported. That is deliberate: this rule may not have a false positive, and
+# reading a literal back as a value would mean a second evaluator here disagreeing with the
+# emitter about what `0x1` is.
+fn lint_dead_arms(f: ast.File, mut &out: list[Finding]) {
+	for fd in f.fns {
+		lint_arms_body(fd.body, fd.path, out)
+	}
+}
+
+fn lint_arms_body(body: list[ast.Stmt], path: str, mut &out: list[Finding]) {
+	for s in body {
+		for e in ast.stmt_exprs(s) {
+			lint_arms_expr(e, path, out)
+		}
+		lint_arms_body(ast.stmt_kids(s), path, out)
+	}
+}
+
+fn lint_arms_expr(e: ast.Expr, path: str, mut &out: list[Finding]) {
+	match e {
+		Expr.EMatch(scrut, arms) => lint_arms_dups(arms, path, out)
+		_ => lint_skip()
+	}
+	for part in ast.expr_parts(e) {
+		lint_arms_expr(part, path, out)
+	}
+}
+
+fn lint_arms_dups(arms: list[ast.Arm], path: str, mut &out: list[Finding]) {
+	mut seen: list[str] = []
+	for a in arms {
+		k := lint_arm_key(a)
+		if k != "" and lint_key_seen(seen, k) {
+			out.append(Finding("", path, a.line, a.col, "L108", f"this `match` arm repeats a pattern an earlier arm already covers, so no value reaches it"))
+		}
+		if k != "" {
+			seen.append(k)
+		}
+	}
+}
+
+fn lint_key_seen(seen: list[str], k: str) -> bool {
+	for s in seen {
+		return true if s == k
+	}
+	return false
+}
+
+# lint_arm_key is what makes two arms the same one, or "" for an arm that cannot be compared.
+# A binding and a wildcard are deliberately unkeyed: they are E4032's question, not this one.
+fn lint_arm_key(a: ast.Arm) -> str {
+	return "" if a.has_guard
+	return "lit " + lint_lit_key(a.lit) if a.pat == 0 and lint_lit_key(a.lit) != ""
+	return f"ctor {a.qual}.{a.ctor}" if a.pat == 3
+
+	return ""
+}
+
+fn lint_lit_key(e: ast.Expr) -> str {
+	return match e {
+		Expr.EInt(lex, _, _) => "i" + lex
+		Expr.EFloat(lex) => "f" + lex
+		Expr.EStr(v) => "s" + v
+		Expr.EBool(b) => lint_bool_key(b)
+		_ => ""
+	}
+}
+
+fn lint_bool_key(b: bool) -> str {
+	return "btrue" if b
+
+	return "bfalse"
+}
+
 fn lint_idle_mut_fn(f: ast.File, mut &out: list[Finding]) {
 	refs := lint_ref_params(f)
 	for fd in f.fns {
@@ -1265,7 +1359,7 @@ struct Allow {
 # directions: a code documented and not listed here can never be allowed, and a code listed
 # here and not documented is a rule with no entry to read.
 fn lint_codes() -> list[str] {
-	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L201", "L202", "L301", "L402", "L502", "L601", "L602"]
+	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L108", "L201", "L202", "L301", "L402", "L502", "L601", "L602"]
 }
 
 # lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that

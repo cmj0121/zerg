@@ -4414,6 +4414,9 @@ fn p_arm_body_stmt(mut &p: Parser, what: str) -> str {
 # scrutinee (or is the `_` wildcard) unless a `..` follows it, which makes it a range bound;
 # anything else is a literal pattern matched by equality.
 fn parse_arm(mut &p: Parser) -> ast.Arm {
+	aline := cur(p).line
+	acol := cur(p).col
+
 	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
 	# message named a symptom two steps from the form that was written.
@@ -4549,7 +4552,7 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
 	raise p_diag(p, rule.Rule.MatchGuardPlacement, "a match arm's guard goes before the `=>` — write `pattern if cond => body`") if p_at(p, token.Kind.If)
 
-	return ast.Arm(pat, lit, bind, ctor, qual, binds, has_guard, grd, body)
+	return ast.Arm(pat, lit, bind, ctor, qual, binds, has_guard, grd, body, aline, acol)
 }
 
 # --- f-strings ---------------------------------------------------------------------------

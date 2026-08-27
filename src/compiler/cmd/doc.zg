@@ -39,12 +39,15 @@ pub fn doc_cmd() -> cli.Command {
 	return (
 		cli.command("doc", "read what a module exposes and the comments that document it")
 		.flag("b", "brief", "one line for each declaration instead of the whole comment")
+		.flag("c", "check", "name the exposed declarations that carry no comment, and exit 1 if any do")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
 		.run(do_doc)
 	)
 }
 
 fn do_doc(c: cli.Ctx) -> int {
+	return run_doc_check(c.args()) if c.has("check")
+
 	return run_doc(c.args(), c.has("brief"))
 }
 
@@ -82,6 +85,91 @@ fn run_doc(args: list[str], brief: bool) -> int {
 	}
 
 	return run_doc_decl(name, col)
+}
+
+# run_doc_check is `--check`: the document read for what is MISSING from it, rather than for
+# what is in it. Every exposed declaration whose comment is empty is named, at the place it
+# was declared, and the run exits 1 if there were any.
+#
+# THE MARK ALREADY EXISTED and this is not a second copy of it. `zerg doc strings` renders
+# `(undocumented)` beside such a declaration, which is how a READER meets one — in the middle
+# of the document, one module at a time, with no place to jump to. What did not exist was a
+# way to ASK: `make doc-check` pinned the count at 18 and asserted it as an equality, which
+# catches the number moving and cannot catch it staying still. Write a comment for one
+# declaration and add a bare `pub` somewhere else in the same change and the pin is satisfied
+# by two errors cancelling. A list of NAMES cannot be satisfied that way, and a name with a
+# `path:line` in front of it is the difference between a count and a work item.
+#
+# A FILE THAT DID NOT PARSE IS A FINDING HERE, not a note. Everywhere else in this command an
+# unreadable file is reported and the document is rendered around it, because a partial
+# document is worth more than none. `--check` is the one caller that must not do that: its
+# whole answer is "nothing is missing", and a module whose declarations never reached the
+# document would answer it by having nothing to report. `atomic` is that module today.
+#
+# DECLARATIONS, NOT MEMBERS. A struct's fields and an enum's variants each carry their own
+# comment and neither is marked in the rendering, so checking them here would report work
+# nothing else in this tree calls owed. The rule this holds is the one the document already
+# states about itself.
+fn run_doc_check(args: list[str]) -> int {
+	raise "`zerg doc --check` reads one thing at a time — a module, or a path" if args.len() > 1
+
+	mut mods: list[zerg.DocModule] = []
+	if args.len() == 0 {
+		mods = doc_index()
+	} else {
+		mods.append(doc_check_one(args[0]))
+	}
+
+	mut out := ""
+	mut total := 0
+	mut undoc := 0
+	mut unread := 0
+	for m in mods {
+		for f in m.files {
+			if not f.ok {
+				out = out + f"{f.path}: does not parse, so what it exposes is in no document\n"
+				unread = unread + 1
+			}
+		}
+		for d in m.decls {
+			total = total + 1
+			if d.doc.len() == 0 {
+				out = out + f"{d.path}:{d.line}: `{doc_check_name(m, d)}` is exposed and carries no comment\n"
+				undoc = undoc + 1
+			}
+		}
+	}
+
+	io.write(out)
+	io.write(f"{total} exposed declarations, {undoc} of them undocumented, {unread} file(s) unreadable\n")
+	return 1 if undoc + unread > 0
+
+	return 0
+}
+
+# doc_check_one resolves the one name `--check` was given, by the same two doors `run_doc`
+# opens and in the same order — a path that is really there, then a module — so that a name
+# which reads one way for `zerg doc` cannot read another way for `zerg doc --check`.
+fn doc_check_one(name: str) -> zerg.DocModule {
+	if doc_is_path(name) {
+		files := doc_path_files(name)
+		raise doc_no_source(name) if files.len() == 0
+
+		return doc_read(doc_path_name(name), files)
+	}
+
+	whole := source.module_sources(name, ".", ".")
+	raise doc_no_such(name) if whole.len() == 0
+
+	return doc_read(source.path_tail(name), whole)
+}
+
+# doc_check_name spells a declaration the way a reader would type it back into `zerg doc`,
+# which is the same spelling `doc_no_decl` lists and the same key `doc_find` reaches.
+fn doc_check_name(m: zerg.DocModule, d: zerg.DocDecl) -> str {
+	return f"{m.name}.{d.name}" if d.recv == ""
+
+	return f"{m.name}.{d.recv}.{d.name}"
 }
 
 # run_doc_decl reads `module.declaration`, which is the form left once the name has resolved to

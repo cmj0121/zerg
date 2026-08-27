@@ -725,9 +725,25 @@ fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text
 # What is left is the text as written — the fence lines, the indentation of an example, and
 # the blank line between two paragraphs all survive, because they are what the author put
 # there and the renderer needs them to tell prose from a code block.
+#
+# A SECOND `#` IS THE DOC-COMMENT MARKER and comes off with the first (#93). `GRAMMAR` gives
+# `##` a production of its own — DOC-COMMENT, attached to the declaration that follows — and
+# this compiler lexes it as an ordinary comment whose text happens to begin with a `#`. The
+# attachment was never the missing half: an ordinary comment attaches too, which is how all
+# fifteen stdlib modules are documented. What was missing was taking the marker OFF, so a
+# `## doubles its argument.` rendered as `# doubles its argument.` — the marker leaking into
+# the prose it marks.
+#
+# ONLY A `#` WITH NO SPACE BEFORE IT is the marker. `# ## Heading` is a markdown heading a
+# author wrote inside ordinary prose: the space after the first `#` ends the marker, and the
+# `##` that follows is text. That is why the space is tested after the second hash and not
+# before it.
 fn doc_strip(lexeme: str) -> str {
 	b := bytearray(lexeme)
 	mut lo := 0
+	if lo < b.len() and b[lo] == b'#' {
+		lo = lo + 1
+	}
 	if lo < b.len() and b[lo] == b'#' {
 		lo = lo + 1
 	}

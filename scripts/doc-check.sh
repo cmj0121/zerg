@@ -95,7 +95,7 @@ ZERG="${ZERG:-./bin/zerg}"
 # without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
-UNDOCUMENTED="${UNDOCUMENTED:-18}"
+UNDOC_LIST="${UNDOC_LIST:-scripts/doc-undocumented}"
 MIN_CHECKS="${MIN_CHECKS:-56}"
 MIN_RULES="${MIN_RULES:-26}"
 
@@ -195,19 +195,43 @@ for m in $modules; do
 	checks=$((checks + 1))
 done
 
-# --- 2. the undocumented ones are counted, and the number is pinned -------------------
+# --- 2. the undocumented ones are NAMED, and the names are pinned ---------------------
 #
-# They are SHOWN by design (issue #16, point 4). What a gate can add is that the number
-# moves deliberately: a tool that stopped marking them would look like a library somebody
-# had finished documenting, and a `pub` added with no comment would otherwise arrive in
-# silence. Both directions are the same assertion, so it is an equality and not a bound.
-undoc=0
+# They are SHOWN by design (issue #16, point 4). What a gate adds is that the set moves
+# deliberately — and a COUNT moves deliberately in one direction only. The pin here was
+# `UNDOCUMENTED=18`, an equality on a total, and an equality on a total is met by two errors
+# cancelling: write the comment for one declaration and add a bare `pub` in the same change,
+# and 18 is still 18 while the set underneath it has moved twice.
+#
+# So the pin is the NAMES, and `zerg doc --check` is what produces them — the tool answering
+# the question directly, rather than this script counting a mark in a rendering.
+: >"$tmp/undoc.names"
+for m in $modules; do
+	"$ZERG" doc --check "$m" 2>/dev/null |
+		sed -nE 's/^.*: `([^`]*)` is exposed and carries no comment$/\1/p' >>"$tmp/undoc.names"
+done
+LC_ALL=C sort -o "$tmp/undoc.names" "$tmp/undoc.names"
+grep -v '^#' "$UNDOC_LIST" | grep -v '^[[:space:]]*$' | LC_ALL=C sort >"$tmp/undoc.pinned"
+
+if ! diff -u "$tmp/undoc.pinned" "$tmp/undoc.names" >"$tmp/diff"; then
+	note "the undocumented declarations are not the pinned set (- $UNDOC_LIST, + \`zerg doc --check\`) — write the comment, or move the line"
+	sed '1,2d;s/^/          /' "$tmp/diff" >&2
+else
+	checks=$((checks + 1))
+fi
+
+undoc=$(grep -c . "$tmp/undoc.names" || true)
+
+# THE READER'S VIEW OF THE SAME FACT, which is the one thing the list above cannot see: a
+# tool that stopped MARKING them would look like a library somebody had finished documenting,
+# while `--check` went on naming them to nobody. The two views are held to one size.
+marked=0
 for m in $modules; do
 	n=$("$ZERG" doc "$m" 2>/dev/null | grep -c '(undocumented)')
-	undoc=$((undoc + n))
+	marked=$((marked + n))
 done
-if [ "$undoc" -ne "$UNDOCUMENTED" ]; then
-	note "$undoc declarations are marked (undocumented) and the pinned number is $UNDOCUMENTED — if a comment was written or a bare \`pub\` added, move UNDOCUMENTED in this script with it"
+if [ "$marked" -ne "$undoc" ]; then
+	note "the document marks $marked declarations (undocumented) and \`zerg doc --check\` names $undoc — two views of one fact disagree"
 else
 	checks=$((checks + 1))
 fi

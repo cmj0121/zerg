@@ -224,3 +224,11 @@ tail=""
 [ "$open" -ne 0 ] && tail="$tail, $open still accepted and marked KNOWN-OPEN"
 
 echo "counterexample-check: $n programs GRAMMAR does not derive over $prods productions — $refused refused at the parse$tail"
+
+# NO SILENT CAP. `productions-check` asserts its sample set EQUALS the grammar, in both
+# directions, and says so; this gate cannot — a counterexample is a near-miss somebody has to
+# think of, and there is no mechanical way to know a production has run out of them. So the
+# number above is a floor on the work, never a claim about the grammar, and a reader who is
+# told "46 productions" without the denominator will hear the second thing. Print it.
+all_prods=$(grep -c . "$tmp/productions" || true)
+echo "counterexample-check: $((all_prods - prods)) of $all_prods productions have no counterexample — a near-miss of one is unchecked"

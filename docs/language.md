@@ -169,9 +169,11 @@ tiers, and `is` dispatches on an erased `Err`. See **[Null-safety & Errors](code
 
 Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`), fire-and-forget with
 no join/handle, capturing **only immutable values and channels**. The scheduler is **M:N** — worker OS
-threads over one shared run queue — but **cooperative, not preemptive** (**[deviation]** — a CPU-bound
-coroutine that never parks occupies a worker, and as many of them as there are workers stop the program;
-see [Coroutines & Channels](code/coroutine.md)).
+threads over one shared run queue — but **cooperative, not preemptive**: a coroutine yields at a channel
+operation, a `select` or a sleep, so a CPU-bound one that never parks occupies a worker for as long as it
+runs, and as many of them as there are workers stop the program. That is the rule rather than a shortfall
+against one — preemption is a [door](../FUTURE.md#preemptive-scheduling), not a promise this page makes.
+See [Coroutines & Channels](code/coroutine.md).
 Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication;
 `Ref[T]` is its resource-holding sibling — see [Values & Memory](core/memory.md)) — payloads copied,
 **auto-closed** when their last sender leaves — or ended early by the channel-only statement

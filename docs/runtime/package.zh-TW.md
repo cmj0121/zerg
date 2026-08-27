@@ -29,7 +29,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 > **[deviation]** 一個公開名字仍然是**全程式唯一**的。可見性是檔案的、也照表所說被檢查——函式、module
 > 常數、型別與 struct 的欄位各自帶位置（_E3001 `helper` is not a public member of `lib/two.zg`_、
 > _E5010 `secret` is not a public field of `P`_）——但 C 符號是一個扁平空間，所以兩個 module 不能宣告同一個
-> **公開**的 top-level 名字。那是 mangling 還沒跟上分層，不是語言想要的規則。見下方「可見性」。
+> **公開**的 top-level 名字。那是 mangling 還沒跟上分層，不是語言想要的規則（#92）。見下方「可見性」。
 >
 > **[not yet]** 兩個 module 宣告同一個**公開**的 top-level 名字會被具名拒絕。**私有**的則不會:module 之外
 > 碰不到它的私有名字,所以裸呼叫一定指的是呼叫端自己那一個,兩者只需要在 C 裡分得開——各自拿到一個 module

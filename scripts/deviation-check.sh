@@ -6,9 +6,17 @@
 # program they are writing, and a document that is wrong in a known way is worse than one
 # that is silent, because it was trusted first (#52).
 #
-# TWO CLAUSES, and the inherited list is what tells them apart:
+# THREE CLAUSES, and the inherited list is what tells the middle two apart:
 #
-#   1. Every marker NOT on the list must NAME AN ISSUE. A disagreement nobody is
+#   0. Every `**[deviation]**` in the documents is EITHER a marker in the canonical form
+#      — a `> **[deviation]**` leading its own blockquote — or a line of the allowlist,
+#      which is the handful of places that talk ABOUT the marker rather than raising one.
+#      Without this clause the form is optional, and an optional form is one the two
+#      clauses below cannot see: `docs/language.md` carried a deviation about the
+#      scheduler written inline, in the middle of a sentence, and this gate reported one
+#      marker for as long as it has existed while the documents held two.
+#
+#   1. Every marker NOT on the inherited list must NAME AN ISSUE. A disagreement nobody is
 #      accountable for is how "no deviations" stops being met by fixing compilers and
 #      starts being met by deleting markers. A marker this release's sweep writes MAY
 #      ship unfixed — that is deliberate — but it owes a ticket.
@@ -37,6 +45,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 LIST=docs/.deviations-inherited
+PROSE=docs/.marker-prose
 fail=0
 
 slug() {
@@ -49,9 +58,54 @@ slug() {
 		cut -d' ' -f1-7
 }
 
+pages() {
+	find docs -name '*.md' ! -name '*.zh-TW.md' | sort
+}
+
+# THE BLOCK A MARKER OWNS is its own blockquote PARAGRAPH: the marker's line, then the
+# quote lines under it, stopping where the quote ends (`>` gone) or where the paragraph
+# does (a `>` with nothing after it — Markdown's paragraph break inside a quote).
+#
+# The reader this replaces was `sed -n "${n},\$p" | sed -n '/^>/p' | sed '/^>/!q'`, which
+# is every quote line from the marker TO THE END OF THE FILE: the trailing `q` never fires
+# because every line it is handed already starts with `>`. So clause 1 was satisfied by a
+# ticket ANYWHERE below the marker on the page. Measured on the day this was rewritten:
+# the one marker `docs/runtime/package.md` carries names no ticket of its own and passed
+# on a `#69` ninety-one lines further down, inside an unrelated `[not yet]` — and #69 is
+# a closed bug about a refusal's wording, which has nothing to do with the flat namespace
+# the marker is about. The `^>` was wrong twice over, too: the gate's own header says a
+# marker may be indented, and for an indented one that anchor matched every line except
+# the marker's own block.
+block_of() {
+	sed -n "$2,\$p" "$1" | awk '
+		NR == 1 { print; next }
+		/^[[:space:]]*>[[:space:]]*$/ { exit }
+		/^[[:space:]]*>/ { print; next }
+		{ exit }
+	'
+}
+
+# --- clause 0: every mention is a canonical marker, or is allowlisted prose ------------
+# The allowlist is keyed the same way the inherited list is, by `path<TAB>slug`, so that
+# exempting one SENTENCE never exempts a chapter: `docs/conformance.md` defines what the
+# marker means and may still one day raise one.
+for f in $(pages); do
+	grep -n '\*\*\[deviation\]\*\*' "$f" | while IFS=: read -r n rest; do
+		case "$rest" in
+		*'> **[deviation]**'*) continue ;;
+		esac
+		s=$(slug "$rest")
+		if grep -qF "$(printf '%s\t%s' "$f" "$s")" "$PROSE" 2>/dev/null; then
+			continue
+		fi
+		echo "NOT A MARKER  $f:$n: $s"
+		echo "$f" >>"$LIST.fail"
+	done
+done
+
 # --- every marker in the tree, as `path<TAB>slug` -------------------------------------
 found=$(
-	for f in $(find docs -name '*.md' ! -name '*.zh-TW.md' | sort); do
+	for f in $(pages); do
 		grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
 			printf '%s\t%s\n' "$f" "$(slug "$rest")"
 		done
@@ -59,15 +113,13 @@ found=$(
 )
 
 # --- clause 1: a marker that is not inherited must name an issue -----------------------
-for f in $(find docs -name '*.md' ! -name '*.zh-TW.md' | sort); do
+for f in $(pages); do
 	grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
 		s=$(slug "$rest")
 		if grep -qF "$(printf '%s\t%s' "$f" "$s")" "$LIST" 2>/dev/null; then
 			continue
 		fi
-		# the block is this line and every `>` line under it
-		block=$(sed -n "${n},\$p" "$f" | sed -n '/^>/p' | sed '/^>/!q')
-		if ! printf '%s' "$block" | grep -q '#[0-9][0-9]*'; then
+		if ! block_of "$f" "$n" | grep -q '#[0-9][0-9]*'; then
 			echo "NO TICKET  $f: $s"
 			echo "$f" >>"$LIST.fail"
 		fi

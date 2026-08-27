@@ -190,3 +190,16 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "productions-check: $n_prod/$n_prod GRAMMAR productions sampled — $parsed parse, $named refused by name"
+
+# WHAT `parse` IS NOT. It is not a claim the form is BUILT, and the line above will be read
+# that way unless it says otherwise. The stage is `--emit ast`: the sample got through the
+# lexer and the parser, and everything after them — the checker, the emitter — never saw it.
+# `DOC-COMMENT ::= '##' [^\n]*` is the example to keep in mind: its sample parses, and it
+# parses because `##` lexes as an ordinary comment. GRAMMAR says the token attaches to the
+# declaration that follows; nothing in this compiler does, and `docs/runtime/stdlib.md` marks
+# it `[not yet]`. A production can be green here and unbuilt in every sense a reader means.
+#
+# The gate that walks the other way is `marker-codes-check`, which holds each `[not yet]` to
+# naming the rule that refuses it. Neither gate subsumes the other and this line is where
+# they meet.
+echo 'productions-check: `parse` is the AST stage only — a form may parse and still be unbuilt past it'

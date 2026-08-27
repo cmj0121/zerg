@@ -36,11 +36,13 @@ Keeping encapsulation/naming (`file`, `module`) and distribution/API (`package`)
 > the table says — a function, a module constant, a type and a struct's fields each with a place (_E3001
 > `helper` is not a public member of `lib/two.zg`_, _E5010 `secret` is not a public field of `P`_) — but
 > the C symbols are one flat space, so two modules cannot declare the same PUBLIC top-level name. That is
-> a mangling that has not caught up with the layers, not a rule the language wants. See Visibility below.
+> a mangling that has not caught up with the layers, not a rule the language wants (#92). See Visibility
+> below.
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name —
-> _E9082 NotImplemented: `a` and `b` both define `f` — this compiler flattens every module into one
-> namespace_. A
+> _E9081 NotImplemented: two modules both define `helper` and at least one is `pub` — a public name has
+> no package to be unique within_. (`E9082` is its neighbour and a different rule: two declarations under
+> ONE directory, whether they are two modules or two files of one.) A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
 > the caller's own, and the two only have to be told apart in C — where each gets a module tag, its
 > position in a sorted list of the program's modules. Sorted rather than first-seen because that name has

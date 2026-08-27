@@ -94,7 +94,7 @@ declaration, …); `nop` remains the one statement that is always available and 
 Comments are not statements — a `#` runs to the end of the line. A `##` begins a **doc comment** (attached
 to the declaration that follows), and `#[` begins a decorator (group 7); Zerg has **no block comments**:
 
-```text
+```zerg
 # a full-line comment
 nop    # a trailing comment
 ## a doc comment — attaches to the declaration below

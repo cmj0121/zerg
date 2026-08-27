@@ -90,7 +90,7 @@ for {
 comment 不是 statement——`#` 一路到行尾。`##` 起始一個 **doc comment**（附著於其後的宣告），`#[` 起始一個
 decorator（group 7）；Zerg **沒有 block comment**：
 
-```text
+```zerg
 # 整行註解
 nop    # 行尾註解
 ## 一段 doc comment——附著於下方的宣告

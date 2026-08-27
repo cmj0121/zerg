@@ -105,9 +105,13 @@ whole_tree=0
 tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT
 
+mkdir -p "$tmp/txt"
+
 fail=0
 blocks=0
 seen=0
+textblocks=0
+textzerg=0
 
 # check_group <page> <the lines its blocks opened on> — check what the path-named blocks
 # collected so far amount to, and clear them. A no-op when no group is open.
@@ -178,6 +182,42 @@ for page in $pages; do
 		fail=$((fail + 1))
 	fi
 
+	# 4. THE OTHER DIRECTION, and the reason this gate's number used to read larger than it
+	#    was. A ` ```text ` block is a picture, and most are: a diagnostic transcript, a
+	#    grammar production, a table of bytes. Some are Zerg on purpose — the form they show
+	#    is `[not yet]` and cannot be built, so calling it Zerg would be a lie clause 1 would
+	#    catch. And a few are Zerg THAT BUILDS, which is the fence lying the other way: the
+	#    block is a whole program, a reader will copy it, and clause 1 never looks at it.
+	#
+	#    The test is therefore not "does this read as Zerg". Measured when this was written:
+	#    64 of the 198 text blocks did, and 60 of them were pictures of unbuilt forms — a
+	#    gate on the reading would have been 60 false findings and turned off in a week. The
+	#    test is "does the compiler ACCEPT it", which only a mis-fenced program does. It
+	#    found two, each with a translated twin: `coroutine.md`'s actor and `grammar.md`'s
+	#    comment example, both complete programs and both invisible here until retagged.
+	awk -v out="$tmp/txt" '
+		/^```text$/ { open = NR; f = out "/" NR ".zg"; printf "" > f; next }
+		open && /^```$/ { close(f); print open >> (out "/INDEX"); open = 0; next }
+		open { print >> f }
+	' "$page"
+
+	if [ -f "$tmp/txt/INDEX" ]; then
+		while IFS= read -r tline; do
+			textblocks=$((textblocks + 1))
+			tsrc="$tmp/txt/$tline.zg"
+			if head -5 "$tsrc" | grep -qE '^[[:space:]]*(pub )?(fn|struct|enum|spec|impl|type|import|const) |^#\[' &&
+				"$ZERG" build --emit check "$tsrc" >"$tmp/build.log" 2>&1; then
+				printf 'docs-zerg: %s:%s — a ```text block this compiler builds; a program is ```zerg\n' \
+					"$page" "$tline" >&2
+				fail=$((fail + 1))
+			elif head -5 "$tsrc" | grep -qE '^[[:space:]]*(pub )?(fn|struct|enum|spec|impl|type|import|const) |^#\['; then
+				textzerg=$((textzerg + 1))
+			fi
+			rm -f "$tsrc"
+		done <"$tmp/txt/INDEX"
+		rm -f "$tmp/txt/INDEX"
+	fi
+
 	[ -f "$tmp/INDEX" ] || continue
 
 	rm -rf "$tmp/prog"
@@ -245,3 +285,11 @@ fi
 
 printf 'docs-zerg: %s ```zerg blocks over %s pages — each one a program this compiler accepts\n' \
 	"$blocks" "$seen"
+
+# NO SILENT CAP. The line above says what was checked and, read alone, sounds like the
+# specification's examples. They are not: the ```text blocks outnumber them five to one, and
+# the ones that read as Zerg are the `[not yet]` samples this compiler cannot build — a real
+# body of example code that no gate compiles, because there is nothing to compile it with
+# until the form lands. Saying so is the whole of what can be done about it here.
+printf 'docs-zerg: %s ```text blocks alongside them, %s of which read as Zerg and none of which builds\n' \
+	"$textblocks" "$textzerg"

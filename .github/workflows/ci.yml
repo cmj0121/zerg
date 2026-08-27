@@ -135,6 +135,13 @@ jobs:
       - name: Every deviation names a ticket, and the inherited list is honest
         run: make deviation-check
 
+      # And the other marker. `[not yet]` leans on one promise — the form is refused BY NAME —
+      # and a marker that quotes no code leaves that promise with nothing holding it. The
+      # failure mode is the stale one: the form ships, the rule leaves the catalogue, and the
+      # marker beside it keeps telling a reader the feature is missing.
+      - name: Every `[not yet]` names the rule that refuses it
+        run: make marker-codes
+
       # An `E9xxx` is a form the LANGUAGE has and this compiler does not build. A reader meets
       # that in the chapter or in a refusal, and only the first comes before they write the
       # program — so the catalogue alone is not where it belongs (#74).

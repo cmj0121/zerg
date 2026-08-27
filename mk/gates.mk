@@ -24,7 +24,7 @@
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
-	deviation-check \
+	deviation-check marker-codes \
 	chapter-codes method-gaps \
 	doc-check stmt-walk entry-path examples-index mem-peak release-notes
 
@@ -476,7 +476,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check chapter-codes method-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -634,6 +634,13 @@ error-codes-check:              # every error code is reported once, asserted, a
 # issue, and an inherited entry whose marker is gone must come off the list.
 deviation-check:                # every deviation names a ticket, and the inherited list is honest
 	./scripts/deviation-check.sh
+
+# The other direction of the same idea, and the other marker. A `[deviation]` owes a ticket
+# because somebody must be accountable for a document that is knowingly wrong; a `[not yet]`
+# owes an ERROR CODE, because the standing rule it leans on — the form is refused by name —
+# is a claim about the compiler that nothing else can reach from the documents' side.
+marker-codes:                   # every `[not yet]` names the rule that refuses it
+	./scripts/marker-codes-check.sh
 
 chapter-codes:                  # every unbuilt form is named where its readers are, not only in the catalogue
 	./scripts/chapter-codes-check.sh

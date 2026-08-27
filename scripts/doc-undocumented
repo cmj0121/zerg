@@ -1,0 +1,27 @@
+# The exposed declarations that carry no comment — the pin `scripts/doc-check.sh` §2 holds
+# `zerg doc --check` to, one name per line, spelled the way a reader types it back in.
+#
+# IT IS A LIST AND NOT A COUNT, and that is the whole point of the file. The pin here used to
+# be `UNDOCUMENTED=18`, an equality on a total, and an equality on a total is met by two
+# errors cancelling: write the comment for one declaration and add a bare `pub` elsewhere in
+# the same change, and 18 is still 18 while the set underneath has moved twice.
+#
+# A line comes off when the comment is written. A line is added only on purpose.
+json.of_obj
+json.put
+json.put_bool
+json.put_int
+json.put_str
+log.Format
+log.Level
+log.Logger.error
+log.Logger.info
+log.Logger.trace
+log.Logger.warn
+log.error
+log.info
+log.trace
+log.warn
+strings.pad_end
+strings.trim_right
+testing.Context

@@ -454,7 +454,7 @@ coroutine that **exclusively owns** some `mut` state, reachable only by messages
 coroutine drains its mailbox one message at a time, so writes **serialize with no lock**, and since no
 one else holds the state there is no data race.
 
-```text
+```zerg
 enum Cmd {
     Add(int)                  # a write
     Get(chan[int]<-)          # a read — carries a reply channel

@@ -171,7 +171,7 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 ## Serialization — the worked example
 
 > **[not yet]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
-> but not implemented; `#[derive(Encode, Decode)]` is a compile error today, since the only derive this
+> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today, since the only derive this
 > compiler writes is `Eq`. The example below illustrates the **intended** shape of structural derivation
 > for when they land.
 

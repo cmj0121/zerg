@@ -314,9 +314,10 @@ others the runtime is written to compile under, and the build cache keys an obje
 the resolved `cc`** — the two inputs to a compile that the emitted C does not already stand for — so two
 dialects, or two compilers, do not hand each other's objects back.
 
-> **[not yet]** The **fallback** is not automatic. The intent is that a `cc` which cannot do C17 is
-> retreated from to C99; no probe for that is built, so the retreat is something a build **asks** for with
-> `ZERG_CSTD=c99` rather than something the compiler discovers. Both dialects are compiled and run on CI.
+> The **fallback** is not automatic. The intent is that a `cc` which cannot do C17 is retreated from to
+> C99; no probe for that is built, so the retreat is something a build **asks** for with `ZERG_CSTD=c99`
+> rather than something the compiler discovers. Both dialects are compiled and run on CI. No program can
+> write the probe that is missing, so there is no form here to refuse and no `[not yet]` to carry.
 
 ## Undefined and implementation-defined behavior
 

@@ -173,8 +173,8 @@ link-name 覆寫,是待決問題——見下。)
 而一個預先安排它的方案,會是一個今天沒有東西算得出來的名字。那一段買到的是**跨** package 不衝突,而它會跟著它所屬
 的那一層一起到來。
 
-> **[not yet]** package 那一段,以及隨之而來的「跨 package 不可能衝突」的名字。它屬於
-> [package.md](package.zh-TW.md) 裡 package 層自己的那個標記,而不是這裡的第二個:在一次建置知道一個宣告屬於哪個
+> package 那一段,以及隨之而來的「跨 package 不可能衝突」的名字,要等它所屬的那一層。那是
+> [package.md](package.zh-TW.md) 裡 package 層自己的 `[not yet]`,而不是這裡的第二個:在一次建置知道一個宣告屬於哪個
 > package 之前,`zg_<pkg>_<name>` 沒有 `<pkg>` 可寫。
 
 ## 匯入 C——一個 stdlib 設施

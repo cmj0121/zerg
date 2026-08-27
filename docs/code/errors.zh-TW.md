@@ -112,9 +112,9 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 **一行**、不屬於訊息:`message()` 只回答文字本身,而錯誤走到頂端時種類會被渲染在它前面——手寫的
 `raise ValueError("bad input")` 與 runtime 自己的 `IndexError` 一視同仁。
 
-> **[not yet]** `code()` 回答 `byte?`，而且**永遠回答 absent**。本編譯器建得出來的 `Err` 沒有一個帶著 code：
-> 存在的錯誤就是那些內建種類，而 code 屬於使用者自訂的錯誤型別——那才是本段尚未建置的部分。`message()` 與
-> `unwrap()` 已經建了。
+> `code()` 已經建了、回答 `byte?`，而且**永遠回答 absent**。本編譯器建得出來的 `Err` 沒有一個帶著 code：
+> 存在的錯誤就是那些內建種類，而 code 屬於使用者自訂的錯誤型別——那才是本段背後沒有實作的那一半。這個方法在
+> 一個空的定義域上是完整的，而不是一個程式碰得到、然後被拒絕的形式；`message()` 與 `unwrap()` 依規格回答。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
 用到的 fault 名稱裡,今天有十一個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、

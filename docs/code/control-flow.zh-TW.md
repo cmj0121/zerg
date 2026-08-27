@@ -110,7 +110,7 @@ _E9039 NotImplemented: `print` is a statement, and an expression is wanted here_
 
 > **[not yet]** **多餘 arm 的 warning** 尚未建置：一個已被前面 arm 覆蓋的 arm 什麼都不會產生——沒有 warning、也
 > 沒有提示——而且它會以「沒有任何值到得了的 arm」留在 emit 出來的程式碼裡。反方向的覆蓋，也就是沒有任何 arm
-> 處理的 case，是有檢查的，而且是 error。
+> 處理的 case，是有檢查的，而且是 error。這裡沒有 code 可引用，因為缺席的正是那條規則本身（#95）。
 
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；

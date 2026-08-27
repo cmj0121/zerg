@@ -201,8 +201,9 @@ layer for a segment to name (Four layers, [package.md](package.md)), and a schem
 would be a name nothing can compute today. What the segment would buy is collision-freedom **across**
 packages, and that arrives with the layer it belongs to.
 
-> **[not yet]** A package segment, and with it a name that cannot collide across packages. It is part of
-> the package layer's own marker in [package.md](package.md) rather than a second one here: until a build
+> A package segment, and with it a name that cannot collide across packages, waits on the layer it belongs
+> to. That is the package layer's own `[not yet]` in [package.md](package.md) and not a second one here:
+> until a build
 > knows what package a declaration belongs to, `zg_<pkg>_<name>` has no `<pkg>` to write.
 
 ## Importing C — a stdlib facility
@@ -234,7 +235,7 @@ it rather than swallowing the rest of the file. Neither is pedantry about braces
 declaration below it read as being inside, which is exactly how a `mut` binding in safe code becomes a
 mutable global with nothing said.
 
-> **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place**. Building it would
+> **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place** — _E9027_. Building it would
 > read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
 > form is turned away rather than silently disarmed.
 

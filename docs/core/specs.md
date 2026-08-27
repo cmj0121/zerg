@@ -30,11 +30,11 @@ inherent methods are invisible. So:
 - **Equality, ordering, and hashing are opt-in, never automatic.** There is **no auto-implemented
   `Object` spec** and no implicit `==`. A type gains structural equality (`==` / `!=`) only through
   **`#[derive(Eq)]`** or a hand-written `impl Eq`, a total order through `derive(Ord)`, and a hash through
-  `derive(Hash)` (both **[not yet]**); comparing two values of a type that has no `Eq` impl is a compile
+  `derive(Hash)` (both **[not yet]** — _E9054_); comparing two values of a type that has no `Eq` impl is a compile
   error. The structural memory operations above are the exception, because they are properties of the
   representation rather than behavior a spec abstracts. The compiler-owned **structural derivation** that
   backs `derive` (built for **`Eq`** on a `struct` and on a fieldless `enum`; **[not yet]** for `Ord`,
-  `Hash`, `Encode`, `Decode`, and for `Eq` on a payload `enum`) is the
+  `Hash`, `Encode`, `Decode` — _E9054_ — and for `Eq` on a payload `enum` — _E9055_) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
@@ -312,7 +312,7 @@ implementation** — its override if it has one, else the default. So a default 
 method reaches the type's override (a defaulted `count` built on `next` uses an overridden `next`) — there is
 **no static-dispatch exception for defaults**, and the mechanism is the one already defined above. This holds
 for a **direct call on a concrete value** as well (**[not yet]** — a provided method is refused at its
-declaration, above): `c.provided()` runs the type's **override** if it has one, else the spec's **default
+declaration, above, as _E9002_): `c.provided()` runs the type's **override** if it has one, else the spec's **default
 body** — with no boxing needed, so a provided method is not confined to the dynamic-dispatch path.
 
 ## Associated types and values
@@ -413,7 +413,7 @@ generic bound gates on it:
   order, its UTF-8 being valid — not locale collation, a separate stdlib concern); `float` opts out of
   both `Ord` and `Hash` (rationale below).
 - **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key.
-  **[not yet]**
+  **[not yet]** — _E9054_ names it at a `derive`.
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
 - **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
   `nil` if none), and `code() -> byte?` (an optional small code).
@@ -424,7 +424,7 @@ generic bound gates on it:
   it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
   between numbers the conversion is `T(x)`, and to text it is `str(x)`, which needs no bound because
   `display` is a **rendering** the language gives rather than a spec a type implements. That is not the
-  same claim as "every type answers it": a composite and an `enum` are **[not yet]**, and a **channel**, a
+  same claim as "every type answers it": a composite and an `enum` are **[not yet]** — _E9059_ — and a **channel**, a
   **function value** and **nil** have no rendering at all ([Format](../runtime/format.md)). See
   [Type Conversion](types.md#into--an-ordinary-conversion-spec).
 

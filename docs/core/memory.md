@@ -223,7 +223,7 @@ captures back would mean unwinding a stack the language says is abandoned where 
 ## `Ref[T]` — a resource that outlives its scope
 
 > **[not yet]** There is no `Ref[T]` in this compiler. `Ref(5)` is refused by name —
-> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_ — so this
+> _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_ — so this
 > section, the `mut`-versus-effect distinction under it, and every mention of a `Ref[T]` elsewhere on this
 > page describe a type nothing can construct. The **machinery** is built and works: the `Ref` spec has one
 > implementer, the built-in `chan`, which is shared by reference, counted, and closed at the last holder's
@@ -303,7 +303,8 @@ the storage.
 > `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
 > **[not yet]** for the same reason from the other side: today such a `del` revokes the name's access, but
 > the storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above
-> is thus the intended behavior, not yet the bootstrap's for owning values.
+> is thus the intended behavior, not yet the bootstrap's for owning values — and no rule refuses the form
+> meanwhile, so this marker names a ticket where the others name a code (#94).
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is

@@ -68,7 +68,7 @@ Five notes carry the rules into the language:
   then refused at the binding — write `float(id(5))`. The demand neither solves `T` nor converts the
   answer: **inference is local**, twice over.
 
-> **[not yet]** One note runs ahead of the compiler: a **spec used as a type** is refused by name — of
+> **[not yet]** One note runs ahead of the compiler: a **spec used as a type** is refused by name, _E9048_ — of
 > the spec positions, the error tier (`Err` in a `Result[T]`) is the one built. The **untyped closure
 > parameter** is not among them any more: it takes its type from the function type the closure is checked
 > against, and so does an omitted result type, at every typed position.

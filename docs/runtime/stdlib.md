@@ -24,7 +24,8 @@ prints a module's whole document, `zerg doc strings.split` one declaration.
 
 > **[not yet]** `##` is not a doc comment. It lexes as an ordinary `#` comment whose text happens to begin
 > with a `#`, so `zerg doc` renders that `#` into the prose; a plain `#` comment is the form that works
-> today and is what all fifteen modules use.
+> today and is what all fifteen modules use. It is the one shape of `[not yet]` that owes a rule rather
+> than quoting one — nothing refuses `##`, it is simply absorbed (#93).
 
 ````text
 # ```zerg
@@ -97,7 +98,8 @@ Process and platform facts. `platform` / `arch` resolve at **compile time**, so 
 binary was built for. The program's own arguments arrive as `fn main(args: list[str])`, not from here.
 `run` is the one leaf that starts ANOTHER process — argv straight to the OS, no shell, no pipes, and the
 exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
-of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]**.
+of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]** — _E9020_, and _E9019_ for the
+interpolating form.
 
 | Function                        | Summary                                              |
 | ------------------------------- | ---------------------------------------------------- |

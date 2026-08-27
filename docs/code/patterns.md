@@ -60,7 +60,7 @@ When an inline function is genuinely one-off, the parameter type its position su
 ys := xs.map(fn(x) -> int { return x *% 2 })   # x: int taken from xs; -> int written
 ```
 
-> **[not yet]** What is left unbuilt in this line is `map`, marked above. The untyped parameter is not:
+> **[not yet]** What is left unbuilt in this line is `map`, marked above as _E9056_. The untyped parameter is not:
 > `x` takes its type from the function type the closure is checked against, so the line could be written
 > `xs.map(fn(x) { return x *% 2 })` the day the adapter exists.
 
@@ -107,7 +107,7 @@ To mutate the builder in place instead, use a `mut fn` method on a `mut` binding
 ## Destructuring & pattern support
 
 Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x, y} := e` both unpack in one
-step — the everyday way a multiple return or a small record is consumed, and both **[not yet]**, as are the
+step — the everyday way a multiple return or a small record is consumed, and both **[not yet]** — _E9021_ — as are the
 struct, tuple and `as` patterns in a `match`. The catalogue of what a pattern may be, and the code each
 unbuilt shape is refused by, is [Control Flow](control-flow.md); what matters here is the idiom left
 standing while they wait.

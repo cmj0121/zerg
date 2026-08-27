@@ -253,8 +253,9 @@ dialect 是 **C17**。`ZERG_CSTD` 為需要的建置指定另一個——`c99` �
 而 build cache 以 **dialect 與解析後的 `cc`**——一次編譯中,emitted C 沒有替它們代言的那兩個輸入——作為
 object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 object 交給對方。
 
-> **[not yet]** **fallback 不是自動的**。原意是：一個做不到 C17 的 `cc` 應被退回 C99；但沒有建置任何探測，所以這個
-> 退回是建置用 `ZERG_CSTD=c99` **主動要求**的，而不是編譯器自己發現的。兩種 dialect 都在 CI 上編譯並執行。
+> **fallback 不是自動的**。原意是：一個做不到 C17 的 `cc` 應被退回 C99；但沒有建置任何探測，所以這個退回是建置
+> 用 `ZERG_CSTD=c99` **主動要求**的，而不是編譯器自己發現的。兩種 dialect 都在 CI 上編譯並執行。沒有任何程式寫得
+> 出那個缺席的探測，所以這裡沒有形式可拒絕，也沒有 `[not yet]` 要背。
 
 ## Undefined 與 implementation-defined behavior
 

@@ -137,7 +137,8 @@ guard-gap; a **redundant** arm (one an earlier arm already covers) is a warning.
 
 > **[not yet]** The **redundant-arm warning** is not built: an arm an earlier arm already covers produces
 > nothing at all — no warning, no note — and stays in the emitted code as an arm no value can reach.
-> Coverage in the other direction, the case no arm handles, is checked and is an error.
+> Coverage in the other direction, the case no arm handles, is checked and is an error. There is no code to
+> quote here because the missing thing is the rule itself (#95).
 
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —
@@ -145,7 +146,8 @@ matched by value; a **nested** pattern (`Left(Some(v))`); or the **wildcard `_`*
 binding nothing. These, together with a **product pattern** (below) and a **range** arm (`1..=2 =>`, which
 matches by containment), all fire. An **or-pattern** (`A | B =>`, and the binding form
 `A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
-(`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both.
+(`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and each is refused in the parser — _E9024_ and
+_E9023_ (below).
 
 A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's `==` uses. It lowered to
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since

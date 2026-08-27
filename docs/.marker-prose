@@ -1,0 +1,7 @@
+# The places a document says `[deviation]` WITHOUT raising one — the marker system# describing itself. `scripts/deviation-check.sh` clause 0 holds every other mention to# the canonical `> **[deviation]**` form, and this file is the whole of the exception.## ONE `path<TAB>slug` PER SENTENCE, the same key the inherited list uses, and for the same# reason: exempting a sentence must never exempt a chapter. `docs/conformance.md` is where# the marker is defined and it may still one day raise one; only these four sentences of it# are prose about the marker rather than a marker.## A line comes off when its sentence is rewritten or deleted — clause 0 will name the# mention again if it is still there and no longer matches this slug.
+docs/conformance.md	the behaviour does not match this spec
+docs/conformance.md	a is a program
+docs/conformance.md	own a always states both the specified
+docs/conformance.md	for example a stack overflow is a
+docs/language.md	the bootstrap s current behavior does not
+docs/surface/grammar.md	grammar yet not yet at code generation

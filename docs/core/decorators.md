@@ -82,7 +82,8 @@ Four names are **specified and unbuilt**, and only one of them is a name the com
   enforce an invariant. **[not yet]**, with a code of its own: `E9079`.
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators, for in-memory
   width, padding and alignment against an external ABI (see _Kept rare_ and
-  [Values & Memory](memory.md)). **[not yet]**
+  [Values & Memory](memory.md)). **[not yet]**, and with no code of its own: what a reader meets is the
+  unknown-decorator arm's _E9005_ (below).
 
 > **[not yet]** The layout three are **reserved on this page and nowhere in the compiler**. `#[repr]` has
 > no rule of its own: it falls into the unknown-decorator arm and gets _E9005 … this compiler reads

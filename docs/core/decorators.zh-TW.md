@@ -67,7 +67,8 @@
   公開的自訂 constructor（具名關聯 `fn`），而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
   **[not yet]**，而且有自己的代碼：`E9079`。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator，用於對接外部 ABI 時控制記憶體
-  寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
+  寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**，而且沒有自己的代碼：
+  讀者遇到的是未知 decorator 那條的 _E9005_（見下）。
 
 > **[not yet]** layout 那三個是**保留在本頁上、而不保留在編譯器裡**。`#[repr]` 沒有自己的規則：它落進未知
 > decorator 的分支，拿到 _E9005 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and

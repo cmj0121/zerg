@@ -47,8 +47,9 @@ both compilers.
 the deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is
 the keyword `not`, so postfix `!` is free.)
 
-> **[not yet]** `UnwrapError` as a distinct, `is`-testable error **kind** is not built; today the abort
-> fires with a generic message and is not one of the six taxonomy kinds below.
+> **[not yet]** `UnwrapError` as a distinct, `is`-testable error **kind** is not built; `err is UnwrapError`
+> is _E9078 NotImplemented: `is UnwrapError`_, and today the abort fires with a generic message and is not
+> one of the six taxonomy kinds below.
 
 ```text
 port := lookup("PORT") ?? 8080
@@ -131,10 +132,11 @@ contract itself — the message written to stderr, exit status 1, the `Kind: mes
 answers the text alone, and the kind is rendered in front of it when the error reaches the top, for a
 `raise ValueError("bad input")` exactly as for the runtime's own `IndexError`.
 
-> **[not yet]** `code()` answers `byte?` and answers it **absent**, always. No `Err` this compiler can
+> `code()` is built, answers `byte?`, and answers it **absent**, always. No `Err` this compiler can
 > construct carries a code: the errors that exist are the built-in kinds, and a code belongs to a
-> user-defined error type, which is the part of this paragraph that is not built. `message()` and
-> `unwrap()` are.
+> user-defined error type, which is the half of this paragraph with no implementation behind it. The
+> method is complete over an empty domain rather than a form a program can reach and be refused for;
+> `message()` and `unwrap()` answer as specified.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
 expected failure. Of the fault names this chapter uses, eleven reify as `is`-testable **kinds** today:

@@ -557,9 +557,10 @@ The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at t
 it is what the unwind already knows, printed on its way past, and nothing about the program's
 behaviour depends on it.
 
-> **[not yet]** The report is the message and nothing more. Naming the **coroutine** it came from,
-> printing a **backtrace**, and a **compiler flag** to choose whether any of it is printed are all
-> unbuilt — so a program with many coroutines gets a reason without a `spawn` site to attach it to.
+> The report is the message and nothing more: it does not name the **coroutine** it came from, print a
+> **backtrace**, or read a **compiler flag** deciding whether any of it appears — so a program with many
+> coroutines gets a reason with no `spawn` site to attach it to. That is a limit of the report and not a
+> form waiting to be built: there is nothing here a program can write and be refused for.
 
 For a _structured_ outcome — partial results, a specific error, or a failure that wouldn't otherwise
 close a watched channel — the coroutine still `guard`s and sends over a channel. Making a death

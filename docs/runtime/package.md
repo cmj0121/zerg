@@ -154,8 +154,9 @@ acyclic graph — dependencies never loop back): cycles between packages are rej
 A build selects **one version per package** across the whole graph — the same package never appears at
 two versions in one program — so a package's types keep a single identity program-wide.
 
-> **[not yet]** All of it — see the marker under Four layers. There is no package, so there is no
-> version, no graph between packages, and nothing to select.
+> None of this is reachable, and it is not a second `[not yet]`: the marker under Four layers is the one
+> that carries the absence. There is no package, so there is no version, no graph between packages, and
+> nothing to select.
 
 ### Coherence & the orphan rule
 
@@ -199,7 +200,7 @@ directory path made of package names; the **prefix decides which root** it is ex
 | `import "io"`             | the standard library     | `<stdlib>/io.zg` or `<stdlib>/io/`             |
 | `import "net/http"`       | the standard library     | `<stdlib>/net/http.zg` or `<stdlib>/net/http/` |
 | `import "./http"`         | this project (entry dir) | `<entry>/http.zg` or `<entry>/http/`           |
-| `import "github.com/a/b"` | a remote package         | **[not yet]** — reserved, refused by name      |
+| `import "github.com/a/b"` | a remote package         | **[not yet]** — _E9105_, refused by name       |
 
 The three roots expand a package path by the same rule, so there is one layout rule rather than three.
 The classifier is a **consequence of the name grammar** and not a rule beside it: a `package-name` is
@@ -305,7 +306,7 @@ where the module was resolved and read back by name. It is not computed from whe
 and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat
 directory.
 
-> **[not yet]** The boundary compared is the **module** one, because the package layer above does not
+> The boundary compared is the **module** one, because the package layer above does not
 > exist to be the other. So **package-internal** and **package-public** are one tier as far as the
 > compiler is concerned: a `pub` declaration is nameable by every module of the build that imports it,
 > and nothing narrows that to a package's root surface. It is the same absence the marker under Four
@@ -449,7 +450,7 @@ exception.
 
 > **[not yet]** Of the built-in specs the prelude promises, only **`Eq`** and **`Into[T]`** exist.
 > `Ord`, `Hash`, `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
-> `impl Ord for P` reports that nothing in the program declares a spec by that name. `set` and `Ref[T]`
+> `impl Ord for P` reports _E3013 no spec named `Ord`_ — nothing in the program declares one. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
 
 ### Testing & visibility
@@ -629,7 +630,8 @@ module's namespace and reaches its internals with no import at all, which is wha
 matter of compiling more files rather than of relaxing a visibility rule.
 
 > **[not yet]** Four things past the above: a doc comment (`##`), a doc example run as a test, benchmarks,
-> and **running two tests at once** — tests are serial, `ctx.parallel()` is unbuilt, and when it lands
+> and **running two tests at once** — tests are serial, `ctx.parallel()` is unbuilt (_E3131 the method
+> `parallel` on a Context_), and when it lands
 > tests sharing a fixture will share one instance of it.
 >
 > A claim over a **composite** is the one gap inside what is built: `assert xs == ys` over two lists is
@@ -647,5 +649,5 @@ matching scheme is a build-tool detail, **deferred**.
 
 > **[not yet]** No suffix is recognized. Every `.zg` file in a module directory is compiled into the
 > build, so a module holding `plat_linux.zg` and `plat_darwin.zg` is two declarations of one name and is
-> refused as a collision — which is a clearer failure than picking the wrong one, and is still not the
-> feature.
+> refused as a collision, _E9081_ — which is a clearer failure than picking the wrong one, and is still not
+> the feature.

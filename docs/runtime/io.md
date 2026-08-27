@@ -11,7 +11,7 @@ each reusing an existing model:
 
 - a **stream** is a `Reader` or `Writer` — a byte source/sink, drained with `for`;
 - a **handle** is a `Ref[T]` — a file or socket, scope-owned and closed exactly once;
-  **[not yet]** — there is no `Ref[T]` type in this compiler (`Ref(x)` is refused by name), so no handle
+  **[not yet]** — there is no `Ref[T]` type in this compiler (`Ref(x)` is refused by name, _E9058_), so no handle
   type exists and the whole-file leaves below are what reading and writing go through;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
@@ -25,8 +25,8 @@ each reusing an existing model:
 
 ## Streams — `Reader` & `Writer`
 
-**[not yet]** — the streaming surface below is specified but unbuilt; today use `io.read_file` for input
-and `io.write` / `io.println` for output.
+**[not yet]** — the streaming surface below is specified but unbuilt; reaching one of its names is _E3084
+module `io` has no `stdout`_, and today use `io.read_file` for input and `io.write` / `io.println` for output.
 
 Each has **one required method**; the rest are provided defaults (Specs & Generics), so a new stream
 supplies the primitive and inherits the conveniences.
@@ -66,7 +66,8 @@ A missing file is an **expected** value-failure, never an abort. Open modes, see
 `io` methods — stdlib detail, not new concepts. A **socket** is the same shape: a `Ref[handle]` that is a
 `Reader` and `Writer`, its network API left to `io`.
 
-> **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase; what is wired is the pair of
+> **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase — `io.open` is _E3084 module
+> `io` has no `open`_ — and what is wired is the pair of
 > whole-file leaves, which raise **`IOError`** (demote with `guard`) — consistent with "a missing file is an
 > expected value-failure" once `guard`ed. Neither leaf hands back a handle, so nothing has to be closed and
 > `defer f.close()` has nothing to name.
@@ -107,7 +108,8 @@ Native `io` reads synchronously but never blocks the runtime: a `read_bytes`/`wr
 exception is the FFI edge: a blocking **foreign (FFI) C call** parks its whole OS thread, since Zerg does not
 own that frame ([FFI](ffi.md)).
 
-> **[not yet]** Coroutine-parking `io` is part of the unbuilt stream surface above. Per-thread parking of a
+> **[not yet]** Coroutine-parking `io` is part of the unbuilt stream surface above, and reaches a reader as
+> that surface does, _E3084_. Per-thread parking of a
 > blocking foreign call has arrived with the **M:N** scheduler ([Coroutines & Channels](../code/coroutine.md)): such
 > a call now occupies **one worker** while the others keep running Zerg coroutines. On a single-worker host
 > it is still the whole program that stops.

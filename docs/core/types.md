@@ -35,7 +35,8 @@ are storage too, one level down. The position that **does** take an absence is a
 [Type System](type-system.md) says a position may.
 
 > **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
-> are specified as stdlib types and no stdlib declares one. It is refused **by name** — a width is an
+> are specified as stdlib types and no stdlib declares one. It is refused **by name** — _E9063 NotImplemented:
+> `i32` is part of the fixed-width ladder_ — a width is an
 > ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the
 > message any misspelled call gets, and a reader was told their own name was unknown. The **seed** builds
 > and runs them, which makes this the one chapter where the seed is the broader of the two.
@@ -92,7 +93,7 @@ are storage too, one level down. The position that **does** take an absence is a
 
 > **[not yet]** The bitwise operators do not desugar to anything a user type can implement. No `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl` or `Shr` spec is declared anywhere, so naming one reports
-> _error: no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
+> _E3013 no spec named `BitAnd`_ — the ordinary message for a spec nobody wrote — and `&` on a composite has
 > no route to a user body. The operators themselves are built in on `int` / `uint` / `byte` and work as
 > specified; what is missing is the overload the desugaring exists to allow (see [Specs & Generics](specs.md)).
 
@@ -259,7 +260,7 @@ slot behind a refcounted cell, so such a value copies **by reference** (refcount
 What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
 
 > **[not yet]** A recursive **`struct`** cannot be declared. The `Node` written above is rejected with
-> _`Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
+> _E4026 `Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
 > size_: sizing runs over the declaration graph before any boxing decision is reached, so the self-referential
 > slot never gets the cell the paragraph promises it. The recursive **`enum`** is the half that works, its
 > payload being the slot the compiler boxes — which is why `Expr` builds and `Node` does not, and why the same
@@ -296,8 +297,8 @@ Where two enums declare the name, the suggestion in that sentence names the firs
 two spellings that would work, and the reader is the one who knows which.
 
 A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
-reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
-`Encode` / `Decode` impl (**[not yet]**), never a decorator.
+reserved and rejected loudly today as _E9005_, see [Decorators](decorators.md)); the serialized/wire form is
+the `Encode` / `Decode` impl (**[not yet]** — _E9054_), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,
@@ -372,8 +373,8 @@ decides its value. Making the literal itself unavailable outside the module is w
 decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
 
 > **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
-> `P(a: 1, b: 2)` reports _NotImplemented: the named argument `a:` — this compiler binds arguments by position
-> only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
+> `P(a: 1, b: 2)` reports _E9010 NotImplemented: the named argument `a:` — this compiler binds arguments by
+> position only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
 > itself is unaffected; what is missing is the spelling this section states its rules in terms of — "it names
 > every field" is what makes a private field one an outsider cannot name, and `Foo(age: 2, name: base.name)`
 > below is written in a form the compiler does not read.
@@ -407,7 +408,7 @@ rejected at the field's own declaration (`E4045`), naming the field.
 > reading an earlier parameter in [Functions & Closures](../code/functions.md). The default is materialised
 > at the **construction**, where a field is not a name in scope, so `a` would resolve to whatever else
 > carries that name. It reports _NotImplemented: the default on field `b` of `P` reads the field `a`_,
-> with the field's place.
+> with the field's place, as _E9071_.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
 and, given a `mut` binding, writable; a private field is neither, and naming one from another module is
@@ -441,7 +442,7 @@ Zerg **converts by re-construction, never by reinterpretation** — a conversion
 from `x`'s value, the way a constructor does; there is **no C-style cast** that views one type's bytes as
 another (a `reinterpret`), and none is offered. The three type operations stay cleanly apart: **build** a
 new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool`, [Type tests](specs.md) —
-**[not yet]** for non-error types this phase; only the error taxonomy is `is`-testable today), and
+**[not yet]** for non-error types this phase — _E9078_ — only the error taxonomy is `is`-testable today), and
 **never** reinterpret one type's storage as another.
 
 Conversion is **explicit by default** — an `int` isn't a `bool`; build one with a constructor-style call

@@ -1,64 +1,19 @@
 # The `[not yet]` markers that quote NO ERROR CODE, and the whole of what "every unbuilt
 # form names the rule that refuses it" means as a criterion (#86). One `path<TAB>slug` per
 # line, where the slug is the marker's first seven significant words — see
-# scripts/marker-codes-check.sh for why the key is a slug and not a line number, and for
-# why this list is 54 lines where #86 measured 133.
+# scripts/marker-codes-check.sh for why the key is a slug and not a line number.
 #
-# A line comes off when the marker's block QUOTES A LIVE CODE — and the gate takes it off
-# for you, by failing until you do. Three other ways it may go: the form gets built and the
-# marker is deleted, the specification moves, or it becomes a door in FUTURE.md. The
-# release closes when nothing but this header is left.
-docs/code/collections.md	set t a unique membership set t
-docs/code/collections.md	t n a fixed size array any
-docs/code/collections.md	see order equality order equality
-docs/code/collections.md	the array typed fill form in explicit
-docs/code/collections.md	bridge from an array back into the
-docs/code/collections.md	everything marked above is deferred with the
-docs/code/control-flow.md	the redundant arm warning is not built
-docs/code/control-flow.md	h t are grammar derives both
-docs/code/control-flow.md	three of the pattern kinds above are
-docs/code/coroutine.md	the report is the message and nothing
-docs/code/errors.md	unwraperror as a distinct is testable error
-docs/code/errors.md	code answers byte and answers it absent
-docs/code/patterns.md	what is left unbuilt in this line
-docs/code/patterns.md	step the everyday way a multiple return
-docs/conformance.md	specified not built using it is a
-docs/conformance.md	the distinction that matters is between the
-docs/conformance.md	the fallback is not automatic the intent
-docs/core/decorators.md	other one sealed the layout directives is
-docs/core/derive.md	encode decode and the sink source specs
-docs/core/memory.md	there is no ref t in this
-docs/core/memory.md	for the same reason from the other
-docs/core/specs.md	derive hash both comparing two values of
-docs/core/specs.md	backs derive built for eq on a
-docs/core/specs.md	for a direct call on a concrete
-docs/core/specs.md	debug belong to format runtime format md
-docs/core/specs.md	hash map set keys with equal same
-docs/core/specs.md	same claim as every type answers it
-docs/core/type-system.md	one note runs ahead of the compiler
-docs/core/types.md	zerg has no part of the fixed
-docs/core/types.md	the bitwise operators do not desugar to
-docs/core/types.md	a recursive struct cannot be declared the
-docs/core/types.md	a specific width is the opt in
-docs/core/types.md	encode decode impl never a decorator
-docs/core/types.md	the struct literal binds by position only
-docs/core/types.md	a default that reads another field struct
-docs/core/types.md	for non error types this phase only
-docs/language.md	specified not yet built using it is
-docs/language.md	is see specs generics core specs md
-docs/runtime/ffi.md	a package segment and with it a
-docs/runtime/ffi.md	a standalone unsafe fn declaration is refused
-docs/runtime/io.md	there is no ref t type in
-docs/runtime/io.md	the streaming surface below is specified but
-docs/runtime/io.md	the file handle and open create are
-docs/runtime/io.md	coroutine parking io is part of the
-docs/runtime/package.md	all of it see the marker under
-docs/runtime/package.md	import github com a b a remote
-docs/runtime/package.md	the boundary compared is the module one
-docs/runtime/package.md	of the built in specs the prelude
-docs/runtime/package.md	four things past the above a doc
-docs/runtime/package.md	no suffix is recognized every zg file
-docs/runtime/stdlib.md	is not a doc comment it lexes
-docs/runtime/stdlib.md	of process i o io md which
-docs/surface/grammar.md	grammar yet at code generation or its
-docs/surface/grammar.md	literal f the group 3 command literal
+# IT IS EMPTY, AND THAT IS THE CRITERION MET rather than the file being unused. It opened
+# with what #86 measured and closed in one pass, four ways and no others. Most markers simply
+# gained the code of the rule that refuses them, each read off the COMPILER rather than off
+# the prose beside it. Some were the marker system describing itself and moved to
+# docs/.marker-prose, which is not a marker to answer for. Three named forms this compiler
+# accepts in SILENCE — `##`, `del` of an owning value, a redundant `match` arm — and those
+# name the ticket for the rule that does not exist (#93, #94, #95), because the debt there is
+# a missing rule and not a missing citation. The rest were rewritten out of the marker
+# altogether: `[not yet]` promises a clean compile error naming the form, and absent behaviour
+# with no form to refuse cannot keep that promise however long it waits.
+#
+# The gate still reads it. A line added here is a marker somebody could not close today, and
+# clause 3 takes it back off the day the marker gains a code — so the countdown cannot drift
+# from the documents in either direction.

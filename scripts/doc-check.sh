@@ -549,9 +549,7 @@ checks=$((checks + 1))
 if on_a_pty "$ZERG" doc log; then
 	grep -q "$esc\[1mFUNCTIONS$esc\[0m" "$tmp/pty.raw" ||
 		note 'a section title at a terminal is not bold — colour did not follow the device'
-	grep -q "$esc\[33m(undocumented)$esc\[0m" "$tmp/pty.raw" ||
-		note 'the (undocumented) mark at a terminal is not coloured'
-	checks=$((checks + 2))
+	checks=$((checks + 1))
 
 	# THE SHAPE DOES NOT FOLLOW THE DEVICE. This is the assertion the two greps above cannot
 	# make: with its colour taken back off, the terminal's document has to be the piped one
@@ -573,6 +571,23 @@ if on_a_pty "$ZERG" doc log; then
 	grep -q "$esc" "$tmp/pty.raw" &&
 		note 'an exported-empty NO_COLOR did not turn colour off at a terminal — see no-color.org'
 	checks=$((checks + 2))
+
+	# THE (undocumented) MARK IS ASSERTED ON THE FIXTURE, and this is the last thing §6 does
+	# because it overwrites `pty.raw` for everything above.
+	#
+	# It used to be read out of `zerg doc log`, which carried ten of them. The library carries
+	# NONE now, and that grep would have gone on asserting the colour of a mark no document
+	# contained — a check that can only pass while somebody has left work undone, and which
+	# fails the day the work is finished. §4's fixture declares `after_banner()` and
+	# `detached()` for the attachment rules and both render the mark, so it is the one corpus
+	# here that cannot run out of one.
+	if (cd "$tmp/proj" && on_a_pty "$ZERG_ABS" doc ./attach.zg); then
+		grep -q "$esc\[33m(undocumented)$esc\[0m" "$tmp/pty.raw" ||
+			note 'the (undocumented) mark at a terminal is not coloured'
+		checks=$((checks + 1))
+	else
+		note 'the attachment fixture could not be rendered on a pty, so the mark was not asserted'
+	fi
 else
 	printf 'doc-check: no `script` on this host, so the terminal half of §6 was not run\n' >&2
 fi

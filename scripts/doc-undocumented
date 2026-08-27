@@ -6,22 +6,6 @@
 # errors cancelling: write the comment for one declaration and add a bare `pub` elsewhere in
 # the same change, and 18 is still 18 while the set underneath has moved twice.
 #
-# A line comes off when the comment is written. A line is added only on purpose.
-json.of_obj
-json.put
-json.put_bool
-json.put_int
-json.put_str
-log.Format
-log.Level
-log.Logger.error
-log.Logger.info
-log.Logger.trace
-log.Logger.warn
-log.error
-log.info
-log.trace
-log.warn
-strings.pad_end
-strings.trim_right
-testing.Context
+# IT IS EMPTY. Every `pub` name the standard library exposes carries a comment. A line added
+# here is a declaration somebody shipped without one, and the gate names it until the comment
+# is written or the line is added on purpose.

@@ -301,10 +301,12 @@ the storage.
 > ---
 >
 > `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
-> **[not yet]** for the same reason from the other side: today such a `del` revokes the name's access, but
-> the storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above
-> is thus the intended behavior, not yet the bootstrap's for owning values — and no rule refuses the form
-> meanwhile, so this marker names a ticket where the others name a code (#94).
+> **[not yet]** for the same reason from the other side, and refused by name rather than half-honoured —
+> _E9108 NotImplemented: `del xs` on an owning list_. The release is registered on the runtime cleanup
+> stack at the declaration and every exit unwinds to a mark, so there is no taking one entry out of the
+> middle; the "storage freed" row above is the intended behaviour and the form is turned away until it is
+> the bootstrap's. A **scalar** `del` is untouched: there is no storage to free early, so revoking the
+> name is the whole of what the statement means for one.
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is

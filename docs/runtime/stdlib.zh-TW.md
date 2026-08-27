@@ -20,9 +20,9 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 主張，而不是一段寫下來的話；而 `zerg doc` 會把同一段註解讀回來——`zerg doc strings` 印出一個模組的完整文件，
 `zerg doc strings.split` 印出單一宣告。
 
-> **[not yet]** `##` 不是一種 doc comment。它就是一個普通 `#` 註解、只是內文剛好以 `#` 開頭，所以 `zerg doc`
-> 會把那個 `#` 一起渲染進說明裡；今天能用的形式是單一 `#` 註解，十五個模組用的也都是它。它是唯一一種欠一條
-> 規則、而不是引用一條規則的 `[not yet]`——沒有任何東西拒絕 `##`，它就只是被吸收掉（#93）。
+> **[not yet]** `##` 讀得到、也渲染得對——標記會被抄掉，整塊附著到它底下那個宣告，這正是 `GRAMMAR` 要求的。
+> **沒有**建的是同一句話畫的那條界線：_any other `#` begins an ordinary line comment_，而這裡普通 `#` 一樣會
+> 成為文件。十五個模組全是這樣寫的，所以把讀者的文件與維護者的筆記分開是一次遷移，不是一個開關（#18）。
 
 ````text
 # ```zerg

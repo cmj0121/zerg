@@ -135,10 +135,13 @@ compiler can't prove a guard holds — so a case still needs an **unguarded** ar
 Because every value is thus statically covered, `MatchError` is only the runtime backstop for that residual
 guard-gap; a **redundant** arm (one an earlier arm already covers) is a warning.
 
-> **[not yet]** The **redundant-arm warning** is not built: an arm an earlier arm already covers produces
-> nothing at all — no warning, no note — and stays in the emitted code as an arm no value can reach.
-> Coverage in the other direction, the case no arm handles, is checked and is an error. There is no code to
-> quote here because the missing thing is the rule itself (#95).
+> An arm an earlier arm already covers is reported, and the two halves are reported by two tools. A
+> **catch-all** followed by anything is a compile error — _E4032 this catch-all arm makes the following
+> arms unreachable_ — because a binding or `_` swallows every value and what follows it is certainly
+> dead. A **duplicate** pattern, the same literal or the same variant written twice, is `zerg lint`'s
+> _L108_: it is a mistake worth naming and not worth refusing a build over. A **guarded** arm covers
+> nothing and neither rule counts it, since the guard may not fire. Coverage in the other direction, the
+> case no arm handles, is checked and is an error.
 
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —

@@ -499,7 +499,8 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   primitive）。函式的值參數**由引數型別推斷**（`fn sum[N: int](xs: [int; N])`）、呼叫端從不寫它,所以它跑的是
   與這裡其他推導**同一個方向**,不是那四個 carve-out 之一;型別的則寫在型別位置（`Matrix[3, 4]`）。沒有它,
   陣列長度屬於型別的一部分這件事會讓 `[T; N]` 無法寫進簽章（**[not yet]**——值參數會被拒絕,
-  _NotImplemented: a value generic parameter `N: int`_,所以這個編譯器只有型別參數）。**沒有 disjunction bound**（`T: A | B`）——body 無從
+  _E9029 NotImplemented: a value generic parameter `N: int`_,所以這個編譯器只有型別參數）。
+  **沒有 disjunction bound**（`T: A | B`）——body 無從
   得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K, V]`
   搭配 `impl Indexable[int, T]`（元素）與 `impl Indexable[Range, list[T]]`（slice）——`xs[k]` 便依 `k` 的型別靜態
   分派——或用 `enum` 做 runtime 選擇。

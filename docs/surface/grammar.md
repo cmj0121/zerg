@@ -573,7 +573,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   never written at the call site, so it runs the **same direction** as every other inference here and is not
   one of the carve-outs; a type's is written in type position (`Matrix[3, 4]`). Without it an array's length
   being part of its type would make `[T; N]` unwritable in a signature (**[not yet]** — a value parameter is
-  refused, _NotImplemented: a value generic parameter `N: int`_, so this compiler has type parameters only).
+  refused, _E9029 NotImplemented: a value generic parameter `N: int`_, so this compiler has type parameters
+  only).
   There is **no disjunction bound**
   (`T: A | B`) — a body could not know which methods `T` has, so it cannot monomorphize. To accept several
   types, **parameterize a spec** and write one impl per type: `spec Indexable[K, V]` with

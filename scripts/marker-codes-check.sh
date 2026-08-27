@@ -93,10 +93,24 @@ scan() {
 			}
 			for (i = 1; i <= NR; i++) {
 				if (fenced[i] || line[i] !~ /\*\*\[not yet\]\*\*/) continue
-				for (s = i; s > 1; s--)
+				# THE BLOCK STOPS AT A SIBLING LIST ITEM. A Markdown list carries no blank
+				# line between its items, so a walk that ends only at a blank one swallows the
+				# whole list — `docs/core/decorators.md` has one thirty-three lines long — and
+				# a marker in one bullet is then satisfied by a code in another. That is the
+				# reader `deviation-check` had, in a smaller room, and it was doing the same
+				# thing here: the `#[repr]` marker quotes no code at all and passed on the
+				# `E9079` of the bullet above it.
+				#
+				# NO APOSTROPHE BELONGS ANYWHERE IN THIS AWK PROGRAM, comments included. It is
+				# one single-quoted shell word, so an apostrophe closes the quote and every
+				# line after it is read as shell. This paragraph cost two attempts to write:
+				# the first put one in the prose, and the second put one in the warning.
+				for (s = i; s > 1; s--) {
+					if (isitem(line[s])) break
 					if (isbreak(line[s - 1])) break
+				}
 				for (e = i; e < NR; e++)
-					if (isbreak(line[e + 1])) break
+					if (isbreak(line[e + 1]) || isitem(line[e + 1])) break
 				j = e + 1
 				if (j <= NR && isblank(line[j])) j++
 				if (j <= NR && line[j] ~ /^[[:space:]]*(> )?[[:space:]]*```/) {
@@ -130,6 +144,7 @@ scan() {
 		}
 		function isblank(t) { return t ~ /^[[:space:]]*$/ }
 		function isbreak(t) { return isblank(t) || t ~ /^[[:space:]]*>[[:space:]]*$/ }
+		function isitem(t) { return t ~ /^[[:space:]]*(>[[:space:]]*)?([-*][[:space:]]|[0-9]+\.[[:space:]])/ }
 		function slug(t,   n, w, out, i) {
 			gsub(/\[not yet\]/, "", t)
 			t = tolower(t)

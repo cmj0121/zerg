@@ -176,6 +176,20 @@ fn main() {
 }
 EOF
 
+# A `match` arm that repeats one an earlier arm already covers. Only the DUPLICATE is a lint
+# finding: an arm after a catch-all is `E4032` in the emitter and refuses the build, so the
+# case below repeats a literal rather than following a `_`.
+lint L108 'repeats a pattern an earlier arm already covers' <<'EOF'
+fn main() {
+	n := 1
+	print match n {
+		1 => 1
+		1 => 2
+		_ => 0
+	}
+}
+EOF
+
 # --- the same two rules, on programs they must stay silent about --------------------
 #
 # L101 and L102 are the two rules that judge a DECLARATION by its uses, so both are only as

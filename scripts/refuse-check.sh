@@ -2967,6 +2967,35 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF `del`'s ABSENCE, and it is the same absence read from the value side. The
+# channel case above is refused because the drop cannot be taken out of the middle of the
+# cleanup stack; an owning struct, list or map is refused for exactly that reason, and used to
+# be accepted in SILENCE — the name was revoked, the storage was not freed, and the "storage
+# freed" row of docs/core/memory.md was a promise no program kept (#94).
+#
+# A SCALAR `del` IS NOT HERE, deliberately: there is no storage to free early, so revoking the
+# name is the whole of what the statement means for one, and the silent case below in this
+# file's companion asserts it still builds.
+expect "$ZERG" del-on-an-owning-list E9108 'on an owning list' <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	del xs
+	print 1
+}
+EOF
+
+expect "$ZERG" del-on-an-owning-struct E9108 'on an owning struct' <<'EOF'
+struct P {
+	pub a: int
+}
+
+fn main() {
+	p := P(1)
+	del p
+	print 1
+}
+EOF
+
 # GRAMMAR#import-path is a str-lit and nothing else. The bare spelling answered "no spec
 # here", so the import was not made and `util/text` fell through to the statement loop as
 # a top-level expression — which compile mode treats as a nop. Built, printed, exited 0,

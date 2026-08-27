@@ -83,6 +83,7 @@ silences a rule that has stopped firing, and nobody learns when the real problem
 | `L103` | binding never read            | the value was computed for nobody                                          |
 | `L104` | `_ := expr`                   | the expression is already a statement; the binder is what nothing reaches  |
 | `L105` | `with … as x`, `x` never read | the block already scopes the resource; the name is what nobody said        |
+| `L108` | a `match` arm written twice   | the same literal or variant twice over; no value reaches the second        |
 
 ```text
 L101 unused import "strconv"

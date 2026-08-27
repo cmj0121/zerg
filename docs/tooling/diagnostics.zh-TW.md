@@ -462,6 +462,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9105` | 遠端套件 —— 路徑指名一個 host,而解析它需要這個編譯器尚未建置的 package layer                          |
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
+| `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an

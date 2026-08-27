@@ -108,9 +108,11 @@ _E9039 NotImplemented: `print` is a statement, and an expression is wanted here_
 無法證明 guard 成立——所以該 case 仍需要一個**無 guard** 的 arm 或結尾的 **`_`**。既然每個值都已被靜態覆蓋，
 `MatchError` 只是那個殘餘 guard-gap 的執行期後備；而**多餘**的 arm（已被前面 arm 覆蓋者）是 warning。
 
-> **[not yet]** **多餘 arm 的 warning** 尚未建置：一個已被前面 arm 覆蓋的 arm 什麼都不會產生——沒有 warning、也
-> 沒有提示——而且它會以「沒有任何值到得了的 arm」留在 emit 出來的程式碼裡。反方向的覆蓋，也就是沒有任何 arm
-> 處理的 case，是有檢查的，而且是 error。這裡沒有 code 可引用，因為缺席的正是那條規則本身（#95）。
+> 一個已被前面 arm 覆蓋的 arm 會被報出來，而兩半分別由兩個工具報。**catch-all** 後面再接任何 arm 是編譯錯誤
+> ——_E4032 this catch-all arm makes the following arms unreachable_——因為 binding 或 `_` 吞下每一個值，後面
+> 的必然是死的。**重複**的 pattern，也就是同一個 literal 或同一個 variant 寫了兩次，是 `zerg lint` 的 _L108_：
+> 那是值得指名、但不值得為它擋下整個 build 的錯誤。**帶 guard** 的 arm 什麼都不覆蓋，兩條規則都不算它，因為
+> guard 可能不成立。反方向的覆蓋，也就是沒有任何 arm 處理的 case，是有檢查的，而且是 error。
 
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；

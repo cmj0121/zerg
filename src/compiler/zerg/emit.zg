@@ -11111,6 +11111,21 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# there is no taking one entry out of the middle early.
 	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now") if ast.ty_is_chan(c_lookup_var(em, name))
 
+	# `del` OF AN OWNING VALUE — a local `struct`, `list` or `map` — is the other half of the
+	# same absence (#94). GRAMMAR and docs/core/memory.md give it a job the revocation is only
+	# the first step of: free the storage EARLY, before the scope ends. This compiler frees it
+	# at ordinary scope exit for the reason the channel paragraph above gives — the release is
+	# registered on the runtime cleanup stack at the DECLARATION and every exit unwinds to a
+	# mark, so there is no taking one entry out of the middle.
+	#
+	# So the form is turned away rather than half-honoured. A reader who believes the "storage
+	# freed" row of that chapter reaches for `del` to bound peak memory inside a long scope,
+	# and got the revocation with no free and nothing said — which is the one thing
+	# docs/conformance.md rules out: implemented, or refused by name, never silently different.
+	# A SCALAR `del` is untouched: there is no storage to free early, so revocation IS the
+	# whole of what the statement means for one.
+	c_del_owning(em, name)
+
 	# THERE HAS TO BE SOMETHING TO REVOKE. `del` emits no C, so a name it could not find was
 	# revoked in nobody's environment and the statement vanished without a word: `del
 	# totally_undefined` compiled and ran, while the very same spelling in a `print` one line
@@ -11131,6 +11146,28 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 # a function, a struct, an enum, one of its variants — is a different confusion: the reader
 # meant something by it, and what they need told is that the thing they named is not a
 # binding and has no storage a name is an access to.
+# c_del_owning refuses `del` on a value whose storage the statement claims to free. The three
+# owning shapes are the three docs/core/memory.md names, and they are asked of the TYPE rather
+# than of the binding, so a `str` — refcounted, shared, and freed by the last holder — is not
+# among them: `del s` on one revokes a name and frees nothing, which is what it says.
+fn c_del_owning(mut &em: Emitter, name: str) {
+	t := c_lookup_var(em, name)
+	what := c_del_owning_kind(em, t)
+	return if what == ""
+
+	raise c_diag(em, rule.Rule.NotYetDelOwning, f"NotImplemented: `del {name}` on an owning {what} — GRAMMAR#del-stmt frees its storage EARLY and this compiler releases it where the binding's scope ends, so the free the statement is for would not happen. Let the scope end, or put the value in a narrower one")
+}
+
+fn c_del_owning_kind(mut &em: Emitter, t: ast.Ty) -> str {
+	k := ast.ty_owning_kind(t)
+
+	return k if k != ""
+
+	return "struct" if c_is_struct_name(em, ast.ty_name(t))
+
+	return ""
+}
+
 fn c_del_target(mut &em: Emitter, name: str) {
 	return if c_live_idx(em, name) >= 0
 

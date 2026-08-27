@@ -486,6 +486,7 @@ shipping compiler rather than a part of it (the line
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                       |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                       |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks   |
+| `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

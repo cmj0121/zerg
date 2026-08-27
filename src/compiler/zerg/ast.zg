@@ -223,6 +223,12 @@ pub struct Arm {
 	pub has_guard: bool
 	pub guard_expr: Expr
 	pub body: Expr
+
+	# where the arm was written. An arm is the unit `zerg lint`'s L108 reports — a pattern an
+	# earlier arm already covers — and a finding a reader cannot jump to is a finding they have
+	# to search for. The enclosing function had a place all along; the arm inside it did not.
+	pub line: int
+	pub col: int
 }
 
 # Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
@@ -1614,6 +1620,22 @@ pub fn ty_chan(elem: Ty, dir: int, at: str) -> Ty {
 # stage that needed it first could not reach the stage that already had it. The emitter
 # reads this file directly (ty_is_chan, ty_chan_elem), so the copy had nothing left to be
 # for and is gone.
+# ty_owning_kind names the shape of a value that OWNS its storage — the list and the map of
+# docs/core/memory.md — or "" for everything else. The chapter's third owning shape is a
+# `struct`, and it is deliberately NOT answered here: whether a name is a struct is a table
+# the emitter keeps, and a second copy of that question is the drift this file avoids.
+#
+# A `str` is not among them and that is not an oversight. It is refcounted and shared, so
+# freeing one early is the last holder's business rather than one name's, and `del s` revoking
+# a name is the whole of what the statement means for it.
+pub fn ty_owning_kind(t: Ty) -> str {
+	return match t {
+		Ty.TList(_)   => "list"
+		Ty.TMap(_, _) => "map"
+		_             => ""
+	}
+}
+
 pub fn ty_is_opt(t: Ty) -> bool {
 	return match t {
 		Ty.TOpt(_) => true

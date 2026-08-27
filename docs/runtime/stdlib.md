@@ -22,10 +22,11 @@ every pair and diffs the real output against the stated one, so an example is a 
 rather than one that is written down, and `zerg doc` reads the same comment back — `zerg doc strings`
 prints a module's whole document, `zerg doc strings.split` one declaration.
 
-> **[not yet]** `##` is not a doc comment. It lexes as an ordinary `#` comment whose text happens to begin
-> with a `#`, so `zerg doc` renders that `#` into the prose; a plain `#` comment is the form that works
-> today and is what all fifteen modules use. It is the one shape of `[not yet]` that owes a rule rather
-> than quoting one — nothing refuses `##`, it is simply absorbed (#93).
+> **[not yet]** `##` is read and rendered — the marker comes off and the block attaches to the declaration
+> under it, which is what `GRAMMAR` asks of it. What is **not** built is the DISTINCTION the same sentence
+> draws: _any other `#` begins an ordinary line comment_, and here a plain `#` documents too. That is how
+> all fifteen modules are written, so separating the reader's document from the maintainer's notes is a
+> migration rather than a switch (#18).
 
 ````text
 # ```zerg

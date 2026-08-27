@@ -503,6 +503,13 @@ pub enum Rule {
 	# retires the day the lowering lands. Where the value has no rendering of its own the
 	# sentence says there is nothing to write instead, because the substitute has to compile.
 	NotYetSpecifiedMethod = 9107
+
+	# `del` of an OWNING value — a local struct, list or map — whose storage the statement is
+	# for freeing early. Revoking the name is built and is the first half; the free is not,
+	# because the release is registered on the runtime cleanup stack at the declaration and
+	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
+	# from the other side, and both retire when a release can be taken out of the middle.
+	NotYetDelOwning = 9108
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

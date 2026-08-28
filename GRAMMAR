@@ -118,19 +118,27 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 
 # A type-ident is the name a DECLARATION gives a type — a struct, an enum, a spec, a
-# 'type X = Y' (group 6). It begins with an UPPER-CASE LETTER, and that is the whole of
-# how the language separates its two namespaces: a name in a value position is a type's
-# when it is capitalized and a function's or a binding's when it is not. 'Point(1, 2)'
-# constructs and 'point(1, 2)' calls; 'cli.Opt' qualifies a module and 'It.Item'
-# projects an associated type; a bound names a spec or a concrete type by the same
-# letter. Those are decided BEFORE anything is resolved, so the rule is lexical and
-# belongs here rather than to a later pass.
-# A leading '_' is refused by that same rule and needs none of its own: '_' has no case,
-# so a name beginning with one is in neither namespace.
-# A USE is not constrained (type-name, group 4): the built-in type names — 'int',
-# 'uint', 'float', 'str', 'list', 'map', the fixed-width members — are stdlib names in
-# lower case, and no declaration in a program introduces them.
-type-ident ::= upper ( letter | digit | '_' )*
+# 'type X = Y' (group 6). It is an ordinary identifier: A NAME DOES NOT DECIDE WHAT A
+# THING IS. What makes 'Point' a type is the 'struct Point' that declared it, and what
+# makes 'point' one is a 'struct point'; the spelling is the author's business.
+# This USED TO BE the namespace separator — a capital meant a type, so 'Point(1, 2)'
+# constructed and 'point(1, 2)' called, and the rule was lexical so the parser could
+# decide before resolving anything. It cost more than it bought. 'fn Fine' was derivable
+# here and uncallable there, because fn-decl names a function with an unconstrained
+# 'identifier' while the namespace rule made every capitalized call a construction; a
+# type could not be named '_Box', for the accident that '_' has no case at all; and the
+# refusal for 'point(1, 2)' named a type the program had never written.
+# WHAT DECIDES INSTEAD is what the program declared. A call is a construction when the
+# name is a declared type and a call when it is a function, which the compiler can
+# answer because both live in ONE namespace — declaring 'struct Fine' and 'fn Fine'
+# together is an error naming both, so at most one of them is ever in scope.
+# THE PATTERN GRAMMAR ALREADY WORKED THIS WAY and is the precedent: 'capitalization was
+# never what decided this', so a variant pattern is told from a binding by the '.' and
+# the payload parentheses, and it parses without a symbol table.
+# A USE is not constrained either (type-name, group 4): the built-in type names —
+# 'int', 'uint', 'float', 'str', 'list', 'map', the fixed-width members — are stdlib
+# names in lower case, and no declaration in a program introduces them.
+type-ident ::= identifier
 
 NEWLINE    ::= '\r'? '\n'          # a line break, LF or CRLF; terminates a statement (group 1)
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens — a '\r' is NOT one

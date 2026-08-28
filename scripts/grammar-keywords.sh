@@ -22,7 +22,19 @@ set -u
 GRAMMAR_FILE=${GRAMMAR_FILE:-GRAMMAR}
 
 # The table runs from the `keyword ::=` line to the first line that is not a continuation.
-table=$(awk '/^keyword +::=/ {inside = 1} inside {print} inside && !/^keyword/ && !/^ *\|/ {exit}' "$GRAMMAR_FILE")
+#
+# THE TERMINATING LINE IS NOT PART OF IT, and the order of these three rules is the whole of
+# saying so. Printing before the exit test swallowed one line past the table, which here is
+# the comment `# ('derive' is not a keyword — it is a compiler decorator name)` — so the
+# extractor read `derive` out of the sentence denying it is a keyword, and this gate reported
+# 45 reserved words where the language has 44 and `editor-align` counts 44. It passed anyway,
+# because `derive` IS reached by the decorator production; a word in that comment that no
+# production reached would have failed the gate for existing in a comment.
+table=$(awk '
+	/^keyword +::=/ { inside = 1 }
+	inside && !/^keyword/ && !/^ *\|/ { exit }
+	inside { print }
+' "$GRAMMAR_FILE")
 if [ -z "$table" ]; then
 	echo "grammar-keywords: no keyword table found in $GRAMMAR_FILE — nothing was checked" >&2
 	exit 1

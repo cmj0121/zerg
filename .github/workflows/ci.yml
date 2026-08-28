@@ -409,6 +409,18 @@ jobs:
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make productions
 
+      # --- 7c''. and the ones it BUILDS run ---------------------------------------
+      #
+      # `productions` above is the AST stage and says so in its own summary; this is the half
+      # that runs the form. It sits HERE, behind `corpus_fetch`, and not in the docs job where
+      # it was first written: that job never fetches the corpus, so the gate reported
+      # "test-data/behaviour is not there — nothing checked", exited 0, and turned green on its
+      # first CI run having measured nothing. The absent-corpus exit is right for a private
+      # submodule and is exactly why the step has to be where the corpus is.
+      - name: Every form this compiler builds has a program that runs it
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make behaviour
+
       # --- 7c'''. and what GRAMMAR does NOT derive is refused ---------------------
       # Every step above asks about programs that ARE Zerg, so none of them can see an
       # over-acceptance. That blind spot held a 1-tuple `(1, )`, a trailing comma in four

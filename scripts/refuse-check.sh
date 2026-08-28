@@ -723,6 +723,40 @@ fn main() {
 }
 EOF
 
+# THE OTHER TWO CONTAINERS. `==` over a list is cased below; a tuple and a map are the same
+# rule and were pinned by nothing, and docs/core/types.md names the tuple one on its own.
+expect "$ZERG" equality-over-a-tuple E9057 'on a (int, int)' <<'EOF'
+fn main() {
+	print (1, 2) == (1, 2)
+}
+EOF
+
+expect "$ZERG" equality-over-a-map E9057 'on a map' <<'EOF'
+fn main() {
+	a: map[str, int] = {"x": 1}
+	b: map[str, int] = {"x": 1}
+	print a == b
+}
+EOF
+
+# A SPEC THE PRELUDE PROMISES AND NOBODY DECLARES. `E3013` is cased for one name; the chapters
+# name six more, and `Hash` is the one a reader meets first through `map` keys.
+expect "$ZERG" impl-hash-no-such-spec E3013 'no spec named `Hash`' <<'EOF'
+struct P {
+	pub a: int
+}
+
+impl Hash for P {
+	fn hash() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 expect "$ZERG" equality-over-a-container E9057 <<'EOF'
 fn main() {
 	print [1, 2] == [1, 2]
@@ -893,6 +927,44 @@ struct P {
 fn main() {
 	P{x} := P(3)
 	print x
+}
+EOF
+
+# THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
+# kinds that are not in the taxonomy, and each is a different sentence out of the same rule.
+expect "$ZERG" is-a-struct E9078 'is P' <<'EOF'
+struct P {
+	pub a: int
+}
+
+fn main() {
+	p := P(1)
+	print p is P
+}
+EOF
+
+expect "$ZERG" is-aliaserror E9078 'is AliasError' <<'EOF'
+fn main() {
+	e := ValueError("x")
+	print e is AliasError
+}
+EOF
+
+expect "$ZERG" is-matcherror E9078 'is MatchError' <<'EOF'
+fn main() {
+	e := ValueError("x")
+	print e is MatchError
+}
+EOF
+
+# `for mut` OVER A MAP. The case below walks a list; docs/code/collections.md says the binding
+# is unbuilt for every element type, and a map is the other container it has.
+expect "$ZERG" for-mut-over-a-map E9025 'for mut' <<'EOF'
+fn main() {
+	mut m: map[str, int] = {"a": 1}
+	for mut k in m {
+		print k
+	}
 }
 EOF
 
@@ -3442,6 +3514,43 @@ fn main() {
 EOF
 
 # `is` names one of the built-in error kinds here, where GRAMMAR#cmp-expr takes any type-name.
+# ONE CODE, SEVERAL FORMS. `E9054` names four derives and this file cased one of them; the
+# other three were refused correctly and pinned by nothing, so a regression in any of them
+# would have been caught by no gate. The same shape is why `E9056` has a case per list method
+# rather than one for the family.
+expect "$ZERG" derive-hash E9054 '`#[derive(Hash)]`' <<'EOF'
+#[derive(Hash)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-encode E9054 '`#[derive(Encode)]`' <<'EOF'
+#[derive(Encode)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-decode E9054 '`#[derive(Decode)]`' <<'EOF'
+#[derive(Decode)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 expect "$ZERG" an-is-test-on-a-non-error-type E9078 <<'EOF'
 fn main() {
 	x := 3

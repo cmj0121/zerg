@@ -23,7 +23,7 @@
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
-	counterexamples version-check cache-key-check error-codes-check seed-gaps lint-check \
+	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
 	doc-check stmt-walk entry-path examples-index mem-peak release-notes
@@ -476,7 +476,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -601,6 +601,15 @@ productions:                    # every GRAMMAR production is read, or refused b
 counterexamples:                # a program GRAMMAR does not derive must be refused
 	$(MAKE) build
 	./scripts/counterexample-check.sh
+
+# The third question about a production, and the one the other two say out loud they do not
+# answer. `productions` samples every form at the AST stage — read, or refused by name — and
+# `counterexamples` breaks each form to check the refusal holds. Neither runs anything, so a
+# form could parse, be counted as covered, and be unbuilt past the parse. This is the half
+# that runs it.
+behaviour:                      # every form this compiler builds has a program that runs it
+	$(MAKE) build
+	./scripts/behaviour-check.sh
 
 # A reserved word no production uses is a word nobody can write and every lexer refuses as a
 # name — which is what `package` was for years. It is grammar-cites reversed: not "does every

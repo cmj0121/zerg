@@ -110,7 +110,7 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\r'? '\n'
 WS         ::= ( ' ' | '\t' )+     # 水平空白——'\r' 不算
-COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' 後不接 '#' 或 '[' → line comment
+COMMENT     ::= '#' ( [^#[\n] [^\n]* )?         # '#' 後不接 '#' 或 '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment；附著於其後的宣告
 block      ::= '{' stmt-list '}'
 ```

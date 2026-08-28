@@ -114,7 +114,7 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\r'? '\n'
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace — a '\r' is not one
-COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' not before '#' or '[' → line comment
+COMMENT     ::= '#' ( [^#[\n] [^\n]* )?         # '#' not before '#' or '[' → line comment
 DOC-COMMENT ::= '##' [^\n]*                       # doc comment; attaches to the following declaration
 block      ::= '{' stmt-list '}'
 ```

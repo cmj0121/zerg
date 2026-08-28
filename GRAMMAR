@@ -104,6 +104,12 @@ nop            ::= 'nop'
 # begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached
 # to the declaration that follows — consecutive '##' lines form one doc block; there is NO
 # inner/trailing doc and NO block comment); any other '#' begins an ordinary line comment.
+# A comment's TEXT IS OPTIONAL, so a bare '#' is one, and it runs to the end of the line
+# WITHOUT taking the break: the NEWLINE that ends the statement is a token of its own, and a
+# file whose last line is a comment need not end in one. This was two alternatives, and the
+# second — a bare '#' spelled as '#' NEWLINE — made both of those false: it put the line
+# break inside the token, and it left a comment at end of FILE underived while the compiler
+# read one.
 # A decorator binds to the item that follows it, and it STANDS ON ITS OWN LINE: it is an item
 # of the 'stmt-list' like any other, so a 'stmt-sep' separates it from what it leads, and
 # '#[derive(Eq)] struct P' — both on one line — is not a form. What it binds to is the next
@@ -141,8 +147,7 @@ type-ident ::= identifier
 
 NEWLINE    ::= '\r'? '\n'          # a line break, LF or CRLF; terminates a statement (group 1)
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens — a '\r' is NOT one
-COMMENT     ::= '#' [^#[\n] [^\n]*  # a '#' NOT followed by '#' or '[' → line comment to EOL
-              | '#' NEWLINE          # a bare '#' at end of line is also a comment
+COMMENT     ::= '#' ( [^#[\n] [^\n]* )?   # a '#' NOT followed by '#' or '[' → to end of line
 DOC-COMMENT ::= '##' [^\n]*         # a doc comment; attaches to the following declaration
 
 # A block groups a statement list in braces — the body of a function, loop, or

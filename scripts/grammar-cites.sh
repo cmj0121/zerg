@@ -153,6 +153,45 @@ done <<EOF
 $(scan "GRAMMAR:[0-9]+")
 EOF
 
+# --- AND THE REVERSE: a production nothing derives defines nothing ---------------------
+#
+# The clauses above hold every citation to a production that exists. This holds every
+# production to being REACHED — from the start symbol down, through the right-hand sides.
+#
+# `upper ::= [A-Z]` is why it is here. It had one user, `type-ident`, and when the case rule
+# retired that user became `identifier`; the production stayed, defining a concept the
+# language no longer has. Nothing said so. Three corpora went on carrying a row for it, and
+# `test-data/productions/INVENTORY` went on describing it as "the first letter of a declared
+# type's name token" — a sentence about a rule that no longer existed.
+#
+# FOUR ROOTS ARE REACHED BY NOTHING AND MUST BE. `program` is the start symbol. `WS`,
+# `COMMENT` and `DOC-COMMENT` are trivia the lexer consumes between tokens, so no syntax
+# production names them. `keyword` is a lexical constraint on `identifier` stated in prose,
+# and `package-path` is reached through `import-path`'s comment because the path is a
+# `str-lit` whose interior is validated at resolution. They are listed rather than pattern-
+# matched, so adding one is a deliberate edit and not a widening.
+#
+# A COMMENT IS NOT A REFERENCE, which is the whole difficulty and the reason this was written
+# three times before it was right. `upper` appears in `package-name`'s trailing comment ("no
+# upper case"), and `byte-char` appears only inside a right-hand side — read the file the
+# obvious way and the first looks used and the second looks dead. Both halves of a line are
+# dropped here: a line that begins with `#`, and everything after two spaces and a `#`.
+ROOTS="program WS COMMENT DOC-COMMENT keyword package-path"
+while IFS= read -r prod; do
+	[ -n "$prod" ] || continue
+	case " $ROOTS " in *" $prod "*) continue ;; esac
+	used=$(grep -vE "^[[:space:]]*#" "$GRAMMAR_FILE" |
+		sed -E "s/[[:space:]][[:space:]]+#.*$//" |
+		grep -vE "^${prod}[[:space:]]+::=" |
+		grep -cE "(^|[^A-Za-z0-9-])${prod}([^A-Za-z0-9-]|$)")
+	if [ "$used" -eq 0 ]; then
+		echo "UNREACHED $prod is defined and no production derives it — it defines nothing"
+		fail=$((fail + 1))
+	fi
+done <<EOF
+$(grammar_productions "$GRAMMAR_FILE" | cut -f1)
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "grammar-cites: $fail finding(s) across $cited citation(s) of $count productions"
 	exit 1

@@ -110,7 +110,6 @@ nop            ::= 'nop'
 # item and not the next line, so blank lines and comments between them change nothing.
 
 letter     ::= [a-zA-Z]
-upper      ::= [A-Z]
 digit      ::= [0-9]
 
 # An identifier names a binding, function, type, field, ...; a reserved keyword is
